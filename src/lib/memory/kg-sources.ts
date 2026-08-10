@@ -36,6 +36,13 @@ export const KG_SOURCES = {
   /** Owner dashboard chat + owner SMS rule capture (both funnel through the
    * owner-append chokepoint / inline capture → ingestBulletsIntoGraph). */
   owner_chat: { status: "extracted", trust: 3 },
+  /** Slack team chat (slack_conversations/messages). Exempt: internal team
+   * conversation, not customer content; the VERIFIED OWNER's durable rules
+   * already flow through the covered owner_chat capture path
+   * (scheduleCaptureOwnerRuleInline in src/lib/slack/worker.ts), and
+   * team-member extraction is a deliberate later decision, not an
+   * oversight. */
+  slack_chat: { status: "exempt", reason: "internal team chat; owner rules ride owner_chat" },
   /** Historical memory_md replays (debug/kg-backfill.ts). */
   backfill: { status: "extracted", trust: 3 },
 

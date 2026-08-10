@@ -199,6 +199,7 @@ const KNOWN_ABOVE_EDGE_CEILING = [
   "outreach-sweep",
   "platform-cost-sync",
   "provisioning-retry",
+  "slack-worker",
   "social-post-sweep",
   "subscription-grace-sweep",
   "usage-pack-auto-reload-sweep",

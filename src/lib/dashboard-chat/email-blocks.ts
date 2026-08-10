@@ -254,12 +254,24 @@ export async function fulfillEmailBlocks(args: {
 export async function fulfillOwnerEmailBlocks(args: {
   businessId: string;
   content: string;
-  source: "dashboard_chat" | "sms_assistant";
+  source: "dashboard_chat" | "sms_assistant" | "slack_assistant";
+  /**
+   * Which surface's `send_email` Settings toggle authorizes the send.
+   * Defaults to `dashboard` (dashboard chat AND the owner-SMS operator both
+   * read the dashboard toggle for their preamble); the Slack surface passes
+   * `slack` so the authoritative check here can never disagree with the
+   * preamble the model was given.
+   */
+  agentKey?: "dashboard" | "slack";
 }): Promise<{ content: string; sentCount: number; failedCount: number }> {
   return fulfillEmailBlocks({
     content: args.content,
     send: async (req) => {
-      const enabled = await isAgentToolEnabled(args.businessId, "dashboard", "send_email");
+      const enabled = await isAgentToolEnabled(
+        args.businessId,
+        args.agentKey ?? "dashboard",
+        "send_email"
+      );
       if (!enabled) return { ok: false, detail: "tool_disabled" };
       const sent = await sendFromOwnerMailbox(args.businessId, {
         toEmail: req.to,

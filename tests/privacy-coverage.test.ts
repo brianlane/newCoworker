@@ -144,6 +144,11 @@ const EXEMPT: Record<string, string> = {
   integrations: "tenant integration state",
   meta_connections: "tenant Page tokens",
   slack_connections: "tenant OAuth grants (workspace bot token, no end-customer data)",
+  slack_conversations:
+    "internal team chat threads (no end-customer identifiers to erase by); business-scoped, removed with the business cascade",
+  slack_messages:
+    "internal team chat content; business-scoped, removed with the business cascade",
+  slack_jobs: "reply-queue bookkeeping for internal team chat; cascades with the conversation",
   vagaro_connections: "tenant credentials",
   whatsapp_connections: "the tenant's own WABA connection",
   workspace_oauth_connections: "tenant OAuth grants",

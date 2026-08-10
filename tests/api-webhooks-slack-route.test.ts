@@ -11,13 +11,28 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const afterCallbacks: Array<() => Promise<void> | void> = [];
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => Promise<void> | void) => {
+      afterCallbacks.push(cb);
+    }
+  };
+});
 vi.mock("@/lib/db/slack-connections", () => ({
   markSlackConnectionDeauthorizedByTeamId: vi.fn()
+}));
+vi.mock("@/lib/slack/inbound", () => ({
+  handleSlackChatEvent: vi.fn(),
+  handleSlackHomeOpened: vi.fn()
 }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import { POST } from "@/app/api/webhooks/slack/route";
 import { markSlackConnectionDeauthorizedByTeamId } from "@/lib/db/slack-connections";
+import { handleSlackChatEvent, handleSlackHomeOpened } from "@/lib/slack/inbound";
 import { SLACK_WEBHOOK_MAX_BODY_BYTES } from "@/lib/slack/webhook";
 
 const SECRET = "signing-secret-abc";
@@ -39,7 +54,10 @@ function signedRequest(rawBody: string, opts?: { timestampSec?: number; signatur
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterCallbacks.length = 0;
   vi.stubEnv("SLACK_SIGNING_SECRET", SECRET);
+  vi.mocked(handleSlackChatEvent).mockResolvedValue({ enqueued: true });
+  vi.mocked(handleSlackHomeOpened).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -125,17 +143,76 @@ describe("POST /api/webhooks/slack", () => {
     expect(res.status).toBe(500);
   });
 
-  it("200-noops chat events until the two-way-chat PR gives them handlers", async () => {
+  it("ingests DMs and mentions, kicking the worker only when a job enqueued", async () => {
     const res = await POST(
       signedRequest(
         JSON.stringify({
           type: "event_callback",
           team_id: "T-1",
-          event: { type: "message", channel_type: "im", text: "hi" }
+          event_id: "Ev-9",
+          event: { type: "message", channel_type: "im", text: "hi", user: "U-1" }
         })
       )
     );
     expect(res.status).toBe(200);
+    expect(vi.mocked(handleSlackChatEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: "T-1", eventId: "Ev-9" })
+    );
+    expect(afterCallbacks).toHaveLength(1);
+
+    vi.mocked(handleSlackChatEvent).mockResolvedValue({
+      enqueued: false,
+      reason: "duplicate_delivery"
+    });
+    await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event: { type: "app_mention", text: "<@U-BOT> hi", user: "U-1" }
+        })
+      )
+    );
+    expect(afterCallbacks).toHaveLength(1);
+  });
+
+  it("500s a chat ingest failure so Slack redelivers into the dedupe", async () => {
+    vi.mocked(handleSlackChatEvent).mockRejectedValue(new Error("db down"));
+    const res = await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event: { type: "message", channel_type: "im", text: "hi", user: "U-1" }
+        })
+      )
+    );
+    expect(res.status).toBe(500);
+  });
+
+  it("routes app_home_opened to the hello handler and ignores plain channel messages", async () => {
+    await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event: { type: "app_home_opened", tab: "messages", user: "U-1", channel: "D-1" }
+        })
+      )
+    );
+    expect(vi.mocked(handleSlackHomeOpened)).toHaveBeenCalled();
+
+    const res = await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event: { type: "message", channel_type: "channel", text: "not for us" }
+        })
+      )
+    );
+    expect(await res.json()).toMatchObject({ data: { ignored: true } });
+    expect(vi.mocked(handleSlackChatEvent)).not.toHaveBeenCalled();
     expect(vi.mocked(markSlackConnectionDeauthorizedByTeamId)).not.toHaveBeenCalled();
   });
 });

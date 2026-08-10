@@ -15,12 +15,19 @@
  *                         connection inactive (Zoom app_deauthorized
  *                         precedent). A DB failure answers 500 so Slack's
  *                         retry redelivers.
- *   - everything else   → 200 no-op for now (the chat events grow handlers
- *                         in the two-way-chat PR).
+ *   - message.im / app_mention
+ *                       → store the message + a reply job (dedupe on
+ *                         event_id: a redelivery is an ack, not a double
+ *                         reply), then kick the internal worker
+ *                         fire-and-forget via after() (Meta-webhook
+ *                         pattern; the per-minute sweep is the retry net).
+ *   - app_home_opened   → best-effort one-time onboarding hello.
+ *   - everything else   → 200 no-op.
  *
  * An authentic-but-unrecognized payload answers 200, never 4xx: sustained
  * non-2xx rates make Slack disable the event subscription entirely.
  */
+import { after } from "next/server";
 import { errorResponse, successResponse } from "@/lib/api-response";
 import {
   parseSlackEventEnvelope,
@@ -29,9 +36,35 @@ import {
   verifySlackSignature
 } from "@/lib/slack/webhook";
 import { markSlackConnectionDeauthorizedByTeamId } from "@/lib/db/slack-connections";
+import { handleSlackChatEvent, handleSlackHomeOpened } from "@/lib/slack/inbound";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Fire-and-forget kick of the reply worker (same bearer the cron bridge
+ * uses). Missing secret/base URL just defers to the sweep.
+ */
+async function kickSlackWorker(): Promise<void> {
+  const secret = process.env.INTERNAL_CRON_SECRET?.trim();
+  const base = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!secret || !base) return;
+  try {
+    await fetch(new URL("/api/internal/slack-worker", base).toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        Origin: base
+      },
+      body: "{}"
+    });
+  } catch (err) {
+    logger.warn("slack worker kick failed; sweep will retry", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -87,6 +120,36 @@ export async function POST(request: Request) {
       // not leave a dead token looking connected.
       return errorResponse("INTERNAL_SERVER_ERROR", "retry");
     }
+    return successResponse({ handled: event.type });
+  }
+
+  const isDm =
+    event.type === "message" &&
+    (event as { channel_type?: unknown }).channel_type === "im";
+  if (isDm || event.type === "app_mention") {
+    try {
+      const outcome = await handleSlackChatEvent({
+        teamId,
+        eventId: envelope.eventId,
+        event
+      });
+      if (outcome.enqueued) {
+        after(() => kickSlackWorker());
+      }
+      return successResponse(outcome);
+    } catch (err) {
+      logger.error("slack webhook: chat ingest failed; asking for redelivery", {
+        teamId,
+        eventType: event.type,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      // 500 → Slack retries; the event-id dedupe makes the replay safe.
+      return errorResponse("INTERNAL_SERVER_ERROR", "retry");
+    }
+  }
+
+  if (event.type === "app_home_opened") {
+    await handleSlackHomeOpened({ teamId, event });
     return successResponse({ handled: event.type });
   }
 

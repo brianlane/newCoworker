@@ -41,6 +41,7 @@ const CONTENT_SURFACE_INVENTORY: Record<string, (keyof typeof KG_SOURCES)[]> = {
   "messenger / instagram DM conversations": ["messenger"],
   "whatsapp conversations": ["whatsapp"],
   "webchat conversations": ["webchat"],
+  "slack team chat (DMs + mentions)": ["slack_chat"],
   "inbound email": ["email_replied", "email_unanswered"],
   "uploaded documents (incl. meeting minutes + agent artifacts)": ["document"],
   "website knowledge (crawl)": ["website"],

@@ -115,7 +115,9 @@ describe("findChannelDivergences", () => {
     });
     expect(widened.length).toBeGreaterThan(0);
     const channels = new Set(widened.flatMap((d) => d.stillEnabledOn.map((s) => s.agentKey)));
-    expect([...channels]).toEqual(["dashboard"]);
+    // Both owner-operated surfaces: dashboard, and the Slack coworker
+    // (team-driven; owner-power tools are identity-gated at run time).
+    expect([...channels].sort()).toEqual(["dashboard", "slack"]);
   });
 
   it("never treats dashboard as a customer-facing gap by default", () => {

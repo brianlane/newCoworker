@@ -126,3 +126,120 @@ export async function slackListChannels(botToken: string): Promise<SlackChannelS
   }
   return out;
 }
+
+export type SlackUserIdentity = {
+  displayName: string | null;
+  /** Verified email; null when the workspace hides it or scope is missing. */
+  email: string | null;
+  isBot: boolean;
+};
+
+/** users.info: how a Slack user becomes a person we can trust or not. */
+export async function slackUsersInfo(
+  botToken: string,
+  userId: string
+): Promise<SlackUserIdentity | null> {
+  const body = await slackApiCall("users.info", botToken, { user: userId });
+  if (body.ok !== true) return null;
+  const user = body.user as
+    | {
+        is_bot?: unknown;
+        profile?: { email?: unknown; display_name?: unknown; real_name?: unknown };
+      }
+    | undefined;
+  if (!user) return null;
+  const display = user.profile?.display_name;
+  const real = user.profile?.real_name;
+  return {
+    displayName:
+      typeof display === "string" && display.length > 0
+        ? display
+        : typeof real === "string" && real.length > 0
+          ? real
+          : null,
+    email: typeof user.profile?.email === "string" ? user.profile.email : null,
+    isBot: user.is_bot === true
+  };
+}
+
+/**
+ * assistant.threads.setStatus: the "is thinking…" indicator on the agent
+ * surface. Best-effort by contract: free-plan workspaces and non-assistant
+ * threads refuse it, and that must never fail a turn.
+ */
+export async function slackSetAssistantStatus(
+  botToken: string,
+  input: { channel_id: string; thread_ts: string; status: string }
+): Promise<boolean> {
+  try {
+    const body = await slackApiCall("assistant.threads.setStatus", botToken, {
+      channel_id: input.channel_id,
+      thread_ts: input.thread_ts,
+      status: input.status
+    });
+    return body.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+export type SlackStreamHandle = { channel: string; ts: string };
+
+/**
+ * chat.startStream / appendStream / stopStream: Slack's streaming message
+ * trio for agent surfaces. All three surface refusals as null/false so the
+ * caller can degrade to a single chat.postMessage; only the caller knows
+ * whether a fallback send is still needed.
+ */
+export async function slackStartStream(
+  botToken: string,
+  input: { channel: string; thread_ts?: string }
+): Promise<SlackStreamHandle | null> {
+  try {
+    const body = await slackApiCall("chat.startStream", botToken, {
+      channel: input.channel,
+      ...(input.thread_ts ? { thread_ts: input.thread_ts } : {})
+    });
+    if (body.ok !== true || typeof body.ts !== "string") return null;
+    return {
+      channel: typeof body.channel === "string" ? body.channel : input.channel,
+      ts: body.ts
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function slackAppendStream(
+  botToken: string,
+  handle: SlackStreamHandle,
+  markdownText: string
+): Promise<boolean> {
+  try {
+    const body = await slackApiCall("chat.appendStream", botToken, {
+      channel: handle.channel,
+      ts: handle.ts,
+      markdown_text: markdownText
+    });
+    return body.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function slackStopStream(
+  botToken: string,
+  handle: SlackStreamHandle,
+  finalMarkdownText?: string
+): Promise<boolean> {
+  try {
+    const body = await slackApiCall("chat.stopStream", botToken, {
+      channel: handle.channel,
+      ts: handle.ts,
+      ...(finalMarkdownText !== undefined ? { markdown_text: finalMarkdownText } : {})
+    });
+    return body.ok === true;
+  } catch {
+    return false;
+  }
+}

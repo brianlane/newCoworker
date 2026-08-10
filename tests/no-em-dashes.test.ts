@@ -121,6 +121,9 @@ describe("no em dashes (README writing rule)", () => {
       "src/lib/messenger/engine.ts",
       // Website webchat.
       "src/lib/webchat/gemini-engine.ts",
+      // Slack team chat (the team preamble; the owner branch reuses
+      // OWNER_PREAMBLE, which embeds the line already).
+      "src/lib/slack/chat.ts",
       // AiFlow field extraction. Its output is pasted verbatim into owner SMS
       // and send_email bodies; only the SMS path is GSM-normalized, so email
       // shipped whatever the model wrote. (buildClassifyPrompt in the same

@@ -10,8 +10,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   slackApiCall,
   SlackApiError,
+  slackAppendStream,
   slackListChannels,
-  slackPostMessage
+  slackPostMessage,
+  slackSetAssistantStatus,
+  slackStartStream,
+  slackStopStream,
+  slackUsersInfo
 } from "@/lib/slack/client";
 import { SLACK_REQUEST_TIMEOUT_MS } from "@/lib/slack/oauth";
 
@@ -177,5 +182,103 @@ describe("slackListChannels", () => {
 
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true, channels: "??" })));
     expect(await slackListChannels("xoxb-1")).toEqual([]);
+  });
+});
+
+describe("slackUsersInfo", () => {
+  it("maps profile fields with real-name fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          ok: true,
+          user: { is_bot: false, profile: { display_name: "", real_name: "Dave L", email: "d@x.co" } }
+        })
+      )
+    );
+    expect(await slackUsersInfo("xoxb-1", "U-1")).toEqual({
+      displayName: "Dave L",
+      email: "d@x.co",
+      isBot: false
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ ok: true, user: { is_bot: true, profile: { display_name: "Bot" } } })
+      )
+    );
+    expect(await slackUsersInfo("xoxb-1", "U-2")).toEqual({
+      displayName: "Bot",
+      email: null,
+      isBot: true
+    });
+  });
+
+  it("nulls out refusals and missing users", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "user_not_found" })));
+    expect(await slackUsersInfo("xoxb-1", "U-x")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true })));
+    expect(await slackUsersInfo("xoxb-1", "U-x")).toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ ok: true, user: { profile: {} } }))
+    );
+    expect(await slackUsersInfo("xoxb-1", "U-x")).toEqual({
+      displayName: null,
+      email: null,
+      isBot: false
+    });
+  });
+});
+
+describe("assistant status + streaming trio", () => {
+  it("setStatus is best-effort in both directions", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true })));
+    expect(
+      await slackSetAssistantStatus("xoxb-1", { channel_id: "D-1", thread_ts: "1.1", status: "hm" })
+    ).toBe(true);
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
+    expect(
+      await slackSetAssistantStatus("xoxb-1", { channel_id: "D-1", thread_ts: "1.1", status: "hm" })
+    ).toBe(false);
+  });
+
+  it("startStream returns a handle only on a real ts, and null on refusal/transport", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, ts: "5.5", channel: "D-9" }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await slackStartStream("xoxb-1", { channel: "D-1", thread_ts: "1.1" })).toEqual({
+      channel: "D-9",
+      ts: "5.5"
+    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ thread_ts: "1.1" });
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true, ts: "6.6" })));
+    expect(await slackStartStream("xoxb-1", { channel: "D-1" })).toEqual({
+      channel: "D-1",
+      ts: "6.6"
+    });
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true })));
+    expect(await slackStartStream("xoxb-1", { channel: "D-1" })).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "not_allowed" })));
+    expect(await slackStartStream("xoxb-1", { channel: "D-1" })).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
+    expect(await slackStartStream("xoxb-1", { channel: "D-1" })).toBeNull();
+  });
+
+  it("append and stop return booleans and never throw", async () => {
+    const handle = { channel: "D-1", ts: "5.5" };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: true })));
+    expect(await slackAppendStream("xoxb-1", handle, "hi")).toBe(true);
+    expect(await slackStopStream("xoxb-1", handle, "final")).toBe(true);
+    expect(await slackStopStream("xoxb-1", handle)).toBe(true);
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "x" })));
+    expect(await slackAppendStream("xoxb-1", handle, "hi")).toBe(false);
+    expect(await slackStopStream("xoxb-1", handle, "final")).toBe(false);
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
+    expect(await slackAppendStream("xoxb-1", handle, "hi")).toBe(false);
+    expect(await slackStopStream("xoxb-1", handle, "final")).toBe(false);
   });
 });
