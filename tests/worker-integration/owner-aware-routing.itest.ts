@@ -153,6 +153,37 @@ describe("owned-contact routing short-circuit", () => {
     expect(run.status).toBe("awaiting_agent");
   }, 120_000);
 
+  it("an extracted-but-empty lead phone never binds ownership to the SENDER (Danfar)", async () => {
+    // The partner line texts the alert in; the flow extracts lead_phone but
+    // the partner withholds it (""). The partner line's own contact row is
+    // owned by Dave (poisoned by an earlier claim). The offer must still
+    // race the roster, not owner-assign.
+    const PARTNER = "+14165550175";
+    const biz = await seedBusiness(db, "Owner Aware Empty Extraction");
+    const ids = await seedRoster(biz);
+    await seedContact(db, biz, PARTNER);
+    await setOwner(biz, PARTNER, ids.dave);
+
+    const flowId = await createFlow(db, biz, routeFlow());
+    // vars.lead_phone seeded PRESENT and EMPTY, exactly the HomeLight shape
+    // at route time.
+    const runId = await enqueueRun(
+      db,
+      flowId,
+      biz,
+      { channel: "sms", from: PARTNER, windowText: "New referral, details on the portal." },
+      { lead_phone: "" }
+    );
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    const routing = (run.context as { routing?: Record<string, unknown> }).routing ?? {};
+    expect(routing.owner_assigned).toBeUndefined();
+    // A live offer went out: the race ran.
+    expect(typeof routing.offered).toBe("string");
+    expect(run.status).toBe("awaiting_agent");
+  }, 120_000);
+
   it("a pinned step keeps its pin even on an owned contact", async () => {
     const LEAD = "+14165550174";
     const biz = await seedBusiness(db, "Owner Aware Pinned");

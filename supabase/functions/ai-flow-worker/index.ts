@@ -103,6 +103,7 @@ import {
 } from "../_shared/ai_flows/call_outcome_meta.ts";
 import { callDialGuard } from "../_shared/ai_flows/call_guards.ts";
 import { rotateReachOrder } from "../_shared/ai_flows/reach_rotation.ts";
+import { ownershipLeadPhone } from "../_shared/ai_flows/claim_owner_gate.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
@@ -9063,6 +9064,22 @@ function leadContactPhone(scope: Scope): string | null {
 }
 
 /**
+ * The phone OWNERSHIP may bind to, stricter than leadContactPhone: when the
+ * flow extracts a lead_phone (the key exists in vars, even empty), an empty
+ * result means the lead's number is UNKNOWN, never that the triggering
+ * sender is the lead. HomeLight withholds the number until after claiming,
+ * so the sender is HomeLight's own alert line; the old fallback made Dave
+ * the "owner" of that partner contact and the next referral skipped the
+ * team race (Danfar, 2026-08-10). Rule in
+ * _shared/ai_flows/claim_owner_gate.ts (ownershipLeadPhone).
+ */
+function ownershipContactPhone(scope: Scope): string | null {
+  const hasKey = Object.prototype.hasOwnProperty.call(scope.vars, "lead_phone");
+  const from = typeof scope.trigger?.from === "string" ? scope.trigger.from.trim() : "";
+  return ownershipLeadPhone(hasKey, leadPhoneE164(scope), from && isE164(from) ? from : null);
+}
+
+/**
  * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
  * resolved to {name, phone}, or null (no phone / no contact / unowned /
  * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
@@ -9087,7 +9104,7 @@ async function activeContactOwner(
   businessId: string,
   scope: Scope
 ): Promise<RoutedAgent | null> {
-  const phone = leadContactPhone(scope);
+  const phone = ownershipContactPhone(scope);
   if (!phone) return null;
   try {
     const { data: contact } = await supabase
@@ -9197,7 +9214,7 @@ async function contactOwnerAgent(
   businessId: string,
   scope: Scope
 ): Promise<RoutedAgent | null> {
-  const phone = leadContactPhone(scope);
+  const phone = ownershipContactPhone(scope);
   if (!phone) return null;
   try {
     const { data: contact } = await supabase
@@ -9272,7 +9289,7 @@ async function assignContactOwnerOnClaim(
   scope: Scope,
   claimedByPhone: string
 ): Promise<void> {
-  const leadPhone = leadContactPhone(scope);
+  const leadPhone = ownershipContactPhone(scope);
   if (!leadPhone || !claimedByPhone) return;
   try {
     const { data: member } = await supabase
