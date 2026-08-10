@@ -12,7 +12,7 @@ written incident review. Calendly is the center of gravity here.
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
-| Roster | none: James is the only human in the loop |
+| Roster | James Lee (`+852` mobile, Hong Kong, no email on the row; NOTE the +852 SMS sharp edge below, so any flow step texting this roster row goes dark). Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
 
 Build spec: [PRDs/white-glove-build-kyp-ads.md](../../PRDs/white-glove-build-kyp-ads.md).
 Incident review: [docs/INCIDENT-2026-07-KYP-ONBOARDING.md](../INCIDENT-2026-07-KYP-ONBOARDING.md).
@@ -25,17 +25,60 @@ problem rather than a messaging problem.
 
 ## Flows
 
+Live snapshot 2026-08-10 (5 on / 8 total). The VFM flow joins this table
+when `seed-vfm-lead-aiflow.ts` runs.
+
 | Flow | State | Note |
 | --- | --- | --- |
 | Lead follow-up (white-glove build, webhook, 16 steps) | on | The main path. Offer selection lives on the webhook trigger condition (payload contains the Simple-form name); the in-flow $100/$200 branch from one-shot #715 was removed in an unledgered Jul 19-24 reshape, and live is canonical (`kyp-lead-flow-definition.ts`). Bad-phone intake arm: an undialable lead number emails the lead and tells James instead of dying at the greeting (`patch-kyp-bad-phone-intake.ts`) |
-| Booking confirmation (SMS + email, webhook, 5) | on | Shape lives in `kyp-reminder-flow-definition.ts` |
-| Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation |
+| Booking confirmation (SMS + email, webhook, 5) | on | Shape lives in `kyp-reminder-flow-definition.ts`; trigger: webhook payload contains `calendly_booking` |
+| Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation. `event_start`, 60 min lead, scoped to events containing "KYP Ads \| Free Strategy Call", so the VFM flow's T-60 confirmation never overlaps it |
 | No-show recovery text (calendar, 3) | **on** | Live since 2026-08-01, and it has sent. The row still says "awaiting approval" in its own name because James never approved it going live: treat that as an open question for him, not as a reason to flip it off. Fires only for no-shows marked in Calendly within 2h |
+| Follow-up send: Stefan, Windshield Place (manual, 1) | on | One-off manual send_email |
+| Proposal follow-up, email (tag_changed, 8) | off | Fires on the `proposal-sent` tag when enabled |
 | Wrong-link booking flag (calendar, 2) | off | Blocked on the warm list |
 | Proposal send + follow-up (manual, 6) | off | Awaiting approval; James triggers it manually |
 
-Two flows (wrong-link flag, proposal send) sit **deliberately off pending
-owner approval**. Do not "fix" them by enabling them.
+The off flows (proposal follow-up email, wrong-link flag, proposal send) sit
+**deliberately off pending owner approval**. Do not "fix" them by enabling
+them. Flow NAMES can carry stale state notes ("awaiting approval"); the
+`enabled` bit is authoritative, the name is not.
+
+## Second brand: Vantage Flow Media (VFM)
+
+Since Aug 2026 this tenant serves TWO of James's businesses. Vantage Flow
+Media (VFM) is his second lead-gen agency, run inside the KYP tenant by
+explicit decision: same login, same DID, same box, no new business record,
+standard features only. Liz (the VFM assignee, US Eastern) runs the VFM
+strategy calls; James is in Hong Kong, so VFM replies must page her, not him.
+
+How the pieces fit:
+
+- **Persona:** the coworker presents as the owner's assistant serving both
+  brands and never asks which business a contact means. Marker-delimited
+  sections in `identity_md` (VFM facts) and `soul_md` (two-business rules),
+  applied by `apply-vfm-brand.ts`.
+- **PRICE SILENCE:** VFM is testing three management price points, and no
+  surface may quote one (the AI cannot know which offer a lead saw). The
+  price points live nowhere in the vault or flow copy, by design; only the
+  $30/day ad-spend floor is sayable. Enforced by
+  `tests/oneshot-vfm-definitions.test.ts`.
+- **Brand separation at the trigger:** the VFM flow claims the three VFM
+  Meta form names via OR'd webhook triggers; KYP's lead flow keeps
+  "Simple form setup 5/7/26". Same mechanism, different `contains` values.
+- **Lead handling:** VFM leads are tagged `VFM`, and `route_to_team` pinned
+  to Liz hard-assigns them (`businesses.lead_auto_assign = true`, the Truly
+  Issue 7 machinery; no other KYP flow uses route_to_team, verified before
+  flipping). Ownership is what redirects `sms_customer_reply` pages to Liz.
+- **No booking integration, on purpose:** VFM books on Liz's own Calendly
+  (`calendly.com/elizabethastone/30min`), which this tenant's Calendly
+  connection cannot see (one connection per business, and it is James's).
+  The T-60 confirmation gets its time from the lead's replies via the
+  run_agent parser ("VFM booked-time parser" in business_agents). A lead
+  who books silently gets no confirmation; accepted.
+- **Timezones:** VFM nudge quiet hours are gated per-flow in
+  America/New_York; the business timezone stays America/Toronto, so KYP's
+  flows are unaffected.
 
 ## Sharp edges
 
@@ -141,9 +184,15 @@ Recovery: `requeue-failed-flow-run.ts` (generic; applied here Aug 6 2026 to
 re-run the lead flow for H Eve after the Canada-whitelist outage killed run
 4e9fdf3c at its first customer text).
 
+Vantage Flow Media rollout: `apply-vfm-brand.ts` (vault sections + sync),
+`apply-vfm-team.ts` (Liz on the roster + `lead_auto_assign`),
+`seed-vfm-lead-aiflow.ts` (parser agent + the VFM lead flow). Content and
+flow shape are pinned by `tests/oneshot-vfm-definitions.test.ts`.
+
 Flow definitions: `kyp-lead-flow-definition.ts` (previously named
 kyp-offer-definition.ts), `kyp-noshow-definition.ts`,
-`kyp-reminder-flow-definition.ts`.
+`kyp-reminder-flow-definition.ts`,
+`vfm-lead-flow-definition.ts` (seeded by `seed-vfm-lead-aiflow.ts`).
 
 `kyp-reminder-flow-definition.ts` is the canonical shape for the two
 calendar-side flows, "Pre-call reminder (1hr before)" and "Booking

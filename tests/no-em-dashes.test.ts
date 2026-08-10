@@ -53,6 +53,10 @@ function guardedFiles(): string[] {
     // Builds an SMS body (seen live in an unassigned-booking alert text).
     "src/lib/calendar-tools/unassigned-booking-alert.ts",
     "scripts/oneshot/seed-amy-new-lead-intake.ts",
+    // VFM second-brand rollout on KYP: lead-flow SMS/email copy and the
+    // vault sections the coworker serves verbatim.
+    "scripts/oneshot/vfm-lead-flow-definition.ts",
+    "scripts/oneshot/vfm-brand-content.ts",
     // Seeds the HQ demo-line / webchat follow-up SMS bodies. The live flows
     // read clean only because patch-hq-booking-offer.ts swept them after the
     // fact; an unguarded re-run would put the em dashes straight back.
