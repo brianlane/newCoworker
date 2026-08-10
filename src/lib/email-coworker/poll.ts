@@ -21,7 +21,7 @@ import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
-import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordFailure, recordSystemLog } from "@/lib/db/system-logs";
 import {
   fetchInboxWithThreads,
   fetchMailboxAddress,
@@ -118,6 +118,48 @@ async function businessTimezone(businessId: string, db: SupabaseClient): Promise
   } catch {
     return null;
   }
+}
+
+/**
+ * Pull the debuggable parts out of a provider call failure.
+ *
+ * The mailbox reads go through Nango's axios client, so a rejection carries the
+ * status, the endpoint, and the provider's own explanation. None of that was
+ * being kept: the 2026-08-08 row read "Request failed with status code 400"
+ * with an empty payload, which says a call failed somewhere and nothing more.
+ * A repeat of that is only actionable if the response body came with it, since
+ * Gmail puts the actual reason there ("Invalid query", an expired token, and so
+ * on) rather than in the status.
+ *
+ * Best effort by construction: an unrecognised throw yields `{}` rather than
+ * inventing fields, and nothing here can throw on the way to a catch block.
+ */
+export function providerFailureDetail(err: unknown): Record<string, unknown> {
+  const e = err as {
+    status?: number;
+    response?: { status?: number; data?: unknown };
+    config?: { endpoint?: string; url?: string };
+  } | null;
+  const detail: Record<string, unknown> = {};
+  const status = e?.response?.status ?? e?.status;
+  if (typeof status === "number") detail.status = status;
+  const endpoint = e?.config?.endpoint ?? e?.config?.url;
+  if (typeof endpoint === "string" && endpoint) detail.endpoint = endpoint;
+  const body = e?.response?.data;
+  if (body !== undefined && body !== null) {
+    let text: string;
+    try {
+      text = typeof body === "string" ? body : JSON.stringify(body);
+    } catch {
+      // Circular or otherwise unserialisable: the shape still beats nothing.
+      text = String(body);
+    }
+    // Clipped: a provider error page can run to kilobytes, and the first line
+    // carries the reason. `text` is a string on both paths above, so it needs
+    // no further guard.
+    detail.response = text.slice(0, 500);
+  }
+  return detail;
 }
 
 export async function pollEmailCoworker(
@@ -311,13 +353,15 @@ export async function pollEmailCoworker(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn("email-coworker: poll failed for business", { businessId, error: message });
-      await recordSystemLog({
+      // recordFailure, not recordSystemLog: this poll runs every minute, so one
+      // failure has already been retried by the time anyone could read it. Only
+      // a failure that repeats inside the window reaches the fleet error feed.
+      await recordFailure({
         businessId,
         source: "email",
-        level: "error",
         event: "email_coworker_poll_failed",
         message: `Email coworker poll failed: ${message}`,
-        payload: {}
+        payload: providerFailureDetail(err)
       });
     }
   }
