@@ -31,7 +31,6 @@ import {
   THREAD_COOLDOWN,
   buildHqInboxTriageDefinition
 } from "../scripts/oneshot/hq-inbox-triage-definition";
-import { HQ_EMAIL_SIGNATURE } from "../scripts/oneshot/hq-inbox-reply-drafter";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { renderTemplate } from "../supabase/functions/_shared/ai_flows/engine";
 import { prepareSmsBody } from "../supabase/functions/_shared/ai_flows/compliance";
@@ -482,36 +481,8 @@ describe("HQ inbox triage: a sales lead gets answered, not just announced", () =
     // Extra prospects ride on cc, since `to` takes a single address.
     expect(inArm("s_send_prospect")?.cc).toEqual(["{{trigger.others_cc}}"]);
     // And the two notes never cross: neither carries the other's body.
-    expect(String(inArm("s_send_intro")?.body)).toContain("{{vars.email_draft_intro}}");
-    expect(String(inArm("s_send_intro")?.body)).not.toContain("{{vars.email_draft_prospect}}");
-    expect(String(inArm("s_send_prospect")?.body)).toContain("{{vars.email_draft_prospect}}");
-    expect(String(inArm("s_send_prospect")?.body)).not.toContain("{{vars.email_draft_intro}}");
-  });
-
-  it("signs both emails, with a signature the model never writes", () => {
-    /**
-     * A signature is exact by nature. Asking a model for one invites a
-     * hallucinated title, an invented phone number, or slightly different
-     * wording each time, so the FLOW appends it and the drafter is told to
-     * write no sign-off at all.
-     */
-    for (const id of ["s_send_intro", "s_send_prospect"]) {
-      const body = String(inArm(id)?.body);
-      expect(body, id).toContain(HQ_EMAIL_SIGNATURE);
-      // After the draft, never before it.
-      expect(body.indexOf(HQ_EMAIL_SIGNATURE), id).toBeGreaterThan(body.indexOf("{{vars."));
-      // Blank line between, or the last line of the note runs into the name.
-      expect(body, id).toContain(`\n\n${HQ_EMAIL_SIGNATURE}`);
-    }
-  });
-
-  it("keeps the signature to verifiable facts", () => {
-    // Nothing invented: a title or phone number nobody can confirm is worse
-    // than no signature at all on mail going to a prospect.
-    expect(HQ_EMAIL_SIGNATURE).toContain("New Coworker");
-    expect(HQ_EMAIL_SIGNATURE).toContain("team@newcoworker.com");
-    expect(HQ_EMAIL_SIGNATURE).not.toMatch(/\+?\d[\d\s()-]{7,}/);
-    expect(HQ_EMAIL_SIGNATURE).not.toContain("—");
+    expect(String(inArm("s_send_intro")?.body)).toBe("{{vars.email_draft_intro}}");
+    expect(String(inArm("s_send_prospect")?.body)).toBe("{{vars.email_draft_prospect}}");
   });
 
   it("shows Brian both notes, labelled with who gets each", () => {

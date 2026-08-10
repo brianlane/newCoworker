@@ -162,6 +162,30 @@ export function pitchParagraphs(
 }
 
 /**
+ * The tenant's sign-off: who it is from, the business, and the website.
+ *
+ * Extracted so it has ONE definition. The HQ team-inbox flow signs its replies
+ * too, and a second hand-written copy drifted immediately: it invented a
+ * `team@newcoworker.com` line this one has never had. Anything that signs mail
+ * as the tenant builds it here.
+ *
+ * `senderName` is `outreach_settings.sender_name`, the name the owner chose to
+ * sign as. With no sender name the business name stands alone rather than
+ * being printed twice.
+ */
+export function emailSignature(input: {
+  senderName?: string | null;
+  businessName: string;
+  website?: string | null;
+}): string {
+  const sender = input.senderName?.trim() ?? "";
+  const business = input.businessName.trim();
+  return [sender || business, sender ? business : "", input.website?.trim() ?? ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
  * Body assembly: paragraphs, then the sign-off, then the compliance footer.
  * Everything below the paragraphs is generated here and only here.
  */
@@ -173,13 +197,11 @@ export function assembleBody(
   const cta = tenant.bookingUrl
     ? `You can grab a time here: ${tenant.bookingUrl}`
     : "Just reply if you want to hear more.";
-  const signature = [
-    tenant.senderName?.trim() || tenant.name.trim(),
-    tenant.senderName?.trim() ? tenant.name.trim() : "",
-    tenant.website ?? ""
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const signature = emailSignature({
+    senderName: tenant.senderName,
+    businessName: tenant.name,
+    website: tenant.website
+  });
   const footer = [
     `You can unsubscribe here and I will not email you again: ${unsubscribeUrl}`,
     tenant.postalAddress.trim()

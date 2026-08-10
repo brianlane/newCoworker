@@ -17,7 +17,7 @@
  *      the thread to a human and alerts the owner once.
  */
 
-import { messagesHandledByFlow } from "@/lib/db/email-log";
+import { threadsWeHaveRepliedOn } from "@/lib/ai-flows/email-poll";
 import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
@@ -211,18 +211,28 @@ export async function pollEmailCoworker(
       });
       if (candidates.length === 0) continue;
 
-      // A message an AiFlow already answered must not be answered again here.
-      // The flow's send CLAIMS the thread, which retroactively makes the very
-      // message that triggered the flow eligible for this poll: still inside
-      // the lookback window, now on an owned thread, and never seen by the
-      // coworker. Live, Aug 10 2026: James got the flow's reply and then an
-      // off-script second one from the coworker a minute later.
-      const flowHandled = await messagesHandledByFlow(
+      // NEVER auto-answer a conversation we have already replied to.
+      //
+      // Live, Aug 10 2026: the triage flow answered James's introduction and
+      // CLAIMED the thread, which retroactively made the triggering message
+      // eligible here (still in the lookback window, now on an owned thread,
+      // never seen by this poll). James got two replies a minute apart, the
+      // second off-script.
+      //
+      // Keyed on the THREAD, not the message, on Brian's instruction: once we
+      // have written on a conversation, every further reply goes through the
+      // flow's approval gate rather than out unseen. An owner who gated the
+      // first email to a stranger did not mean "and then send whatever you
+      // like". The flow still runs on these messages, so they are classified,
+      // drafted and put in front of him; this only stops the SILENT send.
+      const repliedThreads = await threadsWeHaveRepliedOn(
         businessId,
-        candidates.map((m) => m.id),
+        candidates.map((m) => m.threadId).filter((t): t is string => Boolean(t)),
         db
       );
-      const notFlowHandled = candidates.filter((m) => !flowHandled.has(m.id));
+      const notFlowHandled = candidates.filter(
+        (m) => !m.threadId || !repliedThreads.has(m.threadId)
+      );
       if (notFlowHandled.length === 0) continue;
 
       const unseenIds = new Set(

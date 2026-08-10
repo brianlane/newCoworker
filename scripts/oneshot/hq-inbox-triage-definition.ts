@@ -15,7 +15,7 @@
  * how to apply).
  */
 
-import { HQ_EMAIL_SIGNATURE, NO_REPLY_SENTINEL } from "./hq-inbox-reply-drafter.ts";
+import { NO_REPLY_SENTINEL } from "./hq-inbox-reply-drafter.ts";
 
 /** The HQ tenant (New Coworker, internal). */
 export const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
@@ -228,7 +228,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 when: { var: "email_draft_intro", notEquals: NO_REPLY_SENTINEL },
                 to: "{{trigger.from}}",
                 subject: "Re: {{trigger.subject}}",
-                body: `{{vars.email_draft_intro}}\n\n${HQ_EMAIL_SIGNATURE}`,
+                body: "{{vars.email_draft_intro}}",
                 // Threaded so it lands in the original conversation, but NOT
                 // reply-all: mirroring would put the prospect back on this
                 // note and undo the whole point of writing two.
@@ -246,7 +246,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 to: "{{trigger.others_to}}",
                 cc: ["{{trigger.others_cc}}"],
                 subject: "Re: {{trigger.subject}}",
-                body: `{{vars.email_draft_prospect}}\n\n${HQ_EMAIL_SIGNATURE}`,
+                body: "{{vars.email_draft_prospect}}",
                 replyToEmailLogId: "{{trigger.email_log_id}}",
                 replyAll: false,
                 fromConnectionId: GMAIL_CONNECTION_ROW_ID

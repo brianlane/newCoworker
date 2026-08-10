@@ -44,22 +44,6 @@ export const HQ_DISCOVERY_CALL_URL =
   "https://www.newcoworker.com/book/newcoworker/discovery-call";
 
 /**
- * The sign-off appended to every email this flow sends.
- *
- * Appended by the FLOW, not written by the model: a signature is exact by
- * nature, and asking a model for one invites a hallucinated title, a made-up
- * phone number, or a slightly different wording every time. The drafter is
- * told to write no sign-off at all, and this goes on afterwards.
- *
- * Every line here is a real, verified value from the business record (name,
- * website) or the sending alias. Nothing is invented: add a title or a phone
- * number by editing this constant, and re-run the one-shot.
- */
-export const HQ_EMAIL_SIGNATURE = ["Brian", "New Coworker", "team@newcoworker.com", "https://www.newcoworker.com"].join(
-  "\n"
-);
-
-/**
  * The saved instructions. Held under AGENT_INSTRUCTIONS_MAX_CHARS (8000).
  *
  * The "who is who" block is adapted from the extraction prompt's person/role
