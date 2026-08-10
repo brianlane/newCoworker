@@ -374,6 +374,11 @@ describe("approval-thread mentions", () => {
       text: "1",
       decidedBy: "slack:U-1"
     });
+    expect(vi.mocked(approvals.findAwaitingApprovalRunBySlackThread)).toHaveBeenCalledWith(
+      BIZ,
+      "C-9",
+      "300.1"
+    );
     expect(vi.mocked(insertSlackUserMessage)).not.toHaveBeenCalled();
     expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
       "xoxb-1",

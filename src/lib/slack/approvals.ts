@@ -180,11 +180,14 @@ export async function applySlackApprovalModify(
 
 /**
  * The awaiting-approval run whose Slack prompt anchors this thread, if any.
- * Newest wins when several gates parked into the same channel (the SMS
- * handler's most-recent rule).
+ * Matched on channel AND ts: Slack ts values are only unique per channel,
+ * so a same-ts thread in another channel must never read as an approval
+ * answer. Newest wins when several gates parked into the same channel (the
+ * SMS handler's most-recent rule).
  */
 export async function findAwaitingApprovalRunBySlackThread(
   businessId: string,
+  channelId: string,
   threadTs: string,
   client?: SupabaseClient
 ): Promise<{ runId: string } | null> {
@@ -194,6 +197,7 @@ export async function findAwaitingApprovalRunBySlackThread(
     .select("id")
     .eq("business_id", businessId)
     .eq("status", "awaiting_approval")
+    .eq("context->approval->>slack_channel_id", channelId)
     .eq("context->approval->>slack_message_ts", threadTs)
     .order("updated_at", { ascending: false })
     .limit(1)

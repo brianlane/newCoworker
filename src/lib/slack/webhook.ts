@@ -104,8 +104,28 @@ export function parseSlackInteractionPayload(rawBody: string): SlackInteractionA
     userName: typeof name === "string" && name.length > 0 ? name : null,
     actionId: action.action_id,
     value: typeof action.value === "string" ? action.value : "",
-    responseUrl: typeof payload.response_url === "string" ? payload.response_url : null
+    responseUrl: slackResponseUrlOrNull(payload.response_url)
   };
+}
+
+/**
+ * Server-side request-forgery guard: a response_url is only ever fetched
+ * when it is literally a Slack webhook endpoint. The payload is already
+ * HMAC-verified, so this is defense in depth against a forged-or-buggy
+ * value steering a server-side POST anywhere else.
+ */
+export function slackResponseUrlOrNull(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.hostname !== "hooks.slack.com") return null;
+    // Rebuilt from validated parts, never the raw string: the fetched URL
+    // is constructed against the fixed origin, so no parser quirk (or
+    // future refactor) can steer the POST anywhere else.
+    return `https://hooks.slack.com${url.pathname}${url.search}`;
+  } catch {
+    return null;
+  }
 }
 
 /**

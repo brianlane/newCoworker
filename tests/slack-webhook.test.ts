@@ -223,7 +223,7 @@ describe("parseSlackInteractionPayload", () => {
         team: { id: "T-1" },
         user: { id: "U-1", name: "amy" },
         actions: [{ action_id: "aiflow_approval:approve", value: "{}" }],
-        response_url: "https://hooks/r"
+        response_url: "https://hooks.slack.com/actions/r"
       })
     );
     expect(parsed).toEqual({
@@ -232,7 +232,7 @@ describe("parseSlackInteractionPayload", () => {
       userName: "amy",
       actionId: "aiflow_approval:approve",
       value: "{}",
-      responseUrl: "https://hooks/r"
+      responseUrl: "https://hooks.slack.com/actions/r"
     });
   });
 
@@ -256,6 +256,24 @@ describe("parseSlackInteractionPayload", () => {
       })
     );
     expect(emptyName).toMatchObject({ userName: null });
+
+    // SSRF guard: only hooks.slack.com over https is ever fetchable.
+    for (const bad of [
+      "https://evil.example.com/hook",
+      "http://hooks.slack.com/actions/r",
+      "not a url"
+    ]) {
+      const guarded = parseSlackInteractionPayload(
+        wrap({
+          type: "block_actions",
+          team: { id: "T-1" },
+          user: { id: "U-1" },
+          actions: [{ action_id: "a" }],
+          response_url: bad
+        })
+      );
+      expect(guarded).toMatchObject({ responseUrl: null });
+    }
 
     expect(parseSlackInteractionPayload("payload=not-json")).toBeNull();
     expect(parseSlackInteractionPayload("nothing=here")).toBeNull();

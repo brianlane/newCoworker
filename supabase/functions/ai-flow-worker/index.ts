@@ -1277,15 +1277,17 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
             });
             const slackJson = slackRes.ok
               ? ((await slackRes.json().catch(() => null)) as {
-                  data?: { ok?: boolean; ts?: string };
+                  data?: { ok?: boolean; ts?: string; channelId?: string };
                 } | null)
               : null;
             const slackTs = slackJson?.data?.ok === true ? slackJson.data.ts : null;
             if (typeof slackTs === "string" && slackTs.length > 0) {
-              // Anchor the thread for free-text modify replies, and stamp the
-              // step index so a re-park of THIS gate does not repost. The
-              // guarded updateRun keeps a canceled run canceled.
+              // Anchor the thread for free-text modify replies (channel AND
+              // ts: Slack ts values are only unique per channel), and stamp
+              // the step index so a re-park of THIS gate does not repost.
+              // The guarded updateRun keeps a canceled run canceled.
               approval.slack_message_ts = slackTs;
+              approval.slack_channel_id = slackJson?.data?.channelId ?? null;
               approval.slack_step_index = index;
               await updateRun(supabase, run.id, {
                 context: buildContext(scope, approval, routing)

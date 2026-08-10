@@ -247,6 +247,7 @@ describe("findAwaitingApprovalRunBySlackThread", () => {
     expect(
       await findAwaitingApprovalRunBySlackThread(
         BIZ,
+        "C-9",
         "77.7",
         makeDb(updateChain({ data: { id: RUN }, error: null }))
       )
@@ -254,6 +255,7 @@ describe("findAwaitingApprovalRunBySlackThread", () => {
     expect(
       await findAwaitingApprovalRunBySlackThread(
         BIZ,
+        "C-9",
         "77.7",
         makeDb(updateChain({ data: null, error: null }))
       )
@@ -261,12 +263,13 @@ describe("findAwaitingApprovalRunBySlackThread", () => {
     expect(
       await findAwaitingApprovalRunBySlackThread(
         BIZ,
+        "C-9",
         "77.7",
         makeDb(updateChain({ data: null, error: { message: "e" } }))
       )
     ).toBeNull();
     defaultClientSpy.mockReturnValueOnce(makeDb(updateChain({ data: null, error: null })));
-    expect(await findAwaitingApprovalRunBySlackThread(BIZ, "77.7")).toBeNull();
+    expect(await findAwaitingApprovalRunBySlackThread(BIZ, "C-9", "77.7")).toBeNull();
   });
 });
 

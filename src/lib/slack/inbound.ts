@@ -101,6 +101,7 @@ export async function handleSlackChatEvent(input: {
   if (isMention && threadTs) {
     const approvalRun = await findAwaitingApprovalRunBySlackThread(
       connection.business_id,
+      channel,
       threadTs
     );
     if (approvalRun) {
