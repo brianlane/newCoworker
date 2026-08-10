@@ -78,23 +78,38 @@ describe("POST /api/webhooks/slack", () => {
     expect(await res.text()).toBe("ch-42");
   });
 
-  it.each(["app_uninstalled", "tokens_revoked"])(
-    "wipes the workspace token on %s",
-    async (type) => {
-      const res = await POST(
-        signedRequest(
-          JSON.stringify({
-            type: "event_callback",
-            team_id: "T-1",
-            event_id: "Ev-1",
-            event: { type }
-          })
-        )
-      );
-      expect(res.status).toBe(200);
-      expect(vi.mocked(markSlackConnectionDeauthorizedByTeamId)).toHaveBeenCalledWith("T-1");
-    }
-  );
+  it.each([
+    { type: "app_uninstalled" },
+    { type: "tokens_revoked", tokens: { bot: ["B-1"] } }
+  ])("wipes the workspace token on $type", async (event) => {
+    const res = await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event_id: "Ev-1",
+          event
+        })
+      )
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(markSlackConnectionDeauthorizedByTeamId)).toHaveBeenCalledWith("T-1");
+  });
+
+  it("leaves the connection alone when only USER tokens were revoked", async () => {
+    const res = await POST(
+      signedRequest(
+        JSON.stringify({
+          type: "event_callback",
+          team_id: "T-1",
+          event: { type: "tokens_revoked", tokens: { oauth: ["U-1"], bot: [] } }
+        })
+      )
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ data: { ignored: true } });
+    expect(vi.mocked(markSlackConnectionDeauthorizedByTeamId)).not.toHaveBeenCalled();
+  });
 
   it("answers 500 when the deauthorize write fails, so Slack redelivers", async () => {
     vi.mocked(markSlackConnectionDeauthorizedByTeamId).mockRejectedValue(new Error("db down"));

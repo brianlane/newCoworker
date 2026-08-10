@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseSlackEventEnvelope,
   SLACK_SIGNATURE_MAX_SKEW_MS,
+  tokensRevokedCoversBot,
   verifySlackSignature
 } from "@/lib/slack/webhook";
 
@@ -188,5 +189,25 @@ describe("parseSlackEventEnvelope", () => {
     expect(parseSlackEventEnvelope(null)).toBeNull();
     expect(parseSlackEventEnvelope("str")).toBeNull();
     expect(parseSlackEventEnvelope({ type: "something_else" })).toBeNull();
+  });
+});
+
+describe("tokensRevokedCoversBot", () => {
+  it("is true only for a non-empty tokens.bot list", () => {
+    expect(
+      tokensRevokedCoversBot({ type: "tokens_revoked", tokens: { bot: ["B-1"] } })
+    ).toBe(true);
+    expect(
+      tokensRevokedCoversBot({ type: "tokens_revoked", tokens: { oauth: ["U-1"], bot: [] } })
+    ).toBe(false);
+    expect(tokensRevokedCoversBot({ type: "tokens_revoked", tokens: {} })).toBe(false);
+    expect(tokensRevokedCoversBot({ type: "tokens_revoked" })).toBe(false);
+    expect(
+      tokensRevokedCoversBot({ type: "tokens_revoked", tokens: "junk" } as never)
+    ).toBe(false);
+    expect(
+      tokensRevokedCoversBot({ type: "tokens_revoked", tokens: { bot: "junk" } } as never)
+    ).toBe(false);
+    expect(tokensRevokedCoversBot({ type: "app_uninstalled" })).toBe(false);
   });
 });

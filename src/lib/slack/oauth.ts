@@ -31,6 +31,8 @@ export const SLACK_STATE_TTL_MS = 10 * 60 * 1000;
  *   assistant:write   the AI-agent surface (status, titles, prompts)
  *   chat:write        post messages as the bot
  *   chat:write.public post alerts into public channels without an invite
+ *   channels:read     list public channels (the alert-channel picker)
+ *   groups:read       list private channels the bot was invited to (same)
  *   im:history        receive message.im events (DMs with the coworker)
  *   app_mentions:read receive app_mention events in channels
  *   users:read(.email) resolve a Slack user to a verified email, which is
@@ -40,6 +42,8 @@ export const SLACK_BOT_SCOPES = [
   "assistant:write",
   "chat:write",
   "chat:write.public",
+  "channels:read",
+  "groups:read",
   "im:history",
   "app_mentions:read",
   "users:read",

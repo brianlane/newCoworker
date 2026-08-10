@@ -43,8 +43,23 @@ export function verifySlackSignature(input: {
 /** The inner event shapes PR 1 acts on; later PRs extend this union. */
 export type SlackInboundEvent =
   | { type: "app_uninstalled" }
-  | { type: "tokens_revoked" }
+  | { type: "tokens_revoked"; tokens?: { oauth?: unknown; bot?: unknown } }
   | { type: string; [key: string]: unknown };
+
+/**
+ * A `tokens_revoked` delivery separates revoked USER OAuth tokens
+ * (`tokens.oauth`) from revoked BOT tokens (`tokens.bot`). Only the latter
+ * kills the workspace install this integration tracks: a member revoking
+ * their personal grant must not wipe a healthy bot connection. Fails closed
+ * on a malformed payload (no bot list → not a bot revocation).
+ */
+export function tokensRevokedCoversBot(event: SlackInboundEvent): boolean {
+  if (event.type !== "tokens_revoked") return false;
+  const tokens = (event as { tokens?: unknown }).tokens;
+  if (typeof tokens !== "object" || tokens === null) return false;
+  const bot = (tokens as { bot?: unknown }).bot;
+  return Array.isArray(bot) && bot.length > 0;
+}
 
 export type SlackEventEnvelope =
   | { kind: "url_verification"; challenge: string }

@@ -8,7 +8,9 @@
  * cheap and idempotent:
  *
  *   - url_verification  → echo the challenge (one-time endpoint handshake)
- *   - app_uninstalled / tokens_revoked
+ *   - app_uninstalled, and tokens_revoked WHEN the payload's tokens.bot
+ *     list is non-empty (a user revoking their personal grant must not
+ *     wipe a healthy bot install)
  *                       → wipe the workspace's dead bot token and flip the
  *                         connection inactive (Zoom app_deauthorized
  *                         precedent). A DB failure answers 500 so Slack's
@@ -23,6 +25,7 @@ import { errorResponse, successResponse } from "@/lib/api-response";
 import {
   parseSlackEventEnvelope,
   SLACK_WEBHOOK_MAX_BODY_BYTES,
+  tokensRevokedCoversBot,
   verifySlackSignature
 } from "@/lib/slack/webhook";
 import { markSlackConnectionDeauthorizedByTeamId } from "@/lib/db/slack-connections";
@@ -68,7 +71,10 @@ export async function POST(request: Request) {
   }
 
   const { teamId, event } = envelope;
-  if (event.type === "app_uninstalled" || event.type === "tokens_revoked") {
+  const botDied =
+    event.type === "app_uninstalled" ||
+    (event.type === "tokens_revoked" && tokensRevokedCoversBot(event));
+  if (botDied) {
     try {
       await markSlackConnectionDeauthorizedByTeamId(teamId);
     } catch (err) {

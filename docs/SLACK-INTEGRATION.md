@@ -63,6 +63,8 @@ dialog. Current manifest (keep this block in step with what is deployed):
         "assistant:write",
         "chat:write",
         "chat:write.public",
+        "channels:read",
+        "groups:read",
         "im:history",
         "app_mentions:read",
         "users:read",
@@ -170,6 +172,9 @@ curl -s -X POST https://slack.com/api/apps.manifest.update \
 - `chat:write`: post alerts and replies as the bot.
 - `chat:write.public`: post alerts into a public channel the owner picked
   without requiring a bot invite first.
+- `channels:read` + `groups:read`: list public channels (and private ones
+  the bot was invited to) for the alert-channel picker; without them
+  `conversations.list` answers `missing_scope` and the picker is empty.
 - `im:history`: receive `message.im` so a DM to the coworker gets a reply.
 - `app_mentions:read`: receive `app_mention` so @New Coworker works in
   channels.
