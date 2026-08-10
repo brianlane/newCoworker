@@ -542,6 +542,25 @@ describe("the branded platform signature", () => {
     expect(args.bodyHtml).toContain("tel:+16023131823");
   });
 
+  it("uses the LIGHT palette, because a reply lands on a white canvas", async () => {
+    /**
+     * Caught by Bugbot. The block is built for the dark template shell, where
+     * parchment text reads fine. A reply renders on the client's own white
+     * background, and #F5F0E8 on white is roughly 1.1:1: the team name, the
+     * founder line and the phone number would have been effectively invisible,
+     * while the plain-text part still looked correct.
+     */
+    await POST(makeRequest({ ...REPLY, businessId: HQ_BUSINESS_ID, brandedSignature: true }));
+    const html = String(
+      (vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as { bodyHtml?: string }).bodyHtml
+    );
+    // Ink, not parchment.
+    expect(html).toContain("#0D2235");
+    expect(html).not.toContain("#F5F0E8");
+    // And a teal deep enough to read as body text on white.
+    expect(html).toContain("#0B7A70");
+  });
+
   it("escapes the draft going into the HTML part", async () => {
     // The draft is model output. Unescaped, a stray angle bracket would eat
     // the rest of the email, and anything script-shaped would ride along.

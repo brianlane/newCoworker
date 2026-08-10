@@ -72,17 +72,36 @@ export type BrandedEmailHtmlInput = {
  * that: `buildBrandedEmailHtml` via `platformSignature: false`, and the AiFlow
  * send path by refusing the flag for any business but HQ.
  */
-export function platformSignatureHtml(logoSrc: string): string {
+export function platformSignatureHtml(
+  logoSrc: string,
+  opts?: {
+    /**
+     * Which canvas this sits on. The template shell is dark, but a REPLY in a
+     * normal mail thread renders on the client's white background, where the
+     * dark-shell palette is near-invisible: parchment text on white is about
+     * 1.1:1. Defaults to "dark" so every existing caller is untouched.
+     */
+    background?: "dark" | "light";
+  }
+): string {
+  const light = opts?.background === "light";
+  // Same block, legible on either canvas. The light values are the dark ones
+  // inverted against #FFFFFF: ink for body text, a muted slate for the title
+  // line, and a deepened teal for links because #2EC4B6 on white is only
+  // ~2.1:1 and fails as body-sized text.
+  const text = light ? "#0D2235" : "#F5F0E8";
+  const muted = light ? "#5B6B7D" : "#8a9bb0";
+  const link = light ? "#0B7A70" : "#2EC4B6";
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
     <tr>
       <td style="vertical-align:middle;padding:0 16px 0 0;">
         <img src="${escapeAttr(logoSrc)}" alt="New Coworker" width="56" height="56" style="display:block;width:56px;height:56px;border-radius:10px;">
       </td>
-      <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:#F5F0E8;">
+      <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:${text};">
         <span style="font-weight:700;">The New Coworker Team</span><br>
-        <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
-        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a><br>
-        Web: <a href="${SITE_URL}" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
+        <span style="font-style:italic;color:${muted};">Brian Lane, Founder</span><br>
+        Call: <a href="tel:+16023131823" style="color:${text};text-decoration:none;">602.313.1823</a><br>
+        Web: <a href="${SITE_URL}" target="_blank" style="color:${link};text-decoration:underline;">newcoworker.com</a>
       </td>
     </tr>
   </table>`;

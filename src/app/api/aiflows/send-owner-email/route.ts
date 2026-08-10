@@ -158,7 +158,10 @@ export async function POST(request: Request) {
       ? [
           `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0B1520;white-space:pre-wrap;">${escapeHtml(body.bodyText)}</div>`,
           '<div style="margin-top:24px;">',
-          platformSignatureHtml(`${SITE_URL}/logo.png`),
+          // A reply renders on the client's own white canvas, not the dark
+          // template shell, so the sign-off needs the light palette or it is
+          // near-invisible.
+          platformSignatureHtml(`${SITE_URL}/logo.png`, { background: "light" }),
           "</div>"
         ].join("\n")
       : undefined;
