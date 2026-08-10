@@ -61,6 +61,14 @@ Two caveats recorded there and worth repeating:
   lab-verified are answered from code review with file-level citations. That
   is a deliberate, recorded decision, not an oversight.
 
+## Reassessment
+
+CASA recertification is **annual**. Start in June, not August.
+
+- **[`recert-runbook.md`](recert-runbook.md)**: the sequence, the portal traps, and the identifiers. Read before touching the lab portal.
+- **[`saq-answers.md`](saq-answers.md)**: all 54 answers as submitted and accepted, so the next cycle starts from the real text rather than reconstruction.
+- **`tsx debug/casa-posture-probe.ts`**: re-proves the externally observable SAQ claims against production and prints a dated report to attach.
+
 ## Policies
 
 Written from this system's actual architecture rather than adapted from a
