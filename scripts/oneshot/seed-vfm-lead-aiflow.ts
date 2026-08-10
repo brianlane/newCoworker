@@ -144,7 +144,7 @@ console.log(`Definition:\n${JSON.stringify(definition, null, 2)}`);
 
 const { data: existing, error: readErr } = await db
   .from("ai_flows")
-  .select("id, enabled")
+  .select("id, enabled, definition")
   .eq("business_id", BUSINESS_ID)
   .eq("name", VFM_FLOW_NAME)
   .maybeSingle();
@@ -152,15 +152,42 @@ if (readErr) {
   console.error(`[oneshot] flows read failed: ${readErr.message}`);
   process.exit(1);
 }
+
+/**
+ * run_agent steps in a stored definition whose agentId no longer matches
+ * the converged parser row. When the parser row was deleted and recreated,
+ * the stored flow would otherwise target a dead UUID at runtime (Bugbot on
+ * PR #1263). Repaired surgically (agentId only), so a live-tuned
+ * definition is never overwritten by a repair.
+ */
+function staleParserStepIds(def: unknown, currentId: string | undefined): string[] {
+  const steps = (def as { steps?: Array<Record<string, unknown>> } | null)?.steps ?? [];
+  return steps
+    .filter(
+      (s) =>
+        s.type === "run_agent" &&
+        s.agentName === VFM_PARSER_AGENT_NAME &&
+        (currentId === undefined || s.agentId !== currentId)
+    )
+    .map((s) => String(s.id));
+}
+const parserIdStale = existing
+  ? staleParserStepIds(existing.definition, parserNeedsCreate ? undefined : parserAgentId)
+  : [];
+
 // What this run will do, existing-flow cases included. Convergence rules:
 //  - the parser agent always converges on --apply (create or update);
 //  - --enable only ever turns the flow ON; an update NEVER flips a live
 //    flow off (disabling is the dashboard's job, not a re-seed side effect);
-//  - the definition is only overwritten with --force.
+//  - the definition is only overwritten with --force, EXCEPT the surgical
+//    agentId repair when the stored flow points at a stale parser row.
 const flowPlan = !existing
   ? `insert (enabled=${ENABLE})`
   : [
       FORCE ? "overwrite definition" : "keep existing definition (--force to overwrite)",
+      ...(parserIdStale.length > 0 && !FORCE
+        ? [`repair stale parser agentId on ${parserIdStale.join(", ")}`]
+        : []),
       ENABLE && !existing.enabled
         ? "enable"
         : `keep enabled=${existing.enabled}${!ENABLE && existing.enabled ? " (updates never disable)" : ""}`
@@ -170,7 +197,12 @@ console.log(
 );
 
 const nothingToDo =
-  existing && !FORCE && !(ENABLE && !existing.enabled) && !parserNeedsCreate && !parserNeedsUpdate;
+  existing &&
+  !FORCE &&
+  !(ENABLE && !existing.enabled) &&
+  !parserNeedsCreate &&
+  !parserNeedsUpdate &&
+  parserIdStale.length === 0;
 if (nothingToDo) {
   console.log("\nAlready converged, nothing to do.");
   process.exit(0);
@@ -224,10 +256,26 @@ let flowId: string;
 let flowEnabled: boolean;
 if (existing) {
   // --enable only turns the flow ON; a re-seed never flips a live flow
-  // off. The definition is only replaced under --force.
+  // off. The definition is only replaced under --force, except the
+  // surgical stale-parser agentId repair (validated before writing).
   flowEnabled = existing.enabled || ENABLE;
   const update: Record<string, unknown> = { enabled: flowEnabled };
-  if (FORCE) update.definition = finalDefinition;
+  let definitionNote = "untouched";
+  if (FORCE) {
+    update.definition = finalDefinition;
+    definitionNote = "overwritten";
+  } else if (staleParserStepIds(existing.definition, parserAgentId).length > 0) {
+    const repaired = JSON.parse(JSON.stringify(existing.definition)) as {
+      steps?: Array<Record<string, unknown>>;
+    };
+    for (const s of repaired.steps ?? []) {
+      if (s.type === "run_agent" && s.agentName === VFM_PARSER_AGENT_NAME) {
+        s.agentId = parserAgentId;
+      }
+    }
+    update.definition = parseAiFlowDefinition(repaired);
+    definitionNote = "parser agentId repaired";
+  }
   const { error } = await db.from("ai_flows").update(update).eq("id", existing.id);
   if (error) {
     console.error(`[oneshot] flow update failed: ${error.message}`);
@@ -235,7 +283,7 @@ if (existing) {
   }
   flowId = existing.id;
   console.log(
-    `\nUpdated AiFlow id=${flowId} (enabled=${flowEnabled}, definition ${FORCE ? "overwritten" : "untouched"}).`
+    `\nUpdated AiFlow id=${flowId} (enabled=${flowEnabled}, definition ${definitionNote}).`
   );
 } else {
   const { data, error } = await db
