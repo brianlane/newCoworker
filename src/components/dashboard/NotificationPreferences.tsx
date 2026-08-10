@@ -45,6 +45,8 @@ function ToggleRow({
 export function NotificationPreferences({ businessId, initial }: Props) {
   const [smsUrgent, setSmsUrgent] = useState(initial.sms_urgent);
   const [whatsappUrgent, setWhatsappUrgent] = useState(initial.whatsapp_urgent ?? true);
+  const [slackUrgent, setSlackUrgent] = useState(initial.slack_urgent ?? true);
+  const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [digestCustomerFacingOnly, setDigestCustomerFacingOnly] = useState(
@@ -91,6 +93,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   useEffect(() => {
     setSmsUrgent(initial.sms_urgent);
     setWhatsappUrgent(initial.whatsapp_urgent ?? true);
+    setSlackUrgent(initial.slack_urgent ?? true);
+    setSlackDigest(initial.slack_digest ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setDigestCustomerFacingOnly(initial.digest_customer_facing_only ?? false);
@@ -114,6 +118,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   function applyResponse(prefs: NotificationPreferencesRow) {
     setSmsUrgent(prefs.sms_urgent);
     setWhatsappUrgent(prefs.whatsapp_urgent ?? true);
+    setSlackUrgent(prefs.slack_urgent ?? true);
+    setSlackDigest(prefs.slack_digest ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setDigestCustomerFacingOnly(prefs.digest_customer_facing_only ?? false);
@@ -145,6 +151,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           businessId,
           sms_urgent: smsUrgent,
           whatsapp_urgent: whatsappUrgent,
+          slack_urgent: slackUrgent,
+          slack_digest: slackDigest,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           digest_customer_facing_only: digestCustomerFacingOnly,
@@ -190,6 +198,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           businessId,
           sms_urgent: false,
           whatsapp_urgent: false,
+          slack_urgent: false,
+          slack_digest: false,
           email_digest: false,
           email_digest_weekly: false,
           email_urgent: false,
@@ -243,6 +253,20 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Also deliver urgent alerts on WhatsApp (requires the WhatsApp integration under Integrations)."
           checked={whatsappUrgent}
           onChange={setWhatsappUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Slack: urgent alerts"
+          description="Post urgent alerts to your picked Slack channel (requires the Slack integration under Integrations)."
+          checked={slackUrgent}
+          onChange={setSlackUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Slack: digests"
+          description="Post the daily and weekly digests to the same Slack channel."
+          checked={slackDigest}
+          onChange={setSlackDigest}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
