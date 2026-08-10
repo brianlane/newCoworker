@@ -35,7 +35,10 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "email-campaign-sweep": { maxGapMinutes: 15, schedule: "* * * * *" },
   "messenger-worker": { maxGapMinutes: 15, schedule: "* * * * *" },
   "meta-capi-drain": { maxGapMinutes: 15, schedule: "* * * * *" },
-  "residency-replay": { maxGapMinutes: 15, schedule: "* * * * *" },
+  // residency-replay is deliberately absent: 20260812000200 unscheduled the
+  // job while zero tenants use residency, so "no run recorded" is its
+  // designed state, not an outage. The migration that re-schedules it will
+  // trip the exact-match fleet test and force the entry back here.
   "social-post-sweep": { maxGapMinutes: 15, schedule: "* * * * *" },
   "usage-pack-auto-reload-sweep": { maxGapMinutes: 15, schedule: "* * * * * (+ :07,:22,:37,:52)" },
   // Every five minutes.

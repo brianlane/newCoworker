@@ -272,11 +272,23 @@ describe("SWEEP_EXPECTATIONS covers exactly the scheduled pass-through fleet", (
   function passthroughRoutes(): string[] {
     const byName = new Map<string, string | null>();
     const migrations = join(ROOT, "supabase", "migrations");
+    // Replay cron.schedule AND cron.unschedule in apply order (files sorted,
+    // calls in document order). Replaying only schedules is the trap the
+    // README's cron section warns about: an unschedule-ONLY migration
+    // (20260812000200 turned residency-replay off while zero tenants use
+    // residency) leaves the job in the "expected" fleet, and the watchdog
+    // then emails ACTION REQUIRED every night for a sweep that is off by
+    // design. The guard pattern (unschedule immediately before a re-schedule
+    // in the same file) survives because document order deletes then re-adds.
     for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
       const sql = readFileSync(join(migrations, file), "utf8");
-      for (const block of sql.split(/cron\.schedule\s*\(/).slice(1)) {
-        const job = block.match(/^\s*'([^']+)'/)?.[1];
-        if (!job) continue;
+      for (const m of sql.matchAll(/cron\.(schedule|unschedule)\s*\(\s*'([^']+)'/g)) {
+        const [, kind, job] = m;
+        if (kind === "unschedule") {
+          byName.delete(job);
+          continue;
+        }
+        const block = sql.slice(m.index).split(/cron\.schedule\s*\(/)[1] ?? "";
         const fn = block.match(/\/functions\/v1\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
         byName.set(job, fn ?? byName.get(job) ?? null);
       }
@@ -297,6 +309,15 @@ describe("SWEEP_EXPECTATIONS covers exactly the scheduled pass-through fleet", (
 
   it("has an entry for every scheduled sweep and no entry for anything else", () => {
     expect(Object.keys(SWEEP_EXPECTATIONS).sort()).toEqual(passthroughRoutes());
+  });
+
+  it("does not expect a sweep whose job a later migration unscheduled", () => {
+    // residency-replay is defined by 20260804000000 and deliberately turned
+    // off by 20260812000200 while zero tenants use residency. Expecting it
+    // makes the watchdog cry wolf nightly, which is how alert channels die.
+    // If a future migration re-schedules the job, discovery re-includes it
+    // and the exact-match test above forces the registry entry back.
+    expect(passthroughRoutes()).not.toContain("residency-replay");
   });
 
   it("gives every sweep a gap longer than a single period, so one hiccup is not an alert", () => {
