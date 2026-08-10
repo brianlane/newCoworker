@@ -258,12 +258,37 @@ describe("runEmailCoworkerTurn", () => {
         source: "email_coworker",
         providerMessageId: "sent-1",
         // The reply files under the mailbox address it actually left from.
-        fromEmail: "amy@newcoworker.com"
+        fromEmail: "amy@newcoworker.com",
+        // And under its CONVERSATION, or the row is invisible to
+        // threadsWeHaveRepliedOn and the coworker's own replies stop counting
+        // as us having been in the thread.
+        threadId: "thread-9"
       })
     );
     // The inbound message reaches the model with its sender and subject.
     expect(String(mockTurn.mock.calls[0][0].userMessage)).toContain("[Email from beth@lizdev.com]");
     expect(String(mockTurn.mock.calls[0][0].userMessage)).toContain("12:00 PM EST");
+  });
+
+  it("files under the thread it replied into when the provider echoes none", async () => {
+    // Graph's /reply returns no ids, so keying the logged thread on the echo
+    // alone would leave every Microsoft reply unfindable.
+    mockSend.mockResolvedValueOnce({
+      ok: true,
+      provider: "microsoft",
+      messageId: null,
+      threadId: null,
+      fromEmail: "amy@newcoworker.com"
+    } as never);
+    await runEmailCoworkerTurn({
+      thread: THREAD,
+      message: MESSAGE,
+      link: LINK,
+      businessTimezone: "America/Phoenix"
+    });
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "thread-9" })
+    );
   });
 
   it("falls back to the message's own subject when the thread has none", async () => {

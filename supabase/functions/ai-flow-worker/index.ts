@@ -2227,6 +2227,13 @@ async function logFlowEmail(
     body: string;
     source: "ai_flow" | "owner_mailbox" | "tenant_mailbox_outbound";
     providerMessageId?: string | null;
+    /**
+     * Conversation this went out on. Without it the row is invisible to
+     * threadsWeHaveRepliedOn, which is what feeds
+     * {{trigger.thread_has_our_reply}}; every outbound row in production
+     * carried NULL until Aug 10 2026, so that signal could never fire.
+     */
+    threadId?: string | null;
     attachments?: {
       filename: string;
       mime_type: string;
@@ -2250,6 +2257,7 @@ async function logFlowEmail(
     run_id: run.id,
     flow_id: run.flow_id,
     provider_message_id: args.providerMessageId ?? null,
+    thread_id: args.threadId ?? null,
     attachments: args.attachments ?? []
   });
   if (error) console.error("email_log insert", error);
@@ -6417,7 +6425,12 @@ async function deliverOwnerMailboxEmail(
   let parsed: {
     ok?: boolean;
     detail?: string;
-    data?: { messageId?: string | null; provider?: string; fromEmail?: string | null };
+    data?: {
+      messageId?: string | null;
+      provider?: string;
+      fromEmail?: string | null;
+      threadId?: string | null;
+    };
   };
   try {
     parsed = (await res.json()) as typeof parsed;
@@ -6441,7 +6454,8 @@ async function deliverOwnerMailboxEmail(
     subject: action.subject,
     body: action.body,
     source: "owner_mailbox",
-    providerMessageId: parsed.data?.messageId ?? null
+    providerMessageId: parsed.data?.messageId ?? null,
+    threadId: parsed.data?.threadId ?? null
   });
   return {
     kind: "ok",

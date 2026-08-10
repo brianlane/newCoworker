@@ -173,8 +173,17 @@ export async function POST(request: Request) {
     return voiceToolResponse({
       ok: true,
       // fromEmail rides along so the worker can log the REAL sending address
-      // on email_log instead of the provider name.
-      data: { messageId: result.messageId, provider: result.provider, fromEmail: result.fromEmail }
+      // on email_log instead of the provider name. threadId rides along for
+      // the same reason: the worker writes the row, and an outbound row with
+      // no conversation id cannot answer "have we already replied here".
+      // Graph's /reply echoes nothing, so fall back to the thread we replied
+      // into, which we just read off the email_log row.
+      data: {
+        messageId: result.messageId,
+        provider: result.provider,
+        fromEmail: result.fromEmail,
+        threadId: result.threadId ?? thread?.threadId ?? null
+      }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

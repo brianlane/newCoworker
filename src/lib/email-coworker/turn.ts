@@ -247,7 +247,11 @@ export async function runEmailCoworkerTurn(args: {
     bodyText: reply,
     source: "email_coworker",
     fromEmail: sent.fromEmail,
-    providerMessageId: sent.messageId
+    providerMessageId: sent.messageId,
+    // The conversation, so this row can answer "have we already replied
+    // here". Graph's /reply echoes no ids, so fall back to the thread we
+    // replied into, which the caller already resolved.
+    threadId: sent.threadId ?? message.threadId
   });
 
   return { ok: true, reply, handoff, sent: true };
