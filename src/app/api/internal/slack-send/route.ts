@@ -1,5 +1,5 @@
 /**
- * Internal Slack delivery endpoint — the bridge the Deno notification
+ * Internal Slack delivery endpoint: the bridge the Deno notification
  * mirrors call (urgent alerts, digests). Token decryption and the Web API
  * client live in src/lib and need the Node runtime, so no Slack secret or
  * crypto ever lands in an edge function (the whatsapp-send precedent).
