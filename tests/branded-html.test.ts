@@ -3,7 +3,8 @@ import {
   buildBrandedEmailHtml,
   escapeAttr,
   escapeHtml,
-  type BrandedEmailHtmlInput
+  type BrandedEmailHtmlInput,
+  platformSignatureHtml
 } from "@/lib/email/branded-html";
 import {
   buildBrandedEmailHtml as buildBrandedEmailHtmlEdge,
@@ -287,5 +288,31 @@ describe("branded_email_html (Edge parity)", () => {
     for (const input of parityInputs) {
       expect(buildBrandedEmailHtmlEdge(input)).toBe(buildBrandedEmailHtml(input));
     }
+  });
+});
+
+describe("platformSignatureHtml: legible on both canvases", () => {
+  it("keeps the dark-shell palette by default, so existing templates are untouched", () => {
+    const html = platformSignatureHtml("https://x.test/logo.png");
+    expect(html).toContain("#F5F0E8");
+    expect(html).toContain("#2EC4B6");
+  });
+
+  it("switches to ink and a deeper teal on a light background", () => {
+    // A reply renders on the client's white canvas; parchment on white is
+    // about 1.1:1 and the sign-off effectively vanishes.
+    const html = platformSignatureHtml("https://x.test/logo.png", { background: "light" });
+    expect(html).toContain("#0D2235");
+    expect(html).toContain("#0B7A70");
+    expect(html).not.toContain("#F5F0E8");
+  });
+
+  it("says the same things either way", () => {
+    // Only the colours change. A signature that dropped the phone number on
+    // one canvas would be a different signature.
+    const strip = (h: string) => h.replace(/#[0-9A-Fa-f]{6}/g, "");
+    expect(strip(platformSignatureHtml("https://x.test/logo.png"))).toBe(
+      strip(platformSignatureHtml("https://x.test/logo.png", { background: "light" }))
+    );
   });
 });

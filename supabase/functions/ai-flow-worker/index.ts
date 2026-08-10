@@ -6021,6 +6021,8 @@ type FlowEmailArgs = {
   replyToEmailLogId?: string;
   /** False threads without mirroring the original's recipients. */
   replyAll?: boolean;
+  /** Sign with the branded platform signature (platform mail only). */
+  brandedSignature?: boolean;
   fromConnectionId?: string;
 };
 
@@ -6438,7 +6440,8 @@ async function deliverOwnerMailboxEmail(
       ...(action.replyToEmailLogId ? { replyToEmailLogId: action.replyToEmailLogId } : {}),
       // Off for a flow that writes separate, tailored notes: mirroring the
       // original's recipients would put both parties back on both messages.
-      ...(action.replyAll === false ? { replyAll: false } : {})
+      ...(action.replyAll === false ? { replyAll: false } : {}),
+      ...(action.brandedSignature ? { brandedSignature: true } : {})
     })
   });
   // 5xx = provider/transport fault → throw so the run retries. 2xx/4xx carry a

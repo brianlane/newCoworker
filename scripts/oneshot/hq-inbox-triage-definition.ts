@@ -248,6 +248,11 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 // note and undo the whole point of writing two.
                 replyToEmailLogId: "{{trigger.email_log_id}}",
                 replyAll: false,
+                // The real sign-off: logo, founder, phone, from
+                // branded-html.ts and docs/email-signatures.html. Composed by
+                // the send path, never by the model, and only ever for the
+                // platform's own business.
+                brandedSignature: true,
                 fromConnectionId: GMAIL_CONNECTION_ROW_ID
               },
               {
@@ -263,6 +268,11 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 body: "{{vars.email_draft_prospect}}",
                 replyToEmailLogId: "{{trigger.email_log_id}}",
                 replyAll: false,
+                // The real sign-off: logo, founder, phone, from
+                // branded-html.ts and docs/email-signatures.html. Composed by
+                // the send path, never by the model, and only ever for the
+                // platform's own business.
+                brandedSignature: true,
                 fromConnectionId: GMAIL_CONNECTION_ROW_ID
               },
               {

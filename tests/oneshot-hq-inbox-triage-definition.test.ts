@@ -485,6 +485,21 @@ describe("HQ inbox triage: a sales lead gets answered, not just announced", () =
     expect(String(inArm("s_send_prospect")?.body)).toBe("{{vars.email_draft_prospect}}");
   });
 
+  it("signs both emails with the branded platform signature", () => {
+    /**
+     * The real sign-off (logo, founder, phone) from branded-html.ts, composed
+     * by the send path rather than written by the model: a signature is exact
+     * by nature, and a model asked for one invents a title or a phone number.
+     * I hand-wrote a replacement once and it was wrong on every line.
+     */
+    for (const id of ["s_send_intro", "s_send_prospect"]) {
+      expect(inArm(id), id).toMatchObject({ brandedSignature: true });
+      // Still plain text in the definition: the HTML part is built at send
+      // time, so no markup ever sits in a flow template.
+      expect(String(inArm(id)?.body), id).not.toMatch(/<[a-z]/i);
+    }
+  });
+
   it("shows Brian both notes, labelled with who gets each", () => {
     const prompt = String(inArm("s_gate")?.prompt);
     expect(prompt).toContain("{{vars.email_draft_intro}}");

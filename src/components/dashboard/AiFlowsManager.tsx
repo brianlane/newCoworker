@@ -4202,6 +4202,25 @@ function StepFields({
           <input
             type="checkbox"
             className="mt-0.5"
+            checked={step.brandedSignature === true}
+            onChange={(ev) =>
+              patchStep(index, { brandedSignature: ev.target.checked ? true : undefined })
+            }
+          />
+          <span>
+            Sign with the New Coworker signature
+            <span className="block text-parchment/45">
+              Adds the branded sign-off (logo, founder, phone) and sends the email in both
+              plain text and HTML. This is the PLATFORM signature, so it only applies to New
+              Coworker&apos;s own mail: on any other business the setting is ignored rather
+              than putting our details under your From address.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            className="mt-0.5"
             checked={step.replyAll === false}
             onChange={(ev) => patchStep(index, { replyAll: ev.target.checked ? false : undefined })}
           />

@@ -409,6 +409,8 @@ export type StepAction =
       replyToEmailLogId?: string;
       /** False threads without mirroring the original's recipients. */
       replyAll?: boolean;
+      /** Sign with the branded platform signature (platform mail only). */
+      brandedSignature?: boolean;
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
       /** Templated recipient resolved to nothing usable → skip, not fail. */
@@ -1385,6 +1387,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(attachDocumentRef ? { attachDocumentRef } : {}),
           ...(replyToEmailLogId ? { replyToEmailLogId } : {}),
           ...(step.replyAll === false ? { replyAll: false } : {}),
+          ...(step.brandedSignature ? { brandedSignature: true } : {}),
           ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
         }
       };

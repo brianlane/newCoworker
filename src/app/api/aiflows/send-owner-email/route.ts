@@ -27,6 +27,9 @@ import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connection
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
+import { PLATFORM_SIGNATURE_TEXT, escapeHtml, platformSignatureHtml } from "@/lib/email/branded-html";
+import { SITE_URL } from "@/lib/marketing/site-url";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import { logger } from "@/lib/logger";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { getEmailLogThreadIdentity } from "@/lib/db/email-log";
@@ -53,7 +56,13 @@ const bodySchema = z.object({
    * mirroring, for a flow writing separate, tailored notes to each party:
    * mirroring would put both of them back on both messages.
    */
-  replyAll: z.boolean().optional()
+  replyAll: z.boolean().optional(),
+  /**
+   * Sign the mail with the branded platform signature (logo, founder, phone).
+   * Honoured ONLY for the platform's own business: the block carries New
+   * Coworker's identity and must never render under a tenant's From header.
+   */
+  brandedSignature: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -133,6 +142,30 @@ export async function POST(request: Request) {
         : [])
     ];
 
+    // The branded signature turns this into a multipart send: the draft stays
+    // the text/plain part so a client that will not render HTML still reads
+    // prose, and the HTML part carries the signature table with the logo.
+    //
+    // Gated on the platform's own business id, not on the caller asking
+    // nicely. The block names Brian, his title and his phone number, so a
+    // tenant flag alone would be one authoring mistake away from putting them
+    // under someone else's From header.
+    const branded = body.brandedSignature === true && body.businessId === HQ_BUSINESS_ID;
+    const bodyText = branded
+      ? `${body.bodyText}\n\n${PLATFORM_SIGNATURE_TEXT}`
+      : body.bodyText;
+    const bodyHtml = branded
+      ? [
+          `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0B1520;white-space:pre-wrap;">${escapeHtml(body.bodyText)}</div>`,
+          '<div style="margin-top:24px;">',
+          // A reply renders on the client's own white canvas, not the dark
+          // template shell, so the sign-off needs the light palette or it is
+          // near-invisible.
+          platformSignatureHtml(`${SITE_URL}/logo.png`, { background: "light" }),
+          "</div>"
+        ].join("\n")
+      : undefined;
+
     const result = await sendFromMailboxConnection(
       body.businessId,
       {
@@ -144,7 +177,8 @@ export async function POST(request: Request) {
         toEmail: body.toEmail,
         ...(replyAllTo.length ? { additionalToEmails: replyAllTo } : {}),
         subject: body.subject,
-        bodyText: body.bodyText,
+        bodyText,
+        ...(bodyHtml ? { bodyHtml } : {}),
         ccEmails: replyAllCc,
         bccEmails: normalizeRecipients(body.bcc),
         ...(thread ? { thread } : {})
