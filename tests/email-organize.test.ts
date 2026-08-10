@@ -876,6 +876,117 @@ describe("organizeMessage: trash", () => {
     ).resolves.toEqual({ ok: false, detail: "outlook_move_failed:500" });
   });
 
+  it("stars a Gmail message on the existing modify call, with no extra round trip", async () => {
+    // STARRED is a system label, so a star rides the same modify the labels
+    // and read-state use. An extra call here would be wasted quota.
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "m-star",
+      actions: { star: true, markRead: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "google" });
+    expect(nangoProxy).toHaveBeenCalledTimes(1);
+    const data = (nangoProxy.mock.calls[0][2] as { data: { addLabelIds?: string[]; removeLabelIds?: string[] } }).data;
+    expect(data.addLabelIds).toContain("STARRED");
+    expect(data.removeLabelIds).toContain("UNREAD");
+  });
+
+  it("unstars by removing the same system label", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "m-unstar",
+      actions: { unstar: true }
+    });
+    const data = (nangoProxy.mock.calls[0][2] as { data: { removeLabelIds?: string[] } }).data;
+    expect(data.removeLabelIds).toContain("STARRED");
+  });
+
+  it("counts a star as an action on its own", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
+    ).resolves.toEqual({ ok: true, provider: "google" });
+  });
+
+  it("refuses to star and unstar in one step", async () => {
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "m",
+        actions: { star: true, unstar: true }
+      })
+    ).resolves.toEqual({ ok: false, detail: "star_and_unstar_conflict" });
+  });
+
+  it("flags an Outlook message, its nearest equivalent to a star", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkFlag",
+      actions: { star: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "microsoft" });
+    expect(nangoProxy).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "/v1.0/me/messages/AAMkFlag",
+        method: "PATCH",
+        data: { flag: { flagStatus: "flagged" } }
+      })
+    );
+  });
+
+  it("clears the Outlook flag on unstar", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkUnflag",
+      actions: { unstar: true }
+    });
+    const data = (nangoProxy.mock.calls[0][2] as { data: { flag: { flagStatus: string } } }).data;
+    expect(data.flag.flagStatus).toBe("notFlagged");
+  });
+
+  it("surfaces an Outlook flag failure and a dead connection", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
+    ).resolves.toEqual({ ok: false, detail: "outlook_flag_failed:500" });
+
+    nangoProxy.mockResolvedValueOnce({ status: 403, data: {} });
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
+    ).resolves.toEqual({ ok: false, detail: "outlook_reconnect_required" });
+
+    nangoProxy.mockResolvedValueOnce(null);
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
+    ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
+  });
+
+  it("says the AI mailbox cannot be starred rather than reporting success", async () => {
+    // Silently ignoring would tell a flow its receipt was starred when nothing
+    // happened, which is the exact failure shape this file avoids elsewhere.
+    await expect(
+      organizeMessage({ businessId: BIZ, emailLogId: LOG, actions: { star: true, markRead: true } })
+    ).resolves.toEqual({ ok: false, detail: "star_unsupported_for_tenant_mailbox" });
+    expect(organizeTenant).not.toHaveBeenCalled();
+  });
+
   it("needs the row id to trash a tenant message", async () => {
     // The soft delete is keyed by id, and a provider message id cannot resolve
     // one here, so say so rather than silently skipping the delete.

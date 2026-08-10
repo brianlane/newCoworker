@@ -717,6 +717,16 @@ export type FlowStep =
       archive?: boolean;
       unarchive?: boolean;
       /**
+       * Star the message (Gmail star / Outlook follow-up flag). Brian stars
+       * every payment receipt and invoice by hand (Anthropic, Vercel,
+       * Supabase, Telnyx, Google Payments, Resend), so the flow does the same
+       * and they stay findable with `is:starred`. Connected mailboxes only:
+       * the AI mailbox has no star concept, and the organize call says so
+       * rather than reporting a success it did not perform.
+       */
+      star?: boolean;
+      unstar?: boolean;
+      /**
        * Move the message to the provider's trash (Gmail Bin / Outlook Deleted
        * Items), or soft-delete the AI mailbox row. Recoverable: Gmail keeps a
        * trashed message for 30 days, so this is not a permanent delete and

@@ -160,6 +160,12 @@ export type InboundEmailMessage = {
    */
   toRecipients?: string;
   ccRecipients?: string;
+  /**
+   * True when this business has already SENT on this conversation. Turns a
+   * message that reads like a broadcast into the next turn of a
+   * correspondence, which is never routine.
+   */
+  weRepliedOnThread?: boolean;
   receivedAt?: string;
 };
 
@@ -171,11 +177,17 @@ export function emailTriggerScope(
   msg: InboundEmailMessage,
   opts?: { connectionId?: string }
 ): TriggerScope {
-  const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  const bodyWindow = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  // AFTER the body slice, so a long message cannot truncate the marker away.
+  const windowText = msg.weRepliedOnThread
+    ? `${bodyWindow}\n\n${EMAIL_THREAD_REPLY_MARKER}`
+    : bodyWindow;
   const connectionId = opts?.connectionId?.trim();
   return {
     channel: "email",
     windowText,
+    // Also a plain key, so a step can branch on it without parsing text.
+    thread_has_our_reply: msg.weRepliedOnThread ? "yes" : "no",
     url: firstUrlInText(windowText),
     from: msg.fromEmail,
     subject: msg.subject.slice(0, 300),
@@ -216,6 +228,23 @@ export const EMAIL_ATTACHMENT_NAMES_MAX = 500;
  * this exact bracketed line could, and the worst case is a courteous
  * confirmation email).
  */
+/**
+ * Appended to windowText when we have already sent on this conversation.
+ *
+ * A classifier reading a message in isolation cannot tell a newsletter from
+ * the next turn of a correspondence we started. Live, Aug 9 2026: Google
+ * acknowledged our OWN OAuth verification request, on a thread Brian had
+ * replied to on Jul 30, and it was filed as routine and binned. Being in the
+ * conversation is a stronger signal than any phrase in the subject, and it
+ * does not depend on the sender wording things a particular way.
+ *
+ * Carried in windowText rather than only as a scope key because `classify`
+ * reads windowText (or a named var) and its `question` is not templated, so
+ * this is the only way the signal reaches the model.
+ */
+export const EMAIL_THREAD_REPLY_MARKER =
+  "[thread] we have already replied on this conversation";
+
 export const EMAIL_ATTACHMENTS_MARKER = "[inbound attachments]";
 
 export function tenantEmailTriggerScope(

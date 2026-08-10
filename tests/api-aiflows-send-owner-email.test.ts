@@ -104,7 +104,7 @@ describe("POST /api/aiflows/send-owner-email", () => {
     expect(await res.json()).toEqual({
       ok: true,
       // fromEmail rides along so the worker logs the real sending address.
-      data: { messageId: "gmail-1", provider: "google", fromEmail: "owner@biz.com" }
+      data: { messageId: "gmail-1", provider: "google", fromEmail: "owner@biz.com", threadId: null }
     });
     expect(sendFromMailboxConnection).toHaveBeenCalledWith(
       businessId,
@@ -131,7 +131,7 @@ describe("POST /api/aiflows/send-owner-email", () => {
     const res = await POST(makeRequest(validBody));
     expect(await res.json()).toEqual({
       ok: true,
-      data: { messageId: null, provider: "microsoft", fromEmail: null }
+      data: { messageId: null, provider: "microsoft", fromEmail: null, threadId: null }
     });
     expect(vi.mocked(sendFromMailboxConnection).mock.calls[0][1].provider).toBe("microsoft");
   });
@@ -201,6 +201,57 @@ describe("replying inside an existing conversation", () => {
     expect(rememberSentThread).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: "199abc4d5e6f7890", correspondentEmail: "lead@example.com" })
     );
+  });
+
+  it("reports the conversation back, so the outbound row can be found later", async () => {
+    /**
+     * Caught by Bugbot, and confirmed against production: every outbound
+     * email_log row carried thread_id NULL, so `threadsWeHaveRepliedOn` (which
+     * matches on thread_id) could never match and the thread signal behind
+     * {{trigger.thread_has_our_reply}} was dead on arrival.
+     *
+     * The worker writes that row from THIS response, so the id has to come
+     * back here or it is lost. My own test for the signal mocked the lookup
+     * and so proved nothing about the row ever being written.
+     */
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-live",
+      providerMessageId: "m-live",
+      replyToRecipients: [],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-live",
+      threadId: "t-echoed",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+    const res = await POST(makeRequest(REPLY_BODY));
+    const body = (await res.json()) as { data: { threadId: string | null } };
+    // The provider's echo wins when there is one.
+    expect(body.data.threadId).toBe("t-echoed");
+  });
+
+  it("falls back to the thread it replied into when the provider echoes none", async () => {
+    // Graph's /reply returns no ids at all, so keying on the echo alone would
+    // leave every Microsoft reply unfindable, exactly the gap this closes.
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-known",
+      providerMessageId: "m9",
+      replyToRecipients: [],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "microsoft",
+      messageId: null,
+      threadId: null,
+      fromEmail: "team@newcoworker.com"
+    } as never);
+    const res = await POST(makeRequest(REPLY_BODY));
+    const body = (await res.json()) as { data: { threadId: string | null } };
+    expect(body.data.threadId).toBe("t-known");
   });
 
   it("mirrors the live Aug 8 thread: two on To, no Cc invented", async () => {

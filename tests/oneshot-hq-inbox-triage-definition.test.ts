@@ -52,6 +52,7 @@ type StepJson = {
   markRead?: boolean;
   markUnread?: boolean;
   archive?: boolean;
+  star?: boolean;
 };
 
 /** Any uuid: the applier supplies the real one after upserting the agent. */
@@ -154,7 +155,7 @@ describe("HQ inbox triage: one alert per conversation", () => {
     // The cooldown silences notify_owner only. If filing ever became
     // conditional on the alert, a quiet reply would sit unlabeled forever.
     const organize = steps.filter((s) => s.type === "email_organize");
-    expect(organize).toHaveLength(6);
+    expect(organize).toHaveLength(7);
     for (const step of organize) {
       expect(step.cooldown, step.id).toBeUndefined();
       expect(step.addLabels?.[0], step.id).toMatch(/^HQ\//);
@@ -252,24 +253,56 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(category("automated_important")?.description).toMatch(/verify|approve|respond/i);
   });
 
-  it("ARCHIVES the merely routine, so a misclassification costs nothing", () => {
+  it("only reads and labels the merely routine, leaving it in the inbox", () => {
     /**
      * The middle tier, and the reason it exists. On Aug 9 2026 an email titled
      * "[Action Needed] OAuth Verification Request Acknowledgement", on a thread
      * Brian had already replied to, was read as routine and went to the Bin.
      *
-     * A classifier will always be wrong sometimes, so what matters is what a
-     * wrong answer costs. Uncertain mail lands here and is merely out of the
-     * inbox, still in All Mail.
+     * It no longer archives either: mail disappearing from the inbox is the
+     * complaint that started all of this, so an uncertain classification now
+     * costs nothing at all.
      */
     const step = steps.find((s) => s.id === "s_org_automated");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_notice" });
     expect(step?.markRead).toBe(true);
-    expect(step?.archive).toBe(true);
     expect(step?.addLabels).toEqual(["HQ/Automated"]);
-    // The whole point: this tier never destroys anything.
     expect(step?.trash).toBeUndefined();
+    expect(step?.archive).toBeUndefined();
     expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
+  });
+
+  it("never removes anything from the inbox, by archive or by folder move", () => {
+    // In Gmail a folder move strips the INBOX label, so it archives by another
+    // name. Brian went looking for the Bobby referral on Aug 8 2026 and could
+    // not find it: it was under HQ/Sales alone. Labels only now.
+    for (const step of steps.filter((s) => s.type === "email_organize")) {
+      expect(step.archive, step.id).toBeUndefined();
+      expect(step.moveToFolder, step.id).toBeUndefined();
+    }
+  });
+
+  it("stars billing receipts and leaves them where they are", () => {
+    // Read off the live mailbox first: every starred message in HQ's Gmail is
+    // a payment receipt or invoice, all left in the inbox.
+    const step = steps.find((s) => s.id === "s_org_receipt");
+    expect(step?.when).toEqual({ var: "email_kind", equals: "billing_receipt" });
+    expect(step?.star).toBe(true);
+    expect(step?.addLabels).toEqual(["HQ/Billing"]);
+    expect(step?.trash).toBeUndefined();
+    // A receipt needs no human, so it must not text.
+    expect(notifySteps.some((n) => n.when?.equals === "billing_receipt")).toBe(false);
+  });
+
+  it("teaches every tier that an ongoing conversation is not routine", () => {
+    // The wording-independent half of the OAuth fix. A phrase match cannot
+    // reach a bland message; being in the thread can.
+    const cat = (v: string) =>
+      (steps.find((s) => s.id === "s_classify")?.categories ?? []).find((c) => c.value === v)
+        ?.description ?? "";
+    expect(cat("automated_important")).toMatch(/conversation we are in/i);
+    expect(cat("automated_notice")).toMatch(/not part of a conversation/i);
+    expect(cat("automated_bulk")).toMatch(/not already corresponding/i);
   });
 
   it("bins ONLY the unmistakably bulk tier, and never texts about it", () => {

@@ -237,6 +237,10 @@ export const TRIGGER_SCOPE_KEYS = [
   // Who else was on the message, so a step can tell whether the person it is
   // about to address will actually receive it.
   "cc",
+  // "yes"/"no": have we already sent on this conversation.
+  "thread_has_our_reply",
+  // "yes"/"no": have we already sent on this conversation.
+  "thread_has_our_reply",
   "email_log_id",
   "received_at",
   "connection_id",
@@ -1028,6 +1032,12 @@ const nonBranchStepMembers = [
        * deciding what to bin must always be undoable.
        */
       trash: z.boolean().optional(),
+      /**
+       * Star / unstar. Brian stars every payment receipt by hand, so the
+       * triage flow does it for him and they stay findable with `is:starred`.
+       */
+      star: z.boolean().optional(),
+      unstar: z.boolean().optional(),
       addLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
       removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
       /** Folder display name (Gmail user label / Outlook folder / AI folder). */
@@ -1040,6 +1050,8 @@ const nonBranchStepMembers = [
         step.markUnread === true ||
         step.archive === true ||
         step.trash === true ||
+        step.star === true ||
+        step.unstar === true ||
         step.unarchive === true ||
         (step.addLabels?.length ?? 0) > 0 ||
         (step.removeLabels?.length ?? 0) > 0 ||

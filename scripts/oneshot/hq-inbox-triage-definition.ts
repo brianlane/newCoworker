@@ -122,22 +122,27 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "billing",
             description:
-              "Billing needing a human: an invoice we owe, a failed or declined payment, a dispute or chargeback. NOT receipts, successful charges, or server and hosting renewal or expiry notices"
+              "Billing needing a human: an unpaid invoice we owe, a failed or declined payment, a dispute or chargeback. NOT receipts for charges that already succeeded, and NOT hosting renewal or expiry notices"
           },
           {
             value: "automated_important",
             description:
-              "Automated mail a human must act on: it asks us to do, verify, approve, confirm or respond to something, or reports an outage, security alert, suspension, broken integration or legal notice"
+              "Automated mail a human must act on: it asks us to do, verify, approve or respond, reports an outage, security alert, suspension or broken integration, OR continues a conversation we are in"
+          },
+          {
+            value: "billing_receipt",
+            description:
+              "A receipt, invoice or payment confirmation for a charge that already went through, from a vendor we pay: nothing is owed and nothing is broken, it is a record worth keeping"
           },
           {
             value: "automated_bulk",
             description:
-              "Bulk mail nobody ever needs to read again: marketing, newsletters, product announcements, promotions, webinar or event invitations, and vendor drip campaigns"
+              "Bulk mail nobody ever needs to read again and that we are not already corresponding on: marketing, newsletters, product announcements, promotions, event invitations, vendor drip campaigns"
           },
           {
             value: "automated_notice",
             description:
-              "Routine automated mail that asks nothing of us: our own alert and contact-form copies, calendar invites, digests, usage summaries, receipts, and hosting renewal or expiry notices"
+              "Routine automated mail that asks nothing of us and is not part of a conversation we are in: our own alert and contact-form copies, calendar invites, digests, usage summaries, hosting renewals"
           }
         ],
         saveAs: "email_kind"
@@ -246,29 +251,33 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         // organize steps below, and silent.
         else: []
       },
+      /**
+       * LABEL ONLY, never a folder move. In Gmail a move strips the INBOX
+       * label, so triaged mail vanished from the inbox: Brian went looking
+       * for the Bobby referral on Aug 8 2026 and could not find it, because
+       * it was sitting under HQ/Sales alone. Nothing in this flow removes a
+       * message from the inbox any more.
+       */
       {
         id: "s_org_sales",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "sales_lead" },
-        addLabels: ["HQ/Sales"],
-        moveToFolder: "HQ/Sales"
+        addLabels: ["HQ/Sales"]
       },
       {
         id: "s_org_support",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "support" },
-        addLabels: ["HQ/Support"],
-        moveToFolder: "HQ/Support"
+        addLabels: ["HQ/Support"]
       },
       {
         id: "s_org_billing",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "billing" },
-        addLabels: ["HQ/Billing"],
-        moveToFolder: "HQ/Billing"
+        addLabels: ["HQ/Billing"]
       },
       /**
        * Routine automated mail: read it, file it, never mention it.
@@ -279,16 +288,15 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
        * nothing happened to it, which is the worst of both: the run did the
        * work of recognising the mail and left it exactly where it was.
        *
-       * ARCHIVED, not binned. This is the middle tier and it exists because
-       * the two-tier version was destructive on every mistake: on Aug 9 2026
-       * an email titled "[Action Needed] OAuth Verification Request
-       * Acknowledgement", on a thread Brian had already replied to, was read
-       * as routine and went to the Bin.
+       * READ AND LABELLED, and that is all. Nothing in this flow archives
+       * any more: mail disappearing from the inbox is the complaint that
+       * started this, and "where did it go" is a worse failure than a read
+       * message Brian can scroll past.
        *
-       * A classifier will always be wrong sometimes, so the question is what
-       * a wrong answer costs. Uncertain mail now lands here and is merely out
-       * of the inbox, still in All Mail. Only the unmistakably-bulk tier below
-       * is destroyed, and even that is recoverable for 30 days.
+       * This is still the tier uncertainty lands in, and it now costs
+       * nothing: the message stays exactly where it was, marked read and
+       * filed under a label. Only the unmistakably-bulk tier below is
+       * destroyed, and even that is recoverable for 30 days.
        */
       {
         id: "s_org_automated",
@@ -296,8 +304,26 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_notice" },
         markRead: true,
-        addLabels: ["HQ/Automated"],
-        archive: true
+        addLabels: ["HQ/Automated"]
+      },
+      /**
+       * Receipts get STARRED, because that is what Brian does by hand.
+       *
+       * Read against the live mailbox before writing this: every starred
+       * message in HQ's Gmail is a payment receipt or invoice (Anthropic,
+       * Vercel, Supabase, Telnyx, Google Payments, Resend, Cursor, the
+       * Arizona Corporation Commission), and all of them are left in the
+       * inbox. So the flow does the same and they stay findable with
+       * `is:starred`.
+       */
+      {
+        id: "s_org_receipt",
+        type: "email_organize",
+        connectionId: GMAIL_CONNECTION_ROW_ID,
+        when: { var: "email_kind", equals: "billing_receipt" },
+        markRead: true,
+        star: true,
+        addLabels: ["HQ/Billing"]
       },
       /**
        * The only tier that bins anything: marketing and newsletters with no

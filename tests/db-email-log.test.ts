@@ -189,6 +189,55 @@ describe("listEmailLogForAddress", () => {
   });
 });
 
+describe("recordOutboundAssistantEmail: the row has to be findable by thread", () => {
+  /**
+   * Every outbound row in production carried thread_id NULL until Aug 10 2026,
+   * so `threadsWeHaveRepliedOn` could never match one and the signal it feeds
+   * was dead. Asserting the INSERT payload rather than a helper's return
+   * value, because the column being written is the whole point.
+   */
+  it("writes the conversation id when the caller threaded the send", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail(
+      {
+        businessId: "biz",
+        toEmail: "a@b.c",
+        subject: "Re: hi",
+        bodyText: "hello",
+        source: "email_coworker",
+        fromEmail: "team@newcoworker.com",
+        threadId: "t-7"
+      },
+      db as never
+    );
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ thread_id: "t-7" }));
+  });
+
+  it("writes null rather than an empty string when there is no thread", async () => {
+    // An empty string would match nothing and read as a real id in the column.
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    for (const threadId of [undefined, "", "   "]) {
+      await recordOutboundAssistantEmail(
+        {
+          businessId: "biz",
+          toEmail: "a@b.c",
+          subject: "hi",
+          bodyText: "hello",
+          source: "dashboard_chat",
+          fromEmail: null,
+          ...(threadId === undefined ? {} : { threadId })
+        },
+        db as never
+      );
+    }
+    for (const call of insert.mock.calls) {
+      expect((call[0] as { thread_id: unknown }).thread_id).toBeNull();
+    }
+  });
+});
+
 describe("getEmailLogRow", () => {
   /**
    * The deep link in the HQ alert names one row by id. The Emails page renders

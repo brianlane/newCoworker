@@ -13,7 +13,8 @@ import {
   safeRegexTest,
   tenantEmailTriggerScope,
   EMAIL_ATTACHMENT_NAMES_MAX,
-  webhookTriggerScope
+  webhookTriggerScope,
+  EMAIL_THREAD_REPLY_MARKER
 } from "@/lib/ai-flows/trigger-eval";
 
 describe("firstUrlInText", () => {
@@ -214,8 +215,46 @@ describe("emailTriggerScope", () => {
       from: "leads@referralexchange.com",
       subject: "New lead",
       message_id: "m1",
-      received_at: "2026-06-09T15:00:00Z"
+      received_at: "2026-06-09T15:00:00Z",
+      // Always present, never omitted: a step branching on it must be able to
+      // tell "we have not replied" from "the poller did not look".
+      thread_has_our_reply: "no"
     });
+  });
+
+  it("marks a message on a conversation we have already replied to", () => {
+    /**
+     * The signal that would have saved the OAuth email (Aug 9 2026): Google
+     * acknowledging our OWN verification request, on a thread Brian had
+     * replied to on Jul 30, filed as routine and binned. Being in the
+     * conversation does not depend on how the sender words the subject.
+     */
+    const scope = emailTriggerScope({
+      id: "m9",
+      fromEmail: "api-oauth-dev-verification@google.com",
+      subject: "[Action Needed] OAuth Verification Request Acknowledgement",
+      bodyText: "We have received your request.",
+      threadId: "t-9",
+      weRepliedOnThread: true
+    });
+    expect(scope.thread_has_our_reply).toBe("yes");
+    // In windowText too, because `classify` reads windowText and its question
+    // is not templated, so this is the only path to the model.
+    expect(scope.windowText).toContain(EMAIL_THREAD_REPLY_MARKER);
+    // AFTER the body, so a long message cannot clip the marker away.
+    expect(String(scope.windowText).trimEnd().endsWith(EMAIL_THREAD_REPLY_MARKER)).toBe(true);
+  });
+
+  it("says nothing extra when we have never replied on the thread", () => {
+    const scope = emailTriggerScope({
+      id: "m10",
+      fromEmail: "news@vendor.com",
+      subject: "Monthly roundup",
+      bodyText: "Lots of news.",
+      threadId: "t-10"
+    });
+    expect(scope.thread_has_our_reply).toBe("no");
+    expect(scope.windowText).not.toContain(EMAIL_THREAD_REPLY_MARKER);
   });
   it("clips oversized bodies and omits received_at when unknown", () => {
     const scope = emailTriggerScope({

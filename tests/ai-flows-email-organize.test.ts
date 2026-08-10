@@ -127,6 +127,46 @@ describe("email_organize schema + planner", () => {
     });
   });
 
+  it("carries `star` and `unstar` from the authored step into the planned action", () => {
+    /**
+     * Same seam as `trash`: valid at authoring, handled at the gateway, and
+     * dropped by the planner in between would mean the receipt is labelled and
+     * never starred, with the step still reporting success.
+     */
+    for (const flag of ["star", "unstar"] as const) {
+      const plan = planStep(
+        { id: "org1", type: "email_organize", [flag]: true } as unknown as FlowStep,
+        {
+          vars: {},
+          trigger: {
+            channel: "email",
+            windowText: "hi",
+            url: null,
+            from: "invoice@vercel.com",
+            message_id: "rfc-r"
+          }
+        }
+      );
+      expect(plan.ok, flag).toBe(true);
+      if (!plan.ok) return;
+      expect(plan.action, flag).toMatchObject({ kind: "email_organize", [flag]: true });
+    }
+  });
+
+  it("omits `star` when the step did not ask for it", () => {
+    const plan = planStep(
+      { id: "org1", type: "email_organize", markRead: true } as FlowStep,
+      {
+        vars: {},
+        trigger: { channel: "email", windowText: "hi", url: null, from: "a@b.c", message_id: "m" }
+      }
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).not.toHaveProperty("star");
+    expect(plan.action).not.toHaveProperty("unstar");
+  });
+
   it("omits `trash` entirely when the step did not ask for it", () => {
     // Never a literal false: the gateway treats presence as intent, and a
     // stray `trash: false` on every organize action is one refactor away from

@@ -614,6 +614,14 @@ export type RecordOutboundAssistantEmailInput = {
   toEmail: string;
   subject: string;
   bodyText: string;
+  /**
+   * Conversation id this reply went out on (Gmail threadId / Graph
+   * conversationId), when the send was threaded. Without it the row cannot
+   * answer "have we already replied on this thread", which is what
+   * threadsWeHaveRepliedOn asks: every outbound row in production carried
+   * NULL until Aug 10 2026, so that signal could never fire.
+   */
+  threadId?: string;
   /** Surface the assistant sent from. */
   source:
     | "dashboard_chat"
@@ -660,6 +668,12 @@ export async function recordOutboundAssistantEmail(
       run_id: null,
       flow_id: null,
       provider_message_id: input.providerMessageId ?? null,
+      // The conversation this went out on, when the caller threaded it.
+      // Without this an outbound row is invisible to any "have we already
+      // replied here" question: threadsWeHaveRepliedOn matches on thread_id,
+      // and every outbound row in production carried NULL until Aug 10 2026,
+      // so the signal it feeds could never fire.
+      thread_id: input.threadId?.trim() || null,
       is_read: true
     });
     if (error) console.error("recordOutboundAssistantEmail", error.message);
