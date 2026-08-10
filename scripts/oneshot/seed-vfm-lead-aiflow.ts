@@ -10,8 +10,12 @@
  * created when absent, so re-runs converge.
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API
- * use. Dry-run by default; idempotent (existing flow by name is left alone
- * unless --force).
+ * use. Dry-run by default; idempotent convergence rules for an existing
+ * flow (Bugbot on PR #1263):
+ *   - the parser agent always converges on --apply (create or update);
+ *   - --enable only ever turns the flow ON; a re-seed NEVER flips a live
+ *     flow off (disabling is the dashboard's job);
+ *   - the definition is only overwritten with --force.
  *
  * Assignee modes (see the definition module):
  *   --assignee-name "<roster name>"  roster mode: route_to_team pin + SMS
@@ -148,16 +152,32 @@ if (readErr) {
   console.error(`[oneshot] flows read failed: ${readErr.message}`);
   process.exit(1);
 }
-if (existing && !FORCE) {
-  console.log(
-    `\nFlow "${VFM_FLOW_NAME}" already exists (id=${existing.id}, enabled=${existing.enabled}). ` +
-      "Nothing to do. Pass --force to overwrite its definition in place."
-  );
+// What this run will do, existing-flow cases included. Convergence rules:
+//  - the parser agent always converges on --apply (create or update);
+//  - --enable only ever turns the flow ON; an update NEVER flips a live
+//    flow off (disabling is the dashboard's job, not a re-seed side effect);
+//  - the definition is only overwritten with --force.
+const flowPlan = !existing
+  ? `insert (enabled=${ENABLE})`
+  : [
+      FORCE ? "overwrite definition" : "keep existing definition (--force to overwrite)",
+      ENABLE && !existing.enabled
+        ? "enable"
+        : `keep enabled=${existing.enabled}${!ENABLE && existing.enabled ? " (updates never disable)" : ""}`
+    ].join("; ");
+console.log(
+  `Flow     : ${existing ? `exists (id=${existing.id}, enabled=${existing.enabled})` : "absent"} -> ${flowPlan}`
+);
+
+const nothingToDo =
+  existing && !FORCE && !(ENABLE && !existing.enabled) && !parserNeedsCreate && !parserNeedsUpdate;
+if (nothingToDo) {
+  console.log("\nAlready converged, nothing to do.");
   process.exit(0);
 }
 
 if (!APPLY) {
-  console.log("\n[dry-run] Not writing. Re-run with --apply to insert.");
+  console.log("\n[dry-run] Not writing. Re-run with --apply to write.");
   process.exit(0);
 }
 
@@ -201,17 +221,22 @@ const finalDefinition = parseAiFlowDefinition(
 );
 
 let flowId: string;
+let flowEnabled: boolean;
 if (existing) {
-  const { error } = await db
-    .from("ai_flows")
-    .update({ definition: finalDefinition, enabled: ENABLE })
-    .eq("id", existing.id);
+  // --enable only turns the flow ON; a re-seed never flips a live flow
+  // off. The definition is only replaced under --force.
+  flowEnabled = existing.enabled || ENABLE;
+  const update: Record<string, unknown> = { enabled: flowEnabled };
+  if (FORCE) update.definition = finalDefinition;
+  const { error } = await db.from("ai_flows").update(update).eq("id", existing.id);
   if (error) {
     console.error(`[oneshot] flow update failed: ${error.message}`);
     process.exit(1);
   }
   flowId = existing.id;
-  console.log(`\nUpdated AiFlow id=${flowId} (enabled=${ENABLE}).`);
+  console.log(
+    `\nUpdated AiFlow id=${flowId} (enabled=${flowEnabled}, definition ${FORCE ? "overwritten" : "untouched"}).`
+  );
 } else {
   const { data, error } = await db
     .from("ai_flows")
@@ -228,6 +253,7 @@ if (existing) {
     process.exit(1);
   }
   flowId = data.id;
+  flowEnabled = ENABLE;
   console.log(`\nSeeded AiFlow id=${flowId} (enabled=${ENABLE}).`);
 }
 
@@ -237,7 +263,8 @@ await recordOneshotApplied(db, {
   details: {
     flow_id: flowId,
     flow_name: VFM_FLOW_NAME,
-    enabled: ENABLE,
+    enabled: flowEnabled,
+    definition_written: !existing || FORCE,
     mode: ASSIGNEE_NAME ? "roster" : "email_only",
     parser_agent_id: parserAgentId
   }
