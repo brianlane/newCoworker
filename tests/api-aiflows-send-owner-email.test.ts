@@ -295,6 +295,87 @@ describe("replying inside an existing conversation", () => {
     expect(sendArgs.ccEmails ?? []).toEqual([]);
   });
 
+  it("addresses ONLY the named recipient when the step opts out of reply-all", async () => {
+    /**
+     * The HQ sales arm now writes two tailored notes and sends them
+     * separately, one to the introducer and one to the prospect. Mirroring
+     * would put both people back on both messages and undo the entire point,
+     * so the opt-out has to actually suppress it, not merely be accepted.
+     */
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-solo",
+      providerMessageId: "m-solo",
+      replyToRecipients: ["team@newcoworker.com", "bobby@bobbyjobs.example.com"],
+      replyCcRecipients: ["assistant@kypads.com"]
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-solo",
+      threadId: "t-solo",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    const res = await POST(makeRequest({ ...REPLY_BODY, replyAll: false }));
+    expect(res.status).toBe(200);
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      toEmail: string;
+      additionalToEmails?: string[];
+      ccEmails?: string[];
+    };
+    expect(sendArgs.toEmail).toBe("lead@example.com");
+    expect(sendArgs.additionalToEmails ?? []).toEqual([]);
+    expect(sendArgs.ccEmails ?? []).toEqual([]);
+  });
+
+  it("still threads the send when reply-all is off", async () => {
+    // Opting out of the RECIPIENTS must not opt out of the conversation: both
+    // tailored notes still belong in the original thread.
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-thread",
+      inReplyToMessageRef: "<orig@mail>",
+      providerMessageId: "m-thread",
+      replyToRecipients: ["bobby@bobbyjobs.example.com"],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-thread",
+      threadId: "t-thread",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    await POST(makeRequest({ ...REPLY_BODY, replyAll: false }));
+    expect(vi.mocked(sendFromMailboxConnection).mock.calls[0][2]).toMatchObject({
+      thread: { threadId: "t-thread", inReplyToMessageRef: "<orig@mail>" }
+    });
+  });
+
+  it("still mirrors when the step says nothing, so other flows are unchanged", async () => {
+    // The opt-out is explicit-false only: an introduction that does NOT split
+    // its reply must keep reaching the prospect.
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-def",
+      providerMessageId: "m-def",
+      replyToRecipients: ["bobby@bobbyjobs.example.com"],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-def",
+      threadId: "t-def",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    await POST(makeRequest(REPLY_BODY));
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      additionalToEmails?: string[];
+    };
+    expect(sendArgs.additionalToEmails).toEqual(["bobby@bobbyjobs.example.com"]);
+  });
+
   it("keeps a Cc recipient on Cc rather than promoting them", async () => {
     // The mirror has to work in both directions, or "mirror" just means
     // "everyone on To".

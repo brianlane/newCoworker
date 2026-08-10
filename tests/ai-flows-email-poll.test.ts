@@ -505,6 +505,45 @@ describe("pollEmailTriggers", () => {
     );
   });
 
+  it("hands the scope our own address, so the prospect is whoever is left", async () => {
+    /**
+     * others_to is "everyone on the mail who is neither us nor the sender",
+     * and the connected account can only drop out if the poller says what it
+     * is. Without this the account address would look like a third party and
+     * the prospect note would be addressed to our own mailbox.
+     */
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      metadata: { provider_account_email: "newcoworkerteam@gmail.com" }
+    } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [
+              { name: "From", value: "james@kypads.com" },
+              { name: "Subject", value: "Referral for Bobby" },
+              {
+                name: "To",
+                value: "newcoworkerteam@gmail.com, bobby@bobbyjobs.example.com"
+              }
+            ],
+            mimeType: "text/plain",
+            body: { data: b64url("Meet Bobby") }
+          }
+        }
+      } as never);
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({ others_to: "bobby@bobbyjobs.example.com" })
+      }),
+      expect.anything()
+    );
+  });
+
   it("asks Gmail to exclude our own sends, using the provider's alias list", async () => {
     // `-from:me` is the first guard and the only one that knows about send-as
     // aliases on domains we cannot enumerate. Verified against the live HQ

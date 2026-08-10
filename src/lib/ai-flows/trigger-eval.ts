@@ -7,6 +7,7 @@
  * dual-runtime pattern as schema.ts ↔ types.ts) for the places that run in
  * Next.js instead: the manual "Run now" route and the inbound-email poller.
  */
+import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 
 const URL_RE = /https?:\/\/[^\s<>"')]+/i;
@@ -175,7 +176,11 @@ export const EMAIL_WINDOW_TEXT_MAX = 6000;
 /** Trigger scope for an inbound email that matched a flow's conditions. */
 export function emailTriggerScope(
   msg: InboundEmailMessage,
-  opts?: { connectionId?: string }
+  opts?: {
+    connectionId?: string;
+    /** The connected account's own address, so it drops out of others_*. */
+    selfEmail?: string;
+  }
 ): TriggerScope {
   const bodyWindow = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
   // AFTER the body slice, so a long message cannot truncate the marker away.
@@ -183,11 +188,21 @@ export function emailTriggerScope(
     ? `${bodyWindow}\n\n${EMAIL_THREAD_REPLY_MARKER}`
     : bodyWindow;
   const connectionId = opts?.connectionId?.trim();
+  const others = otherRecipients(
+    msg.toRecipients,
+    msg.ccRecipients,
+    msg.fromEmail,
+    opts?.selfEmail
+  );
   return {
     channel: "email",
     windowText,
     // Also a plain key, so a step can branch on it without parsing text.
     thread_has_our_reply: msg.weRepliedOnThread ? "yes" : "no",
+    // The prospect, split so a send step can use them: `to` takes one address
+    // and `cc` takes the rest (normalizeRecipients splits the comma string).
+    others_to: others[0] ?? "",
+    others_cc: others.slice(1).join(", "),
     url: firstUrlInText(windowText),
     from: msg.fromEmail,
     subject: msg.subject.slice(0, 300),
@@ -228,6 +243,43 @@ export const EMAIL_ATTACHMENT_NAMES_MAX = 500;
  * this exact bracketed line could, and the worst case is a courteous
  * confirmation email).
  */
+/**
+ * Everyone on this message who is neither US nor the sender: in practice, the
+ * prospect an introducer put on To or Cc.
+ *
+ * Exists so a flow can write to the prospect DIRECTLY rather than replying-all
+ * with copy aimed partly at someone else. An intro reply that thanks the
+ * introducer and pitches the prospect in one message reads oddly to both of
+ * them: each sees a paragraph written for the other.
+ *
+ * "Ours" is the connected account plus anything on the tenant email domain,
+ * which is where the AI mailbox and the catch-all aliases live. Display names
+ * are dropped because the send path validates bare addresses.
+ */
+export function otherRecipients(
+  toHeader: string | undefined,
+  ccHeader: string | undefined,
+  fromEmail: string,
+  selfEmail?: string
+): string[] {
+  const domain = tenantEmailDomain();
+  const mine = new Set(
+    [selfEmail, fromEmail].map((a) => (a ?? "").trim().toLowerCase()).filter(Boolean)
+  );
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of `${toHeader ?? ""},${ccHeader ?? ""}`.split(",")) {
+    const m = /<([^<>]+)>/.exec(raw);
+    const addr = (m ? m[1] : raw).trim().toLowerCase();
+    if (!addr.includes("@") || seen.has(addr) || mine.has(addr)) continue;
+    const at = addr.lastIndexOf("@");
+    if (addr.slice(at + 1) === domain) continue;
+    seen.add(addr);
+    out.push(addr);
+  }
+  return out;
+}
+
 /**
  * Appended to windowText when we have already sent on this conversation.
  *

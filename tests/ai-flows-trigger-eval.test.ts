@@ -218,8 +218,66 @@ describe("emailTriggerScope", () => {
       received_at: "2026-06-09T15:00:00Z",
       // Always present, never omitted: a step branching on it must be able to
       // tell "we have not replied" from "the poller did not look".
-      thread_has_our_reply: "no"
+      thread_has_our_reply: "no",
+      // No To/Cc on this fixture, so there is nobody else on the mail.
+      others_to: "",
+      others_cc: ""
     });
+  });
+
+  it("splits the prospect out of the recipients, dropping us and the sender", () => {
+    /**
+     * The Aug 8 referral: addressed to our team alias and the prospect, with
+     * the introducer in From. Writing to the prospect DIRECTLY needs their
+     * address on its own, which a reply-all cannot give you.
+     */
+    const scope = emailTriggerScope(
+      {
+        id: "m11",
+        fromEmail: "james@kypads.com",
+        subject: "Referral for Bobby",
+        bodyText: "Meet Bobby.",
+        toRecipients: '"team@newcoworker.com" <team@newcoworker.com>, bobby@bobbyjobs.example.com',
+        ccRecipients: "Assistant <assistant@kypads.com>, newcoworkerteam@gmail.com"
+      },
+      { selfEmail: "newcoworkerteam@gmail.com" }
+    );
+    // team@ is on the tenant domain and newcoworkerteam@ is the account, so
+    // both drop; the sender drops; display names are stripped.
+    expect(scope.others_to).toBe("bobby@bobbyjobs.example.com");
+    expect(scope.others_cc).toBe("assistant@kypads.com");
+  });
+
+  it("reports nobody else when only we and the sender are on it", () => {
+    // The Example B case. An empty others_to is what lets the send step skip.
+    const scope = emailTriggerScope(
+      {
+        id: "m12",
+        fromEmail: "james@kypads.com",
+        subject: "Referral for Bobby",
+        bodyText: "Meet Bobby.",
+        toRecipients: "team@newcoworker.com"
+      },
+      { selfEmail: "newcoworkerteam@gmail.com" }
+    );
+    expect(scope.others_to).toBe("");
+    expect(scope.others_cc).toBe("");
+  });
+
+  it("never lists one person twice across To and Cc", () => {
+    const scope = emailTriggerScope(
+      {
+        id: "m13",
+        fromEmail: "james@kypads.com",
+        subject: "s",
+        bodyText: "b",
+        toRecipients: "bobby@x.com",
+        ccRecipients: "Bobby <BOBBY@x.com>, carol@y.com"
+      },
+      { selfEmail: "newcoworkerteam@gmail.com" }
+    );
+    expect(scope.others_to).toBe("bobby@x.com");
+    expect(scope.others_cc).toBe("carol@y.com");
   });
 
   it("marks a message on a conversation we have already replied to", () => {

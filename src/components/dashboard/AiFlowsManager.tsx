@@ -4198,6 +4198,23 @@ function StepFields({
             "thread, which is what happens today."
           }
         />
+        <label className="flex items-start gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={step.replyAll === false}
+            onChange={(ev) => patchStep(index, { replyAll: ev.target.checked ? false : undefined })}
+          />
+          <span>
+            Do not reply-all
+            <span className="block text-parchment/45">
+              A threaded reply normally also goes to everyone on the original, since an
+              introduction puts the prospect there while the introducer sits in From. Tick this
+              to answer only the address above, which is what you want when the flow sends
+              separate, tailored emails to each person.
+            </span>
+          </span>
+        </label>
       </div>
     );
   }
@@ -4373,6 +4390,21 @@ function StepFields({
     return (
       <div className="space-y-2">
         <Field label="Approval prompt" value={step.prompt} onChange={(v) => patchStep(index, { prompt: v })} />
+        <Field
+          label="Steps this approval covers (optional, default 1)"
+          value={step.guardsNextSteps ? String(step.guardsNextSteps) : ""}
+          onChange={(v) => {
+            const n = Number.parseInt(v.trim(), 10);
+            patchStep(index, {
+              guardsNextSteps: Number.isFinite(n) && n > 1 ? Math.min(n, 5) : undefined
+            });
+          }}
+          help={
+            "How many steps directly after this gate the approval decides. Leave empty for the " +
+            "usual one. Set it to 2 when the gate fronts two sends, or replying \u201cskip\u201d " +
+            "would skip only the first and the second would still go out unapproved."
+          }
+        />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
           <label className="flex items-center gap-2 text-xs text-parchment/70">
             <input

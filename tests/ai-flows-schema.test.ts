@@ -8,7 +8,8 @@ import {
   parseAiFlowDefinition,
   summarizeDefinition,
   validateDefinitionSemantics,
-  type AiFlowDefinition
+  type AiFlowDefinition,
+  TRIGGER_SCOPE_KEYS
 } from "@/lib/ai-flows/schema";
 
 const validInput = {
@@ -3884,5 +3885,15 @@ describe("extraction field cap", () => {
     expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS)).success).toBe(true);
     expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS + 1)).success).toBe(false);
     expect(docExtractBodySchema.safeParse(body(0)).success).toBe(false);
+  });
+});
+
+describe("TRIGGER_SCOPE_KEYS hygiene", () => {
+  it("lists every key exactly once", () => {
+    // A duplicate is harmless at runtime, which is why one shipped unnoticed
+    // in PR #1252: the list is only ever membership-tested. It still means two
+    // people edited the same idea twice, so catch it here.
+    const dupes = TRIGGER_SCOPE_KEYS.filter((k, i) => TRIGGER_SCOPE_KEYS.indexOf(k) !== i);
+    expect(dupes).toEqual([]);
   });
 });

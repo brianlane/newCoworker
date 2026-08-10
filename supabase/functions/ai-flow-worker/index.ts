@@ -1146,7 +1146,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
               skipped: "approval_cooldown"
             });
             index += 1;
-            if (index < flat.length) {
+            // EVERY step the gate guards, not just the first. A gate fronting
+            // two sends that skipped only one would deliver the second
+            // unapproved, which is precisely what this path exists to stop.
+            const cooledSkips =
+              gateStep.type === "approval_gate" ? (gateStep.guardsNextSteps ?? 1) : 1;
+            for (let n = 0; n < cooledSkips && index < flat.length; n += 1) {
               await recordStep(supabase, run, index, flat[index].step, "skipped", {
                 skipped: "approval_cooldown_gated_step"
               });
@@ -1526,13 +1531,19 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // Late claim: jump to the end so the run completes as done without
       // replaying the steps after route_to_team.
       index = flat.length;
-    } else if (outcome.skipNextStep && index < flat.length) {
-      // Approval gate decided "skip": the step the gate guards (the one
-      // directly after it) is recorded as skipped without running.
-      await recordStep(supabase, run, index, flat[index].step, "skipped", {
-        skipped: "approval_skipped"
-      });
-      index += 1;
+    } else if (outcome.skipNextStep) {
+      // Approval gate decided "skip": every step the gate guards is recorded
+      // as skipped without running. Usually one, but a gate can declare that
+      // it covers more (guardsNextSteps) when a single approval fronts several
+      // actions. Skipping only the first would run the rest unapproved, which
+      // for the HQ sales arm meant an email to a stranger.
+      const toSkip = typeof outcome.skipNextStep === "number" ? outcome.skipNextStep : 1;
+      for (let n = 0; n < toSkip && index < flat.length; n += 1) {
+        await recordStep(supabase, run, index, flat[index].step, "skipped", {
+          skipped: "approval_skipped"
+        });
+        index += 1;
+      }
     }
     stampResumeMarker(index);
     await updateRun(supabase, run.id, {
@@ -1841,14 +1852,24 @@ const COMM_STEP_TYPES = new Set<string>([
 ]);
 
 type StepOutcome =
-  // skipNextStep: set by an approval gate decided "skip" — the step directly
+  // skipNextStep: how many steps an approval gate decided "skip" covers (the
+  // steps directly after it). A gate guarding two sends must skip both, or the
+  // second goes out unapproved.
+  // Legacy note: set by an approval gate decided "skip" — the step directly
   // after the gate (the action it guards) is recorded as skipped and never
   // runs, while the rest of the flow continues.
   // endRun: finalize the run immediately after this step WITHOUT running any
   // remaining steps. Used by a route_to_team LATE claim (a "1" on a lapsed
   // offer) and the "86" unclaim, so those paths notify the owner but later
   // steps (email/browse/notify) don't replay.
-  | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean; endRun?: boolean }
+  | {
+      kind: "ok";
+      result?: Record<string, unknown>;
+      skipped?: boolean;
+      /** Number of following steps to skip; true means one. */
+      skipNextStep?: boolean | number;
+      endRun?: boolean;
+    }
   // `result` lets a failing step attach diagnostics (e.g. a screenshot_path of
   // the stuck page) onto the recorded failed step so the dashboard can show it.
   | { kind: "fail"; error: string; result?: Record<string, unknown> }
@@ -5998,6 +6019,8 @@ type FlowEmailArgs = {
    * claims the conversation for the email coworker.
    */
   replyToEmailLogId?: string;
+  /** False threads without mirroring the original's recipients. */
+  replyAll?: boolean;
   fromConnectionId?: string;
 };
 
@@ -6412,7 +6435,10 @@ async function deliverOwnerMailboxEmail(
       // The route resolves this to the row's provider thread id + Message-Id
       // and threads the send, then claims the conversation for the email
       // coworker. Forwarded raw: the worker holds no email_log access.
-      ...(action.replyToEmailLogId ? { replyToEmailLogId: action.replyToEmailLogId } : {})
+      ...(action.replyToEmailLogId ? { replyToEmailLogId: action.replyToEmailLogId } : {}),
+      // Off for a flow that writes separate, tailored notes: mirroring the
+      // original's recipients would put both parties back on both messages.
+      ...(action.replyAll === false ? { replyAll: false } : {})
     })
   });
   // 5xx = provider/transport fault → throw so the run retries. 2xx/4xx carry a
@@ -7726,7 +7752,11 @@ function approvalStep(
   // the decide paths set the run to canceled directly.
   if (approval.decision === "skip" && approval.consumed !== true) {
     approval.consumed = true;
-    return { kind: "ok", result: { approved: false, skipped_gated_step: true }, skipNextStep: true };
+    return {
+      kind: "ok",
+      result: { approved: false, skipped_gated_step: true },
+      skipNextStep: action.guardsNextSteps ?? true
+    };
   }
   // Stash the prompt for the dashboard approvals inbox.
   approval.prompt = action.prompt;

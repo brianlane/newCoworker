@@ -407,6 +407,8 @@ export type StepAction =
        * case the send opens a new conversation as it always did.
        */
       replyToEmailLogId?: string;
+      /** False threads without mirroring the original's recipients. */
+      replyAll?: boolean;
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
       /** Templated recipient resolved to nothing usable → skip, not fail. */
@@ -508,7 +510,16 @@ export type StepAction =
       backfill: Array<{ from: string; to: string }>;
       resumed: boolean;
     }
-  | { kind: "await_approval"; prompt: string }
+  | {
+      kind: "await_approval";
+      prompt: string;
+      /**
+       * How many steps directly after the gate this approval covers. The
+       * worker's "skip" advance used to be hard-coded to one, so a gate
+       * guarding two sends skipped the first and ran the second unapproved.
+       */
+      guardsNextSteps?: number;
+    }
   | {
       kind: "http_call";
       label: string;
@@ -1373,6 +1384,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           attachScreenshot: step.attachScreenshot === true,
           ...(attachDocumentRef ? { attachDocumentRef } : {}),
           ...(replyToEmailLogId ? { replyToEmailLogId } : {}),
+          ...(step.replyAll === false ? { replyAll: false } : {}),
           ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
         }
       };
@@ -1484,7 +1496,11 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "approval_gate": {
       return {
         ok: true,
-        action: { kind: "await_approval", prompt: renderTemplate(step.prompt, scope).trim() }
+        action: {
+          kind: "await_approval",
+          prompt: renderTemplate(step.prompt, scope).trim(),
+          ...(step.guardsNextSteps ? { guardsNextSteps: step.guardsNextSteps } : {})
+        }
       };
     }
     case "http_call": {

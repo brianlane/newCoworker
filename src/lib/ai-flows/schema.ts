@@ -239,8 +239,10 @@ export const TRIGGER_SCOPE_KEYS = [
   "cc",
   // "yes"/"no": have we already sent on this conversation.
   "thread_has_our_reply",
-  // "yes"/"no": have we already sent on this conversation.
-  "thread_has_our_reply",
+  // The prospect an introducer put on To/Cc, split so a send step can use
+  // them: `to` takes one address, `cc` takes the rest.
+  "others_to",
+  "others_cc",
   "email_log_id",
   "received_at",
   "connection_id",
@@ -1004,6 +1006,14 @@ const nonBranchStepMembers = [
      * failing, matching how the other optional templates here degrade.
      */
     replyToEmailLogId: z.string().min(1).max(300).optional(),
+    /**
+     * Reply-all is the default on a threaded send: an introduction puts the
+     * PROSPECT on To while the introducer sits in From, so answering only From
+     * reaches the person who did the favour and never the lead. Set false to
+     * thread WITHOUT mirroring, which is what a flow writing separate,
+     * tailored notes to each party needs.
+     */
+    replyAll: z.boolean().optional(),
     fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),
@@ -1119,6 +1129,15 @@ const nonBranchStepMembers = [
      * `redraftStepId` must name a step in the same flow (validated below), or
      * the rewind would park the run forever.
      */
+    /**
+     * How many steps directly after this gate the approval covers. Default 1.
+     *
+     * "Skip" and a cooling gate both advance PAST the guarded step without
+     * running it, and that advance was hard-coded to one. A gate followed by
+     * two sends therefore skipped the first and ran the second, which for the
+     * HQ sales arm meant an unapproved email to a stranger.
+     */
+    guardsNextSteps: z.number().int().min(1).max(5).optional(),
     allowModify: z.object({ redraftStepId: stepId }).optional(),
     /**
      * Same per-key suppression `notify_owner` has, because parking this gate
