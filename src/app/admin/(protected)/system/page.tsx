@@ -86,10 +86,15 @@ const ENV_GROUPS: EnvGroup[] = [
     ]
   },
   {
-    label: "Slack (stubbed)",
+    label: "Slack",
     vars: [
       { name: "Client ID", description: "Slack app client", key: "SLACK_CLIENT_ID" },
-      { name: "Client Secret", description: "Slack app secret", key: "SLACK_CLIENT_SECRET" }
+      { name: "Client Secret", description: "Slack app secret", key: "SLACK_CLIENT_SECRET" },
+      {
+        name: "Signing Secret",
+        description: "HMAC key for Events API deliveries",
+        key: "SLACK_SIGNING_SECRET"
+      }
     ]
   }
 ];

@@ -25,6 +25,7 @@ vi.mock("@/lib/db/caldav-connections", () => ({ getPublicCaldavConnection: vi.fn
 vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({ getPublicZoomConnection: vi.fn() }));
+vi.mock("@/lib/db/slack-connections", () => ({ getPublicSlackConnection: vi.fn() }));
 vi.mock("@/lib/db/api-keys", () => ({ listApiKeys: vi.fn() }));
 vi.mock("@/lib/db/webhook-subscriptions", () => ({ listWebhookSubscriptions: vi.fn() }));
 vi.mock("@/lib/mcp/connector-status", () => ({ getMcpConnectorStatus: vi.fn() }));
@@ -47,6 +48,7 @@ import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
+import { getPublicSlackConnection } from "@/lib/db/slack-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { getMcpConnectorStatus } from "@/lib/mcp/connector-status";
@@ -84,6 +86,7 @@ beforeEach(() => {
   vi.mocked(getPublicCaldavConnection).mockResolvedValue(null);
   vi.mocked(getPublicMetaConnection).mockResolvedValue(null);
   vi.mocked(getPublicZoomConnection).mockResolvedValue(null);
+  vi.mocked(getPublicSlackConnection).mockResolvedValue(null);
   vi.mocked(listApiKeys).mockResolvedValue([]);
   vi.mocked(listWebhookSubscriptions).mockResolvedValue([]);
   vi.mocked(getMcpConnectorStatus).mockResolvedValue(null);
@@ -120,6 +123,9 @@ describe("loadIntegrationsContext", () => {
     expect(getPublicCaldavConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicMetaConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicZoomConnection).toHaveBeenCalledWith(BIZ);
+    expect(getPublicSlackConnection).toHaveBeenCalledWith(BIZ);
+    // No tier on the row → Slack (Standard+) reads as not enabled.
+    expect(ctx.slackEnabled).toBe(false);
     expect(listApiKeys).toHaveBeenCalledWith(BIZ);
     expect(listWebhookSubscriptions).toHaveBeenCalledWith(BIZ);
     expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId);
@@ -150,6 +156,8 @@ describe("loadIntegrationsContext", () => {
     ] as never);
     const ctx = await loadIntegrationsContext("/dashboard/integrations");
     expect(ctx.workspaceConnectionCap).toEqual({ used: 3, max: 3, atCap: true });
+    // Standard tier → the Slack integration is available.
+    expect(ctx.slackEnabled).toBe(true);
 
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       mockDb([
@@ -191,6 +199,7 @@ describe("loadIntegrationsContext", () => {
     expect(ctx.metaConnection).toBeNull();
     expect(ctx.whatsappConnection).toBeNull();
     expect(ctx.zoomConnection).toBeNull();
+    expect(ctx.slackConnection).toBeNull();
     expect(ctx.apiKeys).toEqual([]);
     expect(ctx.activeHooks).toEqual([]);
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
@@ -229,6 +238,23 @@ describe("computeIntegrationStatuses", () => {
     } as IntegrationsContext;
   }
 
+  it("distinguishes a live Slack connection from an uninstalled one", () => {
+    const connected = computeIntegrationStatuses(
+      baseCtx({ slackConnection: { is_active: true, has_bot_token: true } as never })
+    );
+    expect(connected.slack).toEqual({ state: "connected", label: "Connected" });
+
+    const uninstalled = computeIntegrationStatuses(
+      baseCtx({ slackConnection: { is_active: false, has_bot_token: false } as never })
+    );
+    expect(uninstalled.slack).toEqual({ state: "attention", label: "Needs reconnect" });
+
+    const wipedToken = computeIntegrationStatuses(
+      baseCtx({ slackConnection: { is_active: true, has_bot_token: false } as never })
+    );
+    expect(wipedToken.slack.state).toBe("attention");
+  });
+
   it("reports everything disconnected on an empty context", () => {
     const s = computeIntegrationStatuses(baseCtx());
     expect(s.workspace).toEqual({ state: "disconnected", label: "Not connected" });
@@ -238,6 +264,7 @@ describe("computeIntegrationStatuses", () => {
     expect(s.meta.state).toBe("disconnected");
     expect(s.whatsapp.state).toBe("disconnected");
     expect(s.zoom.state).toBe("disconnected");
+    expect(s.slack.state).toBe("disconnected");
     expect(s.custom).toEqual({ state: "disconnected", label: "None yet" });
     expect(s["zapier-api"]).toEqual({ state: "disconnected", label: "No keys" });
     expect(s.claude).toEqual({ state: "disconnected", label: "Available" });

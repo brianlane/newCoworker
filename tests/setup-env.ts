@@ -62,6 +62,12 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "NANGO_SECRET_KEY",
   "MICROSOFT_CLIENT_SECRET",
   "SLACK_CLIENT_SECRET",
+  // Webhook HMAC key: without this the Slack webhook suite would run against
+  // the real Signing Secret for anyone with a sourced .env.
+  "SLACK_SIGNING_SECRET",
+  // App Manifest API pair (scripts only, never runtime).
+  "SLACK_APP_ACCESS_TOKEN",
+  "SLACK_APP_REFRESH_TOKEN",
   "ZOOM_CLIENT_ID",
   "ZOOM_CLIENT_SECRET",
   // Webhook HMAC key: without this the webhook suite would run against the

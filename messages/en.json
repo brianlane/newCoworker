@@ -1787,6 +1787,31 @@
       "autoImportLabel": "Automatic meeting minutes",
       "autoImportHint": "Import minutes automatically after every cloud-recorded meeting with a transcript."
     },
+    "integrationsSlack": {
+      "title": "Slack",
+      "description": "Bring your coworker into Slack: alerts land in a channel you pick, right where your team already works.",
+      "statusConnected": "Connected",
+      "statusNeedsReconnect": "Needs reconnect",
+      "statusNotConnected": "Not connected",
+      "connectCta": "Connect Slack",
+      "connectNote": "You'll be sent to Slack to approve access for your workspace. Your Slack sign-in stays with Slack.",
+      "linkedTo": "Connected to the {workspace} workspace.",
+      "linkedNoName": "Slack workspace connected.",
+      "reconnectNote": "Access was revoked or the app was uninstalled - reconnect to resume.",
+      "reconnect": "Reconnect",
+      "disconnect": "Disconnect",
+      "disconnectFailed": "Could not disconnect",
+      "alertChannelTitle": "Alert channel",
+      "alertChannelHint": "Pick the channel where your coworker posts alerts. For a private channel, invite @New Coworker there first.",
+      "alertChannelCurrent": "Alerts go to #{channel}.",
+      "alertChannelNone": "No channel selected yet.",
+      "alertChannelPlaceholder": "Choose a channel",
+      "alertChannelSave": "Save channel",
+      "alertChannelSaved": "Saved. A hello message was posted to #{channel}.",
+      "alertChannelSaveFailed": "Could not save the channel",
+      "privateChannelSuffix": "(private)",
+      "upgradeMessage": "The Slack integration is available on Standard and Enterprise plans."
+    },
     "integrationsWorkspace": {
       "capUsage": "{used} of {max} workspace connections used",
       "capReached": "Your plan includes {max, plural, one {# workspace connection} other {# workspace connections}}. Remove one or upgrade your plan to connect another."

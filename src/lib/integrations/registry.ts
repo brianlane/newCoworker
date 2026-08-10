@@ -16,6 +16,7 @@ import {
   CalendarClock,
   CalendarDays,
   CalendarRange,
+  Hash,
   Inbox,
   KeyRound,
   Megaphone,
@@ -25,6 +26,7 @@ import {
 
 export type IntegrationSlug =
   | "workspace"
+  | "slack"
   | "vagaro"
   | "acuity"
   | "calendly"
@@ -50,6 +52,7 @@ export type IntegrationDef = {
 /** Ordered category labels for the hub page. */
 export const INTEGRATION_CATEGORIES = [
   "Workspace",
+  "Team chat",
   "Lead sources",
   "Meetings",
   "Custom",
@@ -63,8 +66,17 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "Workspace",
     category: "Workspace",
     benefit:
-      "Connect Gmail, Google Calendar, Drive, Microsoft 365, Slack, and more so your coworker can send email and manage your calendar.",
+      "Connect Gmail, Google Calendar, Drive, Microsoft 365, and more so your coworker can send email and manage your calendar.",
     icon: Inbox
+  },
+  {
+    slug: "slack",
+    name: "Slack",
+    category: "Team chat",
+    benefit:
+      "Bring your coworker into Slack: alerts for leads, bookings, and handoffs land in a channel you pick, right where your team already works.",
+    // lucide dropped brand icons, so the channel hash stands in for Slack.
+    icon: Hash
   },
   {
     slug: "vagaro",

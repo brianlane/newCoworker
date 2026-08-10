@@ -143,6 +143,7 @@ const EXEMPT: Record<string, string> = {
   calendly_connections: "tenant credentials",
   integrations: "tenant integration state",
   meta_connections: "tenant Page tokens",
+  slack_connections: "tenant OAuth grants (workspace bot token, no end-customer data)",
   vagaro_connections: "tenant credentials",
   whatsapp_connections: "the tenant's own WABA connection",
   workspace_oauth_connections: "tenant OAuth grants",

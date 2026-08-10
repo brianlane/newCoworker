@@ -83,6 +83,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.employeeAvailability",
       "dashboard.humanHandoff",
       "dashboard.integrationsClaude",
+      "dashboard.integrationsSlack",
       "dashboard.integrationsWorkspace",
       "dashboard.integrationsZoom",
       "dashboard.nav",

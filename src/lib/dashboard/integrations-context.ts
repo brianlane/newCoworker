@@ -26,6 +26,8 @@ import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
+import { getPublicSlackConnection } from "@/lib/db/slack-connections";
+import { slackAllowedForTier } from "@/lib/slack/tier-gate";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
@@ -52,6 +54,9 @@ export type IntegrationsContext = {
   metaConnection: Awaited<ReturnType<typeof getPublicMetaConnection>>;
   whatsappConnection: Awaited<ReturnType<typeof getPublicWhatsAppConnection>>;
   zoomConnection: Awaited<ReturnType<typeof getPublicZoomConnection>>;
+  slackConnection: Awaited<ReturnType<typeof getPublicSlackConnection>>;
+  /** False on starter: the Slack integration is a Standard-tier perk. */
+  slackEnabled: boolean;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
@@ -115,6 +120,8 @@ export async function loadIntegrationsContext(
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
     whatsappConnection: businessId ? await getPublicWhatsAppConnection(businessId) : null,
     zoomConnection: businessId ? await getPublicZoomConnection(businessId) : null,
+    slackConnection: businessId ? await getPublicSlackConnection(businessId) : null,
+    slackEnabled: slackAllowedForTier(businessRow?.tier),
     // Never load key metadata for non-owners — the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
@@ -150,6 +157,12 @@ export function computeIntegrationStatuses(
       ? connected
       : { state: "attention", label: "Paused" };
 
+  const slackStatus: IntegrationStatus = !ctx.slackConnection
+    ? disconnected
+    : ctx.slackConnection.is_active && ctx.slackConnection.has_bot_token
+      ? connected
+      : { state: "attention", label: "Needs reconnect" };
+
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
 
@@ -171,6 +184,7 @@ export function computeIntegrationStatuses(
     meta: metaStatus,
     whatsapp: whatsappStatus,
     zoom: zoomStatus,
+    slack: slackStatus,
     custom:
       customCount > 0
         ? { state: "connected", label: `${customCount} connected` }
