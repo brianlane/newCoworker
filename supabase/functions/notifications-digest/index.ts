@@ -703,6 +703,20 @@ serve(async (req: Request) => {
         slackLines.push("");
       }
       slackLines.push(`<${dashboardUrl}|Open dashboard>`);
+      // Slack renders chat.postMessage text reliably only up to ~4k chars,
+      // so a busy weekly digest must be clamped or the whole post fails
+      // (msg_too_long) while the email quietly succeeds. Cut at the last
+      // complete line so no mrkdwn marker dangles, and keep the dashboard
+      // link as the pointer to the full picture.
+      const SLACK_DIGEST_MAX_CHARS = 3900;
+      let slackText = slackLines.join("\n");
+      if (slackText.length > SLACK_DIGEST_MAX_CHARS) {
+        const tail = `\n…\n<${dashboardUrl}|See the full digest on the dashboard>`;
+        let clipped = slackText.slice(0, SLACK_DIGEST_MAX_CHARS - tail.length);
+        const lastNewline = clipped.lastIndexOf("\n");
+        if (lastNewline > 0) clipped = clipped.slice(0, lastNewline);
+        slackText = clipped + tail;
+      }
       try {
         const slRes = await fetch(`${appUrl}/api/internal/slack-send`, {
           method: "POST",
@@ -713,7 +727,7 @@ serve(async (req: Request) => {
             // only when Origin matches NEXT_PUBLIC_APP_URL.
             Origin: appUrl
           },
-          body: JSON.stringify({ businessId: t.business_id, text: slackLines.join("\n") })
+          body: JSON.stringify({ businessId: t.business_id, text: slackText })
         });
         const slJson = slRes.ok
           ? ((await slRes.json().catch(() => null)) as {
