@@ -135,6 +135,34 @@ These are mistakes already made on this account. Do not remake them.
   no patch. Two HQ flows ("Demo caller follow-up", "Webchat lead follow-up")
   had the same dependency. If you are counting on this flow as the safety net
   that keeps calling unclaimed leads, note it provided none before this date.
+  Confirmed working on Aug 10 2026: 7 runs, each carrying the full
+  name/phone/email/tags/owner text, reading real addresses off the lead pages
+  and sleeping between weekly calls.
+- **The spoke check could not reach a lead nobody ever claimed.** Its only
+  trigger was `owner_assigned`, which is backwards for a safety net: leads that
+  already got human attention also got the AI follow-up, and untouched leads
+  got nothing. On Aug 10 2026 that was 14 of 45 Clever-tagged contacts with no
+  owner, every one still tagged only "New Lead, Clever" (never advanced to
+  Contacted or Engaged), the oldest untouched for 25 days. Closed by
+  `patch-clever-spoke-check-unclaimed-leads.ts`, which adds a `tag_changed`
+  trigger on the `Clever` tag so a lead enters at ACCEPTANCE and the existing
+  3-day `grace` sleep becomes the timer.
+
+  **Do not "fix" this with a `contact_created` trigger**, which is the
+  intuitive choice and cannot work: the accept flow creates the contact at
+  step 4 (`save_contact`) and only tags it "Clever" at step 5 (`tag_clever`),
+  so a contact_created event fires one step BEFORE the tag exists and nothing
+  keyed on "clever" can match it. Two details that make the tag_changed
+  trigger need no other edit: a tag_changed event has no `owner:` line, so
+  `spoke_owner` resolves to "none" and `spoke_check`'s `agentNameVar` pin
+  leaves the step UN-pinned (it offers to the roster rotation, which is right
+  for an unowned lead); and the `converted` goal already lists
+  `{kind: "claimed"}`, so a lead claimed mid-grace jumps to the goal and is
+  never called. The same patch sets `options.allowReentry=false`, which is
+  load-bearing, not cosmetic: with two triggers a lead that is tagged and then
+  claimed matches BOTH and would get two parallel weekly-call chains.
+  The patch does NOT backfill: leads already sitting unowned emit no new
+  tag_changed event and need a separate deliberate backfill.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
@@ -201,7 +229,10 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 `clever-start-immediately.ts`,
 `patch-clever-group-reply-second-intro.ts`,
 `patch-clever-accept-idempotent.ts` (Aug 4 2026: `continueWhenText` on the
-accept step, see Sharp edges).
+accept step, see Sharp edges),
+`clever-spoke-check-unclaimed-patch.ts` +
+`patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
+second trigger, see Sharp edges).
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in
