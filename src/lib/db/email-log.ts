@@ -234,6 +234,52 @@ export async function listEmailLog(
 }
 
 /**
+ * Of these conversations, which has an AiFlow already answered?
+ *
+ * The discriminator is `run_id`: the flow worker stamps its own run on every
+ * email it logs, while the coworker (`recordOutboundAssistantEmail`) and the
+ * outreach sweep both write `run_id: null`. So this asks precisely "did a
+ * GATED flow reply here", not "did anything of ours reply here".
+ *
+ * That distinction is the whole point. A flow reply means Brian approved it at
+ * a gate, and every later message on that conversation should go back through
+ * the same gate rather than out unseen: he did not gate the first email to a
+ * stranger and then mean "send whatever you like after that". But a thread the
+ * COWORKER owns (an outreach pitch, a booking follow-up) is its job to carry,
+ * and blocking on any outbound row would have stopped it after its own first
+ * reply, breaking the multi-turn budget it is built around.
+ *
+ * Best-effort and fails OPEN: a read error costs at most one duplicate reply,
+ * while failing closed would silence the coworker on every thread it owns.
+ */
+export async function threadsAnsweredByFlow(
+  businessId: string,
+  threadIds: string[],
+  client?: SupabaseClient
+): Promise<Set<string>> {
+  const wanted = [...new Set(threadIds.map((t) => t.trim()).filter(Boolean))];
+  if (wanted.length === 0) return new Set();
+  const db = client ?? (await createSupabaseServiceClient());
+  const out = new Set<string>();
+  try {
+    const { data, error } = await db
+      .from("email_log")
+      .select("thread_id")
+      .eq("business_id", businessId)
+      .eq("direction", "outbound")
+      .not("run_id", "is", null)
+      .in("thread_id", wanted);
+    if (error) throw new Error(error.message);
+    for (const row of (data ?? []) as Array<{ thread_id?: string | null }>) {
+      if (row.thread_id) out.add(row.thread_id);
+    }
+  } catch (e) {
+    console.error("threadsAnsweredByFlow", e instanceof Error ? e.message : String(e));
+  }
+  return out;
+}
+
+/**
  * One email_log row by id, scoped by business so a guessed uuid can never read
  * another tenant's mail. Returns null when the id does not belong to the
  * business, is soft-deleted, or does not exist.

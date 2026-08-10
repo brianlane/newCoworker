@@ -17,7 +17,7 @@
  *      the thread to a human and alerts the owner once.
  */
 
-import { threadsWeHaveRepliedOn } from "@/lib/ai-flows/email-poll";
+import { threadsAnsweredByFlow } from "@/lib/db/email-log";
 import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
@@ -219,13 +219,18 @@ export async function pollEmailCoworker(
       // never seen by this poll). James got two replies a minute apart, the
       // second off-script.
       //
-      // Keyed on the THREAD, not the message, on Brian's instruction: once we
-      // have written on a conversation, every further reply goes through the
-      // flow's approval gate rather than out unseen. An owner who gated the
-      // first email to a stranger did not mean "and then send whatever you
-      // like". The flow still runs on these messages, so they are classified,
-      // drafted and put in front of him; this only stops the SILENT send.
-      const repliedThreads = await threadsWeHaveRepliedOn(
+      // Keyed on the THREAD, and specifically on threads a GATED FLOW answered:
+      // once Brian has approved a reply on a conversation, every later message
+      // goes back through the same gate rather than out unseen. He did not
+      // gate the first email to a stranger and then mean "send whatever you
+      // like after that". The flow still runs on these messages, so they are
+      // classified, filed and put in front of him; only the silent send stops.
+      //
+      // Deliberately NOT "any outbound row on the thread": the coworker's own
+      // replies are outbound too, so that rule would have stopped it after its
+      // FIRST reply on a conversation it owns and quietly broken the multi-turn
+      // budget it is built around (an outreach pitch, a booking follow-up).
+      const repliedThreads = await threadsAnsweredByFlow(
         businessId,
         candidates.map((m) => m.threadId).filter((t): t is string => Boolean(t)),
         db

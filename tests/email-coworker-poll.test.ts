@@ -24,9 +24,9 @@ vi.mock("@/lib/email-coworker/threads", async (importOriginal) => ({
   recordThreadTurn: vi.fn()
 }));
 vi.mock("@/lib/email-coworker/turn", () => ({ runEmailCoworkerTurn: vi.fn() }));
-vi.mock("@/lib/ai-flows/email-poll", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/ai-flows/email-poll")>()),
-  threadsWeHaveRepliedOn: vi.fn()
+vi.mock("@/lib/db/email-log", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/db/email-log")>()),
+  threadsAnsweredByFlow: vi.fn()
 }));
 vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
@@ -49,7 +49,7 @@ import {
   recordThreadTurn
 } from "@/lib/email-coworker/threads";
 import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
-import { threadsWeHaveRepliedOn } from "@/lib/ai-flows/email-poll";
+import { threadsAnsweredByFlow } from "@/lib/db/email-log";
 import { noteProspectReply } from "@/lib/outreach/reply";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -123,7 +123,7 @@ beforeEach(() => {
   mockFetch.mockResolvedValue([message()]);
   mockMailboxAddress.mockResolvedValue(MAILBOX_EMAIL);
   mockUnseen.mockImplementation(async (_biz, ids) => ids);
-  vi.mocked(threadsWeHaveRepliedOn).mockResolvedValue(new Set());
+  vi.mocked(threadsAnsweredByFlow).mockResolvedValue(new Set());
   mockClaim.mockResolvedValue(true);
   mockHandoff.mockResolvedValue(undefined);
   mockRecordTurn.mockResolvedValue(undefined);
@@ -195,7 +195,7 @@ describe("pollEmailCoworker", () => {
      * instead of out unseen. Gating the first email to a stranger and then
      * sending the rest unread is not what an approval is for.
      */
-    vi.mocked(threadsWeHaveRepliedOn).mockResolvedValue(new Set(["thread-9"]));
+    vi.mocked(threadsAnsweredByFlow).mockResolvedValue(new Set(["thread-9"]));
     mockFetch.mockResolvedValue([message({ id: "m-1", threadId: "thread-9" })]);
     const out = await pollEmailCoworker(businessDb());
     expect(out.messages).toBe(0);
@@ -205,10 +205,12 @@ describe("pollEmailCoworker", () => {
     expect(mockClaim).not.toHaveBeenCalled();
   });
 
-  it("still answers a thread we have NOT written on", async () => {
-    // The guard must not silence the coworker everywhere. A conversation it
-    // opened and has not yet answered is exactly what it exists for.
-    vi.mocked(threadsWeHaveRepliedOn).mockResolvedValue(new Set(["other-thread"]));
+  it("still carries a thread it owns, turn after turn", async () => {
+    // The guard must not silence the coworker on its OWN conversations. Its
+    // replies are outbound too, so a rule keyed on "any outbound row" would
+    // have stopped it after its first answer and broken the multi-turn budget
+    // the whole surface is built around.
+    vi.mocked(threadsAnsweredByFlow).mockResolvedValue(new Set(["other-thread"]));
     mockFetch.mockResolvedValue([message({ id: "m-2", threadId: "thread-9" })]);
     await pollEmailCoworker(businessDb());
     expect(mockTurn).toHaveBeenCalledTimes(1);

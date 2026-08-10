@@ -22,6 +22,7 @@ import {
   EMAIL_LOG_MAX_LIMIT,
   getEmailBody,
   getEmailLogRow,
+  threadsAnsweredByFlow,
   listEmailLog,
   listEmailLogForAddress,
   recordInboundTriggerEmail,
@@ -235,6 +236,68 @@ describe("recordOutboundAssistantEmail: the row has to be findable by thread", (
     for (const call of insert.mock.calls) {
       expect((call[0] as { thread_id: unknown }).thread_id).toBeNull();
     }
+  });
+});
+
+describe("threadsAnsweredByFlow", () => {
+  /**
+   * "Did a GATED flow reply here", not "did anything of ours reply here".
+   * The discriminator is run_id: the flow worker stamps its run on every email
+   * it logs, while the coworker and the outreach sweep both write null.
+   */
+  const chain = (result: { data: unknown; error: { message: string } | null }) => {
+    const inFn = vi.fn().mockResolvedValue(result);
+    const notFn = vi.fn(() => ({ in: inFn }));
+    const eqDir = vi.fn(() => ({ not: notFn }));
+    const eqBiz = vi.fn(() => ({ eq: eqDir }));
+    const select = vi.fn(() => ({ eq: eqBiz }));
+    return { db: { from: vi.fn(() => ({ select })) }, select, eqBiz, eqDir, notFn, inFn };
+  };
+
+  it("matches only outbound rows that carry a run id", async () => {
+    const c = chain({ data: [{ thread_id: "t1" }], error: null });
+    expect([...(await threadsAnsweredByFlow("biz", ["t1", "t2"], c.db as never))]).toEqual(["t1"]);
+    expect(c.eqDir).toHaveBeenCalledWith("direction", "outbound");
+    // The whole distinction: a coworker or outreach send writes run_id null,
+    // and blocking on those would stop the coworker after its own first reply.
+    expect(c.notFn).toHaveBeenCalledWith("run_id", "is", null);
+  });
+
+  it("dedupes and drops blanks, and skips the query when there is nothing to ask", async () => {
+    const c = chain({ data: [], error: null });
+    await threadsAnsweredByFlow("biz", ["t1", "t1", "  ", "t2"], c.db as never);
+    expect(c.inFn).toHaveBeenCalledWith("thread_id", ["t1", "t2"]);
+
+    const c2 = chain({ data: [], error: null });
+    expect(await threadsAnsweredByFlow("biz", ["", " "], c2.db as never)).toEqual(new Set());
+    expect(c2.select).not.toHaveBeenCalled();
+  });
+
+  it("fails OPEN, on a query error and on a non-Error throw alike", async () => {
+    // A read failure costs one duplicate reply; failing closed would silence
+    // the coworker on every thread it owns.
+    const c = chain({ data: null, error: { message: "boom" } });
+    expect(await threadsAnsweredByFlow("biz", ["t1"], c.db as never)).toEqual(new Set());
+    const throwing = {
+      from: () => {
+        throw "connection reset";
+      }
+    };
+    expect(await threadsAnsweredByFlow("biz", ["t1"], throwing as never)).toEqual(new Set());
+  });
+
+  it("treats a null payload as no flow-answered threads", async () => {
+    // PostgREST can answer with neither rows nor an error.
+    const c = chain({ data: null, error: null });
+    expect(await threadsAnsweredByFlow("biz", ["t1"], c.db as never)).toEqual(new Set());
+  });
+
+  it("ignores null thread ids and falls back to the default client", async () => {
+    const c = chain({ data: [{ thread_id: null }, { thread_id: "t9" }], error: null });
+    expect([...(await threadsAnsweredByFlow("biz", ["t9"], c.db as never))]).toEqual(["t9"]);
+    const c2 = chain({ data: [{ thread_id: "t8" }], error: null });
+    defaultClientSpy.mockResolvedValue(c2.db);
+    expect([...(await threadsAnsweredByFlow("biz", ["t8"]))]).toEqual(["t8"]);
   });
 });
 
