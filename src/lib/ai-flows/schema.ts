@@ -1578,6 +1578,14 @@ const nonBranchStepMembers = [
         detailsTemplate: z.string().min(1).max(600).optional()
       })
       .optional(),
+    // Include what the LEAD has already said (their inbound texts, and their
+    // own words from recent calls read live off the transcript turns) in the
+    // team-facing messages: a short excerpt on each offer, and a fuller one
+    // texted to whoever claims it. Without this a teammate sees structured
+    // fields and a status label like "spoke with them", never the ask the AI
+    // already agreed to on their behalf. Off by default: each excerpt costs
+    // SMS segments on every offer, so it is a per-step decision.
+    shareContactHistory: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({

@@ -142,6 +142,22 @@ describe("planStep: route_to_team unclaimedReminders passthrough", () => {
       r.ok && r.action.kind === "route_to_team" && "unclaimedReminders" in r.action
     ).toBe(false);
   });
+
+  it("carries shareContactHistory only as an explicit opt-in", () => {
+    const on = planStep({ ...base, shareContactHistory: true }, {});
+    expect(on.ok && on.action.kind === "route_to_team" ? on.action.shareContactHistory : null).toBe(
+      true
+    );
+    // Absence IS the off state: a stored `false` must not become a carried key.
+    const off = planStep({ ...base, shareContactHistory: false }, {});
+    expect(
+      off.ok && off.action.kind === "route_to_team" && "shareContactHistory" in off.action
+    ).toBe(false);
+    const unset = planStep(base, {});
+    expect(
+      unset.ok && unset.action.kind === "route_to_team" && "shareContactHistory" in unset.action
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -198,6 +198,14 @@ import {
   reminderClaimHint,
   reminderText
 } from "../_shared/ai_flows/offer_reminders.ts";
+import {
+  formatContactSaid,
+  loadContactSaid,
+  SAID_CLAIM_MAX_ITEMS,
+  SAID_CLAIM_MAX_LINE_CHARS,
+  SAID_OFFER_MAX_ITEMS,
+  SAID_OFFER_MAX_LINE_CHARS
+} from "../_shared/ai_flows/contact_said.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
 import { capturedCallVars, capturedSpoken } from "../_shared/ai_flows/call_capture.ts";
 import { isRunsOnlyRequest } from "../_shared/ai_flows/worker_kick.ts";
@@ -8213,6 +8221,37 @@ async function routeToTeamStep(
         }
       }
     }
+    // Hand the claimer what the lead actually said. Until now the person who
+    // took the lead was the ONLY party told nothing: the owner got a claim
+    // notice, the losing offerees got a courtesy note, and the claimer got
+    // silence, so an ask the AI already agreed to on their behalf ("email me
+    // comps, then we can talk Monday") never reached the person who had to
+    // honor it. Fuller than the offer excerpt: they are committed now.
+    if (claimedBy) {
+      try {
+        const said = await contactSaidBlock(supabase, run, scope, action, "claim");
+        if (said) {
+          await sendOfferSms(
+            supabase,
+            run,
+            claimedBy,
+            said,
+            `aiflow-claim-history:${run.id}:${claimedBy}`
+          );
+        }
+      } catch (e) {
+        // Never let the recap failure unwind a completed claim.
+        console.error("route_to_team claim history send failed", e);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_offer_sms_failed",
+          message: `claim history send failed: ${e instanceof Error ? e.message : String(e)}`,
+          payload: { run_id: run.id, flow_id: run.flow_id, agent: claimedBy }
+        });
+      }
+    }
     appendActionTaken(
       scope,
       // No "(86)" here: "86" is the retroactive UNCLAIM digit — a late claim
@@ -8526,6 +8565,13 @@ async function routeToTeamStep(
     if (alreadyPending > 0) {
       offerText = `${multiOfferHeadsUpLine(alreadyPending + 1, leadShortLabel(leadLabelFromVars(scope.vars)))}\n${offerText}`;
     }
+    // What the lead has already said, appended so every opted-in flow carries
+    // it without editing each offerTemplate (same reasoning as the pass
+    // reasons appended to the owner fallback).
+    {
+      const said = await contactSaidBlock(supabase, run, scope, action, "offer");
+      if (said) offerText = `${offerText}\n\n${said}`;
+    }
     if (preferredThisPass && agent.phone === preferredThisPass.phone) {
       appendActionTaken(
         scope,
@@ -8633,6 +8679,39 @@ async function maybeOwnerDirect(
  * goes to X" warning. Best-effort: an unnamed owner degrades the copy to "the
  * owner" rather than failing the round.
  */
+/**
+ * The lead's own words, sized for where they are going. Null when the step
+ * did not opt in, when no lead phone is known, or when the lead has said
+ * nothing we hold. Best-effort by construction: `loadContactSaid` swallows
+ * its own failures, so a history lookup can never stop an offer.
+ */
+async function contactSaidBlock(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  audience: "offer" | "claim"
+): Promise<string | null> {
+  if (action.shareContactHistory !== true) return null;
+  // The SAME strict rule ownership binds by (ownershipLeadPhone), not the
+  // looser leadContactPhone. When a flow declares a lead_phone var, an empty
+  // value means the lead's number is UNKNOWN, never that the triggering sender
+  // is the lead: on the referral flows the sender is the partner's own alert
+  // line, so the loose fallback would quote CLEVER's or HOMELIGHT's message
+  // history into a notice about a seller. That is the Danfar failure (2026-08-10)
+  // in a worse place, because this text QUOTES the contact rather than just
+  // routing to them. Contact-event flows that declare no lead_phone still fall
+  // back to the trigger, where the sender genuinely is the contact.
+  const phone = ownershipContactPhone(scope);
+  if (!phone) return null;
+  const events = await loadContactSaid(supabase, run.business_id, phone);
+  return formatContactSaid(events, {
+    leadLabel: leadLabelFromVars(scope.vars),
+    maxItems: audience === "claim" ? SAID_CLAIM_MAX_ITEMS : SAID_OFFER_MAX_ITEMS,
+    maxLineChars: audience === "claim" ? SAID_CLAIM_MAX_LINE_CHARS : SAID_OFFER_MAX_LINE_CHARS
+  });
+}
+
 async function ownerDisplayName(supabase: Supabase, businessId: string): Promise<string> {
   const { data } = await supabase
     .from("businesses")
@@ -8923,6 +9002,10 @@ async function routeBroadcastStep(
   if (action.firstToClaim === false) routing.first_to_claim = false;
   else delete routing.first_to_claim;
 
+  // One lookup for the whole fan-out: every recipient is being told about the
+  // same lead, so loading their history per recipient would be N identical
+  // query sets.
+  const broadcastSaid = await contactSaidBlock(supabase, run, scope, action, "offer");
   const recipients: { e164: string; offerText: string; idempotencyKey: string; mediaUrls?: string[] }[] = [];
   for (const agent of sendable) {
     let offerText = renderTemplate(action.offerTemplate, agentScope(scope, agent, deadlineText));
@@ -8931,6 +9014,7 @@ async function routeBroadcastStep(
     if (alreadyPending > 0) {
       offerText = `${multiOfferHeadsUpLine(alreadyPending + 1, leadShortLabel(leadLabelFromVars(scope.vars)))}\n${offerText}`;
     }
+    if (broadcastSaid) offerText = `${offerText}\n\n${broadcastSaid}`;
     recipients.push({
       e164: agent.phone,
       offerText,

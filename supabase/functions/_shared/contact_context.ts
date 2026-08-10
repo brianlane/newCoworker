@@ -132,7 +132,7 @@ export const TIMELINE_MAX_NUMBERS = 6;
  * logs — so a merged contact's SMS/call rows stay keyed on the old
  * number). Best-effort: on any failure the queried number alone is used.
  */
-async function resolveContactNumbers(
+export async function resolveContactNumbers(
   supabase: AnyClient,
   businessId: string,
   contactE164: string
