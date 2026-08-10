@@ -263,6 +263,24 @@ describe("findAwaitingApprovalRunBySlackThread", () => {
       )
     ).toBeNull();
 
+    // A newer channel-less row never shadows the strict match for this thread.
+    expect(
+      await findAwaitingApprovalRunBySlackThread(
+        BIZ,
+        "C-9",
+        "77.7",
+        makeDb(
+          updateChain({
+            data: [
+              { id: "run-newer-null", slack_channel_id: null },
+              { id: RUN, slack_channel_id: "C-9" }
+            ],
+            error: null
+          })
+        )
+      )
+    ).toEqual({ runId: RUN });
+
     // A row anchored without a channel (failed context merge) still answers.
     expect(
       await findAwaitingApprovalRunBySlackThread(

@@ -212,9 +212,12 @@ export async function findAwaitingApprovalRunBySlackThread(
   // channel field (a failed context merge, or data from before the field
   // existed) still answers instead of falling through to chat.
   const rows = (data ?? []) as Array<{ id: string; slack_channel_id: string | null }>;
-  const match = rows.find(
-    (r) => r.slack_channel_id === channelId || r.slack_channel_id == null
-  );
+  // A strict channel match ALWAYS beats a channel-less row, regardless of
+  // recency: a newer ts-only anchor from some other channel's gate must
+  // never shadow the gate that actually lives in this thread.
+  const match =
+    rows.find((r) => r.slack_channel_id === channelId) ??
+    rows.find((r) => r.slack_channel_id == null);
   return match ? { runId: match.id } : null;
 }
 
