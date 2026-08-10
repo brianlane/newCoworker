@@ -25,6 +25,22 @@ vi.mock("@/lib/db/whatsapp-connections", () => ({
   getPublicWhatsAppConnection: vi.fn()
 }));
 
+// The Slack delivery core has its own suite (slack-deliver); mocking it keeps
+// this one about what the DISPATCHER does with the outcome. Defaults to a
+// never-connected tenant so every pre-Slack expectation is unchanged.
+vi.mock("@/lib/slack/deliver", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/slack/deliver")>();
+  return {
+    buildSlackAlertBlocks: actual.buildSlackAlertBlocks,
+    deliverSlackAlert: vi.fn(),
+    slackAlertTargetState: vi.fn(async () => ({
+      connected: false,
+      deliverable: false,
+      alertChannelName: null
+    }))
+  };
+});
+
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
   getTelnyxMessagingForBusiness: vi.fn(async () => ({
@@ -70,6 +86,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
+import { deliverSlackAlert, slackAlertTargetState } from "@/lib/slack/deliver";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -126,6 +143,10 @@ describe("notifications/dispatch", () => {
     };
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
     vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+    // Re-pin the cooldown counter default: clearAllMocks keeps implementations,
+    // so a suite that raised it (the cooldown tests) must not leak into the
+    // next one now that suites run in more than one order-sensitive spot.
+    vi.mocked(countRecentNotificationsAbout).mockResolvedValue(0 as never);
     vi.mocked(deliverWhatsApp).mockResolvedValue({
       ok: true,
       via: "text",
@@ -148,6 +169,14 @@ describe("notifications/dispatch", () => {
     // Default success shape ({ id, channel }) — the dispatcher destructures
     // the result to stamp telnyx_message_id on the outbound-log row.
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
+    // Default: Slack NOT connected, so the pre-Slack expectations (four
+    // channel fan-outs) hold; the slack-channel suite opts in per test.
+    vi.mocked(slackAlertTargetState).mockResolvedValue({
+      connected: false,
+      deliverable: false,
+      alertChannelName: null
+    });
+    vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
     // English unless a test says otherwise: clearAllMocks clears calls, not
@@ -1201,6 +1230,185 @@ describe("notifications/dispatch", () => {
         status: "failed",
         reason: "send_failed"
       });
+    });
+  });
+
+  describe("slack channel", () => {
+    const slackRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "slack");
+
+    const connected = () =>
+      vi.mocked(slackAlertTargetState).mockResolvedValue({
+        connected: true,
+        deliverable: true,
+        alertChannelName: "leads"
+      });
+
+    it("never-connected writes no rows and never delivers", async () => {
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(slackRows()).toHaveLength(0);
+      expect(deliverSlackAlert).not.toHaveBeenCalled();
+      expect(result.results.some((r) => r.channel === "slack")).toBe(false);
+    });
+
+    it("posts the alert card and records sent with the channel name", async () => {
+      connected();
+      vi.mocked(deliverSlackAlert).mockResolvedValue({
+        ok: true,
+        channelId: "C-1",
+        channelName: "leads",
+        ts: "1.2"
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        ctaPath: "/dashboard/calls/abc"
+      });
+      const rows = slackRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("sent");
+      expect((rows[0].payload as Record<string, unknown>).recipient).toBe("#leads");
+      expect(deliverSlackAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: BIZ,
+          text: expect.stringContaining("https://app.example.com/dashboard/calls/abc"),
+          blocks: expect.any(Array)
+        })
+      );
+    });
+
+    it("records honest skips for toggle-off and unsubscribe without delivering", async () => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        slack_urgent: false
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect(slackRows()[0]).toMatchObject({ status: "skipped" });
+      expect(
+        (slackRows()[0].payload as Record<string, unknown>).reason
+      ).toBe("slack_urgent_disabled");
+      expect(deliverSlackAlert).not.toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-08-01T00:00:00Z"
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe("unsubscribed");
+    });
+
+    it("maps structured refusals to skips and transport failures to failed", async () => {
+      connected();
+      vi.mocked(deliverSlackAlert).mockResolvedValue({
+        ok: false,
+        reason: "no_alert_channel"
+      });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect(slackRows()[0]).toMatchObject({ status: "skipped" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe(
+        "no_alert_channel"
+      );
+
+      vi.clearAllMocks();
+      vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
+      connected();
+      vi.mocked(deliverSlackAlert).mockResolvedValue({
+        ok: false,
+        reason: "send_failed",
+        detail: "not_in_channel"
+      });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect(slackRows()[0]).toMatchObject({ status: "failed" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe(
+        "send_failed:not_in_channel"
+      );
+
+      vi.clearAllMocks();
+      vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
+      connected();
+      vi.mocked(deliverSlackAlert).mockRejectedValue(new Error("socket hang up"));
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect(slackRows()[0]).toMatchObject({ status: "failed" });
+    });
+
+    it("falls back to the channel id when Slack returns no name, and stringifies non-Error throws", async () => {
+      connected();
+      vi.mocked(deliverSlackAlert).mockResolvedValue({
+        ok: true,
+        channelId: "C-1",
+        channelName: null,
+        ts: "1.2"
+      });
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect((slackRows()[0].payload as Record<string, unknown>).recipient).toBe("C-1");
+
+      vi.clearAllMocks();
+      vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
+      connected();
+      vi.mocked(deliverSlackAlert).mockRejectedValue("plain string error");
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "A", kind: "urgent_alert" });
+      expect(slackRows()[0]).toMatchObject({ status: "failed" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe("send_failed");
+    });
+
+    it("stays silent when delivery races a disconnect", async () => {
+      connected();
+      vi.mocked(deliverSlackAlert).mockResolvedValue({ ok: false, reason: "not_connected" });
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "A",
+        kind: "urgent_alert"
+      });
+      expect(slackRows()).toHaveLength(0);
+      expect(result.results.some((r) => r.channel === "slack")).toBe(false);
+    });
+
+    it("joins the category-off and cooldown skip fan-outs when connected", async () => {
+      connected();
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead captured",
+        kind: "voice_capture"
+      });
+      expect(slackRows()[0]).toMatchObject({ status: "skipped" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe(
+        "category_leads_disabled"
+      );
+
+      vi.clearAllMocks();
+      vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
+      connected();
+      vi.mocked(countRecentNotificationsAbout).mockResolvedValue(5 as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "A",
+        kind: "urgent_alert",
+        contactE164: LEAD_PHONE
+      });
+      expect(slackRows()[0]).toMatchObject({ status: "skipped" });
+      expect((slackRows()[0].payload as Record<string, unknown>).reason).toBe(
+        "contact_alert_cooldown"
+      );
     });
   });
 

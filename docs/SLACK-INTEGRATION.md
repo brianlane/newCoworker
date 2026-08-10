@@ -105,8 +105,10 @@ because Slack verifies the request URL against a live endpoint:
 ```
 
 The Agents feature (`agent_view` messaging experience) is enabled with the
-event subscriptions stage; `apps.manifest.validate` is the authority on the
-exact field shape the current schema expects.
+event subscriptions stage. Confirmed against the live validator (Aug 2026):
+the block is `"features": { "agent_view": {} }` — an empty object; it
+accepts no description properties (those belong to the legacy
+`assistant_view`).
 
 ## App Manifest API commands
 

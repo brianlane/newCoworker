@@ -47,6 +47,11 @@ import {
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import {
+  buildSlackAlertBlocks,
+  deliverSlackAlert,
+  slackAlertTargetState
+} from "@/lib/slack/deliver";
+import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
 } from "../../../supabase/functions/_shared/contact_owner_target";
@@ -139,6 +144,10 @@ export type ResolvedTargets = {
    * really is connected.
    */
   whatsappConnected: boolean;
+  /** Slack channel toggle (delivery still requires a picked alert channel). */
+  slackUrgentEnabled: boolean;
+  /** Same never-connected silence rule as whatsappConnected. */
+  slackConnected: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -183,6 +192,7 @@ export async function resolveNotificationTargets(
   let prefsPhone: string | null = null;
   let smsUrgent = true;
   let whatsappUrgent = true;
+  let slackUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
   let dashboardAlerts = true;
@@ -218,6 +228,8 @@ export async function resolveNotificationTargets(
     // ?? true: rows read before the 20260811210000 migration keep the
     // channel on (delivery still requires a connected integration).
     whatsappUrgent = prefs.whatsapp_urgent ?? true;
+    // ?? true: rows read before 20260822113305, same posture.
+    slackUrgent = prefs.slack_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
@@ -258,6 +270,9 @@ export async function resolveNotificationTargets(
     });
   }
 
+  // Same question for Slack (fails toward connected inside the helper).
+  const slackState = await slackAlertTargetState(businessId);
+
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
 
@@ -291,6 +306,8 @@ export async function resolveNotificationTargets(
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
     whatsappConnected,
+    slackUrgentEnabled: slackUrgent,
+    slackConnected: slackState.connected,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -408,8 +425,10 @@ export async function dispatchUrgentNotification(
     }
     if (recentCount >= URGENT_ALERT_COOLDOWN_MAX) {
       const reason = "contact_alert_cooldown";
-      const gatedChannels = (["dashboard", "email", "sms", "whatsapp"] as const).filter(
-        (channel) => channel !== "whatsapp" || targets.whatsappConnected
+      const gatedChannels = (["dashboard", "email", "sms", "whatsapp", "slack"] as const).filter(
+        (channel) =>
+          (channel !== "whatsapp" || targets.whatsappConnected) &&
+          (channel !== "slack" || targets.slackConnected)
       );
       for (const channel of gatedChannels) {
         results.push(
@@ -435,8 +454,10 @@ export async function dispatchUrgentNotification(
   const category = resolveNotificationCategory(kind);
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
-    const gatedChannels = (["dashboard", "email", "sms", "whatsapp"] as const).filter(
-      (channel) => channel !== "whatsapp" || targets.whatsappConnected
+    const gatedChannels = (["dashboard", "email", "sms", "whatsapp", "slack"] as const).filter(
+      (channel) =>
+        (channel !== "whatsapp" || targets.whatsappConnected) &&
+        (channel !== "slack" || targets.slackConnected)
     );
     for (const channel of gatedChannels) {
       results.push(
@@ -752,6 +773,78 @@ export async function dispatchUrgentNotification(
           summary,
           kind,
           { ...payload, recipient: targets.phone },
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 5) Slack channel. Same never-connected silence rule as WhatsApp: a
+  // business that never connected Slack records NOTHING here. A connected
+  // workspace with a problem (uninstalled, no channel picked, tier) records
+  // an honest owner-actionable skip row. Delivery details (tier re-check,
+  // channel resolution, the actual post) live in deliverSlackAlert.
+  if (!targets.slackConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.slackUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "slack",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "slack_urgent_disabled"
+      )
+    );
+  } else {
+    const text =
+      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+    try {
+      const delivered = await deliverSlackAlert({
+        businessId: input.businessId,
+        text,
+        blocks: buildSlackAlertBlocks({ summary, detailsUrl: dashboardUrl })
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "slack", "sent", summary, kind, {
+            ...payload,
+            recipient: delivered.channelName
+              ? `#${delivered.channelName}`
+              : delivered.channelId
+          })
+        );
+      } else if (delivered.reason === "not_connected") {
+        // Raced a disconnect since the existence check: treat as never
+        // connected, no row (see the section comment above).
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "slack",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            payload,
+            delivered.detail ? `${delivered.reason}:${delivered.detail}` : delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: slack send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "slack",
+          "failed",
+          summary,
+          kind,
+          payload,
           err instanceof Error ? err.message : "send_failed"
         )
       );

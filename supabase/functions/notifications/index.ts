@@ -59,7 +59,7 @@ interface WebhookPayload {
   };
 }
 
-type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp";
+type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp" | "slack";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
@@ -67,6 +67,7 @@ type ResolvedTargets = {
   phone: string | null;
   smsUrgent: boolean;
   whatsappUrgent: boolean;
+  slackUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -146,6 +147,7 @@ async function resolveTargets(
   let prefsPhone: string | null = null;
   let smsUrgent = true;
   let whatsappUrgent = true;
+  let slackUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -154,7 +156,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, slack_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -170,6 +172,8 @@ async function resolveTargets(
     // ?? true: rows read before the whatsapp_urgent column existed keep the
     // channel on (delivery still requires a connected WhatsApp integration).
     whatsappUrgent = Boolean(prefs.whatsapp_urgent ?? true);
+    // ?? true: rows read before 20260822113305, same posture.
+    slackUrgent = Boolean(prefs.slack_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -202,6 +206,7 @@ async function resolveTargets(
     phone: redirected ? routing!.phone : ownerAlertPhone,
     smsUrgent,
     whatsappUrgent,
+    slackUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
@@ -985,6 +990,148 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.phone },
       "whatsapp_bridge_unconfigured"
+    );
+  }
+
+  // 5) Slack channel — delegated to the Next.js internal endpoint (bot
+  // token decryption + the Web API client live there, so no Slack secret
+  // lands in an edge function). Same never-connected silence rule as
+  // WhatsApp: a business with no slack_connections row records NOTHING
+  // here; a connected workspace with a problem (uninstalled, no channel
+  // picked, tier) records an honest skip row. Mirrors the fifth arm of
+  // src/lib/notifications/dispatch.ts.
+  let slackConnected = true;
+  {
+    const { data: slConn, error: slConnErr } = await supa
+      .from("slack_connections")
+      .select("business_id")
+      .eq("business_id", record.business_id)
+      .maybeSingle();
+    if (!slConnErr) slackConnected = slConn !== null;
+  }
+  if (!slackConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.slackUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "slack",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "slack_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "slack",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "recent_team_notify"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const slRes = await fetch(`${appUrl}/api/internal/slack-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs
+          // only when Origin matches NEXT_PUBLIC_APP_URL.
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          text: `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
+          // Same compact card buildSlackAlertBlocks renders on the Node
+          // path, kept in lockstep so both pipelines look identical.
+          blocks: [
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: `*New Coworker Alert*\n${summary}` }
+            },
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `<${dashboardUrl}|Open dashboard>` }]
+            }
+          ]
+        })
+      });
+      const slJson = slRes.ok
+        ? ((await slRes.json().catch(() => null)) as {
+            data?: {
+              ok?: boolean;
+              channelId?: string;
+              channelName?: string | null;
+              reason?: string;
+              detail?: string;
+            };
+          } | null)
+        : null;
+      if (slJson?.data?.ok) {
+        await recordRow(supa, record.business_id, "slack", "sent", summary, kind, {
+          ...basePayload,
+          recipient: slJson.data.channelName
+            ? `#${slJson.data.channelName}`
+            : (slJson.data.channelId ?? "slack")
+        });
+      } else if (slRes.ok) {
+        // Structured policy skip (needs reconnect / no channel / tier). A
+        // NEVER-connected business records nothing (raced a disconnect).
+        const slReason = slJson?.data?.reason ?? "send_failed";
+        if (slReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "slack",
+            slReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            basePayload,
+            slJson?.data?.detail ? `${slReason}:${slJson.data.detail}` : slReason
+          );
+        }
+      } else {
+        errors.push(`Slack failed: ${slRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "slack",
+          "failed",
+          summary,
+          kind,
+          basePayload,
+          `slack_bridge_${slRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Slack error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "slack",
+        "failed",
+        summary,
+        kind,
+        basePayload,
+        msg
+      );
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "slack",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "slack_bridge_unconfigured"
     );
   }
 

@@ -46,6 +46,8 @@ describe("applyNotificationPreferenceToggles", () => {
         "unassigned_booking_alerts",
         "sms_urgent",
         "whatsapp_urgent",
+        "slack_urgent",
+        "slack_digest",
         "email_urgent",
         "email_digest",
         "email_digest_weekly",

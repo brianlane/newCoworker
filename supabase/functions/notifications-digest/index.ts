@@ -75,6 +75,8 @@ type DigestTarget = {
   digest_email_weekly: string | null;
   email_digest: boolean;
   email_digest_weekly: boolean;
+  /** One toggle covers both windows on the Slack leg. */
+  slack_digest: boolean;
   /** When true, send only for windows with customer-facing activity. */
   digest_customer_facing_only: boolean;
   unsubscribed_at: string | null;
@@ -94,12 +96,13 @@ async function recordDigestRow(
   status: "sent" | "failed" | "skipped",
   summary: string,
   payload: Record<string, unknown>,
-  reason?: string
+  reason?: string,
+  channel: "email" | "slack" = "email"
 ): Promise<void> {
   const { error } = await supa.from("notifications").insert({
     id: crypto.randomUUID(),
     business_id: businessId,
-    delivery_channel: "email",
+    delivery_channel: channel,
     status,
     kind: "digest",
     summary,
@@ -364,6 +367,9 @@ serve(async (req: Request) => {
   const supa = createClient(supabaseUrl, serviceKey);
 
   const resendKey = Deno.env.get("RESEND_API_KEY") ?? "";
+  // The Slack digest leg posts through /api/internal/slack-send with this
+  // bearer (token decryption + the Web API client live in Node).
+  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
   const from = Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>";
   const replyTo = Deno.env.get("CONTACT_EMAIL");
   const adminEmail = (Deno.env.get("ADMIN_EMAIL") ?? "").trim() || null;
@@ -404,9 +410,19 @@ serve(async (req: Request) => {
   const { data: prefsRows } = await supa
     .from("notification_preferences")
     .select(
-      "business_id, alert_email, digest_email_daily, digest_email_weekly, email_digest, email_digest_weekly, digest_customer_facing_only, unsubscribed_at"
+      "business_id, alert_email, digest_email_daily, digest_email_weekly, email_digest, email_digest_weekly, slack_digest, digest_customer_facing_only, unsubscribed_at"
     )
     .in("business_id", ids);
+
+  // Which of these businesses have a Slack workspace connected at all: the
+  // never-connected majority records NO slack rows (the PR #1148 rule).
+  const { data: slackRows } = await supa
+    .from("slack_connections")
+    .select("business_id")
+    .in("business_id", ids);
+  const slackConnectedIds = new Set(
+    ((slackRows ?? []) as Array<{ business_id: string }>).map((r) => r.business_id)
+  );
   type PrefsRow = {
     business_id: string;
     alert_email: string | null;
@@ -414,6 +430,7 @@ serve(async (req: Request) => {
     digest_email_weekly: string | null;
     email_digest: boolean;
     email_digest_weekly: boolean;
+    slack_digest: boolean | null;
     digest_customer_facing_only: boolean | null;
     unsubscribed_at: string | null;
   };
@@ -425,6 +442,7 @@ serve(async (req: Request) => {
       digest_email_weekly: row.digest_email_weekly,
       email_digest: row.email_digest,
       email_digest_weekly: row.email_digest_weekly,
+      slack_digest: row.slack_digest,
       digest_customer_facing_only: row.digest_customer_facing_only,
       unsubscribed_at: row.unsubscribed_at
     });
@@ -439,6 +457,9 @@ serve(async (req: Request) => {
       // Default-on when no prefs row exists (matches table defaults).
       email_digest: prefs ? prefs.email_digest : true,
       email_digest_weekly: prefs ? prefs.email_digest_weekly : true,
+      // ?? true: rows read before 20260822113305 keep the leg on (delivery
+      // still requires a connected workspace + picked channel).
+      slack_digest: prefs?.slack_digest ?? true,
       // Default-off (matches table default): full-activity gating unchanged.
       digest_customer_facing_only: prefs?.digest_customer_facing_only ?? false,
       alert_email: prefs?.alert_email ?? null,
@@ -460,6 +481,11 @@ serve(async (req: Request) => {
     // Window-specific recipient override first, then the legacy chain.
     const windowOverride = window === "weekly" ? t.digest_email_weekly : t.digest_email_daily;
     const fallbackRecipient = t.alert_email ?? t.owner_email ?? adminEmail;
+    const recipient = (windowOverride ?? fallbackRecipient ?? "").trim();
+
+    // Email leg gating: rows and reasons byte-identical to the pre-Slack
+    // behavior, but a refused email leg no longer starves the Slack one.
+    let emailWanted = false;
     if (!toggleOn || t.unsubscribed_at) {
       await recordDigestRow(
         supa,
@@ -473,17 +499,9 @@ serve(async (req: Request) => {
             ? "email_digest_weekly_disabled"
             : "email_digest_disabled"
       );
-      skipped += 1;
-      continue;
-    }
-
-    const recipient = (windowOverride ?? fallbackRecipient ?? "").trim();
-    if (!recipient) {
+    } else if (!recipient) {
       await recordDigestRow(supa, t.business_id, "skipped", digestLabel, { window }, "no_email");
-      skipped += 1;
-      continue;
-    }
-    if (!resendKey) {
+    } else if (!resendKey) {
       await recordDigestRow(
         supa,
         t.business_id,
@@ -492,6 +510,40 @@ serve(async (req: Request) => {
         { window, recipient },
         "resend_unconfigured"
       );
+    } else {
+      emailWanted = true;
+    }
+
+    // Slack leg gating: one slack_digest toggle covers both windows; a
+    // business with no Slack connection records nothing at all.
+    let slackWanted = false;
+    if (slackConnectedIds.has(t.business_id)) {
+      if (!t.slack_digest || t.unsubscribed_at) {
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "skipped",
+          digestLabel,
+          { window },
+          t.unsubscribed_at ? "unsubscribed" : "slack_digest_disabled",
+          "slack"
+        );
+      } else if (!cronSecret) {
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "skipped",
+          digestLabel,
+          { window },
+          "slack_bridge_unconfigured",
+          "slack"
+        );
+      } else {
+        slackWanted = true;
+      }
+    }
+
+    if (!emailWanted && !slackWanted) {
       skipped += 1;
       continue;
     }
@@ -499,14 +551,27 @@ serve(async (req: Request) => {
     const { activity, error: activityErr } = await fetchActivity(supa, t.business_id, since);
     if (activityErr) {
       console.error("digest.activity_query_failed", t.business_id, activityErr);
-      await recordDigestRow(
-        supa,
-        t.business_id,
-        "failed",
-        digestLabel,
-        { window, recipient },
-        `activity_query_failed: ${activityErr}`
-      );
+      if (emailWanted) {
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "failed",
+          digestLabel,
+          { window, recipient },
+          `activity_query_failed: ${activityErr}`
+        );
+      }
+      if (slackWanted) {
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "failed",
+          digestLabel,
+          { window },
+          `activity_query_failed: ${activityErr}`,
+          "slack"
+        );
+      }
       failed += 1;
       continue;
     }
@@ -521,105 +586,222 @@ serve(async (req: Request) => {
         t.digest_customer_facing_only && hasDigestActivity(activity)
           ? "no_customer_facing_activity"
           : "no_activity";
-      await recordDigestRow(
-        supa,
-        t.business_id,
-        "skipped",
-        digestLabel,
-        { window, recipient },
-        reason
-      );
+      if (emailWanted) {
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "skipped",
+          digestLabel,
+          { window, recipient },
+          reason
+        );
+      }
+      if (slackWanted) {
+        await recordDigestRow(supa, t.business_id, "skipped", digestLabel, { window }, reason, "slack");
+      }
       skipped += 1;
       continue;
     }
 
-    const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
     const dashboardUrl = `${appUrl}/dashboard`;
     const model = buildDigestEmailModel({
       window,
       businessName: t.business_name ?? "your business",
       activity
     });
-
-    const textLines: string[] = [model.intro, ""];
-    const bodyBlocks: BrandedBodyBlock[] = [{ kind: "text", text: model.intro }];
-    for (const section of model.sections) {
-      textLines.push(`${section.heading}:`);
-      for (const line of section.lines) textLines.push(`  • ${line}`);
-      textLines.push("");
-      bodyBlocks.push({
-        kind: "text",
-        text: [`${section.heading}:`, ...section.lines.map((l) => `• ${l}`)].join("\n")
-      });
-    }
-    textLines.push(`Open the dashboard: ${dashboardUrl}`);
-    textLines.push("");
-    textLines.push("---");
-    textLines.push(`Don't want these emails? Unsubscribe: ${unsubscribeUrl}`);
-    const text = textLines.join("\n");
-
-    const html = buildBrandedEmailHtml({
-      siteUrl: appUrl,
-      documentTitle: model.subject,
-      heading: `${windowLabel(window).title}: ${t.business_name ?? "your business"}`,
-      bodyBlocks,
-      cta: { label: "Open dashboard", href: dashboardUrl },
-      unsubscribeUrl,
-      recipientEmail: recipient
-    });
-
-    const headers: Record<string, string> = {
-      "List-Unsubscribe": `<${unsubscribeUrl}>`,
-      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
-    };
-
-    // NB: the Resend REST API uses snake_case in the JSON body
-    // (https://resend.com/docs/api-reference/emails/send-email) — `reply_to`,
-    // not `replyTo`. The Resend SDK in src/lib/email/client.ts uses the
-    // camelCase form because the SDK transforms it internally; direct REST
-    // calls (here + supabase/functions/notifications/index.ts) must stick
-    // to snake_case or the header is silently dropped.
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        from,
-        to: [recipient],
-        subject: model.subject,
-        text,
-        html,
-        ...(replyTo ? { reply_to: replyTo } : {}),
-        headers
-      })
-    });
-
     // Per-event deep links so the dashboard notification expands into the
     // actual events the digest counted.
     const events = buildDigestEventLinks(activity);
 
-    if (res.ok) {
-      await recordDigestRow(supa, t.business_id, "sent", model.subject, {
-        window,
-        recipient,
-        activitySummary: model.activitySummary,
-        events
+    if (emailWanted) {
+      const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
+      const textLines: string[] = [model.intro, ""];
+      const bodyBlocks: BrandedBodyBlock[] = [{ kind: "text", text: model.intro }];
+      for (const section of model.sections) {
+        textLines.push(`${section.heading}:`);
+        for (const line of section.lines) textLines.push(`  • ${line}`);
+        textLines.push("");
+        bodyBlocks.push({
+          kind: "text",
+          text: [`${section.heading}:`, ...section.lines.map((l) => `• ${l}`)].join("\n")
+        });
+      }
+      textLines.push(`Open the dashboard: ${dashboardUrl}`);
+      textLines.push("");
+      textLines.push("---");
+      textLines.push(`Don't want these emails? Unsubscribe: ${unsubscribeUrl}`);
+      const text = textLines.join("\n");
+
+      const html = buildBrandedEmailHtml({
+        siteUrl: appUrl,
+        documentTitle: model.subject,
+        heading: `${windowLabel(window).title}: ${t.business_name ?? "your business"}`,
+        bodyBlocks,
+        cta: { label: "Open dashboard", href: dashboardUrl },
+        unsubscribeUrl,
+        recipientEmail: recipient
       });
-      sent += 1;
-    } else {
-      const body = await res.text().catch(() => "");
-      console.error("digest.resend", t.business_id, res.status, body.slice(0, 500));
-      await recordDigestRow(
-        supa,
-        t.business_id,
-        "failed",
-        model.subject,
-        { window, recipient, activitySummary: model.activitySummary, events },
-        `resend_${res.status}`
-      );
-      failed += 1;
+
+      const headers: Record<string, string> = {
+        "List-Unsubscribe": `<${unsubscribeUrl}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+      };
+
+      // NB: the Resend REST API uses snake_case in the JSON body
+      // (https://resend.com/docs/api-reference/emails/send-email) — `reply_to`,
+      // not `replyTo`. The Resend SDK in src/lib/email/client.ts uses the
+      // camelCase form because the SDK transforms it internally; direct REST
+      // calls (here + supabase/functions/notifications/index.ts) must stick
+      // to snake_case or the header is silently dropped.
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from,
+          to: [recipient],
+          subject: model.subject,
+          text,
+          html,
+          ...(replyTo ? { reply_to: replyTo } : {}),
+          headers
+        })
+      });
+
+      if (res.ok) {
+        await recordDigestRow(supa, t.business_id, "sent", model.subject, {
+          window,
+          recipient,
+          activitySummary: model.activitySummary,
+          events
+        });
+        sent += 1;
+      } else {
+        const body = await res.text().catch(() => "");
+        console.error("digest.resend", t.business_id, res.status, body.slice(0, 500));
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "failed",
+          model.subject,
+          { window, recipient, activitySummary: model.activitySummary, events },
+          `resend_${res.status}`
+        );
+        failed += 1;
+      }
+    }
+
+    // Slack leg: the same digest content rendered to mrkdwn and posted to
+    // the tenant's alert channel through the internal bridge.
+    if (slackWanted) {
+      const slackLines: string[] = [`*${model.subject}*`, "", model.intro, ""];
+      for (const section of model.sections) {
+        slackLines.push(`*${section.heading}*`);
+        for (const line of section.lines) slackLines.push(`• ${line}`);
+        slackLines.push("");
+      }
+      slackLines.push(`<${dashboardUrl}|Open dashboard>`);
+      // Slack renders chat.postMessage text reliably only up to ~4k chars,
+      // so a busy weekly digest must be clamped or the whole post fails
+      // (msg_too_long) while the email quietly succeeds. Cut at the last
+      // complete line so no mrkdwn marker dangles, and keep the dashboard
+      // link as the pointer to the full picture.
+      const SLACK_DIGEST_MAX_CHARS = 3900;
+      let slackText = slackLines.join("\n");
+      if (slackText.length > SLACK_DIGEST_MAX_CHARS) {
+        const tail = `\n…\n<${dashboardUrl}|See the full digest on the dashboard>`;
+        let clipped = slackText.slice(0, SLACK_DIGEST_MAX_CHARS - tail.length);
+        const lastNewline = clipped.lastIndexOf("\n");
+        if (lastNewline > 0) clipped = clipped.slice(0, lastNewline);
+        slackText = clipped + tail;
+      }
+      try {
+        const slRes = await fetch(`${appUrl}/api/internal/slack-send`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${cronSecret}`,
+            // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs
+            // only when Origin matches NEXT_PUBLIC_APP_URL.
+            Origin: appUrl
+          },
+          body: JSON.stringify({ businessId: t.business_id, text: slackText })
+        });
+        const slJson = slRes.ok
+          ? ((await slRes.json().catch(() => null)) as {
+              data?: {
+                ok?: boolean;
+                channelName?: string | null;
+                channelId?: string;
+                reason?: string;
+                detail?: string;
+              };
+            } | null)
+          : null;
+        if (slJson?.data?.ok) {
+          await recordDigestRow(
+            supa,
+            t.business_id,
+            "sent",
+            model.subject,
+            {
+              window,
+              recipient: slJson.data.channelName
+                ? `#${slJson.data.channelName}`
+                : (slJson.data.channelId ?? "slack"),
+              activitySummary: model.activitySummary,
+              events
+            },
+            undefined,
+            "slack"
+          );
+          sent += 1;
+        } else if (slRes.ok) {
+          // Structured policy skip (needs reconnect / no channel / tier);
+          // a raced disconnect ("not_connected") records nothing.
+          const slReason = slJson?.data?.reason ?? "send_failed";
+          if (slReason !== "not_connected") {
+            await recordDigestRow(
+              supa,
+              t.business_id,
+              slReason === "send_failed" ? "failed" : "skipped",
+              model.subject,
+              { window },
+              slJson?.data?.detail ? `${slReason}:${slJson.data.detail}` : slReason,
+              "slack"
+            );
+            if (slReason === "send_failed") failed += 1;
+            else skipped += 1;
+          }
+        } else {
+          console.error("digest.slack_bridge", t.business_id, slRes.status);
+          await recordDigestRow(
+            supa,
+            t.business_id,
+            "failed",
+            model.subject,
+            { window },
+            `slack_bridge_${slRes.status}`,
+            "slack"
+          );
+          failed += 1;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("digest.slack_bridge_error", t.business_id, msg);
+        await recordDigestRow(
+          supa,
+          t.business_id,
+          "failed",
+          model.subject,
+          { window },
+          msg,
+          "slack"
+        );
+        failed += 1;
+      }
     }
   }
 

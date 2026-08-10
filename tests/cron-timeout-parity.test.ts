@@ -215,6 +215,11 @@ const KNOWN_ABOVE_EDGE_CEILING = [
 const KNOWN_DISPATCHERS = [
   "edge-ai-flow-worker",
   "edge-customer-memory-summarize-sweep",
+  // The digest sweep posts /api/internal/slack-send once per business with
+  // a Slack digest leg (PR train: Slack alerts), so its per-call budgets
+  // live in the function, not the cron timeout.
+  "edge-notifications-digest",
+  "edge-notifications-digest-weekly",
   "edge-sms-inbound-worker"
 ];
 
