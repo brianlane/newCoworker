@@ -4521,6 +4521,7 @@ function StepFields({
   }
   if (step.type === "route_to_team") {
     const ow = step.offerWindow;
+    const reminders = step.unclaimedReminders;
     return (
       <div className="space-y-2">
         <Field
@@ -4818,6 +4819,77 @@ function StepFields({
                 }}
               />
             </div>
+          )}
+        </div>
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(reminders)}
+              onChange={(ev) =>
+                patchStep(index, {
+                  unclaimedReminders: ev.target.checked
+                    ? { rounds: 3, intervalMinutes: 20 }
+                    : undefined
+                })
+              }
+            />
+            Nobody claimed it: remind the same teammates before it comes back to me
+          </label>
+          {reminders && (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Field
+                  label="Reminder rounds"
+                  value={String(reminders.rounds)}
+                  onChange={(v) => {
+                    const n = Number(v);
+                    patchStep(index, {
+                      unclaimedReminders: {
+                        ...reminders,
+                        rounds: Number.isFinite(n) ? Math.min(5, Math.max(1, Math.round(n))) : 3
+                      }
+                    });
+                  }}
+                />
+                <Field
+                  label="Minutes apart"
+                  value={String(reminders.intervalMinutes)}
+                  onChange={(v) => {
+                    const n = Number(v);
+                    patchStep(index, {
+                      unclaimedReminders: {
+                        ...reminders,
+                        intervalMinutes: Number.isFinite(n)
+                          ? Math.min(240, Math.max(5, Math.round(n)))
+                          : 20
+                      }
+                    });
+                  }}
+                />
+              </div>
+              <Field
+                label="Compact context repeated in each reminder (optional)"
+                value={reminders.detailsTemplate ?? ""}
+                onChange={(v) =>
+                  patchStep(index, {
+                    unclaimedReminders: {
+                      ...reminders,
+                      detailsTemplate: v.trim() ? v : undefined
+                    }
+                  })
+                }
+                textarea
+              />
+              <p className="text-[11px] text-parchment/50">
+                Reminders go to whoever was already offered the lead, not the whole
+                roster, and only when nobody answered. If everyone explicitly passes,
+                the lead comes back to you right away. The last round leads with a row
+                of double exclamation marks, and you inherit the lead one interval
+                later. Reminders never re-send the full offer text, so keep this line
+                short.
+              </p>
+            </>
           )}
         </div>
         <label className="flex items-center gap-2 text-xs text-parchment/70">

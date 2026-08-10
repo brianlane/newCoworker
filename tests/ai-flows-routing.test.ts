@@ -92,16 +92,25 @@ describe("parseRouting", () => {
 });
 
 describe("multiOfferHeadsUpLine", () => {
-  it("uses the two-offer wording for exactly 2 pending", () => {
-    const line = multiOfferHeadsUpLine(2);
-    expect(line).toContain("2 pending offers");
-    expect(line).toContain('reply "1" twice to take both');
+  it("names the lead so the reply is unambiguous", () => {
+    const line = multiOfferHeadsUpLine(2, "Daniel");
+    expect(line).toContain("*You have 2 unclaimed leads.*");
+    expect(line).toContain("*1, Daniel*");
   });
 
-  it("generalizes for 3+ pending", () => {
-    const line = multiOfferHeadsUpLine(3);
-    expect(line).toContain("3 pending offers");
-    expect(line).toContain('once per offer');
+  it("counts correctly past two", () => {
+    expect(multiOfferHeadsUpLine(3, "Daniel")).toContain("*You have 3 unclaimed leads.*");
+  });
+
+  it("falls back to a name placeholder when the flow captured no lead name", () => {
+    const line = multiOfferHeadsUpLine(2, "   ");
+    expect(line).toContain("*1, <name>*");
+    // Never promise a reply shape naming a lead we cannot match on.
+    expect(line).not.toContain("*1, *");
+  });
+
+  it("no longer tells the team to reply 1 twice, which was never reliable", () => {
+    expect(multiOfferHeadsUpLine(2, "Daniel")).not.toContain("twice");
   });
 });
 

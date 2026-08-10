@@ -114,6 +114,36 @@ describe("planStep: route_to_team agentNames passthrough", () => {
   });
 });
 
+describe("planStep: route_to_team unclaimedReminders passthrough", () => {
+  const base: FlowStep = {
+    id: "r",
+    type: "route_to_team",
+    offerTemplate: "New lead, reply 1/2",
+    ownerFallbackTemplate: "No one claimed it"
+  };
+
+  it("carries the ladder through whole and unrendered", () => {
+    // detailsTemplate stays a template here: the worker renders it per round,
+    // like every other route template.
+    const reminders = {
+      rounds: 3,
+      intervalMinutes: 20,
+      detailsTemplate: "Address: {{vars.lead_address}}"
+    };
+    const r = planStep({ ...base, unclaimedReminders: reminders }, {});
+    expect(
+      r.ok && r.action.kind === "route_to_team" ? r.action.unclaimedReminders : null
+    ).toEqual(reminders);
+  });
+
+  it("omits the field entirely when not configured, so the owner still inherits at once", () => {
+    const r = planStep(base, {});
+    expect(
+      r.ok && r.action.kind === "route_to_team" && "unclaimedReminders" in r.action
+    ).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Routing contract: offered_all / offered_names / offer_deadline_ms
 // ---------------------------------------------------------------------------

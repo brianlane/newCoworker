@@ -1562,6 +1562,22 @@ const nonBranchStepMembers = [
     // Owner-first routing for repeat leads: when the lead's contact already
     // has an owning employee, offer them first, then the normal cascade.
     preferContactOwner: z.boolean().optional(),
+    // Reminder ladder before the owner inherits an unclaimed lead. Without
+    // it, a lapsed offer goes to the owner immediately. With it, the SAME
+    // offerees are nudged `rounds` more times, `intervalMinutes` apart, and
+    // the owner fallback fires one interval after the last round. The team is
+    // who should work the lead; the owner is the backstop, not the second
+    // rung. Reminder copy is generated (compact by design: re-sending a
+    // 1,500-character lead blob three more times would quadruple the
+    // messaging cost of an unclaimed lead), with `detailsTemplate` carrying
+    // whatever context the flow wants repeated.
+    unclaimedReminders: z
+      .object({
+        rounds: z.number().int().min(1).max(5),
+        intervalMinutes: z.number().int().min(5).max(240),
+        detailsTemplate: z.string().min(1).max(600).optional()
+      })
+      .optional(),
     when: whenSchema.optional()
   }),
   z.object({
