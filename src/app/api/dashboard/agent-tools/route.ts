@@ -29,7 +29,7 @@ const putBodySchema = z.object({
   // Must list EVERY AgentKey the registry renders on Settings, or that
   // surface's toggles are read-only in practice (the UI shows them, the
   // write 400s). Kept in lockstep by tests/agent-tool-settings.test.ts.
-  agentKey: z.enum(["dashboard", "voice", "sms", "webchat", "email"]),
+  agentKey: z.enum(["dashboard", "voice", "sms", "webchat", "email", "slack"]),
   toolKey: z.string().min(1).max(100),
   enabled: z.boolean()
 });

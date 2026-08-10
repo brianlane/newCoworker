@@ -540,6 +540,21 @@ export async function runInlineChatTurn(
      * budget applies there).
      */
     budgetMs?: number;
+    /**
+     * Stream hook for surfaces that can render text progressively (Slack).
+     * Called ONLY with the text of a final step (one that requested no
+     * tools): interim text accompanying a tool request is superseded by the
+     * post-tool wrap-up, and streamed content cannot be unsent. The full
+     * final `content` (including degraded-turn notes) still arrives on the
+     * result; a throwing callback is swallowed, never failing the turn.
+     */
+    onTextDelta?: (text: string) => void;
+    /**
+     * AI-spend surface tag (default "dashboard_chat"). Callers that are a
+     * different product surface (Slack chat) pass their own so the usage
+     * card attributes the burn honestly.
+     */
+    spendSurface?: string;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -666,13 +681,24 @@ export async function runInlineChatTurn(
     await meterGeminiSpendForBusiness({
       businessId: args.businessId,
       model,
-      surface: "dashboard_chat",
+      surface: args.spendSurface ?? "dashboard_chat",
       usage: result.usage,
       inputChars: inputCharsEstimate,
       outputChars: result.text?.length ?? 0
     });
 
-    if (result.text) texts.push(result.text);
+    if (result.text) {
+      texts.push(result.text);
+      // Final-step text only (see the onTextDelta doc above); a throwing
+      // callback must never take the turn down with it.
+      if (result.functionCalls.length === 0) {
+        try {
+          args.onTextDelta?.(result.text);
+        } catch {
+          // Streaming is best-effort by contract.
+        }
+      }
+    }
 
     if (result.functionCalls.length === 0 || !result.modelContent) {
       break;

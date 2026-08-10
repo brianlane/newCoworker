@@ -37,7 +37,7 @@ import { AGENT_TOOL_REGISTRY, type AgentKey } from "./registry";
  * So they are excluded by default and `includeOwnerOperated` brings them back
  * for the rarer question "where is this tool live at all?".
  */
-export const OWNER_OPERATED_AGENT_KEYS: readonly AgentKey[] = ["dashboard"];
+export const OWNER_OPERATED_AGENT_KEYS: readonly AgentKey[] = ["dashboard", "slack"];
 
 export type DivergenceOptions = {
   /** Include owner-driven surfaces (dashboard). Default false. */

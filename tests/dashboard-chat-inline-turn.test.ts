@@ -131,6 +131,49 @@ describe("runInlineChatTurn, plain turns", () => {
     );
   });
 
+  it("tags spend with the caller's surface and streams final-step text once", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("Streamed answer"));
+    const deltas: string[] = [];
+    const res = await runInlineChatTurn(
+      { ...baseArgs(), spendSurface: "slack_chat", onTextDelta: (t) => deltas.push(t) },
+      { chatStep }
+    );
+    expect(res).toMatchObject({ ok: true, content: "Streamed answer" });
+    expect(deltas).toEqual(["Streamed answer"]);
+    expect(meter).toHaveBeenCalledWith(expect.objectContaining({ surface: "slack_chat" }));
+  });
+
+  it("never streams interim text that a tool step will supersede", async () => {
+    const deltas: string[] = [];
+    const chatStep = vi
+      .fn(async (_p: GeminiChatStepParams) => textStep("final answer"))
+      .mockImplementationOnce(async (_p: GeminiChatStepParams) => ({
+        ...textStep("interim narration"),
+        functionCalls: [{ name: "business_knowledge_lookup", args: { query: "hours" } }],
+        modelContent: { role: "model", parts: [{ text: "interim narration" }] }
+      }));
+    const res = await runInlineChatTurn(
+      { ...baseArgs(), knowledgeToolEnabled: true, onTextDelta: (t) => deltas.push(t) },
+      { chatStep, lookupKnowledge: vi.fn(async () => ({ ok: true, answer: "9-5" })) as never }
+    );
+    expect(res).toMatchObject({ ok: true });
+    expect(deltas).toEqual(["final answer"]);
+  });
+
+  it("a throwing onTextDelta never takes the turn down", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("Still fine"));
+    const res = await runInlineChatTurn(
+      {
+        ...baseArgs(),
+        onTextDelta: () => {
+          throw new Error("stream broke");
+        }
+      },
+      { chatStep }
+    );
+    expect(res).toMatchObject({ ok: true, content: "Still fine" });
+  });
+
   it("defaults to a model that exists on the Gemini API (gemini-3.6-flash)", async () => {
     // Regression pin: the launch default was gemini-3.1-flash, an id that
     // does not exist on the API, every inline turn 404'd, silently

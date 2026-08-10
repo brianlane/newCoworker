@@ -52,6 +52,9 @@ export type EmailLogSource =
   | "dashboard_chat"
   | "sms_assistant"
   | "voice_assistant"
+  // The verified owner asked from the Slack surface (EMAIL_SEND block
+  // fulfilled by src/lib/slack/worker.ts).
+  | "slack_assistant"
   | "tenant_mailbox_inbound"
   | "tenant_mailbox_outbound"
   // Owner typed + sent this email by hand from the dashboard Emails page
@@ -673,6 +676,7 @@ export type RecordOutboundAssistantEmailInput = {
     | "dashboard_chat"
     | "sms_assistant"
     | "voice_assistant"
+    | "slack_assistant"
     | "email_coworker"
     | "booking_reminder";
   /**

@@ -18,7 +18,7 @@
  * per call, so they ARE configurable.
  */
 
-export type AgentKey = "dashboard" | "voice" | "sms" | "webchat" | "email";
+export type AgentKey = "dashboard" | "voice" | "sms" | "webchat" | "email" | "slack";
 
 export type AgentToolDefinition = {
   toolKey: string;
@@ -581,6 +581,125 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Cancellation waitlist",
         description:
           "Offer to text them if an earlier slot frees up, when they ask for something sooner.",
+        defaultEnabled: true,
+        configurable: true
+      }
+    ]
+  },
+  {
+    // Inline-engine surface like `email` (no Rowboat seed): the tenant's
+    // team talks to the coworker in their connected Slack workspace. The
+    // owner-power tools below additionally require the VERIFIED OWNER at
+    // run time (users.info email match in src/lib/slack/worker.ts): the
+    // toggle turns a tool on for the surface, never for a teammate.
+    key: "slack",
+    label: "Slack coworker",
+    description:
+      "Answers your team in your connected Slack workspace: DMs and @New Coworker mentions, with the same brain as dashboard chat.",
+    tools: [
+      {
+        toolKey: "business_knowledge_lookup",
+        label: "Business knowledge lookup",
+        description: "Answer team questions from your business knowledge and website summary.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "send_sms",
+        label: "Send texts",
+        description: "Text a customer or teammate when someone asks in Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "send_whatsapp",
+        label: "Send WhatsApp messages",
+        description: "Message a customer on WhatsApp when someone asks in Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "send_email",
+        label: "Send email (owner only)",
+        description:
+          "Send email from your connected mailbox when the verified owner asks in Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_find_slots",
+        label: "Find calendar openings",
+        description: "Look up free slots on the connected calendar.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_book_appointment",
+        label: "Book appointments",
+        description: "Book appointments on the connected calendar.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_reschedule_appointment",
+        label: "Reschedule appointments",
+        description: "Move an existing appointment.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_cancel_appointment",
+        label: "Cancel appointments",
+        description: "Cancel an existing appointment.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_join_waitlist",
+        label: "Cancellation waitlist",
+        description: "Add someone to the cancellation waitlist.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "run_aiflow",
+        label: "Run automations",
+        description: "List and start your AiFlows from Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "edit_aiflow",
+        label: "Edit automations (owner only)",
+        description: "Apply validated in-place AiFlow edits when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_notification_preferences",
+        label: "Change notification settings (owner only)",
+        description: "Flip alert toggles when the verified owner asks in Slack.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "flag_contact_spam",
+        label: "Flag spam (owner only)",
+        description: "Mark a contact as spam when the verified owner declares it.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "set_contact_reply_mode",
+        label: "Mute or unmute contacts (owner only)",
+        description: "Stop or resume auto-replies to one contact when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_employee",
+        label: "Manage the roster (owner only)",
+        description: "Add or update team members when the verified owner asks.",
         defaultEnabled: true,
         configurable: true
       }

@@ -254,7 +254,7 @@ export async function fulfillEmailBlocks(args: {
 export async function fulfillOwnerEmailBlocks(args: {
   businessId: string;
   content: string;
-  source: "dashboard_chat" | "sms_assistant";
+  source: "dashboard_chat" | "sms_assistant" | "slack_assistant";
 }): Promise<{ content: string; sentCount: number; failedCount: number }> {
   return fulfillEmailBlocks({
     content: args.content,
