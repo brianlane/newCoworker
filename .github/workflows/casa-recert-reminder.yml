@@ -45,16 +45,38 @@ jobs:
           script: |
             const year = new Date().getUTCFullYear();
             const title = `Start the CASA AL1 reassessment (${year})`;
+            const LABEL = "casa-recert";
+
+            // The label has to exist BEFORE the issue is created. GitHub does
+            // not create unknown labels on issue creation, it silently drops
+            // them and opens the issue unlabelled, which would leave the
+            // duplicate guard below matching nothing forever and reopening a
+            // fresh issue on every dispatch.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: LABEL,
+                color: "5319e7",
+                description: "Annual ADA-CASA AL1 reassessment for the Google OAuth verification"
+              });
+              core.info(`Created the ${LABEL} label.`);
+            } catch (error) {
+              // 422 is "already exists", which is the normal path on every run
+              // after the first. Anything else is worth failing on.
+              if (error.status !== 422) throw error;
+            }
 
             // Opening a duplicate every manual dispatch would train everyone
             // to ignore the issue, which defeats the point.
-            const existing = await github.rest.issues.listForRepo({
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: "open",
-              labels: "casa-recert"
+              labels: LABEL,
+              per_page: 100
             });
-            if (existing.data.some((issue) => issue.title === title)) {
+            if (existing.some((issue) => issue.title === title)) {
               core.info(`Already open: ${title}. Nothing to do.`);
               return;
             }
@@ -97,6 +119,6 @@ jobs:
               repo: context.repo.repo,
               title,
               body,
-              labels: ["casa-recert"]
+              labels: [LABEL]
             });
             core.info(`Opened #${created.data.number}: ${title}`);
