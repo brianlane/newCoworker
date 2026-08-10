@@ -14,6 +14,7 @@ import {
   rememberLastLoginMethod,
   type LoginMethod
 } from "@/lib/auth/last-login-method";
+import { NO_ACCOUNT_ERROR } from "@/lib/auth/account-gate";
 import { isPasskeyCeremonyCancellation, passkeyErrorMessage } from "@/lib/auth/passkey-errors";
 import { safeInternalPath } from "@/lib/auth/safe-redirect";
 import {
@@ -68,7 +69,13 @@ export default function LoginForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // /api/auth/callback bounces an OAuth sign-in whose address has no account
+  // back here with ?error=no_account (src/lib/auth/account-gate.ts). Seeded
+  // into the same error slot every other failure uses, so the next attempt
+  // clears it.
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get("error") === NO_ACCOUNT_ERROR ? t("noAccountForEmail") : null
+  );
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [magicSent, setMagicSent] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -191,12 +198,19 @@ export default function LoginForm() {
       // auth-token accumulation across abandoned sessions).
       await clearStaleSupabaseAuthCookies();
       const supabase = getSupabaseBrowserClient();
+      // `shouldCreateUser` defaults to TRUE, which made this button the second
+      // door into account creation: any address typed here got an empty
+      // `auth.users` row and a working magic link. This is a sign-IN form, so
+      // the link is only ever issued to an address that already has an
+      // account; Supabase answers `otp_disabled` for anything else.
       const { error: magicError } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: callbackUrl(redirectTo) }
+        options: { emailRedirectTo: callbackUrl(redirectTo), shouldCreateUser: false }
       });
       if (magicError) {
-        setError(magicError.message);
+        setError(
+          magicError.code === "otp_disabled" ? t("noAccountForEmail") : magicError.message
+        );
         return;
       }
       rememberLastLoginMethod("magic-link");
