@@ -58,6 +58,48 @@ export type BrandedEmailHtmlInput = {
   platformSignature?: boolean;
 };
 
+/**
+ * The platform sign-off: logo left, stacked details right. Mirrors
+ * docs/email-signatures.html, the canonical artwork.
+ *
+ * Extracted so it has ONE definition. The HQ team-inbox flow signs its replies
+ * with it too, and the hand-written second copy drifted immediately: it
+ * invented a team@newcoworker.com line and dropped the logo, the title and the
+ * phone number.
+ *
+ * PLATFORM IDENTITY ONLY. It carries New Coworker's name, founder and phone,
+ * so it must never render under a tenant's own From header. Callers enforce
+ * that: `buildBrandedEmailHtml` via `platformSignature: false`, and the AiFlow
+ * send path by refusing the flag for any business but HQ.
+ */
+export function platformSignatureHtml(logoSrc: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+    <tr>
+      <td style="vertical-align:middle;padding:0 16px 0 0;">
+        <img src="${escapeAttr(logoSrc)}" alt="New Coworker" width="56" height="56" style="display:block;width:56px;height:56px;border-radius:10px;">
+      </td>
+      <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:#F5F0E8;">
+        <span style="font-weight:700;">The New Coworker Team</span><br>
+        <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
+        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a><br>
+        Web: <a href="${SITE_URL}" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
+      </td>
+    </tr>
+  </table>`;
+}
+
+/**
+ * Plain-text twin, for the text/plain alternative of a multipart send. Same
+ * facts in the same order, so a client showing the text part is not reading a
+ * different signature from the one in the HTML part.
+ */
+export const PLATFORM_SIGNATURE_TEXT = [
+  "The New Coworker Team",
+  "Brian Lane, Founder",
+  "Call: 602.313.1823",
+  "Web: newcoworker.com"
+].join("\n");
+
 function renderBodyBlocks(blocks: BrandedBodyBlock[]): string {
   return blocks
     .map((b) => {
@@ -132,21 +174,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
   const signatureBlock =
     input.platformSignature === false
       ? ""
-      : `<tr><td style="padding:0 40px 32px;">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
-    <tr>
-      <td style="vertical-align:middle;padding:0 16px 0 0;">
-        <img src="${escapeAttr(logoSrc)}" alt="New Coworker" width="56" height="56" style="display:block;width:56px;height:56px;border-radius:10px;">
-      </td>
-      <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:#F5F0E8;">
-        <span style="font-weight:700;">The New Coworker Team</span><br>
-        <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
-        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a><br>
-        Web: <a href="${SITE_URL}" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
-      </td>
-    </tr>
-  </table>
-</td></tr>`;
+      : `<tr><td style="padding:0 40px 32px;">\n  ${platformSignatureHtml(logoSrc)}\n</td></tr>`;
 
   const bodyInner = renderBodyBlocks(input.bodyBlocks);
   const bodyCellInner = [bodyInner, warningBlock].filter(Boolean).join("\n  ");

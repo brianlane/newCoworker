@@ -21,6 +21,14 @@ export type OwnerMailboxSendArgs = {
    * the sender addressed directly is a participant, not a bystander.
    */
   additionalToEmails?: string[];
+  /**
+   * Optional HTML alternative. When set the message goes out as
+   * multipart/alternative: `bodyText` stays the text/plain part, so a client
+   * that will not render HTML still gets a readable email rather than markup.
+   * Needed because the branded signature is a table with a logo, which cannot
+   * survive as plain text.
+   */
+  bodyHtml?: string;
   subject: string;
   bodyText: string;
   /** Optional cc recipients (already normalized to valid addresses). */
@@ -85,13 +93,33 @@ function encodeRfc2822(args: OwnerMailboxSendArgs): string {
     // marks this as a direct answer.
     lines.push(`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`);
   }
-  lines.push(
-    `Subject: ${args.subject}`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "",
-    args.bodyText
-  );
+  lines.push(`Subject: ${args.subject}`, "MIME-Version: 1.0");
+  const html = args.bodyHtml?.trim();
+  if (html) {
+    // multipart/alternative: the SAME message in two forms, text first so a
+    // client that picks the first part it understands still gets prose. The
+    // boundary is fixed rather than random because these bodies are ours and
+    // a stable one keeps the encoder deterministic for tests; it is prefixed
+    // so it cannot collide with ordinary content.
+    const boundary = "----=_NewCoworker_alt_boundary";
+    lines.push(
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "",
+      args.bodyText,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/html; charset=UTF-8",
+      "",
+      html,
+      "",
+      `--${boundary}--`
+    );
+  } else {
+    lines.push("Content-Type: text/plain; charset=UTF-8", "", args.bodyText);
+  }
   return Buffer.from(lines.join("\r\n"), "utf8")
     .toString("base64")
     .replace(/\+/g, "-")
@@ -182,25 +210,29 @@ export async function sendFromMailboxConnection(
       {
         endpoint: `/v1.0/me/messages/${encodeURIComponent(replyToId)}/reply`,
         method: "POST",
-        data: {
-          comment: args.bodyText,
-          // /reply addresses the original sender on its own, but everyone
-          // else has to be restated or they are dropped. Both slots, so the
-          // answer mirrors the original instead of demoting its To line.
-          ...(() => {
-            const cc = args.ccEmails ?? [];
-            const extraTo = args.additionalToEmails ?? [];
-            if (cc.length === 0 && extraTo.length === 0) return {};
-            return {
-              message: {
-                ...(cc.length > 0 ? { ccRecipients: toGraphRecipients(cc) } : {}),
-                ...(extraTo.length > 0
-                  ? { toRecipients: toGraphRecipients([args.toEmail, ...extraTo]) }
-                  : {})
-              }
-            };
-          })()
-        }
+        data: (() => {
+          const cc = args.ccEmails ?? [];
+          const extraTo = args.additionalToEmails ?? [];
+          const html = args.bodyHtml?.trim();
+          // `comment` is plain text and Graph escapes it, so HTML has to ride
+          // message.body instead or the signature markup arrives as literal
+          // angle brackets. With a body set, comment must be empty or Graph
+          // renders both.
+          const message = {
+            // /reply addresses the original sender on its own, but everyone
+            // else has to be restated or they are dropped. Both slots, so the
+            // answer mirrors the original instead of demoting its To line.
+            ...(cc.length > 0 ? { ccRecipients: toGraphRecipients(cc) } : {}),
+            ...(extraTo.length > 0
+              ? { toRecipients: toGraphRecipients([args.toEmail, ...extraTo]) }
+              : {}),
+            ...(html ? { body: { contentType: "HTML", content: html } } : {})
+          };
+          return {
+            comment: html ? "" : args.bodyText,
+            ...(Object.keys(message).length > 0 ? { message } : {})
+          };
+        })()
       }
     );
     if (!replied) return { ok: false, detail: "email_not_connected" };
@@ -216,7 +248,9 @@ export async function sendFromMailboxConnection(
       data: {
         message: {
           subject: args.subject,
-          body: { contentType: "Text", content: args.bodyText },
+          body: args.bodyHtml?.trim()
+            ? { contentType: "HTML", content: args.bodyHtml.trim() }
+            : { contentType: "Text", content: args.bodyText },
           toRecipients: [args.toEmail, ...(args.additionalToEmails ?? [])].map((address) => ({
             emailAddress: { address }
           })),
