@@ -1,0 +1,102 @@
+name: CASA Recert Reminder
+
+# Why: the Google OAuth verification for this app depends on an ADA-CASA AL1
+# assessment that must be renewed ANNUALLY. Let it lapse and the app loses
+# verification for its restricted scope (gmail.modify), which is a production
+# outage for every tenant with a connected Gmail, not a paperwork problem.
+#
+# Google does send its own notice, but it arrives close to the deadline. The
+# 2026 cycle took about a week of back-and-forth with the lab AFTER the scan
+# completed, and that was with everything already remediated. So this fires in
+# JUNE for an AUGUST deadline, deliberately, to leave slack.
+#
+# Why a workflow rather than only a calendar entry or a scheduled agent: this
+# runs on GitHub, beside the runbook it points at, and depends on no
+# subscription, no laptop, and no one person still being here. The reminder
+# should outlive whoever set it.
+#
+# Note: GitHub disables scheduled workflows in repositories with no activity
+# for 60 days. This repo is active daily, so that is not a live risk, but if
+# the repo ever goes quiet the schedule needs re-enabling from the Actions tab.
+
+on:
+  schedule:
+    # 16:00 UTC on 1 June = 09:00 America/Phoenix, which observes no DST, so
+    # this does not drift by an hour half the year. Annual, matching the
+    # recertification cadence itself.
+    - cron: "0 16 1 6 *"
+  # So it can be proved to work now rather than discovered broken in 2027.
+  workflow_dispatch:
+
+permissions:
+  # issues: write to open the reminder. Everything else is denied: an explicit
+  # permissions block grants nothing it does not name.
+  issues: write
+
+jobs:
+  remind:
+    name: Open the reassessment issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open the CASA reassessment issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const year = new Date().getUTCFullYear();
+            const title = `Start the CASA AL1 reassessment (${year})`;
+
+            // Opening a duplicate every manual dispatch would train everyone
+            // to ignore the issue, which defeats the point.
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "casa-recert"
+            });
+            if (existing.data.some((issue) => issue.title === title)) {
+              core.info(`Already open: ${title}. Nothing to do.`);
+              return;
+            }
+
+            const body = [
+              "The ADA-CASA AL1 assessment behind our Google OAuth verification is due for renewal around **August " + year + "**.",
+              "",
+              "**This fires in June on purpose.** The 2026 cycle took roughly a week of back-and-forth with the lab *after* the scan completed, and that was with everything already remediated. Google's deadline is a hard stop.",
+              "",
+              "### Start here",
+              "",
+              "1. [`google-oauth-assets/casa/recert-runbook.md`](../blob/main/google-oauth-assets/casa/recert-runbook.md) - the sequence, the portal traps, the identifiers.",
+              "2. [`google-oauth-assets/casa/saq-answers.md`](../blob/main/google-oauth-assets/casa/saq-answers.md) - all 54 SAQ answers as submitted and accepted, so this cycle starts from the real text.",
+              "3. Run the posture probe and attach its dated output:",
+              "",
+              "```bash",
+              "tsx debug/casa-posture-probe.ts",
+              "```",
+              "",
+              "Anything it fails is an SAQ answer that has drifted. Fix it before submitting rather than restating an answer that is no longer true.",
+              "",
+              "### Two things that cost real time in 2026",
+              "",
+              "- **Google does not notice that CASA finished.** The Verification Center keeps showing the item until you reply on the Trust and Safety email thread.",
+              "- **Verify CORS headers with an `Origin` header.** Static serving swaps in a wildcard only when one is present, so a plain `curl` looks fixed when it is not. The probe always sends one.",
+              "",
+              "### Not covered by the probe, a human must do these",
+              "",
+              "- A current Qualys SSL Labs report for `www.newcoworker.com`.",
+              "- Supabase Database > Backups, for the restorable-from-backups half of SAQ 15.",
+              "- Supabase Authentication > Sign In / Providers > Email, which evidences the password minimum, the complexity requirement and the OTP expiry in one frame (SAQ 19 and 20).",
+              "",
+              "Also confirm the Cloud Console **Project Owner and Editor accounts** are current. That is the address Google sends the reassessment notice to, and a stale one means the first sign of trouble is losing verification.",
+              "",
+              "Close this issue when the Letter of Validation is issued and the Verification Center shows data access verified."
+            ].join("\n");
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ["casa-recert"]
+            });
+            core.info(`Opened #${created.data.number}: ${title}`);
