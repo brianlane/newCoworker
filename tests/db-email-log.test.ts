@@ -22,6 +22,7 @@ import {
   EMAIL_LOG_MAX_LIMIT,
   getEmailBody,
   getEmailLogRow,
+  messagesHandledByFlow,
   listEmailLog,
   listEmailLogForAddress,
   recordInboundTriggerEmail,
@@ -235,6 +236,83 @@ describe("recordOutboundAssistantEmail: the row has to be findable by thread", (
     for (const call of insert.mock.calls) {
       expect((call[0] as { thread_id: unknown }).thread_id).toBeNull();
     }
+  });
+});
+
+describe("messagesHandledByFlow", () => {
+  /**
+   * The precise "an AiFlow took this message" marker.
+   * `recordInboundTriggerEmail` writes an email_trigger row only when a flow
+   * MATCHED and enqueued, so this answers the question ai_flow_email_seen
+   * cannot: that table records every flow/message pair evaluated, match or
+   * not, so a message no flow wanted would look handled.
+   */
+  const chain = (result: { data: unknown; error: { message: string } | null }) => {
+    const inFn = vi.fn().mockResolvedValue(result);
+    const eqSource = vi.fn(() => ({ in: inFn }));
+    const eqBiz = vi.fn(() => ({ eq: eqSource }));
+    const select = vi.fn(() => ({ eq: eqBiz }));
+    return { db: { from: vi.fn(() => ({ select })) }, select, eqBiz, eqSource, inFn };
+  };
+
+  it("returns the ids a flow already handled", async () => {
+    const c = chain({ data: [{ provider_message_id: "m-1" }], error: null });
+    const out = await messagesHandledByFlow("biz", ["m-1", "m-2"], c.db as never);
+    expect([...out]).toEqual(["m-1"]);
+    expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
+    // email_trigger only: an outbound or AI-mailbox row is not a flow handling
+    // this inbound message.
+    expect(c.eqSource).toHaveBeenCalledWith("source", "email_trigger");
+  });
+
+  it("dedupes and drops blanks before querying", async () => {
+    const c = chain({ data: [], error: null });
+    await messagesHandledByFlow("biz", ["m-1", "m-1", " ", "m-2"], c.db as never);
+    expect(c.inFn).toHaveBeenCalledWith("provider_message_id", ["m-1", "m-2"]);
+  });
+
+  it("does not query when there is nothing to ask about", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await messagesHandledByFlow("biz", ["", "  "], c.db as never)).toEqual(new Set());
+    expect(c.select).not.toHaveBeenCalled();
+  });
+
+  it("fails OPEN on a read error", async () => {
+    // Deliberate direction: the cost of a missed guard is one duplicate reply,
+    // the cost of failing closed is the coworker going silent on every thread
+    // it owns.
+    const c = chain({ data: null, error: { message: "boom" } });
+    expect(await messagesHandledByFlow("biz", ["m-1"], c.db as never)).toEqual(new Set());
+  });
+
+  it("treats a null payload as nothing handled", async () => {
+    // PostgREST can answer with neither rows nor an error.
+    const c = chain({ data: null, error: null });
+    expect(await messagesHandledByFlow("biz", ["m-1"], c.db as never)).toEqual(new Set());
+  });
+
+  it("survives a non-Error thrown from the client", async () => {
+    // The catch logs String(e) for anything that is not an Error; a driver
+    // rejecting with a plain string must not take the coworker poll down.
+    const db = {
+      from: () => {
+        throw "connection reset";
+      }
+    };
+    expect(await messagesHandledByFlow("biz", ["m-1"], db as never)).toEqual(new Set());
+  });
+
+  it("falls back to the default service client when none is passed", async () => {
+    // The coworker poll passes its own client, but the export is public and a
+    // caller without one must not blow up on an undefined `.from`.
+    const c = chain({ data: [{ provider_message_id: "m-3" }], error: null });
+    defaultClientSpy.mockResolvedValue(c.db);
+    expect([...(await messagesHandledByFlow("biz", ["m-3"]))]).toEqual(["m-3"]);
+  });
+
+  it("ignores rows with a null provider message id", async () => {
+    const c = chain({ data: [{ provider_message_id: null }, { provider_message_id: "m-9" }], error: null });
+    expect([...(await messagesHandledByFlow("biz", ["m-9"], c.db as never))]).toEqual(["m-9"]);
   });
 });
 

@@ -17,6 +17,7 @@
  *      the thread to a human and alerts the owner once.
  */
 
+import { messagesHandledByFlow } from "@/lib/db/email-log";
 import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
@@ -210,14 +211,28 @@ export async function pollEmailCoworker(
       });
       if (candidates.length === 0) continue;
 
+      // A message an AiFlow already answered must not be answered again here.
+      // The flow's send CLAIMS the thread, which retroactively makes the very
+      // message that triggered the flow eligible for this poll: still inside
+      // the lookback window, now on an owned thread, and never seen by the
+      // coworker. Live, Aug 10 2026: James got the flow's reply and then an
+      // off-script second one from the coworker a minute later.
+      const flowHandled = await messagesHandledByFlow(
+        businessId,
+        candidates.map((m) => m.id),
+        db
+      );
+      const notFlowHandled = candidates.filter((m) => !flowHandled.has(m.id));
+      if (notFlowHandled.length === 0) continue;
+
       const unseenIds = new Set(
         await filterUnseenMessages(
           businessId,
-          candidates.map((m) => m.id),
+          notFlowHandled.map((m) => m.id),
           db
         )
       );
-      const fresh = candidates.filter((m) => unseenIds.has(m.id));
+      const fresh = notFlowHandled.filter((m) => unseenIds.has(m.id));
       if (fresh.length === 0) continue;
       result.messages += fresh.length;
 

@@ -44,6 +44,22 @@ export const HQ_DISCOVERY_CALL_URL =
   "https://www.newcoworker.com/book/newcoworker/discovery-call";
 
 /**
+ * The sign-off appended to every email this flow sends.
+ *
+ * Appended by the FLOW, not written by the model: a signature is exact by
+ * nature, and asking a model for one invites a hallucinated title, a made-up
+ * phone number, or a slightly different wording every time. The drafter is
+ * told to write no sign-off at all, and this goes on afterwards.
+ *
+ * Every line here is a real, verified value from the business record (name,
+ * website) or the sending alias. Nothing is invented: add a title or a phone
+ * number by editing this constant, and re-run the one-shot.
+ */
+export const HQ_EMAIL_SIGNATURE = ["Brian", "New Coworker", "team@newcoworker.com", "https://www.newcoworker.com"].join(
+  "\n"
+);
+
+/**
  * The saved instructions. Held under AGENT_INSTRUCTIONS_MAX_CHARS (8000).
  *
  * The "who is who" block is adapted from the extraction prompt's person/role
@@ -55,7 +71,7 @@ export const HQ_DISCOVERY_CALL_URL =
  * the person who did the favor.
  */
 export const HQ_REPLY_DRAFTER_INSTRUCTIONS = [
-  "You draft the emails Brian sends from the New Coworker team inbox. Output one email body only, with no subject line and no signature block.",
+  "You draft the emails Brian sends from the New Coworker team inbox. Output one email body only, with no subject line and NO sign-off or signature: the flow appends Brian's real signature after your text, so anything you add would be a second one.",
   "",
   "TWO NOTES, NOT ONE. An introduction has two people who need different things, and one message addressing both reads oddly to each of them: the introducer gets a pitch meant for someone else, the prospect gets thanks meant for someone else. So they are written separately and sent separately. The input tells you WHICH note to write, on a line starting with WRITE. Write only that one.",
   "",

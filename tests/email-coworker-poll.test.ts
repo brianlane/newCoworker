@@ -24,6 +24,10 @@ vi.mock("@/lib/email-coworker/threads", async (importOriginal) => ({
   recordThreadTurn: vi.fn()
 }));
 vi.mock("@/lib/email-coworker/turn", () => ({ runEmailCoworkerTurn: vi.fn() }));
+vi.mock("@/lib/db/email-log", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/db/email-log")>()),
+  messagesHandledByFlow: vi.fn()
+}));
 vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
@@ -45,6 +49,7 @@ import {
   recordThreadTurn
 } from "@/lib/email-coworker/threads";
 import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
+import { messagesHandledByFlow } from "@/lib/db/email-log";
 import { noteProspectReply } from "@/lib/outreach/reply";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -118,6 +123,7 @@ beforeEach(() => {
   mockFetch.mockResolvedValue([message()]);
   mockMailboxAddress.mockResolvedValue(MAILBOX_EMAIL);
   mockUnseen.mockImplementation(async (_biz, ids) => ids);
+  vi.mocked(messagesHandledByFlow).mockResolvedValue(new Set());
   mockClaim.mockResolvedValue(true);
   mockHandoff.mockResolvedValue(undefined);
   mockRecordTurn.mockResolvedValue(undefined);
@@ -174,6 +180,37 @@ describe("pollEmailCoworker", () => {
     expect(out.messages).toBe(0);
     expect(mockTurn).not.toHaveBeenCalled();
     expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it("never answers a message an AiFlow already answered", async () => {
+    /**
+     * Live, Aug 10 2026. The triage flow replied to James's introduction and
+     * CLAIMED the thread, which retroactively made the very message that
+     * triggered the flow eligible here: still inside the lookback window, now
+     * on an owned thread, and never seen by the coworker itself. James got the
+     * flow's reply at 10:26 and an off-script second one at 10:27.
+     *
+     * The mirror of this guard already existed in the other direction: the
+     * flow poller skips messages the coworker has claimed.
+     */
+    vi.mocked(messagesHandledByFlow).mockResolvedValue(new Set(["m-1"]));
+    mockFetch.mockResolvedValue([message({ id: "m-1" })]);
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.messages).toBe(0);
+    expect(mockTurn).not.toHaveBeenCalled();
+    // Not merely unanswered: it must not be claimed either, or the coworker
+    // would record a turn it never took.
+    expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it("still answers the OTHER messages on the thread when one was flow-handled", async () => {
+    // The guard is per message, not per thread. A genuine follow-up arriving
+    // after the flow's reply is exactly what the coworker exists for.
+    vi.mocked(messagesHandledByFlow).mockResolvedValue(new Set(["m-1"]));
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    await pollEmailCoworker(businessDb());
+    expect(mockTurn).toHaveBeenCalledTimes(1);
+    expect(mockTurn.mock.calls[0][0].message.id).toBe("m-2");
   });
 
   it("never answers the CONNECTED MAILBOX's own message (no talking to itself)", async () => {

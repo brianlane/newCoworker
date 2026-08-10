@@ -234,6 +234,57 @@ export async function listEmailLog(
 }
 
 /**
+ * Of these PROVIDER message ids, which has an AiFlow already handled?
+ *
+ * `recordInboundTriggerEmail` writes a row only when a flow MATCHED and
+ * enqueued a run, so an `email_trigger` row is the precise "a flow took this
+ * message" marker. `ai_flow_email_seen` is not: it records every
+ * flow/message pair evaluated, match or not, so a message no flow wanted would
+ * look handled.
+ *
+ * Exists because the email coworker answered a message the triage flow had
+ * just answered. Live, Aug 10 2026: the flow replied to an introduction and
+ * CLAIMED the thread, which retroactively made the triggering message eligible
+ * for the coworker (still inside its lookback window, now on an owned thread,
+ * and never seen by the coworker itself). James got two replies a minute
+ * apart, the second one off-script.
+ *
+ * The mirror of this guard already existed in the other direction: the flow
+ * poller skips messages the coworker has claimed.
+ */
+export async function messagesHandledByFlow(
+  businessId: string,
+  providerMessageIds: string[],
+  client?: SupabaseClient
+): Promise<Set<string>> {
+  const wanted = [...new Set(providerMessageIds.map((id) => id.trim()).filter(Boolean))];
+  if (wanted.length === 0) return new Set();
+  const db = client ?? (await createSupabaseServiceClient());
+  const out = new Set<string>();
+  try {
+    for (let i = 0; i < wanted.length; i += 100) {
+      const chunk = wanted.slice(i, i + 100);
+      const { data, error } = await db
+        .from("email_log")
+        .select("provider_message_id")
+        .eq("business_id", businessId)
+        .eq("source", "email_trigger")
+        .in("provider_message_id", chunk);
+      if (error) throw new Error(error.message);
+      for (const row of (data ?? []) as Array<{ provider_message_id?: string | null }>) {
+        if (row.provider_message_id) out.add(row.provider_message_id);
+      }
+    }
+  } catch (e) {
+    // Best-effort, and it fails OPEN on purpose: the cost of a missed guard is
+    // a duplicate reply, the cost of failing closed is the coworker going
+    // silent on every thread it owns.
+    console.error("messagesHandledByFlow", e instanceof Error ? e.message : String(e));
+  }
+  return out;
+}
+
+/**
  * One email_log row by id, scoped by business so a guessed uuid can never read
  * another tenant's mail. Returns null when the id does not belong to the
  * business, is soft-deleted, or does not exist.
