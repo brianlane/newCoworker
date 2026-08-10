@@ -39,7 +39,7 @@ export default function SlackReviewTestPlanPage() {
         </h1>
         <p className="mt-4 text-sm leading-relaxed text-parchment/60">
           New Coworker is an AI coworker for small businesses. The Slack app posts business
-          alerts to a channel the owner picks, answers DMs and @mentions with the business's
+          alerts to a channel the owner picks, answers DMs and @mentions with the business&apos;s
           AI assistant, and lets the verified owner approve automation steps from Slack.
           Sign-in credentials for a review tenant are provided in the submission notes.
         </p>
@@ -47,7 +47,7 @@ export default function SlackReviewTestPlanPage() {
         <ol className="mt-10 space-y-4">
           <Step n={1} title="Connect the workspace">
             <p>
-              Sign in to the review tenant's dashboard with the provided credentials, open
+              Sign in to the review tenant&apos;s dashboard with the provided credentials, open
               Integrations → Slack, and click Connect Slack. Approve the OAuth request for
               your test workspace. You land back on the Slack card showing Connected.
             </p>
@@ -56,21 +56,21 @@ export default function SlackReviewTestPlanPage() {
             <p>
               On the same card, choose a channel from the picker and save. The app posts a
               hello message there; for a private channel, invite @New Coworker first, as the
-              card's helper text says.
+              card&apos;s helper text says.
             </p>
           </Step>
           <Step n={3} title="Chat by DM and by mention">
             <p>
-              Open a DM with New Coworker and ask a business question ("what are your
-              hours?"). Mention @New Coworker in a channel it is in and ask the same; the
-              reply arrives in a thread. Replies stream when the workspace supports Slack's
+              Open a DM with New Coworker and ask a business question (&quot;what are your
+              hours?&quot;). Mention @New Coworker in a channel it is in and ask the same; the
+              reply arrives in a thread. Replies stream when the workspace supports Slack&apos;s
               streaming APIs and arrive as a normal message otherwise.
             </p>
           </Step>
           <Step n={4} title="Receive an alert">
             <p>
-              Trigger the review tenant's demo automation (instructions in the submission
-              notes) or text the tenant's business number from a second phone. An alert card
+              Trigger the review tenant&apos;s demo automation (instructions in the submission
+              notes) or text the tenant&apos;s business number from a second phone. An alert card
               posts to the picked channel, deep-linking to the dashboard.
             </p>
           </Step>
@@ -78,7 +78,7 @@ export default function SlackReviewTestPlanPage() {
             <p>
               The demo automation parks at an approval step and posts a card with Approve /
               Skip / Cancel buttons. Press one as the owner account: the card rewrites with
-              the outcome. Press one as a non-owner member: only an ephemeral "owner only"
+              the outcome. Press one as a non-owner member: only an ephemeral &quot;owner only&quot;
               note appears and the card stays live.
             </p>
           </Step>
