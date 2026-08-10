@@ -46,6 +46,68 @@ export type SlackInboundEvent =
   | { type: "tokens_revoked"; tokens?: { oauth?: unknown; bot?: unknown } }
   | { type: string; [key: string]: unknown };
 
+/** A block_actions press we act on (the approval buttons). */
+export type SlackInteractionAction = {
+  teamId: string;
+  userId: string;
+  userName: string | null;
+  actionId: string;
+  /** The button's `value` payload, verbatim (JSON the poster chose). */
+  value: string;
+  responseUrl: string | null;
+};
+
+/**
+ * Parse an interactivity delivery: a form-encoded body whose `payload`
+ * field is JSON. Returns null for anything that is not a block_actions
+ * press with at least one action (view submissions etc. are not ours yet).
+ */
+export function parseSlackInteractionPayload(rawBody: string): SlackInteractionAction | null {
+  let payloadRaw: string | null = null;
+  try {
+    payloadRaw = new URLSearchParams(rawBody).get("payload");
+    /* c8 ignore start -- URLSearchParams(string) does not throw today; the
+       guard is for engine changes, not a reachable branch */
+  } catch {
+    return null;
+  }
+  /* c8 ignore stop */
+  if (!payloadRaw) return null;
+  let payload: {
+    type?: unknown;
+    team?: { id?: unknown };
+    user?: { id?: unknown; name?: unknown; username?: unknown };
+    actions?: Array<{ action_id?: unknown; value?: unknown }>;
+    response_url?: unknown;
+  };
+  try {
+    payload = JSON.parse(payloadRaw);
+  } catch {
+    return null;
+  }
+  if (payload.type !== "block_actions") return null;
+  const teamId = payload.team?.id;
+  const userId = payload.user?.id;
+  const action = Array.isArray(payload.actions) ? payload.actions[0] : undefined;
+  if (
+    typeof teamId !== "string" ||
+    typeof userId !== "string" ||
+    !action ||
+    typeof action.action_id !== "string"
+  ) {
+    return null;
+  }
+  const name = payload.user?.name ?? payload.user?.username;
+  return {
+    teamId,
+    userId,
+    userName: typeof name === "string" && name.length > 0 ? name : null,
+    actionId: action.action_id,
+    value: typeof action.value === "string" ? action.value : "",
+    responseUrl: typeof payload.response_url === "string" ? payload.response_url : null
+  };
+}
+
 /**
  * A `tokens_revoked` delivery separates revoked USER OAuth tokens
  * (`tokens.oauth`) from revoked BOT tokens (`tokens.bot`). Only the latter

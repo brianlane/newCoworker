@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   parseSlackEventEnvelope,
+  parseSlackInteractionPayload,
   SLACK_SIGNATURE_MAX_SKEW_MS,
   tokensRevokedCoversBot,
   verifySlackSignature
@@ -209,5 +210,63 @@ describe("tokensRevokedCoversBot", () => {
       tokensRevokedCoversBot({ type: "tokens_revoked", tokens: { bot: "junk" } } as never)
     ).toBe(false);
     expect(tokensRevokedCoversBot({ type: "app_uninstalled" })).toBe(false);
+  });
+});
+
+describe("parseSlackInteractionPayload", () => {
+  const wrap = (payload: unknown) => `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+
+  it("parses a block_actions press", () => {
+    const parsed = parseSlackInteractionPayload(
+      wrap({
+        type: "block_actions",
+        team: { id: "T-1" },
+        user: { id: "U-1", name: "amy" },
+        actions: [{ action_id: "aiflow_approval:approve", value: "{}" }],
+        response_url: "https://hooks/r"
+      })
+    );
+    expect(parsed).toEqual({
+      teamId: "T-1",
+      userId: "U-1",
+      userName: "amy",
+      actionId: "aiflow_approval:approve",
+      value: "{}",
+      responseUrl: "https://hooks/r"
+    });
+  });
+
+  it("falls back to username, nulls missing extras, refuses junk", () => {
+    const parsed = parseSlackInteractionPayload(
+      wrap({
+        type: "block_actions",
+        team: { id: "T-1" },
+        user: { id: "U-1", username: "amy2" },
+        actions: [{ action_id: "a" }]
+      })
+    );
+    expect(parsed).toMatchObject({ userName: "amy2", value: "", responseUrl: null });
+
+    const emptyName = parseSlackInteractionPayload(
+      wrap({
+        type: "block_actions",
+        team: { id: "T-1" },
+        user: { id: "U-1", name: "" },
+        actions: [{ action_id: "a" }]
+      })
+    );
+    expect(emptyName).toMatchObject({ userName: null });
+
+    expect(parseSlackInteractionPayload("payload=not-json")).toBeNull();
+    expect(parseSlackInteractionPayload("nothing=here")).toBeNull();
+    expect(parseSlackInteractionPayload(wrap({ type: "view_submission" }))).toBeNull();
+    expect(
+      parseSlackInteractionPayload(wrap({ type: "block_actions", team: {}, user: { id: "U" } }))
+    ).toBeNull();
+    expect(
+      parseSlackInteractionPayload(
+        wrap({ type: "block_actions", team: { id: "T" }, user: { id: "U" }, actions: [] })
+      )
+    ).toBeNull();
   });
 });
