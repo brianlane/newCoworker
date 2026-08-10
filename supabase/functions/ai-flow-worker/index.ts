@@ -8693,7 +8693,16 @@ async function contactSaidBlock(
   audience: "offer" | "claim"
 ): Promise<string | null> {
   if (action.shareContactHistory !== true) return null;
-  const phone = leadPhoneFromVars(scope.vars);
+  // The SAME strict rule ownership binds by (ownershipLeadPhone), not the
+  // looser leadContactPhone. When a flow declares a lead_phone var, an empty
+  // value means the lead's number is UNKNOWN, never that the triggering sender
+  // is the lead: on the referral flows the sender is the partner's own alert
+  // line, so the loose fallback would quote CLEVER's or HOMELIGHT's message
+  // history into a notice about a seller. That is the Danfar failure (2026-08-10)
+  // in a worse place, because this text QUOTES the contact rather than just
+  // routing to them. Contact-event flows that declare no lead_phone still fall
+  // back to the trigger, where the sender genuinely is the contact.
+  const phone = ownershipContactPhone(scope);
   if (!phone) return null;
   const events = await loadContactSaid(supabase, run.business_id, phone);
   return formatContactSaid(events, {
