@@ -33,6 +33,7 @@
  *   npx tsx scripts/oneshot/amy-speed-to-lead-patch.ts --only "HomeLight Referral" --apply
  *   npx tsx scripts/oneshot/amy-speed-to-lead-patch.ts --revert --only "HomeLight Referral" --apply
  */
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { parseAiFlowDefinition, AiFlowValidationError } from "@/lib/ai-flows/schema";
@@ -263,7 +264,10 @@ async function revert(
     .from("applied_oneshots")
     .select("id, details, applied_at")
     .eq("business_id", businessId)
-    .eq("script_path", SCRIPT_PATH)
+    // The ledger stores the script BASENAME (recordOneshotApplied normalizes
+    // it); there is no script_path column, and filtering on one made every
+    // --revert exit 1 on a PostgREST "column does not exist" error.
+    .eq("script", basename(SCRIPT_PATH))
     .order("applied_at", { ascending: false });
   if (error) {
     console.error(`Ledger read failed: ${error.message}`);

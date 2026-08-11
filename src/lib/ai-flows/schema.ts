@@ -2107,7 +2107,14 @@ function templateStringsForStep(step: FlowStep): string[] {
         step.ownerFallbackTemplate,
         step.claimedNotifyTemplate ?? "",
         step.claimedNotifyEmail ?? "",
-        step.ownerDirectTemplate ?? ""
+        step.ownerDirectTemplate ?? "",
+        // The reminder ladder's details line is an ordinary outbound template
+        // and needs the same scope check as the offer it repeats. It was
+        // omitted when unclaimedReminders landed, so a var no step produces
+        // rendered as a bare label ("Address:") on every nudge, three times
+        // per recipient per unclaimed lead, with nothing to catch it at
+        // author time.
+        step.unclaimedReminders?.detailsTemplate ?? ""
       ];
     case "browse_action":
       return step.actions.map((a) => a.valueTemplate ?? "");

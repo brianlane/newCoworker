@@ -2334,6 +2334,36 @@ describe("Clever engine: browse_action same-pass extraction + click_text_while_p
       true
     );
   });
+
+  /**
+   * The reminder ladder's details line is an ordinary outbound template and was
+   * left out of templateStringsForStep when unclaimedReminders shipped, so a var
+   * no step produced rendered as a bare label ("Price:") on every nudge, three
+   * times per recipient per unclaimed lead, with nothing catching it at author
+   * time.
+   */
+  it("scope-checks unclaimedReminders.detailsTemplate like any other template", () => {
+    const withReminders = (detailsTemplate: string): AiFlowDefinition => {
+      const def = baseDef();
+      def.steps = [
+        { id: "read", type: "extract_text", fields: [{ name: "lead_address" }] },
+        {
+          id: "route",
+          type: "route_to_team",
+          offerTemplate: "New lead at {{vars.lead_address}}, reply 1/2",
+          ownerFallbackTemplate: "No one claimed it",
+          unclaimedReminders: { rounds: 3, intervalMinutes: 20, detailsTemplate }
+        }
+      ] as AiFlowDefinition["steps"];
+      return def;
+    };
+    expect(validateDefinitionSemantics(withReminders("Address: {{vars.lead_address}}"))).toEqual([]);
+    expect(
+      validateDefinitionSemantics(withReminders("Price: {{vars.price}}")).some(
+        (i) => i.includes('"route"') && i.includes("{{vars.price}} before any step produces it")
+      )
+    ).toBe(true);
+  });
 });
 
 describe("Clever engine: send_sms replyToGroup", () => {
