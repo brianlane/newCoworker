@@ -105,10 +105,12 @@ because Slack verifies the request URL against a live endpoint:
 ```
 
 The Agents feature (`agent_view` messaging experience) is enabled with the
-event subscriptions stage. Confirmed against the live validator (Aug 2026):
-the block is `"features": { "agent_view": {} }`, an empty object; it
-accepts no description properties (those belong to the legacy
-`assistant_view`).
+event subscriptions stage. Live-validator facts (re-probed 2026-08-11): the
+minimal block is `"features": { "agent_view": {} }`, and the only extra
+properties it accepts are `suggested_prompts` and `agent_description` (the
+"assistant overview" the Marketplace's AI-app check requires; `overview`,
+`description`, and `assistant_description` are all rejected). The same
+check also requires `features.app_home.messages_tab_enabled: true`.
 
 ## App Manifest API commands
 
@@ -189,6 +191,34 @@ Once the app is approved for the Slack Marketplace, scope/endpoint/listing
 changes require a re-review before they apply. Batch such changes, and never
 land a code change that silently depends on an unapproved scope. Unlisted
 installs (any workspace, via our connect URL) work before and during review.
+
+## Marketplace submission state (2026-08-11)
+
+The submission wizard (app config, Prepare & Submit) is filled and saved
+through all five sections: listing (long description, categories Customer
+Support / Productivity / Office Management, languages en-US + es-LA, pricing
+"Included with service subscription", all four URLs, support email), scope
+reasons for all nine scopes, security & compliance (hosting, retention,
+erasure, sub-processors yes, LLM yes with tenancy/residency/retention
+answers, HIPAA no), and testing information (review tenant credentials,
+Run now instructions, notification channel #all-new-coworker).
+
+App config added for the AI-app requirement: `features.app_home.messages_tab_enabled`
+and `features.agent_view.agent_description` (the "assistant overview"; the
+manifest field name is `agent_description`).
+
+Automated checks still blocking the final Submit click:
+
+1. Their cached "TOS URL non-200" result. Root cause was Cloudflare
+   challenging their headerless checker; fixed by the listing-URL skip rule
+   (see docs/OPS-MARKETING-SCRAPE-WAF.md). Clears when their checker re-runs.
+2. Five active workspace installs required; the app has one (HQ). Four more
+   workspaces need real installs through the dashboard connect flow. The
+   page's install count refreshes within 24 hours of installs.
+
+When both clear, the "Submit App for Review" button on the Automated
+Feedback page completes the submission. Review wait times shown: 10 days
+preliminary, about 10 weeks functional for new apps.
 
 ## Marketplace submission checklist
 
