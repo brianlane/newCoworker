@@ -50,11 +50,13 @@ import {
   MicrosoftOAuthError,
   verifyMicrosoftOAuthState
 } from "@/lib/microsoft/oauth";
+import {
+  findDuplicateOutlookRow,
+  findOutlookReconnectTarget,
+  OUTLOOK_KEY
+} from "@/lib/microsoft/reconnect";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
-
-/** The Nango provider key an Outlook mailbox uses, on BOTH transports. */
-const OUTLOOK_KEY = "outlook";
 
 function dashboardRedirect(request: Request, params: Record<string, string>) {
   const url = new URL("/dashboard/integrations/workspace", request.url);
@@ -145,11 +147,11 @@ export async function GET(request: Request) {
     }
     const accountEmail = identity.email.toLowerCase();
 
-    const existing = (await listWorkspaceOAuthConnections(verified.businessId)).find((row) => {
-      if (row.provider_config_key !== OUTLOOK_KEY) return false;
-      const rowEmail = row.metadata?.provider_account_email;
-      return typeof rowEmail === "string" && rowEmail.toLowerCase() === accountEmail;
-    });
+    const target = findOutlookReconnectTarget(
+      await listWorkspaceOAuthConnections(verified.businessId),
+      accountEmail
+    );
+    const existing = target?.row;
 
     const metadata: Record<string, unknown> = {
       // App-owned keys (the shared-calendar id and its ACL) must survive a
@@ -177,7 +179,9 @@ export async function GET(request: Request) {
       logger.info("microsoft connection reconnected", {
         businessId: verified.businessId,
         connectionRowId: existing.id,
-        fromTransport: existing.transport
+        fromTransport: existing.transport,
+        // An unlabeled adoption is a judgement call, so leave a trail.
+        matchedBy: target.matchedBy
       });
     } else {
       // A genuinely new mailbox does consume a seat. Re-check here rather than
@@ -194,11 +198,39 @@ export async function GET(request: Request) {
         tokens
       });
 
-      // The check above reads a count and inserts without a transaction, so two
-      // parallel callbacks can BOTH pass it. Settle after the insert, exactly
-      // as the Nango complete route does: re-read in deterministic order and
-      // evict our own row if it landed past the cap. Seats belong to the
-      // earliest rows, so racers can never end above the cap.
+      // The identity probe runs BEFORE the insert, so two callbacks for the
+      // same mailbox can both find no existing row and both insert. Left alone
+      // that is duplicate rows for one account, with bindings split across them
+      // and an ambiguous resolver. The row that lost the race backs itself out
+      // and the older one is flipped instead, so the account still ends on one
+      // row and that row is the one flows have had longest to bind to.
+      const duplicateOf = findDuplicateOutlookRow(
+        await listWorkspaceOAuthConnections(verified.businessId),
+        inserted.id,
+        accountEmail
+      );
+      if (duplicateOf) {
+        await deleteWorkspaceOAuthConnection(verified.businessId, inserted.id);
+        await flipWorkspaceConnectionToDirect({
+          id: duplicateOf.id,
+          businessId: verified.businessId,
+          connectionId: `direct:${randomUUID()}`,
+          metadata: { ...duplicateOf.metadata, ...metadata },
+          tokens
+        });
+        logger.info("microsoft connect consolidated onto an older row for the same account", {
+          businessId: verified.businessId,
+          keptRowId: duplicateOf.id,
+          discardedRowId: inserted.id
+        });
+        return dashboardRedirect(request, { workspace: "connected" });
+      }
+
+      // The cap check above reads a count and inserts without a transaction, so
+      // two parallel callbacks can BOTH pass it. Settle after the insert,
+      // exactly as the Nango complete route does: re-read in deterministic
+      // order and evict our own row if it landed past the cap. Seats belong to
+      // the earliest rows, so racers can never end above the cap.
       const settlement = await settleWorkspaceConnectionInsert(verified.businessId, {
         providerConfigKey: OUTLOOK_KEY,
         connectionId
