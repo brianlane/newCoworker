@@ -60,7 +60,19 @@ const db = createClient(url, key, { auth: { persistSession: false } });
 const OUR_GCP_PROJECT_NUMBER = "354099628168";
 
 /** Nango provider config keys that broker Google, per src/lib/nango/account-identity.ts. */
-const GOOGLE_PROVIDER_KEYS = new Set(["google", "google-mail", "gmail", "google-calendar"]);
+const GOOGLE_PROVIDER_KEYS = ["google", "google-mail", "gmail", "google-calendar"];
+
+/**
+ * Row ceiling for the Google query.
+ *
+ * PostgREST caps un-limited selects at 1000 rows and truncates SILENTLY, so an
+ * unbounded read cannot tell "that is all of them" from "that is the first
+ * page". This script's verdict is a fleet-wide claim, so a truncated read must
+ * refuse to answer rather than answer from a sample. The filter runs in Postgres
+ * (not in memory) so the ceiling applies to Google rows only, and hitting it is
+ * treated as a hard stop below.
+ */
+const ROW_CEILING = 1000;
 
 type DbRow = {
   business_id: string;
@@ -85,14 +97,35 @@ function accountEmailOf(row: DbRow): string {
 async function main() {
   const nango = getNangoClient();
 
-  const { data, error } = await db
+  // Filter server-side: the row ceiling must bound GOOGLE rows, not all
+  // workspace rows, or a fleet with >1000 Outlook connections would push Google
+  // rows out of the window and this audit would never see them. Ordered so the
+  // window is deterministic rather than whatever Postgres returns first.
+  const { data, error, count } = await db
     .from("workspace_oauth_connections")
-    .select("business_id, provider_config_key, connection_id, metadata")
-    .limit(1000);
+    .select("business_id, provider_config_key, connection_id, metadata", { count: "exact" })
+    .in("provider_config_key", GOOGLE_PROVIDER_KEYS)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(ROW_CEILING);
   if (error) throw new Error(`list DB rows: ${error.message}`);
-  const googleRows = ((data ?? []) as DbRow[]).filter((r) => GOOGLE_PROVIDER_KEYS.has(r.provider_config_key));
+  const googleRows = (data ?? []) as DbRow[];
 
-  console.log(`Google-brokered rows in workspace_oauth_connections: ${googleRows.length}\n`);
+  // A truncated read cannot support a fleet-wide verdict. Refuse rather than
+  // declare Path A open over a sample: an unaudited live grant is exactly the
+  // thing that would break the migration silently.
+  const total = typeof count === "number" ? count : googleRows.length;
+  if (googleRows.length >= ROW_CEILING || total > googleRows.length) {
+    console.error(
+      `STOP. Read ${googleRows.length} Google row(s) but the table holds ${total}. ` +
+        `The row ceiling (${ROW_CEILING}) truncated the result, so this audit cannot ` +
+        `speak for the whole fleet. Page through the remainder before trusting any verdict.`
+    );
+    process.exitCode = 2;
+    return;
+  }
+
+  console.log(`Google-brokered rows in workspace_oauth_connections: ${googleRows.length} (of ${total} total, complete)\n`);
   if (googleRows.length === 0) {
     console.log("Nothing to migrate. (Non-Google rows are out of scope for this audit.)");
     return;
