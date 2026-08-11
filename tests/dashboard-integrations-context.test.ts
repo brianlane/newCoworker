@@ -134,18 +134,24 @@ describe("loadIntegrationsContext", () => {
     expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "claude");
   });
 
-  it("loads the signed-in user's MCP connector status (user-scoped) and tolerates a read failure", async () => {
+  it("loads a status per MCP client (user-scoped) and tolerates a read failure", async () => {
     const status = {
       firstConnectedAt: "2026-07-18T00:00:00Z",
       lastSeenAt: "2026-07-19T00:00:00Z"
     };
-    vi.mocked(getMcpConnectorStatus).mockResolvedValue(status);
+    // One connector connected and the other not is the normal state, so the
+    // two reads have to be independent rather than one shared answer.
+    vi.mocked(getMcpConnectorStatus).mockImplementation(
+      async (_userId: string, client: string) => (client === "claude" ? status : null) as never
+    );
     const ctx = await loadIntegrationsContext("/dashboard/integrations");
-    expect(ctx.mcpConnectorStatus).toEqual(status);
+    expect(ctx.mcpConnectorStatuses).toEqual({ claude: status, chatgpt: null });
+    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "claude");
+    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "chatgpt");
 
     vi.mocked(getMcpConnectorStatus).mockRejectedValue(new Error("status down"));
     const degraded = await loadIntegrationsContext("/dashboard/integrations");
-    expect(degraded.mcpConnectorStatus).toBeNull();
+    expect(degraded.mcpConnectorStatuses).toEqual({ claude: null, chatgpt: null });
   });
 
   it("computes the workspace connection cap from tier, count, and enterprise override", async () => {
@@ -236,7 +242,7 @@ describe("computeIntegrationStatuses", () => {
       zoomConnection: null,
       apiKeys: [],
       activeHooks: [],
-      mcpConnectorStatus: null,
+      mcpConnectorStatuses: { claude: null, chatgpt: null },
       ...overrides
     } as IntegrationsContext;
   }
@@ -352,15 +358,24 @@ describe("computeIntegrationStatuses", () => {
     expect(many["zapier-api"]).toEqual({ state: "connected", label: "2 keys" });
   });
 
-  it("marks the Claude connector connected once the user's Claude has made a request", () => {
+  it("marks each connector connected independently, once that client has made a request", () => {
+    const stamp = {
+      firstConnectedAt: "2026-07-18T00:00:00Z",
+      lastSeenAt: "2026-07-19T00:00:00Z"
+    };
     const connected = computeIntegrationStatuses(
-      baseCtx({
-        mcpConnectorStatus: {
-          firstConnectedAt: "2026-07-18T00:00:00Z",
-          lastSeenAt: "2026-07-19T00:00:00Z"
-        }
-      })
+      baseCtx({ mcpConnectorStatuses: { claude: stamp, chatgpt: null } })
     );
+    // The whole point of keying the table on (user, client): one assistant's
+    // traffic must not light the other one's tile.
+    expect(connected.chatgpt).toEqual({ state: "disconnected", label: "Available" });
     expect(connected.claude).toEqual({ state: "connected", label: "Connected" });
+
+    // And the mirror image, so neither tile is wired to the other's status.
+    const swapped = computeIntegrationStatuses(
+      baseCtx({ mcpConnectorStatuses: { claude: null, chatgpt: stamp } })
+    );
+    expect(swapped.chatgpt).toEqual({ state: "connected", label: "Connected" });
+    expect(swapped.claude).toEqual({ state: "disconnected", label: "Available" });
   });
 });

@@ -1822,10 +1822,29 @@
       "feedError": "Could not load the calendar link. Refresh to try again.",
       "feedActionError": "Something went wrong. The link above is still valid; select and copy it manually, or try again."
     },
-    "integrationsClaude": {
+    "integrationsMcp": {
       "connectedBadge": "Connected",
-      "lastUsed": "Claude last used this connector",
-      "firstConnected": "first connected"
+      "firstConnected": "first connected",
+      "copy": "Copy",
+      "copied": "Copied",
+      "claude": {
+        "title": "Claude connector",
+        "blurb": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and build AiFlows, signed in as you and limited to your role.",
+        "lastUsed": "Claude last used this connector",
+        "step1": "In Claude (claude.ai or the desktop app), open Settings, Connectors, Add custom connector.",
+        "step2": "Paste the URL above and add the connector.",
+        "step3": "Click Connect. You will sign in with your New Coworker account and approve access once.",
+        "footer": "Disconnect anytime from Claude's connector settings. Access follows your team role, so a staff login cannot manage automations through Claude either."
+      },
+      "chatgpt": {
+        "title": "ChatGPT app",
+        "blurb": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments, signed in as you and limited to your role.",
+        "lastUsed": "ChatGPT last used this app",
+        "step1": "In ChatGPT, open Settings, Connectors, then turn on developer mode under Advanced.",
+        "step2": "Add a connector, paste the URL above, and choose OAuth for authentication.",
+        "step3": "Click Connect. You will sign in with your New Coworker account and approve access once.",
+        "footer": "Disconnect anytime from ChatGPT's connector settings. Access follows your team role, so a staff login cannot manage automations through ChatGPT either."
+      }
     },
     "integrationsZoom": {
       "marketplaceLink": "View our listing on the Zoom App Marketplace",

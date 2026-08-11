@@ -1822,10 +1822,29 @@
       "feedError": "No se pudo cargar el enlace del calendario. Recarga para intentarlo de nuevo.",
       "feedActionError": "Algo salió mal. El enlace de arriba sigue siendo válido; selecciónalo y cópialo manualmente, o inténtalo de nuevo."
     },
-    "integrationsClaude": {
+    "integrationsMcp": {
       "connectedBadge": "Conectado",
-      "lastUsed": "Claude usó este conector por última vez",
-      "firstConnected": "conectado por primera vez"
+      "firstConnected": "primera conexion",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "claude": {
+        "title": "Conector de Claude",
+        "blurb": "Deja que Claude trabaje con tu companero: buscar contactos, leer mensajes y resumenes de llamadas, enviar mensajes, agendar citas y crear AiFlows, con tu sesion y limitado a tu rol.",
+        "lastUsed": "Claude uso este conector por ultima vez",
+        "step1": "En Claude (claude.ai o la aplicacion de escritorio), abre Configuracion, Conectores, Anadir conector personalizado.",
+        "step2": "Pega la URL de arriba y anade el conector.",
+        "step3": "Haz clic en Conectar. Iniciaras sesion con tu cuenta de New Coworker y aprobaras el acceso una vez.",
+        "footer": "Puedes desconectarlo cuando quieras desde la configuracion de conectores de Claude. El acceso sigue tu rol de equipo, asi que una cuenta de personal tampoco puede gestionar automatizaciones desde Claude."
+      },
+      "chatgpt": {
+        "title": "Aplicacion de ChatGPT",
+        "blurb": "Deja que ChatGPT trabaje con tu companero: buscar contactos, leer mensajes y resumenes de llamadas, enviar mensajes y agendar citas, con tu sesion y limitado a tu rol.",
+        "lastUsed": "ChatGPT uso esta aplicacion por ultima vez",
+        "step1": "En ChatGPT, abre Configuracion, Conectores y activa el modo de desarrollador en Avanzado.",
+        "step2": "Anade un conector, pega la URL de arriba y elige OAuth como autenticacion.",
+        "step3": "Haz clic en Conectar. Iniciaras sesion con tu cuenta de New Coworker y aprobaras el acceso una vez.",
+        "footer": "Puedes desconectarla cuando quieras desde la configuracion de conectores de ChatGPT. El acceso sigue tu rol de equipo, asi que una cuenta de personal tampoco puede gestionar automatizaciones desde ChatGPT."
+      }
     },
     "integrationsZoom": {
       "marketplaceLink": "Ver nuestra app en el Zoom App Marketplace",
