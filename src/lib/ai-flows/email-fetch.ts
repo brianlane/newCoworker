@@ -19,7 +19,7 @@
  * backfills nothing), and a provider/connection error throws (the worker retries).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import { htmlToText, type InboundEmailMessage } from "@/lib/ai-flows/trigger-eval";
@@ -82,7 +82,7 @@ async function readGmailInbox(
   sinceMs: number
 ): Promise<InboundEmailMessage[]> {
   const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)}`);
-  const page = await nangoProxyForBusiness(businessId, link, {
+  const page = await workspaceProxyForBusiness(businessId, link, {
     endpoint: `/gmail/v1/users/me/messages?maxResults=${EMAIL_FETCH_MAX_MESSAGES}&q=${q}`,
     method: "GET"
   });
@@ -94,7 +94,7 @@ async function readGmailInbox(
     .slice(0, EMAIL_FETCH_MAX_MESSAGES);
   const out: InboundEmailMessage[] = [];
   for (const id of ids) {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await workspaceProxyForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${id}?format=full`,
       method: "GET"
     });
@@ -138,7 +138,7 @@ async function readMicrosoftInbox(
     `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
     `&$top=${EMAIL_FETCH_MAX_MESSAGES}` +
     `&$select=id,subject,from,body,receivedDateTime`;
-  const res = await nangoProxyForBusiness(businessId, link, {
+  const res = await workspaceProxyForBusiness(businessId, link, {
     endpoint: `/v1.0/me/mailFolders/inbox/messages?${params}`,
     method: "GET"
   });

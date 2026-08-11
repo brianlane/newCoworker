@@ -1,5 +1,5 @@
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import {
   ensureSharedCalendar,
@@ -306,7 +306,7 @@ export async function getWorkspaceBusyBlocks(
   if (conn.provider === "google") {
     const items = [{ id: "primary" }];
     if (shared) items.push({ id: shared.calendarId });
-    const res = await nangoProxyForBusiness(
+    const res = await workspaceProxyForBusiness(
       businessId,
       { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
       {
@@ -326,7 +326,7 @@ export async function getWorkspaceBusyBlocks(
   }
 
   // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
-  const res = await nangoProxyForBusiness(
+  const res = await workspaceProxyForBusiness(
     businessId,
     { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
     {
@@ -358,7 +358,7 @@ export async function getWorkspaceBusyBlocks(
   // getSchedule only covers the default calendar; pull the shared
   // NewCoworker calendar's events separately and merge them in.
   if (shared) {
-    const viewRes = await nangoProxyForBusiness(
+    const viewRes = await workspaceProxyForBusiness(
       businessId,
       { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
       {
@@ -934,7 +934,7 @@ async function bookOnProvider(
       : "/v1.0/me/events";
 
     if (conn.provider === "google") {
-      const res = await nangoProxyForBusiness(
+      const res = await workspaceProxyForBusiness(
         businessId,
         { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
         {
@@ -962,7 +962,7 @@ async function bookOnProvider(
       eventId = data?.id ?? null;
       htmlLink = data?.htmlLink ?? null;
     } else {
-      const res = await nangoProxyForBusiness(
+      const res = await workspaceProxyForBusiness(
         businessId,
         { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
         {

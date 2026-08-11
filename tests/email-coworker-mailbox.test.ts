@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 
 import {
   INBOX_LOOKBACK_MINUTES,
@@ -13,12 +13,12 @@ import {
   fetchInboxWithThreads,
   fetchMailboxAddress
 } from "@/lib/email-coworker/mailbox";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const LINK = { connectionId: "c-1", providerConfigKey: "google" };
 const SINCE = Date.parse("2026-07-25T00:00:00.000Z");
-const mockProxy = vi.mocked(nangoProxyForBusiness);
+const mockProxy = vi.mocked(workspaceProxyForBusiness);
 
 beforeEach(() => {
   vi.clearAllMocks();

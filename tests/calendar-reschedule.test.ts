@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
   moveSharedCalendarMirror: vi.fn(),
   removeSharedCalendarMirror: vi.fn(), getSharedCalendar: vi.fn() }));
@@ -51,7 +51,7 @@ import {
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import {
   deleteBookingClaim,
@@ -137,7 +137,7 @@ beforeEach(() => {
   // Full reset (not just clear): clearAllMocks leaves mockResolvedValueOnce
   // queues intact, so a test that queues more responses than it consumes
   // would silently shift the next test's queue.
-  vi.mocked(nangoProxyForBusiness).mockReset();
+  vi.mocked(workspaceProxyForBusiness).mockReset();
   vi.mocked(getSharedCalendar).mockResolvedValue(null);
   vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
   vi.mocked(findUpcomingBookingClaimByPhone).mockResolvedValue(null);
@@ -184,7 +184,7 @@ describe("rescheduleCalendarAppointment", () => {
       "claim-1",
       "2026-07-15T20:00:00.000Z"
     );
-    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(rescheduleVagaroAppointment)).not.toHaveBeenCalled();
   });
 
@@ -229,7 +229,7 @@ describe("rescheduleCalendarAppointment", () => {
       phone: PHONE,
       email: null
     });
-    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
     // No ledger writes: Calendly link bookings never hold ledger rows.
     expect(vi.mocked(rescheduleBookingClaim)).not.toHaveBeenCalled();
   });
@@ -405,7 +405,7 @@ describe("rescheduleCalendarAppointment", () => {
 
   it("booking_not_found when neither the ledger nor the provider search locates an event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "booking_not_found"
@@ -419,13 +419,13 @@ describe("rescheduleCalendarAppointment", () => {
       newEndIso: RESCHEDULE_ARGS.newEndIso
     });
     expect(result).toEqual({ ok: false, detail: "booking_not_found" });
-    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
   });
 
   it("PATCHes the Google event from the ledger claim and moves the claim to the new start", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     const result = await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(result).toEqual({
@@ -438,7 +438,7 @@ describe("rescheduleCalendarAppointment", () => {
         rescheduled: true
       }
     });
-    const [, , config] = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const [, , config] = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(config).toMatchObject({
       endpoint: "/calendar/v3/calendars/primary/events/evt-1",
       method: "PATCH",
@@ -460,14 +460,14 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(new Error("404 not found"))
       .mockResolvedValueOnce({ data: {} } as never);
 
     const result = await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(result.ok).toBe(true);
     const endpoints = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints).toEqual([
       "/calendar/v3/calendars/shared-cal/events/evt-1",
@@ -478,7 +478,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("calendar_reschedule_failed when every Google calendar attempt fails", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("boom"));
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValue(new Error("boom"));
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "calendar_reschedule_failed"
@@ -489,7 +489,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("a null Google mutate response counts as a failed attempt (not a success)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "calendar_reschedule_failed"
@@ -501,7 +501,7 @@ describe("rescheduleCalendarAppointment", () => {
     // Not in the ledger (pre-ledger booking) → provider search finds it via
     // the FULL body: long notes push the Phone: marker out of bodyPreview
     // (Graph truncates it), so the truncated preview alone must not decide.
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           value: [
@@ -520,7 +520,7 @@ describe("rescheduleCalendarAppointment", () => {
     const result = await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(result.ok).toBe(true);
     expect((result.data as { eventId: string }).eventId).toBe("evt-search");
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as {
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as {
       endpoint: string;
       method: string;
       data: { start: { dateTime: string; timeZone: string } };
@@ -543,7 +543,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("Microsoft search scans the shared calendar view first and skips non-matching events", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-ms" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       // Shared view: an event for someone else — no match (bodyPreview-only
       // rows still match when short enough; id-less rows are skipped).
       .mockResolvedValueOnce({
@@ -558,7 +558,7 @@ describe("rescheduleCalendarAppointment", () => {
     const result = await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(result.ok).toBe(true);
     const endpoints = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints[0]).toBe("/v1.0/me/calendars/shared-ms/calendarView");
     expect(endpoints[1]).toBe("/v1.0/me/calendarView");
@@ -566,7 +566,7 @@ describe("rescheduleCalendarAppointment", () => {
 
   it("Microsoft search tolerates per-view failures and empty bodies", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(new Error("view down"))
       .mockResolvedValueOnce(null as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
@@ -578,7 +578,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("Microsoft search tolerates non-Error throws, missing value arrays, and preview-less events", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-ms" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce("raw view failure" as never) // shared view: non-Error throw
       .mockResolvedValueOnce({ data: { value: [{ id: "evt-no-preview" }] } } as never); // no bodyPreview → no match
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
@@ -587,15 +587,15 @@ describe("rescheduleCalendarAppointment", () => {
     });
 
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness).mockReset();
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never); // no value key
+    vi.mocked(workspaceProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never); // no value key
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "booking_not_found"
     });
 
-    vi.mocked(nangoProxyForBusiness).mockReset();
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: undefined } as never); // response without data
+    vi.mocked(workspaceProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: undefined } as never); // response without data
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "booking_not_found"
@@ -605,7 +605,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("Google search tolerates null responses, missing items, and non-Error throws", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce(null as never) // shared search: null response
       .mockResolvedValueOnce({ data: undefined } as never); // primary: response without data
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
@@ -613,9 +613,9 @@ describe("rescheduleCalendarAppointment", () => {
       detail: "booking_not_found"
     });
 
-    vi.mocked(nangoProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness).mockReset();
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness).mockRejectedValueOnce("raw search failure" as never);
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce("raw search failure" as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "booking_not_found"
@@ -626,7 +626,7 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce("raw patch failure" as never)
       .mockResolvedValueOnce({ data: {} } as never);
     expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
@@ -637,7 +637,7 @@ describe("rescheduleCalendarAppointment", () => {
     // would steer the model to "you cannot change any appointment".
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "calendar_reschedule_failed"
@@ -646,7 +646,7 @@ describe("rescheduleCalendarAppointment", () => {
 
   it("marker matching is boundary-guarded: a longer number or wrapping email never matches", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           // The lead's E.164 as a PREFIX of a longer number — not a match.
@@ -665,7 +665,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("Google search falls back to the email marker and tolerates search errors", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(new Error("search boom")) // shared search fails
       .mockResolvedValueOnce({
         // Primary search: a loose q hit WITHOUT the marker in its description
@@ -688,12 +688,12 @@ describe("rescheduleCalendarAppointment", () => {
       attendeeEmail: "joe@acme.com"
     });
     expect(result.ok).toBe(true);
-    const searchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as unknown as {
+    const searchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as unknown as {
       params: { q: string };
     };
     expect(searchCall.params.q).toBe("joe@acme.com");
     // The unverified fuzzy hit lost; the marker-verified event was mutated.
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[2][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[2][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-mail");
     expect(patchCall.endpoint).not.toContain("evt-fuzzy");
   });
@@ -701,7 +701,7 @@ describe("rescheduleCalendarAppointment", () => {
   it("uses the surface fallback phone when the model omits attendee identity", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const result = await rescheduleCalendarAppointment(
       BIZ,
       { newStartIso: RESCHEDULE_ARGS.newStartIso, newEndIso: RESCHEDULE_ARGS.newEndIso },
@@ -786,7 +786,7 @@ describe("cancelCalendarAppointment", () => {
       phone: PHONE,
       email: "joe@acme.com"
     });
-    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
   });
 
   it("Calendly: null email when the model omits it", async () => {
@@ -932,7 +932,7 @@ describe("cancelCalendarAppointment", () => {
 
   it("booking_not_found when nothing locates the event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
       detail: "booking_not_found"
@@ -942,7 +942,7 @@ describe("cancelCalendarAppointment", () => {
   it("falls back to the email marker, the surface phone, or refuses with no identity at all", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     // Email-only identity: still resolves via the ledger key.
     expect((await cancelCalendarAppointment(BIZ, { attendeeEmail: "joe@acme.com" })).ok).toBe(true);
     // No model-provided identity: the surface fallback phone carries it.
@@ -963,14 +963,14 @@ describe("cancelCalendarAppointment", () => {
   it("DELETEs the Google event and drops the ledger claim", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     const result = await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
     expect(result).toEqual({
       ok: true,
       data: { eventId: "evt-1", provider: "google", canceled: true }
     });
-    const [, , config] = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const [, , config] = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(config).toMatchObject({
       endpoint: "/calendar/v3/calendars/primary/events/evt-1",
       method: "DELETE"
@@ -981,7 +981,7 @@ describe("cancelCalendarAppointment", () => {
   it("calendar_cancel_failed when every Google delete attempt fails (claim kept)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("boom"));
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValue(new Error("boom"));
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
       detail: "calendar_cancel_failed"
@@ -991,7 +991,7 @@ describe("cancelCalendarAppointment", () => {
 
   it("DELETEs the Microsoft event; a searched (ledger-less) event cleans the ledger BY EVENT ID", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { value: [{ id: "evt-search", bodyPreview: `Phone: ${PHONE}` }] }
       } as never)
@@ -1002,7 +1002,7 @@ describe("cancelCalendarAppointment", () => {
       ok: true,
       data: { eventId: "evt-search", provider: "microsoft", canceled: true }
     });
-    const deleteCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as {
+    const deleteCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as {
       endpoint: string;
       method: string;
     };
@@ -1016,7 +1016,7 @@ describe("cancelCalendarAppointment", () => {
   it("a null Microsoft DELETE response is a FAILED MUTATION, never calendar_not_connected", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
       detail: "calendar_cancel_failed"
@@ -1041,7 +1041,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
   it("Google reschedule moves the Zoom meeting with the event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
     expect(vi.mocked(updateZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1", {
@@ -1053,7 +1053,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
   it("a Zoom-free claim reschedules without touching Zoom", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
     expect(vi.mocked(updateZoomMeetingForBooking)).not.toHaveBeenCalled();
@@ -1077,7 +1077,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
   it("Microsoft cancel deletes the Zoom meeting with the event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
     expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
@@ -1100,7 +1100,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
     // search, but its row under a DIFFERENT key still holds the meeting id.
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue("zm-7");
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [{ id: "evt-search", description: `Phone: ${PHONE}` }] }
       } as never)
@@ -1118,7 +1118,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
   it("a provider-search hit deletes the recovered meeting on cancel", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue("zm-7");
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { value: [{ id: "evt-search", bodyPreview: `Phone: ${PHONE}` }] }
       } as never)
@@ -1168,7 +1168,7 @@ describe("waitlist hooks", () => {
   it("Google ledger reschedule frees the claim's old start; a start-less search hit has nothing to free", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
       BIZ,
@@ -1180,8 +1180,8 @@ describe("waitlist hooks", () => {
     vi.mocked(offerFreedSlot).mockClear();
     vi.mocked(resolveWaitlistAfterBooking).mockClear();
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness).mockReset();
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [{ id: "evt-search", description: `Phone: ${PHONE}` }] }
       } as never)
@@ -1194,7 +1194,7 @@ describe("waitlist hooks", () => {
   it("a searched event WITH a listed start frees that slot too (Google reschedule, Graph cancel)", async () => {
     // Google search listing carries the event's start.
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           items: [
@@ -1218,8 +1218,8 @@ describe("waitlist hooks", () => {
     // Graph search listing: zone-less dateTime reads as UTC (graphTimeIso).
     vi.mocked(offerFreedSlot).mockClear();
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness).mockReset();
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           value: [
@@ -1273,7 +1273,7 @@ describe("waitlist hooks", () => {
 
   it("a searched (ledger-less) cancel drops entries but has no start to offer (email-only identity)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { value: [{ id: "evt-search", bodyPreview: "Email: joe@acme.com" }] }
       } as never)
@@ -1361,7 +1361,7 @@ describe("resolution by attendee name", () => {
 
   it("finds the event by name alone and moves it", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [namedEvent("evt-name", "2026-07-28T23:00:00.000Z")] }
       } as never)
@@ -1369,17 +1369,17 @@ describe("resolution by attendee name", () => {
 
     const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
     expect(result.ok).toBe(true);
-    const searchCall = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as unknown as {
+    const searchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as unknown as {
       params: { q: string };
     };
     expect(searchCall.params.q).toBe(NAME);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-name");
   });
 
   it("returns multiple_matches with candidate starts (and mutates nothing) when a name is ambiguous", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           namedEvent("evt-a", "2026-07-28T23:00:00.000Z"),
@@ -1399,12 +1399,12 @@ describe("resolution by attendee name", () => {
     });
     expect(result.message).toContain("Ask which one");
     // Search only: the ambiguity is reported BEFORE anything is mutated.
-    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledTimes(1);
   });
 
   it("appointmentStartIso picks the appointment the owner named out of several", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           items: [
@@ -1421,13 +1421,13 @@ describe("resolution by attendee name", () => {
       appointmentStartIso: "2026-07-30T10:00:00.000-07:00"
     });
     expect(result.ok).toBe(true);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-b");
   });
 
   it("a lone candidate still resolves when no candidate sits at the named time", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       // Start-less listing: the narrowing cannot confirm the time, but one
       // candidate is unambiguous (their only upcoming appointment).
       .mockResolvedValueOnce({
@@ -1440,13 +1440,13 @@ describe("resolution by attendee name", () => {
       appointmentStartIso: "2026-07-28T23:00:00.000Z"
     });
     expect(result.ok).toBe(true);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-only");
   });
 
   it("name matching is anchored to the Attendee line and never partial", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           // A longer name that merely STARTS with the search name.
@@ -1470,7 +1470,7 @@ describe("resolution by attendee name", () => {
   it("collects same-name candidates across the shared AND primary calendars", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [namedEvent("evt-shared", "2026-07-28T23:00:00.000Z")] }
       } as never)
@@ -1483,7 +1483,7 @@ describe("resolution by attendee name", () => {
     expect((result.data as { candidates: unknown[] }).candidates).toHaveLength(2);
     // Name mode does NOT short-circuit: both calendars were scanned.
     const endpoints = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints).toEqual([
       "/calendar/v3/calendars/shared-cal/events",
@@ -1493,7 +1493,7 @@ describe("resolution by attendee name", () => {
 
   it("Microsoft resolves by name from the event body", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           value: [
@@ -1510,7 +1510,7 @@ describe("resolution by attendee name", () => {
 
     const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
     expect(result.ok).toBe(true);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(patchCall.endpoint).toBe("/v1.0/me/events/evt-ms");
   });
 
@@ -1519,7 +1519,7 @@ describe("resolution by attendee name", () => {
     // The ledger holds this person's NEXT appointment (Jul 13), but the owner
     // named the Jul 28 one: the claim must not be moved.
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [namedEvent("evt-named", "2026-07-28T23:00:00.000Z")] }
       } as never)
@@ -1530,7 +1530,7 @@ describe("resolution by attendee name", () => {
       appointmentStartIso: "2026-07-28T23:00:00.000Z"
     });
     expect(result.ok).toBe(true);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-named");
     expect(patchCall.endpoint).not.toContain("evt-1");
     // Resolved by search, so the ledger row is re-recorded by event id.
@@ -1541,7 +1541,7 @@ describe("resolution by attendee name", () => {
   it("a ledger claim AT the named time is used directly, with no provider search", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     const result = await rescheduleCalendarAppointment(BIZ, {
       ...NAME_ARGS,
@@ -1549,8 +1549,8 @@ describe("resolution by attendee name", () => {
       appointmentStartIso: "2026-07-13T16:00:00.000-04:00"
     });
     expect(result.ok).toBe(true);
-    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
-    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledTimes(1);
+    const patchCall = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(patchCall.endpoint).toContain("evt-1");
   });
 
@@ -1562,7 +1562,7 @@ describe("resolution by attendee name", () => {
     } as never);
     // Nothing else matches, so the guard surfaces as booking_not_found rather
     // than moving the claim the caller did not name.
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
 
     expect(
       await rescheduleCalendarAppointment(BIZ, {
@@ -1574,7 +1574,7 @@ describe("resolution by attendee name", () => {
 
   it("cancel resolves by name and reports ambiguity the same way", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: { items: [namedEvent("evt-cancel", "2026-07-28T23:00:00.000Z")] }
       } as never)
@@ -1582,15 +1582,15 @@ describe("resolution by attendee name", () => {
 
     const canceled = await cancelCalendarAppointment(BIZ, { attendeeName: NAME });
     expect(canceled.ok).toBe(true);
-    const deleteCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as {
+    const deleteCall = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as {
       endpoint: string;
       method: string;
     };
     expect(deleteCall.method).toBe("DELETE");
     expect(deleteCall.endpoint).toContain("evt-cancel");
 
-    vi.mocked(nangoProxyForBusiness).mockReset();
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockReset();
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           namedEvent("evt-a", "2026-07-28T23:00:00.000Z"),
@@ -1601,6 +1601,6 @@ describe("resolution by attendee name", () => {
     const ambiguous = await cancelCalendarAppointment(BIZ, { attendeeName: NAME });
     expect(ambiguous.detail).toBe("multiple_matches");
     // Nothing was deleted while the model still has to ask.
-    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(workspaceProxyForBusiness)).toHaveBeenCalledTimes(1);
   });
 });

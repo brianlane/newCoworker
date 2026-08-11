@@ -4,8 +4,8 @@ vi.mock("@/lib/voice-tools/connections", () => ({
   resolveEmailConnection: vi.fn()
 }));
 
-vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: vi.fn()
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: vi.fn()
 }));
 
 // The real owner-mailbox module runs in this suite, and it resolves the
@@ -29,7 +29,7 @@ vi.mock("@/lib/db/email-log", () => ({
 
 import { POST } from "@/app/api/voice/tools/email/route";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -96,7 +96,7 @@ describe("POST /api/voice/tools/email", () => {
       "voice",
       "send_follow_up_email"
     );
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
   });
 
   it("returns email_not_connected when no Nango connection exists (per require_nango product rule)", async () => {
@@ -109,7 +109,7 @@ describe("POST /api/voice/tools/email", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: false, detail: "email_not_connected" });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
   });
 
   it("sends a base64url RFC2822 body via Gmail when Google is connected", async () => {
@@ -118,7 +118,7 @@ describe("POST /api/voice/tools/email", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       data: { id: "gmail-abc" }
     } as never);
 
@@ -132,8 +132,8 @@ describe("POST /api/voice/tools/email", () => {
     const body = await res.json();
     expect(body).toEqual({ ok: true, data: { messageId: "gmail-abc", provider: "google" } });
 
-    expect(nangoProxyForBusiness).toHaveBeenCalledOnce();
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    expect(workspaceProxyForBusiness).toHaveBeenCalledOnce();
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(call[0]).toBe(businessId);
     expect(call[1]).toEqual({ connectionId: "cx-1", providerConfigKey: "google-mail" });
     expect(call[2]).toMatchObject({ endpoint: "/gmail/v1/users/me/messages/send", method: "POST" });
@@ -164,7 +164,7 @@ describe("POST /api/voice/tools/email", () => {
       providerConfigKey: "outlook",
       connectionId: "cx-ms"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     const res = await POST(
       makeRequest({
@@ -175,7 +175,7 @@ describe("POST /api/voice/tools/email", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, data: { messageId: null, provider: "microsoft" } });
 
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(call[2]).toMatchObject({ endpoint: "/v1.0/me/sendMail", method: "POST" });
     const msg = (call[2] as { data: { message: { toRecipients: Array<{ emailAddress: { address: string } }> } } }).data.message;
     expect(msg.toRecipients[0].emailAddress.address).toBe("lead@example.com");
@@ -187,7 +187,7 @@ describe("POST /api/voice/tools/email", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("boom"));
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValue(new Error("boom"));
 
     const res = await POST(
       makeRequest({

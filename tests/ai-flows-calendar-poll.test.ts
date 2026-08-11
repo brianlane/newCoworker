@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
   // Pure helper — real behavior inline so the guards under test stay honest.
@@ -44,7 +44,7 @@ import {
   tryEnqueueCalendarRun
 } from "@/lib/ai-flows/calendar-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
@@ -437,7 +437,7 @@ describe("pollCalendarTriggers", () => {
       .fn()
       .mockResolvedValueOnce({ data: page1, error: null })
       .mockResolvedValueOnce({ data: page2, error: null });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const res = await pollCalendarTriggers(dbWithRange(range));
     expect(res.flows).toBe(101);
     expect(range).toHaveBeenCalledTimes(2);
@@ -451,7 +451,7 @@ describe("pollCalendarTriggers", () => {
       .fn()
       .mockResolvedValueOnce({ data: page1, error: null })
       .mockResolvedValueOnce({ data: null, error: { message: "later page" } });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const res = await pollCalendarTriggers(dbWithRange(range));
     expect(res.flows).toBe(100);
     expect(errSpy).toHaveBeenCalledWith("pollCalendarTriggers flow listing page", "later page");
@@ -495,7 +495,7 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
     expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
     expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
     expect(recordSystemLog).toHaveBeenCalledWith(
@@ -528,7 +528,7 @@ describe("pollCalendarTriggers", () => {
     });
     const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
     expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
     expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
     expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
 
@@ -618,7 +618,7 @@ describe("pollCalendarTriggers", () => {
     });
     const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
     expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
     expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
 
     // Windows derive from the flow group; the due filter is the poller's own.
@@ -737,7 +737,7 @@ describe("pollCalendarTriggers", () => {
     });
     const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
     expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
 
     // Windows derive from the flow group; the due filter is the poller's own.
     const args = vi.mocked(fetchCalendlyCandidateEvents).mock.calls[0][0];
@@ -837,7 +837,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("enqueues a run for a newly created Google event and evaluates conditions per flow", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           {
@@ -864,8 +864,8 @@ describe("pollCalendarTriggers", () => {
     );
     expect(res).toEqual({ flows: 2, businesses: 1, events: 3, enqueued: 1 });
     // One Google list call for the primary calendar (shared doesn't exist).
-    expect(nangoProxyForBusiness).toHaveBeenCalledTimes(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("/calendar/v3/calendars/primary/events?updatedMin=");
     expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
@@ -892,7 +892,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("event_canceled (Google): lists with showDeleted, fires for fresh cancellations only", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           {
@@ -912,7 +912,7 @@ describe("pollCalendarTriggers", () => {
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
     expect(res.enqueued).toBe(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("showDeleted=true");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ flowId: "f-cancel", dedupeKey: "cal:ev-c1:cancelled" }),
@@ -950,7 +950,7 @@ describe("pollCalendarTriggers", () => {
     // A flow watching BOTH calendars observes the same event twice; the
     // callback still fires once per event id.
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { items: canceledItems } } as never)
       .mockResolvedValueOnce({ data: { items: canceledItems } } as never);
     const onCanceledEvent = vi.fn(async () => "offered");
@@ -996,7 +996,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("a throwing freed-slot callback is logged and never affects the poll", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           {
@@ -1022,7 +1022,7 @@ describe("pollCalendarTriggers", () => {
 
   it("event_canceled (Microsoft): filters by lastModifiedDateTime and isCancelled", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(microsoftConn as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           {
@@ -1039,7 +1039,7 @@ describe("pollCalendarTriggers", () => {
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
     expect(res.enqueued).toBe(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("lastModifiedDateTime%20ge%20");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ flowId: "f-cancel", dedupeKey: "cal:ms-c1:cancelled" }),
@@ -1049,7 +1049,7 @@ describe("pollCalendarTriggers", () => {
 
   it("event_canceled: tolerates empty payloads and targets the shared calendar path (Graph)", async () => {
     // Google, primary, no items key at all.
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     let res = await pollCalendarTriggers(
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
@@ -1060,7 +1060,7 @@ describe("pollCalendarTriggers", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn as never);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1" } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     res = await pollCalendarTriggers(
       dbWith([
         flowRow("f-cancel", {
@@ -1072,12 +1072,12 @@ describe("pollCalendarTriggers", () => {
       ])
     );
     expect(res.enqueued).toBe(0);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("/v1.0/me/calendars/shared-cal/events");
   });
 
   it("event_canceled: a null proxy response reads as a rejected workspace connection (both providers)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null as never);
     await pollCalendarTriggers(
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
@@ -1090,7 +1090,7 @@ describe("pollCalendarTriggers", () => {
     vi.clearAllMocks();
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(microsoftConn as never);
     vi.mocked(getSharedCalendar).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null as never);
     await pollCalendarTriggers(
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
@@ -1102,7 +1102,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("fires flows whose calendar trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           {
@@ -1135,7 +1135,7 @@ describe("pollCalendarTriggers", () => {
 
   it("enqueues a run leadMinutes before a Google event starts, keyed per occurrence", async () => {
     const startIso = isoIn(10);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           { id: "soon", summary: "Estimate", start: { dateTime: startIso } },
@@ -1147,7 +1147,7 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", startTrigger(30))]));
     expect(res.enqueued).toBe(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("singleEvents=true");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1164,7 +1164,7 @@ describe("pollCalendarTriggers", () => {
 
   it("enqueues a run after a Google event ends, keyed per occurrence by end time", async () => {
     const endIso = isoIn(-70); // ended 70 min ago
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           {
@@ -1199,10 +1199,10 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("sizes the recently-ended fetch window to the largest follow + lookback", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
     const before = Date.now();
     await pollCalendarTriggers(dbWith([flowRow("f-end", endTrigger(120))]));
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     const timeMin = decodeURIComponent(/timeMin=([^&]+)/.exec(endpoint)![1]);
     const timeMax = decodeURIComponent(/timeMax=([^&]+)/.exec(endpoint)![1]);
     const backMinutes = (before - Date.parse(timeMin)) / 60_000;
@@ -1214,7 +1214,7 @@ describe("pollCalendarTriggers", () => {
 
   it("defaults a missing followMinutes to zero (fires right at the end)", async () => {
     const endIso = isoIn(-1);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: { items: [{ id: "fresh", summary: "Walkthrough", end: { dateTime: endIso } }] }
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f-end", endTrigger())]));
@@ -1226,10 +1226,10 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("widens the upcoming fetch window past the lead (exclusive provider bounds)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
     const before = Date.now();
     await pollCalendarTriggers(dbWith([flowRow("f1", startTrigger(30))]));
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     const timeMax = decodeURIComponent(/timeMax=([^&]+)/.exec(endpoint)![1]);
     const horizonMinutes = (Date.parse(timeMax) - before) / 60_000;
     // 30-min lead + the exclusive-bound buffer, so an event starting exactly
@@ -1241,7 +1241,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("skips all-day events in start mode but still fires them in created mode", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => ({
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async () => ({
       data: {
         items: [
           {
@@ -1268,7 +1268,7 @@ describe("pollCalendarTriggers", () => {
       calendarId: "shared-cal-x",
       conn: googleConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1299,7 +1299,7 @@ describe("pollCalendarTriggers", () => {
       calendarId: "shared-cal-x",
       conn: googleConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both links dead
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never); // both links dead
     await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     const failureLogs = vi
       .mocked(recordSystemLog)
@@ -1312,7 +1312,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("stringifies a non-Error per-calendar fetch failure", async () => {
-    vi.mocked(nangoProxyForBusiness).mockRejectedValueOnce("proxy blew up");
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce("proxy blew up");
     await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1327,7 +1327,7 @@ describe("pollCalendarTriggers", () => {
       dbWith([flowRow("f1", createdTrigger({ calendar: "shared" }))])
     );
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
     // Only the cadence-tick stamp — no failure/overflow rows.
     expect(recordSystemLog).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
@@ -1342,7 +1342,7 @@ describe("pollCalendarTriggers", () => {
       calendarId: "shared-cal/1",
       conn: googleConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1355,7 +1355,7 @@ describe("pollCalendarTriggers", () => {
     expect(res.events).toBe(2);
     expect(res.enqueued).toBe(2);
     const endpoints = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints.some((e) => e.includes("/calendars/primary/"))).toBe(true);
     expect(endpoints.some((e) => e.includes(encodeURIComponent("shared-cal/1")))).toBe(true);
@@ -1369,7 +1369,7 @@ describe("pollCalendarTriggers", () => {
     // One created + one start flow on the same calendar: the created listing
     // and the upcoming listing both return ev1 — it must count once.
     const startIso = isoIn(10);
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1391,7 +1391,7 @@ describe("pollCalendarTriggers", () => {
     // ev1 fires the created flow AND both start flows (due within both leads).
     expect(res.enqueued).toBe(3);
     const endpoints = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints).toHaveLength(2);
     expect(endpoints.filter((e) => e.includes("timeMin="))).toHaveLength(1);
@@ -1399,7 +1399,7 @@ describe("pollCalendarTriggers", () => {
 
   it("treats a dedupe collision (null run) as already-enqueued", async () => {
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: { items: [{ id: "ev1", summary: "x", created: isoIn(-1) }] }
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
@@ -1414,7 +1414,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("fails closed when a from_matches contact ref cannot be resolved", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: [
           { id: "ev1", summary: "x", created: isoIn(-1), organizer: { email: "leads@rx.com" } }
@@ -1445,7 +1445,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("throws into the per-business error path when the Google link is dead", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
@@ -1457,7 +1457,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("logs an overflow warning when a Google listing fills the event cap", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         items: Array.from({ length: CALENDAR_POLL_MAX_EVENTS }, (_, i) => ({
           id: `e${i}`,
@@ -1476,7 +1476,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("tolerates Google responses without items (created and upcoming)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.events).toBe(0);
     const res2 = await pollCalendarTriggers(dbWith([flowRow("f2", startTrigger(30))]));
@@ -1489,18 +1489,18 @@ describe("pollCalendarTriggers", () => {
       calendarId: "ms-shared-2",
       conn: microsoftConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger({ calendar: "shared" }))])
     );
     expect(res.events).toBe(0);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("/v1.0/me/calendars/ms-shared-2/events?$filter=");
   });
 
   it("polls Microsoft created events on the default calendar", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           {
@@ -1515,7 +1515,7 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(1);
-    const cfg = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const cfg = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
       headers?: Record<string, string>;
     };
@@ -1538,14 +1538,14 @@ describe("pollCalendarTriggers", () => {
       conn: microsoftConn
     } as never);
     const startIso = isoIn(5);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: { value: [{ id: "m2", subject: "Booked", start: { dateTime: startIso } }] }
     } as never);
     const res = await pollCalendarTriggers(
       dbWith([flowRow("f1", startTrigger(30, { calendar: "shared" }))])
     );
     expect(res.enqueued).toBe(1);
-    const cfg = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const cfg = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
       headers?: Record<string, string>;
     };
@@ -1561,16 +1561,16 @@ describe("pollCalendarTriggers", () => {
 
   it("polls Microsoft upcoming events on the default calendar and tolerates a missing value", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", startTrigger(30))]));
     expect(res.events).toBe(0);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("/v1.0/me/calendarView?");
   });
 
   it("hits the per-business error path when a Microsoft listing link is dead", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null);
     // created flow → fetchRecentlyCreated null; then a separate poll for the
@@ -1586,7 +1586,7 @@ describe("pollCalendarTriggers", () => {
 
   it("logs an overflow warning when a Microsoft shared upcoming listing fills the cap", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: Array.from({ length: CALENDAR_POLL_MAX_EVENTS }, (_, i) => ({
           id: `m${i}`,
@@ -1602,7 +1602,7 @@ describe("pollCalendarTriggers", () => {
   });
 
   it("polls Google upcoming events with a dead link (throws into error path)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null);
     await pollCalendarTriggers(dbWith([flowRow("f1", startTrigger(30))]));
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
@@ -1614,7 +1614,7 @@ describe("pollCalendarTriggers", () => {
     vi.mocked(resolveCalendarConnection)
       .mockResolvedValueOnce(googleConn)
       .mockResolvedValueOnce(null);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
     const res = await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger()), flowRow("f2", createdTrigger(), OTHER)])
     );
@@ -1715,7 +1715,7 @@ describe("poll failure escalation + owner alert", () => {
       calendarId: "shared-cal-x",
       conn: googleConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1742,7 +1742,7 @@ describe("poll failure escalation + owner alert", () => {
       calendarId: "shared-cal-x",
       conn: googleConn
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both dead
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never); // both dead
     await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger())], null, [
         { data: [], error: null }, // cadence gate
@@ -1817,12 +1817,12 @@ describe("poll cadence gate (inside pollCalendarTriggers)", () => {
       ])
     );
     expect(res).toMatchObject({ flows: 1, businesses: 0, skipped: true });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
 
   it("a short event_start lead disables the gate — the poll runs every tick", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
     const res = await pollCalendarTriggers(
       // leadMinutes 3 < the gate threshold: its due window could fit
       // entirely between two gated polls, so the gate must stand down.
@@ -1839,7 +1839,7 @@ describe("poll cadence gate (inside pollCalendarTriggers)", () => {
   });
 
   it("a completed gated poll stamps the marker AFTER the work", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
     await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger())], null, [{ data: [], error: null }])
     );

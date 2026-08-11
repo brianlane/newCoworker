@@ -9,7 +9,7 @@
  */
 
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
 import { connectionEmail } from "@/lib/email/mailbox-options";
 
@@ -155,7 +155,7 @@ export type MailboxConnectionRef = {
 /**
  * Send from a SPECIFIC connected mailbox (caller already resolved which
  * connection to use — e.g. an AiFlow step pinned to one of several accounts).
- * `nangoProxyForBusiness` re-verifies the connection belongs to the business,
+ * `workspaceProxyForBusiness` re-verifies the connection belongs to the business,
  * so a stale/foreign id degrades to `email_not_connected` rather than sending.
  */
 export async function sendFromMailboxConnection(
@@ -165,7 +165,7 @@ export async function sendFromMailboxConnection(
 ): Promise<OwnerMailboxSendResult> {
   // Resolve the stored row up front for its metadata: the send result carries
   // the address the mail leaves from, so every logging caller can record it.
-  // A missing row would make nangoProxyForBusiness refuse anyway; failing
+  // A missing row would make workspaceProxyForBusiness refuse anyway; failing
   // here just skips the provider round-trip.
   const row = await getWorkspaceOAuthConnectionByNangoIds(
     businessId,
@@ -178,7 +178,7 @@ export async function sendFromMailboxConnection(
   if (conn.provider === "google") {
     const raw = encodeRfc2822(args);
     const threadId = args.thread?.threadId?.trim();
-    const res = await nangoProxyForBusiness(
+    const res = await workspaceProxyForBusiness(
       businessId,
       { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
       {
@@ -204,7 +204,7 @@ export async function sendFromMailboxConnection(
   // message's reply action (which sets the conversation headers itself).
   const replyToId = args.thread?.providerMessageId?.trim();
   if (replyToId) {
-    const replied = await nangoProxyForBusiness(
+    const replied = await workspaceProxyForBusiness(
       businessId,
       { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
       {
@@ -239,7 +239,7 @@ export async function sendFromMailboxConnection(
     return { ok: true, provider: "microsoft", messageId: null, threadId: null, fromEmail };
   }
 
-  const res = await nangoProxyForBusiness(
+  const res = await workspaceProxyForBusiness(
     businessId,
     { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
     {

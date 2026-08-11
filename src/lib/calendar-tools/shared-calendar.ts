@@ -26,7 +26,7 @@
  * must never block a booking or a roster edit.
  */
 
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import {
   listWorkspaceOAuthConnections,
   upsertWorkspaceOAuthConnection
@@ -136,7 +136,7 @@ export async function ensureSharedCalendar(
     const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
     let calendarId: string | null = null;
     if (conn.provider === "google") {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: "/calendar/v3/calendars",
         method: "POST",
         data: { summary: SHARED_CALENDAR_NAME }
@@ -144,7 +144,7 @@ export async function ensureSharedCalendar(
       const data = (res?.data ?? null) as { id?: string } | null;
       calendarId = data?.id ?? null;
     } else {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: "/v1.0/me/calendars",
         method: "POST",
         data: { name: SHARED_CALENDAR_NAME }
@@ -191,7 +191,7 @@ async function deleteProviderCalendar(
       conn.provider === "google"
         ? `/calendar/v3/calendars/${encodeURIComponent(calendarId)}`
         : `/v1.0/me/calendars/${encodeURIComponent(calendarId)}`;
-    await nangoProxyForBusiness(businessId, proxyTarget, { endpoint, method: "DELETE" });
+    await workspaceProxyForBusiness(businessId, proxyTarget, { endpoint, method: "DELETE" });
   } catch (err) {
     logger.warn("shared-calendar: duplicate calendar cleanup failed", {
       businessId,
@@ -257,7 +257,7 @@ export async function shareSharedCalendarWithEmployees(businessId: string): Prom
                 endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/calendarPermissions`,
                 data: { emailAddress: { address: email }, role: "read" }
               };
-        const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+        const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
           ...grantRequest,
           method: "POST"
         });
@@ -357,7 +357,7 @@ export async function mirrorBookingToSharedCalendar(
       .join("\n");
 
     if (conn.provider === "google") {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
         method: "POST",
         data: {
@@ -370,7 +370,7 @@ export async function mirrorBookingToSharedCalendar(
       const data = (res?.data ?? null) as { id?: string } | null;
       return data?.id ?? null;
     }
-    const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+    const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
       endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`,
       method: "POST",
       data: {
@@ -404,14 +404,14 @@ export async function moveSharedCalendarMirror(
     const { calendarId, conn } = shared;
     const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
     if (conn.provider === "google") {
-      await nangoProxyForBusiness(businessId, proxyTarget, {
+      await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
         method: "PATCH",
         data: { start: { dateTime: startIso }, end: { dateTime: endIso } }
       });
       return;
     }
-    await nangoProxyForBusiness(businessId, proxyTarget, {
+    await workspaceProxyForBusiness(businessId, proxyTarget, {
       endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
       method: "PATCH",
       data: {
@@ -463,7 +463,7 @@ export async function mirrorTimeOffEvent(
     const endExclusive = nextDayIsoDate(endsOn);
 
     if (conn.provider === "google") {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
         method: "POST",
         data: {
@@ -476,7 +476,7 @@ export async function mirrorTimeOffEvent(
       const data = (res?.data ?? null) as { id?: string } | null;
       return data?.id ?? null;
     }
-    const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+    const res = await workspaceProxyForBusiness(businessId, proxyTarget, {
       endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`,
       method: "POST",
       data: {
@@ -506,13 +506,13 @@ export async function removeTimeOffEvent(businessId: string, eventId: string): P
     const { calendarId, conn } = shared;
     const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
     if (conn.provider === "google") {
-      await nangoProxyForBusiness(businessId, proxyTarget, {
+      await workspaceProxyForBusiness(businessId, proxyTarget, {
         endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
         method: "DELETE"
       });
       return;
     }
-    await nangoProxyForBusiness(businessId, proxyTarget, {
+    await workspaceProxyForBusiness(businessId, proxyTarget, {
       endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
       method: "DELETE"
     });

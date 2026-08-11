@@ -3,7 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const nangoProxy = vi.hoisted(() => vi.fn());
+const workspaceProxy = vi.hoisted(() => vi.fn());
 const getConn = vi.hoisted(() => vi.fn());
 const organizeTenant = vi.hoisted(() => vi.fn());
 
@@ -17,9 +17,9 @@ const organizeTenant = vi.hoisted(() => vi.fn());
 // It is NOT truthful for the raw proxy, which throws on non-2xx, so raw-path
 // failures are modelled as rejections. See email-organize-proxy-errors.test.ts
 // for the end-to-end proof through the real helper.
-vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: nangoProxy,
-  nangoProxyStatusForBusiness: nangoProxy
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: workspaceProxy,
+  workspaceProxyStatusForBusiness: workspaceProxy
 }));
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: getConn
@@ -58,7 +58,7 @@ function outlookConn() {
 
 describe("organizeMessage", () => {
   beforeEach(() => {
-    nangoProxy.mockReset();
+    workspaceProxy.mockReset();
     getConn.mockReset();
     organizeTenant.mockReset();
     softDelete.mockReset();
@@ -179,7 +179,7 @@ describe("organizeMessage", () => {
 
   it("marks Gmail read and archives via messages.modify", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -187,7 +187,7 @@ describe("organizeMessage", () => {
       actions: { markRead: true, archive: true }
     });
     expect(res).toEqual({ ok: true, provider: "google" });
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       { connectionId: "nango-1", providerConfigKey: "google-mail" },
       expect.objectContaining({
@@ -201,7 +201,7 @@ describe("organizeMessage", () => {
 
   it("creates missing Gmail labels, moves, unarchives, and marks unread", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({
         status: 200,
         data: { labels: [{ id: "L1", name: "Existing" }] }
@@ -221,7 +221,7 @@ describe("organizeMessage", () => {
       }
     });
     expect(res).toEqual({ ok: true, provider: "google" });
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -234,7 +234,7 @@ describe("organizeMessage", () => {
 
   it("fails when Gmail labels cannot be created or resolved", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValueOnce({ status: 403, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 403, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -245,8 +245,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "gmail_labels_list_failed:403" });
 
     // addLabels: list empty, create fails
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
@@ -259,8 +259,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope:500" });
 
     // create returns 200 without an id
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce({ status: 200, data: {} });
     await expect(
@@ -273,8 +273,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope" });
 
     // create call disconnects after a successful list
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce(null);
     await expect(
@@ -287,8 +287,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
 
     // removeLabels name that never resolves → noop (label already gone)
-    nangoProxy.mockReset();
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: {} });
+    workspaceProxy.mockReset();
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -299,8 +299,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: true, provider: "google", detail: "noop" });
 
     // moveToFolder that never resolves fails (do not silent-archive)
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
@@ -313,8 +313,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Ghost:500" });
 
     // add-only modify (no removeLabelIds branch)
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({
         status: 200,
         data: { labels: [{ id: "L9", name: "Keep" }] }
@@ -332,7 +332,7 @@ describe("organizeMessage", () => {
 
   it("fails Gmail when not connected or modify errors", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValueOnce(null);
+    workspaceProxy.mockResolvedValueOnce(null);
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -342,7 +342,7 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
 
-    nangoProxy.mockResolvedValueOnce({ status: 400, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 400, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -355,7 +355,7 @@ describe("organizeMessage", () => {
 
   it("returns reconnect hint when Outlook scope is missing", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 403, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 403, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -369,7 +369,7 @@ describe("organizeMessage", () => {
   it("patches Outlook categories and moves into Archive", async () => {
     getConn.mockResolvedValue(outlookConn());
     // Preflight folder → GET categories → combined PATCH → move
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { id: "folder-archive" } })
       .mockResolvedValueOnce({ status: 200, data: { categories: ["Old", "Drop"] } })
       .mockResolvedValueOnce({ status: 200, data: {} })
@@ -388,8 +388,8 @@ describe("organizeMessage", () => {
     expect(res).toEqual({ ok: true, provider: "microsoft" });
 
     // categories omitted on GET (uses ?? [])
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: {} })
       .mockResolvedValueOnce({ status: 200, data: {} });
     await expect(
@@ -404,7 +404,7 @@ describe("organizeMessage", () => {
 
   it("prefers moveToFolder over Archive when both are set on Outlook", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({
         status: 200,
         data: { value: [{ id: "f-sales", displayName: "Sales" }] }
@@ -418,7 +418,7 @@ describe("organizeMessage", () => {
         actions: { archive: true, moveToFolder: "Sales" }
       })
     ).resolves.toEqual({ ok: true, provider: "microsoft" });
-    expect(nangoProxy).toHaveBeenLastCalledWith(
+    expect(workspaceProxy).toHaveBeenLastCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -430,7 +430,7 @@ describe("organizeMessage", () => {
 
   it("resolves Outlook folders from the mailFolders list and unarchives to Inbox", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({
         status: 200,
         data: {
@@ -450,7 +450,7 @@ describe("organizeMessage", () => {
       actions: { moveToFolder: "Billing" }
     });
     expect(res).toEqual({ ok: true, provider: "microsoft" });
-    expect(nangoProxy).toHaveBeenLastCalledWith(
+    expect(workspaceProxy).toHaveBeenLastCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -462,7 +462,7 @@ describe("organizeMessage", () => {
 
   it("fails Outlook when folder is missing or move/patch fails", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: { value: [] } });
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: { value: [] } });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -472,8 +472,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_folder_not_found:Missing" });
 
-    nangoProxy.mockReset();
-    nangoProxy.mockResolvedValueOnce(null);
+    workspaceProxy.mockReset();
+    workspaceProxy.mockResolvedValueOnce(null);
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -483,7 +483,7 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
 
-    nangoProxy.mockResolvedValueOnce({ status: 400, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 400, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -496,7 +496,7 @@ describe("organizeMessage", () => {
 
   it("soft-fails Outlook category and move on 401/403", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { categories: [] } })
       .mockResolvedValueOnce({ status: 401, data: {} });
     await expect(
@@ -508,8 +508,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_reconnect_required" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { id: "inbox" } })
       .mockResolvedValueOnce({ status: 403, data: {} });
     await expect(
@@ -523,13 +523,13 @@ describe("organizeMessage", () => {
   });
 
   it("exposes markGmailMessageRead helper", async () => {
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     await markGmailMessageRead(
       BIZ,
       { connectionId: "nango-1", providerConfigKey: "google-mail" },
       "mid"
     );
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       { connectionId: "nango-1", providerConfigKey: "google-mail" },
       expect.objectContaining({
@@ -541,7 +541,7 @@ describe("organizeMessage", () => {
 
   it("covers Outlook category get-401, categories_failed, move_failed, bad nextLink", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 401, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 401, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -551,8 +551,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_reconnect_required" });
 
-    nangoProxy.mockReset();
-    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    workspaceProxy.mockReset();
+    workspaceProxy.mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -562,8 +562,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_categories_get_failed:500" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { categories: [] } })
       .mockResolvedValueOnce({ status: 400, data: {} });
     await expect(
@@ -575,8 +575,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_patch_failed:400" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { id: "arch" } })
       .mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
@@ -588,8 +588,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_move_failed:500" });
 
-    nangoProxy.mockReset();
-    nangoProxy.mockResolvedValueOnce({
+    workspaceProxy.mockReset();
+    workspaceProxy.mockResolvedValueOnce({
       status: 200,
       data: { value: [], "@odata.nextLink": "not a url" }
     });
@@ -605,7 +605,7 @@ describe("organizeMessage", () => {
 
   it("covers Gmail label-list disconnect and Outlook folder fallbacks", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValueOnce(null); // labels list
+    workspaceProxy.mockResolvedValueOnce(null); // labels list
     const disconnected = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -616,7 +616,7 @@ describe("organizeMessage", () => {
 
     getConn.mockResolvedValue(outlookConn());
     // well-known Archive miss → list null
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: {} }).mockResolvedValueOnce(null);
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: {} }).mockResolvedValueOnce(null);
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -626,8 +626,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "outlook_folder_not_found:Archive" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 404, data: {} }) // well-known miss
       .mockResolvedValueOnce({
         status: 200,
@@ -643,8 +643,8 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "outlook_folder_not_found:Drafts" });
 
     // markRead only: destinationName stays null (archive/move/unarchive unset)
-    nangoProxy.mockReset();
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: {} });
+    workspaceProxy.mockReset();
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -657,7 +657,7 @@ describe("organizeMessage", () => {
 
   it("fails Outlook category get when disconnected", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce(null);
+    workspaceProxy.mockResolvedValueOnce(null);
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -667,8 +667,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { categories: [] } })
       .mockResolvedValueOnce(null);
     await expect(
@@ -680,8 +680,8 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
 
-    nangoProxy.mockReset();
-    nangoProxy
+    workspaceProxy.mockReset();
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { id: "inbox" } })
       .mockResolvedValueOnce(null);
     await expect(
@@ -703,7 +703,7 @@ describe("organizeMessage: trash", () => {
    * the caller is an AI classification and that has to be undoable.
    */
   beforeEach(() => {
-    nangoProxy.mockReset();
+    workspaceProxy.mockReset();
     getConn.mockReset();
     organizeTenant.mockReset();
     softDelete.mockReset();
@@ -711,7 +711,7 @@ describe("organizeMessage: trash", () => {
 
   it("counts as an action on its own, so a trash-only step is valid", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -721,8 +721,8 @@ describe("organizeMessage: trash", () => {
     expect(res).toEqual({ ok: true, provider: "google" });
     // No labels to change, so modify is skipped entirely and trash is the
     // single call. The old code would have short-circuited to "noop" here.
-    expect(nangoProxy).toHaveBeenCalledTimes(1);
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledTimes(1);
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m-only/trash", method: "POST" })
@@ -731,7 +731,7 @@ describe("organizeMessage: trash", () => {
 
   it("labels FIRST and bins second, so the message stays findable in the bin", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy
+    workspaceProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [{ id: "L9", name: "HQ/Automated" }] } })
       .mockResolvedValueOnce({ status: 200, data: {} })
       .mockResolvedValueOnce({ status: 200, data: {} });
@@ -742,7 +742,7 @@ describe("organizeMessage: trash", () => {
       actions: { markRead: true, addLabels: ["HQ/Automated"], trash: true }
     });
     expect(res).toEqual({ ok: true, provider: "google" });
-    const endpoints = nangoProxy.mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
+    const endpoints = workspaceProxy.mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
     expect(endpoints).toEqual([
       "/gmail/v1/users/me/labels",
       "/gmail/v1/users/me/messages/m-z/modify",
@@ -752,14 +752,14 @@ describe("organizeMessage: trash", () => {
 
   it("never calls messages.delete, which is the permanent one", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
       messageId: "m-d",
       actions: { trash: true }
     });
-    for (const call of nangoProxy.mock.calls) {
+    for (const call of workspaceProxy.mock.calls) {
       const { endpoint, method } = call[2] as { endpoint: string; method: string };
       expect(`${method} ${endpoint}`).not.toMatch(/DELETE /);
       expect(endpoint).not.toMatch(/\/delete$/);
@@ -768,7 +768,7 @@ describe("organizeMessage: trash", () => {
 
   it("surfaces a failed trash instead of reporting success", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 403, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 403, data: {} });
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m-f", actions: { trash: true } })
     ).resolves.toEqual({ ok: false, detail: "gmail_trash_failed:403" });
@@ -776,7 +776,7 @@ describe("organizeMessage: trash", () => {
 
   it("reports a disconnected mailbox on the trash call", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue(null);
+    workspaceProxy.mockResolvedValue(null);
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m-n", actions: { trash: true } })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
@@ -829,7 +829,7 @@ describe("organizeMessage: trash", () => {
      */
     getConn.mockResolvedValue(outlookConn());
     // No preflight folder lookup: deleteditems is a well-known id.
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -837,7 +837,7 @@ describe("organizeMessage: trash", () => {
       actions: { trash: true }
     });
     expect(res).toEqual({ ok: true, provider: "microsoft" });
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -848,7 +848,7 @@ describe("organizeMessage: trash", () => {
     );
     // Resolved by well-known id, never by display name: "Deleted Items" is
     // localised, so a name lookup would fail on a non-English mailbox.
-    for (const call of nangoProxy.mock.calls) {
+    for (const call of workspaceProxy.mock.calls) {
       expect((call[2] as { endpoint: string }).endpoint).not.toMatch(/mailFolders\?/);
     }
   });
@@ -858,7 +858,7 @@ describe("organizeMessage: trash", () => {
     // deleteditems and a filing folder at once. Trash has to win, or the
     // message quietly stays put in the folder instead.
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    workspaceProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -866,7 +866,7 @@ describe("organizeMessage: trash", () => {
       actions: { trash: true, archive: true, moveToFolder: "HQ/Automated" }
     });
     expect(res).toEqual({ ok: true, provider: "microsoft" });
-    const move = nangoProxy.mock.calls.find((c) =>
+    const move = workspaceProxy.mock.calls.find((c) =>
       (c[2] as { endpoint: string }).endpoint.endsWith("/move")
     );
     expect((move?.[2] as { data: { destinationId: string } }).data.destinationId).toBe(
@@ -876,7 +876,7 @@ describe("organizeMessage: trash", () => {
 
   it("surfaces a failed Outlook bin instead of reporting success", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -891,7 +891,7 @@ describe("organizeMessage: trash", () => {
     // STARRED is a system label, so a star rides the same modify the labels
     // and read-state use. An extra call here would be wasted quota.
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -899,28 +899,28 @@ describe("organizeMessage: trash", () => {
       actions: { star: true, markRead: true }
     });
     expect(res).toEqual({ ok: true, provider: "google" });
-    expect(nangoProxy).toHaveBeenCalledTimes(1);
-    const data = (nangoProxy.mock.calls[0][2] as { data: { addLabelIds?: string[]; removeLabelIds?: string[] } }).data;
+    expect(workspaceProxy).toHaveBeenCalledTimes(1);
+    const data = (workspaceProxy.mock.calls[0][2] as { data: { addLabelIds?: string[]; removeLabelIds?: string[] } }).data;
     expect(data.addLabelIds).toContain("STARRED");
     expect(data.removeLabelIds).toContain("UNREAD");
   });
 
   it("unstars by removing the same system label", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
       messageId: "m-unstar",
       actions: { unstar: true }
     });
-    const data = (nangoProxy.mock.calls[0][2] as { data: { removeLabelIds?: string[] } }).data;
+    const data = (workspaceProxy.mock.calls[0][2] as { data: { removeLabelIds?: string[] } }).data;
     expect(data.removeLabelIds).toContain("STARRED");
   });
 
   it("counts a star as an action on its own", async () => {
     getConn.mockResolvedValue(gmailConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
     ).resolves.toEqual({ ok: true, provider: "google" });
@@ -939,7 +939,7 @@ describe("organizeMessage: trash", () => {
 
   it("flags an Outlook message, its nearest equivalent to a star", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -947,7 +947,7 @@ describe("organizeMessage: trash", () => {
       actions: { star: true }
     });
     expect(res).toEqual({ ok: true, provider: "microsoft" });
-    expect(nangoProxy).toHaveBeenCalledWith(
+    expect(workspaceProxy).toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -960,30 +960,30 @@ describe("organizeMessage: trash", () => {
 
   it("clears the Outlook flag on unstar", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    workspaceProxy.mockResolvedValue({ status: 200, data: {} });
     await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
       messageId: "AAMkUnflag",
       actions: { unstar: true }
     });
-    const data = (nangoProxy.mock.calls[0][2] as { data: { flag: { flagStatus: string } } }).data;
+    const data = (workspaceProxy.mock.calls[0][2] as { data: { flag: { flagStatus: string } } }).data;
     expect(data.flag.flagStatus).toBe("notFlagged");
   });
 
   it("surfaces an Outlook flag failure and a dead connection", async () => {
     getConn.mockResolvedValue(outlookConn());
-    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
     ).resolves.toEqual({ ok: false, detail: "outlook_flag_failed:500" });
 
-    nangoProxy.mockResolvedValueOnce({ status: 403, data: {} });
+    workspaceProxy.mockResolvedValueOnce({ status: 403, data: {} });
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
     ).resolves.toEqual({ ok: false, detail: "outlook_reconnect_required" });
 
-    nangoProxy.mockResolvedValueOnce(null);
+    workspaceProxy.mockResolvedValueOnce(null);
     await expect(
       organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m", actions: { star: true } })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });

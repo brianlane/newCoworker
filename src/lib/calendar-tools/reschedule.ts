@@ -1,6 +1,6 @@
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import type { ResolvedVoiceConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import {
   bookingAttendeeKey,
@@ -226,7 +226,7 @@ async function searchProviderEvents(
     ];
     for (const endpoint of calendarPaths) {
       try {
-        const res = await nangoProxyForBusiness(businessId, proxyTarget(conn), {
+        const res = await workspaceProxyForBusiness(businessId, proxyTarget(conn), {
           endpoint,
           method: "GET",
           params: {
@@ -282,7 +282,7 @@ async function searchProviderEvents(
   ];
   for (const endpoint of viewPaths) {
     try {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget(conn), {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget(conn), {
         endpoint,
         method: "GET",
         params: {
@@ -449,7 +449,7 @@ async function mutateGoogleEvent(
   const calendarIds = [...(shared ? [shared.calendarId] : []), "primary"];
   for (const calendarId of calendarIds) {
     try {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget(conn), {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget(conn), {
         endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
         method,
         ...(data ? { data } : {})
@@ -616,7 +616,7 @@ export async function rescheduleCalendarAppointment(
       });
       if (!patched) return { ok: false, detail: "calendar_reschedule_failed" };
     } else {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget(conn), {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget(conn), {
         endpoint: `/v1.0/me/events/${encodeURIComponent(located.eventId)}`,
         method: "PATCH",
         data: {
@@ -808,7 +808,7 @@ export async function cancelCalendarAppointment(
       const deleted = await mutateGoogleEvent(businessId, conn, located.eventId, "DELETE");
       if (!deleted) return { ok: false, detail: "calendar_cancel_failed" };
     } else {
-      const res = await nangoProxyForBusiness(businessId, proxyTarget(conn), {
+      const res = await workspaceProxyForBusiness(businessId, proxyTarget(conn), {
         endpoint: `/v1.0/me/events/${encodeURIComponent(located.eventId)}`,
         method: "DELETE"
       });

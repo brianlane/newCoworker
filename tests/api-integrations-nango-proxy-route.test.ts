@@ -5,8 +5,8 @@ vi.mock("@/lib/auth", () => ({
   requireBusinessRole: vi.fn()
 }));
 
-vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: vi.fn()
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: vi.fn()
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
@@ -19,7 +19,7 @@ vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
 
 import { POST } from "@/app/api/integrations/nango/proxy/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
@@ -80,7 +80,7 @@ describe("api/integrations/nango/proxy", () => {
   });
 
   it("proxies for session owner", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       status: 200,
       data: { emailAddress: "a@b.com" }
     } as never);
@@ -105,7 +105,7 @@ describe("api/integrations/nango/proxy", () => {
     expect(json.data.status).toBe(200);
     expect(json.data.data.emailAddress).toBe("a@b.com");
     expect(requireBusinessRole).toHaveBeenCalledWith(businessId, "manage_settings");
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+    expect(workspaceProxyForBusiness).toHaveBeenCalledWith(
       businessId,
       { connectionId: "conn-a", providerConfigKey: "gmail" },
       expect.objectContaining({ endpoint: "/gmail/v1/users/me/profile", method: "GET" })
@@ -115,7 +115,7 @@ describe("api/integrations/nango/proxy", () => {
   it("proxies for Rowboat gateway token without session", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ status: 204, data: null } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ status: 204, data: null } as never);
 
     const res = await POST(
       new Request("http://localhost/api/integrations/nango/proxy", {
@@ -138,7 +138,7 @@ describe("api/integrations/nango/proxy", () => {
   });
 
   it("returns 404 when no workspace connection", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null);
     const res = await POST(
       new Request("http://localhost/api/integrations/nango/proxy", {
         method: "POST",
