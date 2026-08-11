@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
-import { authFromContext } from "@/lib/mcp/registry";
+import { allMcpTools, authFromContext, registerMcpTools } from "@/lib/mcp/registry";
 
 const VALID_BEARER = "valid-test-bearer";
 const CALLER = { userId: "user-123", email: "owner@example.com" };
@@ -131,5 +131,80 @@ describe("mcp-handler 2.x contract", () => {
     // If this ever becomes defined again, the nesting moved back and
     // authFromContext needs revisiting.
     expect(seen[0].legacyTopLevel).toBeUndefined();
+  });
+});
+
+/**
+ * The block above proves the LIBRARY's shape using a hand-registered tool.
+ * This one proves OUR registry reaches the wire correctly, which is a
+ * different failure: every metadata field is optional in the SDK's config
+ * type, so a renamed or dropped key still type-checks and the annotations
+ * simply vanish from tools/list. That silent vanishing is precisely what gets
+ * a ChatGPT plugin rejected, and nothing else in the suite can see it,
+ * because the unit tests assert our own objects rather than the JSON a client
+ * receives.
+ *
+ * tools/list only. Calling a real tool would need a database.
+ */
+describe("the real registry on the wire", () => {
+  const realHandler = createMcpHandler((server) => registerMcpTools(server), {
+    serverInfo: { name: "new-coworker", version: "1.0.0" }
+  });
+
+  async function toolsList(): Promise<Array<Record<string, unknown>>> {
+    const res = await realHandler(
+      new Request("https://app.example.com/api/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream"
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
+      })
+    );
+    const text = await res.text();
+    // Streamable HTTP may answer as an SSE frame rather than a bare body.
+    const framed = text.split("\n").find((line) => line.startsWith("data: "));
+    const parsed = JSON.parse(framed ? framed.slice(6) : text) as {
+      result?: { tools?: Array<Record<string, unknown>> };
+    };
+    return parsed.result?.tools ?? [];
+  }
+
+  it("puts title and all three annotations on every advertised tool", async () => {
+    const tools = await toolsList();
+    expect(tools.length).toBe(allMcpTools.length);
+
+    for (const tool of tools) {
+      const name = tool.name as string;
+      // `title` is TOP LEVEL on the wire. The spec also allows
+      // `annotations.title`, so a wrong choice would still serialize.
+      expect(typeof tool.title, `${name} title`).toBe("string");
+      expect((tool.title as string).length, `${name} title`).toBeGreaterThan(0);
+
+      const annotations = tool.annotations as Record<string, unknown> | undefined;
+      expect(annotations, `${name} annotations`).toBeDefined();
+      expect(typeof annotations?.readOnlyHint, `${name} readOnlyHint`).toBe("boolean");
+      expect(typeof annotations?.destructiveHint, `${name} destructiveHint`).toBe("boolean");
+      expect(typeof annotations?.openWorldHint, `${name} openWorldHint`).toBe("boolean");
+    }
+  });
+
+  it("carries the exact values we declared, not defaults", async () => {
+    const tools = await toolsList();
+    const sendSms = tools.find((t) => t.name === "send_sms");
+    expect(sendSms?.title).toBe("Send a text message");
+    expect(sendSms?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true
+    });
+
+    const listBusinesses = tools.find((t) => t.name === "list_businesses");
+    expect(listBusinesses?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false
+    });
   });
 });

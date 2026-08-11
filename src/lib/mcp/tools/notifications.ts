@@ -14,7 +14,7 @@
 
 import { z } from "zod";
 import { McpToolError, requireMcpBusinessRole, resolveMcpBusinessId } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import {
   applyNotificationPreferenceToggles,
   NOTIFICATION_TOGGLE_KEYS,
@@ -37,6 +37,8 @@ const TOGGLE_SCHEMA = Object.fromEntries(
 
 export const updateNotificationPreferencesTool = defineMcpTool({
   name: "update_notification_preferences",
+  title: "Update alert settings",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
   description:
     "Turn the business's notification/alert toggles on or off (e.g. customer_reply_alerts to text the owner the moment a client texts the business). Managers and owners only. Booleans only — the alert phone number and email cannot be changed here (dashboard Settings → Notifications). Pass only the toggles the user asked to change.",
   schema: {
@@ -62,6 +64,8 @@ export const updateNotificationPreferencesTool = defineMcpTool({
 
 export const getNotificationPreferencesTool = defineMcpTool({
   name: "get_notification_preferences",
+  title: "Get alert settings",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "Read the business's notification/alert toggle settings (which alerts are on or off, and whether an alert phone/email is configured). Managers and owners only.",
   schema: {

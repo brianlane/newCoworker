@@ -12,7 +12,7 @@ import {
   requireMcpBusinessRole,
   resolveMcpBusinessId
 } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import {
   AGENT_INSTRUCTIONS_MAX_CHARS,
   AGENT_NAME_MAX_CHARS,
@@ -29,6 +29,8 @@ const businessIdField = z
 
 export const listAgentsTool = defineMcpTool({
   name: "list_agents",
+  title: "List document agents",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "List the business's agents — reusable document-processing task templates (instructions run against uploaded files, manually or from run_agent flow steps).",
   schema: { business_id: businessIdField },
@@ -52,6 +54,8 @@ export const listAgentsTool = defineMcpTool({
 
 export const createAgentTool = defineMcpTool({
   name: "create_agent",
+  title: "Create a document agent",
+  annotations: TOOL_BEHAVIOR.writeLocal,
   description:
     "Create a reusable agent: a named instruction template the business runs against documents (e.g. 'extract line items from invoices as a table'). Agent counts are capped per plan tier.",
   schema: {
@@ -90,6 +94,8 @@ export const createAgentTool = defineMcpTool({
 
 export const updateAgentTool = defineMcpTool({
   name: "update_agent",
+  title: "Update a document agent",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
   description: "Update an agent's name, instructions, output format, or enabled state.",
   schema: {
     business_id: businessIdField,
@@ -134,6 +140,8 @@ export const updateAgentTool = defineMcpTool({
 
 export const deleteAgentTool = defineMcpTool({
   name: "delete_agent",
+  title: "Delete a document agent",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
   description: "Delete an agent (its past run history is removed with it).",
   schema: {
     business_id: businessIdField,

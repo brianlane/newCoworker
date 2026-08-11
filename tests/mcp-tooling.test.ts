@@ -10,7 +10,8 @@ import {
   defineMcpTool,
   errorResult,
   jsonResult,
-  runMcpTool
+  runMcpTool,
+  TOOL_BEHAVIOR
 } from "@/lib/mcp/tooling";
 import { logger } from "@/lib/logger";
 
@@ -24,12 +25,16 @@ describe("defineMcpTool / result helpers", () => {
   it("passes the definition through unchanged", () => {
     const def = defineMcpTool({
       name: "demo",
+      title: "Demo",
       description: "d",
+      annotations: TOOL_BEHAVIOR.readLocal,
       schema: { x: z.string() },
       handler: async ({ x }) => ({ x })
     });
     expect(def.name).toBe("demo");
+    expect(def.title).toBe("Demo");
     expect(def.description).toBe("d");
+    expect(def.annotations).toEqual(TOOL_BEHAVIOR.readLocal);
   });
 
   it("jsonResult pretty-prints; errorResult flags isError", () => {
@@ -46,7 +51,9 @@ describe("defineMcpTool / result helpers", () => {
 describe("runMcpTool", () => {
   const okTool = defineMcpTool({
     name: "ok",
+    title: "Ok",
     description: "d",
+    annotations: TOOL_BEHAVIOR.readLocal,
     schema: {},
     handler: async () => ({ fine: true })
   });
@@ -60,7 +67,9 @@ describe("runMcpTool", () => {
   it("surfaces McpToolError messages to the model", async () => {
     const tool = defineMcpTool({
       name: "refuses",
+      title: "Refuses",
       description: "d",
+      annotations: TOOL_BEHAVIOR.readLocal,
       schema: {},
       handler: async () => {
         throw new McpToolError("no permission");
@@ -77,7 +86,9 @@ describe("runMcpTool", () => {
   it("logs unexpected errors and returns a generic failure", async () => {
     const tool = defineMcpTool({
       name: "boom",
+      title: "Boom",
       description: "d",
+      annotations: TOOL_BEHAVIOR.readLocal,
       schema: {},
       handler: async () => {
         throw new Error("db exploded");
@@ -96,7 +107,9 @@ describe("runMcpTool", () => {
   it("stringifies non-Error throws for the log", async () => {
     const tool = defineMcpTool({
       name: "weird",
+      title: "Weird",
       description: "d",
+      annotations: TOOL_BEHAVIOR.readLocal,
       schema: {},
       handler: async () => {
         throw "plain string";

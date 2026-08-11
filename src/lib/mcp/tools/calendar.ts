@@ -11,7 +11,7 @@ import {
   requireMcpBusinessRole,
   resolveMcpBusinessId
 } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 
 const businessIdField = z
   .string()
@@ -32,6 +32,8 @@ export function calendarFailureMessage(detail: string | undefined): string {
 
 export const calendarFindSlotsTool = defineMcpTool({
   name: "calendar_find_slots",
+  title: "Find open appointment times",
+  annotations: TOOL_BEHAVIOR.readExternal,
   description:
     "Find open appointment slots on the business's connected calendar (Google, Microsoft 365, Calendly, Vagaro, Acuity Scheduling, or CalDAV). Returns up to 3 bookable start/end times.",
   schema: {
@@ -77,6 +79,8 @@ export const calendarFindSlotsTool = defineMcpTool({
 
 export const calendarBookAppointmentTool = defineMcpTool({
   name: "calendar_book_appointment",
+  title: "Book an appointment",
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Book an appointment on the business's connected calendar. Use calendar_find_slots first and book one of the returned slots. Confirm the booked day/time from the result's startLocal field verbatim. If it fails because the person already has an upcoming appointment (attendee_already_booked), offer to keep, reschedule, or cancel the existing one instead of booking again. Note: with Calendly, this returns a single-use scheduling link to send the customer instead of a confirmed booking.",
   schema: {
