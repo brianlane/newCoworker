@@ -16,6 +16,7 @@ import type { AuthInfo } from "@modelcontextprotocol/server";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { verifySupabaseAccessToken } from "@/lib/mcp/auth";
 import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
+import { MCP_RESOURCE_METADATA_PATH } from "@/lib/mcp/oauth";
 import { registerMcpTools } from "@/lib/mcp/registry";
 
 export const dynamic = "force-dynamic";
@@ -52,9 +53,13 @@ const verifyToken = async (
   };
 };
 
+// The challenge points at the PATH-INSERTED metadata document, RFC 9728's
+// canonical form for a resource that lives at a path. It used to point at the
+// bare /.well-known/oauth-protected-resource, which advertised the whole site
+// as the protected resource rather than this endpoint.
 const authHandler = withMcpAuth(handler, verifyToken, {
   required: true,
-  resourceMetadataPath: "/.well-known/oauth-protected-resource"
+  resourceMetadataPath: MCP_RESOURCE_METADATA_PATH
 });
 
 export { authHandler as GET, authHandler as POST, authHandler as DELETE };
