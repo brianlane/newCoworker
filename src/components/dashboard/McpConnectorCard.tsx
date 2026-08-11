@@ -1,15 +1,21 @@
 "use client";
 
 /**
- * "Claude connector" card for /dashboard/integrations.
+ * The connector card on /dashboard/integrations, for any MCP client.
  *
- * The connector authenticates with the owner's own New Coworker login
- * through OAuth (no key to mint here). The card shows the MCP server URL,
- * the add-a-custom-connector steps for claude.ai / Claude Desktop, and —
- * once the signed-in user's Claude has made an authenticated request
- * (`mcp_connector_status`) — a Connected badge with the last-used time.
+ * One card serves Claude and ChatGPT because the story is identical: the
+ * assistant authenticates as the owner's own New Coworker login through OAuth
+ * (no key to mint), and once it has made an authenticated request the card
+ * shows Connected with the last-used time.
+ *
  * The stamp is request-time, not consent-time, so a green badge means the
- * whole path (OAuth + the WAF allowlist for Anthropic's POSTs) works.
+ * WHOLE path works. That distinction was earned: OAuth can succeed while the
+ * assistant's tool calls are still being blocked at the edge, and a
+ * consent-time badge would have called that connected.
+ *
+ * Generalised from the Claude-only version rather than copied. Copying would
+ * have doubled that card's half-finished internationalization, so the strings
+ * moved into the catalog on the way through.
  */
 
 import { useState } from "react";
@@ -19,14 +25,16 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 type Props = {
+  /** Which assistant this card is for; picks the copy. */
+  client: "claude" | "chatgpt";
   /** Absolute MCP endpoint, e.g. "https://app.example.com/api/mcp". */
   mcpUrl: string;
   /** The signed-in user's connection status; null = never connected. */
   status?: { firstConnectedAt: string; lastSeenAt: string } | null;
 };
 
-export function ClaudeConnectorCard({ mcpUrl, status = null }: Props) {
-  const t = useTranslations("dashboard.integrationsClaude");
+export function McpConnectorCard({ client, mcpUrl, status = null }: Props) {
+  const t = useTranslations("dashboard.integrationsMcp");
   const [copied, setCopied] = useState(false);
 
   async function copyUrl() {
@@ -41,22 +49,18 @@ export function ClaudeConnectorCard({ mcpUrl, status = null }: Props) {
   return (
     <Card>
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-parchment">Claude connector</h3>
+        <h3 className="text-sm font-semibold text-parchment">{t(`${client}.title`)}</h3>
         {status && (
           <span className="rounded-full border border-signal-teal/40 bg-signal-teal/10 px-3 py-0.5 text-xs font-medium text-signal-teal">
             {t("connectedBadge")}
           </span>
         )}
       </div>
-      <p className="text-xs text-parchment/50 mt-1">
-        Let Claude work with your coworker: look up contacts, read texts and call
-        summaries, send messages, book appointments, and build AiFlows — signed in as you,
-        limited to your role.
-      </p>
+      <p className="text-xs text-parchment/50 mt-1">{t(`${client}.blurb`)}</p>
 
       {status && (
         <p className="mt-2 text-xs text-parchment/60">
-          {t("lastUsed")} <LocalDateTime iso={status.lastSeenAt} />
+          {t(`${client}.lastUsed`)} <LocalDateTime iso={status.lastSeenAt} />
           {" · "}
           {t("firstConnected")} <LocalDateTime iso={status.firstConnectedAt} />
         </p>
@@ -67,25 +71,16 @@ export function ClaudeConnectorCard({ mcpUrl, status = null }: Props) {
           {mcpUrl}
         </code>
         <Button type="button" variant="secondary" size="sm" onClick={copyUrl}>
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("copied") : t("copy")}
         </Button>
       </div>
 
       <ol className="mt-3 space-y-1 text-xs text-parchment/60 list-decimal list-inside">
-        <li>
-          In Claude (claude.ai or the desktop app), open{" "}
-          <span className="text-parchment/80">Settings → Connectors → Add custom connector</span>.
-        </li>
-        <li>Paste the URL above and add the connector.</li>
-        <li>
-          Click <span className="text-parchment/80">Connect</span> — you&apos;ll sign in with
-          your New Coworker account and approve access once.
-        </li>
+        <li>{t(`${client}.step1`)}</li>
+        <li>{t(`${client}.step2`)}</li>
+        <li>{t(`${client}.step3`)}</li>
       </ol>
-      <p className="text-[11px] text-parchment/40 mt-2">
-        Disconnect anytime from Claude&apos;s connector settings; access follows your team
-        role, so a staff login can&apos;t manage automations through Claude either.
-      </p>
+      <p className="text-[11px] text-parchment/40 mt-2">{t(`${client}.footer`)}</p>
     </Card>
   );
 }

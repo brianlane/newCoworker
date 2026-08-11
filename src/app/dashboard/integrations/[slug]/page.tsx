@@ -15,7 +15,8 @@ import { WhatsAppIntegrationCard } from "@/components/dashboard/WhatsAppIntegrat
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
-import { ClaudeConnectorCard } from "@/components/dashboard/ClaudeConnectorCard";
+import { McpConnectorCard } from "@/components/dashboard/McpConnectorCard";
+import { MCP_ROUTES } from "@/lib/mcp/routes";
 import {
   loadIntegrationsContext,
   type IntegrationsContext
@@ -144,10 +145,12 @@ function IntegrationBody({
         />
       );
     case "claude":
+    case "chatgpt":
       return (
-        <ClaudeConnectorCard
-          mcpUrl={`${(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/mcp`}
-          status={ctx.mcpConnectorStatus}
+        <McpConnectorCard
+          client={slug}
+          mcpUrl={`${(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}${MCP_ROUTES[slug]}`}
+          status={ctx.mcpConnectorStatuses[slug]}
         />
       );
   }

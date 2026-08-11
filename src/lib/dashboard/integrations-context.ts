@@ -64,7 +64,7 @@ export type IntegrationsContext = {
    * scoped — the MCP bearer belongs to the login). Null = never connected,
    * or the best-effort read failed.
    */
-  mcpConnectorStatus: McpConnectorStatus | null;
+  mcpConnectorStatuses: Record<"claude" | "chatgpt", McpConnectorStatus | null>;
 };
 
 /**
@@ -128,7 +128,12 @@ export async function loadIntegrationsContext(
     activeHooks: businessId ? await listWebhookSubscriptions(businessId) : [],
     // Best-effort: a status-read failure must not take the page down — the
     // card just falls back to the instructions-only state.
-    mcpConnectorStatus: await getMcpConnectorStatus(user.userId, "claude").catch(() => null)
+    // One read per client. Best-effort: a status-read failure must not take
+    // the page down, the card just falls back to the instructions-only state.
+    mcpConnectorStatuses: {
+      claude: await getMcpConnectorStatus(user.userId, "claude").catch(() => null),
+      chatgpt: await getMcpConnectorStatus(user.userId, "chatgpt").catch(() => null)
+    }
   };
 }
 
@@ -195,7 +200,10 @@ export function computeIntegrationStatuses(
         : { state: "disconnected", label: "No keys" },
     // User-scoped (the MCP bearer belongs to the login): connected once the
     // signed-in user's Claude has made an authenticated request.
-    claude: ctx.mcpConnectorStatus
+    claude: ctx.mcpConnectorStatuses.claude
+      ? connected
+      : { state: "disconnected", label: "Available" },
+    chatgpt: ctx.mcpConnectorStatuses.chatgpt
       ? connected
       : { state: "disconnected", label: "Available" }
   };

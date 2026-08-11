@@ -36,7 +36,8 @@ export type IntegrationSlug =
   | "zoom"
   | "custom"
   | "zapier-api"
-  | "claude";
+  | "claude"
+  | "chatgpt";
 
 export type IntegrationDef = {
   slug: IntegrationSlug;
@@ -157,6 +158,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     category: "AI assistants",
     benefit:
       "Let Claude work with your coworker — look up contacts, read texts and call summaries, send messages, and book appointments as you.",
+    icon: Bot
+  },
+  {
+    slug: "chatgpt",
+    name: "ChatGPT app",
+    category: "AI assistants",
+    benefit:
+      "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments as you.",
     icon: Bot
   }
 ];
