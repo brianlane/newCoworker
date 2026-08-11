@@ -14,6 +14,7 @@ import {
   telnyxHangupCall,
   telnyxSendDtmf,
   telnyxSpeak,
+  telnyxStreamingStop,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
@@ -774,37 +775,48 @@ async function speakVoicemail(
   callControlId: string,
   script: string
 ): Promise<Response> {
-  const { data } = await supabase
-    .from("voice_handoff_sessions")
-    .select("context")
-    .eq("call_control_id", callControlId)
-    .maybeSingle();
-  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
-    {}) as Record<string, unknown>;
-  // Exactly once. Telnyx can deliver a webhook more than once, and two speaks
-  // would talk over each other into the same recording.
-  if (ctx.voicemail_spoken === true) return jsonOk("amd_voicemail_already_spoken");
-  const res = await telnyxSpeak(
-    Deno.env.get("TELNYX_API_KEY") ?? "",
-    callControlId,
-    script
-  );
+  // Claim the right to speak in ONE statement. Check-then-speak loses to
+  // Telnyx's at-least-once redelivery: two deliveries both read "not spoken"
+  // and the assistant talks over itself into a single recording.
+  const { data: claimed, error: claimErr } = await supabase.rpc("voice_claim_voicemail_speak", {
+    p_call_control_id: callControlId
+  });
+  if (claimErr) {
+    console.error("amd: voicemail claim failed", claimErr);
+    return jsonOk("amd_voicemail_claim_failed");
+  }
+  if (claimed !== true) return jsonOk("amd_voicemail_already_spoken");
+
+  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  // Silence the Gemini bridge BEFORE speaking. It was attached on
+  // call.answered, before anyone knew a machine had picked up, and hanging up
+  // is what used to silence it. A leg held open to leave a message has to stop
+  // the fork explicitly or the recording gets the assistant talking through
+  // the greeting and over the message. Best-effort: a failure here is a worse
+  // recording, not a reason to leave no message at all.
+  const stopped = await telnyxStreamingStop(apiKey, callControlId);
+  if (!stopped.ok) {
+    console.error(
+      "amd: streaming_stop before voicemail failed",
+      callControlId,
+      stopped.status,
+      (await stopped.text()).slice(0, 300)
+    );
+  }
+
+  const res = await telnyxSpeak(apiKey, callControlId, script);
   if (!res.ok) {
-    // Speaking failed, so nothing was left. Fall back to the pre-voicemail
-    // behavior rather than holding the leg open: the run still resolves as
-    // no_answer, with the reason saying no message was left.
+    // Nothing was left, so release the claim: otherwise the run resolves
+    // voicemail_left on a leg where nobody said anything. Then fall back to
+    // the pre-voicemail behavior rather than holding the leg open.
     console.error("amd: voicemail speak failed", callControlId, res.status, await res.text());
-    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    const { error: relErr } = await supabase.rpc("voice_release_voicemail_claim", {
+      p_call_control_id: callControlId
+    });
+    if (relErr) console.error("amd: voicemail claim release failed", relErr);
+    await telnyxHangupCall(apiKey, callControlId);
     return jsonOk("amd_voicemail_speak_failed");
   }
-  const { error } = await supabase
-    .from("voice_handoff_sessions")
-    .update({ context: { ...ctx, voicemail_spoken: true } })
-    .eq("call_control_id", callControlId);
-  // The stamp is what turns the outcome reason into voicemail_left. Losing it
-  // understates what happened (the lead still heard the message) but must not
-  // keep the leg up.
-  if (error) console.error("amd: voicemail_spoken stamp failed", error);
   return jsonOk("amd_voicemail_spoken");
 }
 
@@ -821,17 +833,14 @@ async function stampMachine(
   supabase: SupabaseClient,
   callControlId: string
 ): Promise<boolean> {
-  const { data: sessRow } = await supabase
-    .from("voice_handoff_sessions")
-    .select("context")
-    .eq("call_control_id", callControlId)
-    .maybeSingle();
-  const ctx = ((sessRow as { context?: Record<string, unknown> } | null)?.context ??
-    {}) as Record<string, unknown>;
-  const { error: stampErr } = await supabase
-    .from("voice_handoff_sessions")
-    .update({ context: { ...ctx, machine_detected: true } })
-    .eq("call_control_id", callControlId);
+  // A merge, not a read-modify-write: this handler and the greeting handler can
+  // be delivered concurrently, and a stamp built from a context read before the
+  // voicemail was spoken would clobber voicemail_spoken. call.speak.ended would
+  // then decline to hang up and the run would report that no message was left.
+  const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: callControlId,
+    p_patch: { machine_detected: true }
+  });
   if (stampErr) {
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
     return false;
