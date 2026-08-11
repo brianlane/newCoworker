@@ -1011,6 +1011,10 @@
         "title": "Conector de Claude",
         "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas y gestionar AiFlows, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel."
       },
+      "chatgpt": {
+        "title": "Aplicacion de ChatGPT",
+        "description": "Deja que ChatGPT trabaje con tu companero: consultar contactos, leer mensajes y resumenes de llamadas, enviar mensajes y agendar citas, todo autenticado como tu mediante OAuth, con permisos que coinciden con tu rol en el panel."
+      },
       "google": {
         "title": "Google Workspace",
         "description": "Búsqueda de espacios y reserva de calendario más seguimientos por correo con tu cuenta de Google, conectado en dos clics."
@@ -1165,6 +1169,41 @@
       "removeBody": "Desconecta desde la tarjeta de Slack del dashboard (que también revoca el token en Slack), o quita la app desde la configuración de tu espacio de trabajo. En ambos casos el coworker deja de publicar de inmediato y el token guardado se borra.",
       "supportLead": "¿Preguntas o problemas para conectar? Escríbenos cuando quieras por la",
       "supportLink": "página de contacto"
+    },
+    "chatgptPage": {
+      "metaTitle": "New Coworker para ChatGPT",
+      "metaDescription": "Conecta New Coworker a ChatGPT: consulta clientes, lee mensajes y resumenes de llamadas, envia mensajes y agenda citas, con tu sesion.",
+      "heroEyebrow": "Aplicacion de ChatGPT",
+      "heroTitle": "Tu companero, dentro de ChatGPT",
+      "heroSubtitle": "Pregunta a ChatGPT por un cliente, ponte al dia con una conversacion o agenda una cita, sin salir del chat. Inicia sesion como tu y solo puede hacer lo que tu rol de equipo ya permite.",
+      "featureFindTitle": "Encuentra a cualquiera rapido",
+      "featureFindBody": "Busca clientes por nombre o numero y abre el perfil completo, el historial de mensajes o el resumen de una llamada en un solo paso.",
+      "featureMessageTitle": "Responde sin cambiar de aplicacion",
+      "featureMessageBody": "Lee una conversacion y envia la respuesta desde ChatGPT. Sale desde el numero de tu negocio y aparece en tu historial como cualquier otro mensaje.",
+      "featureBookTitle": "Consulta el calendario y agenda",
+      "featureBookBody": "Encuentra horarios libres en tu calendario conectado y agenda la cita, ya sea Google, Microsoft 365, Calendly, Vagaro, Acuity o CalDAV.",
+      "addEyebrow": "Configuracion",
+      "addTitle": "Como anadirla a ChatGPT",
+      "step1": "En ChatGPT, abre Configuracion, luego Conectores, y activa el modo de desarrollador en Avanzado. Se necesita un plan de pago de ChatGPT.",
+      "step2": "Anade un conector, pega la URL de tu servidor desde Panel, Integraciones, Aplicacion de ChatGPT, y elige OAuth como autenticacion.",
+      "step3": "Haz clic en Conectar, inicia sesion con tu cuenta de New Coworker y aprueba el acceso una vez.",
+      "addNote": "Tu URL aparece en la tarjeta de la aplicacion de ChatGPT en tu panel. Es la misma cuenta con la que ya inicias sesion, asi que no hay ninguna clave que crear ni guardar.",
+      "accessEyebrow": "Acceso",
+      "accessTitle": "A que puede acceder",
+      "accessIntro": "Todo lo siguiente se ejecuta como la persona que inicio sesion y se verifica contra su rol de equipo en cada negocio, igual que en el panel. Un propietario ve mas que un miembro del personal, tanto en ChatGPT como en la web.",
+      "access1": "Leer tus negocios, tus clientes y sus datos de contacto.",
+      "access2": "Leer conversaciones de texto, resumenes y transcripciones de llamadas, actividad reciente y las tareas que la plataforma esta siguiendo.",
+      "access3": "Anadir y actualizar clientes, incluidas las etiquetas y el companero responsable de un prospecto.",
+      "access4": "Enviar un mensaje de texto o de WhatsApp desde el numero de tu negocio. Cuentan para el limite de mensajes de tu plan igual que los enviados desde el panel.",
+      "access5": "Buscar horarios libres y agendar citas en tu calendario conectado.",
+      "access6": "Leer, crear y editar tus automatizaciones, y ejecutar una cuando lo pidas. Las automatizaciones pueden enviar mensajes a clientes, por eso ChatGPT tiene instrucciones de confirmar contigo primero.",
+      "privacyEyebrow": "Privacidad y control",
+      "privacyTitle": "Que hacemos y que no",
+      "privacyRole": "El acceso sigue tu rol de equipo. Una cuenta de personal no puede gestionar automatizaciones desde ChatGPT igual que no puede en la web, y no hay ninguna contrasena ni clave aparte que se pueda filtrar.",
+      "privacyNoTraining": "No vendemos tus datos, y conectar la aplicacion no nos da nada que no tuvieramos ya en tu nombre.",
+      "privacyRemove": "Quitala cuando quieras desde la configuracion de conectores de ChatGPT. Eso revoca el acceso de inmediato. Quitar la aplicacion no borra nada de tu cuenta de New Coworker.",
+      "privacyMore": "Todos los detalles estan en nuestra",
+      "privacyLink": "politica de privacidad"
     },
     "compareGhl": {
       "metaTitle": "New Coworker vs GoHighLevel",
