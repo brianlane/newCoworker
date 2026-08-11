@@ -38,8 +38,8 @@ export const MCP_RESOURCE_METADATA_PATH = `/.well-known/oauth-protected-resource
  * validation exists to catch. `getPublicOrigin` reads the forwarded headers,
  * so it sees the public host rather than the internal one.
  */
-export function mcpResourceUrl(req: Request): string {
-  return `${getPublicOrigin(req)}${MCP_PATH}`;
+export function mcpResourceUrl(req: Request, path: string = MCP_PATH): string {
+  return `${getPublicOrigin(req)}${path}`;
 }
 
 /**
@@ -52,10 +52,19 @@ export function mcpResourceUrl(req: Request): string {
  * advertised `/api/mcp`. Harmless while nothing validated it, and precisely
  * what RFC 8707 starts validating.
  */
-export function buildMcpProtectedResourceMetadata(req: Request): Record<string, unknown> {
+export function buildMcpProtectedResourceMetadata(
+  req: Request,
+  /**
+   * Which endpoint this document describes. Defaults to the Claude connector,
+   * whose two metadata routes predate the second client. A client echoes this
+   * value back as RFC 8707's `resource`, so a document naming the wrong
+   * endpoint is exactly what audience validation exists to reject.
+   */
+  path: string = MCP_PATH
+): Record<string, unknown> {
   return generateProtectedResourceMetadata({
     authServerUrls: [supabaseAuthIssuer()],
-    resourceUrl: mcpResourceUrl(req),
+    resourceUrl: mcpResourceUrl(req, path),
     additionalMetadata: {
       // We read the bearer from the Authorization header only; the other two
       // RFC 6750 methods (query parameter and form body) are not accepted.

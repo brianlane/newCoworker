@@ -27,6 +27,26 @@ import { registerMcpTools } from "@/lib/mcp/registry";
  */
 export const MCP_MAX_DURATION_SECONDS = 300;
 
+/**
+ * Server-level guidance ChatGPT reads on `initialize`.
+ *
+ * Only the first 512 characters are prioritized, so the load-bearing parts
+ * come first: what this is, that it acts as the signed-in owner within their
+ * role, and the confirmation rule. The last one is not decoration. Several
+ * tools here reach real customers (a text goes out, a booking is made, an
+ * automation starts), and the behavior annotations tell a client a call is
+ * consequential without telling it to ask first.
+ *
+ * Product term is "AI coworker", never "AI receptionist" (CLAUDE.md rule 5).
+ */
+export const CHATGPT_MCP_INSTRUCTIONS = [
+  "New Coworker is an AI coworker for small businesses.",
+  "Use these tools to look up customers, read text conversations and call summaries, check the day's tasks, send a text, and book appointments, always on behalf of the signed-in owner and limited to their team role.",
+  "Confirm with the user before anything that reaches a customer: sending a text or WhatsApp message, booking an appointment, or starting an automation.",
+  "If a tool reports that the account has multiple businesses, call list_businesses and pass business_id explicitly.",
+  "Times in messages always carry a named timezone, never a bare clock time."
+].join(" ");
+
 export type McpRouteHandlers = {
   GET: (req: Request) => Promise<Response>;
   POST: (req: Request) => Promise<Response>;
