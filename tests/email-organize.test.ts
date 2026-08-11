@@ -7,8 +7,19 @@ const nangoProxy = vi.hoisted(() => vi.fn());
 const getConn = vi.hoisted(() => vi.fn());
 const organizeTenant = vi.hoisted(() => vi.fn());
 
+// Both exports share one mock so a single mockResolvedValueOnce sequence still
+// describes the call order across a path that mixes them (the Outlook folder
+// resolver uses the status-normalizing helper for the well-known lookup and the
+// raw proxy for the paged scan).
+//
+// Resolving an error status is truthful for the status helper: normalizing a
+// non-2xx into a returned { status, data } is precisely what it exists to do.
+// It is NOT truthful for the raw proxy, which throws on non-2xx, so raw-path
+// failures are modelled as rejections. See email-organize-proxy-errors.test.ts
+// for the end-to-end proof through the real helper.
 vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: nangoProxy
+  nangoProxyForBusiness: nangoProxy,
+  nangoProxyStatusForBusiness: nangoProxy
 }));
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: getConn

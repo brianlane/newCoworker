@@ -7,7 +7,10 @@
  * Outlook needs Mail.ReadWrite (move / isRead / categories); missing scope
  * returns a soft reconnect hint. Tenant updates are SQL-only.
  */
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import {
+  nangoProxyForBusiness,
+  nangoProxyStatusForBusiness
+} from "@/lib/nango/workspace";
 import {
   getWorkspaceOAuthConnection,
   type WorkspaceOAuthConnectionRow
@@ -248,7 +251,7 @@ async function organizeGmail(
   }
 
   if (uniqueAdd.length > 0 || uniqueRemove.length > 0) {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/modify`,
       method: "POST",
       data: {
@@ -267,7 +270,7 @@ async function organizeGmail(
   // (untrash, 30-day retention) and is NOT messages.delete, which is
   // permanent and deliberately never called anywhere in this codebase.
   if (actions.trash) {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/trash`,
       method: "POST",
       data: {}
@@ -286,7 +289,7 @@ async function ensureGmailLabels(
   createNames: string[]
 ): Promise<{ ok: true; map: Map<string, string> } | { ok: false; detail: string }> {
   const map = new Map<string, string>();
-  const listRes = await nangoProxyForBusiness(businessId, link, {
+  const listRes = await nangoProxyStatusForBusiness(businessId, link, {
     endpoint: "/gmail/v1/users/me/labels",
     method: "GET"
   });
@@ -303,7 +306,7 @@ async function ensureGmailLabels(
   for (const name of createNames) {
     const key = name.toLowerCase();
     if (map.has(key)) continue;
-    const created = await nangoProxyForBusiness(businessId, link, {
+    const created = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: "/gmail/v1/users/me/labels",
       method: "POST",
       data: {
@@ -366,7 +369,7 @@ async function organizeOutlook(
   const removeCats = new Set(normalizeLabelList(actions.removeLabels).map((c) => c.toLowerCase()));
   let nextCategories: string[] | null = null;
   if (addCats.length > 0 || removeCats.size > 0) {
-    const getRes = await nangoProxyForBusiness(businessId, link, {
+    const getRes = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=categories`,
       method: "GET"
     });
@@ -393,7 +396,7 @@ async function organizeOutlook(
   }
   if (nextCategories) patchData.categories = nextCategories;
   if (Object.keys(patchData).length > 0) {
-    const patch = await nangoProxyForBusiness(businessId, link, {
+    const patch = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}`,
       method: "PATCH",
       data: patchData
@@ -410,7 +413,7 @@ async function organizeOutlook(
   // Outlook has no star: the follow-up flag is its nearest equivalent, and it
   // is what "flagged" means in every Outlook client.
   if (actions.star || actions.unstar) {
-    const flagRes = await nangoProxyForBusiness(businessId, link, {
+    const flagRes = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}`,
       method: "PATCH",
       data: { flag: { flagStatus: actions.star ? "flagged" : "notFlagged" } }
@@ -425,7 +428,7 @@ async function organizeOutlook(
   }
 
   if (destinationId) {
-    const moveRes = await nangoProxyForBusiness(businessId, link, {
+    const moveRes = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}/move`,
       method: "POST",
       data: { destinationId }
@@ -452,7 +455,10 @@ async function resolveOutlookFolderId(
   const wellKnown = ["inbox", "archive", "deleteditems", "drafts", "sentitems", "junkemail"];
   const wellKnownKey = wanted.replace(/\s+/g, "");
   if (wellKnown.includes(wellKnownKey)) {
-    const wk = await nangoProxyForBusiness(businessId, link, {
+    // Status-normalizing on purpose: a mailbox that has never had an Archive
+    // folder answers 404 here, and the intended response is to fall through to
+    // the scan below, not to abort the whole organize.
+    const wk = await nangoProxyStatusForBusiness(businessId, link, {
       endpoint: `/v1.0/me/mailFolders/${wellKnownKey}`,
       method: "GET"
     });
@@ -462,6 +468,10 @@ async function resolveOutlookFolderId(
 
   let endpoint = "/v1.0/me/mailFolders?$top=100&$select=id,displayName";
   for (let page = 0; page < 5; page++) {
+    // Raw proxy: this loop has no way to distinguish "the folder is not in
+    // this page" from "Graph refused the read", and returning null for the
+    // second would report a missing folder for what is really an outage. Let
+    // the throw carry the reason up.
     const res = await nangoProxyForBusiness(businessId, link, { endpoint, method: "GET" });
     if (!res) return null;
     const data = res.data as { value?: GraphFolder[]; "@odata.nextLink"?: string };
@@ -487,7 +497,11 @@ async function resolveOutlookFolderId(
   return null;
 }
 
-/** Re-export for mark-handled poller convenience (Gmail remove UNREAD). */
+/**
+ * Re-export for mark-handled poller convenience (Gmail remove UNREAD).
+ * Raw proxy: the result is discarded, so a failure has to throw to be visible
+ * at all. Callers wrap this in their own logging catch.
+ */
 export async function markGmailMessageRead(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
