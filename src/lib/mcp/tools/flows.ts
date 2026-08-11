@@ -71,6 +71,18 @@ export const listFlowsTool = defineMcpTool({
   name: "list_flows",
   title: "List automations",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    flows: z.array(
+      z.looseObject({
+        flow_id: z.string(),
+        name: z.string(),
+        enabled: z.boolean(),
+        trigger_channel: z.string(),
+        step_count: z.number(),
+        updated_at: z.string()
+      })
+    )
+  }),
   description:
     "List the business's AiFlows (automations): name, enabled state, trigger channel, and last-run time. Use get_flow for a flow's full definition.",
   schema: { business_id: businessIdField },
@@ -96,6 +108,14 @@ export const getFlowTool = defineMcpTool({
   name: "get_flow",
   title: "Get an automation",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.looseObject({
+    flow_id: z.string(),
+    name: z.string(),
+    enabled: z.boolean(),
+    definition: z.record(z.string(), z.unknown()),
+    created_at: z.string().nullable(),
+    updated_at: z.string().nullable()
+  }),
   description: "Get one AiFlow's full definition (trigger, steps, settings).",
   schema: {
     business_id: businessIdField,
@@ -122,6 +142,13 @@ export const getFlowSchemaTool = defineMcpTool({
   name: "get_flow_schema",
   title: "Get the automation format",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.looseObject({
+    step_types: z.array(z.string()),
+    trigger_channels: z.array(z.string()),
+    voice_only_step_types: z.array(z.string()),
+    notes: z.string(),
+    json_schema: z.unknown()
+  }),
   description:
     "The AiFlow definition format as JSON Schema, plus the step-type and trigger-channel vocabulary. Read this before authoring or editing a flow definition for create_flow / update_flow.",
   schema: {},
@@ -158,6 +185,12 @@ export const createFlowTool = defineMcpTool({
   name: "create_flow",
   title: "Create an automation",
   annotations: TOOL_BEHAVIOR.writeLocal,
+  outputSchema: z.object({
+    created: z.boolean(),
+    flow_id: z.string(),
+    name: z.string(),
+    enabled: z.boolean()
+  }),
   description:
     "Create a new AiFlow automation. The definition is validated (call get_flow_schema for the format); invalid definitions are refused with the exact issues. New flows default to disabled unless enabled is true.",
   schema: {
@@ -190,6 +223,12 @@ export const updateFlowTool = defineMcpTool({
   name: "update_flow",
   title: "Update an automation",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    updated: z.boolean(),
+    flow_id: z.string(),
+    name: z.string(),
+    enabled: z.boolean()
+  }),
   description:
     "Update an AiFlow's name and/or definition. A supplied definition REPLACES the whole definition and is validated like create_flow (fetch the current one with get_flow first).",
   schema: {
@@ -222,6 +261,10 @@ export const setFlowEnabledTool = defineMcpTool({
   name: "set_flow_enabled",
   title: "Turn an automation on or off",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    flow_id: z.string(),
+    enabled: z.boolean()
+  }),
   description:
     "Turn one of the business's AiFlow automations on or off. Enabling makes the flow live immediately, so it can start messaging customers the next time its trigger fires; disabling stops new runs without deleting the flow, its steps, or its history.",
   schema: {
@@ -248,6 +291,11 @@ export const triggerFlowTool = defineMcpTool({
   // Runs owner-authored flows, so it is only as additive as they are: an
   // update_contact step can carry removeTags and delete CRM state.
   annotations: TOOL_BEHAVIOR.mutateExternal,
+  outputSchema: z.object({
+    enqueued: z.number(),
+    flows_evaluated: z.number(),
+    flows_matched: z.number()
+  }),
   description:
     "Send an event to the business's webhook-triggered AiFlows: every enabled webhook flow whose conditions match the payload gets a queued run (e.g. forward a new lead into the flow engine). Idempotent per event_id.",
   schema: {
@@ -304,6 +352,11 @@ export const runFlowTool = defineMcpTool({
   // Same reasoning as trigger_flow: the flow body decides, and it can
   // remove tags as well as send.
   annotations: TOOL_BEHAVIOR.mutateExternal,
+  outputSchema: z.object({
+    run_id: z.string().nullable(),
+    flow_name: z.string(),
+    note: z.string().optional()
+  }),
   description:
     "Run one of the business's ENABLED automations right now (a manual run), the same as pressing Run now in the dashboard. Use this to hand work to a flow directly, e.g. give a new lead's details to the owner's lead-intake automation. `input` is passed to the run as its triggering text, so include everything the flow needs to extract. Unlike trigger_flow (which only reaches webhook-triggered flows), this starts a flow by name or id whatever its trigger, except voice flows, which only run on a live call.",
   schema: {

@@ -34,6 +34,7 @@ import {
   patchBusinessAgent
 } from "@/lib/agents/db";
 import { getBusiness } from "@/lib/db/businesses";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 const AGENT_ID = "9c1a2f34-0000-4000-8000-000000000009";
@@ -57,7 +58,7 @@ beforeEach(() => {
 describe("list_agents", () => {
   it("lists the business's agents", async () => {
     vi.mocked(listBusinessAgents).mockResolvedValue([AGENT as never]);
-    const result = (await listAgentsTool.handler({}, AUTH)) as { agents: unknown[] };
+    const result = (await runTool(listAgentsTool, {}, AUTH)) as { agents: unknown[] };
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_aiflows");
     expect(result.agents).toEqual([
       {
@@ -77,7 +78,7 @@ describe("create_agent", () => {
     vi.mocked(getBusiness).mockResolvedValue({ tier: "standard" } as never);
     vi.mocked(countBusinessAgents).mockResolvedValue(3);
     vi.mocked(insertBusinessAgent).mockResolvedValue(AGENT as never);
-    const result = await createAgentTool.handler(
+    const result = await runTool(createAgentTool, 
       { name: "Invoice extractor", instructions: "Extract line items" },
       AUTH
     );
@@ -94,7 +95,7 @@ describe("create_agent", () => {
     vi.mocked(getBusiness).mockResolvedValue({ tier: "standard" } as never);
     vi.mocked(countBusinessAgents).mockResolvedValue(0);
     vi.mocked(insertBusinessAgent).mockResolvedValue(AGENT as never);
-    await createAgentTool.handler(
+    await runTool(createAgentTool, 
       { name: "n", instructions: "i", output_format: "same_as_input" },
       AUTH
     );
@@ -107,7 +108,7 @@ describe("create_agent", () => {
     vi.mocked(getBusiness).mockResolvedValue(null);
     vi.mocked(countBusinessAgents).mockResolvedValue(5); // starter cap
     await expect(
-      createAgentTool.handler({ name: "n", instructions: "i" }, AUTH)
+      runTool(createAgentTool, { name: "n", instructions: "i" }, AUTH)
     ).rejects.toThrow(/Agent limit reached \(5/);
     expect(insertBusinessAgent).not.toHaveBeenCalled();
   });
@@ -116,7 +117,7 @@ describe("create_agent", () => {
     vi.mocked(getBusiness).mockResolvedValue({ tier: "starter" } as never);
     vi.mocked(countBusinessAgents).mockResolvedValue(0);
     await expect(
-      createAgentTool.handler(
+      runTool(createAgentTool, 
         { name: "n", instructions: "i", output_format: "pdf_retypeset" },
         AUTH
       )
@@ -125,7 +126,7 @@ describe("create_agent", () => {
 
     vi.mocked(getBusiness).mockResolvedValue({ tier: "enterprise" } as never);
     vi.mocked(insertBusinessAgent).mockResolvedValue(AGENT as never);
-    await createAgentTool.handler(
+    await runTool(createAgentTool, 
       { name: "n", instructions: "i", output_format: "pdf_retypeset" },
       AUTH
     );
@@ -138,7 +139,7 @@ describe("create_agent", () => {
 describe("update_agent", () => {
   it("refuses an empty patch", async () => {
     await expect(
-      updateAgentTool.handler({ agent_id: AGENT_ID }, AUTH)
+      runTool(updateAgentTool, { agent_id: AGENT_ID }, AUTH)
     ).rejects.toThrow(/Nothing to update/);
     expect(getBusinessAgent).not.toHaveBeenCalled();
   });
@@ -146,17 +147,17 @@ describe("update_agent", () => {
   it("errors when the agent does not exist", async () => {
     vi.mocked(getBusinessAgent).mockResolvedValue(null);
     await expect(
-      updateAgentTool.handler({ agent_id: AGENT_ID, enabled: false }, AUTH)
+      runTool(updateAgentTool, { agent_id: AGENT_ID, enabled: false }, AUTH)
     ).rejects.toThrow(/Agent not found/);
     expect(patchBusinessAgent).not.toHaveBeenCalled();
   });
 
   it("patches only the supplied fields", async () => {
     vi.mocked(getBusinessAgent).mockResolvedValue(AGENT as never);
-    await updateAgentTool.handler({ agent_id: AGENT_ID, enabled: false }, AUTH);
+    await runTool(updateAgentTool, { agent_id: AGENT_ID, enabled: false }, AUTH);
     expect(patchBusinessAgent).toHaveBeenCalledWith("biz-1", AGENT_ID, { enabled: false });
 
-    await updateAgentTool.handler(
+    await runTool(updateAgentTool, 
       {
         agent_id: AGENT_ID,
         name: "Renamed",
@@ -176,12 +177,12 @@ describe("update_agent", () => {
     vi.mocked(getBusinessAgent).mockResolvedValue(AGENT as never);
     vi.mocked(getBusiness).mockResolvedValue({ tier: "starter" } as never);
     await expect(
-      updateAgentTool.handler({ agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH)
+      runTool(updateAgentTool, { agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH)
     ).rejects.toThrow(/Standard plan and above/);
     expect(patchBusinessAgent).not.toHaveBeenCalled();
 
     vi.mocked(getBusiness).mockResolvedValue({ tier: "standard" } as never);
-    await updateAgentTool.handler({ agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH);
+    await runTool(updateAgentTool, { agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH);
     expect(patchBusinessAgent).toHaveBeenLastCalledWith("biz-1", AGENT_ID, {
       output_format: "pdf_retypeset"
     });
@@ -192,14 +193,14 @@ describe("delete_agent", () => {
   it("errors when the agent does not exist", async () => {
     vi.mocked(getBusinessAgent).mockResolvedValue(null);
     await expect(
-      deleteAgentTool.handler({ agent_id: AGENT_ID }, AUTH)
+      runTool(deleteAgentTool, { agent_id: AGENT_ID }, AUTH)
     ).rejects.toThrow(/Agent not found/);
     expect(deleteBusinessAgent).not.toHaveBeenCalled();
   });
 
   it("deletes an existing agent", async () => {
     vi.mocked(getBusinessAgent).mockResolvedValue(AGENT as never);
-    const result = await deleteAgentTool.handler({ agent_id: AGENT_ID }, AUTH);
+    const result = await runTool(deleteAgentTool, { agent_id: AGENT_ID }, AUTH);
     expect(deleteBusinessAgent).toHaveBeenCalledWith("biz-1", AGENT_ID);
     expect(result).toEqual({ deleted: true, agent_id: AGENT_ID });
   });

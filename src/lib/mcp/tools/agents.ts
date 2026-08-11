@@ -31,6 +31,18 @@ export const listAgentsTool = defineMcpTool({
   name: "list_agents",
   title: "List document agents",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    agents: z.array(
+      z.looseObject({
+        agent_id: z.string(),
+        name: z.string(),
+        instructions: z.string(),
+        output_format: z.string(),
+        enabled: z.boolean(),
+        updated_at: z.string()
+      })
+    )
+  }),
   description:
     "List the business's agents — reusable document-processing task templates (instructions run against uploaded files, manually or from run_agent flow steps).",
   schema: { business_id: businessIdField },
@@ -56,6 +68,11 @@ export const createAgentTool = defineMcpTool({
   name: "create_agent",
   title: "Create a document agent",
   annotations: TOOL_BEHAVIOR.writeLocal,
+  outputSchema: z.object({
+    created: z.boolean(),
+    agent_id: z.string(),
+    name: z.string()
+  }),
   description:
     "Create a reusable agent: a named instruction template the business runs against documents (e.g. 'extract line items from invoices as a table'). Agent counts are capped per plan tier.",
   schema: {
@@ -96,6 +113,10 @@ export const updateAgentTool = defineMcpTool({
   name: "update_agent",
   title: "Update a document agent",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    updated: z.boolean(),
+    agent_id: z.string()
+  }),
   description: "Update an agent's name, instructions, output format, or enabled state.",
   schema: {
     business_id: businessIdField,
@@ -142,6 +163,10 @@ export const deleteAgentTool = defineMcpTool({
   name: "delete_agent",
   title: "Delete a document agent",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    deleted: z.boolean(),
+    agent_id: z.string()
+  }),
   description: "Delete an agent (its past run history is removed with it).",
   schema: {
     business_id: businessIdField,

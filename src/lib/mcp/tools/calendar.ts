@@ -34,6 +34,15 @@ export const calendarFindSlotsTool = defineMcpTool({
   name: "calendar_find_slots",
   title: "Find open appointment times",
   annotations: TOOL_BEHAVIOR.readExternal,
+  // Only `slots` is guaranteed. The shared calendar core returns a slightly
+  // different `data` per provider, and a field required here that one of them
+  // omits would turn a working slot lookup into an error result.
+  outputSchema: z.looseObject({
+    slots: z.array(z.looseObject({ startIso: z.string(), endIso: z.string() })),
+    timezone: z.string().optional(),
+    purpose: z.string().nullable().optional(),
+    durationMinutes: z.number().optional()
+  }),
   description:
     "Find open appointment slots on the business's connected calendar (Google, Microsoft 365, Calendly, Vagaro, Acuity Scheduling, or CalDAV). Returns up to 3 bookable start/end times.",
   schema: {
@@ -81,6 +90,12 @@ export const calendarBookAppointmentTool = defineMcpTool({
   name: "calendar_book_appointment",
   title: "Book an appointment",
   annotations: TOOL_BEHAVIOR.writeExternal,
+  outputSchema: z.looseObject({
+    startLocal: z.string().optional(),
+    endLocal: z.string().optional(),
+    timezone: z.string().optional(),
+    schedulingUrl: z.string().optional()
+  }),
   description:
     "Book an appointment on the business's connected calendar. Use calendar_find_slots first and book one of the returned slots. Confirm the booked day/time from the result's startLocal field verbatim. If it fails because the person already has an upcoming appointment (attendee_already_booked), offer to keep, reschedule, or cancel the existing one instead of booking again. Note: with Calendly, this returns a single-use scheduling link to send the customer instead of a confirmed booking.",
   schema: {

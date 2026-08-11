@@ -190,6 +190,19 @@ describe("the real registry on the wire", () => {
     }
   });
 
+  it("advertises an object-rooted output schema for every tool", async () => {
+    // Two failures this catches, neither of which type-checks its way out:
+    // a tool shipped without a schema (the SDK makes it optional), and a
+    // schema whose JSON Schema conversion silently produced a non-object
+    // root, which changes how results are wrapped on the wire.
+    const tools = await toolsList();
+    for (const tool of tools) {
+      const schema = tool.outputSchema as Record<string, unknown> | undefined;
+      expect(schema, `${tool.name as string} has no outputSchema`).toBeDefined();
+      expect(schema?.type, `${tool.name as string} outputSchema root`).toBe("object");
+    }
+  });
+
   it("carries the exact values we declared, not defaults", async () => {
     const tools = await toolsList();
     const sendSms = tools.find((t) => t.name === "send_sms");

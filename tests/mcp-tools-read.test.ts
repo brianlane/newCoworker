@@ -43,6 +43,7 @@ import { listAccessibleBusinesses } from "@/lib/dashboard/active-business";
 import { getCustomerMemory, listCustomerMemories } from "@/lib/customer-memory/db";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import { listTranscriptsForBusiness } from "@/lib/db/voice-transcripts";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 
@@ -78,7 +79,7 @@ describe("list_businesses", () => {
       { businessId: "biz-1", name: "One", tier: "starter", role: "owner", created_at: "x" },
       { businessId: "biz-2", name: "Two", tier: "standard", role: "staff", created_at: "y" }
     ]);
-    const result = (await listBusinessesTool.handler({}, AUTH)) as {
+    const result = (await runTool(listBusinessesTool, {}, AUTH)) as {
       businesses: unknown[];
     };
     expect(result.businesses).toEqual([
@@ -105,7 +106,7 @@ describe("get_business", () => {
         })
       )
     });
-    const result = await getBusinessTool.handler({}, AUTH);
+    const result = await runTool(getBusinessTool, {}, AUTH);
     expect(result).toEqual({
       business_id: "biz-1",
       name: "One",
@@ -126,7 +127,7 @@ describe("get_business", () => {
         })
       )
     });
-    const ok = (await getBusinessTool.handler({ business_id: "b" }, AUTH)) as {
+    const ok = (await runTool(getBusinessTool, { business_id: "b" }, AUTH)) as {
       timezone: string | null;
     };
     expect(ok.timezone).toBeNull();
@@ -134,7 +135,7 @@ describe("get_business", () => {
     serviceClientMock.mockReturnValue({
       from: vi.fn(() => chain({ data: null, error: { message: "gone" } }))
     });
-    await expect(getBusinessTool.handler({}, AUTH)).rejects.toThrow(/not found/i);
+    await expect(runTool(getBusinessTool, {}, AUTH)).rejects.toThrow(/not found/i);
   });
 });
 
@@ -151,7 +152,7 @@ describe("search_contacts", () => {
         total_interaction_count: 4
       } as never
     ]);
-    const result = (await searchContactsTool.handler({ search: "ann" }, AUTH)) as {
+    const result = (await runTool(searchContactsTool, { search: "ann" }, AUTH)) as {
       contacts: unknown[];
     };
     expect(listCustomerMemories).toHaveBeenCalledWith("biz-1", { search: "ann", limit: 50 });
@@ -170,7 +171,7 @@ describe("search_contacts", () => {
 
   it("honors an explicit limit", async () => {
     vi.mocked(listCustomerMemories).mockResolvedValue([]);
-    await searchContactsTool.handler({ limit: 5 }, AUTH);
+    await runTool(searchContactsTool, { limit: 5 }, AUTH);
     expect(listCustomerMemories).toHaveBeenCalledWith("biz-1", { search: undefined, limit: 5 });
   });
 });
@@ -191,7 +192,7 @@ describe("get_contact", () => {
       last_interaction_at: "2026-07-01",
       total_interaction_count: 9
     } as never);
-    const result = (await getContactTool.handler({ phone: "555-000-1111" }, AUTH)) as {
+    const result = (await runTool(getContactTool, { phone: "555-000-1111" }, AUTH)) as {
       phone: string;
       ai_summary: string;
     };
@@ -203,7 +204,7 @@ describe("get_contact", () => {
   it("errors when the contact does not exist", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(null);
     await expect(
-      getContactTool.handler({ phone: "+15550001111" }, AUTH)
+      runTool(getContactTool, { phone: "+15550001111" }, AUTH)
     ).rejects.toThrow(/No contact found/);
   });
 });
@@ -232,7 +233,7 @@ describe("get_sms_thread", () => {
         channel: "rcs"
       }
     ] as never);
-    const result = (await getSmsThreadTool.handler({ phone: "+15550001111" }, AUTH)) as {
+    const result = (await runTool(getSmsThreadTool, { phone: "+15550001111" }, AUTH)) as {
       messages: Array<Record<string, unknown>>;
     };
     expect(listMessagesForCustomer).toHaveBeenCalledWith("biz-1", "+15550001111", { limit: 50 });
@@ -244,7 +245,7 @@ describe("get_sms_thread", () => {
 
   it("honors an explicit limit", async () => {
     vi.mocked(listMessagesForCustomer).mockResolvedValue([]);
-    await getSmsThreadTool.handler({ phone: "+15550001111", limit: 10 }, AUTH);
+    await runTool(getSmsThreadTool, { phone: "+15550001111", limit: 10 }, AUTH);
     expect(listMessagesForCustomer).toHaveBeenCalledWith("biz-1", "+15550001111", { limit: 10 });
   });
 });
@@ -252,7 +253,7 @@ describe("get_sms_thread", () => {
 describe("list_recent_events", () => {
   it("rejects unknown event types", async () => {
     await expect(
-      listRecentEventsTool.handler({ event: "nope" }, AUTH)
+      runTool(listRecentEventsTool, { event: "nope" }, AUTH)
     ).rejects.toThrow(/event must be one of/);
   });
 
@@ -273,7 +274,7 @@ describe("list_recent_events", () => {
       error: null
     });
     serviceClientMock.mockReturnValue({ from: vi.fn(() => c) });
-    const result = (await listRecentEventsTool.handler(
+    const result = (await runTool(listRecentEventsTool, 
       { event: "sms.outbound" },
       AUTH
     )) as { events: Array<{ event: string; data: Record<string, unknown> }> };
@@ -287,7 +288,7 @@ describe("list_recent_events", () => {
   it("applies the filter + readiness gate for call.completed", async () => {
     const c = chain({ data: [], error: null });
     serviceClientMock.mockReturnValue({ from: vi.fn(() => c) });
-    const result = (await listRecentEventsTool.handler(
+    const result = (await runTool(listRecentEventsTool, 
       { event: "call.completed", limit: 3 },
       AUTH
     )) as { events: unknown[] };
@@ -302,7 +303,7 @@ describe("list_recent_events", () => {
       from: vi.fn(() => chain({ data: null, error: { message: "boom" } }))
     });
     await expect(
-      listRecentEventsTool.handler({ event: "sms.inbound" }, AUTH)
+      runTool(listRecentEventsTool, { event: "sms.inbound" }, AUTH)
     ).rejects.toThrow(/Could not load events: boom/);
   });
 
@@ -310,7 +311,7 @@ describe("list_recent_events", () => {
     serviceClientMock.mockReturnValue({
       from: vi.fn(() => chain({ data: null, error: null }))
     });
-    const result = (await listRecentEventsTool.handler(
+    const result = (await runTool(listRecentEventsTool, 
       { event: "sms.inbound" },
       AUTH
     )) as { events: unknown[] };
@@ -333,7 +334,7 @@ describe("list_call_transcripts", () => {
         sentiment: "positive"
       } as never
     ]);
-    const result = (await listCallTranscriptsTool.handler({ limit: 7 }, AUTH)) as {
+    const result = (await runTool(listCallTranscriptsTool, { limit: 7 }, AUTH)) as {
       calls: Array<Record<string, unknown>>;
     };
     expect(listTranscriptsForBusiness).toHaveBeenCalledWith("biz-1", { limit: 7 });
@@ -352,7 +353,7 @@ describe("list_call_transcripts", () => {
 
   it("uses the default limit", async () => {
     vi.mocked(listTranscriptsForBusiness).mockResolvedValue([]);
-    await listCallTranscriptsTool.handler({}, AUTH);
+    await runTool(listCallTranscriptsTool, {}, AUTH);
     expect(listTranscriptsForBusiness).toHaveBeenCalledWith("biz-1", { limit: 25 });
   });
 });
@@ -404,7 +405,7 @@ describe("list_tasks", () => {
         { customer_e164: "+15550003333", display_name: null, tags: null, updated_at: "2026-07-03" }
       ]
     });
-    const result = (await listTasksTool.handler({}, AUTH)) as {
+    const result = (await runTool(listTasksTool, {}, AUTH)) as {
       active_runs: Array<Record<string, unknown>>;
       tagged_contacts: Array<Record<string, unknown>>;
     };
@@ -433,7 +434,7 @@ describe("list_tasks", () => {
 
   it("skips the flows query when there are no active runs", async () => {
     const from = tasksDb({ runs: [], tagged: [] });
-    const result = (await listTasksTool.handler({ limit: 5 }, AUTH)) as {
+    const result = (await runTool(listTasksTool, { limit: 5 }, AUTH)) as {
       active_runs: unknown[];
     };
     expect(result.active_runs).toEqual([]);
@@ -446,7 +447,7 @@ describe("list_tasks", () => {
       flows: [{ id: "flow-1", name: "F" }],
       tagged: []
     });
-    const result = (await listTasksTool.handler({}, AUTH)) as {
+    const result = (await runTool(listTasksTool, {}, AUTH)) as {
       active_runs: Array<{ lead_phone: string | null }>;
     };
     expect(result.active_runs[0].lead_phone).toBeNull();
@@ -454,7 +455,7 @@ describe("list_tasks", () => {
 
   it("treats null query payloads as empty sets", async () => {
     tasksDb({ runs: null, tagged: null });
-    const empty = (await listTasksTool.handler({}, AUTH)) as {
+    const empty = (await runTool(listTasksTool, {}, AUTH)) as {
       active_runs: unknown[];
       tagged_contacts: unknown[];
     };
@@ -462,7 +463,7 @@ describe("list_tasks", () => {
     expect(empty.tagged_contacts).toEqual([]);
 
     tasksDb({ runs: [RUN], flows: null, tagged: [] });
-    const noFlows = (await listTasksTool.handler({}, AUTH)) as {
+    const noFlows = (await runTool(listTasksTool, {}, AUTH)) as {
       active_runs: Array<{ flow: string }>;
     };
     expect(noFlows.active_runs[0].flow).toBe("AiFlow");
@@ -470,12 +471,12 @@ describe("list_tasks", () => {
 
   it("surfaces each query's errors", async () => {
     tasksDb({ runsError: { message: "r" } });
-    await expect(listTasksTool.handler({}, AUTH)).rejects.toThrow(/workflow runs: r/);
+    await expect(runTool(listTasksTool, {}, AUTH)).rejects.toThrow(/workflow runs: r/);
 
     tasksDb({ runs: [RUN], flowsError: { message: "f" } });
-    await expect(listTasksTool.handler({}, AUTH)).rejects.toThrow(/flows: f/);
+    await expect(runTool(listTasksTool, {}, AUTH)).rejects.toThrow(/flows: f/);
 
     tasksDb({ runs: [RUN], flows: [], taggedError: { message: "t" } });
-    await expect(listTasksTool.handler({}, AUTH)).rejects.toThrow(/tagged contacts: t/);
+    await expect(runTool(listTasksTool, {}, AUTH)).rejects.toThrow(/tagged contacts: t/);
   });
 });

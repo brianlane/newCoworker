@@ -60,6 +60,7 @@ import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flo
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 import { rateLimit } from "@/lib/rate-limit";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 const FLOW_ID = "7d1a2f34-0000-4000-8000-000000000001";
@@ -128,7 +129,7 @@ describe("validateFlowDefinition", () => {
 describe("list_flows / get_flow", () => {
   it("lists flows with trigger channel and step count", async () => {
     vi.mocked(listAiFlows).mockResolvedValue([FLOW_ROW as never]);
-    const result = (await listFlowsTool.handler({}, AUTH)) as { flows: unknown[] };
+    const result = (await runTool(listFlowsTool, {}, AUTH)) as { flows: unknown[] };
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_aiflows");
     expect(result.flows).toEqual([
       {
@@ -144,7 +145,7 @@ describe("list_flows / get_flow", () => {
 
   it("returns one flow's full definition", async () => {
     vi.mocked(getAiFlow).mockResolvedValue(FLOW_ROW as never);
-    const result = (await getFlowTool.handler({ flow_id: FLOW_ID }, AUTH)) as {
+    const result = (await runTool(getFlowTool, { flow_id: FLOW_ID }, AUTH)) as {
       definition: unknown;
     };
     expect(result.definition).toEqual(DEFINITION);
@@ -152,7 +153,7 @@ describe("list_flows / get_flow", () => {
 
   it("errors on an unknown flow", async () => {
     vi.mocked(getAiFlow).mockResolvedValue(null);
-    await expect(getFlowTool.handler({ flow_id: FLOW_ID }, AUTH)).rejects.toThrow(
+    await expect(runTool(getFlowTool, { flow_id: FLOW_ID }, AUTH)).rejects.toThrow(
       /Flow not found/
     );
   });
@@ -162,7 +163,7 @@ describe("get_flow_schema", () => {
   it("returns the vocabulary plus the derived JSON Schema", async () => {
     schemaHolder.override = z.object({ version: z.literal(1) });
     try {
-      const result = (await getFlowSchemaTool.handler({}, AUTH)) as {
+      const result = (await runTool(getFlowSchemaTool, {}, AUTH)) as {
         step_types: readonly string[];
         trigger_channels: readonly string[];
         json_schema: { type?: string } | null;
@@ -178,7 +179,7 @@ describe("get_flow_schema", () => {
   it("degrades to a null json_schema when derivation throws", async () => {
     schemaHolder.override = 42; // not a zod schema → z.toJSONSchema throws
     try {
-      const result = (await getFlowSchemaTool.handler({}, AUTH)) as {
+      const result = (await runTool(getFlowSchemaTool, {}, AUTH)) as {
         json_schema: unknown;
       };
       expect(result.json_schema).toBeNull();
@@ -191,7 +192,7 @@ describe("get_flow_schema", () => {
 describe("create_flow / update_flow / set_flow_enabled", () => {
   it("creates a validated flow attributed to the caller, DISABLED by default", async () => {
     vi.mocked(createAiFlow).mockResolvedValue({ ...FLOW_ROW, enabled: false } as never);
-    const result = await createFlowTool.handler(
+    const result = await runTool(createFlowTool, 
       { name: "Lead intake", definition: DEFINITION },
       AUTH
     );
@@ -214,7 +215,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
 
   it("honors an explicit enabled:true on create", async () => {
     vi.mocked(createAiFlow).mockResolvedValue(FLOW_ROW as never);
-    await createFlowTool.handler(
+    await runTool(createFlowTool, 
       { name: "Lead intake", enabled: true, definition: DEFINITION },
       AUTH
     );
@@ -224,7 +225,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
   });
 
   it("refuses an update with nothing to change", async () => {
-    await expect(updateFlowTool.handler({ flow_id: FLOW_ID }, AUTH)).rejects.toThrow(
+    await expect(runTool(updateFlowTool, { flow_id: FLOW_ID }, AUTH)).rejects.toThrow(
       /Nothing to update/
     );
     expect(updateAiFlow).not.toHaveBeenCalled();
@@ -232,7 +233,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
 
   it("renames without re-validating a definition", async () => {
     vi.mocked(updateAiFlow).mockResolvedValue(FLOW_ROW as never);
-    await updateFlowTool.handler({ flow_id: FLOW_ID, name: "Renamed" }, AUTH);
+    await runTool(updateFlowTool, { flow_id: FLOW_ID, name: "Renamed" }, AUTH);
     expect(parseAiFlowDefinition).not.toHaveBeenCalled();
     expect(updateAiFlow).toHaveBeenCalledWith({
       businessId: "biz-1",
@@ -243,7 +244,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
 
   it("validates a replacement definition before persisting", async () => {
     vi.mocked(updateAiFlow).mockResolvedValue(FLOW_ROW as never);
-    const result = await updateFlowTool.handler(
+    const result = await runTool(updateFlowTool, 
       { flow_id: FLOW_ID, definition: DEFINITION },
       AUTH
     );
@@ -258,7 +259,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
 
   it("toggles enabled", async () => {
     vi.mocked(updateAiFlow).mockResolvedValue({ ...FLOW_ROW, enabled: false } as never);
-    const result = await setFlowEnabledTool.handler(
+    const result = await runTool(setFlowEnabledTool, 
       { flow_id: FLOW_ID, enabled: false },
       AUTH
     );
@@ -278,7 +279,7 @@ describe("trigger_flow", () => {
       flowsEvaluated: 3,
       flowsMatched: 2
     } as never);
-    const result = await triggerFlowTool.handler(
+    const result = await runTool(triggerFlowTool, 
       { source: " zapier ", event_id: "evt-1", data: { name: "Ann" } },
       AUTH
     );
@@ -296,7 +297,7 @@ describe("trigger_flow", () => {
       flowsEvaluated: 0,
       flowsMatched: 0
     } as never);
-    await triggerFlowTool.handler({ data: {} }, AUTH);
+    await runTool(triggerFlowTool, { data: {} }, AUTH);
     expect(processWebhookFlowEvent).toHaveBeenCalledWith(
       "biz-1",
       expect.objectContaining({ source: "webhook" })
@@ -305,13 +306,13 @@ describe("trigger_flow", () => {
 
   it("refuses oversized payloads before rate limiting", async () => {
     const big = { blob: "x".repeat(65 * 1024) };
-    await expect(triggerFlowTool.handler({ data: big }, AUTH)).rejects.toThrow(/64KB max/);
+    await expect(runTool(triggerFlowTool, { data: big }, AUTH)).rejects.toThrow(/64KB max/);
     expect(rateLimit).not.toHaveBeenCalled();
   });
 
   it("refuses when rate limited", async () => {
     vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 1, remaining: 0, reset: 0 });
-    await expect(triggerFlowTool.handler({ data: {} }, AUTH)).rejects.toBeInstanceOf(
+    await expect(runTool(triggerFlowTool, { data: {} }, AUTH)).rejects.toBeInstanceOf(
       McpToolError
     );
     expect(processWebhookFlowEvent).not.toHaveBeenCalled();
@@ -326,7 +327,7 @@ describe("trigger_flow", () => {
       flowsMatched: 0,
       tierBlocked: true
     } as never);
-    await expect(triggerFlowTool.handler({ data: {} }, AUTH)).rejects.toThrow(/Standard plan/);
+    await expect(runTool(triggerFlowTool, { data: {} }, AUTH)).rejects.toThrow(/Standard plan/);
   });
 });
 
@@ -343,7 +344,7 @@ describe("run_flow", () => {
       flowName: "New Lead Intake",
       note: "Run enqueued."
     } as never);
-    const result = await runFlowTool.handler(
+    const result = await runTool(runFlowTool, 
       { flow: "New Lead Intake", input: "Jane +16025551212 wants a quote" },
       AUTH
     );
@@ -365,7 +366,7 @@ describe("run_flow", () => {
       flowName: "F",
       note: "n"
     } as never);
-    await runFlowTool.handler({ flow: "F" }, AUTH);
+    await runTool(runFlowTool, { flow: "F" }, AUTH);
     expect(runAiFlowTool).toHaveBeenCalledWith("biz-1", { flow: "F" });
   });
 
@@ -374,7 +375,7 @@ describe("run_flow", () => {
       ok: false,
       message: '"Voice routing" is a voice flow'
     } as never);
-    await expect(runFlowTool.handler({ flow: "Voice routing" }, AUTH)).rejects.toThrow(
+    await expect(runTool(runFlowTool, { flow: "Voice routing" }, AUTH)).rejects.toThrow(
       /is a voice flow/
     );
   });
@@ -386,13 +387,13 @@ describe("run_flow", () => {
       flowName: "F",
       note: "n"
     } as never);
-    await runFlowTool.handler({ flow: "F" }, AUTH);
+    await runTool(runFlowTool, { flow: "F" }, AUTH);
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_aiflows");
   });
 
   it("refuses when rate limited, before any run is enqueued", async () => {
     vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 1, remaining: 0, reset: 0 });
-    await expect(runFlowTool.handler({ flow: "F" }, AUTH)).rejects.toBeInstanceOf(McpToolError);
+    await expect(runTool(runFlowTool, { flow: "F" }, AUTH)).rejects.toBeInstanceOf(McpToolError);
     expect(runAiFlowTool).not.toHaveBeenCalled();
   });
 });

@@ -35,6 +35,7 @@ import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { logger } from "@/lib/logger";
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 const CONFIG = {
@@ -60,7 +61,7 @@ beforeEach(() => {
 
 describe("send_sms", () => {
   it("sends through the metered path and logs with source mcp", async () => {
-    const result = await sendSmsTool.handler(
+    const result = await runTool(sendSmsTool, 
       { to: "555-000-1111", text: "hello" },
       AUTH
     );
@@ -92,7 +93,7 @@ describe("send_sms", () => {
       apiKey: "k",
       messagingProfileId: "p"
     });
-    await sendSmsTool.handler({ to: "+15550001111", text: "x" }, AUTH);
+    await runTool(sendSmsTool, { to: "+15550001111", text: "x" }, AUTH);
     expect(insertMock).toHaveBeenCalledWith(expect.objectContaining({ from_e164: null }));
   });
 
@@ -104,7 +105,7 @@ describe("send_sms", () => {
       reset: 0
     });
     await expect(
-      sendSmsTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendSmsTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/rate limit/i);
     expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
@@ -112,18 +113,18 @@ describe("send_sms", () => {
   it("surfaces quota/send failures as tool errors", async () => {
     vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("Monthly SMS limit reached"));
     await expect(
-      sendSmsTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendSmsTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/Could not send: Monthly SMS limit reached/);
 
     vi.mocked(sendTelnyxSms).mockRejectedValue("weird failure");
     await expect(
-      sendSmsTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendSmsTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/Could not send: weird failure/);
   });
 
   it("still reports success when the outbound log insert fails", async () => {
     insertMock.mockResolvedValue({ error: { message: "insert down" } });
-    const result = (await sendSmsTool.handler(
+    const result = (await runTool(sendSmsTool, 
       { to: "+15550001111", text: "x" },
       AUTH
     )) as { sent: boolean };
@@ -143,7 +144,7 @@ describe("send_sms", () => {
   });
 
   it("upserts the recipient as a contact after a successful send (outbound-first numbers must exist)", async () => {
-    await sendSmsTool.handler({ to: "555-000-1111", text: "hello" }, AUTH);
+    await runTool(sendSmsTool, { to: "555-000-1111", text: "hello" }, AUTH);
     expect(recordInteractionAndIncrement).toHaveBeenCalledWith(
       "biz-1",
       "+15550001111",
@@ -157,7 +158,7 @@ describe("send_sms", () => {
   });
 
   it("passes contact_name through to the upsert (existing names are never clobbered by the RPC)", async () => {
-    await sendSmsTool.handler(
+    await runTool(sendSmsTool, 
       { to: "+13127310559", text: "hello", contact_name: "  Ayanna  " },
       AUTH
     );
@@ -172,7 +173,7 @@ describe("send_sms", () => {
 
   it("a failed contact upsert logs and never fails the sent message (Error AND string shapes)", async () => {
     vi.mocked(recordInteractionAndIncrement).mockRejectedValue(new Error("rollup down"));
-    const result = (await sendSmsTool.handler(
+    const result = (await runTool(sendSmsTool, 
       { to: "+15550001111", text: "x" },
       AUTH
     )) as { sent: boolean };
@@ -183,7 +184,7 @@ describe("send_sms", () => {
     );
 
     vi.mocked(recordInteractionAndIncrement).mockRejectedValue("rollup string blast");
-    const again = (await sendSmsTool.handler(
+    const again = (await runTool(sendSmsTool, 
       { to: "+15550001111", text: "x" },
       AUTH
     )) as { sent: boolean };
@@ -197,7 +198,7 @@ describe("send_sms", () => {
   it("skips the contact upsert when the send itself failed", async () => {
     vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("Monthly SMS limit reached"));
     await expect(
-      sendSmsTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendSmsTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/Could not send/);
     expect(recordInteractionAndIncrement).not.toHaveBeenCalled();
   });
@@ -210,7 +211,7 @@ describe("send_whatsapp", () => {
       via: "template",
       messageId: "wamid-1"
     } as never);
-    const result = await sendWhatsAppTool.handler(
+    const result = await runTool(sendWhatsAppTool, 
       { to: "555-000-1111", text: "hello" },
       AUTH
     );
@@ -237,7 +238,7 @@ describe("send_whatsapp", () => {
       reset: 0
     });
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/rate limit/i);
     expect(deliverWhatsApp).not.toHaveBeenCalled();
   });
@@ -248,7 +249,7 @@ describe("send_whatsapp", () => {
       via: "text",
       messageId: "wamid-9"
     } as never);
-    await sendWhatsAppTool.handler(
+    await runTool(sendWhatsAppTool, 
       { to: "+13127310559", text: "hello", contact_name: "Ayanna" },
       AUTH
     );
@@ -269,7 +270,7 @@ describe("send_whatsapp", () => {
       messageId: "wamid-10"
     } as never);
     vi.mocked(recordInteractionAndIncrement).mockRejectedValue(new Error("rollup down"));
-    const result = (await sendWhatsAppTool.handler(
+    const result = (await runTool(sendWhatsAppTool, 
       { to: "+15550001111", text: "x" },
       AUTH
     )) as { sent: boolean };
@@ -286,7 +287,7 @@ describe("send_whatsapp", () => {
       reason: "not_connected"
     } as never);
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/not connected/i);
 
     vi.mocked(deliverWhatsApp).mockResolvedValue({
@@ -294,7 +295,7 @@ describe("send_whatsapp", () => {
       reason: "connection_inactive"
     } as never);
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/inactive or expired/i);
 
     vi.mocked(deliverWhatsApp).mockResolvedValue({
@@ -302,7 +303,7 @@ describe("send_whatsapp", () => {
       reason: "template_not_approved"
     } as never);
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/use send_sms instead/i);
 
     vi.mocked(deliverWhatsApp).mockResolvedValue({
@@ -311,7 +312,7 @@ describe("send_whatsapp", () => {
       detail: "cloud api 500"
     } as never);
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/Could not send: send_failed \(cloud api 500\)/);
 
     vi.mocked(deliverWhatsApp).mockResolvedValue({
@@ -319,7 +320,7 @@ describe("send_whatsapp", () => {
       reason: "invalid_recipient"
     } as never);
     await expect(
-      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+      runTool(sendWhatsAppTool, { to: "+15550001111", text: "x" }, AUTH)
     ).rejects.toThrow(/Could not send: invalid_recipient/);
     // No delivery → no contact upsert.
     expect(recordInteractionAndIncrement).not.toHaveBeenCalled();

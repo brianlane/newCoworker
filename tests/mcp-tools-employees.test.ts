@@ -25,6 +25,7 @@ import {
 } from "@/lib/mcp/tools/employees";
 import { manageEmployee } from "@/lib/employees/manage-tool";
 import { listTeamMembers, type TeamMemberRow } from "@/lib/db/employees";
+import { runTool } from "./helpers/run-mcp-tool";
 
 /**
  * Claude-connector roster tools. The roster decides who receives leads, so all
@@ -81,7 +82,7 @@ beforeEach(() => {
 
 describe("list_employees (MCP)", () => {
   it("reports availability and schedules in the owner-facing form", async () => {
-    const result = (await listEmployeesTool.handler({}, AUTH)) as {
+    const result = (await runTool(listEmployeesTool, {}, AUTH)) as {
       employees: Array<Record<string, unknown>>;
     };
     expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_settings");
@@ -110,7 +111,7 @@ describe("list_employees (MCP)", () => {
         team_broadcast_enabled: null as unknown as boolean
       })
     ]);
-    const result = (await listEmployeesTool.handler({}, AUTH)) as {
+    const result = (await runTool(listEmployeesTool, {}, AUTH)) as {
       employees: Array<Record<string, unknown>>;
     };
     expect(result.employees[0]).toMatchObject({
@@ -125,7 +126,7 @@ describe("list_employees (MCP)", () => {
 
 describe("create_employee (MCP)", () => {
   it("delegates to the shared core with every optional field mapped", async () => {
-    const result = (await createEmployeeTool.handler(
+    const result = (await runTool(createEmployeeTool, 
       {
         business_id: "biz-9",
         name: "Sandy Reyes",
@@ -157,7 +158,7 @@ describe("create_employee (MCP)", () => {
   });
 
   it("omits fields the caller left out, so column defaults apply", async () => {
-    await createEmployeeTool.handler({ name: "Sandy", phone: "+16025550134" }, AUTH);
+    await runTool(createEmployeeTool, { name: "Sandy", phone: "+16025550134" }, AUTH);
     expect(manageEmployee).toHaveBeenCalledWith("biz-1", {
       action: "add",
       name: "Sandy",
@@ -171,7 +172,7 @@ describe("create_employee (MCP)", () => {
       message: "already_on_roster, +16025550134 is already Dave Lane."
     });
     await expect(
-      createEmployeeTool.handler({ name: "Dave", phone: "+16025550134" }, AUTH)
+      runTool(createEmployeeTool, { name: "Dave", phone: "+16025550134" }, AUTH)
     ).rejects.toThrow(/already_on_roster/);
   });
 
@@ -180,7 +181,7 @@ describe("create_employee (MCP)", () => {
       new McpToolError("Your role does not allow this.")
     );
     await expect(
-      createEmployeeTool.handler({ name: "Sandy", phone: "+16025550134" }, AUTH)
+      runTool(createEmployeeTool, { name: "Sandy", phone: "+16025550134" }, AUTH)
     ).rejects.toThrow(/role does not allow/);
     expect(manageEmployee).not.toHaveBeenCalled();
   });
@@ -188,7 +189,7 @@ describe("create_employee (MCP)", () => {
 
 describe("update_employee (MCP)", () => {
   it("maps active=false to the deactivate action and carries edits with it", async () => {
-    await updateEmployeeTool.handler(
+    await runTool(updateEmployeeTool, 
       { employee: "Dave Lane", active: false, email: "" },
       AUTH
     );
@@ -200,7 +201,7 @@ describe("update_employee (MCP)", () => {
   });
 
   it("maps active=true to reactivate", async () => {
-    await updateEmployeeTool.handler({ employee: "Dave Lane", active: true }, AUTH);
+    await runTool(updateEmployeeTool, { employee: "Dave Lane", active: true }, AUTH);
     expect(manageEmployee).toHaveBeenCalledWith("biz-1", {
       action: "reactivate",
       employee: "Dave Lane"
@@ -208,7 +209,7 @@ describe("update_employee (MCP)", () => {
   });
 
   it("is a plain update when active is untouched, and maps every field", async () => {
-    const result = (await updateEmployeeTool.handler(
+    const result = (await runTool(updateEmployeeTool, 
       {
         employee: "+16026951142",
         name: "Amy Laidlaw",
@@ -243,7 +244,7 @@ describe("update_employee (MCP)", () => {
       message: 'ambiguous_employee, "Dave" matches two people.'
     });
     await expect(
-      updateEmployeeTool.handler({ employee: "Dave", lead_rotation: false }, AUTH)
+      runTool(updateEmployeeTool, { employee: "Dave", lead_rotation: false }, AUTH)
     ).rejects.toThrow(/ambiguous_employee/);
   });
 });
