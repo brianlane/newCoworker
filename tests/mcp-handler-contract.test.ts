@@ -120,7 +120,8 @@ describe("mcp-handler 2.x contract", () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0].args).toMatchObject({ ping: "hello" });
-    expect(seen[0].viaHelper).toEqual(CALLER);
+    // authFromContext defaults the client to claude when the context carries none.
+    expect(seen[0].viaHelper).toEqual({ ...CALLER, client: "claude" });
     expect(res.text).toContain(CALLER.email);
   });
 

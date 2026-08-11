@@ -133,7 +133,7 @@ export function createMcpRouteHandlers(options: {
       token: bearerToken,
       clientId: user.userId,
       scopes: [],
-      extra: { userId: user.userId, email: user.email }
+      extra: { userId: user.userId, email: user.email, client: options.client }
     };
   };
 

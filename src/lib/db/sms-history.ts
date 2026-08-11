@@ -106,6 +106,7 @@ export type OutboundLogSource =
   | "api"
   | "voice_follow_up"
   | "mcp"
+  | "mcp_chatgpt"
   | "dashboard_chat"
   | "owner_alert";
 

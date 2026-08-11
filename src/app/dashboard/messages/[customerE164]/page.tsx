@@ -221,6 +221,8 @@ export default async function SmsThreadPage({
                                     ? "Assistant · call follow-up"
                                     : m.source === "mcp"
                                       ? "Claude connector"
+                                      : m.source === "mcp_chatgpt"
+                                        ? "ChatGPT app"
                                       : m.source === "owner_alert"
                                         ? "Coworker · urgent alert"
                                         : "Assistant"}
