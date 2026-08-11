@@ -47,8 +47,13 @@ function IntegrationBody({
         >
           <MicrosoftConnectButton
             businessId={businessId}
-            atCap={
-              ctx.workspaceConnectionCap.max !== null && ctx.workspaceConnectionCap.atCap
+            // Mirrors the connect route exactly: at the cap is not enough,
+            // because a reconnect consumes no seat. An at-cap tenant holding an
+            // Outlook row is precisely who needs this button, to migrate off
+            // Nango.
+            blocked={
+              ctx.workspaceConnectionCap.atCap &&
+              !ctx.workspaceConnections.some((r) => r.provider_config_key === "outlook")
             }
           />
           <NangoEmailIntegrationActions

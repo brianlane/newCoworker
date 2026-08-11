@@ -5,8 +5,17 @@ import { Button } from "@/components/ui/Button";
 
 type Props = {
   businessId: string;
-  /** True once the tier cap is reached; the connect route enforces it too. */
-  atCap: boolean;
+  /**
+   * True only when the connect route would actually refuse: at the tier cap
+   * AND with no Outlook row to reconnect.
+   *
+   * NOT simply "at cap". A reconnect consumes no seat, so the route lets an
+   * at-cap owner through when they already hold an Outlook row. Disabling on
+   * the cap alone would lock a Starter tenant (cap 1, one Nango Outlook row)
+   * out of the very migration this button exists for, with the server happily
+   * allowing what the UI forbids.
+   */
+  blocked: boolean;
 };
 
 /**
@@ -20,7 +29,7 @@ type Props = {
  * usable: Outlook comes through here, while Google, OneDrive and the long tail
  * still go through the Nango Connect UI below.
  */
-export function MicrosoftConnectButton({ businessId, atCap }: Props) {
+export function MicrosoftConnectButton({ businessId, blocked }: Props) {
   const t = useTranslations("dashboard.integrationsWorkspace");
 
   function startConnect() {
@@ -34,7 +43,7 @@ export function MicrosoftConnectButton({ businessId, atCap }: Props) {
         variant="primary"
         size="sm"
         onClick={startConnect}
-        disabled={atCap}
+        disabled={blocked}
       >
         {t("connectMicrosoft")}
       </Button>
