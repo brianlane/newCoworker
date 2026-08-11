@@ -114,18 +114,28 @@ async function main() {
   // A truncated read cannot support a fleet-wide verdict. Refuse rather than
   // declare Path A open over a sample: an unaudited live grant is exactly the
   // thing that would break the migration silently.
-  const total = typeof count === "number" ? count : googleRows.length;
-  if (googleRows.length >= ROW_CEILING || total > googleRows.length) {
+  //
+  // The exact count is the authority, so completeness is `count === rows read`,
+  // NOT `rows read < ceiling`. Those differ at exactly ROW_CEILING matching
+  // rows, where the read is complete but a length-based test would false-stop.
+  // The ceiling comparison is only the fallback for when PostgREST gives us no
+  // count, where a full page is indistinguishable from a truncated one.
+  const exactTotal = typeof count === "number" ? count : null;
+  const truncated =
+    exactTotal === null ? googleRows.length >= ROW_CEILING : exactTotal > googleRows.length;
+  if (truncated) {
     console.error(
-      `STOP. Read ${googleRows.length} Google row(s) but the table holds ${total}. ` +
-        `The row ceiling (${ROW_CEILING}) truncated the result, so this audit cannot ` +
-        `speak for the whole fleet. Page through the remainder before trusting any verdict.`
+      `STOP. Read ${googleRows.length} Google row(s), table holds ` +
+        `${exactTotal === null ? "an unreported number" : exactTotal}. The row ceiling ` +
+        `(${ROW_CEILING}) truncated the result, so this audit cannot speak for the whole ` +
+        `fleet. Page through the remainder before trusting any verdict.`
     );
     process.exitCode = 2;
     return;
   }
 
-  console.log(`Google-brokered rows in workspace_oauth_connections: ${googleRows.length} (of ${total} total, complete)\n`);
+  const totalLabel = exactTotal === null ? "count unreported" : `of ${exactTotal} total, complete`;
+  console.log(`Google-brokered rows in workspace_oauth_connections: ${googleRows.length} (${totalLabel})\n`);
   if (googleRows.length === 0) {
     console.log("Nothing to migrate. (Non-Google rows are out of scope for this audit.)");
     return;
