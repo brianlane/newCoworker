@@ -174,7 +174,101 @@ async function registerClient(meta: Record<string, unknown>): Promise<string | n
   return clientId;
 }
 
-/** Step 3: does the authorize endpoint tolerate `resource`? */
+/** One authorize attempt, reduced to the bits the comparison needs. */
+type AuthorizeAttempt = {
+  status: number;
+  location: string;
+  /** OAuth `error` code, from a JSON body or from the redirect query. */
+  error: string;
+  errorDescription: string;
+  bodyPreview: string;
+};
+
+/**
+ * Read the OAuth error out of a response, from either shape an authorization
+ * server may use: a 400 with a JSON body, or a 302 back to redirect_uri
+ * carrying `?error=...&error_description=...` (RFC 6749 section 4.1.2.1 sends
+ * errors that way once the client and redirect are themselves valid).
+ */
+function readOAuthError(
+  status: number,
+  location: string,
+  text: string
+): { error: string; errorDescription: string } {
+  if (location) {
+    try {
+      const q = new URL(location).searchParams;
+      const error = q.get("error") ?? "";
+      if (error) return { error, errorDescription: q.get("error_description") ?? "" };
+    } catch {
+      // Relative or malformed Location: fall through to the body.
+    }
+  }
+  if (status >= 400) {
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      const str = (key: string): string =>
+        typeof body[key] === "string" ? (body[key] as string) : "";
+      // Supabase answers with its own `{code, error_code, msg}` shape rather
+      // than RFC 6749's `{error, error_description}`, so read both. Without
+      // the fallback the report prints "(none)" next to a real refusal and
+      // an `invalid_target` would be invisible.
+      return {
+        error: str("error") || str("error_code"),
+        errorDescription: str("error_description") || str("msg")
+      };
+    } catch {
+      // Non-JSON error body (an HTML error page). The preview still shows it.
+    }
+  }
+  return { error: "", errorDescription: "" };
+}
+
+/** Issue one authorize request, optionally carrying `resource`. */
+async function authorizeAttempt(
+  endpoint: string,
+  clientId: string,
+  challenge: string,
+  withResource: boolean
+): Promise<AuthorizeAttempt> {
+  const url = new URL(endpoint);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", REDIRECT_URI);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("state", randomBytes(8).toString("hex"));
+  if (withResource) url.searchParams.set("resource", RESOURCE);
+
+  // `manual` so a 302 to the consent page reads as acceptance rather than
+  // being followed into an HTML login page we would have to parse.
+  const res = await fetch(url, { redirect: "manual" });
+  const text = await res.text();
+  const location = res.headers.get("location") ?? "";
+  return {
+    status: res.status,
+    location,
+    ...readOAuthError(res.status, location, text),
+    bodyPreview: text.slice(0, 400)
+  };
+}
+
+/**
+ * Step 3: does the authorize endpoint tolerate `resource`?
+ *
+ * Answered by DIFFERENCE, not by status code alone. An authorization server
+ * returns 400 for a bad client id, a redirect URI that does not match the
+ * registration, an unsupported scope, a malformed PKCE challenge, and plenty
+ * else, so reading any 400 as "it refused `resource`" would print the one
+ * blocking verdict for an unrelated cause and send us building an
+ * authorization-server shim we never needed.
+ *
+ * So we send the same request twice, identical but for the parameter under
+ * test. Only a failure that appears WITH `resource` and not without it is
+ * evidence about `resource`. RFC 8707 names `invalid_target` for exactly this
+ * refusal, which upgrades the verdict from inferred to confirmed.
+ */
 async function probeAuthorize(
   meta: Record<string, unknown>,
   clientId: string
@@ -189,6 +283,46 @@ async function probeAuthorize(
 
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
+
+  const control = await authorizeAttempt(endpoint, clientId, challenge, false);
+  const test = await authorizeAttempt(endpoint, clientId, challenge, true);
+
+  const report = (label: string, a: AuthorizeAttempt): void => {
+    console.log(`  ${label}`);
+    show("  status", a.status);
+    show("  location", a.location || "(none)");
+    show("  error", a.error || "(none)");
+    if (a.errorDescription) show("  error_description", a.errorDescription);
+  };
+  report("without resource (control)", control);
+  report("with resource (test)", test);
+
+  const failed = (a: AuthorizeAttempt): boolean => a.status >= 400 || a.error !== "";
+
+  if (failed(test) && !failed(control)) {
+    console.log("\n  -> VERDICT: REJECTS. The request succeeds without `resource` and fails");
+    console.log("     with it, so the parameter is the difference.");
+    if (test.error === "invalid_target") {
+      console.log("     Confirmed by the RFC 8707 error code `invalid_target`.");
+    }
+    console.log("     This is the blocking outcome. See the plan's authorization-server shim.");
+    if (!test.error) show("  body", test.bodyPreview);
+    return null;
+  }
+
+  if (failed(test) && failed(control)) {
+    console.log("\n  -> INCONCLUSIVE. Both attempts failed the same way, so this says");
+    console.log("     nothing about `resource`. Fix the underlying request first: the");
+    console.log("     usual causes are a stale client id, a redirect URI that does not");
+    console.log("     match the registration, or an unsupported scope.");
+    if (!test.error) show("  body", test.bodyPreview);
+    return null;
+  }
+
+  console.log("\n  -> Supabase accepted the request with `resource` present.");
+  console.log("     Whether it BINDS it is only visible in the token (step 4).");
+  show("verifier (save this)", verifier);
+
   const url = new URL(endpoint);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
@@ -198,23 +332,6 @@ async function probeAuthorize(
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("state", randomBytes(8).toString("hex"));
   url.searchParams.set("resource", RESOURCE);
-
-  // `manual` so a 302 to the consent page reads as acceptance rather than
-  // being followed into an HTML login page we would have to parse.
-  const res = await fetch(url, { redirect: "manual" });
-  show("status", res.status);
-  show("location", res.headers.get("location") ?? "(none)");
-
-  if (res.status === 400) {
-    const text = await res.text();
-    show("body", text.slice(0, 400));
-    console.log("  -> VERDICT: REJECTS. Supabase refuses the `resource` parameter.");
-    console.log("     This is the blocking outcome. See the plan's authorization-server shim.");
-    return null;
-  }
-  console.log("  -> Supabase accepted the request with `resource` present.");
-  console.log("     Whether it BINDS it is only visible in the token (step 4).");
-  show("verifier (save this)", verifier);
   console.log("\n  Open this URL in a signed-in browser, approve, then copy the `code`");
   console.log("  out of the chatgpt.com redirect (that page 404s, which is expected):\n");
   console.log(`  ${url.toString()}\n`);
