@@ -43,9 +43,98 @@
  * point of view.
  */
 import { nangoProxyForBusiness, nangoProxyStatusForBusiness } from "@/lib/nango/workspace";
+import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
+import { providerFromKey } from "@/lib/voice-tools/connections";
+import { getMicrosoftAccessToken } from "@/lib/microsoft/client";
+import { GRAPH_API_BASE_URL } from "@/lib/microsoft/oauth";
+import { directProviderRequest } from "./direct-transport";
+import { logger } from "@/lib/logger";
 import type { WorkspaceLink, WorkspaceProxyArgs, WorkspaceProxyResponse } from "./types";
 
 export type { WorkspaceLink, WorkspaceProxyArgs, WorkspaceProxyResponse } from "./types";
+
+/**
+ * Where each first-party provider's API lives, and how to get a live token for
+ * it. Adding Google-direct later is one entry here plus its own oauth/client
+ * pair: no resolver, cap, cleanup, or call-site change.
+ */
+type DirectClient = {
+  baseUrl: string;
+  getAccessToken(connectionRowId: string): Promise<string | null>;
+};
+
+const DIRECT_CLIENTS: Partial<Record<"google" | "microsoft", DirectClient>> = {
+  microsoft: {
+    baseUrl: GRAPH_API_BASE_URL,
+    getAccessToken: getMicrosoftAccessToken
+  }
+};
+
+/**
+ * Which transport serves this connection.
+ *
+ * The row's `transport` column decides, not the provider key: an Outlook
+ * mailbox is `provider_config_key = 'outlook'` whether Nango brokers it or we
+ * hold the tokens, which is what keeps every resolver and every AiFlow mailbox
+ * binding transport-blind.
+ *
+ * Returns `null` for "no usable connection", which the callers already
+ * understand: no row for this business, a direct row whose grant is dead, or a
+ * direct row for a provider that has no first-party client yet.
+ */
+async function directProxy(
+  businessId: string,
+  link: WorkspaceLink,
+  config: WorkspaceProxyArgs
+): Promise<{ handled: false } | { handled: true; res: WorkspaceProxyResponse | null }> {
+  const row = await getWorkspaceOAuthConnectionByNangoIds(
+    businessId,
+    link.providerConfigKey,
+    link.connectionId
+  );
+  // No row at all is the Nango transport's answer to give (it re-verifies and
+  // returns null itself), so fall through rather than duplicating that here.
+  //
+  // That fall-through means a NANGO call reads the row twice: once here to
+  // learn the transport, once inside nangoProxyForBusiness to verify it. That
+  // is a deliberate trade, not an oversight. Reading it once would mean either
+  // teaching the Nango transport to accept a pre-verified row (weakening the
+  // check that keeps one tenant from reaching another's connection by guessing
+  // ids) or inlining the Nango call here (collapsing the layering this module
+  // exists to provide). Both are worse than one extra point lookup on a unique
+  // index, and the cost sits on the SHRINKING path: as providers move to
+  // first-party OAuth, fewer calls take it.
+  if (!row || row.transport !== "direct") return { handled: false };
+
+  const provider = providerFromKey(row.provider_config_key);
+  const client = DIRECT_CLIENTS[provider];
+  if (!client) {
+    // A direct row for a provider with no client is a data problem, not a
+    // request problem. Degrade to "not connected" rather than throwing an
+    // error every caller would have to special-case, and say so in the log.
+    logger.warn("direct workspace connection has no client for provider", {
+      provider,
+      providerConfigKey: row.provider_config_key
+    });
+    return { handled: true, res: null };
+  }
+
+  const accessToken = await client.getAccessToken(row.id);
+  // A dead grant (the token manager already deactivated the row) is the direct
+  // analogue of having no connection at all.
+  if (!accessToken) return { handled: true, res: null };
+
+  return {
+    handled: true,
+    res: await directProviderRequest(client.baseUrl, accessToken, {
+      endpoint: config.endpoint,
+      method: config.method,
+      data: config.data,
+      params: config.params,
+      headers: config.headers
+    })
+  };
+}
 
 /**
  * Calls a provider API on behalf of one connected workspace account.
@@ -62,6 +151,9 @@ export async function workspaceProxyForBusiness(
   link: WorkspaceLink,
   config: WorkspaceProxyArgs
 ): Promise<WorkspaceProxyResponse | null> {
+  const direct = await directProxy(businessId, link, config);
+  if (direct.handled) return direct.res;
+
   const res = await nangoProxyForBusiness(businessId, link, config);
   if (!res) return null;
   return { status: res.status, data: res.data };
@@ -82,5 +174,35 @@ export async function workspaceProxyStatusForBusiness(
   link: WorkspaceLink,
   config: WorkspaceProxyArgs
 ): Promise<WorkspaceProxyResponse | null> {
+  // The direct transport needs the same treatment, or a caller that branches on
+  // 403-means-reconnect would start seeing throws the moment a tenant moves off
+  // Nango. `DirectTransportError` carries the axios-shaped `response` on
+  // purpose so both arms normalize identically.
+  let direct;
+  try {
+    direct = await directProxy(businessId, link, config);
+  } catch (err) {
+    const normalized = directErrorResponse(err);
+    if (!normalized) throw err;
+    return normalized;
+  }
+  if (direct.handled) return direct.res;
+
   return nangoProxyStatusForBusiness(businessId, link, config);
+}
+
+/**
+ * Reads the HTTP status off a rejected DIRECT call, or undefined when the
+ * failure carried no response at all (DNS, timeout, socket reset), which still
+ * has to propagate: there is no status to report and inventing one would be
+ * worse.
+ */
+function directErrorResponse(err: unknown): WorkspaceProxyResponse | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const response = (err as { response?: unknown }).response;
+  if (!response || typeof response !== "object") return undefined;
+  const { status, data } = response as { status?: unknown; data?: unknown };
+  if (typeof status !== "number" || !Number.isFinite(status)) return undefined;
+  if (status < 100 || status > 599) return undefined;
+  return { status, data };
 }

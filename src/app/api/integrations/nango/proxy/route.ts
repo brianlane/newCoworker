@@ -16,14 +16,11 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    if (!process.env.NANGO_SECRET_KEY) {
-      return errorResponse(
-        "INTERNAL_SERVER_ERROR",
-        "Workspace connections are not available (service misconfigured)",
-        503
-      );
-    }
-
+    // Deliberately NO NANGO_SECRET_KEY pre-gate. Workspace connections are no
+    // longer all Nango: a first-party Outlook connection needs no Nango key at
+    // all, and refusing the whole route without one would 503 a perfectly good
+    // direct connection. The dispatcher decides per row, and the Nango branch
+    // still throws a clear error from getNangoClient when the key is missing.
     const user = await getAuthUser();
     const hasBearer = extractBearerToken(request) !== "";
 

@@ -60,6 +60,7 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "SECRETS_ENCRYPTION_KEY",
   // Workspace OAuth / third-party apps
   "NANGO_SECRET_KEY",
+  "MICROSOFT_CLIENT_ID",
   "MICROSOFT_CLIENT_SECRET",
   "SLACK_CLIENT_SECRET",
   // Webhook HMAC key: without this the Slack webhook suite would run against

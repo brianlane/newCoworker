@@ -43,22 +43,34 @@ describe("api/integrations/nango/proxy", () => {
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   });
 
-  it("returns 503 when NANGO_SECRET_KEY is missing", async () => {
+  it("does NOT pre-gate on NANGO_SECRET_KEY, so a direct connection still works", async () => {
+    // This route used to refuse outright without a Nango key. Workspace
+    // connections are no longer all Nango: a first-party Outlook connection
+    // needs no Nango key at all, and a blanket 503 would take down a perfectly
+    // good direct connection. The dispatcher decides per row now, and the
+    // Nango branch still raises its own error from getNangoClient.
     delete process.env.NANGO_SECRET_KEY;
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      status: 200,
+      data: { id: "m1" }
+    } as never);
+
     const res = await POST(
       new Request("http://localhost/api/integrations/nango/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId,
-          connectionId: "c1",
-          providerConfigKey: "gmail",
-          endpoint: "/v1/x",
+          connectionId: "direct:abc",
+          providerConfigKey: "outlook",
+          endpoint: "/v1.0/me",
           method: "GET"
         })
       })
     );
-    expect(res.status).toBe(503);
+
+    expect(res.status).toBe(200);
+    expect(workspaceProxyForBusiness).toHaveBeenCalled();
   });
 
   it("returns 401 when unauthenticated", async () => {
