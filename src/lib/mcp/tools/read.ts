@@ -307,6 +307,7 @@ export const listCallTranscriptsTool = defineMcpTool({
     calls: z.array(
       z.looseObject({
         id: z.string(),
+        fetch_id: z.string(),
         caller: z.string().nullable(),
         direction: z.string().nullable(),
         kind: z.string().nullable(),
@@ -319,7 +320,7 @@ export const listCallTranscriptsTool = defineMcpTool({
     )
   }),
   description:
-    "List the business's recent phone calls (AI-handled and human-forwarded), newest first, with status, AI summary, and sentiment when available.",
+    "List the business's recent phone calls (AI-handled and human-forwarded), newest first, with status, AI summary, and sentiment when available. Pass a row's fetch_id to the fetch tool to read that call's full transcript.",
   schema: {
     business_id: businessIdField,
     limit: z.number().int().min(1).max(100).optional()
@@ -331,9 +332,14 @@ export const listCallTranscriptsTool = defineMcpTool({
     const rows = await listTranscriptsForBusiness(businessId, {
       limit: args.limit ?? 25
     });
+    const { formatMcpResourceId } = await import("@/lib/mcp/resource-id");
     return {
       calls: rows.map((row) => ({
         id: row.id,
+        // The id `fetch` accepts. Without it this tool emits a bare UUID and
+        // fetch refuses every call id a model can actually get hold of, which
+        // makes fetch's whole call branch unreachable.
+        fetch_id: formatMcpResourceId({ kind: "call", businessId, ref: row.id }),
         caller: row.caller_e164,
         direction: row.direction,
         kind: row.call_kind,

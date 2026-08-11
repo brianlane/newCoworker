@@ -33,8 +33,12 @@ import { employeeTools } from "@/lib/mcp/tools/employees";
 import { flowTools } from "@/lib/mcp/tools/flows";
 import { agentTools } from "@/lib/mcp/tools/agents";
 import { notificationTools } from "@/lib/mcp/tools/notifications";
+import { searchTools } from "@/lib/mcp/tools/search";
 
 export const allMcpTools: McpToolDef[] = [
+  // First, because they are the entry point a model should reach for: find
+  // the thing, then read it, instead of guessing among the rest.
+  ...searchTools,
   ...readTools,
   ...smsTools,
   ...calendarTools,

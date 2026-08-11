@@ -28,10 +28,24 @@ const NAME_PATTERN = /^[a-z][a-z0-9_]{2,63}$/;
 const MUTATING_PREFIXES = ["delete_", "update_", "set_"];
 
 describe("MCP tool metadata", () => {
+  /**
+   * The one assertion here that is a hard external gate rather than our own
+   * taste: ChatGPT rejects a connector lacking either tool unless the user has
+   * Developer Mode on, and both must be read-only to qualify as a knowledge
+   * source. Passing in Developer Mode proves nothing about the normal install.
+   */
+  it("ships the search and fetch pair ChatGPT requires, both read-only", () => {
+    for (const name of ["search", "fetch"]) {
+      const tool = allMcpTools.find((t) => t.name === name);
+      expect(tool, `${name} is missing; ChatGPT would reject the connector`).toBeDefined();
+      expect(tool?.annotations.readOnlyHint, `${name} must be read-only`).toBe(true);
+    }
+  });
+
   it("registers at least the tools we think it does", () => {
     // Cheap canary: a registry that silently emptied would pass every
     // per-tool loop below, because a loop over nothing asserts nothing.
-    expect(allMcpTools.length).toBeGreaterThanOrEqual(31);
+    expect(allMcpTools.length).toBeGreaterThanOrEqual(33);
   });
 
   for (const tool of allMcpTools) {
