@@ -63,6 +63,14 @@ import {
   matchOfferByLeadName,
   type OfferCandidate
 } from "../_shared/ai_flows/offer_identity.ts";
+import {
+  followUpAckText,
+  followUpAmbiguityText,
+  followUpNoLeadText,
+  matchFollowUpTarget,
+  parseFollowUpReply
+} from "../_shared/ai_flows/follow_up_reply.ts";
+import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
@@ -1615,6 +1623,179 @@ async function tryStaleOfferAck(args: StaleOfferAckArgs): Promise<Response | nul
   });
 }
 
+/** The tag whose tag_changed event starts the AI follow-up cadence. */
+const FOLLOW_UP_TAG = "Needs Follow Up";
+/**
+ * How many recent contacts a follow-up reply may resolve against. Bounded like
+ * the live-offer scan: a teammate naming a lead older than this is better told
+ * nothing matched than handed a guess.
+ */
+const FOLLOW_UP_CANDIDATE_SCAN = 50;
+
+/**
+ * Mark a lead for AI follow-up from a teammate's text ("F", "Daniel, F",
+ * "needs follow up").
+ *
+ * Returns a Response when it handled the text, null to fall through to every
+ * other reply path unchanged.
+ *
+ * Deliberately resolves against RECENT LEAD CONTACTS rather than live offers,
+ * which is what makes it useful: a claim reply only means anything while an
+ * offer is parked (about 15 minutes), and "this one needs following up" is
+ * something a teammate realizes after a call that went nowhere, days later.
+ *
+ * The tag is the whole mechanism. Writing it fires the same tag_changed
+ * chokepoint the dashboard's tag editor and the worker's update_contact step
+ * use, so the follow-up flow starts exactly as it would from any other tagger,
+ * and this function never needs to know the flow exists.
+ */
+async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
+  const {
+    supabase,
+    businessId,
+    from,
+    body,
+    ackTo,
+    eventId,
+    envelope,
+    telnyxApiKey,
+    messagingProfileId,
+    smsFromE164
+  } = args;
+
+  const parsed = parseFollowUpReply(body);
+  if (!parsed) return null;
+
+  // Only a teammate may tag a lead. Without this a customer texting "f" would
+  // put THEMSELVES into a calling cadence.
+  const { data: memberRow } = await supabase
+    .from("ai_flow_team_members")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("phone_e164", from)
+    .eq("active", true)
+    .maybeSingle();
+  const { data: ownerRow } = await supabase
+    .from("businesses")
+    .select("id")
+    .eq("id", businessId)
+    .eq("owner_alert_e164", from)
+    .maybeSingle();
+  if (!memberRow && !ownerRow) return null;
+
+  const ackProfile = messagingProfileId;
+  const ackFrom = ackTo || smsFromE164;
+  const ack = async (text: string, keySuffix: string): Promise<Response> => {
+    let ackSent: string | null = null;
+    if (telnyxApiKey && ackProfile) {
+      const send = await sendOperationalSms(supabase, businessId, {
+        apiKey: telnyxApiKey,
+        messagingProfileId: ackProfile,
+        fromE164: ackFrom,
+        toE164: from,
+        text,
+        idempotencyKey: `${eventId}:${keySuffix}`
+      });
+      if (!send.ok) console.error("follow-up ack reply", send.status, send.body.slice(0, 300));
+      else ackSent = text;
+    }
+    await persistOfferReplyJob({
+      supabase,
+      businessId,
+      eventId,
+      envelope,
+      from,
+      staffKind: "team",
+      ackSent
+    });
+    return new Response(JSON.stringify({ ok: true, follow_up_tag: keySuffix }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  // Recent leads, newest first. Staff rows are excluded because a teammate is
+  // never a lead (the rule this account already learned the hard way), and the
+  // sender themselves can never be the target.
+  const { data: rows } = await supabase
+    .from("contacts")
+    .select("id, name, customer_e164, tags, is_staff, updated_at")
+    .eq("business_id", businessId)
+    .order("updated_at", { ascending: false })
+    .limit(FOLLOW_UP_CANDIDATE_SCAN);
+  const candidates = ((rows ?? []) as Array<{
+    id: string;
+    name?: string | null;
+    customer_e164?: string | null;
+    tags?: string[] | null;
+    is_staff?: boolean | null;
+  }>)
+    .filter((r) => r.is_staff !== true && r.customer_e164 && r.customer_e164 !== from)
+    .map((r) => ({
+      contactId: r.id,
+      name: (r.name ?? "").trim(),
+      phone: r.customer_e164 as string,
+      tags: Array.isArray(r.tags) ? r.tags : []
+    }));
+
+  const match = matchFollowUpTarget(candidates, parsed.name);
+  if (match.kind === "none") {
+    return await ack(followUpNoLeadText(parsed.name), "fu-none");
+  }
+  if (match.kind === "ambiguous") {
+    return await ack(
+      followUpAmbiguityText(match.candidates.map((c) => c.name)),
+      "fu-ambiguous"
+    );
+  }
+
+  const target = candidates.find((c) => c.contactId === match.candidate.contactId)!;
+  // Already tagged: confirm rather than re-writing. A second write would emit
+  // a second tag_changed event and enroll the lead in a second cadence.
+  const already = target.tags.some((t) => t.trim().toLowerCase() === FOLLOW_UP_TAG.toLowerCase());
+  if (already) {
+    return await ack(followUpAckText(target.name), "fu-already");
+  }
+
+  const nextTags = [...target.tags, FOLLOW_UP_TAG];
+  const { error: updErr } = await supabase
+    .from("contacts")
+    .update({ tags: nextTags, updated_at: new Date().toISOString() })
+    .eq("id", target.contactId);
+  if (updErr) {
+    console.error("follow-up tag write", updErr);
+    return await ack(
+      "Could not mark that lead for follow-up just now. Please try again.",
+      "fu-error"
+    );
+  }
+  // The same chokepoint the dashboard tag editor and update_contact use, so
+  // the cadence flow starts identically however the tag was applied.
+  await enqueueContactEventRuns(supabase, businessId, {
+    kind: "tag_changed",
+    contact: { e164: target.phone, name: target.name, tags: nextTags },
+    tag: FOLLOW_UP_TAG,
+    change: "added",
+    dedupeKey: `ce:fu:${eventId}:${target.contactId}`
+  });
+  return await ack(followUpAckText(target.name), "fu-ok");
+}
+
+type FollowUpTagArgs = {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  /** The teammate's raw inbound text. */
+  body: string;
+  ackTo: string;
+  eventId: string;
+  envelope: unknown;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+};
+
 type UnclaimArgs = {
   // deno-lint-ignore no-explicit-any
   supabase: any;
@@ -2269,6 +2450,25 @@ serve(async (req: Request) => {
       // reach out), "2, <reason>" (pass + why), "86, <note>". The comma is the
       // signal that free text annotates the digit.
       const claimTf = parseClaimWithTimeframe(replyBody);
+
+      // "F" / "Needs Follow Up" / "<name>, F" from a teammate: mark a lead for
+      // the AI follow-up cadence. Checked BEFORE the offer digits because it is
+      // not a digit at all and cannot collide with them, and before the
+      // customer path so a teammate's instruction is never answered by the
+      // Coworker as if it were a customer message.
+      const followUpHandled = await tryFollowUpTag({
+        supabase,
+        businessId,
+        from,
+        body: replyBody,
+        ackTo: to,
+        eventId,
+        envelope,
+        telnyxApiKey,
+        messagingProfileId,
+        smsFromE164
+      });
+      if (followUpHandled) return followUpHandled;
 
       // route_to_team retroactive UNCLAIM ("86"): a teammate RELEASES a lead
       // they had claimed; the worker hands it back to the owner.
