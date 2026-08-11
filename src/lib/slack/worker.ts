@@ -162,6 +162,29 @@ async function runOneSlackJob(
     ? await resolveOwnerUiLocaleForEmail(business.owner_email).catch(() => "en" as const)
     : ("en" as const);
 
+  const history = await listSlackMessages(conversationId, SLACK_HISTORY_MESSAGES);
+  const historyMaxMessageId = history.length > 0 ? history[history.length - 1].id : 0;
+  const latestUser = [...history].reverse().find((m) => m.role === "user");
+  if (!latestUser) {
+    await failSlackJob({ jobId, errorCode: "no_user_message", terminal: true });
+    return false;
+  }
+
+  // Slack auto-clears the "is thinking" status only when the app posts INTO
+  // the status thread. DM replies post to the channel top level (there is no
+  // conversation thread), so the auto-clear never fires there and the
+  // indicator spins forever after the reply lands. Clear it explicitly at
+  // every terminal outcome; retryable failures keep it, honestly, since the
+  // sweep will run the turn again.
+  const statusThreadTs = conversation.thread_ts ?? latestUser.slack_ts ?? "";
+  const clearAssistantStatus = async () => {
+    await slackSetAssistantStatus(botToken, {
+      channel_id: conversation.channel_id,
+      thread_ts: statusThreadTs,
+      status: ""
+    }).catch(() => false);
+  };
+
   // Tier chokepoint (messenger worker precedent): terminal so the reclaim
   // never loops a starter tenant, but with an honest line in the thread,
   // since Slack silence reads as "broken", not "gated".
@@ -170,6 +193,7 @@ async function runOneSlackJob(
       ...replyTarget,
       text: slackTierBlockedMessage(locale)
     }).catch(() => undefined);
+    await clearAssistantStatus();
     await failSlackJob({ jobId, errorCode: "tier_blocked", terminal: true });
     return false;
   }
@@ -187,6 +211,7 @@ async function runOneSlackJob(
     if (identity) {
       if (identity.isBot) {
         // Belt and braces: the webhook already drops bot messages.
+        await clearAssistantStatus();
         await failSlackJob({ jobId, errorCode: "bot_user", terminal: true });
         return false;
       }
@@ -215,6 +240,7 @@ async function runOneSlackJob(
   if (spend !== null && spend.spendMicros >= spend.effectiveCapMicros) {
     const text = slackOverCapMessage(locale);
     const posted = await slackPostMessage(botToken, { ...replyTarget, text });
+    await clearAssistantStatus();
     await completeSlackJob({
       jobId,
       content: text,
@@ -224,13 +250,6 @@ async function runOneSlackJob(
     return true;
   }
 
-  const history = await listSlackMessages(conversationId, SLACK_HISTORY_MESSAGES);
-  const historyMaxMessageId = history.length > 0 ? history[history.length - 1].id : 0;
-  const latestUser = [...history].reverse().find((m) => m.role === "user");
-  if (!latestUser) {
-    await failSlackJob({ jobId, errorCode: "no_user_message", terminal: true });
-    return false;
-  }
   const speaker = displayName ?? "Teammate";
   const transcript = history
     .slice(0, -1)
@@ -308,7 +327,7 @@ async function runOneSlackJob(
   // EMAIL_SEND marker shows up, so raw blocks never render mid-stream.
   await slackSetAssistantStatus(botToken, {
     channel_id: conversation.channel_id,
-    thread_ts: conversation.thread_ts ?? latestUser.slack_ts ?? "",
+    thread_ts: statusThreadTs,
     status: "is thinking..."
   });
   const stream: SlackStreamHandle | null = await slackStartStream(botToken, replyTarget);
@@ -361,6 +380,7 @@ async function runOneSlackJob(
     if (lastAttempt) {
       const text = slackTurnFailedMessage(locale);
       const posted = await slackPostMessage(botToken, { ...replyTarget, text });
+      await clearAssistantStatus();
       await completeSlackJob({
         jobId,
         content: text,
@@ -400,6 +420,7 @@ async function runOneSlackJob(
   if (postedTs === null) {
     const posted = await slackPostMessage(botToken, { ...replyTarget, text: finalContent });
     if (!posted.ok) {
+      // Retryable: keep the status spinning, the sweep will run this again.
       await failSlackJob({
         jobId,
         errorCode: "post_failed",
@@ -410,6 +431,9 @@ async function runOneSlackJob(
     }
     postedTs = posted.ts;
   }
+  // The reply is visible; kill the indicator (a no-op wherever Slack already
+  // auto-cleared it, e.g. threaded mention replies).
+  await clearAssistantStatus();
 
   if (isOwner) {
     // Same silent durable-rule capture as dashboard turns.
