@@ -333,12 +333,6 @@ describe("send_whatsapp", () => {
  * text ChatGPT sent. Asserted at the producer (what the tool writes) rather
  * than at the label, because the label is downstream of this value.
  */
-/**
- * Outbound attribution. The dashboard thread view renders `mcp` as "Claude
- * connector", so before this the owner's own history credited Claude for a
- * text ChatGPT sent. Asserted at the producer (what the tool writes) rather
- * than at the label, because the label is downstream of this value.
- */
 describe("which assistant a send is credited to", () => {
   it("writes mcp_chatgpt when ChatGPT sent it", async () => {
     await runTool({ ...sendSmsTool }, { to: "+15550001111", text: "hi" }, {
