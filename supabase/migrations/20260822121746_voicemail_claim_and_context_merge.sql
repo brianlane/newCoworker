@@ -40,6 +40,13 @@ $$;
 -- the claim exclusive, so the winner is decided by the database rather than by
 -- the order two handlers happened to read in. Returns true only for the caller
 -- that flipped it, and that caller is the only one that speaks.
+--
+-- The claim key is deliberately NOT `voicemail_spoken`. Claiming happens before
+-- the stream stop and the speak, and a leg can die in that window (the
+-- voicemail system drops, the assistant ends the call). Reusing one key would
+-- let the hangup path resolve the run `voicemail_left` for a message nobody
+-- ever heard. `voicemail_spoken` is written separately, AFTER the speak
+-- returns, and is the only key the outcome is derived from.
 create or replace function public.voice_claim_voicemail_speak(
   p_call_control_id text
 )
@@ -52,17 +59,17 @@ declare
   v_claimed boolean;
 begin
   update voice_handoff_sessions
-     set context = coalesce(context, '{}'::jsonb) || '{"voicemail_spoken": true}'::jsonb
+     set context = coalesce(context, '{}'::jsonb) || '{"voicemail_claimed": true}'::jsonb
    where call_control_id = p_call_control_id
-     and coalesce(context->>'voicemail_spoken', '') <> 'true'
+     and coalesce(context->>'voicemail_claimed', '') <> 'true'
   returning true into v_claimed;
   return coalesce(v_claimed, false);
 end;
 $$;
 
--- Releasing the claim is how a FAILED speak avoids reporting a message that was
--- never left: without it the run would resolve `voicemail_left` on a leg where
--- nothing was said.
+-- Releasing the claim lets a retry delivery try again after a failed attempt.
+-- It clears only the claim: `voicemail_spoken` is never set unless a speak
+-- actually succeeded, so a released leg has nothing to unsay.
 create or replace function public.voice_release_voicemail_claim(
   p_call_control_id text
 )
@@ -72,7 +79,7 @@ security definer
 set search_path = public
 as $$
   update voice_handoff_sessions
-     set context = coalesce(context, '{}'::jsonb) - 'voicemail_spoken'
+     set context = coalesce(context, '{}'::jsonb) - 'voicemail_claimed'
    where call_control_id = p_call_control_id;
 $$;
 

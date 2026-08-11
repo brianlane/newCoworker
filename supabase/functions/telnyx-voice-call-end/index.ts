@@ -775,6 +775,19 @@ async function speakVoicemail(
   callControlId: string,
   script: string
 ): Promise<Response> {
+  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  /**
+   * End the leg the way the pre-voicemail path did. Used whenever a message
+   * cannot be left: the Gemini bridge is still attached from call.answered, so
+   * leaving the leg up means the assistant keeps talking into the recording and
+   * the run stays parked until something else ends the call.
+   */
+  const giveUpAndHangUp = async (label: string): Promise<Response> => {
+    await telnyxStreamingStop(apiKey, callControlId);
+    await telnyxHangupCall(apiKey, callControlId);
+    return jsonOk(label);
+  };
+
   // Claim the right to speak in ONE statement. Check-then-speak loses to
   // Telnyx's at-least-once redelivery: two deliveries both read "not spoken"
   // and the assistant talks over itself into a single recording.
@@ -783,39 +796,56 @@ async function speakVoicemail(
   });
   if (claimErr) {
     console.error("amd: voicemail claim failed", claimErr);
-    return jsonOk("amd_voicemail_claim_failed");
+    return await giveUpAndHangUp("amd_voicemail_claim_failed");
   }
-  if (claimed !== true) return jsonOk("amd_voicemail_already_spoken");
+  // Someone else holds the claim. They own the leg's ending, so leave it alone
+  // rather than hanging up a call that is mid-message.
+  if (claimed !== true) return jsonOk("amd_voicemail_already_claimed");
 
-  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
   // Silence the Gemini bridge BEFORE speaking. It was attached on
   // call.answered, before anyone knew a machine had picked up, and hanging up
   // is what used to silence it. A leg held open to leave a message has to stop
   // the fork explicitly or the recording gets the assistant talking through
-  // the greeting and over the message. Best-effort: a failure here is a worse
-  // recording, not a reason to leave no message at all.
+  // the greeting and over the message.
   const stopped = await telnyxStreamingStop(apiKey, callControlId);
   if (!stopped.ok) {
+    // Speaking now would record our message UNDER the assistant's chatter.
+    // A clean "no message" beats an unintelligible one.
     console.error(
       "amd: streaming_stop before voicemail failed",
       callControlId,
       stopped.status,
       (await stopped.text()).slice(0, 300)
     );
+    const { error: relErr } = await supabase.rpc("voice_release_voicemail_claim", {
+      p_call_control_id: callControlId
+    });
+    if (relErr) console.error("amd: voicemail claim release failed", relErr);
+    return await giveUpAndHangUp("amd_voicemail_stream_stop_failed");
   }
 
   const res = await telnyxSpeak(apiKey, callControlId, script);
   if (!res.ok) {
-    // Nothing was left, so release the claim: otherwise the run resolves
-    // voicemail_left on a leg where nobody said anything. Then fall back to
-    // the pre-voicemail behavior rather than holding the leg open.
     console.error("amd: voicemail speak failed", callControlId, res.status, await res.text());
     const { error: relErr } = await supabase.rpc("voice_release_voicemail_claim", {
       p_call_control_id: callControlId
     });
     if (relErr) console.error("amd: voicemail claim release failed", relErr);
-    await telnyxHangupCall(apiKey, callControlId);
-    return jsonOk("amd_voicemail_speak_failed");
+    return await giveUpAndHangUp("amd_voicemail_speak_failed");
+  }
+
+  // Only NOW is a message actually going out. voicemail_spoken is what the
+  // hangup path derives the outcome reason from and what call.speak.ended
+  // checks before releasing the leg, so it is deliberately written after the
+  // speak succeeds rather than as part of the claim: a leg that died between
+  // claiming and speaking must not report a message nobody heard.
+  const { error: markErr } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: callControlId,
+    p_patch: { voicemail_spoken: true }
+  });
+  if (markErr) {
+    // The message IS being spoken; losing the stamp only understates it.
+    console.error("amd: voicemail_spoken stamp failed", markErr);
   }
   return jsonOk("amd_voicemail_spoken");
 }
