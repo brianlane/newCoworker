@@ -267,7 +267,17 @@ false), and broadcast name matching is full-name ("Gabrielle Mota";
 Seller auto-call (Aug 7 2026): `amy-seller-ai-call-definition.ts` (pure
 builders) driven by `amy-seller-ai-call-patch.ts` (idempotent, dry-run by
 default, `--revert` restores the exact previous definition from the ledger).
-The AI now owns FIRST contact on both seller sources: it dials the seller
+
+**Only the Clever half of this is live.** The builder carries a
+ReferralExchange variant and the intent was both seller sources, but the ledger
+shows the patch applied twice, 2026-08-07 at 20:17 and again at 22:48, both
+times against `Clever Lead - Accept` alone. The live `ReferralExchange Lead`
+definition still has zero `place_ai_call` steps (verified Aug 11 2026), so a
+ReferralExchange seller gets the intro SMS/email and the team offer and no AI
+first contact at all. Closing it is a `--only "ReferralExchange Lead"` run, not
+new code. Read the rest of this paragraph as the DESIGN, not as production.
+
+On Clever, where it did land, the AI owns FIRST contact: it dials the seller
 within a minute of the lead landing (skipping $1M+ leads, which stay with
 Amy), pitches the listing with Amy's approved script (the Clever variant
 carries the cash-offer angle and a new `cash_offers` extraction field copied
@@ -297,6 +307,48 @@ same shape as the address gap #1202 closed. Watch the collapseEmpty trap
 documented in both scripts: route_to_team templates render with no
 collapseEmpty, so any price var must extract with a "none" fallback or a
 teammate gets a bare "Price:" label).
+
+`amy-price-every-lead-notice.ts` (Aug 11 2026) finishes that job across the
+whole account: 47 templates on all seven lead flows, so every team-facing text
+about a lead carries the figure. The Aug 7 script had patched the two flows Amy
+happened to have a notice from, which left the same partial coverage everywhere
+else: 15 `claimedNotifyTemplate` / `ownerFallbackTemplate` where the offer named
+the price and the "you got it" / "nobody took it" follow-ups did not, all 13
+`unclaimedReminders.detailsTemplate`, and the AI-call gap/failure alerts, the
+late-contact notices and every `bp_forward` relay. Four things worth knowing
+before touching it:
+
+- **Its per-flow target lists are exhaustive on purpose**, naming templates that
+  already carry the price as well as the ones that did not. Nothing is patched
+  twice (see the next point), so the lists double as a standing assertion of
+  coverage, and a step id that disappears aborts the run rather than repeating
+  the three-quarters-applied outcome the tool-toggle policy had.
+- **Presence is tested on the price VAR, not on a "Price:" line.** Most of these
+  notices state the figure in prose ("(~{{vars.price}})", "in Mesa, around
+  {{vars.price}}"), so the Aug 7 script's exact-line test would have added a
+  second labelled copy underneath the sentence. The dry run is what caught it.
+- **Two flows had no price to template, so the script adds the extraction
+  first.** Clever Spoke Check browses the SAME Clever lead page the accept flow
+  does, so its `read_page` gets the identical field, worded verbatim from
+  `CLEVER_PRICE_FIELD`. Follow Up Requested reads a contact-event or Amy's
+  Run-now text and usually has no figure, so its field answers "none" more often
+  than not; a real figure there would mean recalling and browsing the lead page
+  on a same-day urgent path, deliberately not done.
+- **Lead-facing copy is deliberately untouched.** None of the 15 SMS bodies
+  addressed to a lead carries a price, and that is a decision, not a gap: the
+  figure is the referral network's estimated home value, and quoting it back at
+  a seller is a valuation claim sitting directly beside Amy's own "I have an
+  appraiser to price your listing with precision" pitch.
+
+The same PR fixed the guard that should have caught the reminder gap:
+`unclaimedReminders.detailsTemplate` was missing from `templateStringsForStep`
+in `src/lib/ai-flows/schema.ts`, so alone among outbound templates it was never
+scope-checked, and a var no step produced would have rendered as a bare label on
+every nudge with nothing flagging it at author time. It also fixed `--revert` on
+`amy-seller-ai-call-patch.ts` and `amy-speed-to-lead-patch.ts`, which filtered
+the ledger on a `script_path` column that does not exist (it is `script`, the
+basename), so both rollbacks exited 1 on a PostgREST error instead of restoring
+anything.
 
 Show the team what the lead said (Aug 10 2026): the same
 `amy-unclaimed-reminders-patch.ts` also sets `shareContactHistory` on all 13
