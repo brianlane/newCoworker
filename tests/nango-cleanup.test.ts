@@ -189,4 +189,25 @@ describe("revokeNangoConnectionsForBusiness (wipe path)", () => {
       error: "weird"
     });
   });
+
+  it("snapshot EXCLUDES direct rows, which Nango has never heard of", async () => {
+    // A direct row's connection_id is a synthetic `direct:<uuid>`. Including it
+    // would make teardown try to revoke a connection that never existed on
+    // Nango and log a spurious leaked-connection warning.
+    //
+    // Note the third row: an unset transport is still offered to Nango. Failing
+    // to revoke leaks a real grant, while revoking one Nango does not have is a
+    // no-op, so the filter is deliberately not symmetric.
+    mockCreateClient.mockResolvedValue(mockDb());
+    mockListConnections.mockResolvedValue([
+      { provider_config_key: "gmail", connection_id: "nango-1", transport: "nango" },
+      { provider_config_key: "outlook", connection_id: "direct:abc", transport: "direct" },
+      { provider_config_key: "google", connection_id: "legacy-1" }
+    ]);
+
+    const rows = await snapshotNangoConnectionLinks("biz-1");
+
+    expect(rows.map((r) => r.connection_id)).toEqual(["nango-1", "legacy-1"]);
+  });
+
 });

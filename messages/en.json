@@ -1859,7 +1859,10 @@
     },
     "integrationsWorkspace": {
       "capUsage": "{used} of {max} workspace connections used",
-      "capReached": "Your plan includes {max, plural, one {# workspace connection} other {# workspace connections}}. Remove one or upgrade your plan to connect another."
+      "capReached": "Your plan includes {max, plural, one {# workspace connection} other {# workspace connections}}. Remove one or upgrade your plan to connect another.",
+      "connectMicrosoft": "Connect Outlook",
+      "connectMicrosoftHelp": "Microsoft 365 or a personal Outlook account. Covers mail and calendar.",
+      "connectOther": "Connect Google or another service"
     },
     "humanHandoff": {
       "title": "Human handoff",

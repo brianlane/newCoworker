@@ -76,7 +76,19 @@ export async function DELETE(request: Request) {
       return errorResponse("CONFLICT", connectionInUseMessage(referencingFlows), 409);
     }
 
-    if (process.env.NANGO_SECRET_KEY) {
+    // Only a Nango row has anything on Nango's side to revoke. A direct row's
+    // connection_id is a synthetic `direct:<uuid>` that Nango has never heard
+    // of, so calling deleteConnection with it fails and would 500 every single
+    // direct disconnect.
+    //
+    // For a direct row the teardown IS deleting the ciphertext below. Microsoft
+    // publishes no scoped revoke endpoint (there is no equivalent of Zoom's
+    // POST /oauth/revoke), so the access token dies within the hour and the
+    // refresh token at the tenant's inactivity window. An owner who wants the
+    // grant gone from their side immediately does it at
+    // account.live.com/consent/Manage or myapps.microsoft.com; the disconnect
+    // copy says so.
+    if (row.transport === "nango" && process.env.NANGO_SECRET_KEY) {
       try {
         const nango = getNangoClient();
         await nango.deleteConnection(row.provider_config_key, row.connection_id);

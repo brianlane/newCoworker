@@ -47,7 +47,20 @@ export async function snapshotNangoConnectionLinks(
 ): Promise<NangoConnectionLink[]> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
-    return await listWorkspaceOAuthConnections(businessId, db);
+    const rows = await listWorkspaceOAuthConnections(businessId, db);
+    // Direct rows have nothing on Nango's side: their connection_id is a
+    // synthetic `direct:<uuid>` Nango has never seen, so including them would
+    // make every teardown log a spurious "leaked connection" warning for a
+    // connection that never existed there. Their teardown is the ciphertext
+    // going away with the row (Microsoft publishes no scoped revoke endpoint;
+    // see the workspace DELETE route for the full note).
+    //
+    // Excludes `direct` rather than including `nango` deliberately. The two
+    // are not symmetric here: a row whose transport is somehow unset or
+    // unrecognized must still be offered to Nango, because failing to revoke
+    // leaks a real grant and burns account quota forever, while revoking a
+    // connection Nango does not have is a harmless no-op.
+    return rows.filter((row) => row.transport !== "direct");
   } catch (err) {
     logger.warn("nango cleanup: snapshot failed (revocation will be skipped)", {
       businessId,

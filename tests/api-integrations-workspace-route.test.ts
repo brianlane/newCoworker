@@ -222,4 +222,40 @@ describe("api/integrations/workspace", () => {
     );
     expect(res.status).toBe(500);
   });
+
+  it("does NOT call Nango when removing a DIRECT row", async () => {
+    // A direct row's connection_id is a synthetic `direct:<uuid>` that Nango
+    // has never seen. Calling deleteConnection with it fails, and before the
+    // transport check that failure returned a 500, wedging every single direct
+    // disconnect. The teardown for a direct row is deleting the ciphertext.
+    process.env.NANGO_SECRET_KEY = "nango-secret";
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      id: connectionRowId,
+      business_id: businessId,
+      provider_config_key: "outlook",
+      connection_id: "direct:abc",
+      metadata: {},
+      transport: "direct" as const,
+      is_active: true,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    } as never);
+    vi.mocked(flowsReferencingWorkspaceConnection).mockResolvedValue([]);
+    vi.mocked(deleteWorkspaceOAuthConnection).mockResolvedValue({ id: connectionRowId } as never);
+    const deleteNango = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(getNangoClient).mockReturnValue({ deleteConnection: deleteNango } as never);
+
+    const res = await DELETE(
+      new Request("http://localhost/api/integrations/workspace", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, id: connectionRowId })
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(deleteNango).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalled();
+  });
+
 });

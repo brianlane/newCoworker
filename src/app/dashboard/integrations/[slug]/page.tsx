@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
+import { MicrosoftConnectButton } from "@/components/dashboard/MicrosoftConnectButton";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
@@ -40,10 +41,16 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Workspace"
-          description="Gmail, Google Calendar, Drive, Microsoft 365, and more; add each integration simply with Nango. Slack and Zoom connect from their own integration pages."
+          description="Outlook connects directly. Gmail, Google Calendar, Drive and more connect through Nango. Slack and Zoom connect from their own integration pages."
           icon={getIntegration("workspace")!.icon}
           status={ctx.workspaceConnections.length > 0 ? "connected" : "disconnected"}
         >
+          <MicrosoftConnectButton
+            businessId={businessId}
+            atCap={
+              ctx.workspaceConnectionCap.max !== null && ctx.workspaceConnectionCap.atCap
+            }
+          />
           <NangoEmailIntegrationActions
             businessId={businessId}
             connections={ctx.workspaceConnections.map((r) => ({
