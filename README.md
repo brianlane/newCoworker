@@ -815,6 +815,12 @@ knowing up front: OpenAI retired `ai-plugin.json`, and a ChatGPT app today
 **is** a remote MCP server plus listing metadata, so the transport, the tools,
 the OAuth, and the per-business role checks above carry over unchanged.
 
+**Live since 2026-08-11**, verified end to end against production: discovery,
+dynamic client registration, consent, token exchange, and tool calls returning
+real data in a ChatGPT conversation. Adding it needs a **paid** ChatGPT plan
+(developer mode under Settings, Connectors, Advanced); the connector UI does
+not work on Free.
+
 A route per client rather than one shared endpoint, because in stateless
 Streamable HTTP only `initialize` carries `clientInfo`: every later tool call
 is an independent request whose only client signal is a User-Agent, so a
