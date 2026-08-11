@@ -30,7 +30,7 @@
  *    browser and back inside the state, which removes the only thing PKCE buys.
  *    If this ever becomes a public client, PKCE stops being optional.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createOAuthStateCodec } from "@/lib/oauth/state";
 
 /**
  * `common` = personal Microsoft accounts AND work/school tenants. See the
@@ -91,6 +91,35 @@ export class MicrosoftOAuthError extends Error {
   }
 }
 
+/**
+ * Shared signed-state codec (src/lib/oauth/state.ts). Microsoft is the fifth
+ * first-party integration; that module was extracted specifically so this one
+ * would not be a fifth copy of the same HMAC dance. The label is domain
+ * separation: a state minted for Google can never verify here.
+ */
+const stateCodec = createOAuthStateCodec({
+  label: "microsoft-oauth-state",
+  ttlMs: MICROSOFT_STATE_TTL_MS,
+  onMissingSecret: () =>
+    new MicrosoftOAuthError(
+      "not_configured",
+      "No key available to sign the Microsoft OAuth state"
+    )
+});
+
+/** Mints a signed state bound to `businessId`. */
+export function createMicrosoftOAuthState(businessId: string, now = Date.now()): string {
+  return stateCodec.create(businessId, undefined, now);
+}
+
+/** Verifies signature then expiry; returns the bound business, or null. */
+export function verifyMicrosoftOAuthState(
+  state: string,
+  now = Date.now()
+): { businessId: string } | null {
+  return stateCodec.verify(state, now);
+}
+
 export type MicrosoftOAuthConfig = {
   clientId: string;
   clientSecret: string;
@@ -123,67 +152,6 @@ export function microsoftOAuthConfigured(): boolean {
   } catch {
     return false;
   }
-}
-
-function stateKey(): Buffer {
-  // Same key source as the integration-secret envelope: a dedicated key when
-  // set, else the service-role key (always present server-side).
-  const secret =
-    process.env.INTEGRATIONS_ENCRYPTION_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!secret) {
-    throw new MicrosoftOAuthError(
-      "not_configured",
-      "No key available to sign the Microsoft OAuth state"
-    );
-  }
-  return createHmac("sha256", "microsoft-oauth-state").update(secret).digest();
-}
-
-function signStatePayload(payload: string): string {
-  return createHmac("sha256", stateKey()).update(payload).digest("base64url");
-}
-
-/**
- * Opaque, signed state: base64url(JSON{businessId, exp, nonce}) + "." + HMAC.
- * Stateless by design, so no server-side session has to survive the round trip
- * through Microsoft.
- */
-export function createMicrosoftOAuthState(businessId: string, now = Date.now()): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      b: businessId,
-      e: now + MICROSOFT_STATE_TTL_MS,
-      n: randomBytes(8).toString("base64url")
-    }),
-    "utf8"
-  ).toString("base64url");
-  return `${payload}.${signStatePayload(payload)}`;
-}
-
-/** Verifies signature + expiry; returns the bound business, or null. */
-export function verifyMicrosoftOAuthState(
-  state: string,
-  now = Date.now()
-): { businessId: string } | null {
-  const dot = state.indexOf(".");
-  if (dot <= 0 || dot === state.length - 1) return null;
-  const payload = state.slice(0, dot);
-  const sig = state.slice(dot + 1);
-  const expected = signStatePayload(payload);
-  const sigBuf = Buffer.from(sig, "utf8");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
-    return null;
-  }
-  let parsed: { b?: unknown; e?: unknown };
-  try {
-    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof parsed.b !== "string" || typeof parsed.e !== "number") return null;
-  if (parsed.e < now) return null;
-  return { businessId: parsed.b };
 }
 
 /**
