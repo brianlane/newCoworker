@@ -76,6 +76,12 @@ export const sendSmsTool = defineMcpTool({
   name: "send_sms",
   title: "Send a text message",
   annotations: TOOL_BEHAVIOR.writeExternal,
+  outputSchema: z.object({
+    sent: z.boolean(),
+    to: z.string(),
+    message_id: z.string(),
+    channel: z.string()
+  }),
   description:
     "Send a text message to a customer from the business's phone number. Counts against the business's monthly SMS quota exactly like a dashboard send; the message appears in the owner's Text history." +
     MCP_TIMEZONE_RULE,
@@ -148,6 +154,12 @@ export const sendWhatsAppTool = defineMcpTool({
   name: "send_whatsapp",
   title: "Send a WhatsApp message",
   annotations: TOOL_BEHAVIOR.writeExternal,
+  outputSchema: z.object({
+    sent: z.boolean(),
+    to: z.string(),
+    message_id: z.string().nullable(),
+    via: z.string().nullable()
+  }),
   description:
     "Send a WhatsApp message to a customer from the business's connected WhatsApp Business number. Inside the recipient's 24-hour conversation window the text goes out as written; outside it, an approved template carries the message (Meta bills the business per template message). Fails with guidance when WhatsApp isn't connected." +
     MCP_TIMEZONE_RULE,

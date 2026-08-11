@@ -14,6 +14,13 @@ import { McpToolError, type McpAuthUser } from "@/lib/mcp/auth";
 
 export type McpTextResult = {
   content: Array<{ type: "text"; text: string }>;
+  /**
+   * The same payload as `content`, unstringified, for clients that can read
+   * data rather than parse prose. Required whenever the tool declares an
+   * `outputSchema`: the SDK answers "has an output schema but no structured
+   * content was provided" and fails the call otherwise.
+   */
+  structuredContent?: Record<string, unknown>;
   isError?: true;
 };
 
@@ -85,6 +92,21 @@ export type McpToolDef = {
   description: string;
   annotations: McpToolAnnotations;
   schema: z.ZodRawShape;
+  /**
+   * What the handler returns, so a client can consume the result as data.
+   *
+   * Object-rooted and REQUIRED, for a blunt reason: the SDK validates every
+   * successful result against this, so a schema that disagrees with its
+   * handler turns a working tool into an error result. That makes the schema
+   * a promise the handler has to keep, and the per-tool tests check the
+   * handler's real output against it rather than a fixture.
+   *
+   * Keep to plainly representable constructs. Conversion to JSON Schema is
+   * memoised at REGISTRATION, so an unrepresentable one (a `.transform()`,
+   * a `.refine()`) throws when the server is built and takes down every
+   * request rather than one tool.
+   */
+  outputSchema: z.ZodType<Record<string, unknown>>;
   handler: (args: Record<string, unknown>, auth: McpAuthUser) => Promise<unknown>;
 };
 
@@ -95,6 +117,7 @@ export function defineMcpTool<Shape extends z.ZodRawShape>(def: {
   description: string;
   annotations: McpToolAnnotations;
   schema: Shape;
+  outputSchema: z.ZodType<Record<string, unknown>>;
   handler: (
     args: z.infer<z.ZodObject<Shape>>,
     auth: McpAuthUser
@@ -103,8 +126,23 @@ export function defineMcpTool<Shape extends z.ZodRawShape>(def: {
   return def as unknown as McpToolDef;
 }
 
+/**
+ * Serialize a handler's return value for the model AND for the client.
+ *
+ * The text block stays byte-identical to what it always was, so Claude's
+ * behavior does not change; `structuredContent` is added alongside it, which
+ * is what the spec recommends for compatibility. A non-object return would
+ * have nothing legal to put in `structuredContent` (it is an object field),
+ * so it degrades to text only rather than emitting something the wire
+ * rejects. Every tool here returns an object, so that path is a guard, not a
+ * behavior.
+ */
 export function jsonResult(data: unknown): McpTextResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  const content = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
+  const isPlainObject = typeof data === "object" && data !== null && !Array.isArray(data);
+  return isPlainObject
+    ? { content, structuredContent: data as Record<string, unknown> }
+    : { content };
 }
 
 export function errorResult(message: string): McpTextResult {

@@ -39,6 +39,12 @@ export const updateNotificationPreferencesTool = defineMcpTool({
   name: "update_notification_preferences",
   title: "Update alert settings",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.looseObject({
+    // Exactly what this call changed (a Partial of the toggle map), not a
+    // list of key names.
+    updated: z.record(z.string(), z.boolean()),
+    settings: z.record(z.string(), z.boolean())
+  }),
   description:
     "Turn the business's notification/alert toggles on or off (e.g. customer_reply_alerts to text the owner the moment a client texts the business). Managers and owners only. Booleans only — the alert phone number and email cannot be changed here (dashboard Settings → Notifications). Pass only the toggles the user asked to change.",
   schema: {
@@ -66,6 +72,12 @@ export const getNotificationPreferencesTool = defineMcpTool({
   name: "get_notification_preferences",
   title: "Get alert settings",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.looseObject({
+    settings: z.record(z.string(), z.boolean()),
+    alert_phone_configured: z.boolean(),
+    alert_email_configured: z.boolean(),
+    unsubscribed: z.boolean()
+  }),
   description:
     "Read the business's notification/alert toggle settings (which alerts are on or off, and whether an alert phone/email is configured). Managers and owners only.",
   schema: {

@@ -23,6 +23,7 @@ import {
   bookCalendarAppointment,
   findCalendarSlots
 } from "@/lib/calendar-tools/handlers";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 
@@ -46,7 +47,7 @@ describe("calendar_find_slots", () => {
   it("returns the core's slot data", async () => {
     const data = { slots: [{ startIso: "s", endIso: "e" }], timezone: "UTC" };
     vi.mocked(findCalendarSlots).mockResolvedValue({ ok: true, data });
-    const result = await calendarFindSlotsTool.handler(
+    const result = await runTool(calendarFindSlotsTool, 
       { durationMinutes: 30, purpose: "consult" },
       AUTH
     );
@@ -68,7 +69,7 @@ describe("calendar_find_slots", () => {
       detail: "calendar_not_connected"
     });
     await expect(
-      calendarFindSlotsTool.handler({ durationMinutes: 30 }, AUTH)
+      runTool(calendarFindSlotsTool, { durationMinutes: 30 }, AUTH)
     ).rejects.toThrow(/No calendar is connected/);
   });
 });
@@ -84,7 +85,7 @@ describe("calendar_book_appointment", () => {
   it("books through the shared core", async () => {
     const data = { eventId: "evt-1" };
     vi.mocked(bookCalendarAppointment).mockResolvedValue({ ok: true, data });
-    const result = await calendarBookAppointmentTool.handler(ARGS, AUTH);
+    const result = await runTool(calendarBookAppointmentTool, ARGS, AUTH);
     expect(bookCalendarAppointment).toHaveBeenCalledWith(
       "biz-1",
       expect.objectContaining({ summary: "Consult", attendeeName: "Ann" })
@@ -97,7 +98,7 @@ describe("calendar_book_appointment", () => {
       ok: false,
       detail: "calendar_book_failed"
     });
-    await expect(calendarBookAppointmentTool.handler(ARGS, AUTH)).rejects.toThrow(
+    await expect(runTool(calendarBookAppointmentTool, ARGS, AUTH)).rejects.toThrow(
       /re-check with calendar_find_slots/
     );
   });
@@ -109,14 +110,14 @@ describe("calendar_book_appointment", () => {
       message:
         "This person already has an upcoming appointment: Wednesday, July 22, 2026 at 12:00 PM EDT. Do NOT book another one."
     });
-    await expect(calendarBookAppointmentTool.handler(ARGS, AUTH)).rejects.toThrow(
+    await expect(runTool(calendarBookAppointmentTool, ARGS, AUTH)).rejects.toThrow(
       /already has an upcoming appointment: Wednesday, July 22/
     );
   });
 
   it("passes allowAdditional through to the core", async () => {
     vi.mocked(bookCalendarAppointment).mockResolvedValue({ ok: true, data: { eventId: "e" } });
-    await calendarBookAppointmentTool.handler({ ...ARGS, allowAdditional: true }, AUTH);
+    await runTool(calendarBookAppointmentTool, { ...ARGS, allowAdditional: true }, AUTH);
     expect(bookCalendarAppointment).toHaveBeenCalledWith(
       "biz-1",
       expect.objectContaining({ allowAdditional: true })

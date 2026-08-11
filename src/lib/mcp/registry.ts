@@ -70,7 +70,8 @@ export function registerMcpTools(server: McpServer): void {
         title: def.title,
         description: def.description,
         annotations: def.annotations,
-        inputSchema: z.object(def.schema)
+        inputSchema: z.object(def.schema),
+        outputSchema: def.outputSchema
       },
       async (args: Record<string, unknown>, ctx: unknown): Promise<McpTextResult> => {
         const auth = authFromContext(ctx);

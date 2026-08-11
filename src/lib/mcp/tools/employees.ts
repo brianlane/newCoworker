@@ -78,10 +78,43 @@ function availabilityArgs(args: {
   };
 }
 
+/**
+ * The roster row as `manageEmployee` reports it back. Loose because the shape
+ * is owned by src/lib/employees/manage-tool.ts, and a field added there must
+ * not turn every roster write into an error result here.
+ */
+const EMPLOYEE_SHAPE = z.looseObject({
+  id: z.string(),
+  name: z.string(),
+  phoneE164: z.string(),
+  email: z.string().nullable(),
+  active: z.boolean(),
+  leadRotation: z.boolean(),
+  namedLeads: z.boolean(),
+  namedGroupOffers: z.boolean(),
+  wholeTeamOffers: z.boolean()
+});
+
 export const listEmployeesTool = defineMcpTool({
   name: "list_employees",
   title: "List the team roster",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    employees: z.array(
+      z.looseObject({
+        name: z.string(),
+        phone: z.string().nullable(),
+        email: z.string().nullable(),
+        active: z.boolean(),
+        weekly_schedule: z.string().nullable(),
+        preferred_times: z.string().nullable(),
+        lead_rotation: z.boolean(),
+        named_leads: z.boolean(),
+        named_group_offers: z.boolean(),
+        whole_team_offers: z.boolean()
+      })
+    )
+  }),
   description:
     "List the business's employee roster: names, numbers, whether each is active, their working hours, and how each one receives leads (rotation, named group offers, whole-team offers).",
   schema: { business_id: businessIdField },
@@ -115,6 +148,11 @@ export const createEmployeeTool = defineMcpTool({
   name: "create_employee",
   title: "Add a team member",
   annotations: TOOL_BEHAVIOR.writeLocal,
+  outputSchema: z.object({
+    created: z.boolean(),
+    employee: EMPLOYEE_SHAPE,
+    note: z.string().optional()
+  }),
   description:
     "Add someone to the employee roster so lead-routing automations can offer them leads. Read the number back to the owner after adding: a wrong digit sends their leads to a stranger.",
   schema: {
@@ -160,6 +198,11 @@ export const updateEmployeeTool = defineMcpTool({
   name: "update_employee",
   title: "Update a team member",
   annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    updated: z.boolean(),
+    employee: EMPLOYEE_SHAPE,
+    note: z.string().optional()
+  }),
   description:
     "Change an existing roster member: their name, number, email, working hours, whether they are active, and how they receive leads. Deactivating someone or turning off lead rotation immediately redirects live leads to other people, so confirm with the owner first.",
   schema: {

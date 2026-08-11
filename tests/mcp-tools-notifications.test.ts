@@ -27,6 +27,7 @@ import {
   defaultNotificationPreferencesRow,
   getNotificationPreferences
 } from "@/lib/db/notification-preferences";
+import { runTool } from "./helpers/run-mcp-tool";
 
 /**
  * Claude-connector notification tools: manage_settings-gated (manager+, the
@@ -58,7 +59,7 @@ beforeEach(() => {
 
 describe("update_notification_preferences (MCP)", () => {
   it("requires manage_settings and applies toggles through the shared core", async () => {
-    const result = (await updateNotificationPreferencesTool.handler(
+    const result = (await runTool(updateNotificationPreferencesTool, 
       { customer_reply_alerts: true },
       AUTH
     )) as { updated: Record<string, boolean> };
@@ -85,7 +86,7 @@ describe("update_notification_preferences (MCP)", () => {
       message: "Pass at least one toggle."
     });
     await expect(
-      updateNotificationPreferencesTool.handler({}, AUTH)
+      runTool(updateNotificationPreferencesTool, {}, AUTH)
     ).rejects.toThrow(/at least one toggle/i);
 
     vi.mocked(applyNotificationPreferenceToggles).mockResolvedValue({
@@ -93,7 +94,7 @@ describe("update_notification_preferences (MCP)", () => {
       detail: "update_failed"
     });
     await expect(
-      updateNotificationPreferencesTool.handler({ sms_urgent: true }, AUTH)
+      runTool(updateNotificationPreferencesTool, { sms_urgent: true }, AUTH)
     ).rejects.toThrow(/update_failed/);
   });
 
@@ -102,7 +103,7 @@ describe("update_notification_preferences (MCP)", () => {
       new McpToolError("Your role does not allow this.")
     );
     await expect(
-      updateNotificationPreferencesTool.handler({ customer_reply_alerts: true }, AUTH)
+      runTool(updateNotificationPreferencesTool, { customer_reply_alerts: true }, AUTH)
     ).rejects.toThrow(/role does not allow/);
     expect(applyNotificationPreferenceToggles).not.toHaveBeenCalled();
   });
@@ -110,7 +111,7 @@ describe("update_notification_preferences (MCP)", () => {
 
 describe("get_notification_preferences (MCP)", () => {
   it("answers the toggle map plus recipient presence, never the recipients", async () => {
-    const result = (await getNotificationPreferencesTool.handler({}, AUTH)) as {
+    const result = (await runTool(getNotificationPreferencesTool, {}, AUTH)) as {
       settings: Record<string, boolean>;
       alert_phone_configured: boolean;
       alert_email_configured: boolean;
@@ -127,7 +128,7 @@ describe("get_notification_preferences (MCP)", () => {
 
   it("a business with no prefs row answers the registry defaults", async () => {
     vi.mocked(getNotificationPreferences).mockResolvedValue(null);
-    const result = (await getNotificationPreferencesTool.handler({}, AUTH)) as {
+    const result = (await runTool(getNotificationPreferencesTool, {}, AUTH)) as {
       settings: Record<string, boolean>;
     };
     expect(result.settings.customer_reply_alerts).toBe(false);

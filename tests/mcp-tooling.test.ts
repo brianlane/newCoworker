@@ -28,6 +28,7 @@ describe("defineMcpTool / result helpers", () => {
       title: "Demo",
       description: "d",
       annotations: TOOL_BEHAVIOR.readLocal,
+      outputSchema: z.object({}).loose(),
       schema: { x: z.string() },
       handler: async ({ x }) => ({ x })
     });
@@ -37,10 +38,29 @@ describe("defineMcpTool / result helpers", () => {
     expect(def.annotations).toEqual(TOOL_BEHAVIOR.readLocal);
   });
 
-  it("jsonResult pretty-prints; errorResult flags isError", () => {
+  it("jsonResult pretty-prints AND carries the same payload as data", () => {
+    // The text block stays byte-identical to what it always was, so a client
+    // reading prose sees no change; structuredContent is added alongside it.
     expect(jsonResult({ a: 1 })).toEqual({
-      content: [{ type: "text", text: JSON.stringify({ a: 1 }, null, 2) }]
+      content: [{ type: "text", text: JSON.stringify({ a: 1 }, null, 2) }],
+      structuredContent: { a: 1 }
     });
+  });
+
+  it("omits structuredContent for a value that cannot legally be one", () => {
+    // structuredContent is an object field on the wire. Arrays, primitives and
+    // null degrade to text rather than emitting something the transport
+    // rejects. No tool returns these, so this is a guard rather than behavior.
+    for (const value of [[1, 2], "plain", 42, null]) {
+      const result = jsonResult(value);
+      expect(result.structuredContent, JSON.stringify(value)).toBeUndefined();
+      expect(result.content[0].text).toBe(JSON.stringify(value, null, 2));
+    }
+  });
+
+  it("errorResult flags isError and never carries structured data", () => {
+    // The SDK skips output validation on isError, and the spec forbids
+    // structuredContent there, so a refusal must stay text only.
     expect(errorResult("nope")).toEqual({
       content: [{ type: "text", text: "nope" }],
       isError: true
@@ -54,6 +74,7 @@ describe("runMcpTool", () => {
     title: "Ok",
     description: "d",
     annotations: TOOL_BEHAVIOR.readLocal,
+    outputSchema: z.object({}).loose(),
     schema: {},
     handler: async () => ({ fine: true })
   });
@@ -70,6 +91,7 @@ describe("runMcpTool", () => {
       title: "Refuses",
       description: "d",
       annotations: TOOL_BEHAVIOR.readLocal,
+      outputSchema: z.object({}).loose(),
       schema: {},
       handler: async () => {
         throw new McpToolError("no permission");
@@ -89,6 +111,7 @@ describe("runMcpTool", () => {
       title: "Boom",
       description: "d",
       annotations: TOOL_BEHAVIOR.readLocal,
+      outputSchema: z.object({}).loose(),
       schema: {},
       handler: async () => {
         throw new Error("db exploded");
@@ -110,6 +133,7 @@ describe("runMcpTool", () => {
       title: "Weird",
       description: "d",
       annotations: TOOL_BEHAVIOR.readLocal,
+      outputSchema: z.object({}).loose(),
       schema: {},
       handler: async () => {
         throw "plain string";

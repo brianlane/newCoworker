@@ -47,6 +47,16 @@ export const listBusinessesTool = defineMcpTool({
   name: "list_businesses",
   title: "List businesses",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    businesses: z.array(
+      z.looseObject({
+        business_id: z.string(),
+        name: z.string().nullable(),
+        tier: z.string().nullable(),
+        role: z.string()
+      })
+    )
+  }),
   description:
     "List every New Coworker business this account can access, with the caller's role on each (owner, manager, or staff). Call this first when other tools report the account has multiple businesses.",
   schema: {},
@@ -68,6 +78,14 @@ export const getBusinessTool = defineMcpTool({
   name: "get_business",
   title: "Get business profile",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.looseObject({
+    business_id: z.string(),
+    name: z.string().nullable(),
+    tier: z.string().nullable(),
+    status: z.string().nullable(),
+    timezone: z.string().nullable(),
+    created_at: z.string().nullable()
+  }),
   description:
     "Get one business's profile: name, plan tier, status, and timezone.",
   schema: { business_id: businessIdField },
@@ -96,6 +114,19 @@ export const searchContactsTool = defineMcpTool({
   name: "search_contacts",
   title: "Search contacts",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    contacts: z.array(
+      z.looseObject({
+        phone: z.string(),
+        name: z.string().nullable(),
+        type: z.string().nullable(),
+        tags: z.array(z.string()).nullable(),
+        last_channel: z.string().nullable(),
+        last_interaction_at: z.string().nullable(),
+        total_interactions: z.number().nullable()
+      })
+    )
+  }),
   description:
     "Search the business's contacts (CRM) by name or phone substring. Returns basic profile info per contact; use get_contact for the full profile including notes and AI memory.",
   schema: {
@@ -134,6 +165,20 @@ export const getContactTool = defineMcpTool({
   name: "get_contact",
   title: "Get contact profile",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.looseObject({
+    phone: z.string(),
+    name: z.string().nullable(),
+    email: z.string().nullable(),
+    type: z.string().nullable(),
+    tags: z.array(z.string()).nullable(),
+    owner_employee_id: z.string().nullable(),
+    birthday: z.string().nullable(),
+    pinned_notes: z.string().nullable(),
+    ai_summary: z.string().nullable(),
+    last_channel: z.string().nullable(),
+    last_interaction_at: z.string().nullable(),
+    total_interactions: z.number().nullable()
+  }),
   description:
     "Get one contact's full profile: name, email, tags, owner, birthday, pinned notes, and the AI's rolling relationship summary.",
   schema: {
@@ -168,6 +213,18 @@ export const getSmsThreadTool = defineMcpTool({
   name: "get_sms_thread",
   title: "Read text conversation",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    phone: z.string(),
+    messages: z.array(
+      z.looseObject({
+        direction: z.string(),
+        text: z.string().nullable(),
+        at: z.string().nullable(),
+        source: z.string().optional(),
+        channel: z.string().optional()
+      })
+    )
+  }),
   description:
     "Read the SMS/RCS conversation with one contact, oldest to newest — inbound texts, the AI coworker's replies, and workflow/manual sends.",
   schema: {
@@ -200,6 +257,9 @@ export const listRecentEventsTool = defineMcpTool({
   name: "list_recent_events",
   title: "List recent activity",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    events: z.array(z.record(z.string(), z.unknown()))
+  }),
   description:
     `Recent activity events for the business, newest first. Event types: ${WEBHOOK_EVENT_TYPES.join(", ")}. Payloads match the business's outbound webhook format.`,
   schema: {
@@ -243,6 +303,21 @@ export const listCallTranscriptsTool = defineMcpTool({
   name: "list_call_transcripts",
   title: "List recent calls",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    calls: z.array(
+      z.looseObject({
+        id: z.string(),
+        caller: z.string().nullable(),
+        direction: z.string().nullable(),
+        kind: z.string().nullable(),
+        status: z.string().nullable(),
+        started_at: z.string().nullable(),
+        ended_at: z.string().nullable(),
+        summary: z.string().nullable(),
+        sentiment: z.string().nullable()
+      })
+    )
+  }),
   description:
     "List the business's recent phone calls (AI-handled and human-forwarded), newest first, with status, AI summary, and sentiment when available.",
   schema: {
@@ -276,6 +351,25 @@ export const listTasksTool = defineMcpTool({
   name: "list_tasks",
   title: "List leads in motion",
   annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    active_runs: z.array(
+      z.looseObject({
+        run_id: z.string(),
+        flow: z.string(),
+        status: z.string(),
+        lead_phone: z.string().nullable(),
+        updated_at: z.string()
+      })
+    ),
+    tagged_contacts: z.array(
+      z.looseObject({
+        phone: z.string(),
+        name: z.string().nullable(),
+        tags: z.array(z.string()),
+        updated_at: z.string()
+      })
+    )
+  }),
   description:
     "The business's leads in motion: contacts with active AiFlow workflow runs (with each run's flow and status) plus lead-state tagged contacts — the same data behind the dashboard Task Center.",
   schema: {

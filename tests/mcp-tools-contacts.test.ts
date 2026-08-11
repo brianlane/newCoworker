@@ -32,6 +32,7 @@ import {
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { getTeamMember } from "@/lib/db/employees";
+import { runTool } from "./helpers/run-mcp-tool";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
 
@@ -52,7 +53,7 @@ beforeEach(() => {
 describe("create_contact", () => {
   it("creates the profile and fires contact_created", async () => {
     vi.mocked(createCustomerMemory).mockResolvedValue(ROW as never);
-    const result = await createContactTool.handler(
+    const result = await runTool(createContactTool, 
       { phone: "555-000-1111", name: "Ann", email: "ann@x.com", type: "customer" },
       AUTH
     );
@@ -85,7 +86,7 @@ describe("create_contact", () => {
       display_name: null,
       email: null
     } as never);
-    await createContactTool.handler({ phone: "+15550001111" }, AUTH);
+    await runTool(createContactTool, { phone: "+15550001111" }, AUTH);
     expect(createCustomerMemory).toHaveBeenCalledWith("biz-1", {
       customerE164: "+15550001111",
       displayName: null,
@@ -103,14 +104,14 @@ describe("create_contact", () => {
       new CustomerExistsError("+15550001111")
     );
     await expect(
-      createContactTool.handler({ phone: "+15550001111" }, AUTH)
+      runTool(createContactTool, { phone: "+15550001111" }, AUTH)
     ).rejects.toThrow(/use update_contact/);
   });
 
   it("rethrows unexpected failures", async () => {
     vi.mocked(createCustomerMemory).mockRejectedValue(new Error("db down"));
     await expect(
-      createContactTool.handler({ phone: "+15550001111" }, AUTH)
+      runTool(createContactTool, { phone: "+15550001111" }, AUTH)
     ).rejects.toThrow("db down");
   });
 });
@@ -119,14 +120,14 @@ describe("update_contact", () => {
   it("errors when the contact does not exist", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(null);
     await expect(
-      updateContactTool.handler({ phone: "+15550001111", name: "Ann" }, AUTH)
+      runTool(updateContactTool, { phone: "+15550001111", name: "Ann" }, AUTH)
     ).rejects.toThrow(/use create_contact/);
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 
   it("patches only the supplied fields (manual name provenance)", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
-    const result = await updateContactTool.handler(
+    const result = await runTool(updateContactTool, 
       { phone: "+15550001111", name: "Annie", notes: "VIP", type: "tester", birthday: null },
       AUTH
     );
@@ -143,7 +144,7 @@ describe("update_contact", () => {
 
   it("also patches email when supplied", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
-    await updateContactTool.handler({ phone: "+15550001111", email: "new@x.com" }, AUTH);
+    await runTool(updateContactTool, { phone: "+15550001111", email: "new@x.com" }, AUTH);
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith("biz-1", "+15550001111", {
       email: "new@x.com"
     });
@@ -154,7 +155,7 @@ describe("update_contact", () => {
       ...ROW,
       tags: ["New Lead", "Contacted"]
     } as never);
-    await updateContactTool.handler(
+    await runTool(updateContactTool, 
       { phone: "+15550001111", tags: ["Contacted", "Booked"] },
       AUTH
     );
@@ -178,7 +179,7 @@ describe("update_contact", () => {
 
   it("handles a null stored tag set", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue({ ...ROW, tags: null } as never);
-    await updateContactTool.handler({ phone: "+15550001111", tags: ["Won"] }, AUTH);
+    await runTool(updateContactTool, { phone: "+15550001111", tags: ["Won"] }, AUTH);
     expect(fireGoalEvent).toHaveBeenCalledWith("biz-1", "+15550001111", {
       kind: "tag_added",
       tag: "Won"
@@ -190,7 +191,7 @@ describe("update_contact", () => {
       ...ROW,
       alias_e164s: ["+15550009999"]
     } as never);
-    await updateContactTool.handler({ phone: "+15550001111", tags: ["Won"] }, AUTH);
+    await runTool(updateContactTool, { phone: "+15550001111", tags: ["Won"] }, AUTH);
     // A parked run may be keyed on the merged-away number — both must jump.
     expect(fireGoalEvent).toHaveBeenCalledTimes(2);
     expect(fireGoalEvent).toHaveBeenCalledWith("biz-1", "+15550001111", {
@@ -206,7 +207,7 @@ describe("update_contact", () => {
   it("fires owner_assigned with the member's name on a real owner change", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
     vi.mocked(getTeamMember).mockResolvedValue({ name: "Sam" } as never);
-    await updateContactTool.handler(
+    await runTool(updateContactTool, 
       { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
       AUTH
     );
@@ -223,7 +224,7 @@ describe("update_contact", () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
     vi.mocked(getTeamMember).mockResolvedValue(null);
     await expect(
-      updateContactTool.handler(
+      runTool(updateContactTool, 
         { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
         AUTH
       )
@@ -235,7 +236,7 @@ describe("update_contact", () => {
   it("omits ownerName when the roster row has an empty name", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
     vi.mocked(getTeamMember).mockResolvedValue({ name: "" } as never);
-    await updateContactTool.handler(
+    await runTool(updateContactTool, 
       { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
       AUTH
     );
@@ -250,13 +251,13 @@ describe("update_contact", () => {
       owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962"
     } as never);
     vi.mocked(getTeamMember).mockResolvedValue({ name: "Sam" } as never);
-    await updateContactTool.handler(
+    await runTool(updateContactTool, 
       { phone: "+15550001111", owner_employee_id: null },
       AUTH
     );
     // Clearing skips the roster check entirely (null is not an assignment).
     expect(getTeamMember).not.toHaveBeenCalled();
-    await updateContactTool.handler(
+    await runTool(updateContactTool, 
       { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
       AUTH
     );
