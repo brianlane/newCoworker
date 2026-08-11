@@ -808,6 +808,33 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
+## ChatGPT app (OpenAI Apps SDK)
+
+The same MCP server, served to ChatGPT at **`/api/mcp/chatgpt`**. Worth
+knowing up front: OpenAI retired `ai-plugin.json`, and a ChatGPT app today
+**is** a remote MCP server plus listing metadata, so the transport, the tools,
+the OAuth, and the per-business role checks above carry over unchanged.
+
+A route per client rather than one shared endpoint, because in stateless
+Streamable HTTP only `initialize` carries `clientInfo`: every later tool call
+is an independent request whose only client signal is a User-Agent, so a
+shared endpoint could not attribute traffic without guessing. `MCP_ROUTES`
+([src/lib/mcp/routes.ts](src/lib/mcp/routes.ts)) is the one source of truth,
+and the handlers are built once per client by
+[src/lib/mcp/server.ts](src/lib/mcp/server.ts).
+
+What OpenAI demands that Claude never did: a `title`, three behavior
+annotations (`readOnlyHint` / `destructiveHint` / `openWorldHint`, whose
+absence is the most-cited rejection cause), an `outputSchema` plus
+`structuredContent` on every result, `search` and `fetch` tools, and a
+plain-text domain proof at `/.well-known/openai-apps-challenge`.
+
+**Do not clone the Anthropic WAF rule.** It allowlists one tidy egress range;
+OpenAI publishes ~270 CIDRs that rotate, so the rule has to be conditioned on
+path rather than IP. Full detail, the Supabase OAuth findings, the rollout
+order, and the submission checklist live in
+[docs/CHATGPT-APP.md](docs/CHATGPT-APP.md).
+
 ## Zoom OAuth: two clients, one app
 
 The published "New Coworker OAuth" Marketplace app carries TWO credential
