@@ -177,8 +177,15 @@ async function main() {
   }
 
   // ── Question 2: is the refresh token exportable, per connection ───────────
+  //
+  // Three outcomes, counted separately and never collapsed. "We asked and there
+  // is no refresh token" (needs re-consent) and "we could not ask" (an API error)
+  // are different facts, and reporting the second as the first would recommend a
+  // re-consent campaign on no evidence.
   console.log("\n── Per-connection refresh token (question 2: exportable?) ──");
   let exportable = 0;
+  let missing = 0;
+  let unknown = 0;
   for (const row of googleRows) {
     const label = `${row.provider_config_key} …${row.connection_id.slice(-6)} (${accountEmailOf(row)}, business ${row.business_id.slice(0, 8)})`;
     let connection;
@@ -186,7 +193,9 @@ async function main() {
       // (providerConfigKey, connectionId, forceRefresh, refreshToken)
       connection = await nango.getConnection(row.provider_config_key, row.connection_id, false, true);
     } catch (err) {
+      unknown += 1;
       console.log(`  ${label}\n    FETCH FAILED: ${err instanceof Error ? err.message : err}`);
+      console.log(`    NOT AUDITED, this row's token status is unknown, not absent`);
       continue;
     }
     const creds = connection?.credentials as
@@ -194,6 +203,7 @@ async function main() {
       | undefined;
     const refresh = creds?.refresh_token;
     if (typeof refresh === "string" && refresh.length > 0) exportable += 1;
+    else missing += 1;
     console.log(`  ${label}`);
     console.log(`    type          ${creds?.type ?? "(unknown)"}`);
     console.log(`    refresh_token ${fingerprint(refresh)}`);
@@ -211,15 +221,33 @@ async function main() {
     process.exitCode = 2;
     return;
   }
+  const rowIdNote =
+    "Either path must preserve the workspace_oauth_connections row id: AiFlow " +
+    "send_email steps bind it as fromConnectionId, and the row's metadata carries " +
+    "shared_calendar_id.";
+
+  // An unaudited row is not a row without a token. Refuse to recommend anything
+  // while any row's status is unknown, or a transient Nango outage would read as
+  // "these owners must re-consent".
+  if (unknown > 0) {
+    console.error(
+      `INCONCLUSIVE. ${unknown} of ${googleRows.length} connection(s) could not be fetched, ` +
+        `so their token status is unknown, NOT absent. Counted: ${exportable} exportable, ` +
+        `${missing} genuinely missing a refresh token, ${unknown} unaudited. Re-run once ` +
+        `Nango is reachable before choosing a migration path.`
+    );
+    process.exitCode = 2;
+    return;
+  }
   if (exportable === googleRows.length) {
     console.log(`Path A (silent token import) is open: ${exportable}/${googleRows.length} connections`);
     console.log("returned a refresh token, all on our client. No owner has to re-consent.");
+    console.log(rowIdNote);
     return;
   }
   console.log(`Path A is open for ${exportable}/${googleRows.length} connection(s).`);
-  console.log("The remainder need Path B (guided re-consent). Both paths must preserve the");
-  console.log("workspace_oauth_connections row id: AiFlow send_email steps bind it as");
-  console.log("fromConnectionId, and the row's metadata carries shared_calendar_id.");
+  console.log(`${missing} connection(s) returned no refresh token and need Path B (guided re-consent).`);
+  console.log(rowIdNote);
 }
 
 main().catch((err) => {
