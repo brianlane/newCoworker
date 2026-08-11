@@ -645,4 +645,66 @@ describe("final branch sweep", () => {
     expect(sys).toContain("The speaker is the business OWNER, verified");
     expect(sys).toContain("[Teammate]: first ask");
   });
+
+  // DM replies post to the channel top level, so Slack's auto-clear (posts
+  // INTO the status thread) never fires: the worker must clear explicitly or
+  // the "is thinking" indicator spins forever after the reply lands.
+  it("clears the thinking status after a DM reply, anchored at the user's message", async () => {
+    claimOnce();
+    await processSlackJobs();
+    const statusCalls = vi.mocked(slackSetAssistantStatus).mock.calls;
+    expect(statusCalls[0][1]).toMatchObject({
+      channel_id: "D-1",
+      thread_ts: "2.0",
+      status: "is thinking..."
+    });
+    expect(statusCalls[statusCalls.length - 1][1]).toMatchObject({
+      channel_id: "D-1",
+      thread_ts: "2.0",
+      status: ""
+    });
+  });
+
+  it("keeps the status spinning on a retryable failure (the sweep runs it again)", async () => {
+    claimOnce();
+    vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: false, error: "model_failed" } as never);
+    await processSlackJobs();
+    const cleared = vi.mocked(slackSetAssistantStatus).mock.calls.some((c) => c[1].status === "");
+    expect(cleared).toBe(false);
+  });
+
+  it("the final-attempt failure line clears the status before closing", async () => {
+    claimOnce({ ...JOB, attempts: 3 });
+    vi.mocked(runInlineChatTurn).mockResolvedValue({ ok: false, error: "model_failed" } as never);
+    await processSlackJobs();
+    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ thread_ts: "2.0", status: "" })
+    );
+  });
+
+  it("terminal refusals clear a status left by an earlier attempt", async () => {
+    claimOnce();
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValue({
+      spendMicros: 10_000_000,
+      effectiveCapMicros: 10_000_000
+    } as never);
+    await processSlackJobs();
+    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ thread_ts: "2.0", status: "" })
+    );
+
+    claimOnce();
+    vi.mocked(slackSetAssistantStatus).mockClear();
+    // A rejected clear is swallowed: killing the spinner is best-effort.
+    vi.mocked(slackSetAssistantStatus).mockRejectedValue(new Error("status api down"));
+    vi.mocked(slackAllowedForBusiness).mockResolvedValue(false);
+    const result = await processSlackJobs();
+    expect(result.failed).toBe(1);
+    expect(vi.mocked(slackSetAssistantStatus)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ thread_ts: "2.0", status: "" })
+    );
+  });
 });
