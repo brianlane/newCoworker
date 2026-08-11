@@ -28,6 +28,8 @@ function conn(over: Partial<{ id: string; provider_config_key: string; metadata:
     provider_config_key: over.provider_config_key ?? "gmail",
     connection_id: "cx",
     metadata: over.metadata ?? {},
+    transport: "nango" as const,
+    is_active: true,
     created_at: "",
     updated_at: ""
   };

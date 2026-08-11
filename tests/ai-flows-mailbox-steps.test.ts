@@ -33,6 +33,8 @@ const connRow = (id: string, providerConfigKey: string): WorkspaceOAuthConnectio
   provider_config_key: providerConfigKey,
   connection_id: `nango-${id}`,
   metadata: {},
+  transport: "nango",
+  is_active: true,
   created_at: "2026-07-22T00:00:00Z",
   updated_at: "2026-07-22T00:00:00Z"
 });
