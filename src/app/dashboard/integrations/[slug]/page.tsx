@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
+import { MicrosoftConnectButton } from "@/components/dashboard/MicrosoftConnectButton";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
@@ -40,10 +41,21 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Workspace"
-          description="Gmail, Google Calendar, Drive, Microsoft 365, and more; add each integration simply with Nango. Slack and Zoom connect from their own integration pages."
+          description="Outlook connects directly. Gmail, Google Calendar, Drive and more connect through Nango. Slack and Zoom connect from their own integration pages."
           icon={getIntegration("workspace")!.icon}
           status={ctx.workspaceConnections.length > 0 ? "connected" : "disconnected"}
         >
+          <MicrosoftConnectButton
+            businessId={businessId}
+            // Mirrors the connect route exactly: at the cap is not enough,
+            // because a reconnect consumes no seat. An at-cap tenant holding an
+            // Outlook row is precisely who needs this button, to migrate off
+            // Nango.
+            blocked={
+              ctx.workspaceConnectionCap.atCap &&
+              !ctx.workspaceConnections.some((r) => r.provider_config_key === "outlook")
+            }
+          />
           <NangoEmailIntegrationActions
             businessId={businessId}
             connections={ctx.workspaceConnections.map((r) => ({

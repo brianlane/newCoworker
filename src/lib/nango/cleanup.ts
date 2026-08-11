@@ -34,7 +34,30 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export type NangoConnectionLink = {
   provider_config_key: string;
   connection_id: string;
+  /** Absent on legacy callers; only `direct` rows are skipped. */
+  transport?: string;
 };
+
+/**
+ * Rows Nango actually knows about.
+ *
+ * A direct row's connection_id is a synthetic `direct:<uuid>` Nango has never
+ * seen, so revoking it fails and logs a leaked-connection warning for a
+ * connection that never existed there. Its teardown is the ciphertext going
+ * away with the row.
+ *
+ * Excludes `direct` rather than including `nango` deliberately: the two are not
+ * symmetric. A row whose transport is somehow unset must still be offered to
+ * Nango, because failing to revoke leaks a real grant and burns account quota
+ * forever, while revoking a connection Nango does not have is a harmless no-op.
+ *
+ * Lives here, at the single point where rows are handed to Nango, rather than
+ * at each call site: filtering in the snapshot alone left the wipe path
+ * revoking direct rows, which is exactly the miss this placement prevents.
+ */
+function nangoBrokeredOnly<T extends NangoConnectionLink>(rows: readonly T[]): T[] {
+  return rows.filter((row) => row.transport !== "direct");
+}
 
 /**
  * Pre-delete snapshot of the business's connection links. Never throws — a
@@ -47,6 +70,9 @@ export async function snapshotNangoConnectionLinks(
 ): Promise<NangoConnectionLink[]> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
+    // No filtering here: `revokeNangoConnectionRows` drops direct rows at the
+    // single point where rows are handed to Nango, so both this path and the
+    // wipe path get it.
     return await listWorkspaceOAuthConnections(businessId, db);
   } catch (err) {
     logger.warn("nango cleanup: snapshot failed (revocation will be skipped)", {
@@ -64,8 +90,9 @@ export async function snapshotNangoConnectionLinks(
  */
 export async function revokeNangoConnectionRows(
   businessId: string,
-  rows: readonly NangoConnectionLink[]
+  input: readonly NangoConnectionLink[]
 ): Promise<number> {
+  const rows = nangoBrokeredOnly(input);
   if (rows.length === 0) return 0;
   if (!process.env.NANGO_SECRET_KEY) {
     logger.warn("nango cleanup: NANGO_SECRET_KEY missing; skipping provider-side revocation", {

@@ -189,4 +189,64 @@ describe("revokeNangoConnectionsForBusiness (wipe path)", () => {
       error: "weird"
     });
   });
+
+  it("snapshot passes rows through; the direct filter runs where Nango is called", async () => {
+    // The snapshot is deliberately not the filter point. Filtering only here
+    // left the wipe path (which reads its own rows) still revoking direct rows,
+    // so the filter moved into revokeNangoConnectionRows, where every caller
+    // gets it. See the wipe-path case below.
+    mockCreateClient.mockResolvedValue(mockDb());
+    mockListConnections.mockResolvedValue([
+      { provider_config_key: "gmail", connection_id: "nango-1", transport: "nango" },
+      { provider_config_key: "outlook", connection_id: "direct:abc", transport: "direct" }
+    ]);
+
+    const rows = await snapshotNangoConnectionLinks("biz-1");
+    expect(rows).toHaveLength(2);
+
+    mockDeleteConnection.mockResolvedValue(undefined);
+    const revoked = await revokeNangoConnectionRows("biz-1", rows);
+
+    expect(revoked).toBe(1);
+    expect(mockDeleteConnection).toHaveBeenCalledExactlyOnceWith("gmail", "nango-1");
+  });
+
+  it("still offers a row with an UNSET transport to Nango", async () => {
+    // Not symmetric with excluding `direct`: failing to revoke leaks a real
+    // grant and burns account quota forever, while revoking one Nango does not
+    // have is a harmless no-op. Legacy rows predate the column.
+    mockDeleteConnection.mockResolvedValue(undefined);
+    const revoked = await revokeNangoConnectionRows("biz-1", [
+      { provider_config_key: "google", connection_id: "legacy-1" }
+    ]);
+    expect(revoked).toBe(1);
+    expect(mockDeleteConnection).toHaveBeenCalledWith("google", "legacy-1");
+  });
+
+
+  it("the WIPE path also skips direct rows, not just the snapshot", async () => {
+    // The filter lives inside revokeNangoConnectionRows, at the single point
+    // where rows are handed to Nango, precisely because filtering only in the
+    // snapshot left this path revoking direct rows against a synthetic
+    // `direct:` id and logging a leaked-connection warning for a connection
+    // that never existed there.
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      delete: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null })
+    };
+    mockListConnections.mockResolvedValue([
+      { provider_config_key: "gmail", connection_id: "nango-1", transport: "nango" },
+      { provider_config_key: "outlook", connection_id: "direct:abc", transport: "direct" }
+    ]);
+    mockDeleteConnection.mockResolvedValue(undefined);
+
+    const revoked = await revokeNangoConnectionsForBusiness("biz-1", db as never);
+
+    expect(revoked).toBe(1);
+    expect(mockDeleteConnection).toHaveBeenCalledTimes(1);
+    expect(mockDeleteConnection).toHaveBeenCalledWith("gmail", "nango-1");
+    expect(mockDeleteConnection).not.toHaveBeenCalledWith("outlook", "direct:abc");
+  });
+
 });

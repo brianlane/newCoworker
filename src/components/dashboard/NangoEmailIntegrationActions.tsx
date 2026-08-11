@@ -227,7 +227,7 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
         loading={loadingConnect}
         disabled={atCap}
       >
-        {connections.length > 0 ? "Connect another account" : "Connect workspace"}
+        {t("connectOther")}
       </Button>
     </div>
   );
