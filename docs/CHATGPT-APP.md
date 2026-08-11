@@ -239,15 +239,76 @@ pasted URL is the only install path; after it, most users never see a URL.
 
 ## Known gaps, before submission
 
-- **Outbound attribution.** `send_sms` writes `source: 'mcp'`, which the
-  dashboard thread view renders as "Claude connector". A text sent from ChatGPT
-  is therefore labelled as Claude in the owner's history. Fixing it properly
-  means a per-client source value and a migration, and it should land before
-  ChatGPT sends anything for a real tenant.
-- **Inline UI components.** Not built. They ship as self-contained HTML
-  resources under a `ui://` URI with `mimeType: text/html;profile=mcp-app`,
-  wired to a tool through `_meta.ui.resourceUri`, and need a Content Security
-  Policy declared at submission. Our `@modelcontextprotocol/server` 2.0.0 has
-  the generic `registerResource` but not the Apps SDK's `registerAppResource`
-  helper, so the wiring is by hand.
+- **Outbound attribution: fixed.** Sends carry `mcp_chatgpt` or `mcp`, and the
+  thread view labels each correctly.
+- **Inline UI components: built.** Three widgets (open times, contact card,
+  conversation) on `calendar_find_slots`, `get_contact` and `get_sms_thread`.
+  Self-contained documents under `ui://`, so the CSP below is genuinely empty.
 - **Audience is unverified**, as above.
+
+---
+
+## The submission form, answered
+
+Everything below is ready to paste. The three items only you can do are marked
+**YOU**.
+
+| Field | Value |
+| --- | --- |
+| Plugin name | New Coworker |
+| Short description | Your AI coworker: look up customers, read texts and calls, send messages, and book appointments. |
+| MCP server URL (Universal) | `https://www.newcoworker.com/api/mcp/chatgpt` |
+| Website | `https://www.newcoworker.com` |
+| Documentation | `https://www.newcoworker.com/integrations/chatgpt` |
+| Reviewer test plan | `https://www.newcoworker.com/integrations/chatgpt/review-test-plan` |
+| Privacy policy | `https://www.newcoworker.com/privacy` |
+| Terms | `https://www.newcoworker.com/terms` |
+| Category | Productivity / Business |
+| Authentication | OAuth 2.1, dynamic client registration, PKCE S256 |
+| CSP: connectDomains | (none) |
+| CSP: resourceDomains | (none) |
+| Logo | **YOU** (PNG, 256x256 or larger, max 10 KB) |
+| Verified developer identity | **YOU** |
+| Demo account credentials | **YOU** (see below) |
+
+### Starter prompts
+
+1. What is going on with my business today?
+2. Find the customer I texted about a quote last week.
+3. Show me my conversation with [customer name].
+4. What open times do I have on Thursday?
+5. Summarize my recent calls.
+
+### Five positive test cases
+
+| Prompt | Expected |
+| --- | --- |
+| List my businesses on New Coworker | Names the demo business with plan and role |
+| Search for Maria | Returns the contact and their conversation, each with a dashboard link |
+| Show me my text conversation with Maria | Renders the conversation widget, oldest first |
+| What appointment times are open on Thursday? | Renders the open-times widget with selectable slots |
+| Text Maria that we can fit her in Thursday at 2pm | **Confirms first**, then sends and reports the result |
+
+### Three negative test cases
+
+| Prompt | Expected | Why |
+| --- | --- | --- |
+| Delete all my customers | Refusal: no such tool exists | Destructive bulk operations are deliberately not exposed |
+| Show me the contacts for [a business the account cannot access] | Refusal naming the permission, without confirming whether that business exists | Authorization is per business per call, and refusals must not leak existence |
+| Text every customer I have a discount code | Refusal or a request to narrow it | There is no bulk-send tool, and the per-business rate limit backs that up |
+
+### The demo account (YOU)
+
+Requirements from the guidelines, all of which cause rejection if missed:
+
+- works with **no MFA**, no email confirmation, no private network,
+- **email pre-confirmed**, so a reviewer never sees a verification wall,
+- seeded with believable but fake contacts, conversations and calls,
+- the business's outbound number points somewhere we control, so a reviewer
+  testing a send does not text a real person,
+- a **second login on the same business with the staff role**, for step 4 of
+  the test plan, which is where a reviewer sees permissions actually enforced.
+
+Verify it end to end from a fresh incognito window before submitting.
+**Credentials go in the password manager and the submission form. Never in this
+repo.**
