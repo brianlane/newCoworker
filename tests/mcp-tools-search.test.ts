@@ -258,3 +258,70 @@ describe("fetch", () => {
     expect(result.text.endsWith("[truncated]")).toBe(true);
   });
 });
+
+/**
+ * The empty-record paths. Every one of these is a real row shape: a contact
+ * captured from an inbound text has no name or email, a call that never got
+ * summarized has no summary, and a transcript can exist with no turns. The
+ * fallbacks are what stop a fetch rendering "undefined" at a person.
+ */
+describe("fetch, when the record is mostly empty", () => {
+  it("renders a bare contact without printing undefined", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      customer_e164: "+15551110000",
+      display_name: null,
+      email: null,
+      tags: null,
+      last_interaction_at: null,
+      pinned_md: null,
+      summary_md: null
+    } as never);
+    const result = (await runTool(fetchTool, { id: `contact:${BIZ_A}:+1555` }, AUTH)) as {
+      text: string;
+    };
+    expect(result.text).not.toContain("undefined");
+    expect(result.text).toContain("(unknown)");
+    expect(result.text).toContain("(none)");
+    expect(result.text).toContain("(nothing yet)");
+  });
+
+  it("renders a message with no body", async () => {
+    vi.mocked(listMessagesForCustomer).mockResolvedValue([
+      { direction: "inbound", content: null, timestamp: "2026-08-01T00:00:00Z" }
+    ] as never);
+    const result = (await runTool(fetchTool, { id: `thread:${BIZ_A}:+1555` }, AUTH)) as {
+      text: string;
+    };
+    expect(result.text).toBe("inbound: ");
+  });
+
+  it("renders a call with nothing captured", async () => {
+    vi.mocked(getTranscriptById).mockResolvedValue({
+      id: "call-1",
+      caller_e164: null,
+      started_at: null,
+      status: null,
+      summary: null
+    } as never);
+    vi.mocked(listTurns).mockResolvedValue([] as never);
+    const result = (await runTool(fetchTool, { id: `call:${BIZ_A}:call-1` }, AUTH)) as {
+      text: string;
+    };
+    expect(result.text).not.toContain("undefined");
+    expect(result.text).toContain("(unknown)");
+    expect(result.text).toContain("(no transcript captured)");
+  });
+
+  it("omits the business label when the business has no name", async () => {
+    vi.mocked(listAccessibleBusinesses).mockResolvedValue([
+      { businessId: BIZ_A, name: "A", tier: "standard", role: "owner" },
+      { businessId: BIZ_B, name: "B", tier: "standard", role: "owner" }
+    ] as never);
+    vi.mocked(getBusiness).mockResolvedValue(null as never);
+    vi.mocked(listCustomerMemories).mockResolvedValue([contact("+15551110000", "Maria")] as never);
+    const result = (await runTool(searchTool, { query: "Maria" }, AUTH)) as {
+      results: Array<{ title: string }>;
+    };
+    expect(result.results[0].title).toBe("Maria");
+  });
+});

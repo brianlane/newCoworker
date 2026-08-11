@@ -58,7 +58,11 @@ async function searchOneBusiness(
   auth: McpAuthUser,
   businessId: string,
   query: string,
-  labelBusiness: boolean
+  labelBusiness: boolean,
+  listCustomerMemories: (
+    businessId: string,
+    options: { search?: string; limit?: number }
+  ) => Promise<Array<{ customer_e164: string; display_name: string | null }>>
 ): Promise<Array<{ id: string; title: string; url: string }>> {
   // Silently skipped rather than refused: on a multi-business account,
   // reaching one you cannot read is the normal case, and a search that
@@ -68,7 +72,6 @@ async function searchOneBusiness(
   const results: Array<{ id: string; title: string; url: string }> = [];
   const suffix = labelBusiness ? await businessLabel(businessId) : "";
 
-  const { listCustomerMemories } = await import("@/lib/customer-memory/db");
   const contacts = await listCustomerMemories(businessId, {
     search: query,
     limit: CONTACTS_PER_BUSINESS
@@ -121,9 +124,28 @@ export const searchTool = defineMcpTool({
   handler: async (args, auth) => {
     const businessIds = await resolveMcpBusinessIdsForSearch(auth, args.business_id);
     const label = businessIds.length > 1;
-    const perBusiness = await Promise.all(
-      businessIds.map((id) => searchOneBusiness(auth, id, args.query, label))
-    );
+    // Resolved ONCE, before the fan-out. Doing the dynamic import inside each
+    // concurrent branch resolves the same module N times for no benefit, and
+    // it is the shape that made these tests reach the real database helper
+    // instead of the mocked one.
+    const { listCustomerMemories } = await import("@/lib/customer-memory/db");
+    // Sequential, not Promise.all. Two reasons, and the second is the one
+    // that would have been easy to miss:
+    //
+    // 1. Bounded load. Each business costs a role check plus a contact query,
+    //    so a five-business fan-out is up to fifteen statements. Serialising
+    //    keeps a chatty client from multiplying concurrent connections, and
+    //    the common case is one business, where this is identical anyway.
+    // 2. Concurrent `await import()` of the same module does not reliably
+    //    resolve to a mocked module under vitest, which made the
+    //    multi-business tests silently reach the real database helper. The
+    //    tests are what surfaced it; the load argument is why it stays.
+    const perBusiness: Array<Array<{ id: string; title: string; url: string }>> = [];
+    for (const id of businessIds) {
+      perBusiness.push(
+        await searchOneBusiness(auth, id, args.query, label, listCustomerMemories)
+      );
+    }
     return { results: perBusiness.flat() };
   }
 });
