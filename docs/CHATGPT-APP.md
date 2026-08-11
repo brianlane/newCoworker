@@ -19,7 +19,7 @@ marketplace submission is run here.
 | Route factory (auth, status stamp, 401 shaping) | `src/lib/mcp/server.ts` |
 | Client registry (routes, metadata paths) | `src/lib/mcp/routes.ts` |
 | Claude endpoint | `src/app/api/mcp/route.ts` |
-| ChatGPT endpoint | `src/app/api/mcp/chatgpt/route.ts` |
+| ChatGPT endpoint | `src/app/api/mcp/chatgpt/route.ts` (live since 2026-08-11) |
 | Tool registry (31 tools) | `src/lib/mcp/registry.ts`, `src/lib/mcp/tools/*` |
 | Tool metadata contract (titles, annotations, output schemas) | `src/lib/mcp/tooling.ts` |
 | OAuth discovery metadata | `src/lib/mcp/oauth.ts` + `src/app/.well-known/oauth-protected-resource/**` |
@@ -92,13 +92,18 @@ Probed against production with `debug/mcp-oauth-resource-probe.ts`:
 | `resource_parameter_supported` (RFC 8707) | **absent** |
 | `client_id_metadata_document_supported` (CIMD) | **absent**, so DCR stays our path |
 
-**Supabase accepts the `resource` parameter** (an authorize request carrying it
-behaves identically to one without it), so the blocking outcome is ruled out.
-Whether it **binds** the value into the token's `aud` is only visible in the
-token itself and needs a browser consent to finish; see the probe's usage
-block. If it does not bind, we publish the correct `resource` in our metadata,
-verify `iss` exactly, and document the gap rather than building an
-authorization-server shim.
+**Settled by a live connection, not by the probe.** On 2026-08-11 ChatGPT
+connected to `/api/mcp` end to end against production: metadata discovery,
+dynamic client registration, the consent page, token exchange, and
+authenticated tool calls. `list_businesses`, `get_business` and `list_flows`
+all returned real data in a conversation.
+
+So Supabase-as-authorization-server is viable and the RFC 8707 question is no
+longer blocking. What remains open is only whether Supabase **binds** the
+`resource` into the token's `aud`, which matters if we ever want to enforce
+audience. We do not today. `debug/mcp-oauth-resource-probe.ts` still answers it
+if needed; it requires a browser consent, and note that the code in the
+redirect is the `code=` value, not the `code_challenge` from the authorize URL.
 
 > **Security note, independent of ChatGPT.** If every token for this project
 > carries `aud: "authenticated"`, then any Supabase access token for the
@@ -148,10 +153,14 @@ Compensating controls, all three:
 3. The JWT-shape pre-check, so an unauthenticated flood does not cost a
    Supabase round trip per request.
 
-A probe from off-network currently returns **401, not 403**, for a
-`ChatGPT-User` user agent on `/api/mcp`. Encouraging but not proof: real
-traffic arrives from OpenAI's egress IPs, and Cloudflare scores more than the
-UA string.
+**Real ChatGPT traffic is getting through today.** The live connection above
+means OpenAI's egress is not being blocked on `/api/mcp` right now.
+
+That is luck rather than design, and the reason to still do the rule change:
+the existing skip is conditioned on **Anthropic's** IP range, so ChatGPT is
+passing on default bot scoring rather than on an explicit allowance. A
+reputation shift, a new managed rule, or a Bot Fight Mode toggle would take it
+out with no warning and no origin trace.
 
 **Failure signatures**, unchanged from the Claude incident: "Couldn't connect"
 means an unauthenticated probe was blocked; an `ofid_…` error means OAuth
@@ -167,8 +176,9 @@ Check Cloudflare Security, Events before suspecting the app.
 2. Apply the path-conditioned WAF rule; keep the Anthropic rule until the new
    one is verified.
 3. Add the connector in **ChatGPT Developer Mode** (Settings, Connectors,
-   Advanced) against `https://www.newcoworker.com/api/mcp/chatgpt` and exercise
-   OAuth, `tools/list`, `search`, `fetch`, and a write.
+   Advanced; a **paid** ChatGPT plan is required, the UI does not work on Free)
+   against `https://www.newcoworker.com/api/mcp/chatgpt` and exercise OAuth,
+   `tools/list`, `search`, `fetch`, and a write.
 4. Verify with MCP Inspector (`npx @modelcontextprotocol/inspector`) that
    titles, annotations, and output schemas render as a client sees them.
 5. Prepare the demo tenant (below), then submit.
@@ -224,3 +234,20 @@ changing it mid-review is what got the July 2026 Zoom update bounced (README
 At publish time, flip the dashboard card copy from "paste this URL into
 Developer Mode" to "install from the ChatGPT directory". Before approval the
 pasted URL is the only install path; after it, most users never see a URL.
+
+---
+
+## Known gaps, before submission
+
+- **Outbound attribution.** `send_sms` writes `source: 'mcp'`, which the
+  dashboard thread view renders as "Claude connector". A text sent from ChatGPT
+  is therefore labelled as Claude in the owner's history. Fixing it properly
+  means a per-client source value and a migration, and it should land before
+  ChatGPT sends anything for a real tenant.
+- **Inline UI components.** Not built. They ship as self-contained HTML
+  resources under a `ui://` URI with `mimeType: text/html;profile=mcp-app`,
+  wired to a tool through `_meta.ui.resourceUri`, and need a Content Security
+  Policy declared at submission. Our `@modelcontextprotocol/server` 2.0.0 has
+  the generic `registerResource` but not the Apps SDK's `registerAppResource`
+  helper, so the wiring is by hand.
+- **Audience is unverified**, as above.
