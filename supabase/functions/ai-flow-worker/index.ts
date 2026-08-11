@@ -7761,6 +7761,7 @@ async function placeAiCallStep(
       toE164: action.to,
       ...(action.persona ? { persona: action.persona } : {}),
       ...(action.contextNote ? { contextNote: action.contextNote } : {}),
+      ...(action.voicemailScript ? { voicemailScript: action.voicemailScript } : {}),
       ...(action.captureFields ? { captureFields: action.captureFields } : {}),
       notifyE164,
       ...(transfer ? { transfer } : {}),
@@ -10800,6 +10801,7 @@ async function placeOutboundCall(
       toE164: string;
       persona?: string;
       contextNote?: string;
+      voicemailScript?: string;
       captureFields?: string[];
       notifyE164: string;
       transfer?: { toE164: string; preSmsBody?: string; agentName?: string };

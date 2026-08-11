@@ -1351,6 +1351,14 @@ export type FlowStep =
        */
       contextTemplate?: string;
       /**
+       * What to say when a machine picks up (var-templated). Absent means hang
+       * up on the answering-machine verdict, which is what shipped with AMD in
+       * #1214 and stays the default: a message nobody wrote is worse than none.
+       * Present, and the worker waits for the outgoing greeting to finish,
+       * speaks this once, and resolves the step with reason `voicemail_left`.
+       */
+      voicemailTemplate?: string;
+      /**
        * Post-call summary recipient: exactly one of notifyE164 / notifyRef /
        * notifyOwner. `notifyOwner` texts the business owner's configured alert
        * number, the tenant-neutral option a shared template can carry.

@@ -44,7 +44,11 @@ export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.free
   "call.machine.detection.ended": "telnyx-voice-call-end",
   "call.machine.premium.detection.ended": "telnyx-voice-call-end",
   "call.machine.greeting.ended": "telnyx-voice-call-end",
-  "call.machine.premium.greeting.ended": "telnyx-voice-call-end"
+  "call.machine.premium.greeting.ended": "telnyx-voice-call-end",
+  // The end of a voicemail message we spoke. Routed so the leg can be hung up
+  // the moment the message finishes: without it the call sits open until the
+  // recording's own limit, billing voice minutes for silence.
+  "call.speak.ended": "telnyx-voice-call-end"
 });
 
 export type DispatchDecision =

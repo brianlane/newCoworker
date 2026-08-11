@@ -155,3 +155,21 @@ describe("buildTargetUrl", () => {
     );
   });
 });
+
+/**
+ * call.speak.ended is what releases the leg once our voicemail message
+ * finishes. Unrouted, the call would sit open to the recording's own limit,
+ * billing voice minutes for silence.
+ */
+describe("speak.ended routing", () => {
+  it("routes call.speak.ended to the call-end function", () => {
+    const decision = decideTelnyxVoiceRoute(
+      JSON.stringify({ data: { event_type: "call.speak.ended", payload: {} } })
+    );
+    expect(decision).toEqual({
+      kind: "route",
+      target: "telnyx-voice-call-end",
+      eventType: "call.speak.ended"
+    });
+  });
+});

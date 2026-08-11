@@ -13,6 +13,7 @@ import {
 import {
   telnyxHangupCall,
   telnyxSendDtmf,
+  telnyxSpeak,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
@@ -575,26 +576,40 @@ async function handleMachineDetection(
   if (!outbound || !callControlId) {
     return jsonOk("amd_not_outbound");
   }
-  // Greeting events. Nothing speaks into a voicemail yet, so their only job
-  // here is as a BACKSTOP: Telnyx documents detection.ended as always
-  // preceding greeting.ended, but a beep is its own proof of a voicemail, and
-  // relying on that ordering is not worth re-introducing the exact bug this
-  // handler exists to prevent. A beep with no verdict recorded yet is treated
-  // as a machine; anything else is acknowledged and dropped.
+  // Greeting events: the outgoing "leave a message after the tone" has
+  // finished, which is the only safe moment to start speaking. Two jobs now.
+  //
+  // 1. If the step configured a voicemail message, speak it (whether the
+  //    verdict came from detection.ended earlier or from this beep).
+  // 2. BACKSTOP, unchanged: Telnyx documents detection.ended as always
+  //    preceding greeting.ended, but a beep is its own proof of a voicemail,
+  //    and relying on that ordering is not worth re-introducing the exact bug
+  //    this handler exists to prevent. A beep with no verdict recorded yet is
+  //    treated as a machine; anything else is acknowledged and dropped.
   if (!AMD_DETECTION_EVENTS.has(eventType)) {
-    if (!greetingImpliesMachine(payload["result"])) {
+    const already = await machineAlreadyStamped(supabase, callControlId);
+    if (!already && !greetingImpliesMachine(payload["result"])) {
       return jsonOk("amd_greeting_noted");
     }
-    const already = await machineAlreadyStamped(supabase, callControlId);
-    if (already) return jsonOk("amd_greeting_after_verdict");
-    await telemetryRecord(supabase, "voice_amd_verdict", {
-      call_control_id: callControlId,
-      business_id: outbound.businessId,
-      event_type: eventType,
-      result: typeof payload["result"] === "string" ? payload["result"] : null,
-      verdict: "machine_from_beep"
-    });
-    return await stampMachineAndHangUp(supabase, callControlId);
+    const script = await voicemailScriptFor(supabase, callControlId);
+    if (!already) {
+      await telemetryRecord(supabase, "voice_amd_verdict", {
+        call_control_id: callControlId,
+        business_id: outbound.businessId,
+        event_type: eventType,
+        result: typeof payload["result"] === "string" ? payload["result"] : null,
+        verdict: "machine_from_beep"
+      });
+      // No script: hang up now, exactly as before voicemails existed.
+      if (!script) return await stampMachineAndHangUp(supabase, callControlId);
+      // With a script the stamp still has to land before we speak, because the
+      // hangup path reads it to decide the outcome is no_answer and not
+      // "answered". stampMachine writes it without ending the leg.
+      const stamped = await stampMachine(supabase, callControlId);
+      if (!stamped) return jsonOk("amd_stamp_failed");
+    }
+    if (!script) return jsonOk("amd_greeting_after_verdict");
+    return await speakVoicemail(supabase, callControlId, script);
   }
 
   const verdict = classifyAmdResult(payload["result"]);
@@ -612,7 +627,40 @@ async function handleMachineDetection(
     return jsonOk(`amd_${verdict}`);
   }
 
+  // A machine, and the step wants a message left. Stamp the verdict but keep
+  // the leg up: speaking now would record over the outgoing greeting, so the
+  // message waits for greeting.ended.
+  if (await voicemailScriptFor(supabase, callControlId)) {
+    return (await stampMachine(supabase, callControlId))
+      ? jsonOk("amd_machine_awaiting_greeting")
+      : jsonOk("amd_stamp_failed");
+  }
   return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/**
+ * Our voicemail message finished playing. End the leg now rather than let it
+ * run to the recording's own limit, which would bill voice minutes for silence.
+ */
+async function handleSpeakEnded(
+  supabase: SupabaseClient,
+  payload: Record<string, unknown>
+): Promise<Response> {
+  const callControlId = String(payload["call_control_id"] ?? "");
+  const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
+  if (!outbound || !callControlId) return jsonOk("speak_not_outbound");
+  // Only OUR voicemail speak ends the call. The same event fires for any other
+  // speak on the leg, and hanging up on those would cut a live call short.
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  if (ctx.voicemail_spoken !== true) return jsonOk("speak_not_voicemail");
+  await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+  return jsonOk("voicemail_left_hangup");
 }
 
 /**
@@ -689,15 +737,90 @@ async function machineAlreadyStamped(
 }
 
 /**
- * Record the machine verdict on the session and end the leg. The hangup this
- * triggers flows through the outbound path, which reads the stamp and resumes
- * the parked run; this function deliberately does not resume it itself, so
- * there is exactly one writer.
+ * The voicemail message configured for this leg, or "" when the step set none.
+ *
+ * No script is the historical behavior and the safe default: hang up on the
+ * verdict rather than hold a leg open speaking at a recording nobody asked for.
  */
-async function stampMachineAndHangUp(
+async function voicemailScriptFor(
   supabase: SupabaseClient,
   callControlId: string
+): Promise<string> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  const vm = ctx.voicemail as { script?: unknown } | undefined;
+  return typeof vm?.script === "string" ? vm.script.trim() : "";
+}
+
+/**
+ * Speak the configured voicemail message, once, and mark that we did.
+ *
+ * Called on `greeting.ended`, which premium AMD fires when the outgoing
+ * greeting has finished: the only moment a message records in full rather than
+ * over the top of "please leave a message after the tone".
+ *
+ * Does NOT hang up. `call.speak.ended` does that, so the leg ends when the
+ * message actually finishes rather than mid-sentence. If that event never
+ * arrives the voicemail system's own recording limit ends the call, which is
+ * the same bound a human leaving a message would hit.
+ */
+async function speakVoicemail(
+  supabase: SupabaseClient,
+  callControlId: string,
+  script: string
 ): Promise<Response> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  // Exactly once. Telnyx can deliver a webhook more than once, and two speaks
+  // would talk over each other into the same recording.
+  if (ctx.voicemail_spoken === true) return jsonOk("amd_voicemail_already_spoken");
+  const res = await telnyxSpeak(
+    Deno.env.get("TELNYX_API_KEY") ?? "",
+    callControlId,
+    script
+  );
+  if (!res.ok) {
+    // Speaking failed, so nothing was left. Fall back to the pre-voicemail
+    // behavior rather than holding the leg open: the run still resolves as
+    // no_answer, with the reason saying no message was left.
+    console.error("amd: voicemail speak failed", callControlId, res.status, await res.text());
+    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    return jsonOk("amd_voicemail_speak_failed");
+  }
+  const { error } = await supabase
+    .from("voice_handoff_sessions")
+    .update({ context: { ...ctx, voicemail_spoken: true } })
+    .eq("call_control_id", callControlId);
+  // The stamp is what turns the outcome reason into voicemail_left. Losing it
+  // understates what happened (the lead still heard the message) but must not
+  // keep the leg up.
+  if (error) console.error("amd: voicemail_spoken stamp failed", error);
+  return jsonOk("amd_voicemail_spoken");
+}
+
+/**
+ * Record the machine verdict on the session, WITHOUT ending the leg.
+ *
+ * Split out from stampMachineAndHangUp because a step with a voicemail script
+ * needs the leg to stay up long enough to speak into it. Returns false when the
+ * stamp did not land, which is the caller's signal to leave the call alone: a
+ * missing stamp makes the hangup derive "answered", and a follow-up ladder
+ * would stop on a lead who heard nothing.
+ */
+async function stampMachine(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<boolean> {
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
     .select("context")
@@ -710,12 +833,8 @@ async function stampMachineAndHangUp(
     .update({ context: { ...ctx, machine_detected: true } })
     .eq("call_control_id", callControlId);
   if (stampErr) {
-    // Without the stamp the hangup would derive "answered" and a follow-up
-    // ladder would stop on a lead who heard nothing. Leave the call up rather
-    // than hang up AND mis-report it: the AI talking to a voicemail wastes
-    // minutes, which is the cheaper of the two failures.
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
-    return jsonOk("amd_stamp_failed");
+    return false;
   }
   // Surface the verdict on the call itself, not just in flow vars. Without
   // this an owner reviewing the call cannot tell a voicemail from a person
@@ -727,6 +846,24 @@ async function stampMachineAndHangUp(
     .update({ answering_machine_result: "machine" })
     .eq("call_control_id", callControlId);
   if (markErr) console.error("amd: transcript mark failed", markErr);
+  return true;
+}
+
+/**
+ * Record the machine verdict on the session and end the leg. The hangup this
+ * triggers flows through the outbound path, which reads the stamp and resumes
+ * the parked run; this function deliberately does not resume it itself, so
+ * there is exactly one writer.
+ *
+ * A stamp failure leaves the call up rather than hanging up AND mis-reporting
+ * it: the AI talking to a voicemail wastes minutes, which is the cheaper of
+ * the two failures.
+ */
+async function stampMachineAndHangUp(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<Response> {
+  if (!(await stampMachine(supabase, callControlId))) return jsonOk("amd_stamp_failed");
   await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
   return jsonOk("amd_machine_hangup");
 }
@@ -831,7 +968,13 @@ async function handleHandoffLifecycle(
         supabase,
         obCtx.flow_run,
         outcome,
-        machine ? CALL_REASON.VOICEMAIL_NO_MESSAGE : undefined
+        machine
+          ? // Both ride no_answer; the reason is what tells the team (and the
+            // flow's own copy) whether the lead has actually heard from us.
+            obCtx.voicemail_spoken === true
+            ? CALL_REASON.VOICEMAIL_LEFT
+            : CALL_REASON.VOICEMAIL_NO_MESSAGE
+          : undefined
       );
     }
     if (!answered) {
@@ -1523,6 +1666,11 @@ serve(async (req: Request) => {
   // lead who never heard a word.
   if (isAmdEvent(eventType)) {
     return await handleMachineDetection(supabase, eventType, data?.payload ?? {});
+  }
+
+  // The end of a voicemail message we spoke, so the leg can be released.
+  if (eventType === "call.speak.ended") {
+    return await handleSpeakEnded(supabase, data?.payload ?? {});
   }
 
   // A "reach a teammate" B leg. Recorded before the outbound handler so a leg
