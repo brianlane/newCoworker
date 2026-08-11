@@ -902,6 +902,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
     return {
       ...step,
       contextTemplate: step.contextTemplate?.trim() || undefined,
+      voicemailTemplate: step.voicemailTemplate?.trim() || undefined,
       notifyE164:
         step.notifyOwner || step.notifyRef || notifyFirstReachTarget
           ? undefined
@@ -5736,6 +5737,13 @@ function StepFields({
           onChange={(v) => patchStep(index, { contextTemplate: v.trim() ? v : undefined })}
           textarea
           help='Details the AI must never re-ask for, e.g. "Their name: {{vars.lead_name}}. Address: {{vars.lead_address}}."'
+        />
+        <Field
+          label="What to say if a machine picks up (optional)"
+          value={step.voicemailTemplate ?? ""}
+          onChange={(v) => patchStep(index, { voicemailTemplate: v.trim() ? v : undefined })}
+          textarea
+          help="Leave this blank and the AI hangs up on voicemail. Fill it in and it waits for the greeting to finish, says this once, and hangs up. Keep it short: nobody can reply, and long messages get cut off."
         />
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input

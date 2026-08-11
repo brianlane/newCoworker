@@ -10,6 +10,7 @@ import {
   telnyxHangupCall,
   telnyxSendDtmf,
   telnyxSpeak,
+  telnyxStreamingStop,
   telnyxStreamingStart,
   telnyxTransferCall,
   telnyxDialCall
@@ -234,6 +235,22 @@ describe("telnyx call-control", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telnyx.com/v2/calls/cc2/actions/speak",
       expect.anything()
+    );
+  });
+
+  /**
+   * The AMD path needs this: the Gemini bridge is attached on call.answered,
+   * before anyone knows a machine picked up. Hanging up used to silence it
+   * implicitly; a leg held open to leave a voicemail has to stop the fork
+   * explicitly or the recording captures the assistant talking over the
+   * message.
+   */
+  it("telnyxStreamingStop posts an empty body to streaming_stop", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await telnyxStreamingStop("key", "cc-vm", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telnyx.com/v2/calls/cc-vm/actions/streaming_stop",
+      expect.objectContaining({ method: "POST", body: "{}" })
     );
   });
 

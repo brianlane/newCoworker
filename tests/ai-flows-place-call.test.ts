@@ -837,3 +837,90 @@ describe("stepOverridesFlowTimeWindow", () => {
     }
   });
 });
+
+/**
+ * Voicemail. AMD shipped in #1214 as detect-and-hang-up: a machine picking up
+ * resolved the step `no_answer` / `voicemail_no_message` and the leg was cut,
+ * because half a conversation into a recording is worse than none. These pin
+ * the message half — the step may now say something, and only when it was
+ * given something to say.
+ */
+describe("place_ai_call: voicemailTemplate", () => {
+  it("accepts a voicemail message and scope-checks its vars like any other template", () => {
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi {{vars.lead_name}}, calling from Amy's office.",
+          voicemailTemplate: "Hi {{vars.lead_name}}, Amy Laidlaw's office calling, we will try again.",
+          notifyE164: "+16025245719"
+        })
+      )
+    ).toEqual([]);
+    // A var no earlier step produces would reach a stranger's voicemail as a
+    // gap mid-sentence, with nothing to catch it at author time.
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi there.",
+          voicemailTemplate: "Calling about {{vars.lead_addres}}.",
+          notifyE164: "+16025245719"
+        })
+      ).some((i) => i.includes("{{vars.lead_addres}} before any step produces it"))
+    ).toBe(true);
+  });
+
+  // The same omission that left unclaimedReminders.detailsTemplate unchecked.
+  it("scope-checks the reach ladder's pre-alert too", () => {
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi there.",
+          notifyFirstReachTarget: true,
+          reachTeammate: { refs: [EMP_REF], preSmsTemplate: "Incoming: {{vars.lead_nam}}" }
+        })
+      ).some((i) => i.includes("{{vars.lead_nam}} before any step produces it"))
+    ).toBe(true);
+  });
+
+  it("renders the message into the plan, and drops it when every var came back empty", () => {
+    const step = {
+      id: "call1",
+      type: "place_ai_call",
+      toVar: "lead_phone",
+      personaTemplate: "Hi {{vars.lead_name}}.",
+      voicemailTemplate: "{{vars.lead_name}}",
+      notifyE164: "+16025245719",
+      saveAs: "call_outcome"
+    } as unknown as FlowStep;
+    const withName = planStep(step, { vars: { lead_phone: "+14805551212", lead_name: "Marla" } });
+    expect(
+      withName.ok && withName.action.kind === "place_ai_call" ? withName.action : null
+    ).toMatchObject({ voicemailScript: "Marla" });
+    // Nothing to say is not the same as saying nothing: an all-empty render
+    // must fall back to hanging up, not speak silence at a recording.
+    const empty = planStep(step, { vars: { lead_phone: "+14805551212" } });
+    expect(
+      empty.ok && empty.action.kind === "place_ai_call" && "voicemailScript" in empty.action
+    ).toBe(false);
+  });
+
+  it("omits the script entirely when the step configured none", () => {
+    const plan = planStep(
+      {
+        id: "call1",
+        type: "place_ai_call",
+        toVar: "lead_phone",
+        personaTemplate: "Hi.",
+        notifyE164: "+16025245719",
+        saveAs: "call_outcome"
+      } as unknown as FlowStep,
+      { vars: { lead_phone: "+14805551212" } }
+    );
+    expect(
+      plan.ok && plan.action.kind === "place_ai_call" && "voicemailScript" in plan.action
+    ).toBe(false);
+  });
+});

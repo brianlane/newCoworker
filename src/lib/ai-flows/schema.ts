@@ -1285,6 +1285,23 @@ const nonBranchStepMembers = [
      * details the flow already extracted.
      */
     contextTemplate: z.string().min(1).max(2000).optional(),
+    /**
+     * What to say when a machine picks up.
+     *
+     * Without this the AI hangs up the moment answering-machine detection
+     * returns a verdict (which is what shipped with AMD in #1214: talking to a
+     * recording wastes minutes, and half a conversation into a voicemail is
+     * worse than none). With it, the worker waits for the outgoing greeting to
+     * finish, speaks this once, and hangs up.
+     *
+     * Set it and the step's outcome reason becomes `voicemail_left` instead of
+     * `voicemail_no_message`; the coarse outcome stays `no_answer` either way,
+     * so a retry ladder written before voicemails existed keeps working.
+     *
+     * Keep it short and self-contained: nobody can ask it a question, it has
+     * no turn-taking, and a long message gets cut off by the recording limit.
+     */
+    voicemailTemplate: z.string().min(1).max(600).optional(),
     // Post-call summary recipient: exactly one of notifyE164 / notifyRef /
     // notifyOwner.
     notifyE164: e164.optional(),
@@ -2152,13 +2169,19 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "run_agent":
       return [step.input ?? "", step.documentTemplate ?? "", step.saveDocument?.titleTemplate ?? ""];
-    // The call script, known-details note, and transfer pre-alert all render
-    // against run vars.
+    // The call script, known-details note, voicemail message, and both
+    // pre-alert flavours all render against run vars.
     case "place_ai_call":
       return [
         step.personaTemplate,
         step.contextTemplate ?? "",
-        step.transfer?.preSmsTemplate ?? ""
+        step.voicemailTemplate ?? "",
+        step.transfer?.preSmsTemplate ?? "",
+        // The reach ladder's pre-alert was missing here, so alone among this
+        // step's templates its vars were never scope-checked: a typo rendered
+        // as a bare label on the text that tells a teammate their phone is
+        // about to ring. Same omission as unclaimedReminders.detailsTemplate.
+        step.reachTeammate?.preSmsTemplate ?? ""
       ];
     // wait_for_reply's dynamic timeout template references vars (e.g. a math
     // step's output), so it gets the same scope checking as any other template.

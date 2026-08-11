@@ -133,6 +133,31 @@ export async function telnyxSpeak(
   });
 }
 
+/**
+ * Detach the Gemini media fork from a leg (`streaming_stop`) without ending
+ * the call.
+ *
+ * The AMD path needs this: the bridge is attached on call.answered, before
+ * anyone knows a machine picked up. Hanging up used to silence it implicitly.
+ * A leg kept alive to leave a voicemail has to silence it explicitly, or the
+ * recording captures the assistant talking over the message.
+ */
+export async function telnyxStreamingStop(
+  apiKey: string,
+  callControlId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/streaming_stop`;
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  });
+}
+
 export async function answerThenSpeak(
   apiKey: string,
   callControlId: string,

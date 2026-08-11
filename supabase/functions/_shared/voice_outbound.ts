@@ -71,6 +71,14 @@ export type OutboundCallPlan = {
     ringSeconds?: number;
     preSmsBody?: string;
   };
+  /**
+   * place_ai_call only: what to say if a machine picks up, already rendered.
+   *
+   * Carried on the session rather than fetched at speak time because the
+   * AMD webhook has only a call_control_id to work from, and the flow's vars
+   * live on a run row it would otherwise have to walk back to.
+   */
+  voicemailScript?: string;
   /** place_ai_call only: the parked run to resume with the outcome. */
   flowRun?: OutboundFlowRunLink;
 };
@@ -154,6 +162,15 @@ export type OutboundSessionContext = {
     pre_sms_body?: string;
     agent_name?: string;
   };
+  /**
+   * place_ai_call only: what to speak when answering-machine detection says a
+   * machine picked up. Read by the AMD webhook, never by the bridge: the AI
+   * conversation never starts on a machine-answered leg.
+   *
+   * Its ABSENCE is the off switch, and is the historical behavior: hang up on
+   * the verdict and resolve the run with `voicemail_no_message`.
+   */
+  voicemail?: { script: string };
   /** place_ai_call only: the parked run the voice path resumes with the outcome. */
   flow_run?: {
     run_id: string;
@@ -215,6 +232,11 @@ export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionC
       ...(plan.reach.preSmsBody ? { pre_sms_body: plan.reach.preSmsBody } : {})
     };
   }
+  // Trimmed, and empty-after-trim is treated as absent: an all-whitespace
+  // render (every var in the template came back empty) must fall back to
+  // hanging up, not speak silence at a recording.
+  const voicemailScript = plan.voicemailScript?.trim();
+  if (voicemailScript) ctx.voicemail = { script: voicemailScript };
   if (plan.flowRun) {
     ctx.flow_run = {
       run_id: plan.flowRun.runId,
@@ -251,6 +273,9 @@ export function parsePlaceCallPayload(raw: unknown): OutboundCallPlan | null {
   };
   if (typeof c.contextNote === "string" && c.contextNote.trim()) {
     plan.contextNote = c.contextNote.trim();
+  }
+  if (typeof c.voicemailScript === "string" && c.voicemailScript.trim()) {
+    plan.voicemailScript = c.voicemailScript.trim();
   }
   if (c.transfer !== undefined) {
     const t = c.transfer as Record<string, unknown> | null;

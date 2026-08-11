@@ -230,6 +230,19 @@ describe("parsePlaceCallPayload", () => {
     );
   });
 
+  // The voicemail message crosses the worker/originate boundary as JSON, so
+  // the parser is the last place a blank one can be caught before it reaches
+  // the session and gets spoken at a stranger's recording.
+  it("carries a trimmed voicemail script, and drops a blank one", () => {
+    expect(
+      parsePlaceCallPayload({ ...BASE, voicemailScript: "  Hi, Amy's office.  " })
+    ).toMatchObject({ voicemailScript: "Hi, Amy's office." });
+    expect(parsePlaceCallPayload({ ...BASE, voicemailScript: "   " })).not.toHaveProperty(
+      "voicemailScript"
+    );
+    expect(parsePlaceCallPayload(BASE)).not.toHaveProperty("voicemailScript");
+  });
+
   it("parses a minimal payload (no persona/captureFields/transfer/flowRun)", () => {
     expect(parsePlaceCallPayload(BASE)).toEqual({
       toE164: "+17572390150",
@@ -336,5 +349,29 @@ describe("reach ladder payload and context", () => {
   it("omits reach_targets entirely when the plan has no ladder", () => {
     const plan = parsePlaceCallPayload(BASE);
     expect(outboundSessionContext(plan!)).not.toHaveProperty("reach_targets");
+  });
+});
+
+/**
+ * The voicemail message rides the session, not the run: the AMD webhook has
+ * only a call_control_id to work from, so anything it must say has to be on
+ * the row it can already reach.
+ */
+describe("outboundSessionContext: voicemail", () => {
+  const base = { toE164: "+14805551212", notifyE164: "+16025245719", persona: "Hi.", captureFields: null };
+
+  it("carries a trimmed script when one was rendered", () => {
+    const ctx = outboundSessionContext({ ...base, voicemailScript: "  Hi Marla, Amy's office.  " });
+    expect(ctx.voicemail).toEqual({ script: "Hi Marla, Amy's office." });
+  });
+
+  // Absence is the off switch, and the off state is the pre-#1214 behavior:
+  // hang up on the verdict rather than speak at a recording.
+  it("omits the key entirely when no script was configured", () => {
+    expect("voicemail" in outboundSessionContext(base)).toBe(false);
+  });
+
+  it("treats an all-whitespace script as no script", () => {
+    expect("voicemail" in outboundSessionContext({ ...base, voicemailScript: "   " })).toBe(false);
   });
 });

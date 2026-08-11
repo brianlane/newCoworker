@@ -720,6 +720,8 @@ export type StepAction =
       persona: string;
       /** Rendered known-details note ("" = none configured). */
       contextNote: string;
+      /** Rendered voicemail message. Absent = hang up on a machine, as before. */
+      voicemailScript?: string;
       notifyE164?: string;
       notifyRef?: ContactRef;
       /** Send the summary to the business owner (tenant-neutral recipient). */
@@ -1765,10 +1767,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const reachPreSmsBody = step.reachTeammate?.preSmsTemplate
         ? renderTemplate(step.reachTeammate.preSmsTemplate, scope, { collapseEmpty: true }).trim()
         : "";
+      // An all-empty render is deliberately dropped rather than sent as "":
+      // no script means the AMD path keeps its pre-#1214 behavior (hang up on
+      // the verdict), which is the safe direction. Speaking a half-rendered
+      // sentence at a stranger's voicemail is not.
+      const voicemailScript = step.voicemailTemplate
+        ? renderTemplate(step.voicemailTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       const base = {
         kind: "place_ai_call" as const,
         persona,
         contextNote,
+        ...(voicemailScript ? { voicemailScript } : {}),
         ...(step.notifyE164 ? { notifyE164: step.notifyE164 } : {}),
         ...(step.notifyRef ? { notifyRef: step.notifyRef } : {}),
         ...(step.notifyOwner === true ? { notifyOwner: true } : {}),
