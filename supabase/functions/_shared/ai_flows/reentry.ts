@@ -236,6 +236,21 @@ export function flowDedupesLeadRuns(def: unknown): boolean {
   return options?.dedupeLeadRuns === true;
 }
 
+/**
+ * The var this flow identifies a lead by, when its person keys are not
+ * available in time. "" when unset.
+ *
+ * See the schema note on `dedupeLeadRunsByVar`: a source can identify a lead
+ * before it hands over a phone or email, and a flow that reads those off a
+ * portal page reaches its first comm step before it has them.
+ */
+export function leadDedupeVarName(def: unknown): string {
+  const options = (def as { options?: { dedupeLeadRunsByVar?: unknown } } | null | undefined)
+    ?.options;
+  const name = options?.dedupeLeadRunsByVar;
+  return typeof name === "string" ? name.trim() : "";
+}
+
 /** Case-insensitive, whitespace-collapsed form for address equality. */
 function normalizeAddress(raw: unknown): string {
   return typeof raw === "string" ? raw.trim().replace(/\s+/g, " ").toLowerCase() : "";
@@ -260,7 +275,13 @@ export async function duplicateLeadRunExists(
   businessId: string,
   flowId: string,
   currentRunId: string,
-  lead: { phone?: unknown; email?: unknown; address?: unknown }
+  lead: {
+    phone?: unknown;
+    email?: unknown;
+    address?: unknown;
+    /** Flow-declared identity var (options.dedupeLeadRunsByVar) and its value. */
+    keyVar?: { name?: unknown; value?: unknown };
+  }
 ): Promise<boolean> {
   const phoneRaw = typeof lead.phone === "string" ? lead.phone.trim() : "";
   const phoneE164 = phoneRaw
@@ -270,7 +291,12 @@ export async function duplicateLeadRunExists(
     : null;
   const email = typeof lead.email === "string" ? lead.email.trim() : "";
   const keys = normalizeKeys([phoneRaw, phoneE164, email]);
-  if (keys.length === 0) return false;
+  // A var key stands on its own: it is the identity for sources that have not
+  // handed over a phone or email yet, which is the whole reason it exists.
+  const varName = typeof lead.keyVar?.name === "string" ? lead.keyVar.name.trim() : "";
+  const varValue = normalizeKeys([lead.keyVar?.value as string | undefined])[0] ?? "";
+  const hasVarKey = Boolean(varName && varValue);
+  if (keys.length === 0 && !hasVarKey) return false;
   try {
     // Only runs created strictly BEFORE this one count — otherwise two
     // near-simultaneous runs for the same lead could each see the other and
@@ -286,10 +312,14 @@ export async function duplicateLeadRunExists(
       if (selfErr) console.error("reentry: duplicate-lead self lookup", selfErr);
       return false;
     }
-    const allKeys = await expandIdentityKeys(supabase, businessId, keys);
-    const identityFilter = allKeys
-      .flatMap((key) => IDENTITY_PATHS.map((path) => `${path}.eq.${key}`))
-      .join(",");
+    const allKeys = keys.length > 0 ? await expandIdentityKeys(supabase, businessId, keys) : [];
+    const identityClauses = allKeys.flatMap((key) =>
+      IDENTITY_PATHS.map((path) => `${path}.eq.${key}`)
+    );
+    // The var key gets its own path, matched against the SAME var on prior
+    // runs, so a run carrying both a phone and a var key matches on either.
+    if (hasVarKey) identityClauses.push(`context->vars->>${varName}.eq.${varValue}`);
+    const identityFilter = identityClauses.join(",");
     const { data, error } = await supabase
       .from("ai_flow_runs")
       .select("id, status, context")
@@ -313,10 +343,16 @@ export async function duplicateLeadRunExists(
       if (isTestModeTrigger(row.context?.trigger as Record<string, unknown> | undefined)) {
         return false;
       }
+      const priorVars = row.context?.vars as Record<string, unknown> | undefined;
+      // A var-key match is DECISIVE and skips the property comparison: the
+      // same referral link is the same referral, and HomeLight publishes only
+      // a city and ZIP before a claim, so an address check there would compare
+      // two coarse strings that say nothing about whether it is one lead.
+      if (hasVarKey && normalizeKeys([priorVars?.[varName] as string | undefined])[0] === varValue) {
+        return true;
+      }
       if (!currentAddress) return true;
-      const priorAddress = normalizeAddress(
-        (row.context?.vars as Record<string, unknown> | undefined)?.lead_address
-      );
+      const priorAddress = normalizeAddress(priorVars?.lead_address);
       // A prior run with no address can't prove a different property —
       // the person match stands. Differing addresses = a NEW lead.
       return !priorAddress || priorAddress === currentAddress;

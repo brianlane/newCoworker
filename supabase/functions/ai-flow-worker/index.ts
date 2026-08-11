@@ -161,7 +161,11 @@ import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { leadSourceLabel } from "../_shared/leads/source_label.ts";
-import { duplicateLeadRunExists, flowDedupesLeadRuns } from "../_shared/ai_flows/reentry.ts";
+import {
+  duplicateLeadRunExists,
+  flowDedupesLeadRuns,
+  leadDedupeVarName
+} from "../_shared/ai_flows/reentry.ts";
 import {
   birthdayDedupeKey,
   birthdayDue,
@@ -884,6 +888,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // The marker rides scope.vars into every later context persist, so
       // later comm steps never re-pay the check.
       scope.vars[LEAD_DEDUPE_VAR] = "1";
+      const leadDedupeVar = leadDedupeVarName(def);
       const isDuplicate = await duplicateLeadRunExists(
         supabase,
         run.business_id,
@@ -892,7 +897,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         {
           phone: scope.vars.lead_phone,
           email: scope.vars.lead_email,
-          address: scope.vars.lead_address
+          address: scope.vars.lead_address,
+          // Optional flow-declared identity var, for a source that names the
+          // lead before it hands over a phone or email.
+          ...(leadDedupeVar
+            ? { keyVar: { name: leadDedupeVar, value: scope.vars[leadDedupeVar] } }
+            : {})
         }
       );
       if (isDuplicate) {

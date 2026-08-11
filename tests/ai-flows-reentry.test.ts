@@ -4,6 +4,7 @@ import {
   flowBlocksReentry,
   flowDedupesLeadRuns,
   hasPriorRunForLead,
+  leadDedupeVarName,
   reentryBlocked
 } from "../supabase/functions/_shared/ai_flows/reentry";
 
@@ -402,5 +403,110 @@ describe("duplicateLeadRunExists", () => {
     expect(await duplicateLeadRunExists(nullData.db, BIZ, "f1", RUN, { phone: LEAD })).toBe(
       false
     );
+  });
+});
+
+
+/**
+ * Var-keyed identity (options.dedupeLeadRunsByVar). HomeLight, Aug 11 2026:
+ * the same alert text arrived twice as two inbound events six seconds apart,
+ * both runs texted the same teammate, and both parked waiting on a reply.
+ * dedupeLeadRuns alone could not help — it bails without a phone or email,
+ * and HomeLight reads those off the portal page AFTER its first comm step.
+ * Its referral link is unique per lead and is extracted at step 0.
+ */
+describe("leadDedupeVarName", () => {
+  it("reads the configured var, and treats anything else as unset", () => {
+    expect(leadDedupeVarName({ options: { dedupeLeadRunsByVar: " leadUrl " } })).toBe("leadUrl");
+    expect(leadDedupeVarName({ options: { dedupeLeadRuns: true } })).toBe("");
+    expect(leadDedupeVarName({ options: { dedupeLeadRunsByVar: 7 } })).toBe("");
+    expect(leadDedupeVarName(null)).toBe("");
+    expect(leadDedupeVarName("junk")).toBe("");
+  });
+});
+
+describe("duplicateLeadRunExists: var-keyed identity", () => {
+  const RUN2 = "22222222-2222-2222-2222-222222222222";
+  const URL = "https://hmlt.co/42a2915a";
+  const SELF2: Scripted = { data: { created_at: "2026-08-11T15:44:00Z" }, error: null };
+
+  it("matches a prior run on the var alone, with no phone or email anywhere", async () => {
+    const { db } = makeDb({
+      ai_flow_runs: [
+        SELF2,
+        { data: [{ id: "r0", context: { trigger: { from: "" }, vars: { leadUrl: URL } } }], error: null }
+      ]
+    });
+    expect(
+      await duplicateLeadRunExists(db, BIZ, "f1", RUN2, {
+        keyVar: { name: "leadUrl", value: URL }
+      })
+    ).toBe(true);
+  });
+
+  // The whole point: this is the state HomeLight is in at its first comm step.
+  it("still returns false when neither person keys nor a var value are present", async () => {
+    const { db, calls } = makeDb({});
+    expect(
+      await duplicateLeadRunExists(db, BIZ, "f1", RUN2, { keyVar: { name: "leadUrl", value: "" } })
+    ).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  /**
+   * Decisive, and deliberately not address-gated: HomeLight publishes only a
+   * city and ZIP before a claim, so comparing addresses there would compare
+   * two coarse strings that say nothing about whether it is one lead.
+   */
+  it("ignores a differing address when the var matches", async () => {
+    const { db } = makeDb({
+      ai_flow_runs: [
+        SELF2,
+        {
+          data: [
+            {
+              id: "r0",
+              context: { trigger: { from: "" }, vars: { leadUrl: URL, lead_address: "Mesa, AZ" } }
+            }
+          ],
+          error: null
+        }
+      ]
+    });
+    expect(
+      await duplicateLeadRunExists(db, BIZ, "f1", RUN2, {
+        address: "San Tan Valley, AZ",
+        keyVar: { name: "leadUrl", value: URL }
+      })
+    ).toBe(true);
+  });
+
+  // A row the or-filter returned on a PHONE match still gets the address rule.
+  it("falls through to the address rule when the var does not match", async () => {
+    const { db } = makeDb({
+      contacts: [{ data: [], error: null }],
+      ai_flow_runs: [
+        SELF2,
+        {
+          data: [
+            {
+              id: "r0",
+              context: {
+                trigger: { from: "" },
+                vars: { leadUrl: "https://hmlt.co/other", lead_address: "Mesa, AZ" }
+              }
+            }
+          ],
+          error: null
+        }
+      ]
+    });
+    expect(
+      await duplicateLeadRunExists(db, BIZ, "f1", RUN2, {
+        phone: LEAD,
+        address: "San Tan Valley, AZ",
+        keyVar: { name: "leadUrl", value: URL }
+      })
+    ).toBe(false);
   });
 });
