@@ -79,10 +79,10 @@ const ENV_GROUPS: EnvGroup[] = [
     ]
   },
   {
-    label: "Microsoft (stubbed)",
+    label: "Microsoft (Outlook OAuth)",
     vars: [
-      { name: "Client ID", description: "Azure / Entra app client", key: "MICROSOFT_CLIENT_ID" },
-      { name: "Client Secret", description: "Azure / Entra secret", key: "MICROSOFT_CLIENT_SECRET" }
+      { name: "Client ID", description: "Entra app (first-party Outlook connect)", key: "MICROSOFT_CLIENT_ID" },
+      { name: "Client Secret", description: "Entra app secret", key: "MICROSOFT_CLIENT_SECRET" }
     ]
   },
   {

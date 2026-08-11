@@ -2,10 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockNangoProxy = vi.fn();
 const mockNangoProxyStatus = vi.fn();
+const mockGetByNangoIds = vi.fn();
 
 vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: (...a: unknown[]) => mockNangoProxy(...a),
   nangoProxyStatusForBusiness: (...a: unknown[]) => mockNangoProxyStatus(...a)
+}));
+
+// The resolver reads the row to learn which transport owns it. Every case in
+// this file is a Nango row, so the direct arm falls straight through.
+vi.mock("@/lib/db/workspace-oauth-connections", () => ({
+  getWorkspaceOAuthConnectionByNangoIds: (...a: unknown[]) => mockGetByNangoIds(...a)
 }));
 
 import { workspaceProxyForBusiness, workspaceProxyStatusForBusiness } from "@/lib/workspace/proxy";
@@ -15,6 +22,17 @@ const LINK = { connectionId: "c1", providerConfigKey: "google" };
 describe("lib/workspace/proxy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetByNangoIds.mockResolvedValue({
+      id: "row-1",
+      business_id: "biz",
+      provider_config_key: "google",
+      connection_id: "c1",
+      metadata: {},
+      transport: "nango",
+      is_active: true,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    });
   });
 
   describe("workspaceProxyForBusiness", () => {
