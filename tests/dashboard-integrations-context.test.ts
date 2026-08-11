@@ -128,7 +128,10 @@ describe("loadIntegrationsContext", () => {
     expect(ctx.slackEnabled).toBe(false);
     expect(listApiKeys).toHaveBeenCalledWith(BIZ);
     expect(listWebhookSubscriptions).toHaveBeenCalledWith(BIZ);
-    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId);
+    // Explicitly the Claude connector: the table is keyed on (user, client)
+    // now, so an unqualified read would be ambiguous the moment a second
+    // connector exists.
+    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "claude");
   });
 
   it("loads the signed-in user's MCP connector status (user-scoped) and tolerates a read failure", async () => {

@@ -128,7 +128,7 @@ export async function loadIntegrationsContext(
     activeHooks: businessId ? await listWebhookSubscriptions(businessId) : [],
     // Best-effort: a status-read failure must not take the page down — the
     // card just falls back to the instructions-only state.
-    mcpConnectorStatus: await getMcpConnectorStatus(user.userId).catch(() => null)
+    mcpConnectorStatus: await getMcpConnectorStatus(user.userId, "claude").catch(() => null)
   };
 }
 
