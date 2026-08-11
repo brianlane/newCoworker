@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockNangoProxy = vi.fn();
+const mockNangoProxyStatus = vi.fn();
 
 vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: (...a: unknown[]) => mockNangoProxy(...a)
+  nangoProxyForBusiness: (...a: unknown[]) => mockNangoProxy(...a),
+  nangoProxyStatusForBusiness: (...a: unknown[]) => mockNangoProxyStatus(...a)
 }));
 
-import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
+import { workspaceProxyForBusiness, workspaceProxyStatusForBusiness } from "@/lib/workspace/proxy";
 
 const LINK = { connectionId: "c1", providerConfigKey: "google" };
 
@@ -59,6 +61,40 @@ describe("lib/workspace/proxy", () => {
       await expect(
         workspaceProxyForBusiness("biz", LINK, { endpoint: "/x" })
       ).rejects.toThrow("403");
+    });
+  });
+
+  describe("workspaceProxyStatusForBusiness", () => {
+    it("passes through to the status-normalizing transport", async () => {
+      mockNangoProxyStatus.mockResolvedValue({ status: 200, data: { ok: true } });
+      const config = { endpoint: "/gmail/v1/users/me/labels", method: "GET" as const };
+      const res = await workspaceProxyStatusForBusiness("biz", LINK, config);
+      expect(mockNangoProxyStatus).toHaveBeenCalledWith("biz", LINK, config);
+      expect(res).toEqual({ status: 200, data: { ok: true } });
+      // The throwing arm must not be involved: routing a status-branching caller
+      // through it is what made organize.ts's error handling dead code.
+      expect(mockNangoProxy).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a provider error as a status rather than a throw", async () => {
+      mockNangoProxyStatus.mockResolvedValue({ status: 403, data: { error: "denied" } });
+      await expect(
+        workspaceProxyStatusForBusiness("biz", LINK, { endpoint: "/x" })
+      ).resolves.toEqual({ status: 403, data: { error: "denied" } });
+    });
+
+    it("returns null when the business has no such connection", async () => {
+      mockNangoProxyStatus.mockResolvedValue(null);
+      await expect(
+        workspaceProxyStatusForBusiness("biz", LINK, { endpoint: "/x" })
+      ).resolves.toBeNull();
+    });
+
+    it("still throws a transport failure that carries no status", async () => {
+      mockNangoProxyStatus.mockRejectedValue(new Error("socket hang up"));
+      await expect(
+        workspaceProxyStatusForBusiness("biz", LINK, { endpoint: "/x" })
+      ).rejects.toThrow("socket hang up");
     });
   });
 });
