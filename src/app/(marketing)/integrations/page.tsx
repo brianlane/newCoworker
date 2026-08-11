@@ -71,11 +71,10 @@ export default async function IntegrationsPage() {
     Icon
   }));
 
-  const claudeConnector = {
-    title: t("claude.title"),
-    description: t("claude.description"),
-    Icon: Bot
-  };
+  const assistantConnectors = [
+    { title: t("claude.title"), description: t("claude.description"), Icon: Bot },
+    { title: t("chatgpt.title"), description: t("chatgpt.description"), Icon: Bot }
+  ];
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
@@ -188,9 +187,9 @@ export default async function IntegrationsPage() {
           {nativeIntegrations.map((f) => (
             <FeatureCard key={f.title} feature={f} />
           ))}
-          <div className="sm:col-span-2">
-            <FeatureCard feature={claudeConnector} />
-          </div>
+          {assistantConnectors.map((f) => (
+            <FeatureCard key={f.title} feature={f} />
+          ))}
         </div>
       </section>
 
