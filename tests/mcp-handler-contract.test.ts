@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
 import { allMcpTools, authFromContext, registerMcpTools } from "@/lib/mcp/registry";
+import { MCP_WIDGET_URI } from "@/lib/mcp/widgets";
 
 const VALID_BEARER = "valid-test-bearer";
 const CALLER = { userId: "user-123", email: "owner@example.com" };
@@ -201,6 +202,64 @@ describe("the real registry on the wire", () => {
       expect(schema, `${tool.name as string} has no outputSchema`).toBeDefined();
       expect(schema?.type, `${tool.name as string} outputSchema root`).toBe("object");
     }
+  });
+
+  it("advertises the widgets as resources and links the tools that use them", async () => {
+    // Nothing else can see this. Both the resource registration and the tool
+    // _meta are optional in the SDK's types, so a dropped or renamed key still
+    // type-checks and the widget silently never renders.
+    const res = await realHandler(
+      new Request("https://app.example.com/api/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream"
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "resources/list", params: {} })
+      })
+    );
+    const text = await res.text();
+    const framed = text.split("\n").find((l) => l.startsWith("data: "));
+    const parsed = JSON.parse(framed ? framed.slice(6) : text) as {
+      result?: { resources?: Array<Record<string, unknown>> };
+    };
+    const uris = (parsed.result?.resources ?? []).map((r) => r.uri);
+    expect(uris).toEqual(expect.arrayContaining(Object.values(MCP_WIDGET_URI)));
+
+    const tools = await toolsList();
+    const contact = tools.find((t) => t.name === "get_contact");
+    const meta = contact?._meta as Record<string, unknown> | undefined;
+    expect(meta?.["openai/outputTemplate"]).toBe(MCP_WIDGET_URI.contact);
+    // And a text-only tool carries none, rather than an empty object.
+    expect(tools.find((t) => t.name === "send_sms")?._meta).toBeUndefined();
+  });
+
+  it("serves the widget document itself, with the Apps SDK mime type", async () => {
+    // resources/list proves the widget is advertised; only a read proves the
+    // document comes back, which is what the host actually renders.
+    const res = await realHandler(
+      new Request("https://app.example.com/api/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "resources/read",
+          params: { uri: MCP_WIDGET_URI.contact }
+        })
+      })
+    );
+    const text = await res.text();
+    const framed = text.split("\n").find((l) => l.startsWith("data: "));
+    const parsed = JSON.parse(framed ? framed.slice(6) : text) as {
+      result?: { contents?: Array<Record<string, unknown>> };
+    };
+    const doc = parsed.result?.contents?.[0];
+    expect(doc?.mimeType).toBe("text/html;profile=mcp-app");
+    expect(String(doc?.text)).toContain("<!doctype html>");
   });
 
   it("carries the exact values we declared, not defaults", async () => {
