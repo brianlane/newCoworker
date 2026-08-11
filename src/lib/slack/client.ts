@@ -134,12 +134,55 @@ export type SlackUserIdentity = {
   isBot: boolean;
 };
 
+/**
+ * POST with form-encoded arguments. Slack's older read methods (users.info
+ * among them) IGNORE application/json request bodies: the arguments never
+ * arrive and the call fails as if they were omitted (users.info answers
+ * user_not_found). Found live: the JSON variant silently broke owner
+ * identity while every write method worked. Write methods keep JSON (blocks
+ * need it); argument-bearing reads go through this.
+ */
+export async function slackApiCallForm(
+  method: string,
+  botToken: string,
+  params: Record<string, string>
+): Promise<SlackApiEnvelope> {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), SLACK_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${SLACK_API_BASE_URL}/${method}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${botToken}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams(params).toString(),
+      signal: ac.signal
+    });
+  } catch (err) {
+    const aborted = (err as Error)?.name === "AbortError";
+    throw new SlackApiError(
+      aborted ? "upstream_timeout" : "upstream_unreachable",
+      aborted ? `Slack ${method} timed out` : `Slack ${method} unreachable`
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const body = (await res.json().catch(() => null)) as SlackApiEnvelope | null;
+  if (body === null) {
+    throw new SlackApiError("bad_response", `Slack ${method} returned a non-JSON body`, res.status);
+  }
+  return body;
+}
+
 /** users.info: how a Slack user becomes a person we can trust or not. */
 export async function slackUsersInfo(
   botToken: string,
   userId: string
 ): Promise<SlackUserIdentity | null> {
-  const body = await slackApiCall("users.info", botToken, { user: userId });
+  const body = await slackApiCallForm("users.info", botToken, { user: userId });
   if (body.ok !== true) return null;
   const user = body.user as
     | {

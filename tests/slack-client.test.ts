@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   slackApiCall,
+  slackApiCallForm,
   SlackApiError,
   slackAppendStream,
   slackListChannels,
@@ -186,21 +187,26 @@ describe("slackListChannels", () => {
 });
 
 describe("slackUsersInfo", () => {
-  it("maps profile fields with real-name fallback", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse({
-          ok: true,
-          user: { is_bot: false, profile: { display_name: "", real_name: "Dave L", email: "d@x.co" } }
-        })
-      )
+  it("sends FORM-ENCODED arguments (users.info ignores JSON bodies) and maps profile fields", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        ok: true,
+        user: { is_bot: false, profile: { display_name: "", real_name: "Dave L", email: "d@x.co" } }
+      })
     );
+    vi.stubGlobal("fetch", fetchMock);
     expect(await slackUsersInfo("xoxb-1", "U-1")).toEqual({
       displayName: "Dave L",
       email: "d@x.co",
       isBot: false
     });
+    // The live-found bug: a JSON body makes Slack answer user_not_found
+    // because the user argument never arrives. Pin the wire format.
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/x-www-form-urlencoded"
+    );
+    expect(String(init.body)).toBe("user=U-1");
 
     vi.stubGlobal(
       "fetch",
@@ -280,5 +286,55 @@ describe("assistant status + streaming trio", () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
     expect(await slackAppendStream("xoxb-1", handle, "hi")).toBe(false);
     expect(await slackStopStream("xoxb-1", handle, "final")).toBe(false);
+  });
+});
+
+describe("slackApiCallForm", () => {
+  it("throws on transport failures and non-JSON bodies like the JSON variant", async () => {
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(abortErr)));
+    await expect(slackApiCallForm("users.info", "xoxb-1", { user: "U" })).rejects.toMatchObject({
+      code: "upstream_timeout"
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
+    await expect(slackApiCallForm("users.info", "xoxb-1", { user: "U" })).rejects.toMatchObject({
+      code: "upstream_unreachable"
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("nope");
+      }
+    }) as unknown as Response));
+    await expect(slackApiCallForm("users.info", "xoxb-1", { user: "U" })).rejects.toMatchObject({
+      code: "bad_response"
+    });
+  });
+
+  it("aborts a hung call when the timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_url: unknown, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => {
+                const e = new Error("aborted");
+                e.name = "AbortError";
+                reject(e);
+              });
+            })
+        )
+      );
+      const pending = slackApiCallForm("users.info", "xoxb-1", { user: "U" });
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(SLACK_REQUEST_TIMEOUT_MS + 5);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
