@@ -38,6 +38,14 @@ the summary.
   Configured by `configure-hq-prospecting.ts` in **manual mode**, so drafts
   wait on a human until the copy earns automatic sending. See the README's
   Prospecting section.
+- **Tenant zero for the Slack integration** (Aug 10 2026). Connected to the
+  "New Coworker" workspace (team `T0BP5MBN1AR`, bot `U0BQ77AUR24`), alert
+  channel `#all-new-coworker`. Live-smoked the same day: hello post, an
+  alert card through the production delivery path, and a signed
+  `app_mention` answered in-thread by the inline engine in ~40s. The smoke
+  also caught the `users.info` JSON-body bug (owner identity resolved as
+  team) fixed in the follow-up PR; docs/SLACK-INTEGRATION.md is the
+  operational runbook.
 
 ## Flows
 
