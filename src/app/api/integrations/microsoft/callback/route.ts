@@ -11,12 +11,18 @@
  * callback URL alone cannot attach a mailbox to someone else's workspace.
  *
  * PROBE BEFORE WRITE. The /v1.0/me call happens before any DB write, which is
- * what lets this route skip the whole tentative-row dance the Nango complete
- * route performs (`settleWorkspaceConnectionInsert` and its
+ * what lets this route skip the TENTATIVE-ROW dance the Nango complete route
+ * performs (inserting first, then consolidating, with
  * over-cap-awaiting-consolidation bookkeeping). That complexity exists only
  * because Nango's identity probe needs the row to already exist. We own the
  * whole flow, so by the time anything is written we already know whether this
  * is a reconnect (no new seat) or a genuinely new mailbox.
+ *
+ * It does NOT skip `settleWorkspaceConnectionInsert`. Knowing the account up
+ * front removes the consolidation bookkeeping, but not the insert race: the
+ * cap check reads a count and inserts without a transaction, so two parallel
+ * callbacks can both pass it. The settlement after the insert is what keeps a
+ * tenant from ending up above their cap.
  *
  * RECONNECT IS CROSS-TRANSPORT, and that is the point. An owner whose Outlook
  * is still on Nango who connects here gets their EXISTING row flipped to
@@ -27,12 +33,15 @@
 import { NextResponse } from "next/server";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
+  deleteWorkspaceOAuthConnection,
   flipWorkspaceConnectionToDirect,
   insertDirectWorkspaceConnection,
   listWorkspaceOAuthConnections
 } from "@/lib/db/workspace-oauth-connections";
 import {
   assertWorkspaceConnectionAllowed,
+  settleWorkspaceConnectionInsert,
+  workspaceConnectionCapMessage,
   WorkspaceConnectionCapError
 } from "@/lib/nango/connection-cap";
 import {
@@ -175,13 +184,37 @@ export async function GET(request: Request) {
       // trusting the pre-consent check: the tenant may have connected something
       // else in another tab while this owner sat on the consent screen.
       await assertWorkspaceConnectionAllowed(verified.businessId);
-      await insertDirectWorkspaceConnection({
+
+      const connectionId = `direct:${randomUUID()}`;
+      const inserted = await insertDirectWorkspaceConnection({
         businessId: verified.businessId,
         providerConfigKey: OUTLOOK_KEY,
-        connectionId: `direct:${randomUUID()}`,
+        connectionId,
         metadata,
         tokens
       });
+
+      // The check above reads a count and inserts without a transaction, so two
+      // parallel callbacks can BOTH pass it. Settle after the insert, exactly
+      // as the Nango complete route does: re-read in deterministic order and
+      // evict our own row if it landed past the cap. Seats belong to the
+      // earliest rows, so racers can never end above the cap.
+      const settlement = await settleWorkspaceConnectionInsert(verified.businessId, {
+        providerConfigKey: OUTLOOK_KEY,
+        connectionId
+      });
+      if (settlement.evictRowId) {
+        await deleteWorkspaceOAuthConnection(verified.businessId, settlement.evictRowId);
+        logger.warn("microsoft connect lost a cap race; evicted the new row", {
+          businessId: verified.businessId,
+          connectionRowId: inserted.id
+        });
+        // Nothing to revoke on Microsoft's side: there is no scoped revoke
+        // endpoint, and deleting the row already destroyed the ciphertext.
+        return dashboardRedirect(request, {
+          error: workspaceConnectionCapMessage(settlement.state)
+        });
+      }
     }
 
     return dashboardRedirect(request, { workspace: "connected" });

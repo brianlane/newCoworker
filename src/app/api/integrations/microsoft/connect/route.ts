@@ -10,8 +10,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import {
-  assertWorkspaceConnectionAllowed,
+  resolveWorkspaceConnectionCapState,
+  workspaceConnectionCapMessage,
   WorkspaceConnectionCapError
 } from "@/lib/nango/connection-cap";
 import {
@@ -22,6 +24,9 @@ import {
 import { logger } from "@/lib/logger";
 
 const businessIdSchema = z.string().uuid();
+
+/** The provider key an Outlook mailbox uses, on BOTH transports. */
+const OUTLOOK_KEY = "outlook";
 
 function dashboardRedirect(request: Request, params: Record<string, string>) {
   const url = new URL("/dashboard/integrations/workspace", request.url);
@@ -50,16 +55,32 @@ export async function GET(request: Request) {
       await requireBusinessRole(parsed.data, "manage_settings");
     }
 
-    // Check the cap BEFORE consent. Walking an owner through the Microsoft
-    // consent screen only to refuse the result at the callback is the worst
-    // possible ordering: they granted access we then threw away.
+    // Check the cap BEFORE consent, but only where the answer is unambiguous.
     //
-    // A RECONNECT of a mailbox they already have does not consume a seat, but
-    // we cannot know which account they will pick until after consent. So this
-    // gate is deliberately the "adding one" question, and the callback settles
-    // the truth once /me says who it is: a reconnect updates in place and never
-    // re-checks.
-    await assertWorkspaceConnectionAllowed(parsed.data);
+    // Walking an owner through the Microsoft consent screen only to refuse the
+    // result is the worst ordering: they granted access we then threw away. So
+    // refuse early WHEN WE CAN.
+    //
+    // We cannot always. A reconnect consumes no seat (the callback updates the
+    // existing row in place), and which account they will pick is unknowable
+    // until after consent. Refusing every at-cap owner would block the single
+    // most important case this whole migration depends on: a Starter tenant
+    // whose cap is 1, already holding one Nango Outlook row, trying to move it
+    // to first-party. They would be permanently stuck on Nango.
+    //
+    // So: refuse early only when the business has NO Outlook row at all, where
+    // the request can only be a new connection. Otherwise let the flow run and
+    // let the callback settle it against the real account identity.
+    const capState = await resolveWorkspaceConnectionCapState(parsed.data);
+    if (capState.atCap) {
+      const rows = await listWorkspaceOAuthConnections(parsed.data);
+      const couldBeReconnect = rows.some((r) => r.provider_config_key === OUTLOOK_KEY);
+      if (!couldBeReconnect) {
+        return dashboardRedirect(request, {
+          error: workspaceConnectionCapMessage(capState)
+        });
+      }
+    }
 
     const state = createMicrosoftOAuthState(parsed.data);
     // `reconnect=1` forces the consent prompt, which re-issues a refresh token
