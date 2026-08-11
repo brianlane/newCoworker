@@ -1988,6 +1988,24 @@ export const aiFlowDefinitionSchema = z.object({
       // trigger SENDER and can't see relay texts (e.g. realtor.com's
       // notifications arrive with an empty/shared sender). Default off.
       dedupeLeadRuns: z.boolean().optional(),
+      /**
+       * Dedupe on the value of ONE extracted var instead of the lead's person
+       * keys, for sources that identify a lead before they hand over a phone
+       * or email.
+       *
+       * `dedupeLeadRuns` alone cannot help there: it bails when the run has
+       * neither phone nor email, and a flow that reads those from a portal
+       * page reaches its first comm step before it has them. HomeLight is the
+       * case (Aug 11 2026): the same alert text arrived twice as two inbound
+       * events six seconds apart, both runs texted the same teammate, and both
+       * parked waiting on a reply. Its referral link is unique per lead and is
+       * extracted at step 0, which makes it the identity the person keys are
+       * not yet able to be.
+       *
+       * A match on this var is DECISIVE (no address comparison): the same
+       * referral link is the same referral. Needs dedupeLeadRuns to be on.
+       */
+      dedupeLeadRunsByVar: varName.optional(),
       // Owner opt-in for the texting coworker's start_aiflow_for_contact
       // tool: when true, the SMS model may enroll the CURRENT texter into
       // this flow. Default off — the customer-facing surface stays barred

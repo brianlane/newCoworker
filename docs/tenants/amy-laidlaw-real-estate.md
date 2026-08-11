@@ -213,6 +213,37 @@ These are mistakes already made on this account. Do not remake them.
   `notify_both` / `notify_buyer` beside it. The three sit consecutively, so a
   run resuming at `notify` still walks all of them and exactly one gate fires.
 
+- **One HomeLight alert can arrive twice, and each delivery spawns a run.**
+  Aug 11 2026: two runs six seconds apart (15:43:54, 15:44:00 UTC) both
+  processed referral `hmlt.co/42a2915a` for seller "Marla". Byte-identical
+  `windowText`, same sender, different inbound event ids. Both routed to the
+  team, both texted Gabrielle Mota, and both parked in a 60-minute
+  `wait_for_reply`. Neither existing guard could catch it: the 15-minute
+  correlation window gathers text into one window rather than suppressing a
+  second run, and sender-keyed re-entry cannot help because HomeLight sends
+  every referral from the same number.
+
+  **`options.dedupeLeadRuns` alone is INERT on this flow**, which is the part
+  that catches people out. That gate bails when the run has neither phone nor
+  email (`keys.length === 0` returns false), and HomeLight's first comm step
+  (`route`) runs BEFORE `card` reads the contact details off the portal, so at
+  gate time the run knows only a first name, a city, a price, and the referral
+  link. Closed by `homelight-dedupe-and-price-digits.ts`, which pairs
+  `dedupeLeadRuns` with `options.dedupeLeadRunsByVar: "leadUrl"`: the referral
+  link is unique per lead and is extracted at step 0, so it is the only
+  identity available in time. A var-key match is deliberately DECISIVE and
+  skips the address comparison, because HomeLight publishes only city and ZIP
+  before a claim.
+- **`price_digits` is a matching token, not display text.** The same alert
+  produced `507` in one run and `507258` in the other. It is one of the two
+  `EMAIL_MATCH_TEMPLATES` (see `update-dave-routed-aiflows.ts`) used to match
+  HomeLight's portal email back to the lead, so a wrong value means the
+  late-arriving contact details never reach the flow. The old wording asked for
+  "the leading digits ONLY" with $429K and $264,000 as examples, neither of
+  which says what to do with $507,258. Reworded by the same one-shot. Note the
+  300-character cap on a field description: the first attempt at the new
+  wording was rejected by the validator before anything was written.
+
 ## One-shots
 
 Which of these actually ran, and when, is in the ledger, not here:
@@ -236,7 +267,9 @@ accept step, see Sharp edges),
 second trigger, see Sharp edges).
 
 Other networks: `seed-referralexchange-aiflow.ts`,
-`realtor-retrigger-guard.ts`. HomeLight's are listed in
+`realtor-retrigger-guard.ts`,
+`homelight-dedupe-and-price-digits.ts` (Aug 11 2026: the duplicate-run and
+`price_digits` fixes, see Sharp edges). HomeLight's others are listed in
 [homelight-flow.md](homelight-flow.md).
 
 Speed-to-lead (Aug 8 2026): `amy-speed-to-lead-definition.ts` (pure
