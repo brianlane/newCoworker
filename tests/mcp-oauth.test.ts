@@ -9,6 +9,7 @@ import {
 } from "@/lib/mcp/oauth";
 import { GET as bareMetadataGet } from "@/app/.well-known/oauth-protected-resource/route";
 import { GET as twinMetadataGet } from "@/app/.well-known/oauth-protected-resource/api/mcp/route";
+import { GET as chatgptMetadataGet } from "@/app/.well-known/oauth-protected-resource/api/mcp/chatgpt/route";
 
 const ISSUER = "https://proj.supabase.co";
 
@@ -119,6 +120,28 @@ describe("the two metadata routes", () => {
   });
 });
 
+describe("the ChatGPT endpoint's metadata", () => {
+  it("names its own endpoint, not the Claude one", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = ISSUER;
+    const body = await chatgptMetadataGet(
+      request("https://www.newcoworker.com/.well-known/oauth-protected-resource/api/mcp/chatgpt")
+    ).json();
+    // ChatGPT echoes this back as RFC 8707's `resource`, so a document naming
+    // the wrong endpoint is the exact mismatch audience validation rejects.
+    expect(body.resource).toBe("https://www.newcoworker.com/api/mcp/chatgpt");
+    expect(body.authorization_servers).toEqual(["https://proj.supabase.co/auth/v1"]);
+  });
+
+  it("differs from the Claude document in the resource and nothing else", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = ISSUER;
+    const req = request("https://www.newcoworker.com/.well-known/x");
+    const chatgpt = await chatgptMetadataGet(req).json();
+    const claude = await bareMetadataGet(req).json();
+    expect({ ...chatgpt, resource: null }).toEqual({ ...claude, resource: null });
+    expect(chatgpt.resource).not.toBe(claude.resource);
+  });
+});
+
 describe("the 401 challenge the live route sends", () => {
   /**
    * Asserted against the REAL route module, because the pointer is the whole
@@ -126,6 +149,22 @@ describe("the 401 challenge the live route sends", () => {
    * else to find out where to authenticate. Pointing it at the bare metadata
    * document is what advertised the entire site as the protected resource.
    */
+  it("points the ChatGPT route at the ChatGPT metadata document", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = ISSUER;
+    const { POST } = await import("@/app/api/mcp/chatgpt/route");
+    const res = await POST(
+      new Request("https://www.newcoworker.com/api/mcp/chatgpt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate") ?? "").toContain(
+      'resource_metadata="https://www.newcoworker.com/.well-known/oauth-protected-resource/api/mcp/chatgpt"'
+    );
+  });
+
   it("points an unauthenticated client at the path-inserted metadata", async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = ISSUER;
     const { POST } = await import("@/app/api/mcp/route");
