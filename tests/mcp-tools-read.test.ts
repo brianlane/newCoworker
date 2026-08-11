@@ -340,6 +340,9 @@ describe("list_call_transcripts", () => {
     expect(listTranscriptsForBusiness).toHaveBeenCalledWith("biz-1", { limit: 7 });
     expect(result.calls[0]).toEqual({
       id: "t1",
+      // The id fetch actually accepts. A bare UUID would make every call id a
+      // model can obtain unusable, since fetch needs the business too.
+      fetch_id: "call:biz-1:t1",
       caller: "+15550001111",
       direction: "inbound",
       kind: "ai",

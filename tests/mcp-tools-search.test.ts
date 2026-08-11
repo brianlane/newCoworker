@@ -13,7 +13,8 @@ vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/sms-history", () => ({ listMessagesForCustomer: vi.fn() }));
 vi.mock("@/lib/db/voice-transcripts", () => ({
   getTranscriptById: vi.fn(),
-  listTurns: vi.fn()
+  listTurns: vi.fn(),
+  listTranscriptsForBusiness: vi.fn()
 }));
 
 import { searchTool, fetchTool } from "@/lib/mcp/tools/search";
@@ -323,5 +324,41 @@ describe("fetch, when the record is mostly empty", () => {
       results: Array<{ title: string }>;
     };
     expect(result.results[0].title).toBe("Maria");
+  });
+});
+
+/**
+ * The gap review caught: `fetch` reads calls, and the only place a model can
+ * get a call id is `list_call_transcripts`. That tool returned a bare UUID,
+ * so every call id a model could actually obtain was one `fetch` refused.
+ * This walks the real round trip rather than asserting the format twice.
+ */
+describe("call ids survive the trip from list_call_transcripts to fetch", () => {
+  it("accepts the fetch_id that list_call_transcripts emits", async () => {
+    const { listCallTranscriptsTool } = await import("@/lib/mcp/tools/read");
+    const { listTranscriptsForBusiness } = await import("@/lib/db/voice-transcripts");
+    vi.mocked(listTranscriptsForBusiness).mockResolvedValue([
+      { id: "call-1", caller_e164: "+15551110000", summary: "Pricing" }
+    ] as never);
+    vi.mocked(listAccessibleBusinesses).mockResolvedValue([
+      { businessId: BIZ_A, name: "A", tier: "standard", role: "owner" }
+    ] as never);
+
+    const listed = (await listCallTranscriptsTool.handler({}, AUTH)) as {
+      calls: Array<{ fetch_id: string }>;
+    };
+    const id = listed.calls[0].fetch_id;
+
+    vi.mocked(getTranscriptById).mockResolvedValue({
+      id: "call-1",
+      caller_e164: "+15551110000",
+      started_at: null,
+      status: null,
+      summary: "Pricing"
+    } as never);
+    vi.mocked(listTurns).mockResolvedValue([] as never);
+
+    const fetched = (await runTool(fetchTool, { id }, AUTH)) as { text: string };
+    expect(fetched.text).toContain("Pricing");
   });
 });
