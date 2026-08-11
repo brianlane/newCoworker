@@ -26,6 +26,7 @@ import {
   MCP_MAX_DURATION_SECONDS,
   withMcpAuthMeta
 } from "@/lib/mcp/server";
+import { MCP_ROUTES } from "@/lib/mcp/routes";
 
 const CALLER = { userId: "user-123", email: "owner@example.com" };
 /** Shaped like a JWT: three non-empty dot-separated parts. */
@@ -77,6 +78,32 @@ describe("createMcpRouteHandlers", () => {
 
   it("lets a long tool call finish, matching the assistants' own timeout", () => {
     expect(MCP_MAX_DURATION_SECONDS).toBe(300);
+  });
+
+  /**
+   * Next reads route segment config statically, so `maxDuration` cannot be the
+   * imported constant: an import fails `next build` with "Invalid segment
+   * configuration export detected", which neither tsc nor vitest sees. The
+   * literal is therefore duplicated on purpose, and this reads the route files
+   * to make sure the duplicate still agrees with the source of truth.
+   */
+  it("keeps every route file's maxDuration literal in step with the constant", async () => {
+    const { readFile } = await import("node:fs/promises");
+    for (const path of Object.values(MCP_ROUTES)) {
+      const file = `src/app${path}/route.ts`;
+      let source: string;
+      try {
+        source = await readFile(file, "utf8");
+      } catch {
+        continue; // Route not built yet (the ChatGPT one lands later).
+      }
+      const declared = source.match(/export const maxDuration = (\d+);/);
+      expect(declared, `${file} declares no maxDuration`).not.toBeNull();
+      expect(Number(declared?.[1]), `${file} maxDuration`).toBe(MCP_MAX_DURATION_SECONDS);
+      expect(source, `${file} must not import the constant into segment config`).not.toMatch(
+        /maxDuration = MCP_MAX_DURATION_SECONDS/
+      );
+    }
   });
 
   it("challenges an unauthenticated request, pointing at its own metadata", async () => {

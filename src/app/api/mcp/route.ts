@@ -11,10 +11,15 @@
  * This file is the mount point and nothing else.
  */
 
-import { createMcpRouteHandlers, MCP_MAX_DURATION_SECONDS } from "@/lib/mcp/server";
+import { createMcpRouteHandlers } from "@/lib/mcp/server";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = MCP_MAX_DURATION_SECONDS;
+// Written as a literal, not as the shared MCP_MAX_DURATION_SECONDS, because
+// Next reads route segment config statically and rejects an imported value
+// with "Invalid segment configuration export detected" at build time. The
+// constant is still the source of truth; tests/mcp-server.test.ts reads this
+// file and fails if the two drift.
+export const maxDuration = 300;
 
 const handlers = createMcpRouteHandlers({ client: "claude" });
 

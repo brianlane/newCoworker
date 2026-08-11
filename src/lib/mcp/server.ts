@@ -16,7 +16,15 @@ import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
 import { mcpResourceMetadataPath, type McpClient } from "@/lib/mcp/routes";
 import { registerMcpTools } from "@/lib/mcp/registry";
 
-/** Both assistants cap a tool call around 300s; let long ones finish. */
+/**
+ * Both assistants cap a tool call around 300s; let long ones finish.
+ *
+ * Each route file must repeat this as a LITERAL in its `maxDuration` export.
+ * Next reads route segment config statically and rejects an imported value
+ * ("Invalid segment configuration export detected"), a failure that appears
+ * only in `next build`, not in tsc or the unit tests. This stays the source of
+ * truth and tests/mcp-server.test.ts reads the route files to catch drift.
+ */
 export const MCP_MAX_DURATION_SECONDS = 300;
 
 export type McpRouteHandlers = {
