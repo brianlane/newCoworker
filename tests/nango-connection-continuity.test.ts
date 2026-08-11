@@ -18,6 +18,8 @@ const row = (over: Partial<WorkspaceOAuthConnectionRow> = {}): WorkspaceOAuthCon
   provider_config_key: "outlook",
   connection_id: "conn-old",
   metadata: { provider_account_email: "sam@example.com", shared_calendar_id: "cal-1" },
+  transport: "nango",
+  is_active: true,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
   ...over

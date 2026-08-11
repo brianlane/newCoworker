@@ -172,6 +172,8 @@ describe("api/integrations/nango/complete", () => {
         provider_config_key: "google-mail",
         connection_id: "conn-1",
         metadata: {},
+        transport: "nango" as const,
+        is_active: true,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z"
       });
@@ -257,6 +259,8 @@ describe("api/integrations/nango/complete", () => {
       provider_config_key: "google-mail",
       connection_id: "conn-1",
       metadata: { shared_calendar_id: "cal-1" },
+      transport: "nango" as const,
+      is_active: true,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -317,6 +321,8 @@ describe("api/integrations/nango/complete", () => {
       provider_config_key: "google-mail",
       connection_id: "conn-1",
       metadata: {},
+      transport: "nango" as const,
+      is_active: true,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });

@@ -814,6 +814,8 @@ describe("mailbox bindings (fromConnectionId)", () => {
     provider_config_key: "outlook",
     connection_id: "nango-outlook-1",
     metadata: {},
+    transport: "nango" as const,
+    is_active: true,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z"
   };
@@ -909,6 +911,8 @@ describe("mailbox bindings (fromConnectionId)", () => {
         provider_config_key: "outlook",
         connection_id: "n1",
         metadata: { provider_account_email: "sam@example.com" },
+        transport: "nango" as const,
+        is_active: true,
         created_at: "2026-07-01T00:00:00Z",
         updated_at: "2026-07-01T00:00:00Z"
       },
@@ -918,6 +922,8 @@ describe("mailbox bindings (fromConnectionId)", () => {
         provider_config_key: "gmail",
         connection_id: "n2",
         metadata: {},
+        transport: "nango" as const,
+        is_active: true,
         created_at: "2026-07-02T00:00:00Z",
         updated_at: "2026-07-02T00:00:00Z"
       },
@@ -927,6 +933,8 @@ describe("mailbox bindings (fromConnectionId)", () => {
         provider_config_key: "zoom",
         connection_id: "n3",
         metadata: {},
+        transport: "nango" as const,
+        is_active: true,
         created_at: "2026-07-03T00:00:00Z",
         updated_at: "2026-07-03T00:00:00Z"
       }
