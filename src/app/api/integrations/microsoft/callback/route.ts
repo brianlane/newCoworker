@@ -40,6 +40,7 @@ import {
 } from "@/lib/db/workspace-oauth-connections";
 import {
   assertWorkspaceConnectionAllowed,
+  resolveWorkspaceConnectionCapState,
   settleWorkspaceConnectionInsert,
   workspaceConnectionCapMessage,
   WorkspaceConnectionCapError
@@ -53,8 +54,10 @@ import {
 import {
   findDuplicateOutlookRow,
   findOutlookReconnectTarget,
+  resolveUnlabeledReconnect,
   OUTLOOK_KEY
 } from "@/lib/microsoft/reconnect";
+import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
@@ -147,11 +150,41 @@ export async function GET(request: Request) {
     }
     const accountEmail = identity.email.toLowerCase();
 
-    const target = findOutlookReconnectTarget(
+    const capState = await resolveWorkspaceConnectionCapState(verified.businessId);
+    let decision = findOutlookReconnectTarget(
       await listWorkspaceOAuthConnections(verified.businessId),
-      accountEmail
+      accountEmail,
+      capState.max
     );
-    const existing = target?.row;
+
+    if (decision.kind === "verify") {
+      // An unlabeled row with room for more than one mailbox: whether this is a
+      // reconnect or a genuine second mailbox is unknowable from the row, so
+      // ask the row's own grant who it belongs to rather than guessing. A
+      // failed probe resolves to "new" (see resolveUnlabeledReconnect): a
+      // duplicate is recoverable, re-pointing a live flow at a different
+      // mailbox is not.
+      const candidate = decision.row;
+      let probed: string | null = null;
+      try {
+        probed = (
+          await fetchProviderAccountIdentity(verified.businessId, {
+            connectionId: candidate.connection_id,
+            providerConfigKey: candidate.provider_config_key
+          })
+        ).email;
+      } catch (err) {
+        logger.warn("microsoft reconnect: identity probe on the unlabeled row failed", {
+          businessId: verified.businessId,
+          connectionRowId: candidate.id,
+          error: (err as Error).message
+        });
+      }
+      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail);
+    }
+
+    const existing = decision.kind === "reconnect" ? decision.row : undefined;
+    const matchedBy = decision.kind === "reconnect" ? decision.matchedBy : null;
 
     const metadata: Record<string, unknown> = {
       // App-owned keys (the shared-calendar id and its ACL) must survive a
@@ -181,7 +214,7 @@ export async function GET(request: Request) {
         connectionRowId: existing.id,
         fromTransport: existing.transport,
         // An unlabeled adoption is a judgement call, so leave a trail.
-        matchedBy: target.matchedBy
+        matchedBy
       });
     } else {
       // A genuinely new mailbox does consume a seat. Re-check here rather than

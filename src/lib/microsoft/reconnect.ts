@@ -1,40 +1,41 @@
 /**
  * Which existing row a Microsoft connect should RECONNECT rather than duplicate.
  *
- * This is the hinge of the whole Nango-to-first-party migration. Get it right
- * and an owner clicking "Connect Outlook" silently moves their existing
- * connection across transports, keeping the row id that AiFlow mailbox
- * bindings, email triggers and the shared-calendar id all reference. Get it
- * wrong and we insert a SECOND row: the flows keep pointing at the stale one,
- * and every later run dies at send time with `connection_not_found`, which is
- * the KYP Ads Jul 22 2026 incident class.
+ * This is the hinge of the whole Nango-to-first-party migration, and it has two
+ * opposite failure modes, both bad:
  *
- * ## Why matching on the account email alone is not enough
+ *  - MISS a reconnect and we insert a second row. The flows keep pointing at
+ *    the stale one and every later run dies at send time with
+ *    `connection_not_found`, the KYP Ads Jul 22 2026 incident class.
+ *  - INVENT a reconnect and we re-point an existing row id at a DIFFERENT
+ *    mailbox. Flows bound to the first mailbox silently start sending from the
+ *    second. That is worse: a duplicate is recoverable, sending a tenant's mail
+ *    from the wrong account is not.
  *
- * The obvious rule is "same provider account email". It is right whenever the
- * row carries one, but plenty of rows do not:
+ * So this module's rule is: never guess. Decide from the account email when the
+ * row carries one, decide from a live identity probe when it does not, and fall
+ * back to inserting a new row when neither can settle it.
+ *
+ * ## Why unlabeled rows exist at all
+ *
  * `/api/integrations/nango/complete` only writes
  * `metadata.provider_account_email` when the identity probe SUCCEEDS
  * (`if (Object.keys(identityMetadata).length > 0)`), and rows created before
  * that probe existed were labeled with the dashboard login instead, which is
- * exactly why `debug/backfill-nango-account-identity.ts` had to be written.
+ * why `debug/backfill-nango-account-identity.ts` had to be written. Unlabeled
+ * Outlook rows are a real, existing shape belonging to precisely the tenants a
+ * migration most needs to carry across.
  *
- * So an unlabeled Nango Outlook row is a real, existing shape, and it belongs
- * to precisely the tenants a migration most needs to carry across.
+ * ## The one case that is decided without a probe
  *
- * ## The rule
+ * A business whose cap is a single connection, holding a single Outlook row,
+ * cannot have a second mailbox: the cap forbids it. So the row can only be the
+ * one being reconnected. That is not a guess, it is forced.
  *
- * 1. Prefer an exact, case-insensitive match on `provider_account_email`, and
- *    take the OLDEST such row, since that is the one flows have had longest to
- *    bind to.
- * 2. Failing that, adopt an unlabeled row ONLY when it is the business's sole
- *    Outlook row. Then there is nothing to be ambiguous about: the business has
- *    exactly one Outlook connection and is reconnecting it.
- *
- * Deliberately NOT adopting an unlabeled row when other Outlook rows exist.
- * With two mailboxes and one label missing, "which one did they just connect"
- * is a guess, and guessing wrong re-points a live flow at a different mailbox,
- * which is worse than the duplicate it would avoid.
+ * It also has to be handled, or those tenants dead-end: they cannot add
+ * (the cap refuses) and often cannot remove either, because the delete guard
+ * `flowsReferencingWorkspaceConnection` refuses while a flow still binds the
+ * row. Without this branch a Starter tenant with a dead grant is stuck forever.
  */
 import type { WorkspaceOAuthConnectionRow } from "@/lib/db/workspace-oauth-connections";
 
@@ -54,36 +55,78 @@ function oldestFirst(
   );
 }
 
-export type ReconnectTarget = {
-  row: WorkspaceOAuthConnectionRow;
-  /** How we decided, for the log: an unlabeled adoption deserves a trail. */
-  matchedBy: "account_email" | "sole_unlabeled_row";
-};
+export type ReconnectDecision =
+  /** Flip this row in place. `matchedBy` records how we knew, for the log. */
+  | {
+      kind: "reconnect";
+      row: WorkspaceOAuthConnectionRow;
+      matchedBy: "account_email" | "cap_forces_single_mailbox";
+    }
+  /**
+   * An unlabeled row that MIGHT be this account. The caller must probe the
+   * row's live grant and compare before touching it; see
+   * `resolveUnlabeledReconnect`.
+   */
+  | { kind: "verify"; row: WorkspaceOAuthConnectionRow }
+  /** A genuinely new mailbox: insert. */
+  | { kind: "new" };
 
 /**
- * The row to flip in place, or null when this is a genuinely new mailbox.
- * See the module doc for why rule 2 exists and why it is bounded.
+ * Decide from the rows alone, escalating to a probe when they cannot settle it.
+ *
+ * `capMax` is the business's workspace-connection limit (null = unlimited), and
+ * is what makes the single-seat case decidable without a network call.
  */
 export function findOutlookReconnectTarget(
   rows: readonly WorkspaceOAuthConnectionRow[],
-  accountEmail: string
-): ReconnectTarget | null {
+  accountEmail: string,
+  capMax: number | null
+): ReconnectDecision {
   const wanted = accountEmail.trim().toLowerCase();
-  if (wanted.length === 0) return null;
+  if (wanted.length === 0) return { kind: "new" };
 
   const outlookRows = rows.filter((r) => r.provider_config_key === OUTLOOK_KEY);
-  if (outlookRows.length === 0) return null;
+  if (outlookRows.length === 0) return { kind: "new" };
 
+  // 1. The row says who it is. Oldest wins: that is the row flows have had
+  //    longest to bind to.
   const labeled = oldestFirst(outlookRows.filter((r) => accountEmailOf(r) === wanted));
-  if (labeled.length > 0) return { row: labeled[0], matchedBy: "account_email" };
+  if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
 
-  // Rule 2: a lone Outlook row with no identity on it. The business has one
-  // Outlook connection, so a reconnect can only mean that one.
-  if (outlookRows.length === 1 && accountEmailOf(outlookRows[0]) === null) {
-    return { row: outlookRows[0], matchedBy: "sole_unlabeled_row" };
+  const soleUnlabeled =
+    outlookRows.length === 1 && accountEmailOf(outlookRows[0]) === null ? outlookRows[0] : null;
+  if (!soleUnlabeled) return { kind: "new" };
+
+  // 2. One seat, one row: a second mailbox is impossible, so this is it.
+  if (capMax === 1 && rows.length === 1) {
+    return { kind: "reconnect", row: soleUnlabeled, matchedBy: "cap_forces_single_mailbox" };
   }
 
-  return null;
+  // 3. Room for more than one mailbox and no label to go on. Whether this is a
+  //    reconnect or a genuine second mailbox is unknowable from the row, so ask
+  //    the provider rather than guessing.
+  return { kind: "verify", row: soleUnlabeled };
+}
+
+/**
+ * Settle a `verify` decision against the unlabeled row's REAL account.
+ *
+ * `probedEmail` is what the existing row's own grant reports (null when the
+ * probe failed, which is common precisely because a dead grant is often WHY
+ * someone is reconnecting).
+ *
+ * A failed probe deliberately resolves to "new". The tenant gets a duplicate
+ * row they can clean up, which is recoverable; adopting on a failed probe could
+ * re-point a live flow at a different mailbox, which is not.
+ */
+export function resolveUnlabeledReconnect(
+  row: WorkspaceOAuthConnectionRow,
+  probedEmail: string | null,
+  accountEmail: string
+): ReconnectDecision {
+  if (!probedEmail) return { kind: "new" };
+  const same = probedEmail.trim().toLowerCase() === accountEmail.trim().toLowerCase();
+  return same ? { kind: "reconnect", row, matchedBy: "account_email" } : { kind: "new" };
 }
 
 /**
@@ -91,9 +134,9 @@ export function findOutlookReconnectTarget(
  * concurrent connect created.
  *
  * The identity probe runs before the insert, so two callbacks for the same
- * mailbox can both see no existing row and both insert. The window is small
- * but real (two tabs, one mailbox), and the result is duplicate rows with
- * split bindings and an ambiguous resolver. The loser deletes its own row.
+ * mailbox can both see no existing row and both insert. The window is small but
+ * real (two tabs, one mailbox), and the result is duplicate rows with split
+ * bindings and an ambiguous resolver. The loser deletes its own row.
  *
  * Returns null when the freshly inserted row is the oldest for that account,
  * which is the common case and means there is nothing to consolidate.
