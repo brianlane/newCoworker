@@ -932,7 +932,12 @@ async function handleHandoffLifecycle(
       .eq("call_control_id", callControlId)
       .maybeSingle();
     const obCtx = ((obSessRow as { context?: Record<string, unknown> } | null)?.context ??
-      {}) as { transfer_initiated?: unknown; flow_run?: FlowRunLink; machine_detected?: unknown };
+      {}) as {
+      transfer_initiated?: unknown;
+      flow_run?: FlowRunLink;
+      machine_detected?: unknown;
+      voicemail_spoken?: unknown;
+    };
     await supabase
       .from("voice_handoff_sessions")
       .update({ status: "done" })
