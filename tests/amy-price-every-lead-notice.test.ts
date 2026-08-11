@@ -6,6 +6,7 @@ import {
   REALTOR_PRICE_LINE,
   SPOKE_CHECK_PRICE_FIELD,
   assertKnownFlowName,
+  newestRevertablePerFlow,
   patchDefinition,
   readTemplate,
   selectRevertTargets,
@@ -94,6 +95,61 @@ describe("--only guards on the revert path", () => {
   it("returns empty when the named flow has no applied ledger row", () => {
     const newest = new Map([["HomeLight Referral", { flow_id: "a", previous_definition: {} }]]);
     expect(selectRevertTargets(newest, "New Lead Intake")).toEqual([]);
+  });
+});
+
+/**
+ * The ledger row's previous_definition is the ONLY rollback path (there is no
+ * flow-version table), so it is written per flow, right after that flow's
+ * write. Batching to the end of the loop meant a later flow failing validation
+ * exited the process with earlier flows already live and nothing recorded to
+ * restore them from (Bugbot, PR #1291).
+ */
+describe("newestRevertablePerFlow", () => {
+  const applied = (flow: string, id: string, steps: number) => ({
+    flow_name: flow,
+    flow_id: id,
+    previous_definition: { steps: Array.from({ length: steps }, (_, i) => ({ id: `s${i}` })) }
+  });
+
+  it("keeps the newest row per flow, rows arriving newest first", () => {
+    const got = newestRevertablePerFlow([
+      applied("HomeLight Referral", "hl", 25),
+      applied("HomeLight Referral", "hl", 24),
+      applied("Realtor.com Lead", "rl", 9)
+    ]);
+    expect(got.size).toBe(2);
+    expect(got.get("HomeLight Referral")?.previous_definition.steps).toHaveLength(25);
+    expect(got.get("Realtor.com Lead")?.flow_id).toBe("rl");
+  });
+
+  // Without this a second --revert would "restore" the patched state the first
+  // one just undid.
+  it("ignores revert records", () => {
+    const got = newestRevertablePerFlow([
+      { flow_name: "HomeLight Referral", flow_id: "hl", reverted: true },
+      applied("HomeLight Referral", "hl", 25)
+    ]);
+    expect(got.get("HomeLight Referral")?.previous_definition.steps).toHaveLength(25);
+  });
+
+  it("ignores rows with no flow name, no stored definition, or no details at all", () => {
+    expect(
+      newestRevertablePerFlow([
+        null,
+        { flow_id: "x", previous_definition: { steps: [] } },
+        { flow_name: "HomeLight Referral", flow_id: "hl" }
+      ]).size
+    ).toBe(0);
+  });
+
+  // A run that died partway still leaves each written flow revertable.
+  it("recovers every flow a half-finished apply managed to write", () => {
+    const got = newestRevertablePerFlow([
+      applied("ReferralExchange Lead", "re", 23),
+      applied("Realtor.com Lead", "rl", 9)
+    ]);
+    expect([...got.keys()].sort()).toEqual(["Realtor.com Lead", "ReferralExchange Lead"]);
   });
 });
 

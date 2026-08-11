@@ -364,6 +364,32 @@ function argValue(flag: string): string | null {
 export type RevertTarget = { flow_id: string; previous_definition: Definition };
 
 /**
+ * Reduce the ledger's rows (newest first) to the newest revertable state per
+ * flow. One row per flow per apply, so a run that died halfway still leaves a
+ * complete rollback path for the flows it did write.
+ *
+ * A row is revertable when it names a flow, carries the definition the write
+ * replaced, and is not itself a revert record (or the second --revert would
+ * "restore" the patched state it just undid).
+ */
+export function newestRevertablePerFlow(
+  rows: ReadonlyArray<Record<string, unknown> | null>
+): Map<string, RevertTarget> {
+  const newest = new Map<string, RevertTarget>();
+  for (const details of rows) {
+    if (!details) continue;
+    const flowName = String(details.flow_name ?? "");
+    if (!flowName || details.reverted === true || !details.previous_definition) continue;
+    if (newest.has(flowName)) continue;
+    newest.set(flowName, {
+      flow_id: String(details.flow_id),
+      previous_definition: details.previous_definition as Definition
+    });
+  }
+  return newest;
+}
+
+/**
  * Narrow the revertable flows by `--only`. Split out and exported so the
  * "matched nothing" case is a value the caller must handle rather than an
  * empty loop that falls through to exit 0.
@@ -400,19 +426,9 @@ async function revert(db: SupabaseClient, businessId: string, apply: boolean, on
     console.error(`Ledger read failed: ${error.message}`);
     process.exit(1);
   }
-  const newestPerFlow = new Map<string, { flow_id: string; previous_definition: Definition }>();
-  for (const row of (data ?? []) as Array<{ details: Record<string, unknown> | null }>) {
-    for (const entry of (row.details?.flows as Array<Record<string, unknown>>) ?? []) {
-      const flowName = String(entry.flow_name ?? "");
-      if (!flowName || entry.reverted === true || !entry.previous_definition) continue;
-      if (!newestPerFlow.has(flowName)) {
-        newestPerFlow.set(flowName, {
-          flow_id: String(entry.flow_id),
-          previous_definition: entry.previous_definition as Definition
-        });
-      }
-    }
-  }
+  const newestPerFlow = newestRevertablePerFlow(
+    ((data ?? []) as Array<{ details: Record<string, unknown> | null }>).map((r) => r.details)
+  );
   if (newestPerFlow.size === 0) {
     console.error("No applied ledger rows with a previous_definition to revert to.");
     process.exit(2);
@@ -440,20 +456,21 @@ async function revert(db: SupabaseClient, businessId: string, apply: boolean, on
       console.error(`Revert failed for ${flowName}: ${upErr.message}`);
       process.exit(1);
     }
-    console.log("  -> reverted.");
-    reverted.push({ flow_id: entry.flow_id, flow_name: flowName, reverted: true });
+    // Recorded per flow for the same reason the apply path is: a later flow
+    // failing must not erase the record that this one was already rolled back.
+    await recordOneshotApplied(db, {
+      scriptPath: process.argv[1] ?? SCRIPT_BASENAME,
+      businessId,
+      details: { flow_id: entry.flow_id, flow_name: flowName, reverted: true }
+    });
+    console.log("  -> reverted and recorded.");
+    reverted.push({ flow_id: entry.flow_id, flow_name: flowName });
   }
   if (!apply) {
     console.log("\n[dry-run] Nothing written. Re-run with --revert --apply.");
     return;
   }
-  if (reverted.length > 0) {
-    await recordOneshotApplied(db, {
-      scriptPath: process.argv[1] ?? SCRIPT_BASENAME,
-      businessId,
-      details: { flows: reverted }
-    });
-  }
+  console.log(`\nReverted ${reverted.length} flow(s).`);
 }
 
 async function main(): Promise<void> {
@@ -509,7 +526,15 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (e) {
-      console.error(`${row.name} would become INVALID, aborting before any write:`);
+      // "Before any write" is only true for the FIRST flow. Say what is
+      // actually on the table, since the operator's next move depends on it.
+      console.error(
+        `${row.name} would become INVALID, not writing it.` +
+          (patched.length > 0
+            ? ` ${patched.length} earlier flow(s) are already updated and ledger-recorded; ` +
+              "re-run with --revert --apply to roll those back."
+            : " Nothing has been written yet.")
+      );
       if (e instanceof AiFlowValidationError) for (const i of e.issues) console.error(`  - ${i}`);
       else console.error(e);
       process.exit(2);
@@ -525,15 +550,24 @@ async function main(): Promise<void> {
         console.error(`Update failed for ${row.name}: ${upErr.message}`);
         process.exit(1);
       }
-      // No flow-version table exists, so the ledger row carries the exact
-      // definition this write replaced. That is the whole rollback story.
-      patched.push({
-        flow_id: row.id,
-        flow_name: row.name,
-        touched: result.touched,
-        previous_definition: previous
+      // Record THIS flow before touching the next one. There is no flow-version
+      // table, so the ledger row's previous_definition is the only rollback
+      // path there is; batching the writes to the end meant a later flow
+      // failing validation exited the process with earlier flows already live
+      // and nothing recorded, so --revert had nothing to restore from.
+      await recordOneshotApplied(db, {
+        scriptPath: process.argv[1] ?? SCRIPT_BASENAME,
+        businessId,
+        details: {
+          flow_id: row.id,
+          flow_name: row.name,
+          touched: result.touched,
+          price_line: PATCH_PLAN[row.name].line,
+          previous_definition: previous
+        }
       });
-      console.log("  -> updated.");
+      patched.push({ flow_id: row.id, flow_name: row.name });
+      console.log("  -> updated and recorded.");
     }
   }
 
@@ -541,13 +575,7 @@ async function main(): Promise<void> {
     console.log("\n[dry-run] Nothing written. Re-run with --apply.");
     return;
   }
-  if (patched.length > 0) {
-    await recordOneshotApplied(db, {
-      scriptPath: process.argv[1] ?? SCRIPT_BASENAME,
-      businessId,
-      details: { flows: patched, price_line: PRICE_LINE, realtor_line: REALTOR_PRICE_LINE }
-    });
-  }
+  console.log(`\nApplied to ${patched.length} flow(s).`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
