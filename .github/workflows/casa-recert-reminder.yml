@@ -108,6 +108,7 @@ jobs:
               "- A current Qualys SSL Labs report for `www.newcoworker.com`.",
               "- Supabase Database > Backups, for the restorable-from-backups half of SAQ 15.",
               "- Supabase Authentication > Sign In / Providers > Email, which evidences the password minimum, the complexity requirement and the OTP expiry in one frame (SAQ 19 and 20).",
+              "- **The OAuth client's Last used date.** Google deletes clients unused for 6 months, and token refreshes do not appear to count as use, only authorizations do. Losing the client loses the verification with it, which breaks email for every tenant with a connected Gmail. If the date is getting old, one re-consent on the internal sandbox tenant resets it. See the runbook's inventory section.",
               "",
               "Also confirm the Cloud Console **Project Owner and Editor accounts** are current. That is the address Google sends the reassessment notice to, and a stale one means the first sign of trouble is losing verification.",
               "",

@@ -109,6 +109,26 @@ The portal marking "LOV Submitted" does not mean Google has seen it. Confirm
 against the Google Cloud Console Verification Center, and ask the lab for a
 copy of the LOV for your records.
 
+### The OAuth client can be deleted for inactivity, and that would take the verification with it
+
+The client page carries a "Last used date" and this warning: "Inactive OAuth
+clients are subject to deletion if they are not used for 6 months. You will be
+notified of deletion due to inactivity, and can restore clients up to 30 days
+after deletion."
+
+On 2026-08-11 it read **July 30, 2026**, while the fleet was polling Gmail
+every minute for three connected accounts. So token refreshes appear NOT to
+count as use: only authorizations do. The last real tenant connect was Jul 22.
+
+With few Google connections and few new ones, a six-month gap with zero
+authorizations is not far-fetched, and losing the client would take the
+verification with it. That is the same class of outage as letting CASA lapse:
+every tenant with a connected Gmail breaks, and it is not a paperwork problem.
+
+**Check the Last used date when this runbook is opened each June.** If it is
+approaching six months, a single re-consent on the internal sandbox tenant
+resets it.
+
 ---
 
 ## Contacts and identifiers
@@ -129,3 +149,39 @@ not require verification and will not appear in the approval email.
 **Any new sensitive or restricted scope, or any change to the OAuth consent
 screen configuration, requires a fresh verification request.** Verification
 cannot be inherited.
+
+The scope set is now also frozen in code at
+`src/lib/google/workspace-scopes.ts`, and `tests/google-workspace-scopes.test.ts`
+fails CI if it changes, quoting the rule above. Update both together, and only
+with a verification step in hand.
+
+### OAuth client inventory
+
+One client serves three consumers, which is the main hazard when editing it:
+Supabase Auth "Log in with Google", our first-party workspace OAuth, and (until
+its rows finish migrating) the Nango broker. A careless edit breaks **site
+login**, not just integrations.
+
+| Field | Value |
+| --- | --- |
+| Client | `354099628168-j492f9g632aaoa6p851gojcq5g4rhu58.apps.googleusercontent.com`, created Apr 2 2026 |
+| Authorized redirect URIs | `https://www.newcoworker.com/api/auth/callback/google` (first-party), `https://api.nango.dev/oauth/callback` (broker), `https://glwmorjxzkzpcfffwvkk.supabase.co/auth/v1/callback` (Supabase sign-in) |
+| Authorized JavaScript origins | none |
+| Client secret | Not viewable in the console ("Viewing and downloading client secrets is no longer available"). The value is held in Vercel, in the Supabase Auth Google provider config, and in the Nango integration config. |
+
+**Authorized domains are DERIVED from the redirect URI list**, which the console
+states explicitly. That is what makes the two cases different:
+
+- **Adding** a redirect URI under a domain already present is client config, and
+  is safe. This is how the first-party callback shipped with no console change.
+- **Removing** `https://api.nango.dev/oauth/callback` drops `nango.dev` out of
+  authorized domains, which IS a consent-screen change. Do it inside a
+  recertification window, when a re-review costs nothing extra, rather than
+  opportunistically after the last Google row goes direct.
+
+**Rotating the secret** is supported without downtime: add a second secret, set
+it everywhere it is consumed (Vercel AND the Supabase Auth provider config),
+verify both `/login` and a workspace connect, then delete the old one. Rotation
+is credential config, not a consent-screen change, so it does not affect
+verification. Do it on its own, on a day nothing else is shipping, because it is
+the one change that can break login for everyone.
