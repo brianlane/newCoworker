@@ -14,7 +14,7 @@
 
 import { z } from "zod";
 import { McpToolError, requireMcpBusinessRole, resolveMcpBusinessId } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import { manageEmployee, type ManageEmployeeResult } from "@/lib/employees/manage-tool";
 
 const businessIdField = z
@@ -80,6 +80,8 @@ function availabilityArgs(args: {
 
 export const listEmployeesTool = defineMcpTool({
   name: "list_employees",
+  title: "List the team roster",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "List the business's employee roster: names, numbers, whether each is active, their working hours, and how each one receives leads (rotation, named group offers, whole-team offers).",
   schema: { business_id: businessIdField },
@@ -111,6 +113,8 @@ export const listEmployeesTool = defineMcpTool({
 
 export const createEmployeeTool = defineMcpTool({
   name: "create_employee",
+  title: "Add a team member",
+  annotations: TOOL_BEHAVIOR.writeLocal,
   description:
     "Add someone to the employee roster so lead-routing automations can offer them leads. Read the number back to the owner after adding: a wrong digit sends their leads to a stranger.",
   schema: {
@@ -154,6 +158,8 @@ export const createEmployeeTool = defineMcpTool({
 
 export const updateEmployeeTool = defineMcpTool({
   name: "update_employee",
+  title: "Update a team member",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
   description:
     "Change an existing roster member: their name, number, email, working hours, whether they are active, and how they receive leads. Deactivating someone or turning off lead rotation immediately redirects live leads to other people, so confirm with the owner first.",
   schema: {

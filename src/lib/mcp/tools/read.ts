@@ -17,7 +17,7 @@ import {
   toAuthUser,
   type McpAuthUser
 } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
@@ -45,6 +45,8 @@ export function normalizePhoneArg(raw: string): string {
 
 export const listBusinessesTool = defineMcpTool({
   name: "list_businesses",
+  title: "List businesses",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "List every New Coworker business this account can access, with the caller's role on each (owner, manager, or staff). Call this first when other tools report the account has multiple businesses.",
   schema: {},
@@ -64,6 +66,8 @@ export const listBusinessesTool = defineMcpTool({
 
 export const getBusinessTool = defineMcpTool({
   name: "get_business",
+  title: "Get business profile",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "Get one business's profile: name, plan tier, status, and timezone.",
   schema: { business_id: businessIdField },
@@ -90,6 +94,8 @@ export const getBusinessTool = defineMcpTool({
 
 export const searchContactsTool = defineMcpTool({
   name: "search_contacts",
+  title: "Search contacts",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "Search the business's contacts (CRM) by name or phone substring. Returns basic profile info per contact; use get_contact for the full profile including notes and AI memory.",
   schema: {
@@ -126,6 +132,8 @@ export const searchContactsTool = defineMcpTool({
 
 export const getContactTool = defineMcpTool({
   name: "get_contact",
+  title: "Get contact profile",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "Get one contact's full profile: name, email, tags, owner, birthday, pinned notes, and the AI's rolling relationship summary.",
   schema: {
@@ -158,6 +166,8 @@ export const getContactTool = defineMcpTool({
 
 export const getSmsThreadTool = defineMcpTool({
   name: "get_sms_thread",
+  title: "Read text conversation",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "Read the SMS/RCS conversation with one contact, oldest to newest — inbound texts, the AI coworker's replies, and workflow/manual sends.",
   schema: {
@@ -188,6 +198,8 @@ export const getSmsThreadTool = defineMcpTool({
 
 export const listRecentEventsTool = defineMcpTool({
   name: "list_recent_events",
+  title: "List recent activity",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     `Recent activity events for the business, newest first. Event types: ${WEBHOOK_EVENT_TYPES.join(", ")}. Payloads match the business's outbound webhook format.`,
   schema: {
@@ -229,6 +241,8 @@ export const listRecentEventsTool = defineMcpTool({
 
 export const listCallTranscriptsTool = defineMcpTool({
   name: "list_call_transcripts",
+  title: "List recent calls",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "List the business's recent phone calls (AI-handled and human-forwarded), newest first, with status, AI summary, and sentiment when available.",
   schema: {
@@ -260,6 +274,8 @@ export const listCallTranscriptsTool = defineMcpTool({
 
 export const listTasksTool = defineMcpTool({
   name: "list_tasks",
+  title: "List leads in motion",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "The business's leads in motion: contacts with active AiFlow workflow runs (with each run's flow and status) plus lead-state tagged contacts — the same data behind the dashboard Task Center.",
   schema: {

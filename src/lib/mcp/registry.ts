@@ -64,7 +64,14 @@ export function registerMcpTools(server: McpServer): void {
   for (const def of allMcpTools) {
     server.registerTool(
       def.name,
-      { description: def.description, inputSchema: z.object(def.schema) },
+      {
+        // `title` is a TOP-LEVEL field on the wire, not `annotations.title`
+        // (the spec has both). Verified against a real tools/list response.
+        title: def.title,
+        description: def.description,
+        annotations: def.annotations,
+        inputSchema: z.object(def.schema)
+      },
       async (args: Record<string, unknown>, ctx: unknown): Promise<McpTextResult> => {
         const auth = authFromContext(ctx);
         if (!auth) return errorResult("Unauthenticated — reconnect the New Coworker connector.");

@@ -14,7 +14,7 @@ import {
   requireMcpBusinessRole,
   resolveMcpBusinessId
 } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import { normalizePhoneArg } from "@/lib/mcp/tools/read";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
@@ -74,6 +74,8 @@ async function upsertRecipientContact(
 
 export const sendSmsTool = defineMcpTool({
   name: "send_sms",
+  title: "Send a text message",
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Send a text message to a customer from the business's phone number. Counts against the business's monthly SMS quota exactly like a dashboard send; the message appears in the owner's Text history." +
     MCP_TIMEZONE_RULE,
@@ -144,6 +146,8 @@ export const sendSmsTool = defineMcpTool({
 
 export const sendWhatsAppTool = defineMcpTool({
   name: "send_whatsapp",
+  title: "Send a WhatsApp message",
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Send a WhatsApp message to a customer from the business's connected WhatsApp Business number. Inside the recipient's 24-hour conversation window the text goes out as written; outside it, an approved template carries the message (Meta bills the business per template message). Fails with guidance when WhatsApp isn't connected." +
     MCP_TIMEZONE_RULE,

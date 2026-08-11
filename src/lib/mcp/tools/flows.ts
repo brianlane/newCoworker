@@ -16,7 +16,7 @@ import {
   requireMcpBusinessRole,
   resolveMcpBusinessId
 } from "@/lib/mcp/auth";
-import { defineMcpTool } from "@/lib/mcp/tooling";
+import { defineMcpTool, TOOL_BEHAVIOR } from "@/lib/mcp/tooling";
 import { rateLimit } from "@/lib/rate-limit";
 
 const businessIdField = z
@@ -69,6 +69,8 @@ export async function validateFlowDefinition(
 
 export const listFlowsTool = defineMcpTool({
   name: "list_flows",
+  title: "List automations",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "List the business's AiFlows (automations): name, enabled state, trigger channel, and last-run time. Use get_flow for a flow's full definition.",
   schema: { business_id: businessIdField },
@@ -92,6 +94,8 @@ export const listFlowsTool = defineMcpTool({
 
 export const getFlowTool = defineMcpTool({
   name: "get_flow",
+  title: "Get an automation",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description: "Get one AiFlow's full definition (trigger, steps, settings).",
   schema: {
     business_id: businessIdField,
@@ -116,6 +120,8 @@ export const getFlowTool = defineMcpTool({
 
 export const getFlowSchemaTool = defineMcpTool({
   name: "get_flow_schema",
+  title: "Get the automation format",
+  annotations: TOOL_BEHAVIOR.readLocal,
   description:
     "The AiFlow definition format as JSON Schema, plus the step-type and trigger-channel vocabulary. Read this before authoring or editing a flow definition for create_flow / update_flow.",
   schema: {},
@@ -150,6 +156,8 @@ export const getFlowSchemaTool = defineMcpTool({
 
 export const createFlowTool = defineMcpTool({
   name: "create_flow",
+  title: "Create an automation",
+  annotations: TOOL_BEHAVIOR.writeLocal,
   description:
     "Create a new AiFlow automation. The definition is validated (call get_flow_schema for the format); invalid definitions are refused with the exact issues. New flows default to disabled unless enabled is true.",
   schema: {
@@ -180,6 +188,8 @@ export const createFlowTool = defineMcpTool({
 
 export const updateFlowTool = defineMcpTool({
   name: "update_flow",
+  title: "Update an automation",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
   description:
     "Update an AiFlow's name and/or definition. A supplied definition REPLACES the whole definition and is validated like create_flow (fetch the current one with get_flow first).",
   schema: {
@@ -210,7 +220,10 @@ export const updateFlowTool = defineMcpTool({
 
 export const setFlowEnabledTool = defineMcpTool({
   name: "set_flow_enabled",
-  description: "Turn one AiFlow on or off.",
+  title: "Turn an automation on or off",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
+  description:
+    "Turn one of the business's AiFlow automations on or off. Enabling makes the flow live immediately, so it can start messaging customers the next time its trigger fires; disabling stops new runs without deleting the flow, its steps, or its history.",
   schema: {
     business_id: businessIdField,
     flow_id: z.string().uuid(),
@@ -231,6 +244,8 @@ export const setFlowEnabledTool = defineMcpTool({
 
 export const triggerFlowTool = defineMcpTool({
   name: "trigger_flow",
+  title: "Send an event to automations",
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Send an event to the business's webhook-triggered AiFlows: every enabled webhook flow whose conditions match the payload gets a queued run (e.g. forward a new lead into the flow engine). Idempotent per event_id.",
   schema: {
@@ -283,6 +298,8 @@ export const triggerFlowTool = defineMcpTool({
 
 export const runFlowTool = defineMcpTool({
   name: "run_flow",
+  title: "Run an automation now",
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Run one of the business's ENABLED automations right now (a manual run), the same as pressing Run now in the dashboard. Use this to hand work to a flow directly, e.g. give a new lead's details to the owner's lead-intake automation. `input` is passed to the run as its triggering text, so include everything the flow needs to extract. Unlike trigger_flow (which only reaches webhook-triggered flows), this starts a flow by name or id whatever its trigger, except voice flows, which only run on a live call.",
   schema: {

@@ -15,37 +15,50 @@ beforeEach(() => {
 });
 
 describe("allMcpTools", () => {
-  it("exposes the full v1 tool set with unique names", () => {
+  // Exhaustive on purpose. This used to be a `toContain` loop over a 24-name
+  // subset while the registry held 31, so seven tools (send_whatsapp,
+  // run_flow, the three employee tools, and both notification tools) could
+  // ship with no name review at all. An exact match is also what forces every
+  // future tool through this file, and therefore through the metadata guard
+  // in tests/mcp-tool-metadata-guard.test.ts.
+  it("exposes exactly the expected tool set, with unique names", () => {
     const names = allMcpTools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
-    for (const expected of [
-      "list_businesses",
-      "get_business",
-      "search_contacts",
-      "get_contact",
-      "get_sms_thread",
-      "list_recent_events",
-      "list_call_transcripts",
-      "list_tasks",
-      "send_sms",
-      "calendar_find_slots",
-      "calendar_book_appointment",
-      "create_contact",
-      "update_contact",
-      "list_flows",
-      "get_flow",
-      "get_flow_schema",
-      "create_flow",
-      "update_flow",
-      "set_flow_enabled",
-      "trigger_flow",
-      "list_agents",
-      "create_agent",
-      "update_agent",
-      "delete_agent"
-    ]) {
-      expect(names).toContain(expected);
-    }
+    expect([...names].sort()).toEqual(
+      [
+        "calendar_book_appointment",
+        "calendar_find_slots",
+        "create_agent",
+        "create_contact",
+        "create_employee",
+        "create_flow",
+        "delete_agent",
+        "get_business",
+        "get_contact",
+        "get_flow",
+        "get_flow_schema",
+        "get_notification_preferences",
+        "get_sms_thread",
+        "list_agents",
+        "list_businesses",
+        "list_call_transcripts",
+        "list_employees",
+        "list_flows",
+        "list_recent_events",
+        "list_tasks",
+        "run_flow",
+        "search_contacts",
+        "send_sms",
+        "send_whatsapp",
+        "set_flow_enabled",
+        "trigger_flow",
+        "update_agent",
+        "update_contact",
+        "update_employee",
+        "update_flow",
+        "update_notification_preferences"
+      ].sort()
+    );
   });
 
   it("every tool carries a model-facing description", () => {
