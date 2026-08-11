@@ -5,8 +5,10 @@ import {
   PRICE_LINE,
   REALTOR_PRICE_LINE,
   SPOKE_CHECK_PRICE_FIELD,
+  assertKnownFlowName,
   patchDefinition,
   readTemplate,
+  selectRevertTargets,
   withExtractField,
   withPriceShown,
   writeTemplate
@@ -45,6 +47,53 @@ describe("readTemplate / writeTemplate", () => {
     expect(() => writeTemplate({ id: "route" }, "unclaimedReminders.detailsTemplate", "x")).toThrow(
       /not an object/
     );
+  });
+});
+
+/**
+ * A rollback that restores nothing must never look like a rollback that
+ * worked. The apply path rejected an unknown --only by construction; the
+ * revert path read the ledger instead, so a typo skipped every entry and still
+ * exited 0 while the live definitions stayed patched (Bugbot, PR #1291).
+ */
+describe("--only guards on the revert path", () => {
+  it("rejects a flow name this script does not patch", () => {
+    expect(() => assertKnownFlowName("HomeLite Referral")).toThrow(/is not one of this script/);
+    // The message has to name the real options, or the operator retypes blind.
+    expect(() => assertKnownFlowName("nope")).toThrow(/HomeLight Referral/);
+  });
+
+  it("accepts a known flow name and a missing flag", () => {
+    expect(() => assertKnownFlowName("HomeLight Referral")).not.toThrow();
+    expect(() => assertKnownFlowName(null)).not.toThrow();
+  });
+
+  it("returns every revertable flow when --only is absent", () => {
+    const newest = new Map([
+      ["HomeLight Referral", { flow_id: "a", previous_definition: {} }],
+      ["Realtor.com Lead", { flow_id: "b", previous_definition: {} }]
+    ]);
+    expect(selectRevertTargets(newest, null).map(([n]) => n)).toEqual([
+      "HomeLight Referral",
+      "Realtor.com Lead"
+    ]);
+  });
+
+  it("narrows to the named flow", () => {
+    const newest = new Map([
+      ["HomeLight Referral", { flow_id: "a", previous_definition: {} }],
+      ["Realtor.com Lead", { flow_id: "b", previous_definition: {} }]
+    ]);
+    expect(selectRevertTargets(newest, "Realtor.com Lead")).toEqual([
+      ["Realtor.com Lead", { flow_id: "b", previous_definition: {} }]
+    ]);
+  });
+
+  // A real flow that this script has not applied to yet: known name, no ledger
+  // row. The empty array is what makes the caller exit 2 instead of 0.
+  it("returns empty when the named flow has no applied ledger row", () => {
+    const newest = new Map([["HomeLight Referral", { flow_id: "a", previous_definition: {} }]]);
+    expect(selectRevertTargets(newest, "New Lead Intake")).toEqual([]);
   });
 });
 

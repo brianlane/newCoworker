@@ -361,6 +361,33 @@ function argValue(flag: string): string | null {
   return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
 
+export type RevertTarget = { flow_id: string; previous_definition: Definition };
+
+/**
+ * Narrow the revertable flows by `--only`. Split out and exported so the
+ * "matched nothing" case is a value the caller must handle rather than an
+ * empty loop that falls through to exit 0.
+ */
+export function selectRevertTargets(
+  newestPerFlow: ReadonlyMap<string, RevertTarget>,
+  only: string | null
+): Array<[string, RevertTarget]> {
+  return [...newestPerFlow].filter(([name]) => !only || name === only);
+}
+
+/**
+ * Reject an `--only` that names no flow this script knows about, on EVERY path.
+ * The apply path always did this by construction; the revert path read the
+ * ledger instead, so a typo there skipped every entry and still exited 0, which
+ * reads as a clean rollback while the live definitions stay patched.
+ */
+export function assertKnownFlowName(only: string | null): void {
+  if (only === null || only in PATCH_PLAN) return;
+  throw new Error(
+    `--only "${only}" is not one of this script's flows: ${Object.keys(PATCH_PLAN).join(", ")}`
+  );
+}
+
 /** Restore the definition each apply replaced, newest ledger row per flow. */
 async function revert(db: SupabaseClient, businessId: string, apply: boolean, only: string | null) {
   const { data, error } = await db
@@ -390,9 +417,18 @@ async function revert(db: SupabaseClient, businessId: string, apply: boolean, on
     console.error("No applied ledger rows with a previous_definition to revert to.");
     process.exit(2);
   }
+  const selected = selectRevertTargets(newestPerFlow, only);
+  if (selected.length === 0) {
+    // Silently reverting nothing is the worst outcome here: the operator reads
+    // exit 0 as "rolled back" and the live definitions stay patched.
+    console.error(
+      `--only "${only}" matched no applied ledger row. Flows this script has patched: ` +
+        `${[...newestPerFlow.keys()].join(", ")}`
+    );
+    process.exit(2);
+  }
   const reverted: Array<Record<string, unknown>> = [];
-  for (const [flowName, entry] of newestPerFlow) {
-    if (only && flowName !== only) continue;
+  for (const [flowName, entry] of selected) {
     console.log(`revert ${flowName} (${entry.flow_id}) to ${entry.previous_definition.steps?.length} steps`);
     if (!apply) continue;
     const { error: upErr } = await db
@@ -429,13 +465,16 @@ async function main(): Promise<void> {
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   const db = createClient(url, key, { auth: { persistSession: false } });
 
+  try {
+    assertKnownFlowName(only);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(2);
+  }
+
   if (isRevert) return revert(db, businessId, apply, only);
 
   const names = Object.keys(PATCH_PLAN).filter((n) => !only || n === only);
-  if (names.length === 0) {
-    console.error(`--only "${only}" matched none of the configured flows.`);
-    process.exit(2);
-  }
   const { data, error } = await db
     .from("ai_flows")
     .select("id,name,definition")
