@@ -62,6 +62,7 @@ import {
 } from "@/lib/db/vps-gateway-tokens";
 import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
 import { assertResidencyForPlacement } from "@/lib/residency/enforce";
+import { assertHipaaPlacement } from "@/lib/hipaa/placement";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import {
   parseComplianceModule,
@@ -1607,9 +1608,14 @@ async function runOrchestrator(
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
   // 'supabase' would put the box up while every piece of customer content
-  // stays in central US Supabase — refuse before anything is purchased or
+  // stays in central US Supabase, so refuse before anything is purchased or
   // bootstrapped. (Hostinger/us tenants no-op here.)
   assertResidencyForPlacement(businessRow ?? {});
+  // Same shape, stricter list: a HIPAA tenant may not land on infrastructure
+  // no BAA covers. Hostinger's own hosting agreement excludes HIPAA, so this
+  // refuses before PHI could reach a box we cannot cover. (Non-HIPAA tenants
+  // no-op here.)
+  assertHipaaPlacement(businessRow ?? {});
 
   const hostinger =
     deps?.hostinger ??

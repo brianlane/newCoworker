@@ -13,6 +13,7 @@ import {
   assertResidencyForPlacement,
   ResidencyPlacementError
 } from "@/lib/residency/enforce";
+import { assertHipaaPlacement, HipaaPlacementError } from "@/lib/hipaa/placement";
 import { resolveVpsSize } from "@/lib/vps/size";
 import {
   getLatestProvisioningStatus,
@@ -89,6 +90,10 @@ export async function POST(request: Request) {
     // same gate): a BYOS box with residency still 'supabase' would leave
     // all customer content in central US Supabase.
     assertResidencyForPlacement(business);
+    // Same, for the HIPAA lane. BYOS is currently the only eligible
+    // placement, so this passes for any correctly-pinned tenant and catches
+    // the residency half early rather than minutes into a provisioning run.
+    assertHipaaPlacement(business);
 
     // In-flight guard: a provisioning run takes many minutes and the button
     // re-enables as soon as this response returns, so a double-click (or an
@@ -166,7 +171,8 @@ export async function POST(request: Request) {
     if (
       err instanceof ByosEnrollmentError ||
       err instanceof VpsProviderValidationError ||
-      err instanceof ResidencyPlacementError
+      err instanceof ResidencyPlacementError ||
+      err instanceof HipaaPlacementError
     ) {
       return errorResponse("VALIDATION_ERROR", err.message);
     }

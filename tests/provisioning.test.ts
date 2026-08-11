@@ -4385,6 +4385,63 @@ describe("provisioning/orchestrate", () => {
       ).rejects.toThrow(/Canadian-region box/);
     });
 
+    it("a HIPAA tenant on the default Hostinger fleet is refused before anything is purchased", async () => {
+      // Hostinger's hosting agreement excludes HIPAA outright, so this must
+      // fail closed rather than standing up a box PHI would land on.
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "hostinger",
+        data_residency_mode: "vps",
+        hipaa_mode: true
+      } as never);
+      const vpsProvisioner = vi.fn();
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-hipaa-hostinger", tier: "enterprise" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/no Business Associate Agreement covers/);
+      expect(vpsProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("a HIPAA tenant on BYOS with residency still 'supabase' is refused", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "byos",
+        data_residency_mode: "supabase",
+        hipaa_mode: true
+      } as never);
+      const vpsProvisioner = vi.fn();
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-hipaa-res", tier: "enterprise" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/Flip data residency to 'dual' first/);
+      expect(vpsProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("a valid HIPAA placement passes the gate and fails only for the missing provisioner", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "byos",
+        data_residency_mode: "dual",
+        hipaa_mode: true
+      } as never);
+      // Proves the gate is not over-refusing: an eligible placement with
+      // residency on gets PAST both compliance checks and dies later for the
+      // unrelated missing-provisioner reason.
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-hipaa-byos", tier: "enterprise" },
+          { remoteExec: vi.fn(), vpsPool: null }
+        )
+      ).rejects.toThrow(/No default VPS provisioner for provider 'byos'/);
+    });
+
     it("byos without an injected provisioner fails loudly instead of buying a Hostinger box", async () => {
       vi.mocked(getBusiness).mockResolvedValue({
         business_type: "real_estate",

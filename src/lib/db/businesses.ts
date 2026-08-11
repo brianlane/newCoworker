@@ -11,6 +11,7 @@ import {
   ResidencyValidationError,
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
+import { assertHipaaModeAllowed } from "@/lib/hipaa/tier-gate";
 import {
   assertVpsProviderAllowed,
   type VpsProvider,
@@ -120,6 +121,13 @@ export type BusinessRow = {
    * which enforces the enterprise tier gate.
    */
   data_residency_mode?: DataResidencyMode;
+  /**
+   * Enterprise-only HIPAA lane opt-in (default false). When true the tenant
+   * may only provision onto a HIPAA-eligible placement with residency at
+   * least 'dual' (src/lib/hipaa/placement.ts). Written only via
+   * updateBusinessHipaaMode, which enforces the enterprise tier gate.
+   */
+  hipaa_mode?: boolean;
   /**
    * Content-history retention window in days (min 30, DB check enforced).
    * Null = keep forever (default). Swept daily by data-retention-sweep →
@@ -529,6 +537,24 @@ export async function updateDataResidencyMode(
     .update({ data_residency_mode: mode })
     .eq("id", id);
   if (error) throw new Error(`updateDataResidencyMode: ${error.message}`);
+}
+
+/**
+ * Flip a tenant into or out of the HIPAA lane. Enterprise-only to turn ON;
+ * turning OFF is always allowed (see assertHipaaModeAllowed) so a downgraded
+ * tenant can never be wedged. Placement is enforced separately at provision
+ * time (src/lib/hipaa/placement.ts) rather than here, because a tenant is
+ * legitimately flipped on BEFORE its box is moved.
+ */
+export async function updateBusinessHipaaMode(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  await assertHipaaModeAllowed(id, enabled, db);
+  const { error } = await db.from("businesses").update({ hipaa_mode: enabled }).eq("id", id);
+  if (error) throw new Error(`updateBusinessHipaaMode: ${error.message}`);
 }
 
 /**

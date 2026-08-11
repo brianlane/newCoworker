@@ -2,7 +2,7 @@
  * Placement-driven residency enforcement (Enterprise BYOS + Canada).
  *
  * The whole point of a customer-owned (BYOS) or Canadian (region 'ca') box
- * is that the tenant's customer content physically lives ON that box — a
+ * is that the tenant's customer content physically lives ON that box. A
  * BYOS/CA tenant whose `data_residency_mode` is still 'supabase' would have
  * their own hardware while every contact/transcript/email sits in central
  * (US) Supabase, silently defeating the deal's compliance premise.
@@ -11,7 +11,7 @@
  * pre-check in the BYOS enrollment route): the admin must flip residency
  * to at least 'dual' BEFORE provisioning, so the same deploy that stands
  * the box up also stands up the on-box datastore, data-api hostname, and
- * backup timer. The runbook then proceeds dual → parity → vps → purge as
+ * backup timer. The runbook then proceeds dual, parity, vps, purge as
  * documented in README §Data residency.
  */
 
@@ -38,7 +38,7 @@ export function placementRequiresResidency(
 
 /**
  * Throws {@link ResidencyPlacementError} when a BYOS/CA business is about
- * to provision with residency still off. Pure — callers supply the raw
+ * to provision with residency still off. Pure: callers supply the raw
  * business-row fields.
  */
 export function assertResidencyForPlacement(business: {
@@ -54,7 +54,7 @@ export function assertResidencyForPlacement(business: {
       ? "a customer-owned (BYOS) box"
       : "a Canadian-region box";
   throw new ResidencyPlacementError(
-    `data_residency_mode is 'supabase' but this tenant provisions onto ${placement} — ` +
+    `data_residency_mode is 'supabase' but this tenant provisions onto ${placement}: ` +
       "content would stay in central (US) Supabase, defeating the placement's compliance premise. " +
       "Flip data residency to 'dual' first (admin business page → Data residency), then provision; " +
       "the deploy will stand up the on-box datastore + backups in the same run."
