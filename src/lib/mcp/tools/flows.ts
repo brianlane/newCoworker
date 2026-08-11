@@ -245,7 +245,9 @@ export const setFlowEnabledTool = defineMcpTool({
 export const triggerFlowTool = defineMcpTool({
   name: "trigger_flow",
   title: "Send an event to automations",
-  annotations: TOOL_BEHAVIOR.writeExternal,
+  // Runs owner-authored flows, so it is only as additive as they are: an
+  // update_contact step can carry removeTags and delete CRM state.
+  annotations: TOOL_BEHAVIOR.mutateExternal,
   description:
     "Send an event to the business's webhook-triggered AiFlows: every enabled webhook flow whose conditions match the payload gets a queued run (e.g. forward a new lead into the flow engine). Idempotent per event_id.",
   schema: {
@@ -299,7 +301,9 @@ export const triggerFlowTool = defineMcpTool({
 export const runFlowTool = defineMcpTool({
   name: "run_flow",
   title: "Run an automation now",
-  annotations: TOOL_BEHAVIOR.writeExternal,
+  // Same reasoning as trigger_flow: the flow body decides, and it can
+  // remove tags as well as send.
+  annotations: TOOL_BEHAVIOR.mutateExternal,
   description:
     "Run one of the business's ENABLED automations right now (a manual run), the same as pressing Run now in the dashboard. Use this to hand work to a flow directly, e.g. give a new lead's details to the owner's lead-intake automation. `input` is passed to the run as its triggering text, so include everything the flow needs to extract. Unlike trigger_flow (which only reaches webhook-triggered flows), this starts a flow by name or id whatever its trigger, except voice flows, which only run on a live call.",
   schema: {

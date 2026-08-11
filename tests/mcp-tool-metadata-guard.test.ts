@@ -85,21 +85,37 @@ describe("MCP tool metadata", () => {
   });
 
   it("marks every tool that reaches a customer or a third party as open-world", () => {
-    // Pinned by name: these are the tools whose effects leave the system, and
-    // a future edit that quietly flips one to closed-world would be telling
-    // ChatGPT it can call them without asking.
+    // Pinned by name, because the rule is about what a call SETS IN MOTION and
+    // no static check can see that. The two contact writers are the ones worth
+    // guarding: they read as plain CRM writes, but each fires contact events
+    // that enqueue AiFlows, and those can text or email the person. A future
+    // edit that "tidied" them back to writeLocal/mutateLocal would be telling
+    // ChatGPT it can add and edit contacts without asking.
     const OPEN_WORLD = [
       "send_sms",
       "send_whatsapp",
       "calendar_find_slots",
       "calendar_book_appointment",
       "trigger_flow",
-      "run_flow"
+      "run_flow",
+      "create_contact",
+      "update_contact"
     ];
     for (const name of OPEN_WORLD) {
       const tool = allMcpTools.find((t) => t.name === name);
       expect(tool, `${name} is missing from the registry`).toBeDefined();
       expect(tool?.annotations.openWorldHint, `${name} should be open-world`).toBe(true);
+    }
+  });
+
+  it("marks the flow runners as destructive, because the flow body decides", () => {
+    // trigger_flow and run_flow start owner-authored automations. An
+    // update_contact step inside one can carry removeTags, so a call that
+    // looks purely additive can delete CRM state. Calling these additive is
+    // the kind of wrong annotation that reassures rather than warns.
+    for (const name of ["trigger_flow", "run_flow"]) {
+      const tool = allMcpTools.find((t) => t.name === name);
+      expect(tool?.annotations.destructiveHint, `${name} should be destructive`).toBe(true);
     }
   });
 

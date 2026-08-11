@@ -29,7 +29,9 @@ const businessIdField = z
 export const createContactTool = defineMcpTool({
   name: "create_contact",
   title: "Add a contact",
-  annotations: TOOL_BEHAVIOR.writeLocal,
+  // Not writeLocal: the handler fires contact_created, which enqueues
+  // matching AiFlows, and those can text or email the person.
+  annotations: TOOL_BEHAVIOR.writeExternal,
   description:
     "Add a new contact to the business's CRM. Fires the business's contact_created automations, same as adding from the dashboard.",
   schema: {
@@ -90,7 +92,9 @@ export const createContactTool = defineMcpTool({
 export const updateContactTool = defineMcpTool({
   name: "update_contact",
   title: "Update a contact",
-  annotations: TOOL_BEHAVIOR.mutateLocal,
+  // Destructive because `tags` REPLACES the set, and open-world because a
+  // tag or owner change fires automations that can message the contact.
+  annotations: TOOL_BEHAVIOR.mutateExternal,
   description:
     "Update an existing contact: name, email, pinned notes, classification, lead-state tags (pipeline stages are tags), owning team member, or birthday. Tag and owner changes fire the same automations as dashboard edits.",
   schema: {

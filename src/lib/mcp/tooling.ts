@@ -44,29 +44,38 @@ export type McpToolAnnotations = {
  * Named behavior presets, so a tool declares intent rather than three
  * booleans whose combination is easy to get subtly wrong.
  *
- * Deliberately NOT derived from the tool name. A prefix heuristic gets wrong
- * exactly the cases that matter: `calendar_find_slots` is read-only but
- * reaches Vagaro/Nango/Calendly/CalDAV, `trigger_flow` is neither read-only
- * nor closed-world because a flow it starts can text a customer, and
- * `update_contact` replaces the tag set rather than adding to it. A heuristic
- * that is right 26 times out of 31 is worse than none when the wrong answers
- * are the consequential ones.
+ * **Annotate what the call SETS IN MOTION, not what its own code touches.**
+ * That distinction is the whole difficulty here, and getting it wrong reads
+ * as reassuring rather than as a bug. `create_contact` looks like a row
+ * insert, but it fires `contact_created`, which enqueues matching AiFlow runs,
+ * which can text a customer. `trigger_flow` and `run_flow` start an
+ * owner-authored flow whose `update_contact` step can carry `removeTags`, so
+ * a call that looks additive can delete CRM state. All three understate
+ * themselves if you annotate the function body.
  *
- * There is no destructive-and-open-world preset because no tool is both:
- * everything that reaches outside the system only adds (a message, a booking,
- * a run). Add it when a tool actually needs it.
+ * The line that keeps this from swallowing everything: a tool is only
+ * responsible for what THIS call sets going. `set_flow_enabled` changes
+ * eligibility for runs that some later, independent trigger causes, so it
+ * stays local; `trigger_flow` enqueues a run right now, so it does not.
+ *
+ * Deliberately NOT derived from the tool name, for the same reason. A prefix
+ * heuristic gets wrong exactly the cases that matter: `calendar_find_slots` is
+ * read-only but reaches Vagaro/Nango/Calendly/CalDAV, and `create_contact`
+ * looks like the most innocuous write in the set.
  */
 export const TOOL_BEHAVIOR = {
   /** Reads our own data. */
   readLocal: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   /** Reads through a third party (a connected calendar). */
   readExternal: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  /** Adds to our own data without replacing anything. */
+  /** Adds to our own data, and sets nothing outside in motion. */
   writeLocal: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  /** Additive, but the effect leaves the system: a text, a booking, a flow run. */
+  /** Additive, but the effect leaves the system: a text, a booking, an automation. */
   writeExternal: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-  /** Replaces or removes existing data of ours. */
-  mutateLocal: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  /** Replaces or removes existing data of ours, with no outside effect. */
+  mutateLocal: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  /** Can both destroy existing data and reach outside. The flow runners. */
+  mutateExternal: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 } as const satisfies Record<string, McpToolAnnotations>;
 
 export type McpToolDef = {
