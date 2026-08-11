@@ -25,7 +25,10 @@
  * a member of their test workspace, re-point owner_email at their member's
  * email:
  *   tsx debug/slack-reviewer-setup.ts --apply --owner-email reviewer@example.com
- * (the login email/password stay unchanged; only the Slack owner match moves).
+ * The login email/password stay unchanged. Because dashboard access also
+ * binds through owner_email, the override upserts an ACTIVE manager
+ * business_members row for the login, so Integrations and Run now keep
+ * working while the Slack owner match points at the reviewer's member.
  *
  * Usage:
  *   tsx debug/slack-reviewer-setup.ts          # dry-run
@@ -160,6 +163,26 @@ const minted = ["Sr", randomBytes(12).toString("base64url")].join("-");
   );
   if (error) throw new Error(`business upsert: ${error.message}`);
   console.log("[setup] business row ready");
+}
+
+// 2b. With --owner-email, owner_email no longer matches the login, and
+//     dashboard access resolves through owner_email OR business_members.
+//     A manager membership keeps the login working (Integrations + Run now
+//     need manage_settings/manage_aiflows, which manager has; billing is
+//     owner-only and the test plan never touches it).
+if (OWNER_EMAIL_OVERRIDE) {
+  const { error } = await db.from("business_members").upsert(
+    {
+      business_id: BUSINESS_ID,
+      email: REVIEWER_EMAIL.toLowerCase(),
+      role: "manager",
+      status: "active",
+      invited_by: REVIEWER_EMAIL.toLowerCase()
+    },
+    { onConflict: "business_id,email" }
+  );
+  if (error) throw new Error(`membership upsert: ${error.message}`);
+  console.log("[setup] manager membership keeps the login's dashboard access");
 }
 
 // 3. Demo approval flow, enabled, at a fixed id.

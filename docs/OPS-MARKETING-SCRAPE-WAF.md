@@ -26,6 +26,16 @@ Managed with `CLOUDFLARE_SSL_API_TOKEN` (the tunnel token cannot edit WAF).
 Ruleset id `f9a51022c3c24b5baa8c8e8ac33f5d8f` (also holds the Anthropic MCP
 skip rule; do not remove that).
 
+0. **Slack Marketplace listing URLs: never challenge** (added 2026-08-11)  
+   Action: `skip` (remaining custom rules + `bic`, `securityLevel`, `hot`;
+   rate limiting still applies)  
+   Expression: GET on `/terms`, `/privacy`, `/contact`, `/integrations/slack`,
+   `/integrations/slack/review-test-plan`.  
+   Why: Slack's submission checker fetches the listing's landing, support,
+   privacy, and TOS URLs headerless from datacenter IPs; a non-200 on any of
+   them blocks the Marketplace listing (it re-checks after listing too).
+   Sits after the Anthropic skip, before both challenge rules.
+
 1. **Challenge likely scraper GETs on hot marketing paths (no Accept-Language)**  
    Action: `managed_challenge`  
    Expression: GET on `/contact`, `/blog*`, `/login`, `/onboard*`, `/pricing`,
