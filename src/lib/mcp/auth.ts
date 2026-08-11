@@ -97,14 +97,70 @@ export async function requireMcpBusinessRole(
     );
   };
 
+  const outcome = await mcpBusinessRoleOutcome(auth, businessId, action);
+  if (!outcome.allowed) return refuse(outcome.reason);
+  return outcome.role;
+}
+
+/**
+ * The permission check without the throw and without the security log.
+ *
+ * `requireMcpBusinessRole` is the right shape for a tool acting on ONE
+ * business: a refusal is an answer the caller asked for, so it is logged and
+ * raised. `search` fans out across every business the account can reach, where
+ * hitting one it cannot use is the normal case rather than a refusal. Sharing
+ * the throwing version there would emit an "mcp authorization refused" warning
+ * per business per query, turning ordinary searches into security-log noise
+ * and burying the real refusals.
+ */
+async function mcpBusinessRoleOutcome(
+  auth: McpAuthUser,
+  businessId: string,
+  action: BusinessAction
+): Promise<{ allowed: true; role: BusinessRole } | { allowed: false; reason: string }> {
   const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
   const role = await getBusinessRoleForEmail(businessId, auth.email);
-  if (!role) return refuse("no_role");
+  if (!role) return { allowed: false, reason: "no_role" };
 
   const { can } = await import("@/lib/authz/policy");
-  if (!can(role, action)) return refuse(`role_${role}_insufficient`);
+  if (!can(role, action)) return { allowed: false, reason: `role_${role}_insufficient` };
 
-  return role;
+  return { allowed: true, role };
+}
+
+/** May this caller do `action` on this business? Never throws, never logs. */
+export async function mcpBusinessRoleAllows(
+  auth: McpAuthUser,
+  businessId: string,
+  action: BusinessAction
+): Promise<boolean> {
+  return (await mcpBusinessRoleOutcome(auth, businessId, action)).allowed;
+}
+
+/** How many businesses one `search` call will fan out across. */
+export const MCP_SEARCH_BUSINESS_LIMIT = 5;
+
+/**
+ * Which businesses a bare `search` should look in.
+ *
+ * Deliberately NOT `resolveMcpBusinessId`, which throws when an account can
+ * reach more than one business. That is right for a tool that has to act
+ * somewhere specific, and exactly wrong for search: it would make a bare
+ * `search("Maria")` fail for the accounts that most need it. Explicit wins;
+ * otherwise take the accessible businesses, capped, so one query cannot fan
+ * out unboundedly.
+ */
+export async function resolveMcpBusinessIdsForSearch(
+  auth: McpAuthUser,
+  explicit?: string
+): Promise<string[]> {
+  if (explicit) return [explicit];
+  const { listAccessibleBusinesses } = await import("@/lib/dashboard/active-business");
+  const accessible = await listAccessibleBusinesses(toAuthUser(auth));
+  if (accessible.length === 0) {
+    throw new McpToolError("This account has no businesses on New Coworker.");
+  }
+  return accessible.slice(0, MCP_SEARCH_BUSINESS_LIMIT).map((b) => b.businessId);
 }
 
 /**
