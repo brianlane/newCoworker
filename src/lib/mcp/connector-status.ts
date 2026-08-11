@@ -14,6 +14,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { McpClient } from "@/lib/mcp/routes";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -41,6 +42,7 @@ const PG_UNIQUE_VIOLATION = "23505";
 /** The signed-in user's connector status; null = never connected. */
 export async function getMcpConnectorStatus(
   userId: string,
+  mcpClient: McpClient,
   client?: SupabaseClient
 ): Promise<McpConnectorStatus | null> {
   const db = await resolveClient(client);
@@ -48,6 +50,7 @@ export async function getMcpConnectorStatus(
     .from("mcp_connector_status")
     .select("first_connected_at, last_seen_at")
     .eq("user_id", userId)
+    .eq("client", mcpClient)
     .maybeSingle();
   if (error) throw new Error(`getMcpConnectorStatus: ${error.message}`);
   const row = data as
@@ -68,6 +71,7 @@ export async function getMcpConnectorStatus(
  */
 export async function recordMcpConnectorSeen(
   userId: string,
+  mcpClient: McpClient,
   client?: SupabaseClient,
   nowMs: number = Date.now()
 ): Promise<void> {
@@ -77,6 +81,7 @@ export async function recordMcpConnectorSeen(
       .from("mcp_connector_status")
       .select("last_seen_at")
       .eq("user_id", userId)
+      .eq("client", mcpClient)
       .maybeSingle();
     if (error) throw new Error(error.message);
     const row = data as { last_seen_at: string } | null;
@@ -85,6 +90,7 @@ export async function recordMcpConnectorSeen(
       const nowIso = new Date(nowMs).toISOString();
       const { error: insErr } = await db.from("mcp_connector_status").insert({
         user_id: userId,
+        client: mcpClient,
         first_connected_at: nowIso,
         last_seen_at: nowIso
       });
@@ -102,11 +108,13 @@ export async function recordMcpConnectorSeen(
     const { error: updErr } = await db
       .from("mcp_connector_status")
       .update({ last_seen_at: new Date(nowMs).toISOString() })
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .eq("client", mcpClient);
     if (updErr) throw new Error(updErr.message);
   } catch (err) {
     logger.warn("mcp connector-status: seen stamp failed", {
       userId,
+      client: mcpClient,
       error: err instanceof Error ? err.message : String(err)
     });
   }

@@ -4,6 +4,7 @@ import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
 import { LOCALE_COOKIE } from "@/i18n/routing";
 import { isSpanishMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
 import { classifyAiTraffic, recordAiTrafficEvent } from "@/lib/marketing/ai-traffic";
+import { isMcpRoutePath } from "@/lib/mcp/routes";
 
 type AuthUser = {
   id: string;
@@ -229,12 +230,14 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     // External clients send no Origin header, so CSRF would 403 every call.
     // Same rationale as the exemptions above.
     !pathname.startsWith("/api/public/") &&
-    // /api/mcp is the Claude connector's MCP server, authenticated solely by
-    // a Supabase OAuth access-token bearer (verifySupabaseAccessToken) —
-    // never by a session cookie. Anthropic's servers POST JSON-RPC with no
-    // Origin header, so CSRF would 403 every tool call. Same rationale as
-    // the /api/public exemption above.
-    pathname !== "/api/mcp" &&
+    // The MCP endpoints are authenticated solely by a Supabase OAuth
+    // access-token bearer (verifySupabaseAccessToken) — never by a session
+    // cookie. The assistants' servers POST JSON-RPC with no Origin header, so
+    // CSRF would 403 every tool call. Same rationale as the /api/public
+    // exemption above. Matched exactly against the known routes rather than
+    // by "/api/mcp" prefix, so a future /api/mcp/* route is not silently
+    // exempted before anyone decides it should be.
+    !isMcpRoutePath(pathname) &&
     // /api/widget/* is the website chat widget API, authenticated solely by
     // the tenant's public site key (ncw_pub_…) + a per-session bearer
     // (ncws_…) — never by a session cookie, so CSRF adds no protection.
