@@ -13,7 +13,7 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
 vi.mock("@/lib/vagaro/client", () => ({ listVagaroAppointments: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",

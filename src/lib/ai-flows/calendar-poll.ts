@@ -38,7 +38,7 @@
  * other tenants' flows or the worker tick that kicked the poll.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness, type NangoWorkspaceLink } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness, type WorkspaceLink } from "@/lib/workspace/proxy";
 import {
   isWorkspaceCalendarProvider,
   resolveCalendarConnection,
@@ -410,7 +410,7 @@ type CalendarFetch = { events: CalendarEventInput[]; overflowed: boolean };
 
 type FetchTarget = {
   businessId: string;
-  link: NangoWorkspaceLink;
+  link: WorkspaceLink;
   provider: ResolvedVoiceConnection["provider"];
   /** Provider calendar id; null = the account's default/primary calendar. */
   calendarId: string | null;
@@ -424,7 +424,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
     const calId = encodeURIComponent(t.calendarId ?? "primary");
     // updatedMin also returns edited (not new) events; eventCreatedDue's
     // created-timestamp filter narrows those out downstream.
-    const res = await nangoProxyForBusiness(t.businessId, t.link, {
+    const res = await workspaceProxyForBusiness(t.businessId, t.link, {
       endpoint:
         `/calendar/v3/calendars/${calId}/events?updatedMin=${encodeURIComponent(sinceIso)}` +
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=false`,
@@ -441,7 +441,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
   const base = t.calendarId
     ? `/v1.0/me/calendars/${encodeURIComponent(t.calendarId)}/events`
     : "/v1.0/me/calendar/events";
-  const res = await nangoProxyForBusiness(t.businessId, t.link, {
+  const res = await workspaceProxyForBusiness(t.businessId, t.link, {
     endpoint:
       `${base}?$filter=${encodeURIComponent(`createdDateTime ge ${sinceIso}`)}` +
       `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_EVENT_SELECT}`,
@@ -467,7 +467,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
   const sinceIso = new Date(sinceMs).toISOString();
   if (t.provider === "google") {
     const calId = encodeURIComponent(t.calendarId ?? "primary");
-    const res = await nangoProxyForBusiness(t.businessId, t.link, {
+    const res = await workspaceProxyForBusiness(t.businessId, t.link, {
       endpoint:
         `/calendar/v3/calendars/${calId}/events?updatedMin=${encodeURIComponent(sinceIso)}` +
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=true`,
@@ -482,7 +482,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
   const base = t.calendarId
     ? `/v1.0/me/calendars/${encodeURIComponent(t.calendarId)}/events`
     : "/v1.0/me/calendar/events";
-  const res = await nangoProxyForBusiness(t.businessId, t.link, {
+  const res = await workspaceProxyForBusiness(t.businessId, t.link, {
     endpoint:
       `${base}?$filter=${encodeURIComponent(`lastModifiedDateTime ge ${sinceIso}`)}` +
       `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_EVENT_SELECT}`,
@@ -513,7 +513,7 @@ async function fetchOverlapping(
     const calId = encodeURIComponent(t.calendarId ?? "primary");
     // singleEvents expands recurrences into occurrence rows, so each
     // occurrence gets its own id + start (and its own dedupe key).
-    const res = await nangoProxyForBusiness(t.businessId, t.link, {
+    const res = await workspaceProxyForBusiness(t.businessId, t.link, {
       endpoint:
         `/calendar/v3/calendars/${calId}/events?timeMin=${encodeURIComponent(timeMin)}` +
         `&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime` +
@@ -529,7 +529,7 @@ async function fetchOverlapping(
   const base = t.calendarId
     ? `/v1.0/me/calendars/${encodeURIComponent(t.calendarId)}/calendarView`
     : "/v1.0/me/calendarView";
-  const res = await nangoProxyForBusiness(t.businessId, t.link, {
+  const res = await workspaceProxyForBusiness(t.businessId, t.link, {
     endpoint:
       `${base}?startDateTime=${encodeURIComponent(timeMin)}` +
       `&endDateTime=${encodeURIComponent(timeMax)}` +
@@ -1149,7 +1149,7 @@ export async function pollCalendarTriggers(
           result.events += fetched.events.length;
         }
       } else {
-        const link: NangoWorkspaceLink = {
+        const link: WorkspaceLink = {
           connectionId: conn.connectionId,
           providerConfigKey: conn.providerConfigKey
         };

@@ -30,7 +30,7 @@
  * silently marking them read makes the inbox lie about what needs attention.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { connectionEmail } from "@/lib/email/mailbox-options";
 import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
@@ -195,7 +195,7 @@ async function fetchGmailMessages(
   let pageToken: string | undefined;
   let pages = 0;
   do {
-    const page = await nangoProxyForBusiness(businessId, link, {
+    const page = await workspaceProxyForBusiness(businessId, link, {
       endpoint:
         `/gmail/v1/users/me/messages?maxResults=${EMAIL_POLL_PAGE_SIZE}&q=${q}` +
         (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""),
@@ -223,7 +223,7 @@ async function fetchGmailMessages(
   }
   const out: InboundEmailMessage[] = [];
   for (const id of pending) {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await workspaceProxyForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${id}?format=full`,
       method: "GET"
     });
@@ -285,7 +285,7 @@ export async function markGmailMessageHandled(
   messageId: string
 ): Promise<void> {
   try {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await workspaceProxyForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${messageId}/modify`,
       method: "POST",
       data: { removeLabelIds: ["UNREAD"] }
@@ -331,7 +331,7 @@ async function fetchMicrosoftMessages(
   let overflowed = false;
   let pages = 0;
   for (;;) {
-    const res = await nangoProxyForBusiness(businessId, link, { endpoint, method: "GET" });
+    const res = await workspaceProxyForBusiness(businessId, link, { endpoint, method: "GET" });
     if (!res) throw new Error("email_not_connected");
     const d = res.data as { value?: GraphMessage[]; "@odata.nextLink"?: string };
     // Graph pages carry full bodies, so the budget is enforced while paging —

@@ -4,8 +4,8 @@ vi.mock("@/lib/voice-tools/connections", () => ({
   resolveEmailConnection: vi.fn()
 }));
 
-vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: vi.fn()
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: vi.fn()
 }));
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
@@ -14,7 +14,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 
 import { sendFromMailboxConnection, sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -36,7 +36,7 @@ describe("sendFromOwnerMailbox", () => {
       ok: false,
       detail: "email_not_connected"
     });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
   });
 
   it("sends base64url RFC2822 via Gmail for google connections", async () => {
@@ -45,7 +45,7 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       data: { id: "gmail-1", threadId: "thread-1" }
     } as never);
 
@@ -59,7 +59,7 @@ describe("sendFromOwnerMailbox", () => {
       // From the connection row's metadata: what email_log stores as FROM.
       fromEmail: "owner@biz.com"
     });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(call[2]).toMatchObject({ endpoint: "/gmail/v1/users/me/messages/send", method: "POST" });
     const raw = (call[2] as { data: { raw: string } }).data.raw;
     expect(raw).not.toMatch(/[+/=]/);
@@ -74,14 +74,14 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-cc" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "gmail-cc" } } as never);
 
     await sendFromOwnerMailbox(BIZ, {
       ...ARGS,
       ccEmails: ["cc1@example.com", "cc2@example.com"],
       bccEmails: ["bcc@example.com"]
     });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     const raw = (call[2] as { data: { raw: string } }).data.raw;
     const decoded = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
     expect(decoded).toContain("Cc: cc1@example.com, cc2@example.com");
@@ -94,14 +94,14 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "outlook",
       connectionId: "cx-ms"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     await sendFromOwnerMailbox(BIZ, {
       ...ARGS,
       ccEmails: ["cc@example.com"],
       bccEmails: ["bcc@example.com"]
     });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     const data = (
       call[2] as {
         data: {
@@ -122,7 +122,7 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "gmail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).resolves.toEqual({
       ok: true,
       provider: "google",
@@ -138,7 +138,7 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null);
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).resolves.toEqual({
       ok: false,
       detail: "email_not_connected"
@@ -151,7 +151,7 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "outlook",
       connectionId: "cx-ms"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).resolves.toEqual({
       ok: true,
@@ -162,7 +162,7 @@ describe("sendFromOwnerMailbox", () => {
       threadId: null,
       fromEmail: "owner@biz.com"
     });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(call[2]).toMatchObject({ endpoint: "/v1.0/me/sendMail", method: "POST" });
     const data = (call[2] as { data: { message: { toRecipients: Array<{ emailAddress: { address: string } }> }; saveToSentItems: boolean } }).data;
     expect(data.message.toRecipients[0].emailAddress.address).toBe("lead@example.com");
@@ -175,7 +175,7 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "outlook",
       connectionId: "cx-ms"
     });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null);
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).resolves.toEqual({
       ok: false,
       detail: "email_not_connected"
@@ -188,14 +188,14 @@ describe("sendFromOwnerMailbox", () => {
       providerConfigKey: "google-mail",
       connectionId: "cx-1"
     });
-    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("gmail 500"));
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValue(new Error("gmail 500"));
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).rejects.toThrow("gmail 500");
   });
 });
 
 describe("sendFromMailboxConnection", () => {
   it("sends through an explicitly chosen connection (no implicit resolution)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-2" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "gmail-2" } } as never);
     await expect(
       sendFromMailboxConnection(
         BIZ,
@@ -213,7 +213,7 @@ describe("sendFromMailboxConnection", () => {
     // The metadata lookup is scoped to the business + exact Nango ids, so it
     // can only ever describe the mailbox that actually sent.
     expect(getWorkspaceOAuthConnectionByNangoIds).toHaveBeenCalledWith(BIZ, "gmail", "cx-picked");
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     expect(call[1]).toMatchObject({ providerConfigKey: "gmail", connectionId: "cx-picked" });
   });
 
@@ -226,14 +226,14 @@ describe("sendFromMailboxConnection", () => {
         ARGS
       )
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
-    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
   });
 
   it("still sends, with a null fromEmail, when the metadata has no address", async () => {
     vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
       metadata: {}
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-3" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "gmail-3" } } as never);
     await expect(
       sendFromMailboxConnection(
         BIZ,
@@ -259,13 +259,13 @@ describe("threaded replies", () => {
   };
 
   function decodeRaw(): string {
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     const raw = (call[2] as { data: { raw: string } }).data.raw;
     return Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
   }
 
   it("Gmail: sets In-Reply-To/References AND the threadId (headers alone can split)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       data: { id: "g-1", threadId: "thread-9" }
     } as never);
     const out = await sendFromMailboxConnection(BIZ, GOOGLE, {
@@ -280,32 +280,32 @@ describe("threaded replies", () => {
     const decoded = decodeRaw();
     expect(decoded).toContain("In-Reply-To: <beth-1@mail>");
     expect(decoded).toContain("References: <beth-1@mail>");
-    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: { threadId: string } })
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { data: { threadId: string } })
       .data;
     expect(data.threadId).toBe("thread-9");
   });
 
   it("Gmail: omits the headers and threadId when there is nothing to reply to", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "g-1" } } as never);
     await sendFromMailboxConnection(BIZ, GOOGLE, {
       ...ARGS,
       thread: { threadId: "   ", inReplyToMessageRef: "  " }
     });
     expect(decodeRaw()).not.toContain("In-Reply-To");
     expect(
-      (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: Record<string, unknown> }).data
+      (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { data: Record<string, unknown> }).data
     ).not.toHaveProperty("threadId");
   });
 
   it("Graph: replies through the message's own reply action, carrying cc", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const out = await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       ccEmails: ["liz@lizdev.com"],
       thread: { providerMessageId: "graph id/1", threadId: "conv-1" }
     });
     expect(out).toMatchObject({ ok: true, provider: "microsoft" });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const call = vi.mocked(workspaceProxyForBusiness).mock.calls[0];
     // The id is path-encoded: Graph ids contain / and + characters.
     expect((call[2] as { endpoint: string }).endpoint).toBe(
       `/v1.0/me/messages/${encodeURIComponent("graph id/1")}/reply`
@@ -324,13 +324,13 @@ describe("threaded replies", () => {
      * message, text part first so a client that takes the first part it
      * understands still gets prose rather than markup.
      */
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
     await sendFromMailboxConnection(BIZ, GOOGLE, {
       ...ARGS,
       bodyText: "Hello there.",
       bodyHtml: "<p>Hello there.</p>"
     });
-    const raw = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
+    const raw = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
     const mime = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
     expect(mime).toContain("Content-Type: multipart/alternative;");
     // Text BEFORE html, which is what makes the fallback work.
@@ -343,9 +343,9 @@ describe("threaded replies", () => {
 
   it("Gmail: stays a plain single-part message when there is no HTML", async () => {
     // Every existing caller sends text only and must be untouched.
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
     await sendFromMailboxConnection(BIZ, GOOGLE, { ...ARGS, bodyText: "Just text." });
-    const raw = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
+    const raw = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
     const mime = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
     expect(mime).toContain("Content-Type: text/plain; charset=UTF-8");
     expect(mime).not.toContain("multipart/alternative");
@@ -357,13 +357,13 @@ describe("threaded replies", () => {
      * there arrives as literal angle brackets. It has to go on message.body,
      * and comment must then be empty or Graph renders both.
      */
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       bodyHtml: "<p>Hi</p>",
       thread: { providerMessageId: "gid", threadId: "conv" }
     });
-    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       data: { comment: string; message?: { body?: { contentType: string; content: string } } };
     }).data;
     expect(data.message?.body).toEqual({ contentType: "HTML", content: "<p>Hi</p>" });
@@ -371,9 +371,9 @@ describe("threaded replies", () => {
   });
 
   it("Graph: a fresh send switches its body to HTML too", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, { ...ARGS, bodyHtml: "<p>Hi</p>" });
-    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       data: { message: { body: { contentType: string; content: string } } };
     }).data;
     expect(data.message.body).toEqual({ contentType: "HTML", content: "<p>Hi</p>" });
@@ -386,13 +386,13 @@ describe("threaded replies", () => {
      * would mirror To correctly on Gmail and lose it here, and the failure is
      * invisible: the reply lands, just short of one recipient.
      */
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       additionalToEmails: ["prospect@example.com"],
       thread: { providerMessageId: "gid", threadId: "conv-2" }
     });
-    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       data: { message?: { toRecipients?: { emailAddress: { address: string } }[] } };
     }).data;
     // The primary recipient is restated alongside, or naming toRecipients at
@@ -404,14 +404,14 @@ describe("threaded replies", () => {
   });
 
   it("Graph: carries both slots at once without losing either", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       additionalToEmails: ["prospect@example.com"],
       ccEmails: ["assistant@example.com"],
       thread: { providerMessageId: "gid2", threadId: "conv-3" }
     });
-    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+    const data = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       data: { message?: Record<string, unknown> };
     }).data;
     expect(data.message).toMatchObject({
@@ -424,16 +424,16 @@ describe("threaded replies", () => {
   });
 
   it("Graph: a cc-less reply carries no message override, and a dead link reports honestly", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       thread: { providerMessageId: "m-1" }
     });
     expect(
-      (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: Record<string, unknown> }).data
+      (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { data: Record<string, unknown> }).data
     ).not.toHaveProperty("message");
 
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null);
     await expect(
       sendFromMailboxConnection(BIZ, MICROSOFT, {
         ...ARGS,
@@ -443,13 +443,13 @@ describe("threaded replies", () => {
   });
 
   it("Graph: falls back to a fresh sendMail when there is no message to reply to", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {
       ...ARGS,
       thread: { threadId: "conv-1", providerMessageId: "  " }
     });
     expect(
-      (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string }).endpoint
+      (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { endpoint: string }).endpoint
     ).toBe("/v1.0/me/sendMail");
   });
 });

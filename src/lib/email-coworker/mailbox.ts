@@ -8,7 +8,7 @@
  * with the trigger poller so body extraction cannot drift between them.
  */
 
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { gmailBodyText, gmailHeader, parseFromAddress } from "@/lib/ai-flows/email-poll";
 import { htmlToText } from "@/lib/ai-flows/trigger-eval";
 
@@ -50,7 +50,7 @@ export async function fetchMailboxAddress(
   provider: "google" | "microsoft",
   link: MailboxLink
 ): Promise<string | null> {
-  const res = await nangoProxyForBusiness(businessId, link, {
+  const res = await workspaceProxyForBusiness(businessId, link, {
     endpoint:
       provider === "google"
         ? "/gmail/v1/users/me/profile"
@@ -101,7 +101,7 @@ async function fetchGmail(
   // shape (signs in as newcoworkerteam@gmail.com, writes as team@), so its own
   // replies came back through the catch-all and the coworker answered them.
   const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)} -from:me`);
-  const list = await nangoProxyForBusiness(businessId, link, {
+  const list = await workspaceProxyForBusiness(businessId, link, {
     endpoint: `/gmail/v1/users/me/messages?maxResults=${limit}&q=${q}`,
     method: "GET"
   });
@@ -113,7 +113,7 @@ async function fetchGmail(
 
   const out: InboxMessage[] = [];
   for (const id of ids.slice(0, limit)) {
-    const res = await nangoProxyForBusiness(businessId, link, {
+    const res = await workspaceProxyForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${id}?format=full`,
       method: "GET"
     });
@@ -158,7 +158,7 @@ async function fetchGraph(
     "&$select=id,conversationId,internetMessageId,subject,from,body,receivedDateTime";
   // mailFolders/inbox only: /me/messages spans Sent, and answering our own
   // sent mail is exactly the loop this surface must never enter.
-  const res = await nangoProxyForBusiness(businessId, link, {
+  const res = await workspaceProxyForBusiness(businessId, link, {
     endpoint: `/v1.0/me/mailFolders/inbox/messages?${params}`,
     method: "GET"
   });

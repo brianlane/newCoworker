@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: vi.fn()
 }));
@@ -23,7 +23,7 @@ import {
   pollEmailTriggers
 } from "@/lib/ai-flows/email-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -257,7 +257,7 @@ describe("pollEmailTriggers", () => {
       .fn()
       .mockResolvedValueOnce({ data: page1, error: null })
       .mockResolvedValueOnce({ data: page2, error: null });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const res = await pollEmailTriggers(dbWithRange(range));
     expect(res.flows).toBe(101);
     expect(range).toHaveBeenCalledTimes(2);
@@ -313,7 +313,7 @@ describe("pollEmailTriggers", () => {
     // Both polls read the same inbox each tick. A reply on a thread the
     // assistant started must not ALSO fire a flow, or the tenant gets two
     // uncoordinated answers to one email.
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: { messages: [{ id: "m1" }] }
     } as never);
     const res = await pollEmailTriggers(
@@ -329,7 +329,7 @@ describe("pollEmailTriggers", () => {
   it("omits message_ref when Gmail returns no Message-Id header", async () => {
     // Fails open the same way thread_id does: a blank identifier must not
     // reach the trigger scope, or a reply would thread against nothing.
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -360,7 +360,7 @@ describe("pollEmailTriggers", () => {
      * supplied email_log_id itself and passed while production had none.
      */
     vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-1" as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -389,7 +389,7 @@ describe("pollEmailTriggers", () => {
     // Logging is best-effort: a failed insert must not cost the run. The
     // reply then opens its own thread rather than failing the step.
     vi.mocked(recordInboundTriggerEmail).mockResolvedValue(null as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -410,7 +410,7 @@ describe("pollEmailTriggers", () => {
     // The conversation id every reply on a thread shares. It rides on the
     // messages.get response and used to be read past; without it a notify
     // step cannot tell an intro from its own "Re:" reply.
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -475,7 +475,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       metadata: { provider_account_email: "newcoworkerteam@gmail.com" }
     } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m-self" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -516,7 +516,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       metadata: { provider_account_email: "newcoworkerteam@gmail.com" }
     } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -548,16 +548,16 @@ describe("pollEmailTriggers", () => {
     // `-from:me` is the first guard and the only one that knows about send-as
     // aliases on domains we cannot enumerate. Verified against the live HQ
     // mailbox: it drops the self-sent copies and keeps the real lead.
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { messages: [] } } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: { messages: [] } } as never);
     await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
-    const endpoint = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string })
+    const endpoint = (vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as { endpoint: string })
       .endpoint;
     expect(decodeURIComponent(endpoint)).toContain("-from:me");
     expect(decodeURIComponent(endpoint)).toContain("in:inbox");
   });
 
   it("claims nothing when the coworker owns no messages in the window", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -577,7 +577,7 @@ describe("pollEmailTriggers", () => {
 
   it("still runs flows when the coworker claim lookup fails", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -600,7 +600,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("polls Gmail, matches conditions, and enqueues with a per-message dedupe key", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }, {}] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -628,7 +628,7 @@ describe("pollEmailTriggers", () => {
     );
     expect(res).toEqual({ flows: 2, mailboxes: 1, messages: 1, enqueued: 1 });
     // The triggering message was marked handled (read) in the owner's inbox.
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+    expect(workspaceProxyForBusiness).toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({
@@ -684,7 +684,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("marks a triggering Gmail message read ONCE even when several flows match it", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -700,7 +700,7 @@ describe("pollEmailTriggers", () => {
     );
     expect(res.enqueued).toBe(2);
     const modifyCalls = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
     expect(modifyCalls).toHaveLength(1);
     expect(recordSystemLog).not.toHaveBeenCalledWith(
@@ -709,7 +709,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("logs a warning (and keeps the run) when the mark-read link is dead", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -731,7 +731,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("stringifies a non-Error mark-read failure without failing the run", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -750,7 +750,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("leaves the message UNREAD when only notify-only flows match (triage must not eat the inbox)", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -768,7 +768,7 @@ describe("pollEmailTriggers", () => {
     );
     expect(res.enqueued).toBe(2);
     const modifyCalls = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
     expect(modifyCalls).toHaveLength(0);
   });
@@ -786,7 +786,7 @@ describe("pollEmailTriggers", () => {
      * hiding mail nobody looked at is the failure this module's header
      * comment warns about.
      */
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -811,7 +811,7 @@ describe("pollEmailTriggers", () => {
       ])
     );
     expect(res.enqueued).toBe(1);
-    expect(nangoProxyForBusiness).not.toHaveBeenCalledWith(
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({ data: { removeLabelIds: ["UNREAD"] } })
@@ -820,7 +820,7 @@ describe("pollEmailTriggers", () => {
 
   it("does NOT mark read when the trunk send carries a when guard", async () => {
     // Same reasoning one level down: a guarded trunk send is still a maybe.
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -833,7 +833,7 @@ describe("pollEmailTriggers", () => {
       ])
     );
     expect(res.enqueued).toBe(1);
-    expect(nangoProxyForBusiness).not.toHaveBeenCalledWith(
+    expect(workspaceProxyForBusiness).not.toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
       expect.objectContaining({ data: { removeLabelIds: ["UNREAD"] } })
@@ -845,7 +845,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           {
@@ -864,13 +864,13 @@ describe("pollEmailTriggers", () => {
     );
     expect(res.enqueued).toBe(1);
     const modifyCalls = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
     expect(modifyCalls).toHaveLength(0);
   });
 
   it("fires flows whose email trigger lives in the EXTRA triggers array, merging same-mailbox triggers (multi-trigger OR)", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -906,7 +906,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("fails closed when a from_matches contact ref cannot be resolved", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -943,7 +943,7 @@ describe("pollEmailTriggers", () => {
 
   it("treats a dedupe collision (null run) as already-enqueued, not a new run", async () => {
     vi.mocked(recordInboundTriggerEmail).mockClear();
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -959,7 +959,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("throws into the per-mailbox error path when the Gmail link is dead", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce(null);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
@@ -975,7 +975,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           {
@@ -991,7 +991,7 @@ describe("pollEmailTriggers", () => {
     } as never);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger([{ type: "has_url" }]))]));
     expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 1, enqueued: 1 });
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint;
+    const endpoint = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2].endpoint;
     expect(endpoint).toContain("/me/mailFolders/inbox/messages");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1010,7 +1010,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({
         data: {
           value: [
@@ -1039,7 +1039,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("follows Gmail pagination across pages", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1057,7 +1057,7 @@ describe("pollEmailTriggers", () => {
     expect(res.messages).toBe(2);
     expect(res.enqueued).toBe(2);
     const listCalls = vi
-      .mocked(nangoProxyForBusiness)
+      .mocked(workspaceProxyForBusiness)
       .mock.calls.filter((c) => (c[2] as { endpoint: string }).endpoint.includes("messages?"));
     expect(listCalls).toHaveLength(2);
     expect((listCalls[1][2] as { endpoint: string }).endpoint).toContain(
@@ -1070,7 +1070,7 @@ describe("pollEmailTriggers", () => {
 
   it("caps a Gmail burst at the per-poll max and logs an overflow warning", async () => {
     let page = 0;
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1104,7 +1104,7 @@ describe("pollEmailTriggers", () => {
 
   it("enforces the message cap exactly when the pending Gmail set overshoots it", async () => {
     let page = 0;
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1134,7 +1134,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("skips already-handled Gmail messages without consuming the read budget", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1160,7 +1160,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("only skips a message once EVERY flow on the mailbox has evaluated it", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1183,7 +1183,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("keeps reading a message that only SOME flows have evaluated", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
       _link: unknown,
       cfg: { endpoint: string }
@@ -1205,7 +1205,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("records evaluation markers for matching AND non-matching flows", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -1230,7 +1230,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("routes a seen-lookup failure into the per-mailbox error path", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: { messages: [{ id: "m1" }] }
     } as never);
     const res = await pollEmailTriggers(
@@ -1246,7 +1246,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("routes a marker-write failure into the per-mailbox error path", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
@@ -1263,7 +1263,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("logs but survives a failed marker prune", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const res = await pollEmailTriggers(
@@ -1277,7 +1277,7 @@ describe("pollEmailTriggers", () => {
   });
 
   it("omits received_at for a malformed Gmail internalDate instead of throwing", async () => {
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: {
@@ -1299,7 +1299,7 @@ describe("pollEmailTriggers", () => {
       provider_config_key: "outlook"
     } as never);
     let call = 0;
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async () => {
       call += 1;
       return {
         data: {
@@ -1324,7 +1324,7 @@ describe("pollEmailTriggers", () => {
       provider_config_key: "outlook"
     } as never);
     let call = 0;
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async () => {
       call += 1;
       return {
         data: {
@@ -1342,7 +1342,7 @@ describe("pollEmailTriggers", () => {
     expect(res.messages).toBe(100);
     expect(call).toBe(4);
     // The follow-up call used the nextLink's path + query, not the seed params.
-    const second = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    const second = vi.mocked(workspaceProxyForBusiness).mock.calls[1][2] as { endpoint: string };
     expect(second.endpoint).toBe("/v1.0/me/mailFolders/inbox/messages?$skip=25");
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
@@ -1354,7 +1354,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           { id: "ms-old", body: { contentType: "text", content: "seen" } },
@@ -1378,7 +1378,7 @@ describe("pollEmailTriggers", () => {
       provider_config_key: "outlook"
     } as never);
     let call = 0;
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async () => {
       call += 1;
       return {
         data: {
@@ -1403,7 +1403,7 @@ describe("pollEmailTriggers", () => {
       .fn()
       .mockResolvedValueOnce({ data: page1, error: null })
       .mockResolvedValueOnce({ data: null, error: { message: "page 2 boom" } });
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const res = await pollEmailTriggers(dbWithRange(range));
@@ -1419,13 +1419,13 @@ describe("pollEmailTriggers", () => {
   });
 
   it("handles a Gmail list without a messages array", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 0, enqueued: 0 });
   });
 
   it("defaults non-array stored conditions to match-everything", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(
       dbWith([flowRow("f1", { channel: "email", connectionId: CONN, conditions: "junk" })])
     );
@@ -1437,7 +1437,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
           { id: "no-body" },
@@ -1455,7 +1455,7 @@ describe("pollEmailTriggers", () => {
       ...googleConn,
       provider_config_key: "outlook"
     } as never);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res.messages).toBe(0);
   });
@@ -1476,7 +1476,7 @@ describe("email_log bookkeeping around the enqueue", () => {
     // would double-list the message on the Emails page.
     vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-dupe" as never);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }
@@ -1493,7 +1493,7 @@ describe("email_log bookkeeping around the enqueue", () => {
     // Neither the run-id link nor the cleanup is worth losing a run over.
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-1" as never);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }
@@ -1510,7 +1510,7 @@ describe("email_log bookkeeping around the enqueue", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-2" as never);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
-    vi.mocked(nangoProxyForBusiness)
+    vi.mocked(workspaceProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: vi.fn()
 }));
@@ -13,7 +13,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 import { pickBestMatch, findMatchingInboundEmail } from "@/lib/ai-flows/email-fetch";
 import type { InboundEmailMessage } from "@/lib/ai-flows/trigger-eval";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -30,7 +30,7 @@ function msg(p: Partial<InboundEmailMessage> & { id: string }): InboundEmailMess
 
 beforeEach(() => {
   vi.mocked(getWorkspaceOAuthConnection).mockReset();
-  vi.mocked(nangoProxyForBusiness).mockReset();
+  vi.mocked(workspaceProxyForBusiness).mockReset();
   vi.mocked(createSupabaseServiceClient).mockReset();
 });
 
@@ -127,7 +127,7 @@ describe("findMatchingInboundEmail: Gmail", () => {
   });
 
   it("reads the inbox, parses messages, and returns the best match with receivedAt", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
       const endpoint = req.endpoint;
       if (endpoint.includes("/messages?")) {
         return { data: { messages: [{ id: "m1" }, { id: "m2" }, { id: "skip" }] } } as never;
@@ -177,7 +177,7 @@ describe("findMatchingInboundEmail: Gmail", () => {
   });
 
   it("returns found:false (no receivedAt) when the only match has no internalDate and nothing else matches", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
       const endpoint = req.endpoint;
       if (endpoint.includes("/messages?")) return { data: { messages: [{ id: "m1" }] } } as never;
       return {
@@ -199,7 +199,7 @@ describe("findMatchingInboundEmail: Gmail", () => {
   });
 
   it("returns found:true WITHOUT receivedAt when the match lacks internalDate", async () => {
-    vi.mocked(nangoProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
+    vi.mocked(workspaceProxyForBusiness).mockImplementation((async (_biz: string, _link: unknown, req: { endpoint: string }) => {
       const endpoint = req.endpoint;
       if (endpoint.includes("/messages?")) return { data: { messages: [{ id: "m1" }] } } as never;
       return {
@@ -222,7 +222,7 @@ describe("findMatchingInboundEmail: Gmail", () => {
   });
 
   it("handles an empty inbox listing (no messages field)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const r = await findMatchingInboundEmail(
       { businessId: BIZ, connectionId: CONN, lookbackMinutes: 30 },
       DB
@@ -231,7 +231,7 @@ describe("findMatchingInboundEmail: Gmail", () => {
   });
 
   it("throws when the mailbox list call fails (not connected)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
     await expect(
       findMatchingInboundEmail({ businessId: BIZ, connectionId: CONN, lookbackMinutes: 30 }, DB)
     ).rejects.toThrow("email_not_connected");
@@ -244,7 +244,7 @@ describe("findMatchingInboundEmail: Microsoft", () => {
   });
 
   it("reads Graph messages, converts HTML bodies, and returns the best match", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       data: {
         value: [
           {
@@ -281,7 +281,7 @@ describe("findMatchingInboundEmail: Microsoft", () => {
   });
 
   it("handles an empty Graph response (no value field)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
     const r = await findMatchingInboundEmail(
       { businessId: BIZ, connectionId: CONN, lookbackMinutes: 30 },
       DB
@@ -290,7 +290,7 @@ describe("findMatchingInboundEmail: Microsoft", () => {
   });
 
   it("throws when the Graph call fails (not connected)", async () => {
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
     await expect(
       findMatchingInboundEmail({ businessId: BIZ, connectionId: CONN, lookbackMinutes: 30 }, DB)
     ).rejects.toThrow("email_not_connected");

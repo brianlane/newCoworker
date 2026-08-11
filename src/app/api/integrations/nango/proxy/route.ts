@@ -1,6 +1,6 @@
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { extractBearerToken, verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { z } from "zod";
 
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 }
 
 async function runProxy(parsed: z.infer<typeof bodySchema>) {
-  const res = await nangoProxyForBusiness(
+  const res = await workspaceProxyForBusiness(
     parsed.businessId,
     {
       connectionId: parsed.connectionId,
