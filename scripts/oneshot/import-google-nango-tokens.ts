@@ -214,9 +214,23 @@ async function main() {
       continue;
     }
 
-    // 3. Flip the row in place. Same id, so every binding survives.
+    // 3. Flip the row in place, as a COMPARE-AND-SWAP. Same id, so every
+    //    binding survives.
+    //
+    //    `transport = 'nango'` is part of the match, not just the read filter,
+    //    and `.select("id")` is what makes the outcome checkable. Both matter for
+    //    the same reason: since #1327 deployed the dashboard button, an owner can
+    //    reconnect while this script runs. That reconnect writes a FRESHER grant
+    //    and flips the row to direct. Without the guard this update would
+    //    silently overwrite it with the older Nango-derived token; without the
+    //    select it would report success anyway, because PostgREST returns no
+    //    error when zero rows match.
+    //
+    //    A false "migrated" here is worse than a plain failure, because the step
+    //    this script prints next is reclaiming the Nango seat, which destroys the
+    //    rollback path.
     const newConnectionId = `direct:${randomUUID()}`;
-    const { error: flipError } = await db
+    const { data: flipped, error: flipError } = await db
       .from("workspace_oauth_connections")
       .update({
         connection_id: newConnectionId,
@@ -240,11 +254,23 @@ async function main() {
         updated_at: new Date().toISOString()
       })
       .eq("id", row.id)
-      .eq("business_id", row.business_id);
+      .eq("business_id", row.business_id)
+      // Compare-and-swap: refuse to touch a row something else already moved.
+      .eq("transport", "nango")
+      .select("id");
 
     if (flipError) {
       skipped += 1;
       console.log(`    FAILED to write: ${flipError.message}`);
+      continue;
+    }
+    if (((flipped as { id: string }[] | null)?.length ?? 0) === 0) {
+      skipped += 1;
+      console.log("    SKIP: no row matched on write, so nothing was changed.");
+      console.log("          Something moved this row while the script ran: most likely the owner");
+      console.log("          reconnected through the dashboard (which writes a FRESHER grant than");
+      console.log("          the one exported here), or the connection was removed. Re-read the row");
+      console.log("          before doing anything else, and do NOT reclaim the Nango seat yet.");
       continue;
     }
     migrated += 1;
