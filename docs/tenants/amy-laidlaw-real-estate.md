@@ -500,18 +500,22 @@ against the portal screenshot she sent.
 - **Revealed details reached nobody on an unclaimed lead**, since every
   contact-info text addressed `{{vars.claimed_agent_phone}}`.
   `late_unclaimed` is ONE top-level branch holding the whole unclaimed tail:
-  two more mailbox reads at 15 and 60 minutes, then an inner branch that alerts
-  via `notify_lead_owner` with `unownedFallback: "team"`.
+  an immediate alert, then two more mailbox reads at 15 and 60 minutes, each
+  followed by its own alert.
 
-  Three things about it are load-bearing. **It retries**, because HomeLight's
+  Four things about it are load-bearing. **It retries**, because HomeLight's
   reveal is delayed and the claimed path's late rungs gate on `contact_status`,
   which only the claimed read sets, so a single unclaimed read finds nothing
-  and nothing looks again. **It is nested**, because definitions cap TOP-LEVEL
-  steps at 30 and this flow is near it: five flat steps were rejected by the
-  validator before anything was written. **It checks `lead_phone contains "+"`
-  before alerting**, because announcing an empty reveal spams the team, and the
-  phone is exactly what HomeLight withholds until a transfer or call connects,
-  so a positive `contains` fails closed.
+  and nothing looks again. **Every wait and re-read is gated on the previous
+  read still being "missing"**, so it delivers the moment details land: an
+  unconditional sleep made the team wait the full 75 minutes even when the
+  FIRST read already had the number. **Each read has its OWN status var**
+  (`u1_status`, `u2_status`, `u3_status`), mirroring
+  contact_status/late_contact_status/late2_contact_status, because the reads
+  carry `fillOnlyEmpty` and a shared status written "missing" could never be
+  updated to "found". **It is nested**, because definitions cap TOP-LEVEL steps
+  at 30 and this flow is near it: the flat version was rejected by the
+  validator before anything was written.
 
 Two things deliberately NOT done:
 

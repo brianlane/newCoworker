@@ -162,69 +162,87 @@ describe("who hears the revealed details", () => {
    * lead the details arrived and went to nobody. notify_lead_owner resolves
    * the owner at run time and falls back to the team when there is none.
    */
+  const tail = (d: { steps: Array<Record<string, unknown>> }) => {
+    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
+    return (branch.branches as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps;
+  };
+
   it("alerts the team when details arrive on a lead nobody claimed", () => {
     const d = def();
     patchHomeLight(d);
-    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
-    const arm = (branch.branches as Array<{ condition: unknown; steps: Array<Record<string, unknown>> }>)[0];
-    expect(arm.condition).toEqual({ var: "claimed_agent", equals: "none" });
-    const inner = arm.steps.find((x) => x.id === "late_unclaimed_found")! as Record<string, unknown>;
-    const innerArm = (inner.branches as Array<{ condition: unknown; steps: Array<Record<string, unknown>> }>)[0];
-    expect(innerArm.steps[0]).toMatchObject({
+    const first = tail(d)[0]!;
+    expect(first).toMatchObject({
       type: "notify_lead_owner",
-      unownedFallback: "team"
+      unownedFallback: "team",
+      when: { var: "u1_status", equals: "found" }
     });
   });
 
   /**
-   * HomeLight's reveal email is DELAYED, which is why the claimed path has
-   * retry rungs at all. Those gate on contact_status, which only the claimed
-   * read sets, so a single early unclaimed read finds nothing and nothing
-   * looks again. Amy: "sometimes there is a delay so they have to check more
-   * than once."
+   * DELIVERS AS SOON AS THE DETAILS LAND. Sleeping unconditionally before
+   * testing made the team wait the full 75 minutes even when the FIRST read
+   * already had the number. Every wait and re-read is gated on the previous
+   * read still being "missing", so a found status skips the rest, exactly as
+   * the claimed ladder behaves.
    */
-  it("re-reads the mailbox for unclaimed leads, more than once", () => {
+  it("short-circuits once a read finds the details", () => {
     const d = def();
     patchHomeLight(d);
-    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
-    const inner = (branch.branches as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps;
-    const reads = inner.filter((x) => x.type === "email_extract");
-    const waits = inner.filter((x) => x.type === "sleep");
-    expect(reads).toHaveLength(2);
-    expect(waits.map((w) => w.minutes)).toEqual([15, 60]);
-    // A later rung fills only what is still missing, so the first read to
-    // succeed wins and the rest are harmless.
-    expect(reads.every((r) => r.fillOnlyEmpty === true)).toBe(true);
+    const ids = tail(d).map((x) => x.id);
+    expect(ids).toEqual([
+      "late_unclaimed_alert",
+      "unclaimed_wait_2",
+      "unclaimed_email_read_2",
+      "late_unclaimed_alert_2",
+      "unclaimed_wait_3",
+      "unclaimed_email_read_3",
+      "late_unclaimed_alert_3"
+    ]);
+    for (const [id, prev] of [
+      ["unclaimed_wait_2", "u1_status"],
+      ["unclaimed_email_read_2", "u1_status"],
+      ["unclaimed_wait_3", "u2_status"],
+      ["unclaimed_email_read_3", "u2_status"]
+    ]) {
+      expect(tail(d).find((x) => x.id === id)!.when).toEqual({ var: prev, equals: "missing" });
+    }
   });
 
   /**
-   * Definitions cap TOP-LEVEL steps at 30 and this flow is already near it, so
-   * the rungs live inside one branch. The validator rejected the flat version
+   * A status var PER READ, mirroring contact_status / late_contact_status /
+   * late2_contact_status on the claimed side. One shared status could not work:
+   * the reads carry fillOnlyEmpty, so a status written "missing" on the first
+   * pass could never be updated to "found" by a later one.
+   */
+  it("gives each read its own status var", () => {
+    const d = def();
+    patchHomeLight(d);
+    const early = d.steps.find((s) => s.id === "unclaimed_email_read")!;
+    expect((early.fields as Array<{ name: string }>).map((f) => f.name)).toContain("u1_status");
+    for (const [id, v] of [["unclaimed_email_read_2", "u2_status"], ["unclaimed_email_read_3", "u3_status"]]) {
+      const step = tail(d).find((x) => x.id === id)!;
+      expect((step.fields as Array<{ name: string }>).map((f) => f.name)).toContain(v);
+      expect(step.fillOnlyEmpty).toBe(true);
+    }
+  });
+
+  it("re-reads the mailbox more than once, at widening delays", () => {
+    const d = def();
+    patchHomeLight(d);
+    const waits = tail(d).filter((x) => x.type === "sleep");
+    expect(waits.map((w) => w.minutes)).toEqual([15, 60]);
+  });
+
+  /**
+   * Definitions cap TOP-LEVEL steps at 30 and this flow is near it, so the
+   * whole tail lives in one branch. The validator rejected the flat version
    * before anything was written.
    */
-  it("costs one top-level step, not five", () => {
+  it("costs one top-level step, not seven", () => {
     const d = def();
     const before = d.steps.length;
     patchHomeLight(d);
-    // unclaimed_email_read + late_unclaimed only.
     expect(d.steps.length).toBe(before + 2);
-  });
-
-  /**
-   * The details must ACTUALLY have arrived. Announcing an empty reveal spams
-   * the team, and the phone is what HomeLight withholds until a transfer or
-   * call connects, so a positive `contains` fails closed.
-   */
-  it("only alerts when details actually arrived", () => {
-    const d = def();
-    patchHomeLight(d);
-    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
-    const inner = (branch.branches as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps;
-    const found = inner.find((x) => x.id === "late_unclaimed_found")! as Record<string, unknown>;
-    expect((found.branches as Array<{ condition: unknown }>)[0].condition).toEqual({
-      var: "lead_phone",
-      contains: "+"
-    });
   });
 
   // Amy's own copy carries the whole client-details block: the "screenshot the

@@ -101,6 +101,30 @@ export const EMAIL_FIELDS = [
   }
 ];
 
+/**
+ * The fields every unclaimed mailbox read pulls, plus its OWN status var.
+ *
+ * A status var PER READ, mirroring the claimed ladder's
+ * contact_status / late_contact_status / late2_contact_status. One shared
+ * status would not work: the reads carry `fillOnlyEmpty`, so a status written
+ * "missing" on the first pass could never be updated to "found" by a later one.
+ */
+function readFieldsFor(statusVar: string): Array<{ name: string; description: string }> {
+  return [
+    { name: "lead_phone", description: "The lead's phone number, labeled 'Phone' in the HomeLight email" },
+    { name: "lead_email", description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'" },
+    { name: "lead_address", description: "The property street address labeled 'Address' in the HomeLight email" },
+    ...EMAIL_FIELDS.map((f) => ({ ...f })),
+    {
+      name: statusVar,
+      description:
+        "Answer exactly one lowercase word: found if this email lists the CLIENT's own " +
+        "phone number, missing if it does not. Never count the agent's own number or a " +
+        "HomeLight support number."
+    }
+  ];
+}
+
 type AnyStep = Record<string, unknown> & { id?: string; type?: string };
 type Definition = { steps?: AnyStep[] };
 
@@ -166,12 +190,7 @@ export function patchHomeLight(def: Definition): PatchResult {
       ...(emailCard.lookbackMinutes ? { lookbackMinutes: emailCard.lookbackMinutes } : {}),
       // Never overwrite something an earlier read already found.
       fillOnlyEmpty: true,
-      fields: [
-        { name: "lead_phone", description: "The lead's phone number, labeled 'Phone' in the HomeLight email" },
-        { name: "lead_email", description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'" },
-        { name: "lead_address", description: "The property street address labeled 'Address' in the HomeLight email" },
-        ...EMAIL_FIELDS.map((f) => ({ ...f }))
-      ],
+      fields: [...readFieldsFor("u1_status")],
       when: { var: "claimed_agent", equals: "none" }
     });
     touched.push("unclaimed_email_read inserted");
@@ -218,32 +237,41 @@ export function patchHomeLight(def: Definition): PatchResult {
     const at = steps.findIndex((s) => s.id === "late2");
     if (at < 0) throw new Error(`${FLOW_NAME}: step "late2" is missing; cannot place the alert`);
     /**
-     * The unclaimed path needs its OWN retry rungs, and it all lives inside ONE
-     * top-level branch.
+     * The unclaimed tail: alert as soon as the details land, and only keep
+     * waiting while they have not.
      *
-     * WHY RETRIES: HomeLight's reveal email is DELAYED, which is the entire
-     * reason the claimed path has late/late2 rungs. Those gate on
+     * WHY RETRIES AT ALL: HomeLight's reveal email is DELAYED, which is the
+     * entire reason the claimed path has late rungs. Those gate on
      * `contact_status`, which only the claimed read sets, so they never run for
-     * an unclaimed lead. A single early read finds nothing and nothing looks
-     * again, so a delayed reveal reaches nobody: the exact failure this change
-     * exists to fix (Bugbot, #1324). Amy said it plainly, "sometimes there is a
-     * delay so they have to check more than once."
+     * an unclaimed lead: a single read finds nothing and nothing looks again.
+     * Amy: "sometimes there is a delay so they have to check more than once."
      *
-     * WHY NESTED: the definition caps TOP-LEVEL steps at 30 and this flow is
-     * already near it, so five more at the top would be rejected. Nested steps
-     * cost one.
+     * WHY EACH RUNG IS GATED: sleeping unconditionally before testing made the
+     * team wait the full 75 minutes even when the FIRST read already had the
+     * number. The claimed ladder waits only while details are missing and
+     * delivers the moment a read finds them; this now does the same. A found
+     * status skips every later wait, read and duplicate alert, because their
+     * guards are unmet.
      *
-     * `fillOnlyEmpty` means a later rung fills only what is still missing, so
-     * the first read to succeed wins and the rest are harmless.
+     * WHY NESTED IN ONE BRANCH: definitions cap TOP-LEVEL steps at 30 and this
+     * flow is near it, so seven flat steps were rejected by the validator
+     * before anything was written. Nested steps cost one.
      */
-    const readFields = [
-      { name: "lead_phone", description: "The lead's phone number, labeled 'Phone' in the HomeLight email" },
-      { name: "lead_email", description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'" },
-      { name: "lead_address", description: "The property street address labeled 'Address' in the HomeLight email" },
-      ...EMAIL_FIELDS.map((f) => ({ ...f }))
-    ];
-    const reread = (n: number, minutes: number, lookback: number): AnyStep[] => [
-      { id: `unclaimed_wait_${n}`, type: "sleep", minutes },
+    const alert = (id: string, statusVar: string): AnyStep => ({
+      id,
+      type: "notify_lead_owner",
+      phoneVar: "lead_phone",
+      nameVar: "lead_name",
+      message:
+        "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
+        "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
+        "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
+        "Nobody has claimed this one yet.",
+      unownedFallback: "team",
+      when: { var: statusVar, equals: "found" }
+    });
+    const rung = (n: number, minutes: number, lookback: number, prev: string): AnyStep[] => [
+      { id: `unclaimed_wait_${n}`, type: "sleep", minutes, when: { var: prev, equals: "missing" } },
       {
         id: `unclaimed_email_read_${n}`,
         type: "email_extract",
@@ -251,60 +279,33 @@ export function patchHomeLight(def: Definition): PatchResult {
         ...(emailCard.fromContains ? { fromContains: emailCard.fromContains } : {}),
         ...(emailCard.matchTemplates ? { matchTemplates: emailCard.matchTemplates } : {}),
         lookbackMinutes: lookback,
+        // Fills only what is still missing, so the first read to succeed wins.
         fillOnlyEmpty: true,
-        fields: readFields.map((f) => ({ ...f }))
-      }
+        fields: readFieldsFor(`u${n}_status`),
+        when: { var: prev, equals: "missing" }
+      },
+      alert(`late_unclaimed_alert_${n}`, `u${n}_status`)
     ];
     steps.splice(at + 1, 0, {
       id: "late_unclaimed",
       type: "branch",
-      question: "Nobody claimed it: keep watching for HomeLight's reveal?",
+      question: "Nobody claimed it: watch for HomeLight's reveal?",
       branches: [
         {
           id: "late_unclaimed_go",
-          label: "Still unclaimed, keep checking",
+          label: "Still unclaimed, deliver the details as soon as they land",
           condition: { var: "claimed_agent", equals: "none" },
           steps: [
-            ...reread(2, 15, 120),
-            ...reread(3, 60, 240),
-            {
-              // The details must ACTUALLY have arrived. Announcing a reveal
-              // that is empty spams the team, and the phone is the right test:
-              // it is what HomeLight withholds until a transfer or call
-              // connects, and a positive `contains` fails closed on an empty
-              // var.
-              id: "late_unclaimed_found",
-              type: "branch",
-              question: "Did the details arrive?",
-              branches: [
-                {
-                  id: "late_unclaimed_yes",
-                  label: "Details arrived",
-                  condition: { var: "lead_phone", contains: "+" },
-                  steps: [
-                    {
-                      id: "late_unclaimed_alert",
-                      type: "notify_lead_owner",
-                      phoneVar: "lead_phone",
-                      nameVar: "lead_name",
-                      message:
-                        "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
-                        "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
-                        "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
-                        "Nobody has claimed this one yet.",
-                      unownedFallback: "team"
-                    }
-                  ]
-                }
-              ],
-              else: []
-            }
+            // The early read may already have them: say so immediately.
+            alert("late_unclaimed_alert", "u1_status"),
+            ...rung(2, 15, 120, "u1_status"),
+            ...rung(3, 60, 240, "u2_status")
           ]
         }
       ],
       else: []
     });
-    touched.push("late_unclaimed (retry rungs + alert) inserted");
+    touched.push("late_unclaimed (short-circuiting retry ladder) inserted");
   }
 
   // 6. Say WHY nothing is coming when the transfer never connected. HomeLight
