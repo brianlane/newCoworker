@@ -353,6 +353,58 @@ on an answering machine and there was no field to put a message in.
   is the referral network's estimate, and quoting it back at a seller in an
   unsupervised voicemail is a valuation claim.
 
+Needs Follow Up cadence (Aug 11 2026): `seed-amy-needs-follow-up-aiflow.ts`
+(applier) over `amy-needs-follow-up-definition.ts` (pure builder, pinned by
+`tests/amy-needs-follow-up-definition.test.ts`). A lead tagged
+"Needs Follow Up" gets an AI call every three days; when nobody picks up the AI
+leaves a voicemail and then texts. Eight rounds, each worded differently, the
+last saying it is the last. The tag comes from a teammate texting `F` (see
+`follow_up_reply.ts`) or from any other tagger.
+
+Four things worth knowing before touching it:
+
+- **The wait IS the gap between rounds, and that is load-bearing.** The obvious
+  build is a `sleep` plus a `goal` on `replied`, and it does not work: a goal's
+  reached-marker is `__goal_<id>`, and a `when` guard's var must start with a
+  letter, so nothing downstream can branch on whether the goal fired. Since a
+  goal step is a JUMP TARGET, the steps after it also run when the ladder
+  merely finishes, so an ungated notice would page the team about every cold
+  lead: the exact opposite of the ask. `wait_for_reply` saves an ordinary var
+  ("no_reply" on timeout, the lead's words otherwise), which is gateable.
+- **Rounds 2 to 8 are FLAT branches**, each gated on `lead_reply` still being
+  "no_reply", the same shape the Clever spoke check uses. Branch nesting is
+  capped at 3 levels, so eight nested rounds was never an option.
+- **`appointment_booked` and `claimed` stay a goal**, because nothing in the
+  flow observes them: either jumps the run out of a parked wait so the AI stops
+  calling someone a teammate has already taken.
+- **Calling hours use `outside: "defer"`, and "skip" would break the whole
+  feature.** Every round waits exactly 72 hours, so all eight land at the same
+  clock time as the first. With "skip" a lead tagged at 2am resolves round 1 to
+  `not_placed`, which is not `no_answer`, so the text does not send either, and
+  three days later it is 2am again: one unlucky tagging time and the lead is
+  never contacted at all. "defer" parks the first round until 08:30 and every
+  later round inherits that daytime phase.
+- **A later round stops ONLY when the lead was actually reached**: empty arms
+  for `transferred`/`answered` with the work in `else`, the same shape the
+  Clever spoke check uses. Both inverses are wrong. Gating only on the reply
+  var lets a lead who SPOKE to the AI (possibly to say stop calling) keep being
+  dialed; gating on `call_outcome equals no_answer` instead ALSO ends the
+  cadence on a transient `failed` or a `not_placed` from the fleet-wide dial
+  cap, abandoning a lead nobody ever reached because one dial did not go out.
+- **The reply notice sits INSIDE each round, right after that round's wait.**
+  One notice at the end gated on `lead_reply notEquals "no_reply"` looks
+  equivalent and is not: a missing var reads as "", which is also not equal to
+  "no_reply", so the guard PASSES. A `claimed` jump during the very first call
+  would have sent the owner a "they came back to us" notice quoting nothing,
+  for a lead who never said a word.
+- **The unclaimed half of Amy's notify rule is not yet faithful.**
+  `notify_lead_owner` resolves the owner at RUN TIME (so a lead claimed
+  mid-cadence reaches the right person, which a var read at step 0 could not
+  do), but with no owner it falls back to the business owner rather than
+  broadcasting to the team. There is no informational team-broadcast
+  primitive: `route_to_team` broadcasts as a claim OFFER with a deadline and a
+  fallback, which is a different thing from an alert.
+
 ReferralExchange on the AI worker (Aug 11 2026):
 `referralexchange-ai-first-contact.ts` (applier, `--revert` restores the exact
 previous definition) over `referralexchange-ai-first-contact-definition.ts`
