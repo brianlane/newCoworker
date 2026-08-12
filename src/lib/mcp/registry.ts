@@ -34,6 +34,11 @@ import { flowTools } from "@/lib/mcp/tools/flows";
 import { agentTools } from "@/lib/mcp/tools/agents";
 import { notificationTools } from "@/lib/mcp/tools/notifications";
 import { searchTools } from "@/lib/mcp/tools/search";
+import {
+  MCP_WIDGETS,
+  MCP_WIDGET_MIME,
+  widgetMetaForTool
+} from "@/lib/mcp/widgets";
 
 export const allMcpTools: McpToolDef[] = [
   // First, because they are the entry point a model should reach for: find
@@ -67,7 +72,29 @@ export function authFromContext(ctx: unknown): McpAuthUser | null {
   return userId && email ? { userId, email, client } : null;
 }
 
+/**
+ * Register the inline widgets as `ui://` resources.
+ *
+ * Separate from the tools because they are a different MCP primitive: a
+ * resource is fetched once and reused, while a tool runs per call. The tools
+ * that draw into one point at it through `_meta`.
+ */
+export function registerMcpWidgets(server: McpServer): void {
+  for (const widget of MCP_WIDGETS) {
+    server.registerResource(
+      widget.name,
+      widget.uri,
+      { title: widget.title, mimeType: MCP_WIDGET_MIME },
+      async (uri: URL) => ({
+        contents: [{ uri: uri.href, mimeType: MCP_WIDGET_MIME, text: widget.html }]
+      })
+    );
+  }
+}
+
 export function registerMcpTools(server: McpServer): void {
+  registerMcpWidgets(server);
+
   for (const def of allMcpTools) {
     server.registerTool(
       def.name,
@@ -78,7 +105,11 @@ export function registerMcpTools(server: McpServer): void {
         description: def.description,
         annotations: def.annotations,
         inputSchema: z.object(def.schema),
-        outputSchema: def.outputSchema
+        outputSchema: def.outputSchema,
+        // Present only for the handful of tools that render inline. Spread so
+        // the key is absent rather than undefined for the rest, since an
+        // explicit undefined _meta is a different thing on the wire.
+        ...(widgetMetaForTool(def.name) ? { _meta: widgetMetaForTool(def.name) } : {})
       },
       async (args: Record<string, unknown>, ctx: unknown): Promise<McpTextResult> => {
         const auth = authFromContext(ctx);

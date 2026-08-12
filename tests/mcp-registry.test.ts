@@ -7,6 +7,7 @@ vi.mock("@/lib/mcp/tooling", async (importOriginal) => {
 
 import { z } from "zod";
 import { allMcpTools, authFromContext, registerMcpTools } from "@/lib/mcp/registry";
+import { MCP_WIDGETS } from "@/lib/mcp/widgets";
 import { runMcpTool } from "@/lib/mcp/tooling";
 import type { McpServer } from "@modelcontextprotocol/server";
 
@@ -130,13 +131,26 @@ describe("registerMcpTools", () => {
 
   function fakeServer() {
     const registered: Registered[] = [];
+    const resources: Array<{ name: string; uri: string }> = [];
     const server = {
       registerTool: vi.fn((name: string, config: Registered["config"], cb: Registered["cb"]) => {
         registered.push({ name, config, cb });
+      }),
+      // registerMcpTools also registers the inline widgets, which are a
+      // different MCP primitive. The double has to carry both or it stops
+      // resembling the thing under test.
+      registerResource: vi.fn((name: string, uri: string) => {
+        resources.push({ name, uri });
       })
     };
-    return { server: server as unknown as McpServer, registered };
+    return { server: server as unknown as McpServer, registered, resources };
   }
+
+  it("registers the inline widgets alongside the tools", () => {
+    const { server, resources } = fakeServer();
+    registerMcpTools(server);
+    expect(resources.map((r) => r.uri)).toEqual(MCP_WIDGETS.map((w) => w.uri));
+  });
 
   it("registers every tool with its description and schema", () => {
     const { server, registered } = fakeServer();
