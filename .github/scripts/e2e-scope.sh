@@ -94,9 +94,21 @@ tests/e2e/truly-renewal-context.e2e.test.ts
 "
 
 # Dashboard/owner-SMS operator surface: OWNER_PREAMBLE, SMS_SURFACE_BLOCK,
-# action tools, context blocks, the geminiChatStep engine step.
+# EMAIL_TOOL_ENABLED_PREAMBLE, action tools, context blocks, the
+# geminiChatStep engine step.
+#
+# beth-delegation is listed here as well as in EMAIL_TESTS on purpose. Its
+# name puts it with the email suites, but what it actually replays is the
+# OWNER-SMS operator turn, and it imports OWNER_PREAMBLE, SMS_SURFACE_BLOCK
+# and EMAIL_TOOL_ENABLED_PREAMBLE straight out of this surface. Grouped only
+# under EMAIL_TESTS, a change to the email tool preamble (which lives in
+# src/app/api/dashboard/chat/route.ts) did not schedule the one test that
+# pins it, which is how the invented-recipient regression reached a nightly
+# instead of the PR that caused it. Selection is `sort -u`, so the overlap
+# costs nothing.
 OPERATOR_TESTS="
 tests/e2e/kyp-owner-sms-operator.e2e.test.ts
+tests/e2e/beth-delegation.e2e.test.ts
 "
 
 # The email surfaces: the autonomous email coworker (its turn/poll/mailbox

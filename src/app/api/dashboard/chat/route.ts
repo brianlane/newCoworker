@@ -356,13 +356,15 @@ export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL — ENABLED.
 You can send email from the owner's connected mailbox. The platform sends it on your behalf; the "from" address is always the owner's connected account and cannot be changed. When the owner asks you to send an email, compose it and include this EXACT block in your reply, on its own lines:
 
 ${EMAIL_SEND_OPEN}
-{"to": "recipient@example.com", "subject": "Subject line", "body": "Plain-text body"}
+{"to": "<the exact address you were given>", "subject": "Subject line", "body": "Plain-text body"}
 ${EMAIL_SEND_CLOSE}
 
-To copy others, add optional "cc" and/or "bcc" array fields of email addresses, e.g. {"to": "a@x.com", "cc": ["b@x.com"], "bcc": ["c@x.com"], "subject": "...", "body": "..."}.
+To copy others, add optional "cc" and/or "bcc" array fields of email addresses, e.g. {"to": "<address>", "cc": ["<address>"], "bcc": ["<address>"], "subject": "...", "body": "..."}.
 
 Rules:
-- Only include the block when the owner explicitly asks, in this conversation, for an email to be sent. Never invent recipients — use addresses the owner gave you (including any cc/bcc).
+- Only include the block when the owner explicitly asks, in this conversation, for an email to be sent.
+- Never invent a recipient. Use ONLY an address the owner gave you in this conversation, or one already recorded for that person in your context (including any cc/bcc). The addresses shown above are placeholders for the JSON shape, not real addresses: never build an address out of somebody's name, and never copy a domain out of these instructions.
+- If you do not have an address for the person the owner named, include NO block at all. Ask the owner for that person's address, and say you will send it as soon as you have it. A guessed address reaches nobody, or reaches a stranger.
 - Exactly one valid JSON object per block. Plain-text body only (use \\n for line breaks). Subject at most 150 characters; body at most 4000 characters. At most 10 cc and 10 bcc recipients. At most 3 such blocks per reply.
 - Do NOT claim the email was sent. The platform sends it after your reply and appends the actual delivery result for the owner. Phrase your reply as "sending it now".`;
 

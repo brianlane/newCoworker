@@ -400,6 +400,41 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
     }
   });
 
+  /**
+   * The invented-recipient regression (nightly e2e, Aug 12 2026).
+   *
+   * Asked to schedule someone "thru her assistant beth" with NO contact
+   * details for Beth, the model emitted an EMAIL_SEND block addressed to
+   * `beth@example.com`. That address appears nowhere in the scenario. The
+   * only `@example.com` in the whole system prompt was this block's own
+   * example line, `{"to": "recipient@example.com", ...}`, so the model
+   * filled the name into the placeholder's domain and mailed it.
+   *
+   * The prose rule "never invent recipients" was already there and did not
+   * hold, so the fix is structural: the example must not read as a usable
+   * address. These assertions pin the property, not the wording, because
+   * the live e2e that caught it only reproduces about half the time.
+   */
+  it("shows no usable example address the model can fill a name into", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    await POST(jsonRequest({ businessId: BIZ, message: "email beth" }));
+    const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    const block = inputMessages.find(
+      (m) => m.role === "system" && m.content.includes("EMAIL TOOL — ENABLED")
+    )!;
+    expect(block).toBeDefined();
+
+    // Every address-shaped token in the block must be a bracketed
+    // placeholder. A bare `name@domain.tld` is the thing that got copied.
+    const addressLike = block.content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g);
+    expect(addressLike, `real-looking addresses in the prompt: ${addressLike}`).toBeNull();
+
+    // And the model is told what to do when it has no address, which is the
+    // branch it took wrongly: ask, send nothing.
+    expect(block.content).toContain("Never invent a recipient");
+    expect(block.content).toContain("include NO block at all");
+  });
+
   it("keeps OWNER_PREAMBLE first — date line second, email block third", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
