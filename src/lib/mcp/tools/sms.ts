@@ -130,7 +130,9 @@ export const sendSmsTool = defineMcpTool({
       to_e164: to,
       from_e164: config.fromE164 ?? null,
       body: args.text,
-      source: "mcp",
+      // Which assistant actually sent it. 'mcp' means Claude, for the rows
+      // written before ChatGPT had its own route as well as for Claude today.
+      source: auth.client === "chatgpt" ? "mcp_chatgpt" : "mcp",
       run_id: null,
       flow_id: null,
       telnyx_message_id: telnyxMessageId,

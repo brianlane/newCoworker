@@ -74,7 +74,10 @@ describe("authFromContext", () => {
   it("extracts the verified identity from ctx.http.authInfo", () => {
     expect(
       authFromContext({ http: { authInfo: { extra: { userId: "u1", email: "a@b.c" } } } })
-    ).toEqual({ userId: "u1", email: "a@b.c" });
+      // No client on the context reads as Claude: every send predating the
+      // second route is a Claude send, so that is the safe default rather
+      // than an absent value the send tools would have to handle.
+    ).toEqual({ userId: "u1", email: "a@b.c", client: "claude" });
   });
 
   // Regression guard for the mcp-handler 1.x -> 2.x migration. 1.x handed the
@@ -83,6 +86,20 @@ describe("authFromContext", () => {
   // 2.x server still COMPILES (the context is narrowed from `unknown`) and
   // silently fails every tool call closed, so the old shape must stay
   // explicitly unauthenticated here rather than merely untested.
+  it("carries which assistant called, for outbound attribution", () => {
+    expect(
+      authFromContext({
+        http: { authInfo: { extra: { userId: "u1", email: "a@b.c", client: "chatgpt" } } }
+      })
+    ).toMatchObject({ client: "chatgpt" });
+    // An unrecognised value must not invent a new source.
+    expect(
+      authFromContext({
+        http: { authInfo: { extra: { userId: "u1", email: "a@b.c", client: "gemini" } } }
+      })
+    ).toMatchObject({ client: "claude" });
+  });
+
   it("does not accept the pre-2.x top-level authInfo shape", () => {
     expect(authFromContext({ authInfo: { extra: { userId: "u1", email: "a@b.c" } } })).toBeNull();
   });
@@ -158,7 +175,7 @@ describe("registerMcpTools", () => {
     expect(runMcpTool).toHaveBeenCalledWith(
       allMcpTools[0],
       { a: 1 },
-      { userId: "u1", email: "a@b.c" }
+      { userId: "u1", email: "a@b.c", client: "claude" }
     );
     expect(result).toEqual({ content: [{ type: "text", text: "ok" }] });
   });

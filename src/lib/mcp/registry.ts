@@ -61,7 +61,10 @@ export function authFromContext(ctx: unknown): McpAuthUser | null {
   )?.http?.authInfo?.extra;
   const userId = typeof info?.userId === "string" ? info.userId : "";
   const email = typeof info?.email === "string" ? info.email : "";
-  return userId && email ? { userId, email } : null;
+  // Unrecognised or absent reads as Claude: every row predating the second
+  // route is a Claude send, and a bad value must not invent a new source.
+  const client = info?.client === "chatgpt" ? "chatgpt" : "claude";
+  return userId && email ? { userId, email, client } : null;
 }
 
 export function registerMcpTools(server: McpServer): void {

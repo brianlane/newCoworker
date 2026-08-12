@@ -326,3 +326,35 @@ describe("send_whatsapp", () => {
     expect(recordInteractionAndIncrement).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Outbound attribution. The dashboard thread view renders `mcp` as "Claude
+ * connector", so before this the owner's own history credited Claude for a
+ * text ChatGPT sent. Asserted at the producer (what the tool writes) rather
+ * than at the label, because the label is downstream of this value.
+ */
+describe("which assistant a send is credited to", () => {
+  it("writes mcp_chatgpt when ChatGPT sent it", async () => {
+    await runTool({ ...sendSmsTool }, { to: "+15550001111", text: "hi" }, {
+      ...AUTH,
+      client: "chatgpt"
+    });
+    expect(insertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "mcp_chatgpt" })
+    );
+  });
+
+  it("writes mcp for Claude, and for a caller with no client at all", async () => {
+    await runTool({ ...sendSmsTool }, { to: "+15550001111", text: "hi" }, {
+      ...AUTH,
+      client: "claude"
+    });
+    expect(insertMock).toHaveBeenCalledWith(expect.objectContaining({ source: "mcp" }));
+
+    insertMock.mockClear();
+    // No client: the shape every row predating the second route was written
+    // with, and it must stay Claude rather than become something new.
+    await runTool({ ...sendSmsTool }, { to: "+15550001111", text: "hi" }, AUTH);
+    expect(insertMock).toHaveBeenCalledWith(expect.objectContaining({ source: "mcp" }));
+  });
+});

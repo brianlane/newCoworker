@@ -23,6 +23,18 @@ import type { BusinessAction, BusinessRole } from "@/lib/authz/policy";
 export type McpAuthUser = {
   userId: string;
   email: string;
+  /**
+   * Which assistant is calling, from the route the request arrived on.
+   *
+   * Only outbound attribution uses it, and it must never influence
+   * authorization: permissions come from the caller's team role, and a tool
+   * that behaved differently per assistant would be a policy nobody wrote.
+   *
+   * Optional so the 30-odd tools that do not care, and their tests, are
+   * untouched. Absent means the Claude connector, which is what every row
+   * predating the second route is.
+   */
+  client?: "claude" | "chatgpt";
 };
 
 /**
