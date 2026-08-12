@@ -468,6 +468,35 @@ Clever and HomeLight already work. 23 steps to 25.
   were not. The offers therefore quote `call_outcome_label` and point at the
   summary.
 
+Who owns the lead, in Amy's own emails (Aug 12 2026):
+`amy-owner-in-lead-emails.ts`. Five emails to amy@amylaidlaw.com never said who
+took the lead, and all five sat BEFORE their flow's `route_to_team`, so no
+template could have shown it from where they stood: Clever `qt_email`,
+Realtor.com `s2`, and ReferralExchange `email_buyer` / `email_seller` /
+`email_both`. They now sit after the route and carry
+`Lead owner: {{vars.claimed_agent}}`.
+
+- **HomeLight was the model, not an exception.** Its `qt_email` already sat
+  after the route and already opened "HomeLight referral claimed by ...". The
+  other four had simply never caught up.
+- **The cost is real and worth knowing:** these emails now wait for the claim
+  window instead of sending on arrival. A lead claimed quickly (the common case
+  on this account, and the point of speed-to-lead) delays the email a minute or
+  two. A lead NOBODY claims delays it by the full ladder, roughly ninety
+  minutes: a 10 minute offer, three 20 minute reminder rounds, then the owner
+  fallback.
+- **Deliberately NOT copied from HomeLight:** its `qt_email` is gated on
+  `claimed_agent notEquals none`, so an unclaimed HomeLight lead sends Amy no
+  QT email at all. These stay ungated, because a lead nobody claimed is the one
+  she most needs to see. The owner line reads "none" rather than the mail
+  silently not arriving.
+- **`claimedNotifyEmail` was already set** to amy@amylaidlaw.com on all four
+  route steps, so she was already getting a SEPARATE claim email. This puts the
+  fact in the lead email itself rather than leaving her to cross-reference two.
+- The last route step is the anchor, not the first: ReferralExchange has three
+  gated by lead type and only one fires, so after all of them is the only
+  position from which the claim is known whichever arm ran.
+
 Notice content: `set-amy-lead-address-in-notices.ts`,
 `amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
 all, only the over/under-$1M routing token, so no Clever notice could show
