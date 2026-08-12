@@ -58,10 +58,18 @@ const SCRIPT = "amy-owner-in-lead-emails.ts";
  *
  * `claimed_agent` is the teammate who took this lead's offer, and a claim
  * auto-assigns the contact's owner, so it IS the owner for this lead. It reads
- * "none" when nobody claimed, which is the honest answer and the reason these
- * emails are not gated on a claim having happened.
+ * "none" when the offer ran and nobody claimed, which is the honest answer and
+ * the reason these emails are not gated on a claim having happened.
+ *
+ * The label explains its own blank, because there is one path where the var is
+ * not merely "none" but UNSET: a goal jump from the AI call skips the route
+ * entirely (see the anchor note below), and send_email renders with plain
+ * renderTemplate and no collapseEmpty, so an unset var leaves a dangling label.
+ * That is the bare-"Price:" trap this account has hit twice; saying what a
+ * blank means costs a few words and removes it.
  */
-export const OWNER_LINE = "Lead owner: {{vars.claimed_agent}}";
+export const OWNER_LINE =
+  "Lead owner (blank if nobody has claimed it yet): {{vars.claimed_agent}}";
 
 /** Which email steps move, per flow. All are top level in the live definitions. */
 export const MOVE_PLAN: Record<string, string[]> = {
@@ -109,7 +117,25 @@ export function moveEmailsAfterRoute(flowName: string, def: Definition): PatchRe
   if (lastRoute < 0) {
     throw new Error(`${flowName}: no top-level route_to_team; nothing to order against`);
   }
-  const routeId = String(steps[lastRoute]!.id);
+  /**
+   * Anchor AFTER a top-level goal when the flow has one, not merely after the
+   * route.
+   *
+   * Clever's ladder parks in `ai_call_1` BEFORE the route, and its
+   * `lead_reached` goal (replied / appointment_booked) sits after it. A lead
+   * who replies or books DURING that call jumps the run straight to the goal
+   * and skips every step in between. Anchoring on the route would therefore
+   * have put the email in the skipped span, so Amy would have received no QT
+   * mail for exactly the leads who engaged: the best ones, silently
+   * (Bugbot, #1319).
+   *
+   * A goal step is a jump TARGET, so steps after it run on both paths: the
+   * normal one where the route already resolved the claim, and the jump where
+   * it never ran and the owner is legitimately blank.
+   */
+  const lastGoal = steps.map((s) => s.type).lastIndexOf("goal");
+  const anchor = Math.max(lastRoute, lastGoal);
+  const anchorId = String(steps[anchor]!.id);
 
   // Add the line first, so a re-run that has nothing left to move still
   // reports honestly on the bodies.
@@ -125,16 +151,17 @@ export function moveEmailsAfterRoute(flowName: string, def: Definition): PatchRe
   }
 
   // Already after the route? Then only the bodies needed touching.
-  const needMove = ids.filter((id) => steps.findIndex((s) => s.id === id) < lastRoute);
+  const needMove = ids.filter((id) => steps.findIndex((s) => s.id === id) < anchor);
   if (needMove.length > 0) {
     const moving = needMove.map((id) => steps.splice(steps.findIndex((s) => s.id === id), 1)[0]!);
     // Recompute: the splices above shifted everything after them.
-    const insertAt = steps.map((s) => s.type).lastIndexOf("route_to_team") + 1;
-    steps.splice(insertAt, 0, ...moving);
-    for (const id of needMove) touched.push(`${id} moved after ${routeId}`);
+    const route2 = steps.map((s) => s.type).lastIndexOf("route_to_team");
+    const goal2 = steps.map((s) => s.type).lastIndexOf("goal");
+    steps.splice(Math.max(route2, goal2) + 1, 0, ...moving);
+    for (const id of needMove) touched.push(`${id} moved after ${anchorId}`);
   }
   def.steps = steps;
-  return { changed: touched.length > 0, touched, movedAfter: routeId };
+  return { changed: touched.length > 0, touched, movedAfter: anchorId };
 }
 
 function requireEnv(name: string, fallback?: string): string {

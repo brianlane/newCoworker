@@ -26,6 +26,7 @@ const cleverish = () => ({
       offerTemplate: "New lead, reply 1",
       ownerFallbackTemplate: "Nobody claimed it"
     },
+    { id: "lead_reached", type: "goal", label: "Lead reached", events: [{ kind: "replied" }] },
     { id: "notify", type: "notify_owner", message: "done" }
   ]
 });
@@ -48,13 +49,21 @@ describe("withOwnerLine", () => {
 });
 
 describe("moveEmailsAfterRoute", () => {
-  it("moves the email after the route and adds the line", () => {
+  /**
+   * AFTER THE GOAL, not merely after the route, and this is the whole ballgame
+   * on Clever. Its ladder parks in ai_call_1 BEFORE the route, and the
+   * lead_reached goal sits after it. A lead who replies or books DURING that
+   * call jumps straight to the goal and skips everything in between, so an
+   * email anchored on the route would never send for exactly the leads who
+   * engaged: the best ones, silently.
+   */
+  it("moves the email after the GOAL when the flow has one", () => {
     const def = cleverish();
     const res = moveEmailsAfterRoute("Clever Lead - Accept", def);
     expect(res.changed).toBe(true);
     const ids = def.steps.map((s) => s.id);
-    expect(ids.indexOf("qt_email")).toBeGreaterThan(ids.indexOf("route"));
-    expect(res.movedAfter).toBe("route");
+    expect(ids.indexOf("qt_email")).toBeGreaterThan(ids.indexOf("lead_reached"));
+    expect(res.movedAfter).toBe("lead_reached");
     const email = def.steps.find((s) => s.id === "qt_email") as { body: string };
     expect(email.body).toContain(OWNER_LINE);
   });
@@ -77,7 +86,18 @@ describe("moveEmailsAfterRoute", () => {
    * fires. After ALL of them is the only position from which the claim is
    * known whichever arm ran.
    */
-  it("uses the LAST route step when a flow has several", () => {
+  /**
+   * A goal step is a jump TARGET, so steps after it run on BOTH paths: the
+   * normal one where the route resolved the claim, and the jump where the
+   * route never ran and the owner is legitimately blank. Hence the label
+   * explains its own blank, since send_email renders with no collapseEmpty and
+   * an unset var would otherwise leave a dangling "Lead owner:".
+   */
+  it("explains what a blank owner means", () => {
+    expect(OWNER_LINE).toContain("blank if nobody has claimed it yet");
+  });
+
+  it("falls back to the last route when the flow has no goal", () => {
     const def = {
       steps: [
         { id: "browse", type: "extract_text", fields: [{ name: "lead_name" }] },

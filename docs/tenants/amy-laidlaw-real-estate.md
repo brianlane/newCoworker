@@ -493,9 +493,22 @@ Realtor.com `s2`, and ReferralExchange `email_buyer` / `email_seller` /
 - **`claimedNotifyEmail` was already set** to amy@amylaidlaw.com on all four
   route steps, so she was already getting a SEPARATE claim email. This puts the
   fact in the lead email itself rather than leaving her to cross-reference two.
-- The last route step is the anchor, not the first: ReferralExchange has three
+- **The anchor is the last top-level GOAL when a flow has one**, not merely the
+  last route, and on Clever that is the whole ballgame. Its ladder parks in
+  `ai_call_1` BEFORE the route, and `lead_reached` (replied /
+  appointment_booked) sits after it, so a lead who replies or books DURING that
+  call jumps straight to the goal and skips everything in between. Anchoring on
+  the route would have put the email in the skipped span: Amy would have got no
+  QT mail for exactly the leads who engaged, the best ones, silently. A goal is
+  a jump TARGET, so steps after it run on both paths.
+- Failing that, the last route step, not the first: ReferralExchange has three
   gated by lead type and only one fires, so after all of them is the only
   position from which the claim is known whichever arm ran.
+- **The owner line explains its own blank.** On the goal-jump path the route
+  never ran, so `claimed_agent` is UNSET rather than "none", and `send_email`
+  renders with plain `renderTemplate` and no `collapseEmpty`: a bare
+  "Lead owner:" would be the same dangling-label trap the price and address
+  work hit twice. The label says what a blank means instead.
 
 Notice content: `set-amy-lead-address-in-notices.ts`,
 `amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
