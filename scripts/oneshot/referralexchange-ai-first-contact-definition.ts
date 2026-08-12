@@ -142,12 +142,14 @@ export function buildCall(type: LeadType, refs: { dave: Ref; gabby: Ref; amy: Re
     // teammate who nearly took the call is the one who hears how it went.
     notifyFirstReachTarget: true,
     captureFields: ["what they want", "timeline", "best time to call back", "notes"],
-    callWindow: {
-      timezone: "America/Phoenix",
-      start: "08:30",
-      end: "21:00",
-      outside: "skip" as const
-    },
+    // NO callWindow, deliberately, and matching Clever's attempt-1 dial.
+    //
+    // This is first contact on a lead that just landed, and speed to lead is
+    // the entire point. A window with outside:"skip" resolves an overnight
+    // lead to `not_placed`, which is not `no_answer`, so the follow-up tag
+    // never fires either: the lead would miss BOTH the AI call and the cadence
+    // (Bugbot, #1308). Only the RETRY rungs elsewhere carry windows, because a
+    // redial is the thing that must not land at 3am.
     saveAs: "call_outcome",
     // Amy keeps $1M+ leads herself, so the AI never dials one. Positive gate:
     // a missing price_band reads as "" and the call SKIPS.
@@ -171,7 +173,14 @@ export function buildAiFirstContactSteps(refs: { dave: Ref; gabby: Ref; amy: Ref
       branches: LEAD_TYPES.map((t) => ({
         id: `ai_call_${t}_arm`,
         label: `${t} lead`,
-        condition: { var: "lead_type", equals: t },
+        // route_lead_type, NOT lead_type. Both exist on this flow and only one
+        // says anything about REACHABILITY: route_lead_type is "the page shows
+        // a text or call option, meaning the lead has a real phone number, and
+        // here is the type", answering "none" for an email-only lead. Gating a
+        // DIAL on lead_type would have validated fine and selected an arm, and
+        // then tried to call leads with no phone (Bugbot, #1308). It is also
+        // the field the three route steps already gate on.
+        condition: { var: "route_lead_type", equals: t },
         steps: [buildCall(t, refs)]
       })),
       else: []

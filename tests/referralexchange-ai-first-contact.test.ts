@@ -36,6 +36,7 @@ const liveish = () => ({
       type: "extract_text",
       fields: [
         { name: "lead_type" },
+        { name: "route_lead_type" },
         { name: "lead_name" },
         { name: "lead_phone" },
         { name: "location" },
@@ -101,6 +102,32 @@ describe("the call step", () => {
 });
 
 describe("insertion", () => {
+  /**
+   * route_lead_type, NOT lead_type. Both exist on the live flow and only one
+   * says anything about REACHABILITY: route_lead_type answers "none" for an
+   * email-only lead. Gating a DIAL on lead_type would validate fine and then
+   * try to call leads with no phone.
+   */
+  it("chooses the script by the phone-aware lead type", () => {
+    const steps = buildAiFirstContactSteps(REFS);
+    const arms = (steps[0] as { branches: Array<{ condition: unknown }> }).branches;
+    expect(arms.map((a) => a.condition)).toEqual([
+      { var: "route_lead_type", equals: "buyer" },
+      { var: "route_lead_type", equals: "seller" },
+      { var: "route_lead_type", equals: "both" }
+    ]);
+  });
+
+  /**
+   * No call window on FIRST contact, matching Clever's attempt-1 dial. A
+   * window with outside:"skip" resolves an overnight lead to not_placed, which
+   * is not no_answer, so the follow-up tag never fires either and the lead
+   * misses both the AI call and the cadence.
+   */
+  it.each(LEAD_TYPES)("dials %s immediately, with no calling window", (t) => {
+    expect(buildCall(t, REFS)).not.toHaveProperty("callWindow");
+  });
+
   it("puts the AI call BEFORE the team is offered the lead", () => {
     const def = liveish();
     expect(insertAiFirstContact(def, REFS)).toBe(true);

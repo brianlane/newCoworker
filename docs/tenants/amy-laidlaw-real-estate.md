@@ -374,6 +374,17 @@ Clever and HomeLight already work. 23 steps to 25.
   ladder here. `update_contact` adds "Needs Follow Up", the same chokepoint the
   `F` reply and the tag editor use, so there is one follow-up sequence and one
   place to change it.
+- **The script arms gate on `route_lead_type`, not `lead_type`.** Both exist on
+  this flow and only one says anything about REACHABILITY: `route_lead_type` is
+  "the page shows a text or call option, meaning the lead has a real phone
+  number, and here is the type", answering "none" for an email-only lead.
+  Gating a DIAL on `lead_type` validates fine and then tries to call leads with
+  no phone. It is also the field the three route steps already gate on.
+- **First contact carries NO `callWindow`**, matching Clever's attempt-1 dial.
+  A window with `outside: "skip"` resolves an overnight lead to `not_placed`,
+  which is not `no_answer`, so the follow-up tag never fires either and the
+  lead misses both the AI call and the cadence. Only RETRY rungs get windows,
+  because a redial is the thing that must not land at 3am.
 - **`captureFields` are not flow vars.** `place_ai_call` produces its outcome
   var and the two companions and nothing else; what the AI collected rides the
   POST-CALL SUMMARY to whoever the ladder rang first
