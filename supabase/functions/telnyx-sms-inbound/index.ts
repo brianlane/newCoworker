@@ -72,6 +72,7 @@ import {
   parseFollowUpReply,
   type FollowUpContactRow
 } from "../_shared/ai_flows/follow_up_reply.ts";
+import { staffNumberCheck } from "../_shared/ai_flows/staff_numbers.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
@@ -1738,22 +1739,23 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
       "fu-lookup-error"
     );
   }
-  // A teammate is never a lead. `type` owner/employee is the stored marker
-  // (the same test lifecycle.ts uses), and the roster check below covers a
-  // teammate whose contact row was never typed.
-  const { data: rosterRows } = await supabase
-    .from("ai_flow_team_members")
-    .select("phone_e164")
-    .eq("business_id", businessId);
-  const rosterPhones = new Set(
-    ((rosterRows ?? []) as Array<{ phone_e164?: string | null }>)
-      .map((r) => (r.phone_e164 ?? "").trim())
-      .filter(Boolean)
-  );
-  const candidates = followUpCandidatesFrom((rows ?? []) as FollowUpContactRow[], {
-    senderE164: from,
-    rosterPhones
+  // A teammate is never a lead, and this is the guard that decides whether a
+  // contact may be put into an AI CALLING cadence, so it uses the shared
+  // staffNumberCheck rather than its own idea of staff.
+  //
+  // Bugbot, PR #1304: a type check plus roster phones is not enough. Owner
+  // numbers are usually DERIVED (the business phone, the forward cell, the
+  // coworker's own DID) and the owner's contact row is very often typed
+  // "customer", so a bare "F" could have started the cadence on Amy herself.
+  // A failed lookup counts as staff (fail safe), same as every other caller.
+  const rawCandidates = followUpCandidatesFrom((rows ?? []) as FollowUpContactRow[], {
+    senderE164: from
   });
+  const candidates: typeof rawCandidates = [];
+  for (const c of rawCandidates) {
+    const check = await staffNumberCheck(supabase, businessId, [c.phone], c.type);
+    if (!check.staff) candidates.push(c);
+  }
 
   const match = matchFollowUpTarget(candidates, parsed.name);
   if (match.kind === "none") {

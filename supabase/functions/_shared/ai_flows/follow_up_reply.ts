@@ -179,29 +179,31 @@ export type FollowUpContactRow = {
 /**
  * Which recent contacts a follow-up reply may target.
  *
- * A teammate is never a lead: `type` owner/employee is the stored marker (the
- * same test lifecycle.ts uses), and the roster phones cover a teammate whose
- * contact row was never typed. The sender is excluded too, so replying "F" can
- * never enroll the person who sent it.
+ * Shape only: drops rows with no number and the sender's own row, and carries
+ * `type` through so the caller can hand it to staffNumberCheck. Deciding who
+ * is staff is deliberately NOT done here, because that rule lives in one place
+ * and three guards depend on it agreeing.
  *
  * Order is preserved, so the caller's newest-first query stays newest-first and
  * a bare "F" means the most recent lead.
  */
 export function followUpCandidatesFrom(
   rows: readonly FollowUpContactRow[],
-  opts: { senderE164: string; rosterPhones: ReadonlySet<string> }
-): Array<FollowUpCandidate & { tags: string[] }> {
-  const out: Array<FollowUpCandidate & { tags: string[] }> = [];
+  opts: { senderE164: string }
+): Array<FollowUpCandidate & { tags: string[]; type: string }> {
+  const out: Array<FollowUpCandidate & { tags: string[]; type: string }> = [];
   for (const r of rows) {
     const phone = (r.customer_e164 ?? "").trim();
+    // No number means nothing to call, and the sender can never enrol
+    // themselves. Everything else about who counts as staff is decided by
+    // staffNumberCheck, which reads the roster and the business's own derived
+    // numbers; duplicating any of that here is how the two would drift apart.
     if (!phone || phone === opts.senderE164) continue;
-    const type = (r.type ?? "").trim().toLowerCase();
-    if (type === "owner" || type === "employee") continue;
-    if (opts.rosterPhones.has(phone)) continue;
     out.push({
       contactId: r.id,
       name: (r.display_name ?? "").trim(),
       phone,
+      type: (r.type ?? "").trim().toLowerCase(),
       tags: Array.isArray(r.tags) ? r.tags : []
     });
   }

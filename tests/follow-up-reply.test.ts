@@ -157,40 +157,46 @@ describe("reply copy", () => {
  */
 describe("followUpCandidatesFrom", () => {
   const SENDER = "+16025551111";
-  const roster = new Set(["+16025552222"]);
   const rows = [
     { id: "c1", display_name: "Michelle Rodahl", customer_e164: "+15053606293", tags: ["Contacted"], type: "customer" },
     { id: "me", display_name: "Dave Lane", customer_e164: SENDER, type: "customer" },
-    { id: "roster", display_name: "Gabrielle Mota", customer_e164: "+16025552222", type: "customer" },
-    { id: "owner", display_name: "Amy Laidlaw", customer_e164: "+16025553333", type: "owner" },
-    { id: "emp", display_name: "Jason Lane", customer_e164: "+16025554444", type: "employee" },
     { id: "nophone", display_name: "No Number", customer_e164: "", type: "customer" },
-    { id: "c2", display_name: "Danny Wallin", customer_e164: "+15208409790", type: "customer" }
+    { id: "c2", display_name: "Danny Wallin", customer_e164: "+15208409790", type: "owner" }
   ];
 
-  it("keeps leads and drops every flavour of teammate", () => {
-    const out = followUpCandidatesFrom(rows, { senderE164: SENDER, rosterPhones: roster });
+  /**
+   * Shape only. Who counts as STAFF is decided by staffNumberCheck, because
+   * owner numbers are usually derived (business phone, forward cell, the
+   * coworker's DID) and the owner's contact row is very often typed
+   * "customer" — so an owner-typed row is passed THROUGH here for that check
+   * to reject, rather than being the whole test (Bugbot, PR #1304).
+   */
+  it("drops only rows with no number and the sender's own row", () => {
+    const out = followUpCandidatesFrom(rows, { senderE164: SENDER });
     expect(out.map((c) => c.contactId)).toEqual(["c1", "c2"]);
+  });
+
+  it("carries type through so the staff check can use it", () => {
+    const out = followUpCandidatesFrom(rows, { senderE164: SENDER });
+    expect(out.find((c) => c.contactId === "c2")!.type).toBe("owner");
   });
 
   // Newest-first in, newest-first out: a bare "F" means the most recent lead.
   it("preserves the query's order", () => {
-    const out = followUpCandidatesFrom(rows, { senderE164: SENDER, rosterPhones: roster });
-    expect(out[0]!.name).toBe("Michelle Rodahl");
+    expect(followUpCandidatesFrom(rows, { senderE164: SENDER })[0]!.name).toBe("Michelle Rodahl");
   });
 
   it("reads display_name and defaults tags to an array", () => {
     const out = followUpCandidatesFrom([{ id: "x", display_name: "A B", customer_e164: "+15551234567" }], {
-      senderE164: SENDER,
-      rosterPhones: new Set()
+      senderE164: SENDER
     });
-    expect(out[0]).toEqual({ contactId: "x", name: "A B", phone: "+15551234567", tags: [] });
+    expect(out[0]).toEqual({ contactId: "x", name: "A B", phone: "+15551234567", type: "", tags: [] });
   });
 
   /**
    * These columns are nullable, and a null is not an empty string. A row with
-   * no number cannot be called and so cannot be followed up; a row with no
-   * name is still a real lead and stays reachable as the newest one.
+   * no number cannot be called; a row with no name is still a real lead and
+   * stays reachable as the newest one.
    */
   it("handles null phone and null name", () => {
     const out = followUpCandidatesFrom(
@@ -198,10 +204,10 @@ describe("followUpCandidatesFrom", () => {
         { id: "nullphone", display_name: "Ghost", customer_e164: null },
         { id: "nullname", display_name: null, customer_e164: "+15559998888", tags: null }
       ],
-      { senderE164: SENDER, rosterPhones: new Set() }
+      { senderE164: SENDER }
     );
     expect(out).toEqual([
-      { contactId: "nullname", name: "", phone: "+15559998888", tags: [] }
+      { contactId: "nullname", name: "", phone: "+15559998888", type: "", tags: [] }
     ]);
   });
 });
