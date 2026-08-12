@@ -139,5 +139,5 @@ will remain available for the duration of the review.
 
 Best regards,
 Brian Lane
-Founder, New Coworker (Newcoworker LLC)
+Founder, New Coworker LLC
 team@newcoworker.com
