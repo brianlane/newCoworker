@@ -166,27 +166,65 @@ describe("who hears the revealed details", () => {
     const d = def();
     patchHomeLight(d);
     const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
-    expect(branch.when).toEqual({ var: "claimed_agent", equals: "none" });
     const arm = (branch.branches as Array<{ condition: unknown; steps: Array<Record<string, unknown>> }>)[0];
-    expect(arm.steps[0]).toMatchObject({
+    expect(arm.condition).toEqual({ var: "claimed_agent", equals: "none" });
+    const inner = arm.steps.find((x) => x.id === "late_unclaimed_found")! as Record<string, unknown>;
+    const innerArm = (inner.branches as Array<{ condition: unknown; steps: Array<Record<string, unknown>> }>)[0];
+    expect(innerArm.steps[0]).toMatchObject({
       type: "notify_lead_owner",
       unownedFallback: "team"
     });
   });
 
   /**
-   * TWO conditions, and a `when` holds one. Gating only on "unclaimed" fired
-   * on EVERY unclaimed run and announced revealed details that were empty. The
-   * phone is the right test: it is exactly what HomeLight withholds until a
-   * transfer or call connects, and a positive `contains` fails closed on an
-   * empty var.
+   * HomeLight's reveal email is DELAYED, which is why the claimed path has
+   * retry rungs at all. Those gate on contact_status, which only the claimed
+   * read sets, so a single early unclaimed read finds nothing and nothing
+   * looks again. Amy: "sometimes there is a delay so they have to check more
+   * than once."
+   */
+  it("re-reads the mailbox for unclaimed leads, more than once", () => {
+    const d = def();
+    patchHomeLight(d);
+    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
+    const inner = (branch.branches as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps;
+    const reads = inner.filter((x) => x.type === "email_extract");
+    const waits = inner.filter((x) => x.type === "sleep");
+    expect(reads).toHaveLength(2);
+    expect(waits.map((w) => w.minutes)).toEqual([15, 60]);
+    // A later rung fills only what is still missing, so the first read to
+    // succeed wins and the rest are harmless.
+    expect(reads.every((r) => r.fillOnlyEmpty === true)).toBe(true);
+  });
+
+  /**
+   * Definitions cap TOP-LEVEL steps at 30 and this flow is already near it, so
+   * the rungs live inside one branch. The validator rejected the flat version
+   * before anything was written.
+   */
+  it("costs one top-level step, not five", () => {
+    const d = def();
+    const before = d.steps.length;
+    patchHomeLight(d);
+    // unclaimed_email_read + late_unclaimed only.
+    expect(d.steps.length).toBe(before + 2);
+  });
+
+  /**
+   * The details must ACTUALLY have arrived. Announcing an empty reveal spams
+   * the team, and the phone is what HomeLight withholds until a transfer or
+   * call connects, so a positive `contains` fails closed.
    */
   it("only alerts when details actually arrived", () => {
     const d = def();
     patchHomeLight(d);
     const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
-    const arm = (branch.branches as Array<{ condition: unknown }>)[0];
-    expect(arm.condition).toEqual({ var: "lead_phone", contains: "+" });
+    const inner = (branch.branches as Array<{ steps: Array<Record<string, unknown>> }>)[0].steps;
+    const found = inner.find((x) => x.id === "late_unclaimed_found")! as Record<string, unknown>;
+    expect((found.branches as Array<{ condition: unknown }>)[0].condition).toEqual({
+      var: "lead_phone",
+      contains: "+"
+    });
   });
 
   // Amy's own copy carries the whole client-details block: the "screenshot the

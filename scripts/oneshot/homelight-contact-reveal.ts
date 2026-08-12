@@ -217,41 +217,94 @@ export function patchHomeLight(def: Definition): PatchResult {
   if (!findStep(steps, "late_unclaimed_alert")) {
     const at = steps.findIndex((s) => s.id === "late2");
     if (at < 0) throw new Error(`${FLOW_NAME}: step "late2" is missing; cannot place the alert`);
+    /**
+     * The unclaimed path needs its OWN retry rungs, and it all lives inside ONE
+     * top-level branch.
+     *
+     * WHY RETRIES: HomeLight's reveal email is DELAYED, which is the entire
+     * reason the claimed path has late/late2 rungs. Those gate on
+     * `contact_status`, which only the claimed read sets, so they never run for
+     * an unclaimed lead. A single early read finds nothing and nothing looks
+     * again, so a delayed reveal reaches nobody: the exact failure this change
+     * exists to fix (Bugbot, #1324). Amy said it plainly, "sometimes there is a
+     * delay so they have to check more than once."
+     *
+     * WHY NESTED: the definition caps TOP-LEVEL steps at 30 and this flow is
+     * already near it, so five more at the top would be rejected. Nested steps
+     * cost one.
+     *
+     * `fillOnlyEmpty` means a later rung fills only what is still missing, so
+     * the first read to succeed wins and the rest are harmless.
+     */
+    const readFields = [
+      { name: "lead_phone", description: "The lead's phone number, labeled 'Phone' in the HomeLight email" },
+      { name: "lead_email", description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'" },
+      { name: "lead_address", description: "The property street address labeled 'Address' in the HomeLight email" },
+      ...EMAIL_FIELDS.map((f) => ({ ...f }))
+    ];
+    const reread = (n: number, minutes: number, lookback: number): AnyStep[] => [
+      { id: `unclaimed_wait_${n}`, type: "sleep", minutes },
+      {
+        id: `unclaimed_email_read_${n}`,
+        type: "email_extract",
+        connectionId: emailCard.connectionId,
+        ...(emailCard.fromContains ? { fromContains: emailCard.fromContains } : {}),
+        ...(emailCard.matchTemplates ? { matchTemplates: emailCard.matchTemplates } : {}),
+        lookbackMinutes: lookback,
+        fillOnlyEmpty: true,
+        fields: readFields.map((f) => ({ ...f }))
+      }
+    ];
     steps.splice(at + 1, 0, {
-      // TWO conditions, and a `when` holds one, so the branch guard carries
-      // the claim state and the arm condition carries "details actually
-      // arrived". Without the second, this fired on EVERY unclaimed run and
-      // announced revealed details that were empty (Bugbot, #1324). The phone
-      // is the right test: it is what HomeLight withholds until a transfer or
-      // call connects, and a positive `contains` fails closed on an empty var.
       id: "late_unclaimed",
       type: "branch",
-      question: "Details arrived on a lead nobody claimed?",
-      when: { var: "claimed_agent", equals: "none" },
+      question: "Nobody claimed it: keep watching for HomeLight's reveal?",
       branches: [
         {
-          id: "late_unclaimed_yes",
-          label: "Details arrived and nobody has claimed it",
-          condition: { var: "lead_phone", contains: "+" },
+          id: "late_unclaimed_go",
+          label: "Still unclaimed, keep checking",
+          condition: { var: "claimed_agent", equals: "none" },
           steps: [
+            ...reread(2, 15, 120),
+            ...reread(3, 60, 240),
             {
-              id: "late_unclaimed_alert",
-              type: "notify_lead_owner",
-              phoneVar: "lead_phone",
-              nameVar: "lead_name",
-              message:
-                "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
-                "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
-                "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
-                "Nobody has claimed this one yet.",
-              unownedFallback: "team"
+              // The details must ACTUALLY have arrived. Announcing a reveal
+              // that is empty spams the team, and the phone is the right test:
+              // it is what HomeLight withholds until a transfer or call
+              // connects, and a positive `contains` fails closed on an empty
+              // var.
+              id: "late_unclaimed_found",
+              type: "branch",
+              question: "Did the details arrive?",
+              branches: [
+                {
+                  id: "late_unclaimed_yes",
+                  label: "Details arrived",
+                  condition: { var: "lead_phone", contains: "+" },
+                  steps: [
+                    {
+                      id: "late_unclaimed_alert",
+                      type: "notify_lead_owner",
+                      phoneVar: "lead_phone",
+                      nameVar: "lead_name",
+                      message:
+                        "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
+                        "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
+                        "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
+                        "Nobody has claimed this one yet.",
+                      unownedFallback: "team"
+                    }
+                  ]
+                }
+              ],
+              else: []
             }
           ]
         }
       ],
       else: []
     });
-    touched.push("late_unclaimed inserted");
+    touched.push("late_unclaimed (retry rungs + alert) inserted");
   }
 
   // 6. Say WHY nothing is coming when the transfer never connected. HomeLight

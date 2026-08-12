@@ -499,13 +499,19 @@ against the portal screenshot she sent.
   them too.
 - **Revealed details reached nobody on an unclaimed lead**, since every
   contact-info text addressed `{{vars.claimed_agent_phone}}`.
-  `late_unclaimed_alert` uses `notify_lead_owner` with `unownedFallback:
-  "team"`, so the details reach whoever owns the lead, or the team when nobody
-  does. It sits behind a branch carrying TWO conditions, because a `when` holds
-  one: unclaimed AND `lead_phone contains "+"`. Gating on unclaimed alone fired
-  on every unclaimed run and announced revealed details that were empty. The
-  phone is the right test because it is exactly what HomeLight withholds until
-  a transfer or call connects, and a positive `contains` fails closed.
+  `late_unclaimed` is ONE top-level branch holding the whole unclaimed tail:
+  two more mailbox reads at 15 and 60 minutes, then an inner branch that alerts
+  via `notify_lead_owner` with `unownedFallback: "team"`.
+
+  Three things about it are load-bearing. **It retries**, because HomeLight's
+  reveal is delayed and the claimed path's late rungs gate on `contact_status`,
+  which only the claimed read sets, so a single unclaimed read finds nothing
+  and nothing looks again. **It is nested**, because definitions cap TOP-LEVEL
+  steps at 30 and this flow is near it: five flat steps were rejected by the
+  validator before anything was written. **It checks `lead_phone contains "+"`
+  before alerting**, because announcing an empty reveal spams the team, and the
+  phone is exactly what HomeLight withholds until a transfer or call connects,
+  so a positive `contains` fails closed.
 
 Two things deliberately NOT done:
 
