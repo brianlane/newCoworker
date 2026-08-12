@@ -482,9 +482,16 @@ against the portal screenshot she sent.
   and `notify` all never ran. The question now names the team, so our own claim
   reads as ours. It names the TEAM rather than four individuals, because a
   roster list in a prompt goes stale the moment somebody joins.
-- **The email was never read unless somebody had already claimed.**
-  `email_card` carried `when claimed_agent notEquals none`, which is backwards:
-  the team needs the details in order to DECIDE whether to claim. Ungated.
+- **The email was never read unless somebody had already claimed**, which is
+  backwards: the team needs the details in order to DECIDE whether to claim.
+  Fixed with a SEPARATE `unclaimed_email_read` step, and `email_card` KEEPS its
+  gate. Dropping that gate is the obvious move and is wrong: the late-retry
+  ladder gates on `contact_status equals missing`, and that is only a claim
+  gate BECAUSE `email_card` never ran for unclaimed leads. Ungating it walks
+  unclaimed leads into `late` / `late2`, where every delivery step addresses
+  `{{vars.claimed_agent_phone}}` and there is no claimer. The new step copies
+  email_card's connection and matching so the two cannot drift, and carries
+  `fillOnlyEmpty` so it never overwrites an earlier read.
 - **No price from the email.** The alert says "$560K", the email says
   "$560,000" plus the timeframe. `email_price`, `email_timeframe` and
   `email_summary` are read on all three passes (`email_card`, `late_read`,
@@ -494,7 +501,11 @@ against the portal screenshot she sent.
   contact-info text addressed `{{vars.claimed_agent_phone}}`.
   `late_unclaimed_alert` uses `notify_lead_owner` with `unownedFallback:
   "team"`, so the details reach whoever owns the lead, or the team when nobody
-  does.
+  does. It sits behind a branch carrying TWO conditions, because a `when` holds
+  one: unclaimed AND `lead_phone contains "+"`. Gating on unclaimed alone fired
+  on every unclaimed run and announced revealed details that were empty. The
+  phone is the right test because it is exactly what HomeLight withholds until
+  a transfer or call connects, and a positive `contains` fails closed.
 
 Two things deliberately NOT done:
 

@@ -141,16 +141,43 @@ export function patchHomeLight(def: Definition): PatchResult {
     }
   }
 
-  // 2. Read the email even when nobody has claimed yet. The team needs the
-  //    details in order to DECIDE whether to claim, so gating the read on a
-  //    claim had it backwards.
+  // 2. Read the email for an UNCLAIMED lead too, via its OWN step.
+  //
+  // The obvious move is to drop `email_card`'s `when claimed_agent notEquals
+  // none`, and it is wrong: the late-retry ladder gates on
+  // `contact_status equals missing`, and that gate is only a claim gate
+  // BECAUSE email_card never ran for unclaimed leads. Ungating it would walk
+  // unclaimed leads into `late` / `late2`, where every delivery step addresses
+  // {{vars.claimed_agent_phone}} and there is no claimer (Bugbot, #1324).
+  //
+  // So the existing ladder keeps its shape untouched and the unclaimed case
+  // gets a step of its own, copying email_card's connection and matching so
+  // the two cannot drift apart.
   const emailCard = need("email_card");
-  if (emailCard.when !== undefined) {
-    delete emailCard.when;
-    touched.push("email_card.when removed");
+  if (!findStep(steps, "unclaimed_email_read")) {
+    const at = steps.findIndex((s) => s.id === "email_card");
+    if (at < 0) throw new Error(`${FLOW_NAME}: step "email_card" is not top level`);
+    steps.splice(at + 1, 0, {
+      id: "unclaimed_email_read",
+      type: "email_extract",
+      connectionId: emailCard.connectionId,
+      ...(emailCard.fromContains ? { fromContains: emailCard.fromContains } : {}),
+      ...(emailCard.matchTemplates ? { matchTemplates: emailCard.matchTemplates } : {}),
+      ...(emailCard.lookbackMinutes ? { lookbackMinutes: emailCard.lookbackMinutes } : {}),
+      // Never overwrite something an earlier read already found.
+      fillOnlyEmpty: true,
+      fields: [
+        { name: "lead_phone", description: "The lead's phone number, labeled 'Phone' in the HomeLight email" },
+        { name: "lead_email", description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'" },
+        { name: "lead_address", description: "The property street address labeled 'Address' in the HomeLight email" },
+        ...EMAIL_FIELDS.map((f) => ({ ...f }))
+      ],
+      when: { var: "claimed_agent", equals: "none" }
+    });
+    touched.push("unclaimed_email_read inserted");
   }
 
-  // 3. Price, timeframe and the full client-details block, from the email.
+  // 3. Price, timeframe and the full client-details block, on every read.
   for (const id of ["email_card", "late_read", "late2_read"]) {
     if (addFields(need(id), EMAIL_FIELDS)) touched.push(`${id}.fields`);
   }
@@ -191,21 +218,40 @@ export function patchHomeLight(def: Definition): PatchResult {
     const at = steps.findIndex((s) => s.id === "late2");
     if (at < 0) throw new Error(`${FLOW_NAME}: step "late2" is missing; cannot place the alert`);
     steps.splice(at + 1, 0, {
-      id: "late_unclaimed_alert",
-      type: "notify_lead_owner",
-      phoneVar: "lead_phone",
-      nameVar: "lead_name",
-      message:
-        "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
-        "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
-        "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
-        "Nobody has claimed this one yet.",
-      unownedFallback: "team",
-      // Only when nobody took it. A claimed lead already got the details by
-      // text from the steps above, and saying it twice is noise.
-      when: { var: "claimed_agent", equals: "none" }
+      // TWO conditions, and a `when` holds one, so the branch guard carries
+      // the claim state and the arm condition carries "details actually
+      // arrived". Without the second, this fired on EVERY unclaimed run and
+      // announced revealed details that were empty (Bugbot, #1324). The phone
+      // is the right test: it is what HomeLight withholds until a transfer or
+      // call connects, and a positive `contains` fails closed on an empty var.
+      id: "late_unclaimed",
+      type: "branch",
+      question: "Details arrived on a lead nobody claimed?",
+      when: { var: "claimed_agent", equals: "none" },
+      branches: [
+        {
+          id: "late_unclaimed_yes",
+          label: "Details arrived and nobody has claimed it",
+          condition: { var: "lead_phone", contains: "+" },
+          steps: [
+            {
+              id: "late_unclaimed_alert",
+              type: "notify_lead_owner",
+              phoneVar: "lead_phone",
+              nameVar: "lead_name",
+              message:
+                "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} " +
+                "{{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n" +
+                "Price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\n" +
+                "Nobody has claimed this one yet.",
+              unownedFallback: "team"
+            }
+          ]
+        }
+      ],
+      else: []
     });
-    touched.push("late_unclaimed_alert inserted");
+    touched.push("late_unclaimed inserted");
   }
 
   // 6. Say WHY nothing is coming when the transfer never connected. HomeLight

@@ -97,14 +97,35 @@ describe("already_claimed", () => {
 
 describe("reading the email", () => {
   /**
-   * Backwards before this: the details sat in Amy's inbox and nothing fetched
-   * them unless someone had ALREADY claimed. The team needs the details in
-   * order to decide whether to claim.
+   * The unclaimed read is its OWN step, and email_card keeps its gate.
+   *
+   * Dropping email_card's `when` is the obvious move and is wrong: the
+   * late-retry ladder gates on `contact_status equals missing`, and that is
+   * only a claim gate BECAUSE email_card never ran for unclaimed leads.
+   * Ungating it walks unclaimed leads into late/late2, where every delivery
+   * step addresses claimed_agent_phone and there is no claimer.
    */
-  it("reads the email even when nobody has claimed", () => {
+  it("leaves email_card gated so the retry ladder keeps its shape", () => {
     const d = def();
     patchHomeLight(d);
-    expect(d.steps.find((s) => s.id === "email_card")).not.toHaveProperty("when");
+    expect(d.steps.find((s) => s.id === "email_card")!.when).toEqual({
+      var: "claimed_agent",
+      notEquals: "none"
+    });
+  });
+
+  it("adds a separate unclaimed read that copies email_card's matching", () => {
+    const d = def();
+    patchHomeLight(d);
+    const read = d.steps.find((s) => s.id === "unclaimed_email_read")!;
+    expect(read).toMatchObject({
+      type: "email_extract",
+      when: { var: "claimed_agent", equals: "none" },
+      // Never overwrite what an earlier read already found.
+      fillOnlyEmpty: true
+    });
+    const card = d.steps.find((s) => s.id === "email_card")!;
+    expect(read.connectionId).toBe(card.connectionId);
   });
 
   it("pulls price and timeframe from the email on all three reads", () => {
@@ -144,12 +165,28 @@ describe("who hears the revealed details", () => {
   it("alerts the team when details arrive on a lead nobody claimed", () => {
     const d = def();
     patchHomeLight(d);
-    const alert = d.steps.find((s) => s.id === "late_unclaimed_alert")!;
-    expect(alert).toMatchObject({
+    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
+    expect(branch.when).toEqual({ var: "claimed_agent", equals: "none" });
+    const arm = (branch.branches as Array<{ condition: unknown; steps: Array<Record<string, unknown>> }>)[0];
+    expect(arm.steps[0]).toMatchObject({
       type: "notify_lead_owner",
-      unownedFallback: "team",
-      when: { var: "claimed_agent", equals: "none" }
+      unownedFallback: "team"
     });
+  });
+
+  /**
+   * TWO conditions, and a `when` holds one. Gating only on "unclaimed" fired
+   * on EVERY unclaimed run and announced revealed details that were empty. The
+   * phone is the right test: it is exactly what HomeLight withholds until a
+   * transfer or call connects, and a positive `contains` fails closed on an
+   * empty var.
+   */
+  it("only alerts when details actually arrived", () => {
+    const d = def();
+    patchHomeLight(d);
+    const branch = d.steps.find((s) => s.id === "late_unclaimed")! as Record<string, unknown>;
+    const arm = (branch.branches as Array<{ condition: unknown }>)[0];
+    expect(arm.condition).toEqual({ var: "lead_phone", contains: "+" });
   });
 
   // Amy's own copy carries the whole client-details block: the "screenshot the
