@@ -81,7 +81,10 @@ describe("widget documents", () => {
 
 describe("attaching a widget to a tool", () => {
   it("points only at widgets that exist", () => {
-    const known = new Set(Object.values(MCP_WIDGET_URI));
+    // Widened: MCP_WIDGET_URI is const-asserted to its three literals, while
+    // MCP_TOOL_WIDGET values are plain strings, and the point of the check is
+    // exactly that an arbitrary string might not be one of them.
+    const known = new Set<string>(Object.values(MCP_WIDGET_URI));
     for (const [tool, uri] of Object.entries(MCP_TOOL_WIDGET)) {
       expect(known.has(uri), `${tool} points at an unknown widget`).toBe(true);
     }
