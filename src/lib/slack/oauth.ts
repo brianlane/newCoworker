@@ -14,7 +14,7 @@
  * derived from NEXT_PUBLIC_APP_URL so dev/prod each register their own
  * callback at /api/integrations/slack/callback.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createOAuthStateCodec } from "@/lib/oauth/state";
 
 export const SLACK_OAUTH_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
 export const SLACK_API_BASE_URL = "https://slack.com/api";
@@ -90,37 +90,28 @@ export function getSlackOAuthConfig(): SlackOAuthConfig {
   };
 }
 
-function stateKey(): Buffer {
-  // Same key source as the integration-secret envelope: a dedicated key when
-  // set, else the service-role key (always present server-side).
-  const secret =
-    process.env.INTEGRATIONS_ENCRYPTION_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!secret) {
-    throw new SlackOAuthError(
-      "not_configured",
-      "No key available to sign the Slack OAuth state"
-    );
-  }
-  return createHmac("sha256", "slack-oauth-state").update(secret).digest();
-}
-
-function signStatePayload(payload: string): string {
-  return createHmac("sha256", stateKey()).update(payload).digest("base64url");
-}
+/**
+ * The shared signed-state codec, with Slack's original domain label and TTL.
+ *
+ * The label `slack-oauth-state` is load-bearing: it derives the signing key, so
+ * renaming it stops every state minted by a previous build from verifying, and an
+ * owner mid-install lands on a failure they cannot act on.
+ * `tests/slack-oauth.test.ts` pins a state captured from the pre-shared-codec
+ * implementation to prove it still verifies, and that block fails if the label
+ * moves. It also pins that a Zoom-labelled state is refused here.
+ */
+const stateCodec = createOAuthStateCodec({
+  label: "slack-oauth-state",
+  ttlMs: SLACK_STATE_TTL_MS,
+  onMissingSecret: () =>
+    new SlackOAuthError("not_configured", "No key available to sign the Slack OAuth state")
+});
 
 /**
  * Opaque, signed state: base64url(JSON{businessId, exp, nonce}) + "." + HMAC.
  */
 export function createSlackOAuthState(businessId: string, now = Date.now()): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      b: businessId,
-      e: now + SLACK_STATE_TTL_MS,
-      n: randomBytes(8).toString("base64url")
-    }),
-    "utf8"
-  ).toString("base64url");
-  return `${payload}.${signStatePayload(payload)}`;
+  return stateCodec.create(businessId, undefined, now);
 }
 
 /** Verifies signature + expiry; returns the bound business, or null. */
@@ -128,25 +119,8 @@ export function verifySlackOAuthState(
   state: string,
   now = Date.now()
 ): { businessId: string } | null {
-  const dot = state.indexOf(".");
-  if (dot <= 0 || dot === state.length - 1) return null;
-  const payload = state.slice(0, dot);
-  const sig = state.slice(dot + 1);
-  const expected = signStatePayload(payload);
-  const sigBuf = Buffer.from(sig, "utf8");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
-    return null;
-  }
-  let parsed: { b?: unknown; e?: unknown };
-  try {
-    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof parsed.b !== "string" || typeof parsed.e !== "number") return null;
-  if (parsed.e < now) return null;
-  return { businessId: parsed.b };
+  const parsed = stateCodec.verify(state, now);
+  return parsed ? { businessId: parsed.businessId } : null;
 }
 
 /** Where /api/integrations/slack/connect sends the owner's browser. */

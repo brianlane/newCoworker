@@ -167,6 +167,66 @@ describe("resolveZoomClientEnvForBusiness", () => {
   });
 });
 
+/**
+ * The point of this block is the migration onto the shared codec in
+ * `src/lib/oauth/state.ts`.
+ *
+ * A test that mints a state and then verifies it uses the same code for both
+ * halves, so it passes no matter what the wire format changed to. That proves
+ * nothing about the owner who clicked Connect thirty seconds before a deploy and
+ * is sitting on Zoom's approval screen right now: their state was signed by the
+ * OLD build, and if the format moved at all, their callback fails with an error
+ * they cannot act on.
+ *
+ * So these are captured from the implementation as it stood BEFORE the shared
+ * codec, minted with a known key at a fixed timestamp, and pasted in verbatim.
+ * They are only meaningful because nothing here can regenerate them: if the
+ * emitted bytes ever change, these fail and the in-flight breakage is caught
+ * here instead of by a customer.
+ */
+describe("states minted before the shared-codec migration still verify", () => {
+  // Key and timestamp used to mint the goldens below.
+  const GOLDEN_KEY = "golden-state-key";
+  const T0 = 1_770_000_000_000;
+  // e = T0 + ZOOM_STATE_TTL_MS = 1_770_000_600_000
+  const GOLDEN_PRODUCTION =
+    "eyJiIjoiYml6LWdvbGRlbi0xIiwiZSI6MTc3MDAwMDYwMDAwMCwibiI6IjhlbmRhZGdSd2E4In0.2SNsAf9zkePnSkqrpgO2WC72glFZUViv2HUk6NEgV50";
+  const GOLDEN_DEVELOPMENT =
+    "eyJiIjoiYml6LWdvbGRlbi0yIiwiZSI6MTc3MDAwMDYwMDAwMCwibiI6IjZUUzdWYTh6NFpJIiwiYyI6ImQifQ.P9ncoOfOXGzaGqkFjzA9bEJ7QG_hf0V2K2jBpsLOKEY";
+
+  beforeEach(() => {
+    process.env.INTEGRATIONS_ENCRYPTION_KEY = GOLDEN_KEY;
+  });
+
+  it("accepts a production state from the old implementation", () => {
+    expect(verifyZoomOAuthState(GOLDEN_PRODUCTION, T0 + 1_000)).toEqual({
+      businessId: "biz-golden-1",
+      clientEnv: "production"
+    });
+  });
+
+  it("accepts a development state from the old implementation, marker intact", () => {
+    // The `c: "d"` marker has to survive extraction from the old payload, or a
+    // reviewer mid-authorization would be sent back to the PRODUCTION client and
+    // get invalid_client. Note this does NOT pin where new states place extras:
+    // verify signs the bytes it received, so key order only affects what create
+    // emits, and those states are verified by the build that made them.
+    expect(verifyZoomOAuthState(GOLDEN_DEVELOPMENT, T0 + 1_000)).toEqual({
+      businessId: "biz-golden-2",
+      clientEnv: "development"
+    });
+  });
+
+  it("still expires an old state on the original schedule", () => {
+    expect(verifyZoomOAuthState(GOLDEN_PRODUCTION, T0 + ZOOM_STATE_TTL_MS + 1)).toBeNull();
+  });
+
+  it("refuses an old state under a different signing key", () => {
+    process.env.INTEGRATIONS_ENCRYPTION_KEY = "some-other-key";
+    expect(verifyZoomOAuthState(GOLDEN_PRODUCTION, T0 + 1_000)).toBeNull();
+  });
+});
+
 describe("state signing", () => {
   it("round-trips a businessId", () => {
     const state = createZoomOAuthState(BIZ, "production");

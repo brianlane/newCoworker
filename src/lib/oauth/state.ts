@@ -27,10 +27,27 @@
  *
  * `base64url(JSON) + "." + base64url(HMAC-SHA256(payload))`
  *
- * Payload keys are single letters and their ORDER IS PART OF THE FORMAT, since
- * the signature covers the encoded bytes: `b` business id, `e` expiry epoch ms,
- * `n` random nonce, then any caller-supplied extras. Do not reorder or rename
- * them without accepting that in-flight states stop verifying.
+ * Payload keys are single letters: `b` business id, `e` expiry epoch ms, `n`
+ * random nonce, then any caller-supplied extras.
+ *
+ * ## What actually breaks in-flight states, and what does not
+ *
+ * `verify` signs the payload bytes it RECEIVED and then parses them, so
+ * compatibility with a state minted by an older build depends only on:
+ *
+ *   - the domain label, since it derives the key;
+ *   - the key source (`INTEGRATIONS_ENCRYPTION_KEY`, else the service-role key);
+ *   - the HMAC construction and its base64url encoding;
+ *   - the `payload.signature` split on the first `.`.
+ *
+ * Change any of those and every state currently sitting on a provider's consent
+ * screen fails on return.
+ *
+ * The ORDER of the payload keys is deliberately NOT in that list. It only
+ * affects what `create` emits, and newly minted states are verified by the same
+ * build that minted them. This was worth checking rather than assuming: moving
+ * the extras ahead of the nonce leaves every captured-state test passing, which
+ * is the correct outcome and not a gap in them.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
