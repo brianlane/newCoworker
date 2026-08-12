@@ -468,6 +468,33 @@ Clever and HomeLight already work. 23 steps to 25.
   were not. The offers therefore quote `call_outcome_label` and point at the
   summary.
 
+Broadcast copy and Realtor.com (Aug 12 2026):
+`amy-broadcast-realtor-and-offer-copy.ts`. Amy, pointing at a Clever offer:
+"why was this lead not broadcasted then?"
+
+- **It WAS.** That run's own outcome line reads "offered simultaneously to
+  Gabrielle Mota, Amy Laidlaw, Dave Lane, first to claim". What she was reading
+  is the offer COPY, which still ended "or it goes to the next agent": wording
+  left behind when `amy-speed-to-lead-patch.ts` converted that step from a
+  rotation to an `agentNames` broadcast on Aug 8. The same message already said
+  "First to reply 1 gets it" three lines later, so it contradicted itself and
+  the stale half read like a cascade. **An audit of all eleven live route steps
+  found Clever was the ONLY broadcast still saying it**; the three rotation
+  offers say it correctly, because for them it is true.
+- **Realtor.com was the only real routing gap.** Its single route has NO
+  lead-type gate and was still a rotation, so any SELLER arriving through
+  Realtor.com would have been round-robined. It now broadcasts to the same trio
+  every other seller route uses, and its copy gained the first-to-claim line.
+- **Buyer routes are deliberately untouched.** Amy: "Do not change buyer
+  leads." New Lead Intake `route_buyer` and ReferralExchange `route_buyer` keep
+  their rotation AND their "next agent" wording, which is accurate for them.
+  Broadcasting those would text three people for every buyer lead, a cost she
+  weighed and declined the same day.
+- **Check the COPY when you change routing.** This is the second time a
+  behavior change left its description behind (the first was the dossier's own
+  claim about the seller AI-call). A run's outcome line is the source of truth
+  for what happened; the offer template is just what somebody wrote.
+
 HomeLight contact reveal (Aug 12 2026): `homelight-contact-reveal.ts`. Amy:
 "it broadcasts the lead to everyone but we never have the contact information
 or the price." FOUR causes, found by reading Kevin Duford's run (`85d1bd1f`)
