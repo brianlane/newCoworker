@@ -21,7 +21,7 @@
  * the connection: refresh and revoke MUST present the same pair that minted
  * the grant or Zoom answers invalid_client.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createOAuthStateCodec } from "@/lib/oauth/state";
 
 export const ZOOM_OAUTH_BASE_URL = "https://zoom.us/oauth";
 export const ZOOM_API_BASE_URL = "https://api.zoom.us/v2";
@@ -123,23 +123,25 @@ export function resolveZoomClientEnvFromClientId(clientId: string): ZoomClientEn
   return null;
 }
 
-function stateKey(): Buffer {
-  // Same key source as the integration-secret envelope: a dedicated key when
-  // set, else the service-role key (always present server-side).
-  const secret =
-    process.env.INTEGRATIONS_ENCRYPTION_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!secret) {
-    throw new ZoomOAuthError(
-      "not_configured",
-      "No key available to sign the Zoom OAuth state"
-    );
-  }
-  return createHmac("sha256", "zoom-oauth-state").update(secret).digest();
-}
-
-function signStatePayload(payload: string): string {
-  return createHmac("sha256", stateKey()).update(payload).digest("base64url");
-}
+/**
+ * The shared signed-state codec, with Zoom's original domain label and TTL.
+ *
+ * The label `zoom-oauth-state` is load-bearing: it derives the signing key, so
+ * renaming it stops every state minted by a previous build from verifying, and
+ * an owner mid-authorization lands on a failure they cannot act on.
+ * `tests/zoom-oauth.test.ts` pins states captured from the pre-shared-codec
+ * implementation to prove they still verify, and that block fails if the label
+ * moves.
+ *
+ * The `c` marker for the development client still has to survive the round trip,
+ * which is why one of those captured states carries it.
+ */
+const stateCodec = createOAuthStateCodec<{ c: string }>({
+  label: "zoom-oauth-state",
+  ttlMs: ZOOM_STATE_TTL_MS,
+  onMissingSecret: () =>
+    new ZoomOAuthError("not_configured", "No key available to sign the Zoom OAuth state")
+});
 
 /**
  * Opaque, signed state: base64url(JSON{businessId, exp, nonce, client}) + "."
@@ -154,16 +156,11 @@ export function createZoomOAuthState(
   clientEnv: ZoomClientEnv,
   now = Date.now()
 ): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      b: businessId,
-      e: now + ZOOM_STATE_TTL_MS,
-      n: randomBytes(8).toString("base64url"),
-      ...(clientEnv === "development" ? { c: "d" } : {})
-    }),
-    "utf8"
-  ).toString("base64url");
-  return `${payload}.${signStatePayload(payload)}`;
+  return stateCodec.create(
+    businessId,
+    clientEnv === "development" ? { c: "d" } : undefined,
+    now
+  );
 }
 
 /** Verifies signature + expiry; returns the bound business + client, or null. */
@@ -171,29 +168,13 @@ export function verifyZoomOAuthState(
   state: string,
   now = Date.now()
 ): { businessId: string; clientEnv: ZoomClientEnv } | null {
-  const dot = state.indexOf(".");
-  if (dot <= 0 || dot === state.length - 1) return null;
-  const payload = state.slice(0, dot);
-  const sig = state.slice(dot + 1);
-  const expected = signStatePayload(payload);
-  const sigBuf = Buffer.from(sig, "utf8");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
-    return null;
-  }
-  let parsed: { b?: unknown; e?: unknown; c?: unknown };
-  try {
-    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof parsed.b !== "string" || typeof parsed.e !== "number") return null;
-  if (parsed.e < now) return null;
+  const parsed = stateCodec.verify(state, now);
+  if (!parsed) return null;
   // Anything other than the development marker (absent, or a value we do not
   // recognize) means production. The state is signed, so this is a shape
   // check, not a trust decision.
   return {
-    businessId: parsed.b,
+    businessId: parsed.businessId,
     clientEnv: parsed.c === "d" ? "development" : "production"
   };
 }

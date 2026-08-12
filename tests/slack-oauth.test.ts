@@ -63,6 +63,48 @@ describe("getSlackOAuthConfig", () => {
   });
 });
 
+/**
+ * Guards the migration onto the shared codec in `src/lib/oauth/state.ts`.
+ *
+ * Minting and verifying with the same code passes regardless of what the wire
+ * format became, so it says nothing about an owner who is mid-install across a
+ * deploy: their state was signed by the OLD build. This state was captured from
+ * the implementation as it stood before the shared codec, with a known key at a
+ * fixed timestamp, and pasted in verbatim. Nothing here can regenerate it, which
+ * is exactly why it is worth having.
+ */
+describe("a state minted before the shared-codec migration still verifies", () => {
+  const GOLDEN_KEY = "golden-state-key";
+  const T0 = 1_770_000_000_000;
+  const GOLDEN =
+    "eyJiIjoiYml6LWdvbGRlbi0zIiwiZSI6MTc3MDAwMDYwMDAwMCwibiI6IkxQNVFCUFB5bFBFIn0.HqfqFDTyw0CEGNfOLVQ2Pr-Al4YzepPBkEeov9EtXKQ";
+
+  beforeEach(() => {
+    vi.stubEnv("INTEGRATIONS_ENCRYPTION_KEY", GOLDEN_KEY);
+  });
+
+  it("accepts it and returns the bound business", () => {
+    expect(verifySlackOAuthState(GOLDEN, T0 + 1_000)).toEqual({ businessId: "biz-golden-3" });
+  });
+
+  it("still expires it on the original schedule", () => {
+    expect(verifySlackOAuthState(GOLDEN, T0 + SLACK_STATE_TTL_MS + 1)).toBeNull();
+  });
+
+  it("refuses it under a different signing key", () => {
+    vi.stubEnv("INTEGRATIONS_ENCRYPTION_KEY", "some-other-key");
+    expect(verifySlackOAuthState(GOLDEN, T0 + 1_000)).toBeNull();
+  });
+
+  it("does not verify a Zoom-labelled state, so the domains stay separated", () => {
+    // Both labels derive from the same platform secret. Without domain
+    // separation a Zoom state would satisfy a Slack callback.
+    const zoomGolden =
+      "eyJiIjoiYml6LWdvbGRlbi0xIiwiZSI6MTc3MDAwMDYwMDAwMCwibiI6IjhlbmRhZGdSd2E4In0.2SNsAf9zkePnSkqrpgO2WC72glFZUViv2HUk6NEgV50";
+    expect(verifySlackOAuthState(zoomGolden, T0 + 1_000)).toBeNull();
+  });
+});
+
 describe("state round-trip", () => {
   it("verifies a fresh state back to its business", () => {
     const state = createSlackOAuthState(BIZ);
