@@ -468,6 +468,67 @@ Clever and HomeLight already work. 23 steps to 25.
   were not. The offers therefore quote `call_outcome_label` and point at the
   summary.
 
+HomeLight contact reveal (Aug 12 2026): `homelight-contact-reveal.ts`. Amy:
+"it broadcasts the lead to everyone but we never have the contact information
+or the price." FOUR causes, found by reading Kevin Duford's run (`85d1bd1f`)
+against the portal screenshot she sent.
+
+- **OUR OWN CLAIM READ AS A RIVAL'S, and this was most of it.** The portal
+  renders one flat `Claimed By: <name>` row whether the claimer is this team or
+  another agency, and `already_claimed` asked whether it was "claimed by ANOTHER
+  agent". On Kevin's run the card said `Claimed By: Amy Laidlaw`, the model
+  answered `yes`, the flow took the we-lost-it path, and **39 of 61 steps were
+  skipped**: `save_contact`, `to_agent`, `qt_email`, `lead_sms`, `lead_email`
+  and `notify` all never ran. The question now names the team, so our own claim
+  reads as ours. It names the TEAM rather than four individuals, because a
+  roster list in a prompt goes stale the moment somebody joins.
+- **The email was never read unless somebody had already claimed**, which is
+  backwards: the team needs the details in order to DECIDE whether to claim.
+  Fixed with a SEPARATE `unclaimed_email_read` step, and `email_card` KEEPS its
+  gate. Dropping that gate is the obvious move and is wrong: the late-retry
+  ladder gates on `contact_status equals missing`, and that is only a claim
+  gate BECAUSE `email_card` never ran for unclaimed leads. Ungating it walks
+  unclaimed leads into `late` / `late2`, where every delivery step addresses
+  `{{vars.claimed_agent_phone}}` and there is no claimer. The new step copies
+  email_card's connection and matching so the two cannot drift, and carries
+  `fillOnlyEmpty` so it never overwrites an earlier read.
+- **No price from the email.** The alert says "$560K", the email says
+  "$560,000" plus the timeframe. `email_price`, `email_timeframe` and
+  `email_summary` are read on all three passes (`email_card`, `late_read`,
+  `late2_read`), so the retry rungs that already handle HomeLight's delay carry
+  them too.
+- **Revealed details reached nobody on an unclaimed lead**, since every
+  contact-info text addressed `{{vars.claimed_agent_phone}}`.
+  `late_unclaimed` is ONE top-level branch holding the whole unclaimed tail:
+  an immediate alert, then two more mailbox reads at 15 and 60 minutes, each
+  followed by its own alert.
+
+  Four things about it are load-bearing. **It retries**, because HomeLight's
+  reveal is delayed and the claimed path's late rungs gate on `contact_status`,
+  which only the claimed read sets, so a single unclaimed read finds nothing
+  and nothing looks again. **Every wait and re-read is gated on the previous
+  read still being "missing"**, so it delivers the moment details land: an
+  unconditional sleep made the team wait the full 75 minutes even when the
+  FIRST read already had the number. **Each read has its OWN status var**
+  (`u1_status`, `u2_status`, `u3_status`), mirroring
+  contact_status/late_contact_status/late2_contact_status, because the reads
+  carry `fillOnlyEmpty` and a shared status written "missing" could never be
+  updated to "found". **It is nested**, because definitions cap TOP-LEVEL steps
+  at 30 and this flow is near it: the flat version was rejected by the
+  validator before anything was written.
+
+Two things deliberately NOT done:
+
+- **A screenshot of the email is not possible.** `attachScreenshot` attaches a
+  BROWSE screenshot; nothing screenshots an email. The full client-details
+  block is captured as text into Amy's QT email instead, which carries
+  everything an image would and is searchable in her inbox.
+- **The failed live transfer is not made to look recoverable.** HomeLight
+  reveals details ONLY after a successful transfer or a connected call, so when
+  a seller hangs up before connecting, none are ever coming.
+  `late2_never_agent` now says that outright rather than implying the wait
+  continues.
+
 Who owns the lead, in Amy's own emails (Aug 12 2026):
 `amy-owner-in-lead-emails.ts`. Five emails to amy@amylaidlaw.com never said who
 took the lead, and all five sat BEFORE their flow's `route_to_team`, so no
