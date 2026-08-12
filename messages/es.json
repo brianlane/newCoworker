@@ -631,15 +631,15 @@
     },
     "about": {
       "metaTitle": "Nosotros",
-      "metaDescription": "New Coworker construye empleados digitales con privacidad primero para pequeños negocios: coworkers de IA autónomos que corren en infraestructura dedicada y actúan como una extensión real de tu equipo.",
+      "metaDescription": "New Coworker construye empleados digitales con privacidad primero para negocios: coworkers de IA autónomos que corren en infraestructura dedicada y actúan como una extensión real de tu equipo.",
       "ogTitle": "Nosotros | New Coworker",
-      "ogDescription": "Empleados digitales con privacidad primero para pequeños negocios, en infraestructura dedicada a cada cliente.",
+      "ogDescription": "Empleados digitales con privacidad primero para negocios, en infraestructura dedicada a cada cliente.",
       "heroEyebrow": "Nosotros",
-      "heroTitle": "Los pequeños negocios merecen una",
+      "heroTitle": "Todo negocio merece una",
       "heroHighlight": "gran primera contratación",
-      "heroSubtitle": "New Coworker existe porque quienes dirigen pequeños negocios están demasiado ocupados dirigiéndolos como para contestar cada llamada, perseguir cada lead y recordar cada detalle. Así que construimos un empleado que sí lo hace.",
-      "storyP1": "Lo más difícil de un pequeño negocio no es el oficio. Es el caos alrededor. La llamada que entra durante un trabajo. El lead que se enfría de la noche a la mañana. El seguimiento que se escapa porque el día se alargó. Los dueños pierden ingresos reales por trabajo importante en el que es imposible estar presente.",
-      "storyP2": "Las grandes empresas lo resuelven con personal. Creemos que los pequeños negocios merecen lo mismo, sin la nómina. New Coworker le da a cada negocio un empleado digital que contesta llamadas con conversación natural, escribe textos y correos a clientes, reserva citas, califica leads y da seguimiento sin descanso, las veinticuatro horas.",
+      "heroSubtitle": "New Coworker existe porque quienes dirigen negocios están demasiado ocupados dirigiéndolos como para contestar cada llamada, perseguir cada lead y recordar cada detalle. Así que construimos un empleado que sí lo hace.",
+      "storyP1": "Lo más difícil de dirigir un negocio no es el oficio. Es el caos alrededor. La llamada que entra durante un trabajo. El lead que se enfría de la noche a la mañana. El seguimiento que se escapa porque el día se alargó. Los dueños pierden ingresos reales por trabajo importante en el que es imposible estar presente.",
+      "storyP2": "Las grandes empresas lo resuelven con personal. Creemos que todo negocio merece lo mismo, sin la nómina. New Coworker le da a cada negocio un empleado digital que contesta llamadas con conversación natural, escribe textos y correos a clientes, reserva citas, califica leads y da seguimiento sin descanso, las veinticuatro horas.",
       "storyP3": "Y como un coworker sabe cosas que un proveedor nunca debería, hicimos de la privacidad el cimiento: tu negocio está estrictamente aislado de todos los demás, tu información sigue siendo tuya, y la memoria de tu coworker trabaja solo para ti.",
       "principlesEyebrow": "En qué creemos",
       "principlesTitle": "Los principios detrás del producto",
@@ -649,7 +649,7 @@
       },
       "employee": {
         "title": "Un empleado, no un chatbot",
-        "description": "Los chatbots responden; los coworkers actúan. El nuestro reserva citas, envía seguimientos, actualiza registros, transfiere llamadas con contexto y ejecuta flujos, porque los dueños de pequeños negocios necesitan el trabajo hecho, no otra bandeja que administrar."
+        "description": "Los chatbots responden; los coworkers actúan. El nuestro reserva citas, envía seguimientos, actualiza registros, transfiere llamadas con contexto y ejecuta flujos, porque los dueños de negocios necesitan el trabajo hecho, no otra bandeja que administrar."
       },
       "memory": {
         "title": "Memoria que se acumula",
@@ -1209,7 +1209,7 @@
       "metaTitle": "New Coworker vs GoHighLevel",
       "metaDescription": "GoHighLevel te da software para operar tú mismo. New Coworker te da un empleado de IA que lo opera por ti: llamadas contestadas, leads de anuncios de Meta respondidos por texto en segundos y seguimiento resuelto, a una fracción del costo total.",
       "ogTitle": "New Coworker vs GoHighLevel",
-      "ogDescription": "Una caja de herramientas que tú operas vs un empleado que se opera solo. Una comparación honesta para pequeños negocios.",
+      "ogDescription": "Una caja de herramientas que tú operas vs un empleado que se opera solo. Una comparación honesta para cualquier negocio.",
       "heroEyebrow": "New Coworker vs GoHighLevel",
       "heroTitle": "Uno te vende software.",
       "heroHighlight": "Nosotros llegamos a trabajar.",
@@ -1316,7 +1316,7 @@
         "metaTitle": "New Coworker frente a Zinng",
         "metaDescription": "Zinng ofrece más minutos de voz por dólar. New Coworker ofrece todos los canales, un motor de automatización y tu propio servidor. Una comparación honesta y documentada.",
         "ogTitle": "New Coworker frente a Zinng",
-        "ogDescription": "Más minutos frente a más coworker. Una comparación honesta para pequeños negocios.",
+        "ogDescription": "Más minutos frente a más coworker. Una comparación honesta para cualquier negocio.",
         "heroEyebrow": "New Coworker frente a Zinng",
         "heroTitle": "Ellos contestan el teléfono.",
         "heroHighlight": "Nosotros contestamos todo.",

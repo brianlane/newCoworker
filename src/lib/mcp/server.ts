@@ -40,7 +40,7 @@ export const MCP_MAX_DURATION_SECONDS = 300;
  * Product term is "AI coworker", never "AI receptionist" (CLAUDE.md rule 5).
  */
 export const CHATGPT_MCP_INSTRUCTIONS = [
-  "New Coworker is an AI coworker for small businesses.",
+  "New Coworker is an AI coworker for businesses.",
   "Use these tools to look up customers, read text conversations and call summaries, check the day's tasks, send a text, and book appointments, always on behalf of the signed-in owner and limited to their team role.",
   "Confirm with the user before anything that reaches a customer: sending a text or WhatsApp message, booking an appointment, or starting an automation.",
   "If a tool reports that the account has multiple businesses, call list_businesses and pass business_id explicitly.",

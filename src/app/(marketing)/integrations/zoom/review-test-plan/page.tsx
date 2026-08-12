@@ -39,7 +39,7 @@ export default function ZoomReviewTestPlanPage() {
           Reviewer test plan
         </h1>
         <p className="mt-4 text-parchment/60">
-          New Coworker is an AI coworker for small businesses: it answers the phone, replies to
+          New Coworker is an AI coworker for businesses: it answers the phone, replies to
           SMS, email, and web chat, and books appointments. This integration lets it schedule Zoom
           meetings for the appointments it books, send customers the join link, and turn a
           cloud-recorded meeting&apos;s transcript into meeting minutes, automatically after the

@@ -79,7 +79,7 @@ export type CallSentiment = (typeof CALL_SENTIMENTS)[number];
  * failure (attributes nobody stated) beats another general instruction to be
  * accurate.
  */
-const SYSTEM_INSTRUCTION = `You summarize one phone call between a small business's AI phone assistant and a caller.
+const SYSTEM_INSTRUCTION = `You summarize one phone call between a business's AI phone assistant and a caller.
 
 Return STRICT JSON: {"summary": string, "sentiment": "positive"|"neutral"|"negative"|"mixed"}.
 

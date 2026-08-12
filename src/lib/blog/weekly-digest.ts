@@ -270,7 +270,7 @@ export type ComposeDigest = (prs: MergedPr[], weekKey: string) => Promise<Digest
 
 const DIGEST_SYSTEM_INSTRUCTION =
   "You write the weekly 'what shipped' post for the New Coworker blog. " +
-  "New Coworker is an AI coworker for small businesses: it answers calls and texts, " +
+  "New Coworker is an AI coworker for businesses: it answers calls and texts, " +
   "books appointments, and follows up with leads so owners never miss business. " +
   "Audience: busy small-business owners. Write in plain English a 12-year-old could " +
   "understand — short sentences, zero jargon, benefit first ('your coworker can now…'). " +

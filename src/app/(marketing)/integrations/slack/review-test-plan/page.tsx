@@ -38,7 +38,7 @@ export default function SlackReviewTestPlanPage() {
           Reviewer test plan
         </h1>
         <p className="mt-4 text-sm leading-relaxed text-parchment/60">
-          New Coworker is an AI coworker for small businesses. The Slack app posts business
+          New Coworker is an AI coworker for businesses. The Slack app posts business
           alerts to a channel the owner picks, answers DMs and @mentions with the business&apos;s
           AI assistant, and lets the verified owner approve automation steps from Slack.
           Sign-in credentials for a review tenant are provided in the submission notes.

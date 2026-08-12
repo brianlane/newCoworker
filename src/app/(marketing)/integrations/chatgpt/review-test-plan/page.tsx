@@ -42,7 +42,7 @@ export default function ChatGptReviewTestPlanPage() {
           Reviewer test plan
         </h1>
         <p className="mt-4 text-sm leading-relaxed text-parchment/60">
-          New Coworker is an AI coworker for small businesses: it answers the phone, replies to
+          New Coworker is an AI coworker for businesses: it answers the phone, replies to
           texts and email, and runs follow-up automations. This app puts that same assistant
           inside ChatGPT, acting as the signed-in owner and limited to their team role. Sign-in
           credentials for a demo account with seeded data are in the submission notes.

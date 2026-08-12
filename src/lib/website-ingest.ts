@@ -854,7 +854,7 @@ function buildSummarizationPrompt(args: {
   corpus: string;
 }): string {
   const header = [
-    `You are condensing the public website of ${args.businessName ?? "a small business"}${
+    `You are condensing the public website of ${args.businessName ?? "a business"}${
       args.businessType ? ` (${args.businessType})` : ""
     } into a vault file called website.md.`,
     `Source URL: ${args.url}`,

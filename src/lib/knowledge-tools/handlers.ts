@@ -98,7 +98,7 @@ async function askGemini(
   const configured = process.env.GEMINI_ROWBOAT_MODEL?.trim();
   const primary = configured?.length ? configured : GEMINI_LOOKUP_DEFAULT_MODEL;
   const sys =
-    "You answer caller questions about a specific small business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'";
+    "You answer caller questions about a specific business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'";
   const userText = `Business knowledge:\n${context}\n\nCaller question: ${question}`;
   const inputChars = sys.length + userText.length;
 
