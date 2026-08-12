@@ -29,8 +29,10 @@ export function widgetDocument(options: { title: string; body: string; script: s
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${options.title}</title>
 <style>
-:root{color-scheme:light dark;--fg:#101014;--muted:#5c5f6b;--line:#e4e5ea;--card:#fff;--accent:#0b7a6b}
-@media (prefers-color-scheme:dark){:root{--fg:#ecedf1;--muted:#9a9daa;--line:#2a2c34;--card:#17181d;--accent:#4fd1bd}}
+:root{color-scheme:light dark;--fg:#101014;--muted:#5c5f6b;--line:#e4e5ea;--card:#fff;--accent:#0b7a6b;--on-accent:#fff}
+/* The dark accent is a light mint, so the text on it has to go dark too:
+   white on #4fd1bd fails contrast and makes outbound messages unreadable. */
+@media (prefers-color-scheme:dark){:root{--fg:#ecedf1;--muted:#9a9daa;--line:#2a2c34;--card:#17181d;--accent:#4fd1bd;--on-accent:#08201c}}
 *{box-sizing:border-box}
 body{margin:0;padding:12px;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:transparent}
 .card{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:14px}
@@ -44,7 +46,7 @@ button[disabled]{opacity:.55;cursor:default}
 .slot{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .msg{padding:8px 10px;border-radius:10px;max-width:85%;white-space:pre-wrap;word-break:break-word}
 .in{align-self:flex-start;border:1px solid var(--line)}
-.out{align-self:flex-end;background:var(--accent);color:#fff}
+.out{align-self:flex-end;background:var(--accent);color:var(--on-accent)}
 .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--muted)}
 .empty{color:var(--muted);font-size:13px;padding:6px 0}
 </style>

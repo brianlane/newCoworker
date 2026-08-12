@@ -123,3 +123,52 @@ describe("attaching a widget to a tool", () => {
     expect(MCP_WIDGET_MIME).toBe("text/html;profile=mcp-app");
   });
 });
+
+/**
+ * Three fixes from review, each pinned because each is invisible in a diff
+ * that looks like styling or wording.
+ */
+describe("the slot picker's correctness details", () => {
+  const slots = MCP_WIDGETS.find((w) => w.name === "calendar-slots")!.html;
+
+  /**
+   * The one with real-world teeth. Labelling a slot in the READER's timezone
+   * while the badge names the BUSINESS's is how a 2pm slot gets read as a
+   * different hour than it is, which is the same mixup that made
+   * MCP_TIMEZONE_RULE necessary on the send tools.
+   */
+  it("formats slot times in the business timezone, not the reader's", () => {
+    expect(slots).toContain("opts.timeZone = data.timezone");
+    // And an unusable IANA zone must not blank the list.
+    expect(slots).toContain("delete opts.timeZone");
+  });
+
+  /**
+   * calendar_book_appointment takes startIso/endIso. Handing the model only a
+   * formatted label makes it reverse a display string back into an instant,
+   * which is how the wrong hour gets booked.
+   */
+  it("passes the ISO instants back, not just the printed label", () => {
+    expect(slots).toContain("startIso");
+    expect(slots).toContain("endIso");
+    expect(slots).toMatch(/sendFollowUpMessage/);
+  });
+
+  it("does not book directly, so the model still confirms who it is for", () => {
+    expect(slots).not.toContain("callTool");
+  });
+});
+
+describe("dark theme contrast", () => {
+  it("darkens the text on the accent, since the dark accent is a light mint", () => {
+    // white on #4fd1bd fails contrast and made outbound messages unreadable.
+    for (const w of MCP_WIDGETS) {
+      expect(w.html, `${w.name} still hardcodes white on the accent`).not.toContain(
+        "background:var(--accent);color:#fff"
+      );
+    }
+    const any = MCP_WIDGETS[0].html;
+    expect(any).toContain("--on-accent");
+    expect(any).toMatch(/prefers-color-scheme:dark\)\{:root\{[^}]*--on-accent/);
+  });
+});

@@ -54,17 +54,32 @@ const render = (data) => {
   for (const slot of slots) {
     const row = el("div","slot");
     const when = new Date(slot.startIso);
-    // The host locale, not ours: the person reading it is the one booking.
-    const label = isNaN(when.getTime())
-      ? String(slot.startIso ?? "")
-      : when.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+    // The host LOCALE for wording, but the BUSINESS timezone for the clock.
+    // Formatting in the reader's zone while the badge names the business's is
+    // how a 2pm slot gets read as a different hour than it is.
+    const opts = {weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"};
+    if (data?.timezone) opts.timeZone = data.timezone;
+    let label;
+    try {
+      label = isNaN(when.getTime()) ? String(slot.startIso ?? "") : when.toLocaleString(undefined, opts);
+    } catch {
+      // An unusable IANA zone must not blank the list; fall back to the
+      // reader's own zone rather than throwing.
+      delete opts.timeZone;
+      label = isNaN(when.getTime()) ? String(slot.startIso ?? "") : when.toLocaleString(undefined, opts);
+    }
     row.append(el("span",null,label));
     const pick = el("button",null,"Use this time");
     pick.addEventListener("click", () => {
       pick.disabled = true;
       // Hand it back as a message rather than booking directly: booking is
       // consequential, and the model should confirm who it is for first.
-      try { window.openai?.sendFollowUpMessage?.({ prompt: "Book " + label }); } catch {}
+      //
+      // The ISO instants go with it. calendar_book_appointment takes
+      // startIso/endIso, and asking the model to reverse a formatted label
+      // back into an instant is how the wrong hour gets booked.
+      const iso = " (startIso " + String(slot.startIso ?? "") + ", endIso " + String(slot.endIso ?? "") + ")";
+      try { window.openai?.sendFollowUpMessage?.({ prompt: "Book " + label + iso }); } catch {}
     });
     row.append(pick);
     list.append(row);
