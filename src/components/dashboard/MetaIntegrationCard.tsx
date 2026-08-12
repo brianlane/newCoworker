@@ -176,16 +176,14 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
           </Button>
           <p className="text-[11px] text-parchment/40">
             You&apos;ll log into Facebook and grant access to the Page that runs your
-            ads. While our Meta app finishes its review, connecting requires your
-            Facebook account to be added as a tester — contact us and we&apos;ll set
-            that up. Or use the{" "}
+            ads. Prefer a bridge instead? The{" "}
             <Link
               href="/dashboard/aiflows/guides/meta-leads"
               className="text-signal-teal hover:underline"
             >
               bridge setup guide
             </Link>{" "}
-            (Make.com / Zapier / Privyr) which works for everyone today.
+            (Make.com / Zapier / Privyr) works too.
           </p>
         </div>
       ) : pending ? (

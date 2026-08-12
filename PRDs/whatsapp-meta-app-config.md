@@ -58,14 +58,22 @@ postMessage) first.
 ## Review / availability chain
 
 - **Business Verification: APPROVED Jul 16, 2026.**
-- **WhatsApp Tech Provider onboarding (independent): App Review SUBMITTED
-  Jul 20, 2026 — "In review".** This is the same submission bundle
-  (WhatsApp + Messenger/lead permissions) and it grants Advanced Access to
-  `whatsapp_business_messaging` + `whatsapp_business_management`. Until Meta
-  approves, only app role-holders/testers can complete Embedded Signup;
-  arbitrary (non-role) customers hit "New Coworker can't onboard customers
-  right now". Now waiting on Meta (WhatsApp Advanced Access is typically a
-  few business days).
+- **App Review APPROVED.** Submitted Jul 20, 2026; decided Aug 11, 2026.
+  The bundle granted Advanced Access to `whatsapp_business_messaging` +
+  `whatsapp_business_management` plus the Messenger/Instagram DM, `pages_*`,
+  `public_profile`, and `leads_retrieval` permissions, so Embedded Signup
+  and the direct Meta connect now work for any customer (no app role or
+  tester status needed).
+- **Rejected in the same submission: `instagram_content_publish`**
+  ("Screencast Not Aligned with Use Case Details", Developer Policy 1.6).
+  The use case is allowed; the screencast did not show it end to end. To
+  regain it: re-record showing the complete Meta login flow, the grant
+  screen with the permission, composing and publishing a post from the
+  dashboard, ending on the live Instagram post (English UI with captions
+  per the Screen Recording Guide, and note in the submission that
+  background jobs perform the server-side publish), then "Request again"
+  on the submission feedback page. Until then Instagram publishing stays
+  app-role-only (HQ's blog cross-posting is unaffected: HQ holds a role).
 - Template review: the two stock utility templates (`nc_owner_alert`,
   `nc_contact_followup`) are auto-registered per tenant WABA at connect
   and typically clear Meta review in minutes; out-of-window sends are
