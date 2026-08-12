@@ -6934,14 +6934,26 @@ async function notifyLeadOwnerStep(
     }
   }
 
-  await telemetryRecord(supabase, "ai_flow_notify_lead_owner", {
-    run_id: run.id,
-    business_id: run.business_id,
-    target: member ? "contact_owner" : "business_owner",
-    matched_by: matchedBy
-  });
+  /**
+   * Recorded per OUTCOME rather than once up front.
+   *
+   * The single call this replaces ran before the delivery decision and labelled
+   * anything without a contact owner "business_owner", so once the team
+   * fallback existed every successful team alert was logged as an owner
+   * delivery: the telemetry would have said the feature was not being used
+   * while it was being used (Bugbot, #1317).
+   */
+  const recordTarget = async (target: string): Promise<void> => {
+    await telemetryRecord(supabase, "ai_flow_notify_lead_owner", {
+      run_id: run.id,
+      business_id: run.business_id,
+      target,
+      matched_by: matchedBy
+    });
+  };
 
   if (member) {
+    await recordTarget("contact_owner");
     const cfg = await messagingConfig(supabase, run.business_id);
     if (cfg) {
       // Same untracked shortening as notify_owner: a teammate's tap on their
@@ -7027,12 +7039,16 @@ async function notifyLeadOwnerStep(
   // offer-shaped alternative and a different thing.
   if (action.unownedFallback === "team") {
     const alerted = await alertBroadcastTeam(supabase, run, index, scope, action);
-    if (alerted) return alerted;
+    if (alerted) {
+      await recordTarget("team_broadcast");
+      return alerted;
+    }
     // Nobody eligible at all (empty roster, everyone opted out of team
     // traffic). Fall through to the owner rather than alerting no one.
   }
 
   // Business-owner fallback: same delivery as notify_owner.
+  await recordTarget("business_owner");
   const outcome = await notifyOwnerStep(supabase, run, index, {
     kind: "notify_owner",
     message: action.message
