@@ -47,6 +47,8 @@ import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-
 import { providerFromKey } from "@/lib/voice-tools/connections";
 import { getMicrosoftAccessToken } from "@/lib/microsoft/client";
 import { GRAPH_API_BASE_URL } from "@/lib/microsoft/oauth";
+import { getGoogleAccessToken } from "@/lib/google/client";
+import { GOOGLE_API_BASE_URL } from "@/lib/google/oauth";
 import { directProviderRequest } from "./direct-transport";
 import { logger } from "@/lib/logger";
 import type { WorkspaceLink, WorkspaceProxyArgs, WorkspaceProxyResponse } from "./types";
@@ -55,18 +57,29 @@ export type { WorkspaceLink, WorkspaceProxyArgs, WorkspaceProxyResponse } from "
 
 /**
  * Where each first-party provider's API lives, and how to get a live token for
- * it. Adding Google-direct later is one entry here plus its own oauth/client
- * pair: no resolver, cap, cleanup, or call-site change.
+ * it. Adding a provider is one entry here plus its own oauth/client pair: no
+ * resolver, cap, cleanup, or call-site change.
+ *
+ * TOTAL, not `Partial`, since Google landed. `providerFromKey` can only answer
+ * `google` or `microsoft`, so with both present a lookup can no longer miss, and
+ * the type now says so: a third provider added to that union will fail to
+ * compile until it has a client here. That is better than the defensive
+ * `if (!client)` this replaced, which after Google became unreachable code that
+ * only a test hitting it for the wrong reason kept alive.
  */
 type DirectClient = {
   baseUrl: string;
   getAccessToken(connectionRowId: string): Promise<string | null>;
 };
 
-const DIRECT_CLIENTS: Partial<Record<"google" | "microsoft", DirectClient>> = {
+const DIRECT_CLIENTS: Record<"google" | "microsoft", DirectClient> = {
   microsoft: {
     baseUrl: GRAPH_API_BASE_URL,
     getAccessToken: getMicrosoftAccessToken
+  },
+  google: {
+    baseUrl: GOOGLE_API_BASE_URL,
+    getAccessToken: getGoogleAccessToken
   }
 };
 
@@ -79,8 +92,7 @@ const DIRECT_CLIENTS: Partial<Record<"google" | "microsoft", DirectClient>> = {
  * binding transport-blind.
  *
  * Returns `null` for "no usable connection", which the callers already
- * understand: no row for this business, a direct row whose grant is dead, or a
- * direct row for a provider that has no first-party client yet.
+ * understand: no row for this business, or a direct row whose grant is dead.
  */
 async function directProxy(
   businessId: string,
@@ -106,18 +118,7 @@ async function directProxy(
   // first-party OAuth, fewer calls take it.
   if (!row || row.transport !== "direct") return { handled: false };
 
-  const provider = providerFromKey(row.provider_config_key);
-  const client = DIRECT_CLIENTS[provider];
-  if (!client) {
-    // A direct row for a provider with no client is a data problem, not a
-    // request problem. Degrade to "not connected" rather than throwing an
-    // error every caller would have to special-case, and say so in the log.
-    logger.warn("direct workspace connection has no client for provider", {
-      provider,
-      providerConfigKey: row.provider_config_key
-    });
-    return { handled: true, res: null };
-  }
+  const client = DIRECT_CLIENTS[providerFromKey(row.provider_config_key)];
 
   const accessToken = await client.getAccessToken(row.id);
   // A dead grant (the token manager already deactivated the row) is the direct

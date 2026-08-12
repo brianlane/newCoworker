@@ -5,6 +5,7 @@ import {
   getWorkspaceConnectionSecrets,
   insertDirectWorkspaceConnection,
   setWorkspaceConnectionActive,
+  updateWorkspaceConnectionAccessToken,
   updateWorkspaceConnectionTokens,
   getWorkspaceOAuthConnection,
   getWorkspaceOAuthConnectionByNangoIds,
@@ -464,6 +465,99 @@ describe("db/workspace-oauth-connections direct rows", () => {
       };
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       await expect(updateWorkspaceConnectionTokens(ROW_ID, tokens)).rejects.toThrow("nope");
+    });
+  });
+
+  describe("updateWorkspaceConnectionAccessToken", () => {
+    it("writes the access token and expiry and leaves the refresh token alone", async () => {
+      // Google does not rotate. Rewriting refresh_token_encrypted here would at
+      // best be a no-op and at worst clear a column the row's check constraint
+      // requires.
+      const eq = vi.fn().mockReturnThis();
+      const db = {
+        ...mockDb(),
+        update: vi.fn().mockReturnThis(),
+        eq,
+        select: vi.fn().mockResolvedValue({ data: [{ id: ROW_ID }], error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(
+        updateWorkspaceConnectionAccessToken(ROW_ID, {
+          accessToken: "at-fresh",
+          expiresAt: new Date("2026-08-11T11:00:00Z"),
+          scope: "openid"
+        })
+      ).resolves.toBe(true);
+
+      const written = db.update.mock.calls[0][0] as Record<string, string>;
+      expect(decryptIntegrationSecret(written.access_token_encrypted)).toBe("at-fresh");
+      expect(written.token_expires_at).toBe("2026-08-11T11:00:00.000Z");
+      expect(written.oauth_scope).toBe("openid");
+      expect(written).not.toHaveProperty("refresh_token_encrypted");
+      expect(eq).toHaveBeenCalledWith("id", ROW_ID);
+    });
+
+    it.each([
+      ["null", null],
+      ["undefined", undefined],
+      ["an empty string", ""]
+    ])("leaves the stored scope untouched when the provider reports %s", async (_label, scope) => {
+      // Blanking oauth_scope would erase the record of what the owner actually
+      // granted, which is the only thing capability gating can trust.
+      const db = {
+        ...mockDb(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue({ data: [{ id: ROW_ID }], error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await updateWorkspaceConnectionAccessToken(ROW_ID, {
+        accessToken: "at-fresh",
+        expiresAt: new Date("2026-08-11T11:00:00Z"),
+        scope
+      });
+
+      expect(db.update.mock.calls[0][0]).not.toHaveProperty("oauth_scope");
+    });
+
+    it.each([
+      ["no rows matched", []],
+      ["neither rows nor an error came back", null]
+    ])("reports false when %s", async (_label, data) => {
+      // The null case is defensive rather than expected, but it has to answer
+      // false: reading it as success would let the caller believe a token was
+      // persisted when nothing was written.
+      const db = {
+        ...mockDb(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue({ data, error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await expect(
+        updateWorkspaceConnectionAccessToken(ROW_ID, {
+          accessToken: "at-fresh",
+          expiresAt: new Date("2026-08-11T11:00:00Z")
+        })
+      ).resolves.toBe(false);
+    });
+
+    it("throws on a database error", async () => {
+      const db = {
+        ...mockDb(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue({ data: null, error: { message: "nope" } })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await expect(
+        updateWorkspaceConnectionAccessToken(ROW_ID, {
+          accessToken: "at-fresh",
+          expiresAt: new Date("2026-08-11T11:00:00Z")
+        })
+      ).rejects.toThrow("nope");
     });
   });
 

@@ -138,8 +138,8 @@ export async function upsertWorkspaceOAuthConnection(
 
 /**
  * Re-point an existing connection row at a NEW Nango connection id
- * (reconnect continuity): the row id — which AiFlow mailbox bindings and
- * email triggers reference — stays stable while the underlying OAuth grant
+ * (reconnect continuity): the row id, which AiFlow mailbox bindings and
+ * email triggers reference, stays stable while the underlying OAuth grant
  * is replaced. Metadata is written wholesale; callers merge app-owned keys
  * (e.g. the shared-calendar id) before calling.
  */
@@ -296,6 +296,46 @@ export async function updateWorkspaceConnectionTokens(
     .select("id");
 
   if (error) throw new Error(`updateWorkspaceConnectionTokens: ${error.message}`);
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
+}
+
+/**
+ * Persist a refreshed ACCESS token only, for providers that do not rotate.
+ *
+ * Google returns no `refresh_token` on a refresh: the stored one keeps working,
+ * and two concurrent refreshes simply yield two independently valid access
+ * tokens. So `updateWorkspaceConnectionTokens` is the wrong shape there twice
+ * over. It would rewrite `refresh_token_encrypted` (there is nothing new to
+ * write), and it would rewrite `oauth_scope` from a response that often omits
+ * it, blanking the record of what the owner actually granted.
+ *
+ * `scope` is therefore written only when the provider reports one, so a refresh
+ * can narrow the record when an owner revokes a box but never erase it.
+ *
+ * No optimistic-concurrency fence, deliberately: with nothing rotating there is
+ * no lost-update hazard worth guarding, and last-write-wins is correct. The
+ * direct-tokens check constraint still holds because the refresh token column is
+ * left untouched.
+ */
+export async function updateWorkspaceConnectionAccessToken(
+  id: string,
+  args: { accessToken: string; expiresAt: Date; scope?: string | null },
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const scope = typeof args.scope === "string" && args.scope.length > 0 ? args.scope : undefined;
+  const { data, error } = await db
+    .from("workspace_oauth_connections")
+    .update({
+      access_token_encrypted: encryptIntegrationSecret(args.accessToken),
+      token_expires_at: args.expiresAt.toISOString(),
+      ...(scope === undefined ? {} : { oauth_scope: scope }),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", id)
+    .select("id");
+
+  if (error) throw new Error(`updateWorkspaceConnectionAccessToken: ${error.message}`);
   return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
