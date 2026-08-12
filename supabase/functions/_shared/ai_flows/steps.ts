@@ -473,7 +473,16 @@ export type StepAction =
   // Text whoever the lead belongs to: the contact's owning employee when one
   // is on record, else the business owner. phone/name are the RESOLVED var
   // values (not var names) the worker locates the contact with.
-  | { kind: "notify_lead_owner"; message: string; phone?: string; name?: string }
+  | {
+      kind: "notify_lead_owner";
+      message: string;
+      phone?: string;
+      name?: string;
+      /** "team" alerts the broadcastable roster when the lead has no owner. */
+      unownedFallback?: "owner" | "team";
+      /** Rendered tag filter for a team alert ("" = no filter). */
+      teamTag?: string;
+    }
   // Arm the business's voice_expected_transfers window (see the FlowStep doc).
   // toRef passes through UNRESOLVED — the worker resolves the person's CURRENT
   // number at execution time (same late-binding rule as route_to_team.agentRef).
@@ -1499,13 +1508,21 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
       const phone = readVar(step.phoneVar);
       const name = readVar(step.nameVar);
+      // An all-empty render means "no filter", not "a tag nobody has": the
+      // whole point of the fallback is that a bad filter costs noise, never
+      // silence.
+      const teamTag = step.teamTagTemplate
+        ? renderTemplate(step.teamTagTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       return {
         ok: true,
         action: {
           kind: "notify_lead_owner",
           message,
           ...(phone ? { phone } : {}),
-          ...(name ? { name } : {})
+          ...(name ? { name } : {}),
+          ...(step.unownedFallback ? { unownedFallback: step.unownedFallback } : {}),
+          ...(teamTag ? { teamTag } : {})
         }
       };
     }

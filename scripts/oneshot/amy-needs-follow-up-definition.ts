@@ -141,6 +141,12 @@ export const READ_FIELDS = [
       "say, answer exactly: the area"
   },
   {
+    name: "lead_type",
+    description:
+      "Is this lead buying or selling? Answer exactly one lowercase word: buyer, " +
+      "seller, or both. When the text does not say, answer exactly: seller"
+  },
+  {
     name: "lead_intent",
     description:
       "What the lead wants, as a short phrase that fits after 'about': answer exactly " +
@@ -223,6 +229,17 @@ function roundSteps(n: number): Step[] {
         "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
         "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
         'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
+      // Nobody owns this lead, so the TEAM hears it rather than Amy. Her
+      // roster row already says team_broadcast_enabled false, so she is
+      // excluded without naming anyone: she is the backstop for an unowned
+      // lead, not its audience.
+      //
+      // The tag comes from the lead itself, so a buyer alert reaches whoever
+      // is tagged buyer and a seller alert whoever is tagged seller. A tag
+      // matching nobody alerts everyone, because a typo should cost noise and
+      // never a lead.
+      unownedFallback: "team",
+      teamTagTemplate: "{{vars.lead_type}}",
       when: { var: "lead_reply", notEquals: "no_reply" }
     }
   ];

@@ -353,6 +353,29 @@ on an answering machine and there was no field to put a message in.
   is the referral network's estimate, and quoting it back at a seller in an
   unsupervised voicemail is a valuation claim.
 
+Who hears an unowned lead's reply (Aug 12 2026):
+`amy-roster-lead-type-tags.ts` writes what each teammate handles onto the
+ROSTER (`ai_flow_team_members.tags`), and the cadence's reply notice uses
+`notify_lead_owner`'s new `unownedFallback: "team"` with
+`teamTagTemplate: "{{vars.lead_type}}"`.
+
+- **The rule was true in exactly one place before this.** "Dave and Gabby for
+  sellers, plus Jason for buyers" lived in the two arms of
+  "Follow Up Requested (Unclaimed Leads)"; the other twelve route steps knew
+  nothing about it and Jason appeared nowhere else on the account. On the
+  roster it is one edit when someone joins or changes.
+- **Amy is deliberately untagged**, and that is not an oversight. Her row
+  already carries `team_broadcast_enabled=false`, which is what keeps her out
+  of team alerts; a tag would not change that and would imply she belongs to an
+  audience she does not. She stays on the CLAIM OFFERS exactly as the Aug 8
+  speed-to-lead patch set them, which none of this touches.
+- **A tag matching nobody alerts EVERYONE.** Tags are free text with nothing
+  validating them, so the filter fails safe: a typo costs noise, never a lead.
+  Same reason an empty render means "no filter" rather than "a tag nobody has".
+- **This is an alert, not an offer.** Nobody is asked to reply, no deadline
+  runs, and the flow does not park. `route_to_team` with `broadcastAll` is the
+  offer-shaped alternative and remains a different thing.
+
 Needs Follow Up cadence (Aug 11 2026): `seed-amy-needs-follow-up-aiflow.ts`
 (applier) over `amy-needs-follow-up-definition.ts` (pure builder, pinned by
 `tests/amy-needs-follow-up-definition.test.ts`). A lead tagged

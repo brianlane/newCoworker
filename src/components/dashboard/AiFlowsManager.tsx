@@ -5175,6 +5175,59 @@ function StepFields({
       </div>
     );
   }
+  if (step.type === "notify_lead_owner") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Message"
+          value={step.message}
+          onChange={(v) => patchStep(index, { message: v })}
+          textarea
+          help="Sent to whoever owns this lead. Reuse what earlier steps found, e.g. {{vars.lead_name}}."
+        />
+        <Field
+          label="Phone variable that finds the contact (optional)"
+          value={step.phoneVar ?? ""}
+          onChange={(v) => patchStep(index, { phoneVar: v || undefined })}
+        />
+        <Field
+          label="Name variable that finds the contact (optional)"
+          value={step.nameVar ?? ""}
+          onChange={(v) => patchStep(index, { nameVar: v || undefined })}
+          help="Only used when the phone finds nothing, and only when exactly one contact matches the name."
+        />
+        <label className="block text-xs text-parchment/70">
+          When nobody owns the lead
+          <select
+            className={inputClass}
+            value={step.unownedFallback ?? "owner"}
+            onChange={(ev) =>
+              patchStep(index, {
+                unownedFallback:
+                  ev.target.value === "team" ? "team" : undefined
+              })
+            }
+          >
+            <option value="owner">Text the business owner</option>
+            <option value="team">Alert the team</option>
+          </select>
+        </label>
+        {step.unownedFallback === "team" ? (
+          <Field
+            label="Only alert teammates tagged (optional)"
+            value={step.teamTagTemplate ?? ""}
+            onChange={(v) => patchStep(index, { teamTagTemplate: v.trim() ? v : undefined })}
+            help={
+              "Matches the tags on each teammate, e.g. buyer. You can use a variable " +
+              "like {{vars.route_lead_type}} so a buyer lead reaches whoever handles buyers. " +
+              "If the tag matches nobody, everyone gets the alert rather than no one."
+            }
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   if (step.type === "upsert_customer") {
     return (
       <div className="space-y-2">

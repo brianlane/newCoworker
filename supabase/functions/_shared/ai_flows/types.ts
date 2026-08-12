@@ -868,6 +868,19 @@ export type FlowStep =
       message: string;
       phoneVar?: string;
       nameVar?: string;
+      /**
+       * Who hears it when the lead has NO owner. Absent or "owner" texts the
+       * business owner (the historical behavior); "team" alerts every active
+       * roster member who can be team-broadcast. An alert, not an offer:
+       * nobody replies and the flow does not wait.
+       */
+      unownedFallback?: "owner" | "team";
+      /**
+       * Narrow a "team" alert to members carrying this tag, templated so it
+       * can come from the lead ("{{vars.route_lead_type}}"). Case-insensitive,
+       * and a filter matching NOBODY falls back to the whole audience.
+       */
+      teamTagTemplate?: string;
       when?: StepCondition;
     }
   | {
