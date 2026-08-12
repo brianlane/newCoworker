@@ -377,6 +377,25 @@ Four things worth knowing before touching it:
 - **`appointment_booked` and `claimed` stay a goal**, because nothing in the
   flow observes them: either jumps the run out of a parked wait so the AI stops
   calling someone a teammate has already taken.
+- **Calling hours use `outside: "defer"`, and "skip" would break the whole
+  feature.** Every round waits exactly 72 hours, so all eight land at the same
+  clock time as the first. With "skip" a lead tagged at 2am resolves round 1 to
+  `not_placed`, which is not `no_answer`, so the text does not send either, and
+  three days later it is 2am again: one unlucky tagging time and the lead is
+  never contacted at all. "defer" parks the first round until 08:30 and every
+  later round inherits that daytime phase.
+- **A later round needs TWO conditions, since a `when` holds one.** The branch
+  guard says the lead has still said nothing; the arm condition says the last
+  call did not reach them. Answering is not replying, so without the second a
+  lead who SPOKE to the AI (and may have asked it to stop) would keep being
+  dialed. The Clever spoke check stops on answered/transferred for the same
+  reason.
+- **The reply notice sits INSIDE each round, right after that round's wait.**
+  One notice at the end gated on `lead_reply notEquals "no_reply"` looks
+  equivalent and is not: a missing var reads as "", which is also not equal to
+  "no_reply", so the guard PASSES. A `claimed` jump during the very first call
+  would have sent the owner a "they came back to us" notice quoting nothing,
+  for a lead who never said a word.
 - **The unclaimed half of Amy's notify rule is not yet faithful.**
   `notify_lead_owner` resolves the owner at RUN TIME (so a lead claimed
   mid-cadence reaches the right person, which a var read at step 0 could not

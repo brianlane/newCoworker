@@ -51,16 +51,23 @@ export const ROUND_GAP_MINUTES = 3 * 24 * 60;
 export const ROUNDS = 8;
 
 /**
- * Calling hours, Phoenix. `outside: "skip"` rather than "defer" is deliberate:
- * a round that comes due at 2am should drop its call and let the rest of the
- * cadence stay on schedule, not park the whole run until morning and push
- * every later round back with it.
+ * Calling hours, Phoenix. `outside: "defer"`, and the reason is worth stating
+ * because "skip" looks like the tidier choice and is catastrophic here.
+ *
+ * Each round waits exactly 72 hours, so every round lands at the SAME clock
+ * time as the first. With "skip" a lead tagged at 2am resolves round 1 to
+ * `not_placed`, which is not `no_answer`, so the text does not send either;
+ * three days later it is 2am again, and so on for all eight rounds. One
+ * unlucky tagging time and the lead is never contacted at all (Bugbot, #1307).
+ *
+ * "defer" parks the first round until 08:30 and every later round inherits
+ * that daytime phase, which is exactly what is wanted.
  */
 const CALL_WINDOW = {
   timezone: "America/Phoenix",
   start: "08:30",
   end: "20:00",
-  outside: "skip" as const
+  outside: "defer" as const
 };
 
 /** What the AI says when a person picks up, per round. */
@@ -185,6 +192,38 @@ function roundSteps(n: number): Step[] {
       phoneVar: "lead_phone",
       saveAs: "lead_reply",
       timeoutMinutes: ROUND_GAP_MINUTES
+    },
+    /**
+     * The notice lives INSIDE the round, immediately after the wait, and that
+     * placement is the fix rather than a style choice.
+     *
+     * A single notice at the end gated on `lead_reply notEquals "no_reply"`
+     * looks equivalent and is not: a missing var reads as "", which is also
+     * not equal to "no_reply", so the guard PASSES. A `claimed` goal jump
+     * during the very first call, before any wait had run, would therefore
+     * have sent the owner a "they came back to us" notice quoting nothing, for
+     * a lead who never said a word (Bugbot, #1307). Here the wait has just
+     * written the var, so there is no unset case to mis-read.
+     *
+     * notify_lead_owner resolves contacts.owner_employee_id AT RUN TIME, so a
+     * lead claimed mid-cadence reaches the right person: an owner var read at
+     * step 0 could not have known about them. Claimed goes to that teammate
+     * alone, which is Amy's rule. UNCLAIMED falls back to the business owner
+     * rather than broadcasting to the team, and that is the one part of the
+     * ask this does not yet do faithfully: there is no informational
+     * team-broadcast primitive. route_to_team broadcasts, but as a claim OFFER
+     * with a deadline and a fallback, which is a different thing from an alert.
+     */
+    {
+      id: `r${n}_tell_owner`,
+      type: "notify_lead_owner",
+      phoneVar: "lead_phone",
+      nameVar: "lead_name",
+      message:
+        "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
+        "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
+        'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
+      when: { var: "lead_reply", notEquals: "no_reply" }
     }
   ];
 }
@@ -202,12 +241,18 @@ function laterRound(n: number): Step {
     id: `r${n}`,
     type: "branch",
     question: `Round ${n}: has the lead said anything yet?`,
+    // TWO conditions, because a `when` holds only one: the branch guard says
+    // the lead has still said nothing, and the arm condition says the last
+    // call did not reach them. Without the second, a lead who ANSWERED (and
+    // may have told the AI to stop calling) would keep being dialed for the
+    // remaining rounds, because answering is not replying (Bugbot, #1307).
+    // The Clever spoke check stops on answered/transferred for the same reason.
     when: { var: "lead_reply", equals: "no_reply" },
     branches: [
       {
         id: `r${n}_go`,
-        label: "Still silent, keep following up",
-        condition: { var: "lead_reply", equals: "no_reply" },
+        label: "Still silent and never reached, keep following up",
+        condition: { var: "call_outcome", equals: "no_answer" },
         steps: roundSteps(n)
       }
     ],
@@ -237,33 +282,6 @@ export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
       label: "Booked or claimed by a teammate",
       events: [{ kind: "appointment_booked" }, { kind: "claimed" }]
     },
-    /**
-     * Who hears that the lead came back.
-     *
-     * `notify_lead_owner` resolves `contacts.owner_employee_id` AT RUN TIME,
-     * which is the property that matters: a lead claimed halfway through the
-     * cadence is owned by someone the extraction at step 0 could not have
-     * known about, so a gate built on an owner var read at the start would
-     * notify the wrong person.
-     *
-     * Claimed goes to that teammate alone, which is Amy's rule. UNCLAIMED
-     * falls back to the business owner rather than broadcasting to the whole
-     * team, and that is the one part of the ask this does not yet do
-     * faithfully: there is no informational team-broadcast primitive.
-     * `route_to_team` broadcasts, but as a claim OFFER with a deadline and a
-     * fallback, which is a different thing from an alert.
-     */
-    {
-      id: "tell_owner",
-      type: "notify_lead_owner",
-      phoneVar: "lead_phone",
-      nameVar: "lead_name",
-      message:
-        "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
-        "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
-        'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
-      when: { var: "lead_reply", notEquals: "no_reply" }
-    }
   ];
 
   return {

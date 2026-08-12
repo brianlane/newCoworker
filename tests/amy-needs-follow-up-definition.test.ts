@@ -32,6 +32,14 @@ function tryFind(list: Array<Record<string, unknown>>, id: string) {
   return list.find((s) => s.id === id);
 }
 const byId = (id: string) => findStep(steps, id);
+/** Step ids of one round, in order (round 1 is top level, 2+ are in a branch arm). */
+function roundStepIds(n: number): string[] {
+  if (n === 1) return steps.map((s) => String(s.id));
+  const branch = steps.find((s) => s.id === `r${n}`) as {
+    branches: Array<{ steps: Array<{ id: string }> }>;
+  };
+  return branch.branches[0].steps.map((s) => s.id);
+}
 
 describe("shape", () => {
   it("is a valid definition with no semantic issues", () => {
@@ -78,11 +86,18 @@ describe("shape", () => {
    * nesting is capped at 3 levels anyway. A reply in round 2 leaves every
    * later round's guard unmet, so the cadence simply stops.
    */
-  it("guards every round after the first on the lead still being silent", () => {
+  /**
+   * TWO conditions, because a `when` holds only one. Answering is not
+   * replying: without the arm condition a lead who SPOKE to the AI (and may
+   * have asked it to stop) would keep being dialed for the remaining rounds.
+   */
+  it("runs a later round only while the lead is silent AND was never reached", () => {
     for (let n = 2; n <= ROUNDS; n += 1) {
-      expect(byId(`r${n}`)).toMatchObject({
-        type: "branch",
-        when: { var: "lead_reply", equals: "no_reply" }
+      const branch = byId(`r${n}`) as Record<string, unknown>;
+      expect(branch).toMatchObject({ type: "branch", when: { var: "lead_reply", equals: "no_reply" } });
+      expect((branch.branches as Array<{ condition: unknown }>)[0].condition).toEqual({
+        var: "call_outcome",
+        equals: "no_answer"
       });
     }
   });
@@ -110,11 +125,22 @@ describe("the rung: voicemail, then text, and only when nobody answered", () => 
    * and let the cadence stay on schedule, not park the run and push every
    * later round back with it.
    */
-  it("keeps calls inside Phoenix daytime and skips outside it", () => {
-    expect(byId("r1_call").callWindow).toMatchObject({
-      timezone: "America/Phoenix",
-      outside: "skip"
-    });
+  /**
+   * "defer", not "skip", and this is the one that would have silently broken
+   * the whole feature. Every round waits exactly 72 hours, so all eight land
+   * at the same clock time as the first. With "skip" a lead tagged at 2am
+   * resolves round 1 to `not_placed`, which is not `no_answer`, so the text
+   * does not send either, and three days later it is 2am again. One unlucky
+   * tagging time and the lead is never contacted at all.
+   */
+  it("defers a night-time round to morning rather than skipping it", () => {
+    for (let n = 1; n <= ROUNDS; n += 1) {
+      expect(byId(`r${n}_call`).callWindow).toMatchObject({
+        timezone: "America/Phoenix",
+        start: "08:30",
+        outside: "defer"
+      });
+    }
   });
 
   it("never tells the AI to ask when to call back", () => {
@@ -170,7 +196,24 @@ describe("who hears about a reply", () => {
    * is paged about someone who is simply cold.
    */
   it("notifies only when the lead actually said something", () => {
-    expect(byId("tell_owner").when).toEqual({ var: "lead_reply", notEquals: "no_reply" });
+    for (let n = 1; n <= ROUNDS; n += 1) {
+      expect(byId(`r${n}_tell_owner`).when).toEqual({ var: "lead_reply", notEquals: "no_reply" });
+    }
+  });
+
+  /**
+   * The notice sits INSIDE each round, right after that round's wait, and the
+   * placement IS the fix. One notice at the end gated the same way looks
+   * equivalent and is not: a missing var reads as "", which is also not equal
+   * to "no_reply", so the guard passes. A `claimed` jump during the very first
+   * call would have sent "they came back to us" quoting nothing, for a lead
+   * who never said a word.
+   */
+  it("puts each notice where lead_reply is guaranteed to have been written", () => {
+    for (let n = 1; n <= ROUNDS; n += 1) {
+      const ids = roundStepIds(n);
+      expect(ids.indexOf(`r${n}_tell_owner`)).toBe(ids.indexOf(`r${n}_wait`) + 1);
+    }
   });
 
   /**
@@ -191,21 +234,20 @@ describe("who hears about a reply", () => {
    * could not have known about.
    */
   it("routes to whoever owns the lead now, not who owned it at the start", () => {
-    expect(byId("tell_owner")).toMatchObject({
+    expect(byId("r1_tell_owner")).toMatchObject({
       type: "notify_lead_owner",
       phoneVar: "lead_phone",
       nameVar: "lead_name"
     });
   });
 
-  it("puts the notice last, after every round", () => {
-    expect(steps.findIndex((s) => s.id === "tell_owner")).toBe(steps.length - 1);
+  it("puts the goal after every round", () => {
     expect(steps.findIndex((s) => s.id === "converted")).toBeGreaterThan(
       steps.findIndex((s) => s.id === `r${ROUNDS}`)
     );
   });
 
   it("quotes the lead's own words back to whoever hears about it", () => {
-    expect(String(byId("tell_owner").message)).toContain("{{vars.lead_reply}}");
+    expect(String(byId("r1_tell_owner").message)).toContain("{{vars.lead_reply}}");
   });
 });
