@@ -64,6 +64,8 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped: urgent SMS disabled";
     case "whatsapp_urgent_disabled":
       return "Skipped: urgent WhatsApp disabled";
+    case "whatsapp_preferred":
+      return "Skipped: sent on WhatsApp instead (your WhatsApp-instead-of-SMS preference)";
     case "not_connected":
       return "Skipped: WhatsApp isn't connected (connect it under Integrations)";
     case "whatsapp_bridge_unconfigured":

@@ -55,6 +55,9 @@ describe("db/notification-preferences", () => {
     // Opt-in by design: digests keep their full-activity gate until the
     // owner narrows them to customer-facing windows.
     expect(row.digest_customer_facing_only).toBe(false);
+    // Off by design: every channel keeps firing independently until the
+    // owner asks for WhatsApp to stand in for the alert text.
+    expect(row.whatsapp_replaces_sms).toBe(false);
     expect(row.phone_number).toBeNull();
     expect(row.alert_email).toBeNull();
     expect(row.digest_email_daily).toBeNull();
@@ -502,6 +505,36 @@ describe("db/notification-preferences", () => {
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ sms_urgent: true })
     );
+  });
+
+  it("updateNotificationPreferences persists whatsapp_replaces_sms without re-subscribing", async () => {
+    // The reroute preference is not a channel switch: turning it ON must not
+    // clear unsubscribed_at the way re-enabling a real channel does.
+    const unsubbed = { ...PREFS, unsubscribed_at: "2026-08-01T00:00:00Z" };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: unsubbed, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...unsubbed, whatsapp_replaces_sms: true },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const row = await updateNotificationPreferences("biz-1", { whatsapp_replaces_sms: true });
+    expect(row.whatsapp_replaces_sms).toBe(true);
+    const patch = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.whatsapp_replaces_sms).toBe(true);
+    expect(patch).not.toHaveProperty("unsubscribed_at");
   });
 
   it("updateNotificationPreferences omits unchanged fields from patch", async () => {

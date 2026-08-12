@@ -67,6 +67,12 @@ type ResolvedTargets = {
   phone: string | null;
   smsUrgent: boolean;
   whatsappUrgent: boolean;
+  /**
+   * Deliver urgent alerts on WhatsApp INSTEAD of SMS. Honored only while
+   * WhatsApp can actually deliver (connected + channel on), never for
+   * alerts redirected to a teammate's phone. Mirrors dispatch.ts.
+   */
+  whatsappReplacesSms: boolean;
   slackUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
@@ -147,6 +153,9 @@ async function resolveTargets(
   let prefsPhone: string | null = null;
   let smsUrgent = true;
   let whatsappUrgent = true;
+  // Reroute preference defaults OFF (fail toward delivering on both
+  // channels), unlike the channel toggles which fail toward on.
+  let whatsappReplacesSms = false;
   let slackUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
@@ -156,7 +165,7 @@ async function resolveTargets(
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, whatsapp_urgent, slack_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, whatsapp_replaces_sms, slack_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -172,6 +181,8 @@ async function resolveTargets(
     // ?? true: rows read before the whatsapp_urgent column existed keep the
     // channel on (delivery still requires a connected WhatsApp integration).
     whatsappUrgent = Boolean(prefs.whatsapp_urgent ?? true);
+    // ?? false: rows read before 20260822125053 keep SMS delivery unchanged.
+    whatsappReplacesSms = Boolean(prefs.whatsapp_replaces_sms ?? false);
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = Boolean(prefs.slack_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
@@ -206,6 +217,7 @@ async function resolveTargets(
     phone: redirected ? routing!.phone : ownerAlertPhone,
     smsUrgent,
     whatsappUrgent,
+    whatsappReplacesSms,
     slackUrgent,
     emailUrgent,
     dashboardAlerts,
@@ -533,6 +545,31 @@ serve(async (req: Request) => {
     telnyxFrom = String(trow.telnyx_sms_from_e164);
   }
 
+  // "Has this business ever connected WhatsApp?" — resolved BEFORE the SMS
+  // branch because the whatsapp_replaces_sms preference may only suppress
+  // SMS while the WhatsApp leg further down can actually fire.
+  //
+  // Two verdicts, DELIBERATELY OPPOSITE failure directions (mirrors
+  // resolveNotificationTargets in src/lib/notifications/dispatch.ts):
+  // `connected` decides whether to write a row at all and fails toward
+  // true; `deliverable` decides whether to SUPPRESS the SMS leg and fails
+  // toward false, because an inactive/expired connection refuses with
+  // `connection_inactive` and suppressing SMS on that basis would leave the
+  // owner with no phone channel at all.
+  let whatsappConnected = true;
+  let whatsappDeliverable = false;
+  {
+    const { data: waConn, error: waConnErr } = await supa
+      .from("whatsapp_connections")
+      .select("business_id, is_active")
+      .eq("business_id", record.business_id)
+      .maybeSingle();
+    if (!waConnErr) {
+      whatsappConnected = waConn !== null;
+      whatsappDeliverable = waConn?.is_active === true;
+    }
+  }
+
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
   if (record.task_type === "owner_notify_fallback") {
     // The SMS path is exactly what failed (or cannot work) for this
@@ -580,6 +617,27 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.phone },
       "recent_team_notify"
+    );
+  } else if (
+    targets.whatsappReplacesSms &&
+    whatsappDeliverable &&
+    targets.whatsappUrgent &&
+    targets.routing?.target !== "contact_owner"
+  ) {
+    // WhatsApp-instead-of-SMS preference: gated on whatsappDeliverable, NOT
+    // whatsappConnected — an inactive/token-lapsed row would otherwise
+    // suppress SMS while the WhatsApp leg refuses, leaving no phone channel
+    // (Bugbot f574b3a4). Never for an alert redirected to a teammate's
+    // phone, whose number may not have WhatsApp at all. Mirrors dispatch.ts.
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "whatsapp_preferred"
     );
   } else if (telnyxKey && telnyxProfile) {
     // An international owner phone with the alpha profile configured rides
@@ -854,18 +912,8 @@ serve(async (req: Request) => {
   // check is the OUTERMOST gate: it used to be reachable only on the
   // delivery path, so the no-phone, toggle-off and transport-dedupe branches
   // below kept writing whatsapp rows for tenants with no WhatsApp at all.
-  // Fails toward true so a read blip degrades to the old behavior rather
-  // than silencing a connected tenant. Mirrors resolveNotificationTargets in
-  // src/lib/notifications/dispatch.ts.
-  let whatsappConnected = true;
-  {
-    const { data: waConn, error: waConnErr } = await supa
-      .from("whatsapp_connections")
-      .select("business_id")
-      .eq("business_id", record.business_id)
-      .maybeSingle();
-    if (!waConnErr) whatsappConnected = waConn !== null;
-  }
+  // whatsappConnected itself is resolved above the SMS branch, which also
+  // needs it for the whatsapp_replaces_sms preference.
   const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
   if (!whatsappConnected) {
     // Not applicable to this business: no row, no delivery attempt.

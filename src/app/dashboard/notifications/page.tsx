@@ -10,6 +10,7 @@ import {
   getOrCreateNotificationPreferences,
   mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getNotifications } from "@/lib/db/notifications";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { getTranscriptByCallControlId } from "@/lib/db/voice-transcripts";
@@ -62,7 +63,7 @@ export default async function NotificationsPage(props: {
   // owners keep the create-on-first-visit behavior.
   // Prefs and the recent list are independent — one parallel group (for
   // residency tenants the notifications read is a tunnel round-trip).
-  const [prefs, recent] = await Promise.all([
+  const [prefs, recent, whatsappConnected] = await Promise.all([
     businessId && businessRow
       ? viewAsCtx.viewAs
         ? getNotificationPreferences(businessId).then(
@@ -77,7 +78,16 @@ export default async function NotificationsPage(props: {
             }
           })
       : Promise.resolve(null),
-    businessId ? getNotifications(businessId, { limit: 25 }) : Promise.resolve([])
+    businessId ? getNotifications(businessId, { limit: 25 }) : Promise.resolve([]),
+    // Gates the "WhatsApp instead of SMS" toggle. ACTIVE, not merely
+    // present: an inactive connection cannot deliver, and the dispatcher
+    // will not honor the preference for one either. A read blip renders the
+    // toggle disabled (safe: the dispatcher re-checks at delivery time).
+    businessId
+      ? getPublicWhatsAppConnection(businessId)
+          .then((c) => c?.is_active === true)
+          .catch(() => false)
+      : Promise.resolve(false)
   ]);
   // Display-only autofill: prefill the alert phone/email inputs from the
   // owner's account + business contact info when the stored prefs are still
@@ -176,7 +186,11 @@ export default async function NotificationsPage(props: {
         <>
           <Card>
             <h2 className="text-sm font-semibold text-parchment mb-4">{t("preferences")}</h2>
-            <NotificationPreferences businessId={businessId} initial={prefsForDisplay} />
+            <NotificationPreferences
+              businessId={businessId}
+              initial={prefsForDisplay}
+              whatsappConnected={whatsappConnected}
+            />
           </Card>
 
           <Card>

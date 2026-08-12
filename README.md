@@ -2108,7 +2108,15 @@ Surfaces: the AiFlow `send_whatsapp` step (planner in
 `_shared/ai_flows/steps.ts`, executor bridges to
 `/api/internal/whatsapp-send` with the cron bearer), owner urgent alerts
 (4th delivery channel in `notifications/dispatch.ts` + the Deno mirror,
-toggle `whatsapp_urgent`), the dashboard coworker `send_whatsapp` tool
+toggle `whatsapp_urgent`; the companion `whatsapp_replaces_sms` preference
+makes WhatsApp stand IN FOR the alert text rather than accompany it, which
+is the answer for owners on non-NANP phones SMS cannot reach at all, and it
+is honored only while WhatsApp can actually deliver — an ACTIVE connection
+(not merely a row: an inactive one refuses with `connection_inactive`, and
+the deliverable check fails toward false where the applicability check fails
+toward true), the channel toggle on, and never for a page redirected to a
+teammate's phone — recording the SMS row as `skipped: whatsapp_preferred`),
+the dashboard coworker `send_whatsapp` tool
 (inline + Rowboat + MCP connector), and manual inbox replies. Every
 outbound send is appended to the conversation transcript so replies thread
 into the inbox. Meta app config steps live in
