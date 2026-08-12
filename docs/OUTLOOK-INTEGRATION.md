@@ -33,28 +33,74 @@ Portal: <https://entra.microsoft.com> → Applications → App registrations →
 registration.
 
 1. **Name**: New Coworker.
-2. **Supported account types**: *Accounts in any organizational directory and
-   personal Microsoft accounts* (`signInAudience =
-   AzureADandPersonalMicrosoftAccount`).
+2. **Supported account types**: the option that admits both work and personal
+   accounts. The portal renamed these when Azure AD became Entra ID, so match on
+   meaning rather than exact wording:
+
+   | Older label | Current label |
+   | --- | --- |
+   | Accounts in any organizational directory and personal Microsoft accounts | **Any Entra ID Tenant + Personal Microsoft accounts** |
+
+   Both set `signInAudience = AzureADandPersonalMicrosoftAccount`. Confirm after
+   registering under Manage -> Manifest; the Overview page shows it as
+   "All Microsoft account users", which is the same thing again.
 
    This is not optional. The code targets the **`common`** authority, which is
    the only one admitting both classes of owner. `organizations` excludes
    personal Outlook accounts; `consumers` excludes every work/school tenant.
    A mismatch between the authority and the registration's audience fails at
    consent with `AADSTS50194`.
-3. **Redirect URI**: platform **Web**, value
-   `https://newcoworker.com/api/integrations/microsoft/callback`.
-   Add the local one too if you connect from a dev box:
+3. **Redirect URI**: platform **Web**. Microsoft requires a byte-exact match,
+   and the value we send is derived, not typed:
+
+   ```
+   ${NEXT_PUBLIC_APP_URL}/api/integrations/microsoft/callback
+   ```
+
+   So read `NEXT_PUBLIC_APP_URL` first and register exactly what it produces.
+   **This repo sets it to `https://www.newcoworker.com`, so the registered URI
+   needs the `www.`**:
+
+   ```
+   https://www.newcoworker.com/api/integrations/microsoft/callback
+   ```
+
+   Registering the apex form instead (`https://newcoworker.com/...`) looks right
+   and fails every connect with `AADSTS50011: The redirect URI specified in the
+   request does not match`. Registering both costs nothing and is the safe move.
+   Add the dev box's too if you connect locally:
    `http://localhost:3000/api/integrations/microsoft/callback`.
-   The value is derived from `NEXT_PUBLIC_APP_URL`, so it must match exactly,
-   including the scheme and any trailing path.
-4. **Certificates & secrets** → New client secret. Copy the **Value** (not the
-   Secret ID) immediately; it is shown once. Note the expiry and set a
+
+   Check it against the shipped code rather than by eye:
+
+   ```bash
+   node -e 'console.log(process.env.NEXT_PUBLIC_APP_URL.replace(/\/+$/,"")+"/api/integrations/microsoft/callback")'
+   ```
+4. **Certificates & secrets** -> New client secret. Copy the **Value**
+   immediately; it is shown once.
+
+   The **Secret ID** next to it is not a credential and is not used anywhere in
+   this codebase: it identifies the secret row in the portal, nothing more. It
+   is the same shape as the Application (client) ID (both UUIDs), which is
+   exactly why it gets pasted into `MICROSOFT_CLIENT_ID` by mistake; that fails
+   every token exchange with `invalid_client`. The client id comes from the
+   **Overview** page. Note the expiry and set a
    reminder: an expired secret fails every refresh with `invalid_client`,
    which by design does NOT deactivate tenant connections (see below), so the
    symptom is every Outlook call failing at once while the cards still read
    connected.
-5. **API permissions**: none need to be pre-added. Scopes are requested per
+5. **Publisher verification**: a multitenant registration shows
+   "End users cannot grant consent to newly registered multitenant apps without
+   verified publishers. Add MPN ID to verify publisher."
+
+   Take it seriously before rollout. Unverified, users in OTHER tenants can be
+   blocked from consenting entirely, which is every customer who is not us.
+   Personal Microsoft accounts are unaffected, so a solo test against a personal
+   Outlook will pass and tell you nothing about org tenants. Verify the
+   publisher with the Microsoft partner (MPN) id, then re-test with a work
+   account before inviting anyone.
+
+6. **API permissions**: none need to be pre-added. Scopes are requested per
    authorize call (`src/lib/microsoft/oauth.ts`, `MICROSOFT_SCOPES`) and
    consented by the owner. Pre-adding them in the portal is harmless but does
    not change behavior.
