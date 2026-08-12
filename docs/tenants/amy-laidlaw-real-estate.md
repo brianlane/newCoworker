@@ -384,12 +384,13 @@ Four things worth knowing before touching it:
   three days later it is 2am again: one unlucky tagging time and the lead is
   never contacted at all. "defer" parks the first round until 08:30 and every
   later round inherits that daytime phase.
-- **A later round needs TWO conditions, since a `when` holds one.** The branch
-  guard says the lead has still said nothing; the arm condition says the last
-  call did not reach them. Answering is not replying, so without the second a
-  lead who SPOKE to the AI (and may have asked it to stop) would keep being
-  dialed. The Clever spoke check stops on answered/transferred for the same
-  reason.
+- **A later round stops ONLY when the lead was actually reached**: empty arms
+  for `transferred`/`answered` with the work in `else`, the same shape the
+  Clever spoke check uses. Both inverses are wrong. Gating only on the reply
+  var lets a lead who SPOKE to the AI (possibly to say stop calling) keep being
+  dialed; gating on `call_outcome equals no_answer` instead ALSO ends the
+  cadence on a transient `failed` or a `not_placed` from the fleet-wide dial
+  cap, abandoning a lead nobody ever reached because one dial did not go out.
 - **The reply notice sits INSIDE each round, right after that round's wait.**
   One notice at the end gated on `lead_reply notEquals "no_reply"` looks
   equivalent and is not: a missing var reads as "", which is also not equal to

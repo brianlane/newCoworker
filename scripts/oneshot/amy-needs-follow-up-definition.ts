@@ -241,22 +241,34 @@ function laterRound(n: number): Step {
     id: `r${n}`,
     type: "branch",
     question: `Round ${n}: has the lead said anything yet?`,
-    // TWO conditions, because a `when` holds only one: the branch guard says
-    // the lead has still said nothing, and the arm condition says the last
-    // call did not reach them. Without the second, a lead who ANSWERED (and
-    // may have told the AI to stop calling) would keep being dialed for the
-    // remaining rounds, because answering is not replying (Bugbot, #1307).
-    // The Clever spoke check stops on answered/transferred for the same reason.
+    // The guard says the lead has still said nothing. Which OUTCOMES stop the
+    // cadence is decided by the arms below.
     when: { var: "lead_reply", equals: "no_reply" },
+    // Stop ONLY when the lead was actually reached, the same shape the Clever
+    // spoke check uses: empty arms for the reached outcomes, and the work in
+    // `else`.
+    //
+    // The inverse (continue only on `no_answer`) reads equivalently and is
+    // wrong twice over. Answering is not replying, so a lead who SPOKE to the
+    // AI, possibly to say stop calling, has to end the cadence; but a
+    // transient `failed`, or a `not_placed` from the fleet-wide dial cap,
+    // would ALSO have ended it, abandoning a lead nobody ever reached because
+    // one dial did not go out (Bugbot, #1307).
     branches: [
       {
-        id: `r${n}_go`,
-        label: "Still silent and never reached, keep following up",
-        condition: { var: "call_outcome", equals: "no_answer" },
-        steps: roundSteps(n)
+        id: `r${n}_transferred`,
+        label: "Already connected to a teammate",
+        condition: { var: "call_outcome", equals: "transferred" },
+        steps: []
+      },
+      {
+        id: `r${n}_answered`,
+        label: "The AI already spoke with them",
+        condition: { var: "call_outcome", equals: "answered" },
+        steps: []
       }
     ],
-    else: []
+    else: roundSteps(n)
   };
 }
 

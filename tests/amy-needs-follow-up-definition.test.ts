@@ -21,9 +21,11 @@ function findStep(list: Array<Record<string, unknown>>, id: string): Record<stri
     if (s.id === id) return s;
     if (s.type === "branch") {
       for (const arm of (s.branches as Array<{ steps: Array<Record<string, unknown>> }>) ?? []) {
-        const hit = list === steps ? tryFind(arm.steps, id) : undefined;
+        const hit = tryFind(arm.steps, id);
         if (hit) return hit;
       }
+      const inElse = tryFind((s.else as Array<Record<string, unknown>>) ?? [], id);
+      if (inElse) return inElse;
     }
   }
   throw new Error(`no step ${id}`);
@@ -35,10 +37,8 @@ const byId = (id: string) => findStep(steps, id);
 /** Step ids of one round, in order (round 1 is top level, 2+ are in a branch arm). */
 function roundStepIds(n: number): string[] {
   if (n === 1) return steps.map((s) => String(s.id));
-  const branch = steps.find((s) => s.id === `r${n}`) as {
-    branches: Array<{ steps: Array<{ id: string }> }>;
-  };
-  return branch.branches[0].steps.map((s) => s.id);
+  const branch = steps.find((s) => s.id === `r${n}`) as { else: Array<{ id: string }> };
+  return branch.else.map((s) => s.id);
 }
 
 describe("shape", () => {
@@ -87,19 +87,40 @@ describe("shape", () => {
    * later round's guard unmet, so the cadence simply stops.
    */
   /**
-   * TWO conditions, because a `when` holds only one. Answering is not
-   * replying: without the arm condition a lead who SPOKE to the AI (and may
-   * have asked it to stop) would keep being dialed for the remaining rounds.
+   * Stop ONLY when the lead was actually reached: empty arms for the reached
+   * outcomes and the work in `else`, the same shape the Clever spoke check
+   * uses.
+   *
+   * The inverse (continue only on `no_answer`) reads equivalently and is wrong
+   * twice over. Answering is not replying, so a lead who SPOKE to the AI has
+   * to end the cadence; but a transient `failed`, or a `not_placed` from the
+   * fleet-wide dial cap, would ALSO have ended it, abandoning a lead nobody
+   * ever reached because one dial did not go out.
    */
-  it("runs a later round only while the lead is silent AND was never reached", () => {
+  it("stops a later round only when the lead was actually reached", () => {
     for (let n = 2; n <= ROUNDS; n += 1) {
       const branch = byId(`r${n}`) as Record<string, unknown>;
       expect(branch).toMatchObject({ type: "branch", when: { var: "lead_reply", equals: "no_reply" } });
-      expect((branch.branches as Array<{ condition: unknown }>)[0].condition).toEqual({
-        var: "call_outcome",
-        equals: "no_answer"
-      });
+      const arms = branch.branches as Array<{ condition: unknown; steps: unknown[] }>;
+      expect(arms.map((a) => a.condition)).toEqual([
+        { var: "call_outcome", equals: "transferred" },
+        { var: "call_outcome", equals: "answered" }
+      ]);
+      // The stop arms do nothing; the round lives in else.
+      expect(arms.every((a) => a.steps.length === 0)).toBe(true);
+      expect((branch.else as unknown[]).length).toBeGreaterThan(0);
     }
+  });
+
+  // A dial that never went out must not end the sequence.
+  it("keeps going after a failed or dial-capped call", () => {
+    const branch = byId("r2") as Record<string, unknown>;
+    const stopOn = (branch.branches as Array<{ condition: { equals: string } }>).map(
+      (a) => a.condition.equals
+    );
+    expect(stopOn).not.toContain("failed");
+    expect(stopOn).not.toContain("not_placed");
+    expect(stopOn).not.toContain("no_answer");
   });
 });
 
