@@ -332,6 +332,27 @@ the AI already did (`actions_taken`), how the call went
 sentence generated from the same constants as the sleeps so copy and
 behavior cannot drift apart.
 
+Voicemails (Aug 11 2026): `amy-voicemail-scripts.ts` gives all 13
+`place_ai_call` rungs a `voicemailTemplate`, so a lead who never picks up now
+hears from us instead of only being texted. Before PR #1297 the engine hung up
+on an answering machine and there was no field to put a message in.
+
+- **HomeLight is absent from that script by design, not by oversight.** It
+  places no outbound AI call at all: its AI ANSWERS HomeLight's inbound
+  live-transfer call, which by definition has a person on the line.
+  ReferralExchange gets its scripts when it gets its call steps.
+- **Every rung is worded differently**, because a ladder that redials leaves a
+  message each time and three identical recordings from one number reads as a
+  malfunction. The Clever accept ladder's third rung and the spoke check's
+  eighth say plainly that they are the last, and week 7 warns that one more is
+  coming.
+- **The copy obeys the account's existing rules and its tests pin all of
+  them:** no callback-time question (Amy calls back fast rather than booking an
+  appointment to call), no em dashes, no "receptionist", and no price. That last
+  one is the same decision `amy-price-every-lead-notice.ts` records: the figure
+  is the referral network's estimate, and quoting it back at a seller in an
+  unsupervised voicemail is a valuation claim.
+
 Notice content: `set-amy-lead-address-in-notices.ts`,
 `amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
 all, only the over/under-$1M routing token, so no Clever notice could show
