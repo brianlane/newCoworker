@@ -256,11 +256,10 @@ export function MetaLeadsGuide({
             field mapping. Your flow from step 1 works unchanged.
           </p>
           <p className="mt-2 text-xs text-parchment/55">
-            While our Meta app finishes Meta&apos;s review process, the direct connection
-            requires your Facebook account to be added as a tester on our app. Contact us
-            and we&apos;ll set it up same-day. If you&apos;d rather not wait, the bridge
-            path below works for everyone right now; you can switch to the direct
-            connection later without touching your flows.
+            The direct connection works for every Facebook account, no tester
+            setup and no waiting. The bridge path below remains available if
+            you already run Make or Zapier for other lead sources; you can
+            switch between the two at any time without touching your flows.
           </p>
         </div>
       </Card>

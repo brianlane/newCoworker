@@ -2056,10 +2056,13 @@ refresh flow). Deliveries land on `/api/webhooks/meta` (GET = Meta's
 `X-Hub-Signature-256`-verified), which fetches each lead's answers via the
 Graph API and enqueues the same webhook flow event the bridges send —
 `source: "facebook_lead_ads"`, leadgen id as the idempotency key — so
-existing flows work unchanged (`src/lib/meta/*`). Until the Meta app clears
-App Review (Advanced Access for `leads_retrieval` + page permissions), only
-Facebook accounts holding a role on the app can connect; the bridges remain
-the everyone-works-today path.
+existing flows work unchanged (`src/lib/meta/*`). Meta's App Review cleared
+Aug 11, 2026 with Advanced Access for `leads_retrieval`, the `pages_*` set,
+Messenger, Instagram DM, and both WhatsApp permissions, so ANY Facebook
+account can connect; the bridges remain as the fallback path. The one
+rejection, `instagram_content_publish`, keeps Instagram publishing
+app-role-only until a resubmission with an end-to-end screencast clears
+(details in `PRDs/whatsapp-meta-app-config.md`).
 
 ### Messenger + Instagram DM conversation channel
 
