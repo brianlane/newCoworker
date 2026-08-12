@@ -3,7 +3,7 @@
     "display_name" : "New Coworker OAuth",
     "description" : "Get appointment updates, booking confirmations & customer support from New Coworker.",
     "long_description" : "<p>New Coworker is an AI coworker for small businesses: it answers your phone, replies to SMS and email, and books appointments for your customers around the clock. Connecting Zoom lets your Coworker schedule Zoom meetings directly on your account. When a customer asks for a video appointment, your Coworker finds an open slot, creates the Zoom meeting, and sends the customer the invite link automatically. It can also update or cancel meetings when plans change. Requires a New Coworker subscription (newcoworker.com).</p>",
-    "company_name" : "Newcoworker LLC",
+    "company_name" : "New Coworker LLC",
     "discover_type" : "LISTED",
     "install_type" : "LANDING_PAGE",
     "landing_page_url" : "https://www.newcoworker.com/integrations/zoom/authorize",

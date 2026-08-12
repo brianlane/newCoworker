@@ -1,6 +1,6 @@
 # Incident Response Policy
 
-**Owner:** Brian Lane, Newcoworker LLC
+**Owner:** Brian Lane, New Coworker LLC
 **Effective:** July 31, 2026
 **Review cadence:** annually, or after any Severity 1 incident
 
