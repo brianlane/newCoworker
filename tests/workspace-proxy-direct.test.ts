@@ -13,6 +13,7 @@ const mockGetByNangoIds = vi.fn();
 const mockProxy = vi.fn();
 const mockProxyStatus = vi.fn();
 const mockGetMicrosoftAccessToken = vi.fn();
+const mockGetGoogleAccessToken = vi.fn();
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnectionByNangoIds: (...a: unknown[]) => mockGetByNangoIds(...a)
@@ -23,6 +24,9 @@ vi.mock("@/lib/nango/workspace", () => ({
 }));
 vi.mock("@/lib/microsoft/client", () => ({
   getMicrosoftAccessToken: (...a: unknown[]) => mockGetMicrosoftAccessToken(...a)
+}));
+vi.mock("@/lib/google/client", () => ({
+  getGoogleAccessToken: (...a: unknown[]) => mockGetGoogleAccessToken(...a)
 }));
 
 import {
@@ -121,21 +125,36 @@ describe("workspaceProxyForBusiness (direct transport)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns null (and does not throw) for a direct row of a provider with no client", async () => {
-    // Google has no direct client yet. A row like this is a data problem, not
-    // a request problem, so it degrades to "not connected".
-    mockGetByNangoIds.mockResolvedValue(
-      directRow({ provider_config_key: "gmail", connection_id: "direct:g" })
-    );
+  it("routes every Google-family provider key to the Google client", async () => {
+    // Replaces a case that asserted a direct row for a client-less provider
+    // degraded to null. Once Google landed there was no client-less provider
+    // left (providerFromKey answers only google or microsoft), so that branch
+    // became unreachable and DIRECT_CLIENTS became a total Record. The case
+    // was still passing, but only because the unconfigured Google mock returned
+    // undefined, which is not what it claimed to prove.
+    //
+    // What is worth pinning instead is the aliasing: several legacy keys all
+    // mean Google, and each must reach the Google client rather than falling
+    // through to Microsoft.
+    for (const key of ["google", "gmail", "google-mail", "google-calendar"]) {
+      vi.clearAllMocks();
+      mockGetByNangoIds.mockResolvedValue(
+        directRow({ provider_config_key: key, connection_id: "direct:g" })
+      );
+      mockGetGoogleAccessToken.mockResolvedValue("at-google");
+      fetchMock.mockResolvedValue(graph({ ok: true }));
 
-    await expect(
-      workspaceProxyForBusiness(
+      await workspaceProxyForBusiness(
         "biz",
-        { connectionId: "direct:g", providerConfigKey: "gmail" },
+        { connectionId: "direct:g", providerConfigKey: key },
         { endpoint: "/gmail/v1/users/me/profile" }
-      )
-    ).resolves.toBeNull();
-    expect(mockGetMicrosoftAccessToken).not.toHaveBeenCalled();
+      );
+
+      expect(mockGetGoogleAccessToken, key).toHaveBeenCalledWith(ROW_ID);
+      expect(mockGetMicrosoftAccessToken, key).not.toHaveBeenCalled();
+      const [url] = fetchMock.mock.calls[0] as [string];
+      expect(url, key).toBe("https://www.googleapis.com/gmail/v1/users/me/profile");
+    }
   });
 
   it("throws on a non-2xx, matching the Nango arm", async () => {
@@ -225,4 +244,93 @@ describe("workspaceProxyStatusForBusiness (direct transport)", () => {
     }
   });
 
+});
+
+/**
+ * Google's direct arm.
+ *
+ * The point of the registry design is that adding a provider is one entry and
+ * changes nothing else, so these assert the two things that could still be wrong
+ * for Google specifically: that it dispatches on the row's transport rather than
+ * on the provider key, and that it targets googleapis.com rather than Graph.
+ */
+describe("workspaceProxyForBusiness (direct transport, Google)", () => {
+  const googleLink = { connectionId: "direct:goog", providerConfigKey: "google" };
+  const googleRow = (over: Record<string, unknown> = {}) =>
+    directRow({ provider_config_key: "google", connection_id: "direct:goog", ...over });
+
+  it("calls googleapis.com with the bearer from the Google token manager", async () => {
+    mockGetByNangoIds.mockResolvedValue(googleRow());
+    mockGetGoogleAccessToken.mockResolvedValue("at-google");
+    fetchMock.mockResolvedValue(graph({ messages: [] }));
+
+    const res = await workspaceProxyForBusiness("biz", googleLink, {
+      endpoint: "/gmail/v1/users/me/messages",
+      method: "GET"
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://www.googleapis.com/gmail/v1/users/me/messages");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer at-google");
+    expect(res).toEqual({ status: 200, data: { messages: [] } });
+    // The Nango arm must not be consulted for a direct row.
+    expect(mockProxy).not.toHaveBeenCalled();
+  });
+
+  it("keys the token lookup on the connection ROW id, not the business", async () => {
+    // A business can hold several Google accounts; keying on the business would
+    // hand one mailbox another's token.
+    mockGetByNangoIds.mockResolvedValue(googleRow());
+    mockGetGoogleAccessToken.mockResolvedValue("at-google");
+    fetchMock.mockResolvedValue(graph({}));
+    await workspaceProxyForBusiness("biz", googleLink, { endpoint: "/gmail/v1/users/me/profile" });
+    expect(mockGetGoogleAccessToken).toHaveBeenCalledWith(ROW_ID);
+  });
+
+  it("returns null when the grant is dead, so callers report not-connected", async () => {
+    mockGetByNangoIds.mockResolvedValue(googleRow());
+    mockGetGoogleAccessToken.mockResolvedValue(null);
+    await expect(
+      workspaceProxyForBusiness("biz", googleLink, { endpoint: "/gmail/v1/users/me/profile" })
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("still routes a Nango-transport google row through Nango", async () => {
+    // The provider key is identical across transports, which is what keeps every
+    // resolver transport-blind. Only the column decides.
+    mockGetByNangoIds.mockResolvedValue(
+      googleRow({ transport: "nango", connection_id: "nango-conn" })
+    );
+    mockProxy.mockResolvedValue({ status: 200, data: { ok: true } });
+    const res = await workspaceProxyForBusiness(
+      "biz",
+      { connectionId: "nango-conn", providerConfigKey: "google" },
+      { endpoint: "/gmail/v1/users/me/profile" }
+    );
+    expect(res).toEqual({ status: 200, data: { ok: true } });
+    expect(mockGetGoogleAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a Google error response through the status wrapper", async () => {
+    mockGetByNangoIds.mockResolvedValue(googleRow());
+    mockGetGoogleAccessToken.mockResolvedValue("at-google");
+    fetchMock.mockResolvedValue(graph({ error: { message: "Insufficient Permission" } }, 403));
+    await expect(
+      workspaceProxyStatusForBusiness("biz", googleLink, {
+        endpoint: "/gmail/v1/users/me/messages/x/modify",
+        method: "POST",
+        data: {}
+      })
+    ).resolves.toEqual({ status: 403, data: { error: { message: "Insufficient Permission" } } });
+  });
+
+  it("throws a Google error through the plain proxy, matching the Nango arm", async () => {
+    mockGetByNangoIds.mockResolvedValue(googleRow());
+    mockGetGoogleAccessToken.mockResolvedValue("at-google");
+    fetchMock.mockResolvedValue(graph({ error: { message: "Insufficient Permission" } }, 403));
+    await expect(
+      workspaceProxyForBusiness("biz", googleLink, { endpoint: "/gmail/v1/users/me/profile" })
+    ).rejects.toThrow();
+  });
 });
