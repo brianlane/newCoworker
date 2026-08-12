@@ -3,6 +3,7 @@ import {
   followUpAckText,
   followUpAmbiguityText,
   followUpNoLeadText,
+  followUpCandidatesFrom,
   matchFollowUpTarget,
   meansFollowUp,
   parseFollowUpReply
@@ -143,5 +144,64 @@ describe("reply copy", () => {
   it("says plainly when nothing was tagged", () => {
     expect(followUpNoLeadText("Nobody")).toContain('"Nobody"');
     expect(followUpNoLeadText("")).toBe("No recent lead to mark for follow-up.");
+  });
+});
+
+
+/**
+ * The lookup that feeds the matcher. Bugbot found the first version selecting
+ * columns this table does not have (`name`, `is_staff` instead of
+ * `display_name`, `type`): PostgREST rejected the select, the error was
+ * swallowed, and every F reply answered "no recent lead" while tagging nobody.
+ * These pin the shape as well as the rules.
+ */
+describe("followUpCandidatesFrom", () => {
+  const SENDER = "+16025551111";
+  const roster = new Set(["+16025552222"]);
+  const rows = [
+    { id: "c1", display_name: "Michelle Rodahl", customer_e164: "+15053606293", tags: ["Contacted"], type: "customer" },
+    { id: "me", display_name: "Dave Lane", customer_e164: SENDER, type: "customer" },
+    { id: "roster", display_name: "Gabrielle Mota", customer_e164: "+16025552222", type: "customer" },
+    { id: "owner", display_name: "Amy Laidlaw", customer_e164: "+16025553333", type: "owner" },
+    { id: "emp", display_name: "Jason Lane", customer_e164: "+16025554444", type: "employee" },
+    { id: "nophone", display_name: "No Number", customer_e164: "", type: "customer" },
+    { id: "c2", display_name: "Danny Wallin", customer_e164: "+15208409790", type: "customer" }
+  ];
+
+  it("keeps leads and drops every flavour of teammate", () => {
+    const out = followUpCandidatesFrom(rows, { senderE164: SENDER, rosterPhones: roster });
+    expect(out.map((c) => c.contactId)).toEqual(["c1", "c2"]);
+  });
+
+  // Newest-first in, newest-first out: a bare "F" means the most recent lead.
+  it("preserves the query's order", () => {
+    const out = followUpCandidatesFrom(rows, { senderE164: SENDER, rosterPhones: roster });
+    expect(out[0]!.name).toBe("Michelle Rodahl");
+  });
+
+  it("reads display_name and defaults tags to an array", () => {
+    const out = followUpCandidatesFrom([{ id: "x", display_name: "A B", customer_e164: "+15551234567" }], {
+      senderE164: SENDER,
+      rosterPhones: new Set()
+    });
+    expect(out[0]).toEqual({ contactId: "x", name: "A B", phone: "+15551234567", tags: [] });
+  });
+
+  /**
+   * These columns are nullable, and a null is not an empty string. A row with
+   * no number cannot be called and so cannot be followed up; a row with no
+   * name is still a real lead and stays reachable as the newest one.
+   */
+  it("handles null phone and null name", () => {
+    const out = followUpCandidatesFrom(
+      [
+        { id: "nullphone", display_name: "Ghost", customer_e164: null },
+        { id: "nullname", display_name: null, customer_e164: "+15559998888", tags: null }
+      ],
+      { senderE164: SENDER, rosterPhones: new Set() }
+    );
+    expect(out).toEqual([
+      { contactId: "nullname", name: "", phone: "+15559998888", tags: [] }
+    ]);
   });
 });

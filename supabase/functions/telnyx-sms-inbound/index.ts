@@ -67,8 +67,10 @@ import {
   followUpAckText,
   followUpAmbiguityText,
   followUpNoLeadText,
+  followUpCandidatesFrom,
   matchFollowUpTarget,
-  parseFollowUpReply
+  parseFollowUpReply,
+  type FollowUpContactRow
 } from "../_shared/ai_flows/follow_up_reply.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
@@ -1714,29 +1716,44 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
     });
   };
 
-  // Recent leads, newest first. Staff rows are excluded because a teammate is
-  // never a lead (the rule this account already learned the hard way), and the
-  // sender themselves can never be the target.
-  const { data: rows } = await supabase
+  // Recent leads, newest first.
+  //
+  // Column names matter here and were got wrong once: this table stores
+  // `display_name`, not `name`, and has no `is_staff` column. PostgREST
+  // rejects a select naming a column that does not exist, and the error was
+  // swallowed, so every reply fell through to "no recent lead" and nothing was
+  // ever tagged (Bugbot, PR #1304).
+  const { data: rows, error: rowsErr } = await supabase
     .from("contacts")
-    .select("id, name, customer_e164, tags, is_staff, updated_at")
+    .select("id, display_name, customer_e164, tags, type, updated_at")
     .eq("business_id", businessId)
     .order("updated_at", { ascending: false })
     .limit(FOLLOW_UP_CANDIDATE_SCAN);
-  const candidates = ((rows ?? []) as Array<{
-    id: string;
-    name?: string | null;
-    customer_e164?: string | null;
-    tags?: string[] | null;
-    is_staff?: boolean | null;
-  }>)
-    .filter((r) => r.is_staff !== true && r.customer_e164 && r.customer_e164 !== from)
-    .map((r) => ({
-      contactId: r.id,
-      name: (r.name ?? "").trim(),
-      phone: r.customer_e164 as string,
-      tags: Array.isArray(r.tags) ? r.tags : []
-    }));
+  if (rowsErr) {
+    // Say so rather than claiming there was nothing to tag: the two are very
+    // different for a teammate deciding whether to chase the lead themselves.
+    console.error("follow-up candidate lookup", rowsErr);
+    return await ack(
+      "Could not look up recent leads just now, so nothing was marked for follow-up. Please try again.",
+      "fu-lookup-error"
+    );
+  }
+  // A teammate is never a lead. `type` owner/employee is the stored marker
+  // (the same test lifecycle.ts uses), and the roster check below covers a
+  // teammate whose contact row was never typed.
+  const { data: rosterRows } = await supabase
+    .from("ai_flow_team_members")
+    .select("phone_e164")
+    .eq("business_id", businessId);
+  const rosterPhones = new Set(
+    ((rosterRows ?? []) as Array<{ phone_e164?: string | null }>)
+      .map((r) => (r.phone_e164 ?? "").trim())
+      .filter(Boolean)
+  );
+  const candidates = followUpCandidatesFrom((rows ?? []) as FollowUpContactRow[], {
+    senderE164: from,
+    rosterPhones
+  });
 
   const match = matchFollowUpTarget(candidates, parsed.name);
   if (match.kind === "none") {

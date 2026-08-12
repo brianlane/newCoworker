@@ -166,3 +166,44 @@ export function followUpNoLeadText(name: string): string {
     ? `No recent lead here matches "${name.trim()}", so nothing was marked for follow-up.`
     : "No recent lead to mark for follow-up.";
 }
+
+/** A contact row as the follow-up lookup reads it. */
+export type FollowUpContactRow = {
+  id: string;
+  display_name?: string | null;
+  customer_e164?: string | null;
+  tags?: string[] | null;
+  type?: string | null;
+};
+
+/**
+ * Which recent contacts a follow-up reply may target.
+ *
+ * A teammate is never a lead: `type` owner/employee is the stored marker (the
+ * same test lifecycle.ts uses), and the roster phones cover a teammate whose
+ * contact row was never typed. The sender is excluded too, so replying "F" can
+ * never enroll the person who sent it.
+ *
+ * Order is preserved, so the caller's newest-first query stays newest-first and
+ * a bare "F" means the most recent lead.
+ */
+export function followUpCandidatesFrom(
+  rows: readonly FollowUpContactRow[],
+  opts: { senderE164: string; rosterPhones: ReadonlySet<string> }
+): Array<FollowUpCandidate & { tags: string[] }> {
+  const out: Array<FollowUpCandidate & { tags: string[] }> = [];
+  for (const r of rows) {
+    const phone = (r.customer_e164 ?? "").trim();
+    if (!phone || phone === opts.senderE164) continue;
+    const type = (r.type ?? "").trim().toLowerCase();
+    if (type === "owner" || type === "employee") continue;
+    if (opts.rosterPhones.has(phone)) continue;
+    out.push({
+      contactId: r.id,
+      name: (r.display_name ?? "").trim(),
+      phone,
+      tags: Array.isArray(r.tags) ? r.tags : []
+    });
+  }
+  return out;
+}
