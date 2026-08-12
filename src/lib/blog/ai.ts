@@ -24,7 +24,7 @@ function textModel(): string {
 }
 
 const BRAND_CONTEXT =
-  "New Coworker is an AI coworker for small businesses: it answers calls and " +
+  "New Coworker is an AI coworker for businesses: it answers calls and " +
   "texts, books appointments, and follows up with leads so owners never miss " +
   "business. Audience: busy small-business owners. Voice: plain, friendly, " +
   "benefit-first, zero jargon. Never call the product an answering service.";

@@ -39,7 +39,7 @@ export default function GoogleReviewTestPlanPage() {
           Reviewer test plan
         </h1>
         <p className="mt-4 text-parchment/60">
-          New Coworker is an AI coworker for small businesses: it answers the phone, replies to
+          New Coworker is an AI coworker for businesses: it answers the phone, replies to
           SMS, email, and web chat, books appointments, and runs a public self-serve booking
           page. The business owner connects their own Google account. Calendar access is split by
           least privilege: availability reads ride{" "}

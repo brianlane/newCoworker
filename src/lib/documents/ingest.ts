@@ -379,7 +379,7 @@ export type DocumentRewriteResult =
   | { ok: false; error: "summarizer_unavailable" | "summarizer_failed"; detail?: string };
 
 const REWRITE_SYSTEM_PROMPT =
-  "You maintain a small business's knowledge documents. Apply the owner's requested edit to the markdown document exactly — change only what the edit requires, keep every other fact byte-identical. Never invent facts.";
+  "You maintain a business's knowledge documents. Apply the owner's requested edit to the markdown document exactly: change only what the edit requires, keep every other fact byte-identical. Never invent facts.";
 
 /**
  * Apply a free-form owner edit ("haircuts are now $40") to a document's

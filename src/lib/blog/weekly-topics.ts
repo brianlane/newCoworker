@@ -51,7 +51,7 @@ import { uniqueBlogSlug } from "./slug";
 export type TopicCategory = "tutorial" | "business-tips" | "feature";
 
 const BRAND_CONTEXT =
-  "New Coworker is an AI coworker for small businesses: it answers calls and texts, " +
+  "New Coworker is an AI coworker for businesses: it answers calls and texts, " +
   "books appointments, and follows up with leads so owners never miss business. " +
   "Audience: busy small-business owners. Write in plain English a 12-year-old could " +
   "understand — short sentences, zero jargon, benefit first. Never call the product " +

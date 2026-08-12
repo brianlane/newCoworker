@@ -1415,7 +1415,7 @@ describe("ingestWebsite", () => {
     const summarize = vi.fn().mockResolvedValue("## Summary\nok");
 
     await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize });
-    expect(summarize.mock.calls[0][0]).toMatch(/a small business/);
+    expect(summarize.mock.calls[0][0]).toMatch(/a business/);
   });
 
   it(`clamps options.maxPages into the [1, ${WEBSITE_INGEST_DEEP_MAX_PAGES}] window`, async () => {
