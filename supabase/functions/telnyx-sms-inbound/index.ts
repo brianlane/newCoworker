@@ -72,7 +72,7 @@ import {
   parseFollowUpReply,
   type FollowUpContactRow
 } from "../_shared/ai_flows/follow_up_reply.ts";
-import { staffNumberCheck } from "../_shared/ai_flows/staff_numbers.ts";
+import { loadStaffMatcher } from "../_shared/ai_flows/staff_numbers.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
@@ -1739,23 +1739,30 @@ async function tryFollowUpTag(args: FollowUpTagArgs): Promise<Response | null> {
       "fu-lookup-error"
     );
   }
-  // A teammate is never a lead, and this is the guard that decides whether a
-  // contact may be put into an AI CALLING cadence, so it uses the shared
-  // staffNumberCheck rather than its own idea of staff.
+  // A teammate is never a lead, and this is the guard deciding whether a
+  // contact may be put into an AI CALLING cadence, so it uses the shared staff
+  // rule rather than its own idea of staff.
   //
-  // Bugbot, PR #1304: a type check plus roster phones is not enough. Owner
-  // numbers are usually DERIVED (the business phone, the forward cell, the
-  // coworker's own DID) and the owner's contact row is very often typed
-  // "customer", so a bare "F" could have started the cadence on Amy herself.
-  // A failed lookup counts as staff (fail safe), same as every other caller.
-  const rawCandidates = followUpCandidatesFrom((rows ?? []) as FollowUpContactRow[], {
-    senderE164: from
-  });
-  const candidates: typeof rawCandidates = [];
-  for (const c of rawCandidates) {
-    const check = await staffNumberCheck(supabase, businessId, [c.phone], c.type);
-    if (!check.staff) candidates.push(c);
+  // A type check plus roster phones is not enough: owner numbers are usually
+  // DERIVED (the business phone, the forward cell, the coworker's own DID) and
+  // the owner's contact row is very often typed "customer", so a bare "F"
+  // could otherwise have started the cadence on Amy herself.
+  //
+  // Loaded ONCE for the whole page. Asking per candidate re-read the roster
+  // and the business numbers every time, turning one inbound text into dozens
+  // of round trips on the webhook path.
+  const staff = await loadStaffMatcher(supabase, businessId);
+  if (staff.readFailed) {
+    // "Could not check" is not "nothing to tag". Saying the wrong one is what
+    // made the earlier column bug invisible, so the two stay distinct.
+    return await ack(
+      "Could not verify our team's numbers just now, so nothing was marked for follow-up. Please try again.",
+      "fu-staff-error"
+    );
   }
+  const candidates = followUpCandidatesFrom((rows ?? []) as FollowUpContactRow[], {
+    senderE164: from
+  }).filter((c) => !staff.isStaff(c.phone, c.type));
 
   const match = matchFollowUpTarget(candidates, parsed.name);
   if (match.kind === "none") {

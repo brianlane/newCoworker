@@ -51,6 +51,57 @@ export async function businessSelfNumbers(
 }
 
 /**
+ * The staff rule with its lookups already done: roster phones and the
+ * business's own derived numbers, read ONCE.
+ *
+ * staffNumberCheck answers for a single contact and re-reads both on every
+ * call, which is right for a guard that fires once per step and wrong for a
+ * caller sifting a page of contacts: fifty candidates became a hundred and
+ * fifty round trips on the SMS webhook path (Bugbot, PR #1304). Load the
+ * matcher once, then ask it as often as you like.
+ */
+export type StaffMatcher = {
+  /** True when this number is our own side of the business. */
+  isStaff(phone: string, storedType: string | null | undefined): boolean;
+  /** A lookup errored, so every answer above is the fail-safe one. */
+  readFailed: boolean;
+};
+
+export async function loadStaffMatcher(
+  supabase: AnyClient,
+  businessId: string
+): Promise<StaffMatcher> {
+  const { data: members, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("phone_e164")
+    .eq("business_id", businessId);
+  if (error) {
+    console.error("staff roster load", error);
+    // Fail SAFE: everything is staff until we can prove otherwise.
+    return { isStaff: () => true, readFailed: true };
+  }
+  const roster = new Set(
+    ((members ?? []) as Array<{ phone_e164?: string | null }>)
+      .map((m) => (m.phone_e164 ?? "").trim())
+      .filter(Boolean)
+  );
+  const selfNumbers = await businessSelfNumbers(supabase, businessId);
+  return {
+    readFailed: false,
+    isStaff(phone, storedType) {
+      const type = (storedType ?? "").trim().toLowerCase();
+      if (type === "owner" || type === "employee") return true;
+      const p = phone.trim();
+      // No number is not a lead: there is nothing to call, and treating it as
+      // callable is the direction that goes wrong.
+      if (!p) return true;
+      if (roster.has(p)) return true;
+      return isSelfPhone(p, selfNumbers);
+    }
+  };
+}
+
+/**
  * Do any of these numbers belong to our side of the business? True when the
  * stored contact row is typed owner/employee, or any number sits on the
  * ai_flow_team_members roster (active or not: a deactivated broker is still
