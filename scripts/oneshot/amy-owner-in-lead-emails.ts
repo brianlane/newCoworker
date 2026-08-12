@@ -132,6 +132,16 @@ export function moveEmailsAfterRoute(flowName: string, def: Definition): PatchRe
    * A goal step is a jump TARGET, so steps after it run on both paths: the
    * normal one where the route already resolved the claim, and the jump where
    * it never ran and the owner is legitimately blank.
+   *
+   * ACCEPTED COST, decided by Amy on 2026-08-12 after both options were put to
+   * her. On Clever this position also sits after `call_followups`, the redial
+   * ladder that sleeps two hours and then until the next morning. So an
+   * UNCLAIMED, no-answer Clever lead's QT email can arrive the following day.
+   * The alternative (anchoring on the route) sends it promptly but skips it
+   * entirely for any lead who engaged during the AI call, and a late email was
+   * judged better than a missing one. Realtor.com and ReferralExchange have no
+   * goal and no ladder, so they anchor on their last route and wait only for
+   * the claim window.
    */
   const lastGoal = steps.map((s) => s.type).lastIndexOf("goal");
   const anchor = Math.max(lastRoute, lastGoal);

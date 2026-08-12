@@ -479,6 +479,14 @@ Realtor.com `s2`, and ReferralExchange `email_buyer` / `email_seller` /
 - **HomeLight was the model, not an exception.** Its `qt_email` already sat
   after the route and already opened "HomeLight referral claimed by ...". The
   other four had simply never caught up.
+- **On Clever the delay can be the NEXT DAY, and that is an accepted trade.**
+  The goal anchor also sits after `call_followups`, the redial ladder that
+  sleeps two hours and then until morning, so an unclaimed no-answer Clever
+  lead's QT email can arrive the following day. Amy chose this on Aug 12 2026
+  with the alternative in front of her: anchoring on the route sends promptly
+  but skips the email entirely for any lead who engaged during the AI call, and
+  a late email beats a missing one. Realtor.com and ReferralExchange have
+  neither a goal nor a ladder and wait only for the claim window.
 - **The cost is real and worth knowing:** these emails now wait for the claim
   window instead of sending on arrival. A lead claimed quickly (the common case
   on this account, and the point of speed-to-lead) delays the email a minute or
