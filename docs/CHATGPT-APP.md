@@ -162,14 +162,20 @@ passing on default bot scoring rather than on an explicit allowance. A
 reputation shift, a new managed rule, or a Bot Fight Mode toggle would take it
 out with no warning and no origin trace.
 
-### The change, ready to apply
+### The change (APPLIED 2026-08-12)
 
-Zone `newcoworker.com`, custom firewall ruleset
-`f9a51022c3c24b5baa8c8e8ac33f5d8f`. **Add** this rule; do NOT delete the
-existing "MCP connector allowlist" until the new one is verified, so there is
-never a window with no skip in place.
+Done. Rule 1 was **edited in place** rather than added alongside, for a reason
+the runbook did not know: the free plan caps custom rules at **five** and four
+were already used, so a new rule would have taken the last slot. An edit is also
+atomic, so there was never a window with no skip in place.
 
-- **Name:** `MCP endpoints: skip bot protection`
+The rule already skipped exactly the right components (managed rules, Super Bot
+Fight Mode, UA blocking, Browser Integrity Check, Security Level) and, usefully,
+does **not** skip rate limiting. Only the expression and the name changed: the
+`and ip.src in {160.79.104.0/21}` clause is gone.
+
+- **Name:** `MCP endpoints: skip bot protection (path-scoped, all assistants).
+  Bearer auth is the control; rate limiting still applies.`
 - **Expression:**
 
 ```
@@ -180,7 +186,11 @@ never a window with no skip in place.
 - **Skip:** Super Bot Fight Mode, all managed rulesets, Browser Integrity
   Check, and any User Agent block rules.
 
-Then the rate limit:
+**Still open: there is no edge rate limit on `/api/mcp`.** The zone has one rate
+limiting rule and it is scoped to the marketing scrape paths; the free plan does
+not give us another. So the compensating controls on the MCP paths are the
+app-level per-user limiter in `src/lib/mcp/server.ts` and the JWT-shape
+pre-check, not the edge. Worth adding if the zone moves off free:
 
 - **Expression:** `starts_with(http.request.uri.path, "/api/mcp")`
 - **Characteristics:** `ip.src`
@@ -201,7 +211,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST https://www.newcoworker.com/api
   -H 'user-agent: Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)' -d '{}'
 ```
 
-### Second Cloudflare item: the listing pages themselves
+### Second Cloudflare item: the listing pages (APPLIED 2026-08-12)
 
 The submission's **Documentation URL** and the reviewer test plan are fetched by
 OpenAI during review, and the zone currently **403s a request that sends no
@@ -223,6 +233,17 @@ Pre-existing zone behavior rather than something the ChatGPT pages introduced
 would read as "documentation URL unreachable" with **nothing in the origin
 logs**, the same zero-trace signature as the connector outage. A `ChatGPT-User`
 agent WITH the header already gets 200, so the user agent is not the problem.
+
+Done, and NOT by exempting `/integrations/*` wholesale. The two ChatGPT URLs
+were added to the existing rule 2, which exists for exactly this reason on the
+Slack side ("Slack's submission checker fetches them headerless from datacenter
+IPs; a non-200 blocks the listing"). Same problem, same fix, same rule, no new
+rule slot consumed.
+
+Verified after applying: both ChatGPT URLs return 200 with **no**
+`Accept-Language` header; the Slack URLs, `/privacy` and `/terms` still return
+200; and `/pricing` still returns **403**, which is the control proving the
+scraper challenge was narrowed for two URLs rather than switched off.
 
 **Failure signatures**, unchanged from the Claude incident: "Couldn't connect"
 means an unauthenticated probe was blocked; an `ofid_…` error means OAuth
