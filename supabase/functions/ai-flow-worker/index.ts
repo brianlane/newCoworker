@@ -6934,14 +6934,26 @@ async function notifyLeadOwnerStep(
     }
   }
 
-  await telemetryRecord(supabase, "ai_flow_notify_lead_owner", {
-    run_id: run.id,
-    business_id: run.business_id,
-    target: member ? "contact_owner" : "business_owner",
-    matched_by: matchedBy
-  });
+  /**
+   * Recorded per OUTCOME rather than once up front.
+   *
+   * The single call this replaces ran before the delivery decision and labelled
+   * anything without a contact owner "business_owner", so once the team
+   * fallback existed every successful team alert was logged as an owner
+   * delivery: the telemetry would have said the feature was not being used
+   * while it was being used (Bugbot, #1317).
+   */
+  const recordTarget = async (target: string): Promise<void> => {
+    await telemetryRecord(supabase, "ai_flow_notify_lead_owner", {
+      run_id: run.id,
+      business_id: run.business_id,
+      target,
+      matched_by: matchedBy
+    });
+  };
 
   if (member) {
+    await recordTarget("contact_owner");
     const cfg = await messagingConfig(supabase, run.business_id);
     if (cfg) {
       // Same untracked shortening as notify_owner: a teammate's tap on their
@@ -7014,7 +7026,29 @@ async function notifyLeadOwnerStep(
     };
   }
 
+  // No teammate owns this lead. Two shapes of fallback.
+  //
+  // "team" alerts every active roster member who can be team-broadcast. That
+  // exclusion is the point rather than a side effect: a member whose row says
+  // team_broadcast_enabled is false has been deliberately kept out of team
+  // traffic (on Amy's account that is Amy, who is the backstop for an unowned
+  // lead, not its audience).
+  //
+  // It is an ALERT, not an offer: nobody is asked to reply, no deadline runs,
+  // and the run does not park. route_to_team with broadcastAll is the
+  // offer-shaped alternative and a different thing.
+  if (action.unownedFallback === "team") {
+    const alerted = await alertBroadcastTeam(supabase, run, index, scope, action);
+    if (alerted) {
+      await recordTarget("team_broadcast");
+      return alerted;
+    }
+    // Nobody eligible at all (empty roster, everyone opted out of team
+    // traffic). Fall through to the owner rather than alerting no one.
+  }
+
   // Business-owner fallback: same delivery as notify_owner.
+  await recordTarget("business_owner");
   const outcome = await notifyOwnerStep(supabase, run, index, {
     kind: "notify_owner",
     message: action.message
@@ -7032,6 +7066,129 @@ async function notifyLeadOwnerStep(
         result: { ...base, target: "business_owner", matched_by: matchedBy }
       }
     : outcome;
+}
+
+/**
+ * Alert every roster member who can be team-broadcast, optionally narrowed to
+ * one tag.
+ *
+ * Returns the step outcome when at least one person was alerted, or null when
+ * nobody was eligible, which is the caller's signal to fall back to the owner.
+ * Alerting nobody is the one outcome this must never produce.
+ *
+ * The tag filter FAILS SAFE for the same reason: tags are free text with
+ * nothing validating them, so a tag that matches no one alerts the whole
+ * eligible audience instead. A typo costs noise; the alternative costs a lead.
+ */
+async function alertBroadcastTeam(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "notify_lead_owner" }>
+): Promise<StepOutcome | null> {
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("id, name, phone_e164, active, team_broadcast_enabled, tags")
+    .eq("business_id", run.business_id)
+    .eq("active", true);
+  if (error) {
+    console.error("notify_lead_owner team alert roster read", error);
+    return null;
+  }
+  const rows = (data ?? []) as Array<{
+    id: string;
+    name?: string | null;
+    phone_e164?: string | null;
+    team_broadcast_enabled?: boolean | null;
+    tags?: string[] | null;
+  }>;
+  // Only an explicit false excludes, matching how the roster's other
+  // availability flags are read: an unset column means available.
+  const eligible = rows.filter(
+    (r) => r.team_broadcast_enabled !== false && (r.phone_e164 ?? "").trim()
+  );
+  if (eligible.length === 0) return null;
+
+  const tag = (action.teamTag ?? "").trim().toLowerCase();
+  const tagged = tag
+    ? eligible.filter((r) =>
+        (r.tags ?? []).some((t) => String(t).trim().toLowerCase() === tag)
+      )
+    : eligible;
+  const targets = tagged.length > 0 ? tagged : eligible;
+
+  const cfg = await messagingConfig(supabase, run.business_id);
+  if (!cfg) {
+    return {
+      kind: "ok",
+      result: {
+        target: "team_broadcast",
+        note: "messaging not configured; send skipped",
+        would_notify: targets.length
+      }
+    };
+  }
+  const notified: string[] = [];
+  for (const t of targets) {
+    const phone = (t.phone_e164 ?? "").trim();
+    const shortened = await shortenSmsBodyUrls(supabase, {
+      businessId: run.business_id,
+      text: action.message,
+      source: "owner_notify",
+      baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+      toE164: phone,
+      flowId: run.flow_id,
+      runId: run.id,
+      tracked: false
+    });
+    const text = prepareSmsBody(`[AiFlow] ${shortened.text}`);
+    let sent = false;
+    try {
+      const send = await sendOperationalSms(supabase, run.business_id, {
+        apiKey: cfg.apiKey,
+        messagingProfileId: cfg.profile,
+        fromE164: cfg.from,
+        toE164: phone,
+        // Per RECIPIENT, so one teammate's failed send cannot suppress the
+        // others as a duplicate.
+        idempotencyKey: `aiflow-team-alert:${run.id}:${index}:${t.id}`,
+        text
+      });
+      if (!send.ok) throw new Error(`team alert telnyx ${send.status}`);
+      sent = true;
+      const outboundLogId = await logOutboundSms(supabase, run, {
+        to: phone,
+        from: cfg.from || null,
+        body: text,
+        source: "owner_notify",
+        telnyxMessageId: telnyxMessageIdFromBody(send.body)
+      });
+      await linkSmsLinksToOutboundLog(
+        supabase,
+        shortened.links.map((l) => l.shortCode),
+        outboundLogId
+      );
+      notified.push(phone);
+    } catch (e) {
+      if (!sent) await deleteShortLinks(supabase, shortened.links);
+      // One teammate's failure must not silence the rest of the team.
+      console.error("notify_lead_owner team alert send", phone, e);
+    }
+  }
+  if (notified.length === 0) return null;
+  appendActionTaken(
+    scope,
+    `alerted the team (${targets.map((t) => t.name || t.phone_e164).join(", ")}), nobody owns this lead`
+  );
+  return {
+    kind: "ok",
+    result: {
+      target: "team_broadcast",
+      notified,
+      ...(tag ? { tag, tag_matched: tagged.length > 0 } : {})
+    }
+  };
 }
 
 /**

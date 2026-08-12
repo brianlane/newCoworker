@@ -1197,6 +1197,32 @@ const nonBranchStepMembers = [
     message: z.string().min(1).max(1000),
     phoneVar: varName.optional(),
     nameVar: varName.optional(),
+    /**
+     * Who hears it when the lead has NO owner.
+     *
+     * Default (absent) is "owner": text the business owner, which is what this
+     * step has always done. "team" instead alerts every active roster member
+     * who can be team-broadcast, which excludes anyone whose row says
+     * team_broadcast_enabled is false (on Amy's account that is Amy herself,
+     * deliberately: an unowned lead needs a teammate to pick it up, and the
+     * owner is the backstop rather than the audience).
+     *
+     * This is an ALERT, not an offer: nobody is asked to reply, no deadline
+     * runs, and the flow does not wait. `route_to_team` with broadcastAll is
+     * the offer-shaped alternative and a different thing.
+     */
+    unownedFallback: z.enum(["owner", "team"]).optional(),
+    /**
+     * Narrow a "team" alert to members carrying this tag
+     * (ai_flow_team_members.tags), rendered as a template so it can come from
+     * the lead itself: "{{vars.route_lead_type}}" sends a buyer alert to
+     * whoever is tagged buyer.
+     *
+     * Matching is case-insensitive, and a filter that matches NOBODY falls
+     * back to the whole eligible audience. Tags are free text with nothing
+     * validating them, so a typo must cost noise rather than silence.
+     */
+    teamTagTemplate: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -2133,7 +2159,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "approval_gate":
       return [step.prompt, step.cooldown?.key ?? ""];
     case "notify_lead_owner":
-      return [step.message];
+      return [step.message, step.teamTagTemplate ?? ""];
     case "http_call":
       return [step.path ?? "", step.bodyTemplate ?? ""];
     case "route_to_team":
