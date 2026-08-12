@@ -15,7 +15,7 @@
  *
  * ## The client is shared, and that is the main hazard
  *
- * `GOOGLE_WORKSPACE_CLIENT_ID` names the SAME OAuth client that backs "Log in
+ * `GOOGLE_CLIENT_ID` names the SAME OAuth client that backs "Log in
  * with Google" through Supabase Auth (`src/app/(auth)/login/LoginForm.tsx`) and,
  * until its Google rows finish migrating, Nango's `google` integration. Three
  * consumers, one client, one secret. Changing that client's configuration in the
@@ -112,12 +112,12 @@ export type GoogleOAuthConfig = {
  * client exactly.
  */
 export function getGoogleOAuthConfig(): GoogleOAuthConfig {
-  const clientId = (process.env.GOOGLE_WORKSPACE_CLIENT_ID ?? "").trim();
-  const clientSecret = (process.env.GOOGLE_WORKSPACE_CLIENT_SECRET ?? "").trim();
+  const clientId = (process.env.GOOGLE_CLIENT_ID ?? "").trim();
+  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET ?? "").trim();
   if (!clientId || !clientSecret) {
     throw new GoogleOAuthError(
       "not_configured",
-      "GOOGLE_WORKSPACE_CLIENT_ID / GOOGLE_WORKSPACE_CLIENT_SECRET are not set"
+      "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set"
     );
   }
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/+$/, "");
@@ -310,6 +310,72 @@ export async function revokeGoogleToken(token: string): Promise<boolean> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export type GoogleAccountIdentity = {
+  /** Stable Google account id (the OIDC `sub`), independent of the address. */
+  accountId: string | null;
+  email: string | null;
+  displayName: string | null;
+};
+
+/**
+ * Which Google account was actually connected.
+ *
+ * NOT best-effort labeling. The reconnect match keys on this email, so without
+ * it the callback cannot tell a reconnect from a second mailbox, and guessing
+ * either strands a live AiFlow binding or burns a connection seat. The callback
+ * refuses to write anything when this returns null.
+ *
+ * The owner's dashboard login is not a substitute: they may well connect a
+ * different Google account than the one they signed in with, which is exactly
+ * the case that produced the mislabeled rows `debug/backfill-nango-account-identity.ts`
+ * had to repair.
+ *
+ * Returns null on 401/403, meaning the token cannot see its own account, which
+ * the caller treats as "ask them to try again" rather than an error.
+ */
+export async function fetchGoogleIdentity(
+  accessToken: string
+): Promise<GoogleAccountIdentity | null> {
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), GOOGLE_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${GOOGLE_API_BASE_URL}/oauth2/v3/userinfo`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal: ac.signal
+    });
+  } catch (err) {
+    const aborted = (err as Error)?.name === "AbortError";
+    throw new GoogleOAuthError(
+      aborted ? "upstream_timeout" : "upstream_unreachable",
+      aborted ? "Google userinfo timed out" : "Google userinfo unreachable"
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (res.status === 401 || res.status === 403) return null;
+  if (!res.ok) {
+    throw new GoogleOAuthError(
+      "request_failed",
+      `Google userinfo failed (${res.status})`,
+      res.status
+    );
+  }
+
+  const body = (await res.json().catch(() => null)) as {
+    sub?: string;
+    email?: string;
+    name?: string;
+  } | null;
+  if (!body) return null;
+  return {
+    accountId: body.sub ?? null,
+    email: body.email ?? null,
+    displayName: body.name ?? null
+  };
 }
 
 /** Re-exported so callers building an authorize flow cannot drift from the frozen set. */

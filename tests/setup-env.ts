@@ -3,7 +3,7 @@
  *
  * The repo's routine ops workflow is `set -a; source .env; set +a`, which
  * exports PRODUCTION credentials into the shell. Any `npm test` run from
- * such a shell would hand those live secrets to code under test — which is
+ * such a shell would hand those live secrets to code under test, which is
  * exactly how the suite once sent real Resend verification emails to the
  * Stripe-fixture address paid@example.com on every run.
  *
@@ -15,7 +15,7 @@
  *
  * Scope: this file is registered via `setupFiles` in vitest.config.ts ONLY.
  * The integration and live-smoke configs (vitest.integration*.config.ts,
- * vitest.gemini-live.config.ts) intentionally keep their environment — they
+ * vitest.gemini-live.config.ts) intentionally keep their environment: they
  * exist to talk to real services.
  */
 
@@ -69,6 +69,12 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   // App Manifest API pair (scripts only, never runtime).
   "SLACK_APP_ACCESS_TOKEN",
   "SLACK_APP_REFRESH_TOKEN",
+  // First-party Google Workspace OAuth. Shares one client with Supabase
+  // "Log in with Google", so a sourced .env holds the REAL verified client:
+  // without stripping, any suite touching the authorize URL or a token
+  // exchange would run against production credentials.
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
   "ZOOM_CLIENT_ID",
   "ZOOM_CLIENT_SECRET",
   // Webhook HMAC key: without this the webhook suite would run against the

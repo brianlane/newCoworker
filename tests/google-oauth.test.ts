@@ -5,6 +5,7 @@ import {
   exchangeGoogleAuthCode,
   getGoogleOAuthConfig,
   GOOGLE_REQUEST_TIMEOUT_MS,
+  fetchGoogleIdentity,
   GOOGLE_REVOKE_URL,
   GOOGLE_TOKEN_URL,
   GoogleOAuthError,
@@ -25,8 +26,8 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 function setEnv() {
-  process.env.GOOGLE_WORKSPACE_CLIENT_ID = "354099628168-test.apps.googleusercontent.com";
-  process.env.GOOGLE_WORKSPACE_CLIENT_SECRET = "test-secret";
+  process.env.GOOGLE_CLIENT_ID = "354099628168-test.apps.googleusercontent.com";
+  process.env.GOOGLE_CLIENT_SECRET = "test-secret";
   process.env.NEXT_PUBLIC_APP_URL = "https://www.newcoworker.com";
   process.env.INTEGRATIONS_ENCRYPTION_KEY = "test-signing-key";
 }
@@ -78,8 +79,8 @@ describe("lib/google/oauth", () => {
     });
 
     it.each([
-      ["client id", "GOOGLE_WORKSPACE_CLIENT_ID"],
-      ["client secret", "GOOGLE_WORKSPACE_CLIENT_SECRET"],
+      ["client id", "GOOGLE_CLIENT_ID"],
+      ["client secret", "GOOGLE_CLIENT_SECRET"],
       ["app url", "NEXT_PUBLIC_APP_URL"]
     ])("throws not_configured without the %s", (_label, key) => {
       delete process.env[key];
@@ -92,7 +93,7 @@ describe("lib/google/oauth", () => {
     });
 
     it("treats whitespace-only credentials as absent", () => {
-      process.env.GOOGLE_WORKSPACE_CLIENT_ID = "   ";
+      process.env.GOOGLE_CLIENT_ID = "   ";
       expect(() => getGoogleOAuthConfig()).toThrow(GoogleOAuthError);
     });
   });
@@ -336,5 +337,108 @@ describe("lib/google/oauth", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("fetchGoogleIdentity", () => {
+  // This block sits outside the suite-level describe, so it needs its own
+  // reset: without it a spy keeps the calls made by the revoke cases above and
+  // `mock.calls[0]` reads someone else's request.
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports which account was actually connected", async () => {
+    // Not the dashboard login: an owner may well connect a different Google
+    // account than the one they signed in with, and the reconnect match keys on
+    // this address.
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      jsonResponse(200, { sub: "1234", email: "owner@acme.com", name: "Owner Name" })
+    );
+    await expect(fetchGoogleIdentity("at")).resolves.toEqual({
+      accountId: "1234",
+      email: "owner@acme.com",
+      displayName: "Owner Name"
+    });
+  });
+
+  it("calls the userinfo endpoint with the bearer", async () => {
+    const spy = vi.spyOn(global, "fetch").mockResolvedValue(jsonResponse(200, { sub: "1" }));
+    await fetchGoogleIdentity("at-x");
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://www.googleapis.com/oauth2/v3/userinfo");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer at-x");
+  });
+
+  it.each([
+    ["only a sub", { sub: "1" }, { accountId: "1", email: null, displayName: null }],
+    [
+      "only an email",
+      { email: "owner@acme.com" },
+      { accountId: null, email: "owner@acme.com", displayName: null }
+    ],
+    ["nothing at all", {}, { accountId: null, email: null, displayName: null }]
+  ])("fills absent fields with null when the body carries %s", async (_label, body, expected) => {
+    // The callback keys its reconnect match on `email`, so it has to be able to
+    // tell "absent" from "empty string" without tripping over undefined.
+    vi.spyOn(global, "fetch").mockResolvedValue(jsonResponse(200, body));
+    await expect(fetchGoogleIdentity("at")).resolves.toEqual(expected);
+  });
+
+  it.each([401, 403])("returns null on %s, so the caller can ask them to retry", async (status) => {
+    vi.spyOn(global, "fetch").mockResolvedValue(jsonResponse(status, {}));
+    await expect(fetchGoogleIdentity("at")).resolves.toBeNull();
+  });
+
+  it("returns null for an unparseable body", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("not json");
+      }
+    } as unknown as Response);
+    await expect(fetchGoogleIdentity("at")).resolves.toBeNull();
+  });
+
+  it("throws on other failures rather than reporting an unknown account", async () => {
+    // A 500 is not "no account". Treating it as one would let the callback
+    // insert a duplicate row for a mailbox that already has one.
+    vi.spyOn(global, "fetch").mockResolvedValue(jsonResponse(500, {}));
+    await expect(fetchGoogleIdentity("at")).rejects.toMatchObject({
+      code: "request_failed",
+      status: 500
+    });
+  });
+
+  it.each([
+    ["a timeout", "AbortError", "upstream_timeout"],
+    ["a network failure", "TypeError", "upstream_unreachable"]
+  ])("maps %s to %s", async (_label, name, code) => {
+    vi.spyOn(global, "fetch").mockRejectedValue(Object.assign(new Error("x"), { name }));
+    await expect(fetchGoogleIdentity("at")).rejects.toMatchObject({ code });
+  });
+
+  it("actually aborts a hung userinfo call once the budget elapses", async () => {
+    // The case above only proves the mapping. This proves the timer fires, so a
+    // stuck userinfo endpoint cannot hold the callback open indefinitely while
+    // an owner waits on a redirect.
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(global, "fetch").mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            (init as RequestInit).signal?.addEventListener("abort", () => {
+              reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            });
+          })
+      );
+      const pending = fetchGoogleIdentity("at");
+      const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
+      await vi.advanceTimersByTimeAsync(GOOGLE_REQUEST_TIMEOUT_MS + 1);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
