@@ -1920,6 +1920,8 @@
       "capReached": "Tu plan incluye {max, plural, one {# conexión de espacio de trabajo} other {# conexiones de espacio de trabajo}}. Elimina una o mejora tu plan para conectar otra.",
       "connectMicrosoft": "Conectar Outlook",
       "connectMicrosoftHelp": "Microsoft 365 o una cuenta personal de Outlook. Incluye correo y calendario.",
+      "connectGoogle": "Conectar Google",
+      "connectGoogleHelp": "Gmail y Google Calendar, incluida una cuenta personal de Google. Incluye correo y calendario.",
       "connectOther": "Conectar Google u otro servicio"
     },
     "humanHandoff": {
