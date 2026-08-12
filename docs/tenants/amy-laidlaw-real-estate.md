@@ -353,6 +353,46 @@ on an answering machine and there was no field to put a message in.
   is the referral network's estimate, and quoting it back at a seller in an
   unsupervised voicemail is a valuation claim.
 
+ReferralExchange on the AI worker (Aug 11 2026):
+`referralexchange-ai-first-contact.ts` (applier, `--revert` restores the exact
+previous definition) over `referralexchange-ai-first-contact-definition.ts`
+(pure builder, pinned by `tests/referralexchange-ai-first-contact.test.ts`).
+The AI now calls a ReferralExchange lead BEFORE the team is offered it, the way
+Clever and HomeLight already work. 23 steps to 25.
+
+- **All three lead types, each with its own script.** ReferralExchange delivers
+  buyer, seller and both, unlike the seller-only sources, and the existing
+  `amy-seller-ai-call-definition.ts` ReferralExchange variant is seller-gated,
+  so it could never have covered this.
+- **This is the ONE place the callback-time question is allowed.** The standing
+  rule is that we never ask a lead when to call back, and Aug 7's
+  `removeBestTimeCaptureField` swept it out of New Lead Intake. Amy narrowed
+  the rule on Aug 11: it is fine in the single moment where the lead ASKED to
+  be connected and nobody picked up. `captureFields` cannot be conditional, so
+  the SCRIPT carries the condition, and the tests assert both halves of it.
+- **A no-answer hands the lead to the cadence by TAG**, not by repeating a
+  ladder here. `update_contact` adds "Needs Follow Up", the same chokepoint the
+  `F` reply and the tag editor use, so there is one follow-up sequence and one
+  place to change it.
+- **The script arms gate on `route_lead_type`, not `lead_type`.** Both exist on
+  this flow and only one says anything about REACHABILITY: `route_lead_type` is
+  "the page shows a text or call option, meaning the lead has a real phone
+  number, and here is the type", answering "none" for an email-only lead.
+  Gating a DIAL on `lead_type` validates fine and then tries to call leads with
+  no phone. It is also the field the three route steps already gate on.
+- **First contact carries NO `callWindow`**, matching Clever's attempt-1 dial.
+  A window with `outside: "skip"` resolves an overnight lead to `not_placed`,
+  which is not `no_answer`, so the follow-up tag never fires either and the
+  lead misses both the AI call and the cadence. Only RETRY rungs get windows,
+  because a redial is the thing that must not land at 3am.
+- **`captureFields` are not flow vars.** `place_ai_call` produces its outcome
+  var and the two companions and nothing else; what the AI collected rides the
+  POST-CALL SUMMARY to whoever the ladder rang first
+  (`notifyFirstReachTarget`). Templating `{{vars.timeline}}` into an offer
+  would be rejected by the authoring validator, and would render empty if it
+  were not. The offers therefore quote `call_outcome_label` and point at the
+  summary.
+
 Notice content: `set-amy-lead-address-in-notices.ts`,
 `amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
 all, only the over/under-$1M routing token, so no Clever notice could show
