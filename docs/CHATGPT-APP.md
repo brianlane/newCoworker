@@ -162,6 +162,68 @@ passing on default bot scoring rather than on an explicit allowance. A
 reputation shift, a new managed rule, or a Bot Fight Mode toggle would take it
 out with no warning and no origin trace.
 
+### The change, ready to apply
+
+Zone `newcoworker.com`, custom firewall ruleset
+`f9a51022c3c24b5baa8c8e8ac33f5d8f`. **Add** this rule; do NOT delete the
+existing "MCP connector allowlist" until the new one is verified, so there is
+never a window with no skip in place.
+
+- **Name:** `MCP endpoints: skip bot protection`
+- **Expression:**
+
+```
+(http.request.uri.path in {"/api/mcp" "/api/mcp/chatgpt"} or starts_with(http.request.uri.path, "/.well-known/"))
+```
+
+- **Action:** Skip
+- **Skip:** Super Bot Fight Mode, all managed rulesets, Browser Integrity
+  Check, and any User Agent block rules.
+
+Then the rate limit:
+
+- **Expression:** `starts_with(http.request.uri.path, "/api/mcp")`
+- **Characteristics:** `ip.src`
+- **Rate:** 120 requests per 60 seconds
+- **Action:** Block, `mitigation_timeout: 10`
+
+Confirm the zone's **Block AI bots** setting stays off for these paths, and that
+free-plan **Bot Fight Mode** is off entirely, since it runs before WAF rules and
+ignores skips.
+
+**Verify after applying**, from off-network. 401 is correct (unauthenticated,
+but reaching the origin); 403 means the edge is still blocking, and Cloudflare
+Security, Events will name the rule:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://www.newcoworker.com/api/mcp/chatgpt \
+  -H 'content-type: application/json' \
+  -H 'user-agent: Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/bot)' -d '{}'
+```
+
+### Second Cloudflare item: the listing pages themselves
+
+The submission's **Documentation URL** and the reviewer test plan are fetched by
+OpenAI during review, and the zone currently **403s a request that sends no
+`Accept-Language` header** (the Jul 2026 scraper rule, see
+`docs/OPS-MARKETING-SCRAPE-WAF.md`). A browser always sends one; an automated
+validator may not.
+
+```bash
+# 403 today. Should be 200 before submitting.
+curl -s -o /dev/null -w "%{http_code}\n" https://www.newcoworker.com/integrations/chatgpt
+
+# 200, because curl was given the header a browser would send.
+curl -s -o /dev/null -w "%{http_code}\n" -H 'Accept-Language: en-US,en;q=0.9' \
+  https://www.newcoworker.com/integrations/chatgpt
+```
+
+Pre-existing zone behavior rather than something the ChatGPT pages introduced
+(`/integrations/slack` behaves the same). It matters here because a rejection
+would read as "documentation URL unreachable" with **nothing in the origin
+logs**, the same zero-trace signature as the connector outage. A `ChatGPT-User`
+agent WITH the header already gets 200, so the user agent is not the problem.
+
 **Failure signatures**, unchanged from the Claude incident: "Couldn't connect"
 means an unauthenticated probe was blocked; an `ofid_…` error means OAuth
 succeeded and the verification POST 403'd at the edge with zero origin trace.
