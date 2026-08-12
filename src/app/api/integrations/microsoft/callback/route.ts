@@ -52,11 +52,12 @@ import {
   verifyMicrosoftOAuthState
 } from "@/lib/microsoft/oauth";
 import {
-  findDuplicateOutlookRow,
-  findOutlookReconnectTarget,
+  findDuplicateRow,
+  findReconnectTarget,
   resolveUnlabeledReconnect,
-  OUTLOOK_KEY
-} from "@/lib/microsoft/reconnect";
+  OUTLOOK_KEY,
+  OUTLOOK_KEYS
+} from "@/lib/workspace/reconnect";
 import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
@@ -151,10 +152,11 @@ export async function GET(request: Request) {
     const accountEmail = identity.email.toLowerCase();
 
     const capState = await resolveWorkspaceConnectionCapState(verified.businessId);
-    let decision = findOutlookReconnectTarget(
+    let decision = findReconnectTarget(
       await listWorkspaceOAuthConnections(verified.businessId),
       accountEmail,
-      capState.max
+      capState.max,
+      OUTLOOK_KEYS
     );
 
     if (decision.kind === "verify") {
@@ -237,10 +239,11 @@ export async function GET(request: Request) {
       // and an ambiguous resolver. The row that lost the race backs itself out
       // and the older one is flipped instead, so the account still ends on one
       // row and that row is the one flows have had longest to bind to.
-      const duplicateOf = findDuplicateOutlookRow(
+      const duplicateOf = findDuplicateRow(
         await listWorkspaceOAuthConnections(verified.businessId),
         inserted.id,
-        accountEmail
+        accountEmail,
+        OUTLOOK_KEYS
       );
       if (duplicateOf) {
         await deleteWorkspaceOAuthConnection(verified.businessId, inserted.id);

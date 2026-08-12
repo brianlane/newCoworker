@@ -1,5 +1,5 @@
 /**
- * Which existing row a Microsoft connect should RECONNECT rather than duplicate.
+ * Which existing row a first-party connect should RECONNECT rather than duplicate.
  *
  * This is the hinge of the whole Nango-to-first-party migration, and it has two
  * opposite failure modes, both bad:
@@ -28,7 +28,8 @@
  *
  * ## The one case that is decided without a probe
  *
- * A business whose cap is a single connection, holding a single Outlook row,
+ * A business whose cap is a single connection, holding a single row for this
+ * provider,
  * cannot have a second mailbox: the cap forbids it. So the row can only be the
  * one being reconnected. That is not a guess, it is forced.
  *
@@ -41,6 +42,21 @@ import type { WorkspaceOAuthConnectionRow } from "@/lib/db/workspace-oauth-conne
 
 /** The provider key an Outlook mailbox uses, on BOTH transports. */
 export const OUTLOOK_KEY = "outlook";
+
+/**
+ * Provider keys that mean "this provider", for matching purposes.
+ *
+ * Outlook has exactly one. Google has FOUR, because the Nango era accumulated
+ * `google` (the broad Gmail + Calendar integration), `gmail` and `google-mail`
+ * (mail only) and `google-calendar` (calendar only). A reconnect has to consider
+ * all of them or a tenant on a legacy key gets a duplicate row and the
+ * `connection_not_found` failure this module exists to prevent.
+ *
+ * Live production holds only `google`, but the resolvers still honour the other
+ * three, so matching must too.
+ */
+export const OUTLOOK_KEYS = [OUTLOOK_KEY] as const;
+export const GOOGLE_KEYS = ["google", "gmail", "google-mail", "google-calendar"] as const;
 
 function accountEmailOf(row: WorkspaceOAuthConnectionRow): string | null {
   const value = row.metadata?.provider_account_email;
@@ -77,24 +93,25 @@ export type ReconnectDecision =
  * `capMax` is the business's workspace-connection limit (null = unlimited), and
  * is what makes the single-seat case decidable without a network call.
  */
-export function findOutlookReconnectTarget(
+export function findReconnectTarget(
   rows: readonly WorkspaceOAuthConnectionRow[],
   accountEmail: string,
-  capMax: number | null
+  capMax: number | null,
+  providerKeys: readonly string[]
 ): ReconnectDecision {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return { kind: "new" };
 
-  const outlookRows = rows.filter((r) => r.provider_config_key === OUTLOOK_KEY);
-  if (outlookRows.length === 0) return { kind: "new" };
+  const providerRows = rows.filter((r) => providerKeys.includes(r.provider_config_key));
+  if (providerRows.length === 0) return { kind: "new" };
 
   // 1. The row says who it is. Oldest wins: that is the row flows have had
   //    longest to bind to.
-  const labeled = oldestFirst(outlookRows.filter((r) => accountEmailOf(r) === wanted));
+  const labeled = oldestFirst(providerRows.filter((r) => accountEmailOf(r) === wanted));
   if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
 
   const soleUnlabeled =
-    outlookRows.length === 1 && accountEmailOf(outlookRows[0]) === null ? outlookRows[0] : null;
+    providerRows.length === 1 && accountEmailOf(providerRows[0]) === null ? providerRows[0] : null;
   if (!soleUnlabeled) return { kind: "new" };
 
   // 2. One seat, one row: a second mailbox is impossible, so this is it.
@@ -141,16 +158,19 @@ export function resolveUnlabeledReconnect(
  * Returns null when the freshly inserted row is the oldest for that account,
  * which is the common case and means there is nothing to consolidate.
  */
-export function findDuplicateOutlookRow(
+export function findDuplicateRow(
   rows: readonly WorkspaceOAuthConnectionRow[],
   insertedRowId: string,
-  accountEmail: string
+  accountEmail: string,
+  providerKeys: readonly string[]
 ): WorkspaceOAuthConnectionRow | null {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return null;
 
   const sameAccount = oldestFirst(
-    rows.filter((r) => r.provider_config_key === OUTLOOK_KEY && accountEmailOf(r) === wanted)
+    rows.filter(
+      (r) => providerKeys.includes(r.provider_config_key) && accountEmailOf(r) === wanted
+    )
   );
   if (sameAccount.length < 2) return null;
 
