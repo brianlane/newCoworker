@@ -159,6 +159,10 @@ import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_
 import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
+import {
+  businessSelfNumbers,
+  staffNumberCheck
+} from "../_shared/ai_flows/staff_numbers.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { leadSourceLabel } from "../_shared/leads/source_label.ts";
 import {
@@ -2911,58 +2915,6 @@ async function upsertCustomerStep(
   };
 }
 
-/**
- * Do any of these numbers belong to OUR side of the business? True when the
- * stored contact row is typed owner/employee, or any number sits on the
- * ai_flow_team_members roster (active or not — a deactivated broker is still
- * staff), or matches the business's own derived numbers (owner cell, forward
- * number, the coworker's DID; owner rows are often typed "customer").
- *
- * `readFailed` reports that a lookup errored so the answer is not trustworthy;
- * every caller treats that as staff (fail safe), but they differ in what they
- * do next, so the flag is returned rather than collapsed into `staff`.
- *
- * Shared by the two staff guards, update_contact's tag protection
- * (isProtectedStaffContact) and customer filing (enrichCustomerProfile), so
- * they can never disagree on who counts as staff.
- */
-async function staffNumberCheck(
-  supabase: Supabase,
-  businessId: string,
-  contactNumbers: string[],
-  storedType: string | null | undefined
-): Promise<{ staff: boolean; readFailed: boolean }> {
-  if (storedType === "owner" || storedType === "employee") {
-    return { staff: true, readFailed: false };
-  }
-  // Roster check spans EVERY number attached to the contact row (primary +
-  // merged aliases + the targeted number): the contact lookup is
-  // alias-aware, so protection must be too: a flow targeting an alias of
-  // a broker's row is still targeting the broker.
-  const { data: member, error } = await supabase
-    .from("ai_flow_team_members")
-    .select("id")
-    .eq("business_id", businessId)
-    .in("phone_e164", contactNumbers)
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.error("staff roster check", error);
-    return { staff: true, readFailed: true };
-  }
-  if (member != null) return { staff: true, readFailed: false };
-  // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
-  // the coworker's own DID) rather than stored as an owner-typed contact, so
-  // an owner testing with their cell must be protected too. isSelfPhone is
-  // the SHARED both-sides-normalized comparator (same one the extraction
-  // scrub and send_sms self-send guard use), so the guards can never
-  // disagree on what counts as "ourselves".
-  const selfNumbers = await businessSelfNumbers(supabase, businessId);
-  return {
-    staff: contactNumbers.some((n) => isSelfPhone(n, selfNumbers)),
-    readFailed: false
-  };
-}
 
 /**
  * Is this contact protected staff for update_contact purposes? Staff (per
@@ -3172,27 +3124,6 @@ function appendActionTaken(scope: Scope, description: string): void {
  * _shared/ai_flows/extracted_contact.ts). Best-effort: a lookup error returns
  * what was found so extraction never fails on this.
  */
-async function businessSelfNumbers(supabase: Supabase, businessId: string): Promise<string[]> {
-  const out: string[] = [];
-  const { data: settings } = await supabase
-    .from("business_telnyx_settings")
-    .select("telnyx_sms_from_e164, forward_to_e164")
-    .eq("business_id", businessId)
-    .maybeSingle();
-  const s = settings as
-    | { telnyx_sms_from_e164?: string | null; forward_to_e164?: string | null }
-    | null;
-  if (s?.telnyx_sms_from_e164) out.push(s.telnyx_sms_from_e164);
-  if (s?.forward_to_e164) out.push(s.forward_to_e164);
-  const { data: biz } = await supabase
-    .from("businesses")
-    .select("phone")
-    .eq("id", businessId)
-    .maybeSingle();
-  const phone = (biz as { phone?: string | null } | null)?.phone;
-  if (phone) out.push(phone);
-  return out;
-}
 
 /**
  * Run extraction output through the self-number scrub and record what was
