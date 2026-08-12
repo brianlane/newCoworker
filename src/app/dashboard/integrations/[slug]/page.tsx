@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
+import { GoogleConnectButton } from "@/components/dashboard/GoogleConnectButton";
 import { MicrosoftConnectButton } from "@/components/dashboard/MicrosoftConnectButton";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
@@ -42,7 +43,7 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Workspace"
-          description="Outlook connects directly. Gmail, Google Calendar, Drive and more connect through Nango. Slack and Zoom connect from their own integration pages."
+          description="Google and Outlook connect directly. Drive and the long tail still connect through Nango. Slack and Zoom connect from their own integration pages."
           icon={getIntegration("workspace")!.icon}
           status={ctx.workspaceConnections.length > 0 ? "connected" : "disconnected"}
         >
@@ -55,6 +56,21 @@ function IntegrationBody({
             blocked={
               ctx.workspaceConnectionCap.atCap &&
               !ctx.workspaceConnections.some((r) => r.provider_config_key === "outlook")
+            }
+          />
+          <GoogleConnectButton
+            businessId={businessId}
+            // Same reasoning as Outlook: at the cap is not enough, because a
+            // reconnect consumes no seat. Any Google-family key counts, since
+            // the Nango era left four of them and a tenant on `google-mail`
+            // reconnects onto their existing row just like one on `google`.
+            blocked={
+              ctx.workspaceConnectionCap.atCap &&
+              !ctx.workspaceConnections.some((r) =>
+                ["google", "gmail", "google-mail", "google-calendar"].includes(
+                  r.provider_config_key
+                )
+              )
             }
           />
           <NangoEmailIntegrationActions
@@ -208,7 +224,7 @@ export default async function IntegrationDetailPage({
         </Card>
       )}
 
-      {/* Generic success banner — the Nango and Zoom flows both land with
+      {/* Generic success banner: the Nango and Zoom flows both land with
           workspace=connected on their own detail page. */}
       {q.workspace === "connected" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
@@ -219,7 +235,7 @@ export default async function IntegrationDetailPage({
       {q.meta === "connected" && integration.slug === "meta" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
           <p className="text-sm text-claw-green">
-            Facebook connected — pick the Page to watch for leads below.
+            Facebook connected. Pick the Page to watch for leads below.
           </p>
         </Card>
       )}
