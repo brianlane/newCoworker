@@ -468,6 +468,46 @@ Clever and HomeLight already work. 23 steps to 25.
   were not. The offers therefore quote `call_outcome_label` and point at the
   summary.
 
+HomeLight contact reveal (Aug 12 2026): `homelight-contact-reveal.ts`. Amy:
+"it broadcasts the lead to everyone but we never have the contact information
+or the price." FOUR causes, found by reading Kevin Duford's run (`85d1bd1f`)
+against the portal screenshot she sent.
+
+- **OUR OWN CLAIM READ AS A RIVAL'S, and this was most of it.** The portal
+  renders one flat `Claimed By: <name>` row whether the claimer is this team or
+  another agency, and `already_claimed` asked whether it was "claimed by ANOTHER
+  agent". On Kevin's run the card said `Claimed By: Amy Laidlaw`, the model
+  answered `yes`, the flow took the we-lost-it path, and **39 of 61 steps were
+  skipped**: `save_contact`, `to_agent`, `qt_email`, `lead_sms`, `lead_email`
+  and `notify` all never ran. The question now names the team, so our own claim
+  reads as ours. It names the TEAM rather than four individuals, because a
+  roster list in a prompt goes stale the moment somebody joins.
+- **The email was never read unless somebody had already claimed.**
+  `email_card` carried `when claimed_agent notEquals none`, which is backwards:
+  the team needs the details in order to DECIDE whether to claim. Ungated.
+- **No price from the email.** The alert says "$560K", the email says
+  "$560,000" plus the timeframe. `email_price`, `email_timeframe` and
+  `email_summary` are read on all three passes (`email_card`, `late_read`,
+  `late2_read`), so the retry rungs that already handle HomeLight's delay carry
+  them too.
+- **Revealed details reached nobody on an unclaimed lead**, since every
+  contact-info text addressed `{{vars.claimed_agent_phone}}`.
+  `late_unclaimed_alert` uses `notify_lead_owner` with `unownedFallback:
+  "team"`, so the details reach whoever owns the lead, or the team when nobody
+  does.
+
+Two things deliberately NOT done:
+
+- **A screenshot of the email is not possible.** `attachScreenshot` attaches a
+  BROWSE screenshot; nothing screenshots an email. The full client-details
+  block is captured as text into Amy's QT email instead, which carries
+  everything an image would and is searchable in her inbox.
+- **The failed live transfer is not made to look recoverable.** HomeLight
+  reveals details ONLY after a successful transfer or a connected call, so when
+  a seller hangs up before connecting, none are ever coming.
+  `late2_never_agent` now says that outright rather than implying the wait
+  continues.
+
 Who owns the lead, in Amy's own emails (Aug 12 2026):
 `amy-owner-in-lead-emails.ts`. Five emails to amy@amylaidlaw.com never said who
 took the lead, and all five sat BEFORE their flow's `route_to_team`, so no
