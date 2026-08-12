@@ -2182,7 +2182,9 @@
       "webchatTitle": "Chat web",
       "webchatSubtitle": "Conversaciones del widget de chat de tu sitio web",
       "whatsappTitle": "WhatsApp",
-      "whatsappSubtitle": "Conversaciones de WhatsApp con tu número de negocio"
+      "whatsappSubtitle": "Conversaciones de WhatsApp con tu número de negocio",
+      "whatsappSmsNudge": "Los SMS no pueden llegar a tu teléfono de alertas, pero WhatsApp sí. Activa \"WhatsApp en lugar de SMS\" para que las alertas urgentes te lleguen aquí.",
+      "whatsappSmsNudgeCta": "Abrir la configuración de notificaciones →"
     },
     "planCard": {
       "yourPlan": "Tu plan",
@@ -2227,8 +2229,10 @@
     },
     "phoneDeliverability": {
       "smsUnreachableMx": "Parece un número mexicano. Nuestras líneas de texto solo pueden entregar SMS a números +1 (EE. UU. y Canadá), así que los mensajes y las alertas por SMS no le llegarán. WhatsApp, el correo y las alertas del panel siguen funcionando.",
-      "smsUnreachable": "Los SMS no pueden llegar a este número: nuestras líneas de texto solo entregan a números +1 (EE. UU. y Canadá). El correo y las alertas del panel siguen funcionando.",
-      "forwardVoiceOnly": "Las llamadas sí se desviarán a este número, pero los mensajes de texto no: nuestras líneas solo entregan SMS a números +1 (EE. UU. y Canadá)."
+      "smsUnreachable": "Los SMS no pueden llegar a este número: nuestras líneas de texto solo entregan a números +1 (EE. UU. y Canadá). WhatsApp, el correo y las alertas del panel siguen funcionando.",
+      "forwardVoiceOnly": "Las llamadas sí se desviarán a este número, pero los mensajes de texto no: nuestras líneas solo entregan SMS a números +1 (EE. UU. y Canadá).",
+      "connectWhatsAppCta": "Conecta WhatsApp para que las alertas urgentes sigan llegando a este teléfono →",
+      "preferWhatsAppTip": "Consejo: activa \"WhatsApp en lugar de SMS\" arriba para que las alertas urgentes lleguen a este número por WhatsApp."
     },
     "settings": {
       "accountTitle": "Cuenta",

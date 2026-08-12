@@ -2182,7 +2182,9 @@
       "webchatTitle": "Web chat",
       "webchatSubtitle": "Conversations from the chat widget on your website",
       "whatsappTitle": "WhatsApp",
-      "whatsappSubtitle": "WhatsApp conversations with your business number"
+      "whatsappSubtitle": "WhatsApp conversations with your business number",
+      "whatsappSmsNudge": "SMS cannot reach your alert phone number, but WhatsApp can. Turn on \"WhatsApp instead of SMS\" so urgent alerts reach you here.",
+      "whatsappSmsNudgeCta": "Open notification settings →"
     },
     "planCard": {
       "yourPlan": "Your plan",
@@ -2227,8 +2229,10 @@
     },
     "phoneDeliverability": {
       "smsUnreachableMx": "This looks like a Mexican number. Our texting lines can only deliver SMS to +1 (US and Canada) numbers, so texts and SMS alerts will not reach it. WhatsApp, email, and dashboard alerts keep working.",
-      "smsUnreachable": "SMS cannot reach this number: our texting lines only deliver to +1 (US and Canada) numbers. Email and dashboard alerts keep working.",
-      "forwardVoiceOnly": "Calls will forward to this number, but texts will not: our texting lines only deliver SMS to +1 (US and Canada) numbers."
+      "smsUnreachable": "SMS cannot reach this number: our texting lines only deliver to +1 (US and Canada) numbers. WhatsApp, email, and dashboard alerts keep working.",
+      "forwardVoiceOnly": "Calls will forward to this number, but texts will not: our texting lines only deliver SMS to +1 (US and Canada) numbers.",
+      "connectWhatsAppCta": "Connect WhatsApp so urgent alerts still reach this phone →",
+      "preferWhatsAppTip": "Tip: turn on \"WhatsApp instead of SMS\" above so urgent alerts reach this number on WhatsApp."
     },
     "settings": {
       "accountTitle": "Account",

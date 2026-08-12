@@ -13,6 +13,13 @@ export type NotificationPreferencesRow = {
    */
   whatsapp_urgent?: boolean;
   /**
+   * Replace the urgent-alert SMS leg with WhatsApp when a connected WhatsApp
+   * integration exists and whatsapp_urgent is on; SMS proceeds unchanged
+   * otherwise. Default false (channels stay independent). Optional on the
+   * type for rows read before 20260822125053.
+   */
+  whatsapp_replaces_sms?: boolean;
+  /**
    * Post urgent alerts to the picked Slack channel (requires a connected
    * Slack workspace with an alert channel set). Optional on the type for
    * rows read before 20260822113305.
@@ -148,6 +155,7 @@ export type NotificationPreferencesUpdate = Partial<
     NotificationPreferencesRow,
     | "sms_urgent"
     | "whatsapp_urgent"
+    | "whatsapp_replaces_sms"
     | "slack_urgent"
     | "slack_digest"
     | "email_digest"
@@ -174,6 +182,7 @@ export type NotificationPreferencesUpdate = Partial<
 const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> = {
   sms_urgent: true,
   whatsapp_urgent: true,
+  whatsapp_replaces_sms: false,
   slack_urgent: true,
   slack_digest: true,
   email_digest: true,
@@ -281,6 +290,7 @@ export async function updateNotificationPreferences(
   const keys: (keyof NotificationPreferencesUpdate)[] = [
     "sms_urgent",
     "whatsapp_urgent",
+    "whatsapp_replaces_sms",
     "slack_urgent",
     "slack_digest",
     "email_digest",
@@ -314,8 +324,9 @@ export async function updateNotificationPreferences(
   // clear unsubscribed_at unless they explicitly set it. Without this, an
   // owner who hit "Unsubscribe from all" then re-enabled email_urgent would
   // keep seeing the "you're unsubscribed" banner until a separate save.
-  // digest_customer_facing_only is deliberately absent: it narrows what a
-  // digest reports rather than turning a channel on, so it never re-subscribes.
+  // digest_customer_facing_only and whatsapp_replaces_sms are deliberately
+  // absent: they narrow or reroute what an already-on channel delivers rather
+  // than turning a channel on, so they never re-subscribe.
   const reSubscribed =
     update.unsubscribed_at === undefined &&
     (patch.sms_urgent === true ||

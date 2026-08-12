@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -10,6 +11,12 @@ import { smsReachability } from "@/lib/phone/deliverability";
 type Props = {
   businessId: string;
   initial: NotificationPreferencesRow;
+  /**
+   * Whether the business has a WhatsApp integration connected. Gates the
+   * "WhatsApp instead of SMS" toggle (the dispatcher ignores the preference
+   * without a connection, so the UI disables it rather than pretend).
+   */
+  whatsappConnected: boolean;
 };
 
 function ToggleRow({
@@ -42,9 +49,12 @@ function ToggleRow({
   );
 }
 
-export function NotificationPreferences({ businessId, initial }: Props) {
+export function NotificationPreferences({ businessId, initial, whatsappConnected }: Props) {
   const [smsUrgent, setSmsUrgent] = useState(initial.sms_urgent);
   const [whatsappUrgent, setWhatsappUrgent] = useState(initial.whatsapp_urgent ?? true);
+  const [whatsappReplacesSms, setWhatsappReplacesSms] = useState(
+    initial.whatsapp_replaces_sms ?? false
+  );
   const [slackUrgent, setSlackUrgent] = useState(initial.slack_urgent ?? true);
   const [slackDigest, setSlackDigest] = useState(initial.slack_digest ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
@@ -93,6 +103,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   useEffect(() => {
     setSmsUrgent(initial.sms_urgent);
     setWhatsappUrgent(initial.whatsapp_urgent ?? true);
+    setWhatsappReplacesSms(initial.whatsapp_replaces_sms ?? false);
     setSlackUrgent(initial.slack_urgent ?? true);
     setSlackDigest(initial.slack_digest ?? true);
     setEmailDigest(initial.email_digest);
@@ -118,6 +129,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   function applyResponse(prefs: NotificationPreferencesRow) {
     setSmsUrgent(prefs.sms_urgent);
     setWhatsappUrgent(prefs.whatsapp_urgent ?? true);
+    setWhatsappReplacesSms(prefs.whatsapp_replaces_sms ?? false);
     setSlackUrgent(prefs.slack_urgent ?? true);
     setSlackDigest(prefs.slack_digest ?? true);
     setEmailDigest(prefs.email_digest);
@@ -151,6 +163,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           businessId,
           sms_urgent: smsUrgent,
           whatsapp_urgent: whatsappUrgent,
+          whatsapp_replaces_sms: whatsappReplacesSms,
           slack_urgent: slackUrgent,
           slack_digest: slackDigest,
           email_digest: emailDigest,
@@ -254,6 +267,17 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           checked={whatsappUrgent}
           onChange={setWhatsappUrgent}
           disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="WhatsApp instead of SMS"
+          description={
+            whatsappConnected
+              ? "Urgent alerts skip the SMS text and arrive on WhatsApp only. The SMS leg returns automatically if WhatsApp is ever disconnected or its urgent toggle is off."
+              : "Connect WhatsApp under Integrations first; until then urgent alerts keep arriving by SMS."
+          }
+          checked={whatsappReplacesSms}
+          onChange={setWhatsappReplacesSms}
+          disabled={loading || unsubscribing || !whatsappConnected}
         />
         <ToggleRow
           label="Slack: urgent alerts"
@@ -384,6 +408,21 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           {phoneWarning && (
             <p className="text-xs text-spark-orange mt-1" role="alert">
               {phoneWarning}
+            </p>
+          )}
+          {phoneWarning && !whatsappConnected && (
+            <p className="text-xs text-parchment/60 mt-1">
+              <Link
+                href="/dashboard/integrations/whatsapp"
+                className="text-signal-teal hover:underline"
+              >
+                {tDeliverability("connectWhatsAppCta")}
+              </Link>
+            </p>
+          )}
+          {phoneWarning && whatsappConnected && !whatsappReplacesSms && (
+            <p className="text-xs text-parchment/60 mt-1">
+              {tDeliverability("preferWhatsAppTip")}
             </p>
           )}
         </div>

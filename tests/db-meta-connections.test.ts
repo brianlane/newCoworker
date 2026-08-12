@@ -27,6 +27,7 @@ import {
   getPublicMetaConnection,
   savePendingMetaConnection,
   setMetaConnectionActive,
+  setMetaConnectionDataset,
   toPublicMetaConnection
 } from "@/lib/db/meta-connections";
 
@@ -36,6 +37,7 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -47,6 +49,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
+    is: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -398,6 +401,28 @@ describe("setMetaConnectionActive", () => {
   });
 });
 
+describe("setMetaConnectionDataset", () => {
+  it("writes the dataset guarded on an ACTIVE row that still has none", async () => {
+    const c = chain({ error: null });
+    await setMetaConnectionDataset(BIZ, "ds-new", makeDb(c));
+    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.dataset_id).toBe("ds-new");
+    expect(patch.updated_at).toEqual(expect.any(String));
+    // The guards are what stop a late discovery from clobbering a working
+    // dataset or touching a pending row.
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("status", "active");
+    expect(c.is).toHaveBeenCalledWith("dataset_id", null);
+  });
+
+  it("throws on a write error", async () => {
+    const c = chain({ error: { message: "dataset write fail" } });
+    await expect(setMetaConnectionDataset(BIZ, "ds-new", makeDb(c))).rejects.toThrow(
+      /dataset write fail/
+    );
+  });
+});
+
 describe("deleteMetaConnection", () => {
   it("deletes by business id and throws on error", async () => {
     const c = chain({ error: null });
@@ -430,7 +455,8 @@ describe("default service client", () => {
       pageToken: "t"
     });
     await setMetaConnectionActive(BIZ, true);
+    await setMetaConnectionDataset(BIZ, "ds-new");
     await deleteMetaConnection(BIZ);
-    expect(defaultClientSpy).toHaveBeenCalledTimes(9);
+    expect(defaultClientSpy).toHaveBeenCalledTimes(10);
   });
 });

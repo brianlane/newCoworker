@@ -299,6 +299,30 @@ export async function activateMetaConnection(
   return toPublicMetaConnection(data as unknown as StoredMetaConnectionRow);
 }
 
+/**
+ * Late Conversions API dataset discovery: fill dataset_id on an ACTIVE
+ * connection that predates the app's post-App-Review scopes (connect-time
+ * discovery returned null for every pre-approval connection, and only a
+ * reconnect re-attempted it). Scoped to status=active AND dataset_id IS
+ * NULL so it can never clobber a working dataset or touch a pending row.
+ * Matching zero rows is a no-op, not an error: the connection may have
+ * been reconnected (dataset already set) or dropped since the caller read it.
+ */
+export async function setMetaConnectionDataset(
+  businessId: string,
+  datasetId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("meta_connections")
+    .update({ dataset_id: datasetId, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("status", "active")
+    .is("dataset_id", null);
+  if (error) throw new Error(`setMetaConnectionDataset: ${error.message}`);
+}
+
 /** Soft-disable / re-enable (webhook deliveries refuse while inactive). */
 export async function setMetaConnectionActive(
   businessId: string,

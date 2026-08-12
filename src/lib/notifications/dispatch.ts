@@ -144,6 +144,13 @@ export type ResolvedTargets = {
    * really is connected.
    */
   whatsappConnected: boolean;
+  /**
+   * Owner preference: deliver urgent alerts on WhatsApp INSTEAD of SMS.
+   * Honored only while WhatsApp can actually deliver (connected + channel
+   * on) and never for alerts redirected to a teammate's phone, so it can
+   * never silence the only phone channel someone has.
+   */
+  whatsappReplacesSms: boolean;
   /** Slack channel toggle (delivery still requires a picked alert channel). */
   slackUrgentEnabled: boolean;
   /** Same never-connected silence rule as whatsappConnected. */
@@ -192,6 +199,9 @@ export async function resolveNotificationTargets(
   let prefsPhone: string | null = null;
   let smsUrgent = true;
   let whatsappUrgent = true;
+  // Reroute preference defaults OFF (fail toward delivering on both
+  // channels), unlike the channel toggles above which fail toward on.
+  let whatsappReplacesSms = false;
   let slackUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
@@ -228,6 +238,8 @@ export async function resolveNotificationTargets(
     // ?? true: rows read before the 20260811210000 migration keep the
     // channel on (delivery still requires a connected integration).
     whatsappUrgent = prefs.whatsapp_urgent ?? true;
+    // ?? false: rows read before 20260822125053 keep SMS delivery unchanged.
+    whatsappReplacesSms = prefs.whatsapp_replaces_sms ?? false;
     // ?? true: rows read before 20260822113305, same posture.
     slackUrgent = prefs.slack_urgent ?? true;
     emailUrgent = prefs.email_urgent;
@@ -305,6 +317,7 @@ export async function resolveNotificationTargets(
     routing,
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
+    whatsappReplacesSms,
     whatsappConnected,
     slackUrgentEnabled: slackUrgent,
     slackConnected: slackState.connected,
@@ -596,6 +609,30 @@ export async function dispatchUrgentNotification(
         kind,
         { ...payload, recipient: targets.phone },
         targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
+      )
+    );
+  } else if (
+    targets.whatsappReplacesSms &&
+    targets.whatsappConnected &&
+    targets.whatsappUrgentEnabled &&
+    targets.routing?.target !== "contact_owner"
+  ) {
+    // The owner opted to receive this on WhatsApp INSTEAD of SMS. Honored
+    // only while the WhatsApp leg below can actually fire (connected +
+    // channel on), and never for an alert redirected to a teammate's phone:
+    // the preference belongs to the owner's number, and a teammate's number
+    // may not have WhatsApp at all. An out-of-window WhatsApp send whose
+    // template is still in Meta review records its own honest skip row, so
+    // the two rows together always tell the owner what happened.
+    results.push(
+      await recordRow(
+        input.businessId,
+        "sms",
+        "skipped",
+        summary,
+        kind,
+        { ...payload, recipient: targets.phone },
+        "whatsapp_preferred"
       )
     );
   } else {

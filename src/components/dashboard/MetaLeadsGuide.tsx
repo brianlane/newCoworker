@@ -8,8 +8,10 @@
  * (POST /api/aiflows, created disabled for review), mints the `nck_` API key
  * inline (same endpoint the integrations card uses; plaintext shown once),
  * and renders a live "recent webhook events" readout so the owner SEES their
- * Meta test lead arrive. Bridge steps lead with Make.com (free tier); Zapier
- * is the alternative for owners who already pay for it.
+ * Meta test lead arrive. The direct Facebook connection is the primary path
+ * (Meta granted Advanced Access Aug 2026); the bridge steps (Make.com free
+ * tier first, Zapier for owners who already pay for it) are the clearly
+ * labeled fallback section below it.
  */
 
 import { useState } from "react";
@@ -239,10 +241,10 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Option A: direct Facebook connection ─────────────────────── */}
+      {/* ── Step 3: the direct Facebook connection (primary path) ────── */}
       <Card>
         <div className="rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3">
-          <StepHeading n={3} title="Fastest path: connect Facebook directly (no bridge)" />
+          <StepHeading n={3} title="Connect Facebook (two clicks, recommended)" />
           <p className="mt-2 text-sm text-parchment/70">
             On the{" "}
             <Link
@@ -253,22 +255,32 @@ export function MetaLeadsGuide({
             </Link>
             , connect your Facebook Page to your coworker in two clicks: log into Facebook, pick your Page, done. Leads arrive
             the moment they&apos;re submitted, with no Make.com or Zapier account and no
-            field mapping. Your flow from step 1 works unchanged.
+            field mapping. Your flow from step 1 works unchanged. Once connected,
+            jump straight to step 7 to send a test lead.
           </p>
           <p className="mt-2 text-xs text-parchment/55">
             The direct connection works for every Facebook account, no tester
-            setup and no waiting. The bridge path below remains available if
+            setup and no waiting. The bridge fallback below remains available if
             you already run Make or Zapier for other lead sources; you can
             switch between the two at any time without touching your flows.
           </p>
         </div>
       </Card>
 
-      {/* ── Steps 4-6: the bridge path (Option B) ────────────────────── */}
+      {/* ── Bridge fallback (steps 4-6): only when skipping the direct
+             connection ──────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 pt-2">
+        <span className="h-px flex-1 bg-parchment/10" />
+        <p className="text-xs font-semibold uppercase tracking-wider text-parchment/40">
+          Bridge fallback: only if you skip the direct connection
+        </p>
+        <span className="h-px flex-1 bg-parchment/10" />
+      </div>
+
       <Card>
-        <StepHeading n={4} title="Bridge path: create your connection key" />
+        <StepHeading n={4} title="Bridge fallback: create your connection key" />
         <p className="mt-2 text-sm text-parchment/60">
-          Using the bridge path instead? The bridge tool (next step) proves it&apos;s yours
+          Using the bridge fallback instead? The bridge tool (next step) proves it&apos;s yours
           with an API key. Create one here. It&apos;s shown once, so copy it somewhere safe
           before you leave this page.
         </p>
@@ -305,11 +317,11 @@ export function MetaLeadsGuide({
         ) : null}
       </Card>
 
-      {/* ── Step 4: the bridge ───────────────────────────────────────── */}
+      {/* ── Step 5: the bridge scenario ──────────────────────────────── */}
       <Card>
-        <StepHeading n={5} title="Bridge path: connect Facebook via Make.com (free)" />
+        <StepHeading n={5} title="Bridge fallback: connect via Make.com (free)" />
         <p className="mt-2 text-sm text-parchment/60">
-          Meta only hands leads to approved partners, so a small bridge forwards each new lead
+          Prefer not to link Facebook directly? A small bridge forwards each new lead
           to your coworker the moment it&apos;s submitted. Make.com&apos;s free plan covers this
           (1,000 leads/month). You&apos;ll need to be an <strong>admin of your Facebook Page</strong>.
         </p>
@@ -386,10 +398,10 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Step 5: the CRM-access gotcha ────────────────────────────── */}
+      {/* ── Step 6: the CRM-access gotcha ────────────────────────────── */}
       <Card>
         <div className="rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
-          <StepHeading n={6} title="Bridge path, don't skip: grant the bridge Lead Access in Facebook" />
+          <StepHeading n={6} title="Bridge fallback, don't skip: grant the bridge Lead Access in Facebook" />
           <p className="mt-2 text-sm text-parchment/70">
             This is the #1 reason lead capture <em>silently</em> fails: test leads work, then real
             ad leads never arrive. In{" "}
@@ -402,7 +414,7 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Step 6: test it ──────────────────────────────────────────── */}
+      {/* ── Step 7: test it (both paths converge here) ───────────────── */}
       <Card>
         <StepHeading n={7} title="Send a test lead and watch it arrive" />
         <p className="mt-2 text-sm text-parchment/60">
@@ -427,7 +439,7 @@ export function MetaLeadsGuide({
         </div>
         {recentEvents.length === 0 ? (
           <p className="mt-2 rounded-md border border-dashed border-parchment/15 p-4 text-center text-xs text-parchment/45">
-            Nothing yet. Events appear here the moment your bridge delivers one.
+            Nothing yet. Events appear here the moment your connection or bridge delivers one.
           </p>
         ) : (
           <ul className="mt-2 divide-y divide-parchment/10">

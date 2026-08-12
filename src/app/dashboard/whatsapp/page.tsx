@@ -16,6 +16,8 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { listMessengerConversationsForBusiness } from "@/lib/messenger/db";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
+import { getNotificationPreferences } from "@/lib/db/notification-preferences";
+import { smsReachability } from "@/lib/phone/deliverability";
 
 export const dynamic = "force-dynamic";
 
@@ -92,9 +94,35 @@ export default async function DashboardWhatsAppPage() {
     platform: "whatsapp"
   });
 
+  // Owner-alert nudge: this tenant is connected here, yet their alert phone
+  // is one SMS cannot reach (non-NANP: our long codes cannot originate
+  // international SMS) and urgent alerts still ride the SMS leg. Point them
+  // at the "WhatsApp instead of SMS" preference. A prefs read failure just
+  // hides the nudge.
+  const prefs = await getNotificationPreferences(business.id).catch(() => null);
+  const alertPhone = prefs?.phone_number?.trim() || null;
+  const showSmsNudge =
+    alertPhone !== null &&
+    smsReachability(alertPhone) !== "nanp" &&
+    !(prefs?.whatsapp_replaces_sms ?? false);
+
   return (
     <div className="space-y-6 max-w-4xl">
       {header}
+
+      {showSmsNudge ? (
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-parchment/70">{t("whatsappSmsNudge")}</p>
+            <Link
+              href="/dashboard/notifications"
+              className="shrink-0 text-sm text-signal-teal hover:underline"
+            >
+              {t("whatsappSmsNudgeCta")}
+            </Link>
+          </div>
+        </Card>
+      ) : null}
 
       {conversations.length === 0 ? (
         <Card>

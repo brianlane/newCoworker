@@ -1634,4 +1634,93 @@ describe("notifications/dispatch", () => {
       expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
     });
   });
+
+  describe("WhatsApp instead of SMS (whatsapp_replaces_sms)", () => {
+    const smsRowOf = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .find((r) => r.delivery_channel === "sms");
+
+    it("skips SMS as whatsapp_preferred and still delivers WhatsApp when the pref is on and WhatsApp can deliver", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(sendTelnyxSms).not.toHaveBeenCalled();
+      expect(deliverWhatsApp).toHaveBeenCalledTimes(1);
+      const smsRow = smsRowOf();
+      expect(smsRow?.status).toBe("skipped");
+      expect((smsRow?.payload as Record<string, unknown>).reason).toBe("whatsapp_preferred");
+      const waRow = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .find((r) => r.delivery_channel === "whatsapp");
+      expect(waRow?.status).toBe("sent");
+    });
+
+    it("keeps sending SMS when the pref is on but WhatsApp was never connected", async () => {
+      vi.mocked(getPublicWhatsAppConnection).mockResolvedValue(null as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+      expect(smsRowOf()?.status).toBe("sent");
+    });
+
+    it("keeps sending SMS when the pref is on but the WhatsApp urgent toggle is off", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_urgent: false,
+        whatsapp_replaces_sms: true
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+      expect(deliverWhatsApp).not.toHaveBeenCalled();
+      expect(smsRowOf()?.status).toBe("sent");
+    });
+
+    it("a redirected teammate page keeps its SMS even with the pref on (the teammate's number may have no WhatsApp)", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0]?.[1]).toBe(DAVE_PHONE);
+      expect(smsRowOf()?.status).toBe("sent");
+    });
+
+    it("resolveNotificationTargets defaults whatsappReplacesSms to false and reads a stored true", async () => {
+      const t1 = await resolveNotificationTargets(BIZ);
+      expect(t1.whatsappReplacesSms).toBe(false);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      const t2 = await resolveNotificationTargets(BIZ);
+      expect(t2.whatsappReplacesSms).toBe(true);
+    });
+  });
 });

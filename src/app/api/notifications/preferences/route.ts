@@ -14,6 +14,7 @@ const patchSchema = z.object({
   businessId: z.string().uuid(),
   sms_urgent: z.boolean().optional(),
   whatsapp_urgent: z.boolean().optional(),
+  whatsapp_replaces_sms: z.boolean().optional(),
   slack_urgent: z.boolean().optional(),
   slack_digest: z.boolean().optional(),
   email_digest: z.boolean().optional(),

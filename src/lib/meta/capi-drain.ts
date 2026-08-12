@@ -17,12 +17,17 @@
  * a tenant who re-enables the connection within the window loses nothing.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connections";
+import {
+  getMetaConnection,
+  setMetaConnectionDataset,
+  type MetaConnectionRow
+} from "@/lib/db/meta-connections";
 import {
   CAPI_EVENT_MAX_AGE_MS,
   buildConversionLeadBody,
   sendConversionLeadBody
 } from "@/lib/meta/capi";
+import { getOrCreatePageDataset } from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -191,16 +196,48 @@ export async function drainMetaCapiEvents(
   // One connection lookup per business in the batch.
   const connections = new Map<string, MetaConnectionRow | null>();
   for (const businessId of new Set(rows.map((r) => r.business_id))) {
-    connections.set(
-      businessId,
-      await getMetaConnection(businessId, db).catch((err) => {
-        logger.warn("meta capi drain: connection lookup failed", {
-          businessId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-        return null;
-      })
-    );
+    let connection = await getMetaConnection(businessId, db).catch((err) => {
+      logger.warn("meta capi drain: connection lookup failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    });
+    // Late dataset discovery. A connection made before the app held the
+    // post-App-Review ads scopes has dataset_id NULL (connect-time discovery
+    // failed silently and only a reconnect retried), which parked its stage
+    // events in `deferred` until the 7-day window expired them. One
+    // get-or-create per drain tick self-heals it; a failed attempt changes
+    // nothing (the events keep deferring exactly as before). Bounded: only
+    // businesses with claimed events reach this loop, and a page whose token
+    // still cannot discover stops costing anything once its rows expire.
+    if (
+      connection &&
+      !connection.dataset_id &&
+      connection.status === "active" &&
+      connection.is_active &&
+      connection.capi_enabled &&
+      connection.page_id &&
+      connection.pageToken
+    ) {
+      const datasetId = await getOrCreatePageDataset(connection.page_id, connection.pageToken);
+      if (datasetId) {
+        try {
+          await setMetaConnectionDataset(businessId, datasetId, db);
+          // Replace (never mutate) the row so THIS batch's events upload now
+          // instead of waiting one more tick.
+          connection = { ...connection, dataset_id: datasetId };
+        } catch (err) {
+          // Persist failed: do not use the discovered id this tick — the
+          // send path must never run ahead of what the row records.
+          logger.warn("meta capi drain: dataset persist failed", {
+            businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+    }
+    connections.set(businessId, connection);
   }
 
   for (const row of rows) {
