@@ -39,6 +39,17 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  *   - any named follow-up timing must still be ahead (tomorrow / the next
  *     window / immediately), with immediate follow-up always allowed (the
  *     act-now contract in amy-act-now.e2e.test.ts is unaffected).
+ *
+ * A reply that points back at the lead's recurring window with NO day
+ * attached ("someone will reach out within that window") satisfies both
+ * halves, and the two judge questions have to agree about that. They did
+ * not: promises_passed_window already answered false for "names no day at
+ * all", while future_or_no_day only accepted "no timing at all", so an
+ * unanchored window fell through the gap and the pair contradicted itself.
+ * That is what failed the nightly on 2026-08-12, on a reply that broke no
+ * contract. future_or_no_day now spells the case out. The real defect this
+ * file exists for, a reply that pins contact to TODAY's closed window, is
+ * still caught by promises_passed_window, which is untouched.
  */
 
 const LEAD = "+16127087408";
@@ -134,7 +145,12 @@ describe("Amy availability-window replay — Kolton 2026-07-31 (generic path, re
           "If the message names when someone will reach out or follow up, is " +
           "that timing still ahead of Friday 8:03 PM (tomorrow, Saturday, the " +
           "next 10am-2pm window, or immediately / shortly / right away)? " +
-          "Answer true when the message names no timing at all.",
+          "Answer true when the message names no timing at all. Also answer " +
+          "true when it points back at the lead's own recurring 10am-2pm " +
+          "window WITHOUT attaching a day to it (for example 'within that " +
+          "window', 'during that time'): naming no day is not the same as " +
+          "naming today, and pinning it to today is what the " +
+          "promises_passed_window question above already catches.",
         acknowledges_criteria:
           "Does the message acknowledge the lead's home criteria in some form " +
           "(beds, baths, garage/carport, or the East Valley cities they named)?"
