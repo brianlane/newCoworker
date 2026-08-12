@@ -79,11 +79,13 @@ export default async function NotificationsPage(props: {
           })
       : Promise.resolve(null),
     businessId ? getNotifications(businessId, { limit: 25 }) : Promise.resolve([]),
-    // Gates the "WhatsApp instead of SMS" toggle; a read blip renders the
+    // Gates the "WhatsApp instead of SMS" toggle. ACTIVE, not merely
+    // present: an inactive connection cannot deliver, and the dispatcher
+    // will not honor the preference for one either. A read blip renders the
     // toggle disabled (safe: the dispatcher re-checks at delivery time).
     businessId
       ? getPublicWhatsAppConnection(businessId)
-          .then((c) => c !== null)
+          .then((c) => c?.is_active === true)
           .catch(() => false)
       : Promise.resolve(false)
   ]);

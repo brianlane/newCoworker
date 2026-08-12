@@ -146,11 +146,19 @@ export type ResolvedTargets = {
   whatsappConnected: boolean;
   /**
    * Owner preference: deliver urgent alerts on WhatsApp INSTEAD of SMS.
-   * Honored only while WhatsApp can actually deliver (connected + channel
-   * on) and never for alerts redirected to a teammate's phone, so it can
-   * never silence the only phone channel someone has.
+   * Gated on {@link whatsappDeliverable}, never on {@link whatsappConnected}.
    */
   whatsappReplacesSms: boolean;
+  /**
+   * Whether the WhatsApp connection can actually DELIVER right now: the row
+   * exists AND is active. Distinct from {@link whatsappConnected}, which
+   * only asks "is this channel applicable to this business?" and fails
+   * toward TRUE. This one fails toward FALSE, because it is the gate that
+   * SUPPRESSES the SMS leg: an inactive/expired connection refuses with
+   * `connection_inactive` inside deliverWhatsApp, so treating a mere row as
+   * proof of delivery would leave the owner with no phone channel at all.
+   */
+  whatsappDeliverable: boolean;
   /** Slack channel toggle (delivery still requires a picked alert channel). */
   slackUrgentEnabled: boolean;
   /** Same never-connected silence rule as whatsappConnected. */
@@ -272,9 +280,18 @@ export async function resolveNotificationTargets(
 
   // "Has this business ever connected WhatsApp?" — the public read, because
   // this is an existence check and never needs the encrypted access token.
+  // Two verdicts from one lookup, with DELIBERATELY OPPOSITE failure
+  // directions: `connected` decides whether to write a row at all (fails
+  // toward true: better a noisy honest skip than silence for a tenant who
+  // really is connected), while `deliverable` decides whether to suppress
+  // the SMS leg (fails toward false: never trade a working channel for an
+  // uncertain one).
   let whatsappConnected = true;
+  let whatsappDeliverable = false;
   try {
-    whatsappConnected = (await getPublicWhatsAppConnection(businessId)) !== null;
+    const waConnection = await getPublicWhatsAppConnection(businessId);
+    whatsappConnected = waConnection !== null;
+    whatsappDeliverable = waConnection?.is_active === true;
   } catch (err) {
     logger.warn("resolveNotificationTargets: whatsapp connection lookup failed", {
       businessId,
@@ -318,6 +335,7 @@ export async function resolveNotificationTargets(
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
     whatsappReplacesSms,
+    whatsappDeliverable,
     whatsappConnected,
     slackUrgentEnabled: slackUrgent,
     slackConnected: slackState.connected,
@@ -613,17 +631,20 @@ export async function dispatchUrgentNotification(
     );
   } else if (
     targets.whatsappReplacesSms &&
-    targets.whatsappConnected &&
+    targets.whatsappDeliverable &&
     targets.whatsappUrgentEnabled &&
     targets.routing?.target !== "contact_owner"
   ) {
-    // The owner opted to receive this on WhatsApp INSTEAD of SMS. Honored
-    // only while the WhatsApp leg below can actually fire (connected +
-    // channel on), and never for an alert redirected to a teammate's phone:
-    // the preference belongs to the owner's number, and a teammate's number
-    // may not have WhatsApp at all. An out-of-window WhatsApp send whose
-    // template is still in Meta review records its own honest skip row, so
-    // the two rows together always tell the owner what happened.
+    // The owner opted to receive this on WhatsApp INSTEAD of SMS. Gated on
+    // whatsappDeliverable, NOT whatsappConnected: the latter is true for a
+    // row that exists but is inactive or token-lapsed, which deliverWhatsApp
+    // refuses with `connection_inactive` — suppressing SMS on that basis
+    // would leave the owner with NO phone channel (Bugbot f574b3a4). Never
+    // applied to an alert redirected to a teammate's phone either: the
+    // preference belongs to the owner's number, and a teammate's number may
+    // not have WhatsApp at all. An out-of-window send whose template is
+    // still in Meta review records its own honest skip row, so the two rows
+    // together always tell the owner what happened.
     results.push(
       await recordRow(
         input.businessId,

@@ -1664,6 +1664,46 @@ describe("notifications/dispatch", () => {
       expect(waRow?.status).toBe("sent");
     });
 
+    it("keeps sending SMS when the connection row exists but is INACTIVE (it would refuse, leaving no phone channel)", async () => {
+      // Bugbot f574b3a4: gating the skip on "a row exists" suppressed SMS
+      // while deliverWhatsApp refused with connection_inactive.
+      vi.mocked(getPublicWhatsAppConnection).mockResolvedValue({
+        business_id: BIZ,
+        phone_number_id: "pn-1",
+        is_active: false
+      } as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+      expect(smsRowOf()?.status).toBe("sent");
+    });
+
+    it("keeps sending SMS when the connection lookup THROWS (uncertainty must never cost a working channel)", async () => {
+      vi.mocked(getPublicWhatsAppConnection).mockRejectedValue(new Error("db down"));
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_replaces_sms: true
+      } as never);
+      const targets = await resolveNotificationTargets(BIZ);
+      // The two verdicts fail in OPPOSITE directions on the same error.
+      expect(targets.whatsappConnected).toBe(true);
+      expect(targets.whatsappDeliverable).toBe(false);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+      expect(smsRowOf()?.status).toBe("sent");
+    });
+
     it("keeps sending SMS when the pref is on but WhatsApp was never connected", async () => {
       vi.mocked(getPublicWhatsAppConnection).mockResolvedValue(null as never);
       vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({

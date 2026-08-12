@@ -547,18 +547,27 @@ serve(async (req: Request) => {
 
   // "Has this business ever connected WhatsApp?" — resolved BEFORE the SMS
   // branch because the whatsapp_replaces_sms preference may only suppress
-  // SMS while the WhatsApp leg further down can actually fire. Fails toward
-  // true so a read blip degrades to the old behavior rather than silencing
-  // a connected tenant. Mirrors resolveNotificationTargets in
-  // src/lib/notifications/dispatch.ts.
+  // SMS while the WhatsApp leg further down can actually fire.
+  //
+  // Two verdicts, DELIBERATELY OPPOSITE failure directions (mirrors
+  // resolveNotificationTargets in src/lib/notifications/dispatch.ts):
+  // `connected` decides whether to write a row at all and fails toward
+  // true; `deliverable` decides whether to SUPPRESS the SMS leg and fails
+  // toward false, because an inactive/expired connection refuses with
+  // `connection_inactive` and suppressing SMS on that basis would leave the
+  // owner with no phone channel at all.
   let whatsappConnected = true;
+  let whatsappDeliverable = false;
   {
     const { data: waConn, error: waConnErr } = await supa
       .from("whatsapp_connections")
-      .select("business_id")
+      .select("business_id, is_active")
       .eq("business_id", record.business_id)
       .maybeSingle();
-    if (!waConnErr) whatsappConnected = waConn !== null;
+    if (!waConnErr) {
+      whatsappConnected = waConn !== null;
+      whatsappDeliverable = waConn?.is_active === true;
+    }
   }
 
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
@@ -611,14 +620,15 @@ serve(async (req: Request) => {
     );
   } else if (
     targets.whatsappReplacesSms &&
-    whatsappConnected &&
+    whatsappDeliverable &&
     targets.whatsappUrgent &&
     targets.routing?.target !== "contact_owner"
   ) {
-    // WhatsApp-instead-of-SMS preference: honored only while the WhatsApp
-    // leg below can actually fire (connected + channel on), and never for
-    // an alert redirected to a teammate's phone, whose number may not have
-    // WhatsApp at all. Mirrors dispatch.ts.
+    // WhatsApp-instead-of-SMS preference: gated on whatsappDeliverable, NOT
+    // whatsappConnected — an inactive/token-lapsed row would otherwise
+    // suppress SMS while the WhatsApp leg refuses, leaving no phone channel
+    // (Bugbot f574b3a4). Never for an alert redirected to a teammate's
+    // phone, whose number may not have WhatsApp at all. Mirrors dispatch.ts.
     await recordRow(
       supa,
       record.business_id,
