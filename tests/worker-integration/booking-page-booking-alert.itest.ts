@@ -52,10 +52,34 @@ beforeEach(() => {
 
 /**
  * A weekday inside the default 9-to-5 business hours, far enough out to clear
- * min_notice_minutes and inside max_advance_days. Fixed, not relative: a
- * date that drifts with the clock is a flaky test waiting to happen.
+ * min_notice_minutes and inside max_advance_days.
+ *
+ * Computed from the clock, NOT a fixed calendar moment. This constant used to
+ * be the literal "2026-08-12T15:00:00.000Z", on the reasoning that a date
+ * which drifts with the clock is a flaky test waiting to happen. The opposite
+ * is what happened: a fixed future instant has an expiry date. On Aug 12 2026
+ * at 13:00 UTC the slot fell inside `min_notice_minutes` (120), the submit
+ * re-verify stopped offering it, and all 7 tests in this file failed on main
+ * and would have failed forever after. Anchoring to `now` is what makes it
+ * durable; the flake it was guarding against comes from a start that lands
+ * outside business hours or the notice window, which is what the arithmetic
+ * below pins instead.
+ *
+ * 3 days out clears the 120-minute notice from any time of day, then roll
+ * forward off Sat/Sun so it stays a weekday, at 15:00 UTC (3pm, inside the
+ * default 9-to-5 of a UTC business). The furthest this can land is ~5 days,
+ * well inside max_advance_days (30).
  */
-const START_ISO = "2026-08-12T15:00:00.000Z"; // Wednesday, 3pm UTC
+function nextWeekdayAt15Utc(): string {
+  const d = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  d.setUTCHours(15, 0, 0, 0);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return d.toISOString();
+}
+
+const START_ISO = nextWeekdayAt15Utc();
 const VISITOR_PHONE = "+12187702372";
 const VISITOR_EMAIL = "brett@example.com";
 
