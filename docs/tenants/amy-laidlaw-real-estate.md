@@ -835,6 +835,33 @@ overwhelmed."
   retry ladder still passes the gate and lands in the cadence instead of
   silence.
 
+Unclaimed $500K+ sellers become AI-owned too (Aug 13 2026):
+`amy-team-unclaimed-ai-followup.ts`. Amy: "When the lead comes in above $500K
+and no employee claims it then ai will own the follow up process." The other
+half of the under-$500K gate: the claim offer still goes out, but when it
+runs its whole course unclaimed the flow no longer ends at "It's back to
+you". A `{p}_team_unclaimed` branch at the END of each of the four lead
+flows (never delaying emails or the bad-phone chain) waits 120 minutes past
+flow end, re-checks `claimed_agent`, and tags the lead into the cadence.
+
+- **Sellers only, $500K to $1M.** Buyers untouched as always; $1M+ is
+  excluded because ownerDirect means it was never offered to the team, so
+  "no employee claims" never describes it and Amy keeps it personal.
+- **Realtor.com gained a `lead_type` extraction** that answers seller ONLY
+  when the message clearly says selling; ambiguity (most Realtor.com traffic
+  is buyer inquiries) fails safe to buyer and no tag.
+- **Note choice mirrors the gate:** Clever and RE tags carry AUTO_TAG_NOTE
+  (their calls run for every under-$1M lead, cadence starts at the 3-day
+  wait); Realtor.com and NLI tag plain (mostly never called, the cadence's
+  immediate call IS the takeover; a rare call-gated NLI lead gets re-called
+  ~3h later, which beats delaying the majority 3 days).
+- **Copy matches behavior:** the seller offers' `ownerFallbackTemplate` now
+  says the AI keeps working unclaimed leads. Realtor.com's s4 fallback is
+  deliberately untouched (it offers buyers too, the line would be false).
+- **Candidate follow-up, not yet asked for:** the "Follow Up Requested
+  (Unclaimed Leads)" flow has the same disease (unclaimed request → "back to
+  you" → nothing); flagged to Brian rather than silently included.
+
 `tests/tenant-dossiers.test.ts` fails if a tenant-named script exists without
 a mention here, so adding a one-shot means adding a line.
 
