@@ -53,8 +53,24 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
   const [loadingPages, setLoadingPages] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [datasetInput, setDatasetInput] = useState(initialConnection?.dataset_id ?? "");
+  const [savingDataset, setSavingDataset] = useState(false);
+  const [datasetMessage, setDatasetMessage] = useState<string | null>(null);
 
   const pending = connection?.status === "pending";
+
+  /**
+   * Replace the connection AND re-seed the dataset field from it. Always use
+   * this instead of setConnection: a dataset belongs to ONE Page, so picking
+   * a different Page drops dataset_id server-side, and a field still holding
+   * the old id would let one Save click attach the previous Page's dataset
+   * to the new one (Bugbot 4cc8f6c4).
+   */
+  function applyConnection(next: MetaConnection | null) {
+    setConnection(next);
+    setDatasetInput(next?.dataset_id ?? "");
+    setDatasetMessage(null);
+  }
 
   // A pending connection needs its Page options (server-side Graph call).
   useEffect(() => {
@@ -72,7 +88,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         if (cancelled) return;
         setPages(json.data?.pages ?? []);
         if (json.data?.connection !== undefined) {
-          setConnection(json.data.connection ?? null);
+          applyConnection(json.data.connection ?? null);
         }
       } finally {
         if (!cancelled) setLoadingPages(false);
@@ -101,9 +117,41 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         setBanner(json.error?.message ?? "Could not connect the Page");
         return;
       }
-      setConnection(json.data ?? null);
+      applyConnection(json.data ?? null);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveDataset() {
+    setDatasetMessage(null);
+    setSavingDataset(true);
+    try {
+      const res = await fetch("/api/integrations/meta", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, datasetId: datasetInput.trim() })
+      });
+      const json = (await res.json()) as {
+        data?: MetaConnection;
+        error?: { message?: string };
+      };
+      if (!res.ok || !json.data) {
+        setDatasetMessage(
+          json.error?.message ??
+            "Could not save that dataset ID. It should be the numeric ID from Events Manager."
+        );
+        return;
+      }
+      const saved = json.data;
+      applyConnection(saved);
+      setDatasetMessage(
+        saved.dataset_id ? "Saved. Stage changes now report to Meta." : "Dataset cleared."
+      );
+    } catch {
+      setDatasetMessage("Network error");
+    } finally {
+      setSavingDataset(false);
     }
   }
 
@@ -117,7 +165,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         body: JSON.stringify({ businessId })
       });
       if (res.ok) {
-        setConnection(null);
+        applyConnection(null);
         setPages([]);
         setSelectedPage("");
       } else {
@@ -257,27 +305,70 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
               <span className="text-spark-orange"> · paused</span>
             ) : null}
           </div>
-          <p className="text-[11px] text-parchment/40">
-            Ads feedback:{" "}
-            {connection.dataset_id && connection.capi_enabled && connection.is_active ? (
-              <span className="text-claw-green">
-                on — booked and stage changes are reported back to Meta so your ads
-                optimize for lead quality
-              </span>
-            ) : connection.dataset_id && connection.capi_enabled ? (
-              // Paused connections defer uploads; they resume on re-enable.
-              <span>
-                paused with the connection — stage changes are held and report to
-                Meta once the connection is re-enabled.
-              </span>
-            ) : (
-              <span>
-                not active yet. Once our Meta app finishes its review, reconnecting
-                enables it automatically — moving a lead to Booked (or any pipeline
-                stage) then trains your ads on lead quality.
-              </span>
-            )}
-          </p>
+          <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+            <p className="text-[11px] text-parchment/40">
+              Ads feedback:{" "}
+              {connection.dataset_id && connection.capi_enabled && connection.is_active ? (
+                <span className="text-claw-green">
+                  on — booked and stage changes are reported back to Meta so your ads
+                  optimize for lead quality
+                </span>
+              ) : connection.dataset_id && connection.capi_enabled ? (
+                // Paused connections defer uploads; they resume on re-enable.
+                <span>
+                  paused with the connection — stage changes are held and report to
+                  Meta once the connection is re-enabled.
+                </span>
+              ) : (
+                <span>
+                  off. Add your Conversions API dataset below and moving a lead to
+                  Booked (or any pipeline stage) starts training your ads on lead
+                  quality.
+                </span>
+              )}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                inputMode="numeric"
+                className="min-w-[12rem] flex-1 rounded-md bg-ink-black/40 border border-parchment/15 px-3 py-1.5 font-mono text-xs text-parchment focus:outline-none focus:border-signal-teal/60"
+                placeholder="Dataset ID, e.g. 1234567890123456"
+                value={datasetInput}
+                onChange={(e) => setDatasetInput(e.target.value)}
+                aria-label="Conversions API dataset ID"
+                disabled={savingDataset}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void saveDataset()}
+                loading={savingDataset}
+                disabled={datasetInput.trim() === (connection.dataset_id ?? "")}
+              >
+                Save
+              </Button>
+            </div>
+            <p className="mt-2 text-[11px] text-parchment/40">
+              In{" "}
+              <a
+                href="https://business.facebook.com/events_manager2"
+                target="_blank"
+                rel="noreferrer"
+                className="text-signal-teal hover:underline"
+              >
+                Meta Events Manager
+              </a>
+              , open <strong>Connect data sources → CRM</strong>, create the dataset,
+              then paste its ID here. Meta requires the advertiser to create it, so we
+              cannot do this step for you. Leave blank to turn the feedback loop off.
+            </p>
+            {datasetMessage ? (
+              <p className="mt-2 text-[11px] text-parchment/70" role="status">
+                {datasetMessage}
+              </p>
+            ) : null}
+          </div>
           <div className="flex gap-2">
             <Button
               type="button"

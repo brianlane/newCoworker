@@ -37,7 +37,6 @@ import {
   getInstagramMediaPermalink,
   getLinkedInstagramAccount,
   getMessengerProfile,
-  getOrCreatePageDataset,
   registerWhatsAppPhoneNumber,
   getMetaAppId,
   getMetaAppSecret,
@@ -171,6 +170,10 @@ describe("buildMetaLoginUrl", () => {
     expect(url.searchParams.get("state")).toBe("signed-state");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("scope")).toContain("leads_retrieval");
+    // The IG comment webhook turns comments into `instagram_comment` AiFlow
+    // triggers (src/lib/meta/webhook.ts); without the scope in the dialog
+    // the permission can never be granted, so the feature would be dead.
+    expect(url.searchParams.get("scope")).toContain("instagram_manage_comments");
   });
 });
 
@@ -397,26 +400,6 @@ describe("Instagram content publishing", () => {
     // Graph error — swallowed, never thrown past a successful publish.
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: { message: "boom" } }));
     expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
-  });
-});
-
-describe("getOrCreatePageDataset", () => {
-  it("POSTs the page's dataset edge and returns the id", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "ds-123" }));
-    expect(await getOrCreatePageDataset("p1", "page-tok")).toBe("ds-123");
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.method).toBe("POST");
-    const parsed = new URL(url);
-    expect(parsed.pathname).toBe("/v25.0/p1/dataset");
-    expect(parsed.searchParams.get("access_token")).toBe("page-tok");
-  });
-
-  it("returns null on a missing id or a Graph refusal (pre-App-Review scopes)", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
-    expect(await getOrCreatePageDataset("p1", "page-tok")).toBeNull();
-
-    fetchMock.mockResolvedValueOnce(jsonResponse(403, { error: { message: "no perm" } }));
-    expect(await getOrCreatePageDataset("p1", "page-tok")).toBeNull();
   });
 });
 
