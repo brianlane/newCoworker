@@ -50,7 +50,8 @@ const rotated = {
   accessToken: "at-new",
   refreshToken: "rt-new",
   expiresAt: new Date(NOW + 3_600_000),
-  scope: "Mail.Send"
+  scope: "Mail.Send",
+  idTokenEmail: null
 };
 
 beforeEach(() => {

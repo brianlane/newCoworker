@@ -143,7 +143,7 @@ export async function GET(request: Request) {
     // Unlike Zoom, this is NOT best-effort labeling: the reconnect match is
     // keyed on it, so without an identity we cannot tell a reconnect from a
     // second mailbox, and guessing wrong either strands a flow or burns a seat.
-    const identity = await fetchMicrosoftIdentity(tokens.accessToken);
+    const identity = await fetchMicrosoftIdentity(tokens.accessToken, tokens.idTokenEmail);
     if (!identity?.email) {
       return dashboardRedirect(request, {
         error: "Could not read the Outlook account, please try again"
@@ -156,7 +156,8 @@ export async function GET(request: Request) {
       await listWorkspaceOAuthConnections(verified.businessId),
       accountEmail,
       capState.max,
-      OUTLOOK_KEYS
+      OUTLOOK_KEYS,
+      identity.accountId
     );
 
     if (decision.kind === "verify") {

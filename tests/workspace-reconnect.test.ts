@@ -269,4 +269,65 @@ describe("provider key sets", () => {
     ];
     expect(findDuplicateRow(rows, "mine", "sam@acme.com", GOOGLE_KEYS)?.id).toBe("row-1");
   });
+
+describe("matching on the provider account id", () => {
+  const withId = (id: string, over: Record<string, unknown> = {}) =>
+    row({ metadata: { provider_account_id: id, ...(over.metadata as object ?? {}) }, ...over });
+
+  it("matches the account id even when the stored EMAIL has changed", () => {
+    // The case that made this necessary: a personal Microsoft account stored as
+    // its synthetic outlook_<CID>@outlook.com, then re-read as the owner's real
+    // address once we started reading the id_token. Same mailbox, different
+    // string. Matching on email alone would call it a new account and strand
+    // every flow bound to the old row.
+    const rows = [
+      row({
+        id: "existing",
+        metadata: {
+          provider_account_id: "graph-object-id-1",
+          provider_account_email: "outlook_5C3966BE918A1C30@outlook.com"
+        }
+      })
+    ];
+
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, "graph-object-id-1");
+
+    expect(d).toEqual({
+      kind: "reconnect",
+      row: expect.objectContaining({ id: "existing" }),
+      matchedBy: "account_id"
+    });
+  });
+
+  it("prefers the account id over an email match on a DIFFERENT row", () => {
+    const rows = [
+      row({ id: "by-email", metadata: { provider_account_email: "team@newcoworker.com" } }),
+      withId("graph-1", { id: "by-id" })
+    ];
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, "graph-1");
+    expect(d.kind === "reconnect" && d.row.id).toBe("by-id");
+  });
+
+  it("takes the oldest when several rows carry the same account id", () => {
+    const rows = [
+      withId("g1", { id: "newer", created_at: "2026-08-02T00:00:00Z" }),
+      withId("g1", { id: "older", created_at: "2026-01-01T00:00:00Z" })
+    ];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS, "g1");
+    expect(d.kind === "reconnect" && d.row.id).toBe("older");
+  });
+
+  it("falls through to the email when no row carries that id", () => {
+    const rows = [row({ metadata: { provider_account_email: "sam@acme.com" } })];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS, "unseen-id");
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+
+  it("behaves exactly as before when no account id is supplied", () => {
+    const rows = [row({ metadata: { provider_account_email: "sam@acme.com" } })];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS);
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+});
+
 });

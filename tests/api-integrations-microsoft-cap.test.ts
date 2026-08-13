@@ -143,7 +143,8 @@ describe("microsoft callback: insert race settlement", () => {
       accessToken: "at",
       refreshToken: "rt",
       expiresAt: new Date("2026-08-11T12:00:00Z"),
-      scope: "Mail.Send"
+      scope: "Mail.Send",
+  idTokenEmail: null
     });
     vi.mocked(fetchMicrosoftIdentity).mockResolvedValue({
       accountId: "u1",

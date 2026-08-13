@@ -58,6 +58,11 @@ export const OUTLOOK_KEY = "outlook";
 export const OUTLOOK_KEYS = [OUTLOOK_KEY] as const;
 export const GOOGLE_KEYS = ["google", "gmail", "google-mail", "google-calendar"] as const;
 
+function accountIdOf(row: WorkspaceOAuthConnectionRow): string | null {
+  const value = row.metadata?.provider_account_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function accountEmailOf(row: WorkspaceOAuthConnectionRow): string | null {
   const value = row.metadata?.provider_account_email;
   return typeof value === "string" && value.length > 0 ? value.toLowerCase() : null;
@@ -76,7 +81,7 @@ export type ReconnectDecision =
   | {
       kind: "reconnect";
       row: WorkspaceOAuthConnectionRow;
-      matchedBy: "account_email" | "cap_forces_single_mailbox";
+      matchedBy: "account_id" | "account_email" | "cap_forces_single_mailbox";
     }
   /**
    * An unlabeled row that MIGHT be this account. The caller must probe the
@@ -97,7 +102,8 @@ export function findReconnectTarget(
   rows: readonly WorkspaceOAuthConnectionRow[],
   accountEmail: string,
   capMax: number | null,
-  providerKeys: readonly string[]
+  providerKeys: readonly string[],
+  accountId: string | null = null
 ): ReconnectDecision {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return { kind: "new" };
@@ -105,7 +111,20 @@ export function findReconnectTarget(
   const providerRows = rows.filter((r) => providerKeys.includes(r.provider_config_key));
   if (providerRows.length === 0) return { kind: "new" };
 
-  // 1. The row says who it is. Oldest wins: that is the row flows have had
+  // 1. The provider's own account id, when both sides have one.
+  //
+  //    Preferred over the email because it is the part of an account's identity
+  //    that cannot change representation underneath us, and the email demonstrably
+  //    can. A personal Microsoft account first stored as its synthetic
+  //    `outlook_<CID>@outlook.com` and later resolved to the owner's real address
+  //    is the SAME mailbox; matching on email alone would read that reconnect as a
+  //    brand-new account and strand every flow on the old row.
+  if (accountId) {
+    const byId = oldestFirst(providerRows.filter((r) => accountIdOf(r) === accountId));
+    if (byId.length > 0) return { kind: "reconnect", row: byId[0], matchedBy: "account_id" };
+  }
+
+  // 2. The row says who it is. Oldest wins: that is the row flows have had
   //    longest to bind to.
   const labeled = oldestFirst(providerRows.filter((r) => accountEmailOf(r) === wanted));
   if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
@@ -114,12 +133,12 @@ export function findReconnectTarget(
     providerRows.length === 1 && accountEmailOf(providerRows[0]) === null ? providerRows[0] : null;
   if (!soleUnlabeled) return { kind: "new" };
 
-  // 2. One seat, one row: a second mailbox is impossible, so this is it.
+  // 3. One seat, one row: a second mailbox is impossible, so this is it.
   if (capMax === 1 && rows.length === 1) {
     return { kind: "reconnect", row: soleUnlabeled, matchedBy: "cap_forces_single_mailbox" };
   }
 
-  // 3. Room for more than one mailbox and no label to go on. Whether this is a
+  // 4. Room for more than one mailbox and no label to go on. Whether this is a
   //    reconnect or a genuine second mailbox is unknowable from the row, so ask
   //    the provider rather than guessing.
   return { kind: "verify", row: soleUnlabeled };
