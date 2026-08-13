@@ -1147,6 +1147,14 @@ export type FlowStep =
       phoneVar: string;
       addTags?: string[];
       removeTags?: string[];
+      /**
+       * Rendered into the tag_changed event's `note:` line ({{trigger.note}}
+       * in whatever flow the tag starts): how a tagger explains itself to the
+       * flow it triggers, e.g. an automated first-contact ladder marking its
+       * tag so the follow-up cadence skips the immediate call a manual tag
+       * warrants.
+       */
+      noteTemplate?: string;
       when?: StepCondition;
     }
   | {

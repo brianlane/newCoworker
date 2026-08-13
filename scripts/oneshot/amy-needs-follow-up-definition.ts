@@ -41,6 +41,19 @@
 /** The tag that starts the cadence. Written by the "F" reply and the tag editor. */
 export const FOLLOW_UP_TAG = "Needs Follow Up";
 
+/**
+ * The verbatim marker an AUTOMATED first-contact ladder puts on the tag event
+ * (update_contact's noteTemplate → the event's `note:` line) when it tags a
+ * lead it has JUST called and texted. Round 1's call is gated on not seeing
+ * it: without this, the cadence's immediate first call landed two minutes
+ * after the first-contact call, and the lead got two voicemails in a row
+ * (Jessica Gutierrez, Aug 12 2026). A manual tag (a teammate's "F", the
+ * dashboard editor) carries no such note, so it keeps the immediate call a
+ * human asking for follow-up expects.
+ */
+export const AUTO_TAG_NOTE =
+  "auto_first_contact: the AI already called and texted this lead just now";
+
 /** Amy's line, given in every message. */
 const CALLBACK = "602-695-1142";
 
@@ -151,6 +164,12 @@ export const READ_FIELDS = [
     description:
       "What the lead wants, as a short phrase that fits after 'about': answer exactly " +
       "'buying a home' or 'selling your home', or 'your move' when the text does not say which"
+  },
+  {
+    name: "tag_auto",
+    description:
+      "Does the note line contain the exact phrase auto_first_contact? Answer exactly one " +
+      "lowercase word: yes or no. Answer no when there is no note line"
   }
 ];
 
@@ -181,7 +200,16 @@ function roundSteps(n: number): Step[] {
       voicemailTemplate: VOICEMAILS[i],
       notifyOwner: true,
       callWindow: CALL_WINDOW,
-      saveAs: "call_outcome"
+      saveAs: "call_outcome",
+      // Round 1 only: an auto-tag means an AI first-contact ladder called and
+      // texted this lead MOMENTS ago, so the cadence's first touch is the
+      // 3-day wait, not another call (see AUTO_TAG_NOTE). The skipped call
+      // leaves call_outcome unset, which also keeps r1_text quiet (its
+      // `equals no_answer` guard fails on a missing var) and lets round 2's
+      // arms fall through to their else. Manual tags extract "no" (or the
+      // field misses and reads ""), both of which keep today's immediate
+      // call: the safe default is the old behavior.
+      ...(n === 1 ? { when: { var: "tag_auto", notEquals: "yes" } } : {})
     },
     {
       id: `r${n}_text`,

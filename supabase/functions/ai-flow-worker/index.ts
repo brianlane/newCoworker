@@ -3086,6 +3086,10 @@ async function updateContactStep(
       contact: { e164: action.e164, tags: next },
       tag: changed,
       change,
+      // The step's rendered noteTemplate: how this tagger explains itself to
+      // the flow the tag starts (e.g. "auto_first_contact" so a cadence knows
+      // the lead was already called and texted moments ago).
+      ...(action.note ? { note: action.note } : {}),
       sourceFlowId: run.flow_id,
       dedupeKey: `ce:tag:${run.id}:${changed.toLowerCase()}:${change}`
     });

@@ -448,7 +448,15 @@ Clever and HomeLight already work. 23 steps to 25.
 - **A no-answer hands the lead to the cadence by TAG**, not by repeating a
   ladder here. `update_contact` adds "Needs Follow Up", the same chokepoint the
   `F` reply and the tag editor use, so there is one follow-up sequence and one
-  place to change it.
+  place to change it. Since Aug 12 the tag step also carries
+  `noteTemplate: AUTO_TAG_NOTE` ("auto_first_contact: ..."), which rides the
+  tag event's note line: the cadence extracts it as `tag_auto` and skips round
+  1's call when it sees it. Without the marker, Jessica Gutierrez got the
+  first-contact call at 6:30pm and the cadence's round-1 call at 6:32pm, two
+  voicemails in two minutes. A manual tag (teammate `F`, dashboard editor)
+  carries no note, so it keeps the immediate call a human asking for follow-up
+  expects. The marker string is a lockstep copy in both builders, asserted
+  equal in `tests/amy-needs-follow-up-definition.test.ts`.
 - **The script arms gate on `route_lead_type`, not `lead_type`.** Both exist on
   this flow and only one says anything about REACHABILITY: `route_lead_type` is
   "the page shows a text or call option, meaning the lead has a real phone

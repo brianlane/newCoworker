@@ -729,6 +729,45 @@ describe("planStep: update_contact", () => {
     });
   });
 
+  it("renders noteTemplate into the action's note, and omits it when empty", () => {
+    const withNote = planStep(
+      {
+        id: "u4",
+        type: "update_contact",
+        phoneVar: "p",
+        addTags: ["Needs Follow Up"],
+        noteTemplate: "auto_first_contact: already called {{vars.lead_name}}"
+      } as FlowStep,
+      { vars: { p: "+16025551234", lead_name: "Jessica" } }
+    );
+    expect(withNote).toEqual({
+      ok: true,
+      action: {
+        kind: "update_contact",
+        e164: "+16025551234",
+        addTags: ["Needs Follow Up"],
+        removeTags: [],
+        note: "auto_first_contact: already called Jessica"
+      }
+    });
+    // A template rendering to whitespace must not put an empty note line on
+    // the event: absent and empty have to look the same downstream.
+    const blankNote = planStep(
+      {
+        id: "u5",
+        type: "update_contact",
+        phoneVar: "p",
+        addTags: ["VIP"],
+        noteTemplate: "{{vars.missing_var}}"
+      } as FlowStep,
+      { vars: { p: "+16025551234" } }
+    );
+    expect(blankNote).toEqual({
+      ok: true,
+      action: { kind: "update_contact", e164: "+16025551234", addTags: ["VIP"], removeTags: [] }
+    });
+  });
+
   it("defaults absent tag lists to empty arrays", () => {
     const addOnly = planStep(
       { id: "u2", type: "update_contact", phoneVar: "p", addTags: ["VIP"] } as FlowStep,

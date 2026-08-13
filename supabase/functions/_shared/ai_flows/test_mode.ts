@@ -230,7 +230,9 @@ export function simulateTestAction(
         simulated: "update_contact",
         customer_e164: action.e164,
         addTags: action.addTags,
-        removeTags: action.removeTags
+        removeTags: action.removeTags,
+        // Shown so a test run proves what the tag event's note line would say.
+        ...(action.note ? { note: action.note } : {})
       };
     case "sleep":
       // Resolve instantly; the marker keeps the step a no-op on re-entry.

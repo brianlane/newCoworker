@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { parseAiFlowDefinition, validateDefinitionSemantics } from "@/lib/ai-flows/schema";
 import {
+  AUTO_TAG_NOTE,
   FOLLOW_UP_TAG,
   ROUNDS,
   ROUND_GAP_MINUTES,
   buildNeedsFollowUpDefinition
 } from "../scripts/oneshot/amy-needs-follow-up-definition";
+import {
+  AUTO_TAG_NOTE as RE_AUTO_TAG_NOTE,
+  buildAiFirstContactSteps
+} from "../scripts/oneshot/referralexchange-ai-first-contact-definition";
 
 /**
  * The cadence Amy asked for: a call every three days, a voicemail then a text
@@ -60,6 +65,43 @@ describe("shape", () => {
    */
   it("blocks re-entry", () => {
     expect(parsed.options?.allowReentry).toBe(false);
+  });
+
+  /**
+   * The double-call fix (Jessica Gutierrez, Aug 12 2026: first-contact call at
+   * 6:30, cadence round 1 at 6:32, two voicemails in two minutes). An
+   * automated first-contact ladder marks its tag with AUTO_TAG_NOTE; round 1's
+   * call skips when the extraction saw it, so the cadence's first touch is the
+   * 3-day wait. A manual tag (teammate "F", dashboard editor) has no note,
+   * extracts "no" (or misses and reads ""), and keeps the immediate call.
+   */
+  it("skips round 1's call on an auto-tag, and ONLY round 1's", () => {
+    expect((byId("r1_call") as { when?: unknown }).when).toEqual({
+      var: "tag_auto",
+      notEquals: "yes"
+    });
+    for (let n = 2; n <= ROUNDS; n++) {
+      expect((byId(`r${n}_call`) as { when?: unknown }).when).toBeUndefined();
+    }
+    const fields = (byId("read_lead") as { fields: Array<{ name: string }> }).fields;
+    expect(fields.map((f) => f.name)).toContain("tag_auto");
+  });
+
+  it("matches the marker the ReferralExchange ladder actually sends (lockstep copies)", () => {
+    expect(RE_AUTO_TAG_NOTE).toBe(AUTO_TAG_NOTE);
+    const ref = { label: "x", source: "employee" as const };
+    const reSteps = buildAiFirstContactSteps({
+      dave: { id: "d", ...ref },
+      gabby: { id: "g", ...ref },
+      amy: { id: "a", ...ref }
+    });
+    const tagStep = reSteps.find((s) => s.id === "ai_no_answer_followup") as {
+      noteTemplate?: string;
+    };
+    expect(tagStep.noteTemplate).toBe(AUTO_TAG_NOTE);
+    // The extraction matches on this exact token; if either side rewords it,
+    // this is the assertion that should fail.
+    expect(AUTO_TAG_NOTE).toContain("auto_first_contact");
   });
 
   /**
