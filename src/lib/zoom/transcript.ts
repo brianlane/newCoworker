@@ -7,8 +7,8 @@
  * `download_restriction_reason`); the VTT itself is then fetched from the
  * download URL with the same bearer token.
  *
- * Direct (first-party) connections only: the transcript scope is granted to
- * OUR OAuth app, so legacy Nango-proxied Zoom links can never carry it.
+ * First-party connections only, like every Zoom surface since the legacy
+ * Nango transport was removed (Aug 2026).
  * Errors are typed for the owner-facing import flow, every failure mode
  * maps to an actionable message, never a bare 500.
  */

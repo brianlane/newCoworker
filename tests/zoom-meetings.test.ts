@@ -1,28 +1,14 @@
 /**
- * Tests for the dual-transport Zoom meeting operations
- * (src/lib/zoom/meetings.ts): direct-first resolution with the legacy Nango
- * fallback, and the best-effort create/update/delete contract.
+ * Tests for the Zoom meeting operations (src/lib/zoom/meetings.ts): the
+ * best-effort create/update/read/delete contract over the first-party
+ * connection. (The legacy Nango transport was removed Aug 2026; these ops
+ * now ride zoomRequestForBusiness alone, which itself answers null when the
+ * business has no usable connection.)
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
-}));
-
-const getActiveZoomConnectionId = vi.fn();
-vi.mock("@/lib/db/zoom-connections", () => ({
-  getActiveZoomConnectionId: (...args: unknown[]) => getActiveZoomConnectionId(...args)
-}));
-
-const listWorkspaceOAuthConnections = vi.fn();
-vi.mock("@/lib/db/workspace-oauth-connections", () => ({
-  listWorkspaceOAuthConnections: (...args: unknown[]) =>
-    listWorkspaceOAuthConnections(...args)
-}));
-
-const nangoProxyForBusiness = vi.fn();
-vi.mock("@/lib/nango/workspace", () => ({
-  nangoProxyForBusiness: (...args: unknown[]) => nangoProxyForBusiness(...args)
 }));
 
 const zoomRequestForBusiness = vi.fn();
@@ -34,7 +20,6 @@ import {
   createZoomMeetingForBooking,
   deleteZoomMeetingForBooking,
   getZoomJoinUrl,
-  resolveZoomTransport,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
 
@@ -47,48 +32,12 @@ const BOOKING = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getActiveZoomConnectionId.mockResolvedValue(null);
-  listWorkspaceOAuthConnections.mockResolvedValue([]);
-  process.env.NANGO_SECRET_KEY = "nango-secret";
-});
-
-afterEach(() => {
-  delete process.env.NANGO_SECRET_KEY;
-});
-
-describe("resolveZoomTransport", () => {
-  it("prefers the first-party connection", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
-    expect(await resolveZoomTransport(BIZ)).toEqual({ kind: "direct" });
-    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a legacy Nango zoom row", async () => {
-    listWorkspaceOAuthConnections.mockResolvedValue([
-      { provider_config_key: "google-mail", connection_id: "g-1" },
-      { provider_config_key: "zoom", connection_id: "legacy-1" }
-    ]);
-    expect(await resolveZoomTransport(BIZ)).toEqual({
-      kind: "nango",
-      connectionId: "legacy-1",
-      providerConfigKey: "zoom"
-    });
-  });
-
-  it("returns null with no connection of either kind", async () => {
-    expect(await resolveZoomTransport(BIZ)).toBeNull();
-  });
-
-  it("ignores legacy rows when NANGO_SECRET_KEY is unset (degrades, never errors)", async () => {
-    delete process.env.NANGO_SECRET_KEY;
-    expect(await resolveZoomTransport(BIZ)).toBeNull();
-    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
-  });
+  // "No usable connection" is the client's null contract, the default here.
+  zoomRequestForBusiness.mockResolvedValue(null);
 });
 
 describe("createZoomMeetingForBooking", () => {
-  it("creates a scheduled meeting over the direct transport", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+  it("creates a scheduled meeting", async () => {
     zoomRequestForBusiness.mockResolvedValue({
       data: { id: 987654, join_url: "https://zoom.us/j/987654" }
     });
@@ -112,7 +61,6 @@ describe("createZoomMeetingForBooking", () => {
   });
 
   it("includes the agenda when provided and floors duration at 1 minute", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
     zoomRequestForBusiness.mockResolvedValue({
       data: { id: "abc", join_url: "https://zoom.us/j/abc" }
     });
@@ -121,55 +69,28 @@ describe("createZoomMeetingForBooking", () => {
       endIso: BOOKING.startIso,
       agenda: "Kitchen sink"
     });
-    const [, req] = zoomRequestForBusiness.mock.calls[0] as [string, { data: Record<string, unknown> }];
+    const [, req] = zoomRequestForBusiness.mock.calls[0] as [
+      string,
+      { data: Record<string, unknown> }
+    ];
     expect(req.data.agenda).toBe("Kitchen sink");
     expect(req.data.duration).toBe(1);
   });
 
-  it("routes through the Nango proxy for a legacy connection (with /v2 prefix)", async () => {
-    listWorkspaceOAuthConnections.mockResolvedValue([
-      { provider_config_key: "zoom", connection_id: "legacy-1" }
-    ]);
-    nangoProxyForBusiness.mockResolvedValue({
-      data: { id: 123, join_url: "https://zoom.us/j/123" }
-    });
-
-    expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toEqual({
-      meetingId: "123",
-      joinUrl: "https://zoom.us/j/123"
-    });
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
-      BIZ,
-      { connectionId: "legacy-1", providerConfigKey: "zoom" },
-      expect.objectContaining({ endpoint: "/v2/users/me/meetings", method: "POST" })
-    );
-    expect(zoomRequestForBusiness).not.toHaveBeenCalled();
-  });
-
-  it("returns null when no transport, when the token is dead, or on a junk body", async () => {
-    expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
-
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
-    zoomRequestForBusiness.mockResolvedValue(null);
+  it("returns null with no usable connection or on a junk body", async () => {
     expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
 
     zoomRequestForBusiness.mockResolvedValue({ data: { id: 1 } }); // no join_url
+    expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
+
+    zoomRequestForBusiness.mockResolvedValue({ data: { join_url: "https://z" } }); // no id
     expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
 
     zoomRequestForBusiness.mockResolvedValue({ data: null });
     expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
   });
 
-  it("returns null when the legacy proxy has no usable connection", async () => {
-    listWorkspaceOAuthConnections.mockResolvedValue([
-      { provider_config_key: "zoom", connection_id: "legacy-1" }
-    ]);
-    nangoProxyForBusiness.mockResolvedValue(null);
-    expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
-  });
-
-  it("never throws: transport failures (Error and non-Error) degrade to null", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+  it("never throws: failures (Error and non-Error) degrade to null", async () => {
     zoomRequestForBusiness.mockRejectedValue(new Error("zoom 500"));
     expect(await createZoomMeetingForBooking(BIZ, BOOKING)).toBeNull();
 
@@ -179,8 +100,7 @@ describe("createZoomMeetingForBooking", () => {
 });
 
 describe("updateZoomMeetingForBooking", () => {
-  it("PATCHes the meeting time over the live transport", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+  it("PATCHes the meeting time", async () => {
     zoomRequestForBusiness.mockResolvedValue({ data: null }); // 204
     expect(await updateZoomMeetingForBooking(BIZ, "zm-1", BOOKING)).toBe(true);
     expect(zoomRequestForBusiness).toHaveBeenCalledWith(BIZ, {
@@ -194,11 +114,7 @@ describe("updateZoomMeetingForBooking", () => {
     });
   });
 
-  it("reports false with no transport, a dead token, or a transport failure", async () => {
-    expect(await updateZoomMeetingForBooking(BIZ, "zm-1", BOOKING)).toBe(false);
-
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
-    zoomRequestForBusiness.mockResolvedValue(null);
+  it("reports false with no usable connection or on a failure", async () => {
     expect(await updateZoomMeetingForBooking(BIZ, "zm-1", BOOKING)).toBe(false);
 
     zoomRequestForBusiness.mockRejectedValue(new Error("down"));
@@ -211,7 +127,6 @@ describe("updateZoomMeetingForBooking", () => {
 
 describe("getZoomJoinUrl", () => {
   it("reads the real join URL back (a rebuilt /j/<id> link drops the password)", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
     zoomRequestForBusiness.mockResolvedValue({
       data: { join_url: "https://zoom.us/j/zm-1?pwd=secret" }
     });
@@ -222,11 +137,7 @@ describe("getZoomJoinUrl", () => {
     });
   });
 
-  it("answers null (never a broken link) with no transport, no url, or a failure", async () => {
-    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
-
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
-    zoomRequestForBusiness.mockResolvedValue(null);
+  it("answers null (never a broken link) with no connection, no url, or a failure", async () => {
     expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
 
     zoomRequestForBusiness.mockResolvedValue({ data: {} });
@@ -247,21 +158,7 @@ describe("getZoomJoinUrl", () => {
 });
 
 describe("deleteZoomMeetingForBooking", () => {
-  it("DELETEs a legacy meeting through the Nango proxy without a request body", async () => {
-    listWorkspaceOAuthConnections.mockResolvedValue([
-      { provider_config_key: "zoom", connection_id: "legacy-1" }
-    ]);
-    nangoProxyForBusiness.mockResolvedValue({ data: null });
-    expect(await deleteZoomMeetingForBooking(BIZ, "zm-1")).toBe(true);
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
-      BIZ,
-      { connectionId: "legacy-1", providerConfigKey: "zoom" },
-      { endpoint: "/v2/meetings/zm-1", method: "DELETE" }
-    );
-  });
-
-  it("DELETEs the meeting over the live transport", async () => {
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+  it("DELETEs the meeting", async () => {
     zoomRequestForBusiness.mockResolvedValue({ data: null });
     expect(await deleteZoomMeetingForBooking(BIZ, "zm-1")).toBe(true);
     expect(zoomRequestForBusiness).toHaveBeenCalledWith(BIZ, {
@@ -270,11 +167,7 @@ describe("deleteZoomMeetingForBooking", () => {
     });
   });
 
-  it("reports false with no transport, a dead token, or a transport failure", async () => {
-    expect(await deleteZoomMeetingForBooking(BIZ, "zm-1")).toBe(false);
-
-    getActiveZoomConnectionId.mockResolvedValue("zc-1");
-    zoomRequestForBusiness.mockResolvedValue(null);
+  it("reports false with no usable connection or on a failure", async () => {
     expect(await deleteZoomMeetingForBooking(BIZ, "zm-1")).toBe(false);
 
     zoomRequestForBusiness.mockRejectedValue(new Error("down"));

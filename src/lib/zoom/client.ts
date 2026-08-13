@@ -13,9 +13,7 @@
  * a losing refresher re-reads the row and adopts the winner's rotation
  * instead of deactivating the connection or clobbering the newer pair.
  *
- * `zoomApiRequest` mirrors the calendly-direct contract so a future
- * dual-transport resolver can treat Nango-proxied and direct responses
- * interchangeably:
+ * `zoomApiRequest` mirrors the calendly-direct response contract:
  *   - 401/403 → null (revoked token, "not connected" semantics);
  *   - other non-2xx → throw ZoomApiError("request_failed");
  *   - timeouts/network failures → throw with a typed code.
@@ -177,8 +175,7 @@ export async function zoomApiRequest(
   }
 
   if (res.status === 401 || res.status === 403) {
-    // Revoked / insufficient token: same "not connected" semantics as a
-    // stale Nango link.
+    // Revoked / insufficient token: "not connected" semantics.
     return null;
   }
   if (!res.ok) {

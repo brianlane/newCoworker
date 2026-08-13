@@ -1,85 +1,33 @@
 /**
- * Zoom meeting operations for booked appointments, over EITHER transport:
+ * Zoom meeting operations for booked appointments, over the business's
+ * first-party OAuth connection (`zoom_connections`) via the token-managing
+ * client in src/lib/zoom/client.ts.
  *
- *   1. `zoom-direct` (primary): the business's first-party OAuth connection
- *      (`zoom_connections`), called through the token-managing client.
- *   2. Legacy Nango: a `workspace_oauth_connections` row with
- *      provider_config_key `zoom` from the old Connect UI flow, proxied by
- *      Nango. Honored only while NANGO_SECRET_KEY is configured — without
- *      it, legacy rows resolve to "no Zoom" instead of erroring. Mirrors
- *      the `calendly` / `calendly-direct` split in voice-tools/connections.
+ * There is deliberately no second transport any more. Until Aug 2026 these
+ * operations could also ride a legacy Nango `workspace_oauth_connections`
+ * row (provider_config_key `zoom`); production held zero such rows, and the
+ * Nango-side integration (which still carried the DEVELOPMENT Marketplace
+ * client's credentials) was deleted after the first-party app's update
+ * review cleared, so the fallback became unreachable and was removed.
  *
  * Every operation here is BEST-EFFORT by contract: Zoom decorates a booking
  * with a video link, and a Zoom hiccup must never fail the booking (or the
  * reschedule/cancel) itself. Failures log and return null/false.
  */
 import { logger } from "@/lib/logger";
-import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
-import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { zoomRequestForBusiness, type ZoomApiRequestSpec } from "@/lib/zoom/client";
 
-/** Synthetic key for the first-party transport (cf. `calendly-direct`). */
-export const ZOOM_DIRECT_KEY = "zoom-direct";
-/** The legacy Nango integration id for Zoom. */
-export const ZOOM_NANGO_KEY = "zoom";
-
-export type ZoomTransport =
-  | { kind: "direct" }
-  | { kind: "nango"; connectionId: string; providerConfigKey: string };
-
 /**
- * Which Zoom transport (if any) serves this business. Direct wins whenever
- * an active first-party connection exists; the legacy Nango link is the
- * fallback for connections made before first-party OAuth shipped.
+ * One Zoom API call for the business. Returns the parsed body (`{ data }`),
+ * null when the business has no usable Zoom connection (none, deactivated,
+ * or a revoked token). Throws on transport failures — the exported
+ * operations below catch and degrade.
  */
-export async function resolveZoomTransport(
-  businessId: string
-): Promise<ZoomTransport | null> {
-  const directId = await getActiveZoomConnectionId(businessId);
-  if (directId) return { kind: "direct" };
-
-  if (!process.env.NANGO_SECRET_KEY) return null;
-  const rows = await listWorkspaceOAuthConnections(businessId);
-  const legacy = rows.find((r) => r.provider_config_key === ZOOM_NANGO_KEY);
-  if (!legacy) return null;
-  return {
-    kind: "nango",
-    connectionId: legacy.connection_id,
-    providerConfigKey: legacy.provider_config_key
-  };
-}
-
-/**
- * One Zoom API call over whichever transport is live. Returns the parsed
- * body (`{ data }`), null when the business has no usable Zoom connection
- * (none, deactivated, or a revoked token). Throws on transport failures —
- * the exported operations below catch and degrade.
- */
-async function zoomRequestViaTransport(
+async function zoomRequest(
   businessId: string,
-  transport: ZoomTransport,
   req: ZoomApiRequestSpec
 ): Promise<{ data: unknown } | null> {
-  if (transport.kind === "direct") {
-    return zoomRequestForBusiness(businessId, req);
-  }
-  const res = await nangoProxyForBusiness(
-    businessId,
-    {
-      connectionId: transport.connectionId,
-      providerConfigKey: transport.providerConfigKey
-    },
-    {
-      // The meeting operations never use query params, so only the endpoint,
-      // method and body translate onto the proxy request.
-      endpoint: `/v2${req.endpoint}`,
-      method: req.method,
-      ...(req.data === undefined ? {} : { data: req.data })
-    }
-  );
-  if (!res) return null;
-  return { data: res.data };
+  return zoomRequestForBusiness(businessId, req);
 }
 
 export type ZoomBookingMeeting = {
@@ -116,10 +64,7 @@ export async function createZoomMeetingForBooking(
   booking: { topic: string; startIso: string; endIso: string; agenda?: string }
 ): Promise<ZoomBookingMeeting | null> {
   try {
-    const transport = await resolveZoomTransport(businessId);
-    if (!transport) return null;
-
-    const res = await zoomRequestViaTransport(businessId, transport, {
+    const res = await zoomRequest(businessId, {
       endpoint: "/users/me/meetings",
       method: "POST",
       data: {
@@ -141,8 +86,7 @@ export async function createZoomMeetingForBooking(
     const joinUrl = typeof data?.join_url === "string" ? data.join_url : null;
     if (!meetingId || !joinUrl) {
       logger.warn("zoom meeting create returned no id/join_url; booking proceeds without", {
-        businessId,
-        transport: transport.kind
+        businessId
       });
       return null;
     }
@@ -167,9 +111,7 @@ export async function updateZoomMeetingForBooking(
   booking: { startIso: string; endIso: string }
 ): Promise<boolean> {
   try {
-    const transport = await resolveZoomTransport(businessId);
-    if (!transport) return false;
-    const res = await zoomRequestViaTransport(businessId, transport, {
+    const res = await zoomRequest(businessId, {
       endpoint: `/meetings/${encodeURIComponent(meetingId)}`,
       method: "PATCH",
       data: {
@@ -203,9 +145,7 @@ export async function getZoomJoinUrl(
   meetingId: string
 ): Promise<string | null> {
   try {
-    const transport = await resolveZoomTransport(businessId);
-    if (!transport) return null;
-    const res = await zoomRequestViaTransport(businessId, transport, {
+    const res = await zoomRequest(businessId, {
       endpoint: `/meetings/${encodeURIComponent(meetingId)}`,
       method: "GET"
     });
@@ -230,9 +170,7 @@ export async function deleteZoomMeetingForBooking(
   meetingId: string
 ): Promise<boolean> {
   try {
-    const transport = await resolveZoomTransport(businessId);
-    if (!transport) return false;
-    const res = await zoomRequestViaTransport(businessId, transport, {
+    const res = await zoomRequest(businessId, {
       endpoint: `/meetings/${encodeURIComponent(meetingId)}`,
       method: "DELETE"
     });
