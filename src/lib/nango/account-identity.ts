@@ -2,17 +2,18 @@
  * Resolve the ACTUAL provider account behind a Nango workspace connection.
  *
  * The Connect UI only knows our `end_user` (the dashboard login that started
- * the session) — it never learns which Google/Microsoft account the owner
+ * the session), it never learns which Google/Microsoft account the owner
  * picked on the consent screen. Labeling connections with `end_user.email`
  * therefore shows the same login address for every account (and the wrong
  * From address in the email log). This module asks the provider itself, via
- * the Nango proxy, "whose account is this token for?".
+ * the workspace proxy, "whose account is this token for?".
  *
  * Best-effort by design: a failed lookup returns nulls and the connect flow
- * proceeds with the provider-name fallback label — it must never block a
+ * proceeds with the provider-name fallback label, it must never block a
  * successful OAuth connect.
  */
 
+import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
 import { nangoProxyForBusiness, type NangoWorkspaceLink } from "./workspace";
 
 export type ProviderAccountIdentity = {
@@ -33,20 +34,20 @@ function asRecord(data: unknown): Record<string, unknown> {
   return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
 }
 
-/** Gmail profile — works with any gmail.* scope. `{ emailAddress }`. */
+/** Gmail profile, works with any gmail.* scope. `{ emailAddress }`. */
 function extractGmailProfile(data: unknown): ProviderAccountIdentity | null {
   const email = nonEmpty(asRecord(data).emailAddress);
   return email ? { email, displayName: null } : null;
 }
 
-/** Google Calendar primary calendar — its `id` IS the account email. */
+/** Google Calendar primary calendar, its `id` IS the account email. */
 function extractGoogleCalendarPrimary(data: unknown): ProviderAccountIdentity | null {
   const o = asRecord(data);
   const email = nonEmpty(o.id);
   return email ? { email, displayName: nonEmpty(o.summary) } : null;
 }
 
-/** Microsoft Graph /me — `mail` is null on some tenants; UPN is the fallback. */
+/** Microsoft Graph /me, `mail` is null on some tenants; UPN is the fallback. */
 function extractGraphMe(data: unknown): ProviderAccountIdentity | null {
   const o = asRecord(data);
   const email = nonEmpty(o.mail) ?? nonEmpty(o.userPrincipalName);
@@ -68,7 +69,7 @@ function extractZoomMe(data: unknown): ProviderAccountIdentity | null {
   return { email, displayName };
 }
 
-/** Calendly /users/me — payload nests under `resource`. */
+/** Calendly /users/me, payload nests under `resource`. */
 function extractCalendlyMe(data: unknown): ProviderAccountIdentity | null {
   const resource = asRecord(asRecord(data).resource);
   const email = nonEmpty(resource.email);
@@ -147,6 +148,35 @@ export async function fetchProviderAccountIdentity(
 }
 
 /**
+ * The same identity probe, over whichever transport actually serves the row.
+ *
+ * `fetchProviderAccountIdentity` above goes through `nangoProxyForBusiness`
+ * specifically, so it can only ever succeed for a Nango row. That was fine while
+ * Nango brokered everything; it is not now. The Google integration was deleted
+ * from Nango on 2026-08-13, so a probe of a GOOGLE row through that path can
+ * only fail.
+ *
+ * That is reachable, not theoretical. KYP Ads' Google row carries only
+ * `end_user_email`, which makes it "unlabeled" to
+ * `findReconnectTarget`; a reconnect there takes the verify branch, and a failed
+ * probe resolves to "new". So the owner would get a DUPLICATE row instead of
+ * their existing one being adopted, quietly consuming a connection seat.
+ *
+ * Routing through `workspaceProxyForBusiness` fixes it for both transports at
+ * once, because that seam dispatches on the row's own `transport` column. The
+ * per-provider probe list is shared and unchanged: what the endpoints are does
+ * not depend on who carries the request.
+ */
+export async function fetchWorkspaceAccountIdentity(
+  businessId: string,
+  link: NangoWorkspaceLink
+): Promise<ProviderAccountIdentity> {
+  return probeProviderAccountIdentity(link.providerConfigKey, (endpoint) =>
+    workspaceProxyForBusiness(businessId, link, { endpoint, method: "GET" })
+  );
+}
+
+/**
  * Metadata keys stored on `workspace_oauth_connections.metadata`. Read
  * everywhere labels are built (integrations list, AiFlow mailbox picker,
  * composer send-from options, email-log From address).
@@ -171,7 +201,7 @@ export type NangoIdentityPatchBody = {
  * session. Nango's connections list displays the `end_user_email` /
  * `end_user_display_name` tags; the legacy `end_user` object is kept in sync
  * (same `id` = businessId, which our complete/verify path reads). Returns
- * null when the probe resolved nothing — leave Nango's record untouched.
+ * null when the probe resolved nothing, leave Nango's record untouched.
  *
  * Note: Nango replaces the whole tag object on patch. Every tag we ever set
  * is included here, so the replace is complete, not lossy.

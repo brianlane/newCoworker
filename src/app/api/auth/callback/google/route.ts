@@ -64,7 +64,7 @@ import {
   resolveUnlabeledReconnect,
   GOOGLE_KEYS
 } from "@/lib/workspace/reconnect";
-import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
+import { fetchWorkspaceAccountIdentity } from "@/lib/nango/account-identity";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
@@ -209,7 +209,7 @@ export async function GET(request: Request) {
       let probed: string | null = null;
       try {
         probed = (
-          await fetchProviderAccountIdentity(verified.businessId, {
+          await fetchWorkspaceAccountIdentity(verified.businessId, {
             connectionId: candidate.connection_id,
             providerConfigKey: candidate.provider_config_key
           })
