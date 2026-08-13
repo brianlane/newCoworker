@@ -143,7 +143,7 @@ export async function GET(request: Request) {
     // Unlike Zoom, this is NOT best-effort labeling: the reconnect match is
     // keyed on it, so without an identity we cannot tell a reconnect from a
     // second mailbox, and guessing wrong either strands a flow or burns a seat.
-    const identity = await fetchMicrosoftIdentity(tokens.accessToken);
+    const identity = await fetchMicrosoftIdentity(tokens.accessToken, tokens.idTokenEmail);
     if (!identity?.email) {
       return dashboardRedirect(request, {
         error: "Could not read the Outlook account, please try again"
@@ -156,7 +156,9 @@ export async function GET(request: Request) {
       await listWorkspaceOAuthConnections(verified.businessId),
       accountEmail,
       capState.max,
-      OUTLOOK_KEYS
+      OUTLOOK_KEYS,
+      identity.accountId,
+      identity.aliases
     );
 
     if (decision.kind === "verify") {
@@ -182,7 +184,7 @@ export async function GET(request: Request) {
           error: (err as Error).message
         });
       }
-      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail);
+      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail, identity.aliases);
     }
 
     const existing = decision.kind === "reconnect" ? decision.row : undefined;
@@ -195,7 +197,11 @@ export async function GET(request: Request) {
       connected_via: "microsoft_oauth",
       provider_account_email: identity.email,
       ...(identity.displayName ? { provider_account_display_name: identity.displayName } : {}),
-      ...(identity.accountId ? { provider_account_id: identity.accountId } : {})
+      ...(identity.accountId ? { provider_account_id: identity.accountId } : {}),
+      // Kept so a later connect that resolves a DIFFERENT representation of
+      // this same account (the synthetic UPN vs the real address) still matches
+      // this row instead of duplicating it.
+      ...(identity.aliases.length > 0 ? { provider_account_aliases: identity.aliases } : {})
     };
 
     if (existing) {

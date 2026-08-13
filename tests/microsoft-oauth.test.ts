@@ -60,6 +60,12 @@ function tokenResponse(over: Record<string, unknown> = {}, status = 200) {
   );
 }
 
+/** A minimally valid unsigned id_token carrying the given claims. */
+function idToken(claims: Record<string, string>): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8").toString("base64url");
+  return `${b64({ alg: "none" })}.${b64(claims)}.sig`;
+}
+
 function formBody(): URLSearchParams {
   const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
   return new URLSearchParams(init.body as string);
@@ -244,7 +250,8 @@ describe("token endpoint", () => {
       accessToken: "at-1",
       refreshToken: "rt-1",
       expiresAt: new Date(NOW + 3600 * 1000),
-      scope: "Mail.Send Mail.ReadWrite"
+      scope: "Mail.Send Mail.ReadWrite",
+      idTokenEmail: null
     });
   });
 
@@ -370,11 +377,15 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: "u1",
       email: "sam@acme.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      // Every representation, so reconnect can match a row labeled with any.
+      aliases: ["sam@acme.com", "sam@acme.onmicrosoft.com"]
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://graph.microsoft.com/v1.0/me");
+    // $select is explicit so otherMails comes back; personal accounts need it.
+    expect(url).toContain("https://graph.microsoft.com/v1.0/me?$select=");
+    expect(url).toContain("otherMails");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer at");
   });
 
@@ -391,7 +402,8 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: "u1",
       email: null,
-      displayName: null
+      displayName: null,
+      aliases: []
     });
   });
 
@@ -407,7 +419,8 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: null,
       email: null,
-      displayName: null
+      displayName: null,
+      aliases: []
     });
   });
 
@@ -455,4 +468,100 @@ describe("fetchMicrosoftIdentity", () => {
       vi.useRealTimers();
     }
   });
+
+describe("personal Microsoft accounts (the synthetic UPN)", () => {
+  // A personal account comes back with mail: null and a synthetic
+  // userPrincipalName of the form outlook_<CID>@outlook.com. It is unique and
+  // stable, so it works as an identifier, but showing it on the integrations
+  // page tells the owner nothing: they expect the address they signed in with.
+  const SYNTHETIC = "outlook_5C3966BE918A1C30@outlook.com";
+
+  function graph(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  it("prefers the id_token email over the synthetic UPN", async () => {
+    fetchMock.mockResolvedValue(
+      graph({ id: "u1", mail: null, userPrincipalName: SYNTHETIC, displayName: "Brian" })
+    );
+
+    const identity = await fetchMicrosoftIdentity("at", "team@newcoworker.com");
+
+    expect(identity?.email).toBe("team@newcoworker.com");
+    expect(identity?.accountId).toBe("u1");
+  });
+
+  it("falls back to otherMails when there is no id_token email", async () => {
+    fetchMock.mockResolvedValue(
+      graph({ id: "u1", mail: null, userPrincipalName: SYNTHETIC, otherMails: ["team@newcoworker.com"] })
+    );
+    await expect(fetchMicrosoftIdentity("at")).resolves.toMatchObject({
+      email: "team@newcoworker.com"
+    });
+  });
+
+  it("still returns the synthetic UPN as a LAST resort rather than nothing", async () => {
+    // The callback refuses to store a connection without an identity, so an
+    // ugly address beats no address.
+    fetchMock.mockResolvedValue(graph({ id: "u1", mail: null, userPrincipalName: SYNTHETIC }));
+    await expect(fetchMicrosoftIdentity("at")).resolves.toMatchObject({ email: SYNTHETIC });
+  });
+
+  it("keeps Graph mail ahead of the id_token, for work accounts", async () => {
+    fetchMock.mockResolvedValue(graph({ id: "u1", mail: "sam@acme.com", userPrincipalName: "sam@acme.onmicrosoft.com" }));
+    await expect(fetchMicrosoftIdentity("at", "stale@acme.com")).resolves.toMatchObject({
+      email: "sam@acme.com"
+    });
+  });
+
+  it("ignores a malformed otherMails rather than throwing", async () => {
+    fetchMock.mockResolvedValue(
+      graph({ id: "u1", mail: null, userPrincipalName: SYNTHETIC, otherMails: [42, ""] })
+    );
+    await expect(fetchMicrosoftIdentity("at")).resolves.toMatchObject({ email: SYNTHETIC });
+  });
+
+  it("asks Graph for otherMails explicitly", async () => {
+    fetchMock.mockResolvedValue(graph({ id: "u1", mail: "a@b.com" }));
+    await fetchMicrosoftIdentity("at");
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[0]).toContain("otherMails");
+  });
+});
+
+describe("id_token email extraction", () => {
+  it("carries the email claim through the token exchange", async () => {
+    fetchMock.mockResolvedValue(
+      tokenResponse({ id_token: idToken({ email: "team@newcoworker.com" }) })
+    );
+    const tokens = await exchangeMicrosoftAuthCode("c", NOW);
+    expect(tokens.idTokenEmail).toBe("team@newcoworker.com");
+  });
+
+  it("falls back to preferred_username, which work tokens tend to carry", async () => {
+    fetchMock.mockResolvedValue(
+      tokenResponse({ id_token: idToken({ preferred_username: "sam@acme.com" }) })
+    );
+    await expect(exchangeMicrosoftAuthCode("c", NOW)).resolves.toMatchObject({
+      idTokenEmail: "sam@acme.com"
+    });
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["not a JWT", "garbage"],
+    ["undecodable payload", "aaa.!!!not-base64!!!.sig"],
+    ["no email claims", `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from('{"sub":"x"}').toString("base64url")}.sig`]
+  ])("degrades to null when the id_token is %s", async (_label, token) => {
+    // Only ever used to LABEL a mailbox, never to authorize, so a bad token
+    // must not fail the connect.
+    fetchMock.mockResolvedValue(tokenResponse({ id_token: token }));
+    await expect(exchangeMicrosoftAuthCode("c", NOW)).resolves.toMatchObject({
+      idTokenEmail: null
+    });
+  });
+});
+
 });

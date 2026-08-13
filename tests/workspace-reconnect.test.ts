@@ -20,6 +20,7 @@ import {
   GOOGLE_KEYS,
   OUTLOOK_KEYS,
   findReconnectTarget,
+  identitySet,
   resolveUnlabeledReconnect
 } from "@/lib/workspace/reconnect";
 
@@ -269,4 +270,194 @@ describe("provider key sets", () => {
     ];
     expect(findDuplicateRow(rows, "mine", "sam@acme.com", GOOGLE_KEYS)?.id).toBe("row-1");
   });
+
+describe("matching on the provider account id", () => {
+  const withId = (id: string, over: Record<string, unknown> = {}) =>
+    row({ metadata: { provider_account_id: id, ...(over.metadata as object ?? {}) }, ...over });
+
+  it("matches the account id even when the stored EMAIL has changed", () => {
+    // The case that made this necessary: a personal Microsoft account stored as
+    // its synthetic outlook_<CID>@outlook.com, then re-read as the owner's real
+    // address once we started reading the id_token. Same mailbox, different
+    // string. Matching on email alone would call it a new account and strand
+    // every flow bound to the old row.
+    const rows = [
+      row({
+        id: "existing",
+        metadata: {
+          provider_account_id: "graph-object-id-1",
+          provider_account_email: "outlook_5C3966BE918A1C30@outlook.com"
+        }
+      })
+    ];
+
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, "graph-object-id-1");
+
+    expect(d).toEqual({
+      kind: "reconnect",
+      row: expect.objectContaining({ id: "existing" }),
+      matchedBy: "account_id"
+    });
+  });
+
+  it("prefers the account id over an email match on a DIFFERENT row", () => {
+    const rows = [
+      row({ id: "by-email", metadata: { provider_account_email: "team@newcoworker.com" } }),
+      withId("graph-1", { id: "by-id" })
+    ];
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, "graph-1");
+    expect(d.kind === "reconnect" && d.row.id).toBe("by-id");
+  });
+
+  it("takes the oldest when several rows carry the same account id", () => {
+    const rows = [
+      withId("g1", { id: "newer", created_at: "2026-08-02T00:00:00Z" }),
+      withId("g1", { id: "older", created_at: "2026-01-01T00:00:00Z" })
+    ];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS, "g1");
+    expect(d.kind === "reconnect" && d.row.id).toBe("older");
+  });
+
+  it("falls through to the email when no row carries that id", () => {
+    const rows = [row({ metadata: { provider_account_email: "sam@acme.com" } })];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS, "unseen-id");
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+
+  it("behaves exactly as before when no account id is supplied", () => {
+    const rows = [row({ metadata: { provider_account_email: "sam@acme.com" } })];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS);
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+});
+
+
+describe("legacy rows labeled with a different representation of the account", () => {
+  const SYNTHETIC = "outlook_5c3966be918a1c30@outlook.com";
+
+  it("matches a NANGO row labeled with the synthetic UPN when we now resolve the real address", () => {
+    // The migration case, and the one that made set matching necessary. A
+    // Nango row carries only provider_account_email (its complete route never
+    // wrote an account id), and for a personal Outlook that email is the
+    // synthetic UPN. Once first-party connect started resolving the owner's
+    // real address, matching on the primary alone found nothing: no id to
+    // match, no email match, and the row IS labeled so the unlabeled fallback
+    // does not apply. Result was a duplicate row and every flow stranded on the
+    // old one.
+    const rows = [
+      row({ id: "legacy-nango", metadata: { provider_account_email: SYNTHETIC } })
+    ];
+
+    const d = findReconnectTarget(
+      rows,
+      "team@newcoworker.com",
+      ROOMY,
+      OUTLOOK_KEYS,
+      "graph-id-1",
+      [SYNTHETIC, "team@newcoworker.com"]
+    );
+
+    expect(d).toEqual({
+      kind: "reconnect",
+      row: expect.objectContaining({ id: "legacy-nango" }),
+      matchedBy: "account_email"
+    });
+  });
+
+  it("matches the other direction too, via aliases stored on the row", () => {
+    // A row written by first-party connect records its whole alias set, so a
+    // later connect resolving only the synthetic form still lands on it.
+    const rows = [
+      row({
+        id: "direct-row",
+        metadata: {
+          provider_account_email: "team@newcoworker.com",
+          provider_account_aliases: ["team@newcoworker.com", SYNTHETIC]
+        }
+      })
+    ];
+
+    const d = findReconnectTarget(rows, SYNTHETIC, ROOMY, OUTLOOK_KEYS, null, [SYNTHETIC]);
+    expect(d.kind === "reconnect" && d.row.id).toBe("direct-row");
+  });
+
+  it("does NOT match an unrelated account that shares no alias", () => {
+    const rows = [
+      row({ id: "someone-else", metadata: { provider_account_email: "other@acme.com" } })
+    ];
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, "id-1", [
+      SYNTHETIC,
+      "team@newcoworker.com"
+    ]);
+    expect(d.kind).toBe("new");
+  });
+
+  it("ignores a malformed provider_account_aliases rather than throwing", () => {
+    const rows = [
+      row({
+        id: "weird",
+        metadata: { provider_account_email: "team@newcoworker.com", provider_account_aliases: "nope" }
+      })
+    ];
+    const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS);
+    expect(d.kind === "reconnect" && d.row.id).toBe("weird");
+  });
+});
+
+
+describe("resolveUnlabeledReconnect and the alias set", () => {
+  const SYNTHETIC = "outlook_5c3966be918a1c30@outlook.com";
+  const candidate = row({ id: "unlabeled" });
+
+  it("reconnects when the PROBE returns a different spelling of the same account", () => {
+    // The probe runs through the row's own grant, so for a personal account it
+    // reports the synthetic UPN while this connect resolved the real address.
+    // Comparing one string to one string called it a stranger and duplicated
+    // the row: the same bug as findReconnectTarget had, on the path that was
+    // not updated with it.
+    const d = resolveUnlabeledReconnect(candidate, SYNTHETIC, "team@newcoworker.com", [
+      SYNTHETIC,
+      "team@newcoworker.com"
+    ]);
+    expect(d).toEqual({ kind: "reconnect", row: candidate, matchedBy: "account_email" });
+  });
+
+  it("still inserts when the probe reports a genuinely different account", () => {
+    const d = resolveUnlabeledReconnect(candidate, "someone@else.com", "team@newcoworker.com", [
+      SYNTHETIC,
+      "team@newcoworker.com"
+    ]);
+    expect(d.kind).toBe("new");
+  });
+
+  it("keeps working with no aliases, matching on the primary alone", () => {
+    expect(
+      resolveUnlabeledReconnect(candidate, "Team@NewCoworker.com", "team@newcoworker.com").kind
+    ).toBe("reconnect");
+  });
+
+  it("still inserts when the probe failed", () => {
+    expect(resolveUnlabeledReconnect(candidate, null, "team@newcoworker.com", [SYNTHETIC]).kind).toBe(
+      "new"
+    );
+  });
+});
+
+describe("identitySet", () => {
+  it("normalizes case and whitespace and drops empties", () => {
+    expect([...identitySet("  Team@NewCoworker.com ", ["", "OTHER@acme.com", "  "])]).toEqual([
+      "team@newcoworker.com",
+      "other@acme.com"
+    ]);
+  });
+
+  it("dedupes across primary and aliases", () => {
+    expect(identitySet("a@b.com", ["A@B.com", "a@b.com"]).size).toBe(1);
+  });
+
+  it("is empty for a null primary and no aliases", () => {
+    expect(identitySet(null).size).toBe(0);
+  });
+});
+
 });

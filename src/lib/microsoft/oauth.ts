@@ -202,7 +202,42 @@ export type MicrosoftTokenSet = {
   refreshToken: string;
   expiresAt: Date;
   scope: string;
+  /**
+   * The `email` claim from the id_token, or null.
+   *
+   * This is the only reliable source of a PERSONAL Microsoft account's real
+   * address. Graph reports those accounts with `mail: null` and a synthetic
+   * `userPrincipalName` of the form `outlook_<CID>@outlook.com`, which is
+   * unique but meaningless to the owner looking at their integrations page.
+   */
+  idTokenEmail: string | null;
 };
+
+/**
+ * Reads one claim out of an id_token payload.
+ *
+ * No signature check, deliberately: this token came straight back from
+ * Microsoft's token endpoint over TLS in response to our own client-
+ * authenticated request, which is the case OIDC explicitly exempts from
+ * validation. It is also used only to LABEL a mailbox, never to authorize
+ * anything, so a malformed or absent claim degrades to null rather than
+ * failing the connect.
+ */
+function idTokenClaim(idToken: string | undefined, claim: string): string | null {
+  if (!idToken) return null;
+  const parts = idToken.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    const value = payload[claim];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 async function tokenEndpointRequest(
   params: URLSearchParams,
@@ -239,6 +274,7 @@ async function tokenEndpointRequest(
     refresh_token?: string;
     expires_in?: number;
     scope?: string;
+    id_token?: string;
     error?: string;
     error_description?: string;
   } | null;
@@ -271,7 +307,12 @@ async function tokenEndpointRequest(
     // What Microsoft actually granted, which can be narrower than what we
     // asked for. Stored so a missing-permission failure is diagnosable without
     // re-running consent.
-    scope: typeof body.scope === "string" ? body.scope : ""
+    scope: typeof body.scope === "string" ? body.scope : "",
+    // `email` first, then `preferred_username`: work/school tokens tend to
+    // carry the latter, personal accounts the former.
+    idTokenEmail:
+      idTokenClaim(body.id_token, "email") ??
+      idTokenClaim(body.id_token, "preferred_username")
   };
 }
 
@@ -310,10 +351,28 @@ export async function refreshMicrosoftTokens(
   );
 }
 
+function firstNonEmpty(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export type MicrosoftAccountIdentity = {
   accountId: string | null;
   email: string | null;
   displayName: string | null;
+  /**
+   * EVERY address this account answers to, lowercased and deduped, including
+   * the synthetic `outlook_<CID>@outlook.com` UPN.
+   *
+   * Reconnect matching needs this, not just the primary. A mailbox connected
+   * through Nango before this existed was labeled with whatever that probe
+   * resolved, which for a personal account is the synthetic UPN. Now that we
+   * resolve the owner's real address instead, the two representations of one
+   * account no longer compare equal, and matching on the primary alone would
+   * read a reconnect as a new account, duplicate the row, and strand the flows
+   * bound to the old one. Carrying the whole set makes the comparison
+   * representation-independent.
+   */
+  aliases: string[];
 };
 
 /**
@@ -326,13 +385,14 @@ export type MicrosoftAccountIdentity = {
  * Returns null on 401/403 (token rejected); throws on other failures.
  */
 export async function fetchMicrosoftIdentity(
-  accessToken: string
+  accessToken: string,
+  idTokenEmail: string | null = null
 ): Promise<MicrosoftAccountIdentity | null> {
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), MICROSOFT_REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`${GRAPH_API_BASE_URL}/v1.0/me`, {
+    res = await fetch(`${GRAPH_API_BASE_URL}/v1.0/me?$select=id,mail,userPrincipalName,displayName,otherMails`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
       signal: ac.signal
     });
@@ -359,19 +419,44 @@ export async function fetchMicrosoftIdentity(
     mail?: string;
     userPrincipalName?: string;
     displayName?: string;
+    otherMails?: unknown;
   } | null;
+
+  // Precedence matters here, and the last entry is the trap.
+  //
+  // A PERSONAL Microsoft account comes back with `mail: null` and a synthetic
+  // `userPrincipalName` of the form `outlook_<CID>@outlook.com`. It is unique
+  // and stable, so it works as an identifier, but it is meaningless to the
+  // owner reading their integrations page, who expects the address they just
+  // signed in with. The id_token's email claim is where that address actually
+  // lives for those accounts.
+  //
+  // The synthetic UPN stays as the LAST resort rather than being rejected: it
+  // is better than no identity at all, and the callback refuses to store a
+  // connection without one.
+  const otherMails = Array.isArray(body?.otherMails)
+    ? body.otherMails.filter((m): m is string => typeof m === "string" && m.length > 0)
+    : [];
   const email =
-    typeof body?.mail === "string" && body.mail.length > 0
-      ? body.mail
-      : typeof body?.userPrincipalName === "string" && body.userPrincipalName.length > 0
-        ? body.userPrincipalName
-        : null;
+    firstNonEmpty(body?.mail) ??
+    firstNonEmpty(idTokenEmail) ??
+    otherMails[0] ??
+    firstNonEmpty(body?.userPrincipalName);
+  const aliases = [
+    ...new Set(
+      [firstNonEmpty(body?.mail), firstNonEmpty(idTokenEmail), ...otherMails, firstNonEmpty(body?.userPrincipalName)]
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+        .map((v) => v.toLowerCase())
+    )
+  ];
+
   return {
     accountId: typeof body?.id === "string" ? body.id : null,
     email,
     displayName:
       typeof body?.displayName === "string" && body.displayName.length > 0
         ? body.displayName
-        : null
+        : null,
+    aliases
   };
 }

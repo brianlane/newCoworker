@@ -143,12 +143,14 @@ describe("microsoft callback: insert race settlement", () => {
       accessToken: "at",
       refreshToken: "rt",
       expiresAt: new Date("2026-08-11T12:00:00Z"),
-      scope: "Mail.Send"
+      scope: "Mail.Send",
+  idTokenEmail: null
     });
     vi.mocked(fetchMicrosoftIdentity).mockResolvedValue({
       accountId: "u1",
       email: "new@acme.com",
-      displayName: "New Box"
+      displayName: "New Box",
+      aliases: []
     });
     vi.mocked(assertWorkspaceConnectionAllowed).mockResolvedValue(undefined as never);
     vi.mocked(insertDirectWorkspaceConnection).mockResolvedValue(
@@ -191,7 +193,8 @@ describe("microsoft callback: insert race settlement", () => {
     vi.mocked(fetchMicrosoftIdentity).mockResolvedValue({
       accountId: "u1",
       email: "sam@acme.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      aliases: []
     });
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([outlookRow()]);
     vi.mocked(flipWorkspaceConnectionToDirect).mockResolvedValue(
