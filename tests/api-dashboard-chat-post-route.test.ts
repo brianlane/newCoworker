@@ -88,7 +88,7 @@ vi.mock("@/lib/dashboard-chat/summarizer", () => ({
 }));
 
 vi.mock("@/lib/voice-tools/connections", () => ({
-  // Default: nothing connected — the integrations status line still renders
+  // Default: nothing connected, the integrations status line still renders
   // (with "not connected" arms); tests that exercise providers override.
   resolveCalendarConnection: vi.fn(async () => null),
   resolveEmailConnection: vi.fn(async () => null)
@@ -187,7 +187,7 @@ beforeEach(() => {
   supabaseFlagsStub.from.mockReturnValue(supabaseFlagsStub);
   supabaseFlagsStub.select.mockReturnValue(supabaseFlagsStub);
   // `.eq()` terminates BOTH the flags read chain (before .maybeSingle) and
-  // the inline path's thread-bump update chain (awaited directly) — a
+  // the inline path's thread-bump update chain (awaited directly), a
   // non-thenable return works for the latter (await passes it through and
   // `error` destructures to undefined).
   supabaseFlagsStub.eq.mockReturnValue(supabaseFlagsStub);
@@ -232,8 +232,8 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", () => {
-  it("returns 200 with the JSON envelope { threadId, activeThreadId, jobId, userMessageId, messages } — the worker handles Rowboat off-Vercel", async () => {
+describe("POST /api/dashboard/chat, enqueue-and-return contract (PR #79)", () => {
+  it("returns 200 with the JSON envelope { threadId, activeThreadId, jobId, userMessageId, messages }, the worker handles Rowboat off-Vercel", async () => {
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     expect(res.status).toBe(200);
     const env = await readEnvelope(res);
@@ -247,14 +247,14 @@ describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", ()
     expect(Array.isArray(env.data?.messages)).toBe(true);
   });
 
-  it("response is plain JSON, not NDJSON — the streaming surface from PR #76-#78 is gone", async () => {
+  it("response is plain JSON, not NDJSON, the streaming surface from PR #76-#78 is gone", async () => {
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const ct = res.headers.get("content-type") ?? "";
     expect(ct).toMatch(/application\/json/);
     expect(ct).not.toMatch(/x-ndjson/);
   });
 
-  it("accepts a long pasted brief (16k cap — the old 4000 clipped onboarding docs mid-sentence)", async () => {
+  it("accepts a long pasted brief (16k cap, the old 4000 clipped onboarding docs mid-sentence)", async () => {
     const brief = "K".repeat(15_999);
     const res = await POST(jsonRequest({ businessId: BIZ, message: brief }));
     expect(res.status).toBe(200);
@@ -265,7 +265,7 @@ describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", ()
     expect(over.status).toBe(400);
   });
 
-  it("persists the user message BEFORE enqueueing — if the enqueue fails the typed message is still saved", async () => {
+  it("persists the user message BEFORE enqueueing, if the enqueue fails the typed message is still saved", async () => {
     // Force insertChatJob to throw to verify ordering. appendMessage
     // must still have run with the user's text.
     vi.mocked(insertChatJob).mockRejectedValueOnce(new Error("queue down"));
@@ -279,17 +279,17 @@ describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", ()
     expect(userAppendCall?.[2]).toBe("save me");
   });
 
-  it("forwards the rowboat_conversation_id from the thread row to the job — worker uses it as the first-attempt continuation", async () => {
+  it("forwards the rowboat_conversation_id from the thread row to the job, worker uses it as the first-attempt continuation", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
     expect(callArgs.rowboatConversationId).toBe("rb-conv");
   });
 
-  it("the route NEVER calls Rowboat — generation moved to the VPS chat-worker", async () => {
+  it("the route NEVER calls Rowboat, generation moved to the VPS chat-worker", async () => {
     // Sanity: nothing in @/lib/rowboat/chat is imported by the route
     // anymore, so a snapshot of the request just shouldn't end up
     // touching it. We assert by checking that no fetch to a rowboat
-    // URL happened — the route only persists + enqueues.
+    // URL happened, the route only persists + enqueues.
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
     );
@@ -300,12 +300,12 @@ describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", ()
   });
 });
 
-describe("POST /api/dashboard/chat — two input variants for the worker (stateless retry)", () => {
+describe("POST /api/dashboard/chat, two input variants for the worker (stateless retry)", () => {
   // The worker is the one that handles try-then-fallback. The route's
   // job is to BUILD both variants up front and stash them on the job
   // row so the worker has zero business logic to duplicate.
 
-  it("on a thread WITH continuation, inputMessages NOW includes a bounded recent tail (deterministic recall, not Rowboat-replay-only) — and statelessInputMessages includes the full tail (used if the convId is rejected)", async () => {
+  it("on a thread WITH continuation, inputMessages NOW includes a bounded recent tail (deterministic recall, not Rowboat-replay-only), and statelessInputMessages includes the full tail (used if the convId is rejected)", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce([
       { role: "user", content: "earlier user turn" },
       { role: "assistant", content: "earlier assistant turn" }
@@ -315,7 +315,7 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
     // First-attempt input: OWNER_PREAMBLE + bounded recent tail + user turn.
     // We deliberately resend the tail even on continuation now (the small
     // per-tenant model lost earlier turns when recall relied on Rowboat
-    // replay alone — see route.ts buildRowboatChatMessages doc).
+    // replay alone, see route.ts buildRowboatChatMessages doc).
     const primary = callArgs.inputMessages;
     expect(primary.some((m) => m.role === "system" && m.content.includes("OWNER MODE"))).toBe(true);
     expect(primary.some((m) => m.content.includes("[Coworker]: earlier assistant turn"))).toBe(
@@ -336,7 +336,7 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
     expect(fallback!.some((m) => m.content.includes("[Owner]: earlier user turn"))).toBe(true);
   });
 
-  it("on a fresh thread (no continuation), inputMessages already includes the tail AND statelessInputMessages is null — there's no fallback to escalate to", async () => {
+  it("on a fresh thread (no continuation), inputMessages already includes the tail AND statelessInputMessages is null, there's no fallback to escalate to", async () => {
     vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
       ...ACTIVE_THREAD,
       rowboat_conversation_id: null
@@ -357,7 +357,7 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
     expect(callArgs.statelessInputMessages).toBeNull();
   });
 
-  it("never sends a { role: 'assistant' } message to the worker — Rowboat's input validator rejects plain assistant rows", async () => {
+  it("never sends a { role: 'assistant' } message to the worker, Rowboat's input validator rejects plain assistant rows", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce([
       { role: "user", content: "what's up" },
       { role: "assistant", content: "all good" }
@@ -369,16 +369,16 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
   });
 });
 
-describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworker tools)", () => {
-  it("injects the DISABLED block by default — the model is told to never pretend to send", async () => {
+describe("POST /api/dashboard/chat, email tool preamble (Settings → Coworker tools)", () => {
+  it("injects the DISABLED block by default, the model is told to never pretend to send", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "send an email to bob@x.co" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     const emailBlock = inputMessages.find(
       (m) => m.role === "system" && m.content.includes("EMAIL TOOL")
     );
-    expect(emailBlock?.content).toContain("EMAIL TOOL — DISABLED");
+    expect(emailBlock?.content).toContain("EMAIL TOOL: DISABLED");
     expect(emailBlock?.content).toContain("Settings → Coworker tools");
-    expect(inputMessages.some((m) => m.content.includes("EMAIL TOOL — ENABLED"))).toBe(false);
+    expect(inputMessages.some((m) => m.content.includes("EMAIL TOOL: ENABLED"))).toBe(false);
     expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "send_email");
   });
 
@@ -391,7 +391,7 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
     const { inputMessages, statelessInputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     for (const variant of [inputMessages, statelessInputMessages!]) {
       const emailBlock = variant.find(
-        (m) => m.role === "system" && m.content.includes("EMAIL TOOL — ENABLED")
+        (m) => m.role === "system" && m.content.includes("EMAIL TOOL: ENABLED")
       );
       expect(emailBlock).toBeDefined();
       expect(emailBlock!.content).toContain("<<EMAIL_SEND>>");
@@ -420,7 +420,7 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
     await POST(jsonRequest({ businessId: BIZ, message: "email beth" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     const block = inputMessages.find(
-      (m) => m.role === "system" && m.content.includes("EMAIL TOOL — ENABLED")
+      (m) => m.role === "system" && m.content.includes("EMAIL TOOL: ENABLED")
     )!;
     expect(block).toBeDefined();
 
@@ -435,7 +435,7 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
     expect(block.content).toContain("include NO block at all");
   });
 
-  it("keeps OWNER_PREAMBLE first — date line second, email block third", async () => {
+  it("keeps OWNER_PREAMBLE first, date line second, email block third", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     expect(inputMessages[0].content).toContain("OWNER MODE");
@@ -446,7 +446,7 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
   });
 });
 
-describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
+describe("POST /api/dashboard/chat, OWNER_PREAMBLE persona pin", () => {
   it("OWNER_PREAMBLE is the FIRST system message of inputMessages on every call", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
@@ -457,14 +457,14 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
     expect(first.content).toContain("NOT a customer");
   });
 
-  it("[Dashboard] channel marker on the user message — defense in depth alongside OWNER_PREAMBLE", async () => {
+  it("[Dashboard] channel marker on the user message, defense in depth alongside OWNER_PREAMBLE", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
     const last = callArgs.inputMessages[callArgs.inputMessages.length - 1];
     expect(last).toEqual({ role: "user", content: "[Dashboard] what was Joe asking about?" });
   });
 
-  it("OWNER_PREAMBLE appears on BOTH input variants — pins persona even on the stateless retry path", async () => {
+  it("OWNER_PREAMBLE appears on BOTH input variants, pins persona even on the stateless retry path", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce([
       { role: "user", content: "x" }
     ] as never);
@@ -474,7 +474,7 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
     expect(statelessInputMessages?.[0].content).toContain("OWNER MODE");
   });
 
-  it("OWNER_PREAMBLE explicitly authorizes sharing PII (phone numbers) with the owner — defeats invented privacy refusals", async () => {
+  it("OWNER_PREAMBLE explicitly authorizes sharing PII (phone numbers) with the owner, defeats invented privacy refusals", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
     const preamble = callArgs.inputMessages[0].content;
@@ -487,7 +487,7 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
     const preamble = callArgs.inputMessages[0].content;
-    // "tomorrow, July 14" relayed ON July 14 — notes' relative dates rot.
+    // "tomorrow, July 14" relayed ON July 14, notes' relative dates rot.
     expect(preamble).toContain("DATES IN NOTES MAY BE STALE");
     // Summary's stale full name must not beat the owner-set header name.
     expect(preamble).toContain("CUSTOMER NAMES");
@@ -524,7 +524,7 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — connected-integrations status line", () => {
+describe("POST /api/dashboard/chat, connected-integrations status line", () => {
   it("injects the ground-truth line with not-connected arms by default", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "are you connected to calendly?" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
@@ -569,7 +569,7 @@ describe("POST /api/dashboard/chat — connected-integrations status line", () =
   });
 });
 
-describe("POST /api/dashboard/chat — summary preamble", () => {
+describe("POST /api/dashboard/chat, summary preamble", () => {
   it("includes summary_md as a system message when present", async () => {
     vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
       ...ACTIVE_THREAD,
@@ -597,7 +597,7 @@ describe("POST /api/dashboard/chat — summary preamble", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () => {
+describe("POST /api/dashboard/chat, customer memory preamble (Phase 4)", () => {
   it("does NOT inject a preamble when the business has no customer memories", async () => {
     vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
@@ -635,7 +635,7 @@ describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () =
     expect(customerMsg!.content).toContain("+15555550123");
   });
 
-  it("succeeds even when the customer memory lookup throws — degraded awareness, not a 500", async () => {
+  it("succeeds even when the customer memory lookup throws, degraded awareness, not a 500", async () => {
     vi.mocked(listCustomerMemories).mockRejectedValueOnce(new Error("supabase_pgrst_500"));
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     expect(res.status).toBe(200);
@@ -647,7 +647,7 @@ describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () =
   });
 });
 
-describe("POST /api/dashboard/chat — threadId path (continue any thread)", () => {
+describe("POST /api/dashboard/chat, threadId path (continue any thread)", () => {
   it("reactivates an archived thread and uses it as the append + enqueue target", async () => {
     await POST(
       jsonRequest({ businessId: BIZ, threadId: ARCHIVED_THREAD_ID, message: "continue" })
@@ -682,7 +682,7 @@ describe("POST /api/dashboard/chat — threadId path (continue any thread)", () 
     expect(insertChatJob).not.toHaveBeenCalled();
   });
 
-  it("returns 404 (NOT 403) when the thread belongs to another tenant — anti-IDOR + denies existence side-channel", async () => {
+  it("returns 404 (NOT 403) when the thread belongs to another tenant, anti-IDOR + denies existence side-channel", async () => {
     vi.mocked(getThreadById).mockResolvedValueOnce({
       ...ARCHIVED_THREAD,
       business_id: OTHER_BIZ
@@ -705,7 +705,7 @@ describe("POST /api/dashboard/chat — threadId path (continue any thread)", () 
   });
 });
 
-describe("POST /api/dashboard/chat — legacy path (no threadId)", () => {
+describe("POST /api/dashboard/chat, legacy path (no threadId)", () => {
   it("uses getOrCreateActiveThread; never touches reactivate", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     expect(getOrCreateActiveThread).toHaveBeenCalledWith(BIZ, "hi");
@@ -714,8 +714,8 @@ describe("POST /api/dashboard/chat — legacy path (no threadId)", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
-  it("returns 401 on missing auth — Rowboat MUST NOT have been queued", async () => {
+describe("POST /api/dashboard/chat, pre-flight errors (no enqueue)", () => {
+  it("returns 401 on missing auth, Rowboat MUST NOT have been queued", async () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce(null as never);
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     expect(res.status).toBe(401);
@@ -755,10 +755,10 @@ describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — summarizer fires only after the assistant turn is persisted", () => {
+describe("POST /api/dashboard/chat, summarizer fires only after the assistant turn is persisted", () => {
   // Bugbot Medium-severity finding on PR #79: firing the summarizer from
   // the ENQUEUE path would build a summary missing the latest assistant
-  // turn (the worker hasn't written it yet) — so the worker path's trigger
+  // turn (the worker hasn't written it yet), so the worker path's trigger
   // lives on the worker side (POST /api/internal/dashboard-chat-summarize
   // after the assistant insert). The INLINE path persists BOTH turns
   // in-route before its summary check, which preserves the same invariant.
@@ -785,7 +785,7 @@ describe("POST /api/dashboard/chat — summarizer fires only after the assistant
   });
 });
 
-describe("POST /api/dashboard/chat — inline (central Gemini) primary path", () => {
+describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () => {
   beforeEach(() => {
     process.env.GOOGLE_API_KEY = "test-key";
     vi.mocked(runInlineChatTurn).mockResolvedValue({
@@ -858,7 +858,7 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
 
   it("gates update_notification_preferences on the caller's manage_settings role, not just the toggle", async () => {
     // A staff-role teammate uses chat freely but must never be handed a
-    // settings-mutation tool — manage_settings is manager+ in the policy
+    // settings-mutation tool, manage_settings is manager+ in the policy
     // matrix, matching the notifications settings page.
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
 
@@ -1028,7 +1028,7 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
   });
 });
 
-describe("renderTailTranscript — bounds CPU-only prefill cost", () => {
+describe("renderTailTranscript, bounds CPU-only prefill cost", () => {
   it("labels roles as Owner/Coworker/System and preserves chronological order", () => {
     const out = renderTailTranscript([
       { role: "user", content: "first" },
@@ -1042,7 +1042,7 @@ describe("renderTailTranscript — bounds CPU-only prefill cost", () => {
     const long = "x".repeat(5000);
     const out = renderTailTranscript([{ role: "assistant", content: long }]);
     expect(out).toContain("… (truncated)");
-    // 700-char body + label + ellipsis marker — far below the raw 5000.
+    // 700-char body + label + ellipsis marker, far below the raw 5000.
     expect(out.length).toBeLessThan(800);
   });
 

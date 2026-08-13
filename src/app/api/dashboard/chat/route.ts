@@ -1,5 +1,5 @@
 /**
- * Owner chat endpoint for /dashboard/chat — central-Gemini PRIMARY, VPS
+ * Owner chat endpoint for /dashboard/chat, central-Gemini PRIMARY, VPS
  * chat-worker FALLBACK.
  *
  * POST   Resolve the turn's route (src/lib/dashboard-chat/routing.ts):
@@ -9,7 +9,7 @@
  *            assistant reply in the response body. No VPS dependency.
  *          - WORKER (fallback): budget-exhausted turns (the worker owns the
  *            local-model degrade), a missing platform API key, or an inline
- *            failure — ENQUEUE a job exactly as before (PR #79 pipeline):
+ *            failure: ENQUEUE a job exactly as before (PR #79 pipeline):
  *            the per-tenant VPS chat-worker (vps/chat-worker/) writes the
  *            assistant message back to dashboard_chat_messages and the
  *            browser sees it via Supabase Realtime / job polling.
@@ -27,15 +27,15 @@
  * Vercel's Hobby plan caps a single function at maxDuration=300s and
  * Pro at 800s. Our local Rowboat sometimes takes 60-120s on the first
  * cold-tenant turn (vault load + Ollama page-in) and another 5-30s for
- * subsequent turns. ANY disconnect inside that window — Cloudflare
- * Tunnel hiccup, browser tab backgrounded, function eviction — meant
+ * subsequent turns. ANY disconnect inside that window (Cloudflare
+ * Tunnel hiccup, browser tab backgrounded, function eviction) meant
  * the assistant reply was generated on the VPS but never persisted,
  * because the route only wrote the message after the stream closed
  * cleanly. Three post-mortems (#76, #77, #78) couldn't close the
  * dropping-messages bug without a different architecture.
  *
  * Reliability contract (proven on srv1632631.hstgr.cloud before this
- * PR shipped — see PR #79):
+ * PR shipped, see PR #79):
  *   1. POST writes the user message + queues a job, both in <2s. The
  *      Vercel function returns immediately and is gone.
  *   2. The chat-worker (one per VPS) claims the job atomically via
@@ -50,7 +50,7 @@
  *   5. Browser subscribes to dashboard_chat_messages Realtime keyed
  *      to thread_id and renders the reply the moment it lands.
  *
- * Wire shape (POST response body — single JSON envelope):
+ * Wire shape (POST response body, single JSON envelope):
  *   {
  *     "ok": true,
  *     "data": {
@@ -95,7 +95,7 @@ import {
 // /api/internal/dashboard-chat/maybe-summarize after persisting the
 // assistant message) so the summary build sees BOTH the user turn
 // AND the assistant turn. Firing from the route would summarize a
-// thread whose latest assistant turn hadn't been written yet —
+// thread whose latest assistant turn hadn't been written yet,
 // Bugbot Medium-severity finding on PR #79.
 import { listCustomerMemories } from "@/lib/customer-memory/db";
 import {
@@ -135,13 +135,13 @@ import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_sha
 export const dynamic = "force-dynamic";
 
 // The worker-fallback enqueue still returns in <2s, but the PRIMARY path
-// now answers inline on central Gemini — and its create_aiflow tool can
+// now answers inline on central Gemini, and its create_aiflow tool can
 // legitimately spend 1-2 minutes compiling + self-repairing a large
 // automation. Budget the worst tool-loop case, not the enqueue case.
 export const maxDuration = 300;
 
 // 16k chars (~2-3 pages). The old 4000 cap silently clipped a pasted
-// onboarding brief mid-sentence (KYP Ads, Jul 15) — owners paste long setup
+// onboarding brief mid-sentence (KYP Ads, Jul 15), owners paste long setup
 // documents into chat, and the composer's maxLength truncated them with no
 // signal. Bounded so a pathological paste can't balloon the prompt; the
 // worker path's tail/summary caps are unchanged (the per-message tail clip
@@ -150,8 +150,8 @@ const MAX_MESSAGE_CHARS = 16_000;
 const HISTORY_TURNS = 20;
 // How many recent messages to replay verbatim as the "recent conversation
 // context" system block on EVERY turn (including continuation turns). Kept
-// small so we don't balloon CPU prefill on the per-tenant model — the box
-// is CPU-only and prefill cost tracks real prompt size — while still giving
+// small so we don't balloon CPU prefill on the per-tenant model (the box
+// is CPU-only and prefill cost tracks real prompt size) while still giving
 // the model deterministic recall of what was just said. The stateless-retry
 // fallback uses the full HISTORY_TURNS tail instead (no conversationId, so
 // it needs maximum local context). 8 messages ≈ the last ~4 turns.
@@ -160,7 +160,7 @@ const RESEND_TAIL_MESSAGES = 8;
 // Character caps on the verbatim recent-tail transcript. The tail is bounded
 // by message COUNT above, but a few long turns (e.g. a multi-bullet "saved to
 // your business memory" recap, which can run ~1.8k chars) still balloon the
-// prompt — and on the CPU-only per-tenant model, prefill time tracks REAL
+// prompt, and on the CPU-only per-tenant model, prefill time tracks REAL
 // prompt size. That is what pushed a live job past the 4-minute Rowboat
 // timeout (twice, incl. the 20-message stateless retry) in June 2026. Capping
 // characters preserves recall of WHAT was just said while bounding cost; the
@@ -204,7 +204,7 @@ const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
 const postBodySchema = z.object({
   businessId: z.string().uuid(),
-  // Optional: when present, the POST targets that specific thread —
+  // Optional: when present, the POST targets that specific thread,
   // reactivating it (deactivating the previously-active one) so the
   // user can continue any past conversation, ChatGPT/Claude/Gemini-
   // style. When omitted, the legacy "use active thread or create one"
@@ -219,7 +219,7 @@ const postBodySchema = z.object({
     .max(MAX_MESSAGE_CHARS, `Message is too long (max ${MAX_MESSAGE_CHARS} chars)`),
   // Optional: run this turn against an existing business document (the
   // stored original is attached to the inline Gemini call). Fresh uploads
-  // arrive as multipart form data instead — see POST.
+  // arrive as multipart form data instead, see POST.
   documentId: z.string().uuid().optional()
 });
 
@@ -240,7 +240,7 @@ type BusinessFlags = {
   customer_channels_enabled: boolean;
   /** IANA timezone for the date/time preamble; null = UTC fallback. */
   timezone: string | null;
-  /** Plan tier — drives the shared AI-budget cap the routing check reads. */
+  /** Plan tier: drives the shared AI-budget cap the routing check reads. */
   tier: PlanTier | null;
 };
 
@@ -266,10 +266,10 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
  * talking to right now". Without this, the per-tenant Rowboat agent
  * (whose persona is built for inbound customer conversations on SMS
  * and voice) defaults to treating EVERY incoming message as if it
- * came from a customer — see screenshot in PR #74 conversation:
+ * came from a customer, see screenshot in PR #74 conversation:
  * the owner asked "has anyone reached out looking to buy a home?"
  * and the agent replied with "I'd be happy to help you qualify a
- * new buyer lead — share your contact details, property address,
+ * new buyer lead, share your contact details, property address,
  * timeline...", which is the lead-intake script aimed at customers.
  *
  * The fix is a strong, ALWAYS-FIRST system preamble that:
@@ -278,7 +278,7 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
  *       customer. The model needs explicit permission to drop the
  *       customer-facing playbook.
  *   (2) Tells the agent its role on this surface: it's the owner's
- *       internal AI assistant — review customer activity, surface
+ *       internal AI assistant, review customer activity, surface
  *       trends, summarize conversations, answer business questions.
  *       This is intentionally distinct from the persona used on the
  *       customer channels (where the agent IS the business's
@@ -286,10 +286,10 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
  *   (3) Reminds the agent it can use tools/context the owner can't
  *       see directly (recent customer activity preamble, rolling
  *       thread summary) but must be honest about what's NOT in
- *       context — never invent customer details, never claim to
+ *       context, never invent customer details, never claim to
  *       have done things it didn't do.
  *   (4) Authorizes the agent to share customer PII (phone numbers,
- *       timestamps, transcript text) with the owner — pre-streaming
+ *       timestamps, transcript text) with the owner, pre-streaming
  *       the model invented privacy/compliance refusals on its own
  *       (see PR #75 screenshot: owner asked for phone numbers, model
  *       refused citing "compliance"). The owner has full read access;
@@ -344,14 +344,14 @@ export { OWNER_PREAMBLE };
  * workflow re-seed.
  *
  * MUST stay in lockstep with the parser in vps/chat-worker/email-tool.mjs
- * (worker path) and src/lib/dashboard-chat/email-blocks.ts (inline path) —
+ * (worker path) and src/lib/dashboard-chat/email-blocks.ts (inline path),
  * EMAIL_SEND_OPEN / EMAIL_SEND_CLOSE + field caps, which themselves match
  * the zod schema in /api/voice/tools/dashboard-email.
  */
 export const EMAIL_SEND_OPEN = EMAIL_BLOCK_OPEN;
 export const EMAIL_SEND_CLOSE = EMAIL_BLOCK_CLOSE;
 
-export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL — ENABLED.
+export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL: ENABLED.
 
 You can send email from the owner's connected mailbox. The platform sends it on your behalf; the "from" address is always the owner's connected account and cannot be changed. When the owner asks you to send an email, compose it and include this EXACT block in your reply, on its own lines:
 
@@ -368,9 +368,9 @@ Rules:
 - Exactly one valid JSON object per block. Plain-text body only (use \\n for line breaks). Subject at most 150 characters; body at most 4000 characters. At most 10 cc and 10 bcc recipients. At most 3 such blocks per reply.
 - Do NOT claim the email was sent. The platform sends it after your reply and appends the actual delivery result for the owner. Phrase your reply as "sending it now".`;
 
-export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.
+export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL: DISABLED.
 
-You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax — tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
+You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax. Tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
 
 /**
  * Build the message array sent to Rowboat for one chat turn. Stored on
@@ -382,7 +382,7 @@ You cannot send emails on this surface. If the owner asks you to send an email, 
  * schema that rejects plain `{ role: "assistant", content: string }`
  * objects (it expects agent/tool-shaped assistant rows produced by
  * Rowboat itself). Replaying our local assistant turns there always
- * 400s — see tests/integration/kvm-rowboat/rowboat-chat.ts for the
+ * 400s, see tests/integration/kvm-rowboat/rowboat-chat.ts for the
  * canonical contract: "Each leg sends only the new user message …
  * do not replay `{ role: 'assistant', content }`". So we instead:
  *
@@ -392,7 +392,7 @@ You cannot send emails on this surface. If the owner asks you to send an email, 
  *
  * Why we now ALWAYS include the tail (vs. the old "omit on continuation,
  * trust Rowboat's conversationId replay" design): production showed the
- * small per-tenant model losing earlier turns on continuation — e.g. it
+ * small per-tenant model losing earlier turns on continuation, e.g. it
  * listed the team's agent roster on turn 1 then claimed "I don't have
  * access" two turns later (business 621a5b0d, June 2026). Root cause was
  * a thin 4k context + zero resent history, so cross-turn recall hinged
@@ -415,14 +415,14 @@ function buildRowboatChatMessages(args: {
    * Built by buildDashboardCustomerPreamble; null when the business
    * has no notable customers yet (first-time dashboard chat user).
    * Prepended BEFORE the rolling thread summary so it's the most
-   * stable piece of ambient context — the thread summary is for
+   * stable piece of ambient context, the thread summary is for
    * THIS owner conversation, the customer preamble is for the
    * world the owner is operating in.
    */
   customerPreamble?: string | null;
   /**
    * Whether the owner enabled the dashboard `send_email` tool (Settings →
-   * Coworker tools). Drives WHICH email-tool system block is injected —
+   * Coworker tools). Drives WHICH email-tool system block is injected,
    * enabled teaches the EMAIL_SEND protocol; disabled explicitly forbids
    * pretending to send (the exact hallucination observed before this
    * existed: the model emitted fake tool_code JSON then claimed the email
@@ -477,11 +477,11 @@ function buildRowboatChatMessages(args: {
     const transcript = renderTailTranscript(args.tail);
     out.push({
       role: "system",
-      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said — including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${transcript}`
+      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said, including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${transcript}`
     });
   }
   // [Dashboard] channel marker mirrors the [SMS]/[Call] markers used
-  // on the customer channels — gives the agent a visible reminder
+  // on the customer channels, gives the agent a visible reminder
   // every turn that the human in front of it is the owner, not a
   // customer (defense in depth alongside OWNER_PREAMBLE).
   out.push({ role: "user", content: `[Dashboard] ${args.newUserMessage}` });
@@ -492,7 +492,7 @@ function buildRowboatChatMessages(args: {
  * Telemetry for a text turn that could NOT run on the inline primary path
  * for a non-cap reason. The July 2026 dead-model incident (default id
  * `gemini-3.1-flash`, which does not exist on the Gemini API) demoted every
- * dashboard turn to the worker for days with zero platform signal — wire
+ * dashboard turn to the worker for days with zero platform signal, wire
  * dashboards/alerts to `dashboard_chat_inline_fallback`. Best-effort.
  */
 async function emitInlineFallbackTelemetry(
@@ -515,7 +515,7 @@ async function emitInlineFallbackTelemetry(
 }
 
 // =====================================================================
-// POST — write user message + enqueue a job + return 200
+// POST: write user message + enqueue a job + return 200
 // =====================================================================
 
 export async function POST(request: Request) {
@@ -567,7 +567,7 @@ export async function POST(request: Request) {
 
     const limiter = rateLimit(`dashboard-chat:${body.businessId}`, DASHBOARD_CHAT_RATE);
     if (!limiter.success) {
-      // 429 Too Many Requests — preserved from the pre-Option-B
+      // 429 Too Many Requests, preserved from the pre-Option-B
       // streaming route (Bugbot Low-severity finding on PR #79).
       // Clients/proxies may implement automatic backoff on 429
       // semantics that 409 doesn't carry. The CONFLICT error code
@@ -591,7 +591,7 @@ export async function POST(request: Request) {
     }
 
     // Resolve the turn's attachment: a fresh upload wins; otherwise an
-    // existing business document's stored ORIGINAL (full fidelity — not the
+    // existing business document's stored ORIGINAL (full fidelity, not the
     // condensed content_md). Reads happen after the role gate above.
     let attachment: InlineTurnAttachment | null = upload;
     if (!attachment && body.documentId) {
@@ -625,7 +625,7 @@ export async function POST(request: Request) {
       };
     }
 
-    // Word attachments are decoded to text at the boundary — the inline
+    // Word attachments are decoded to text at the boundary, the inline
     // prompt builder only understands text formats and PDF inlineData, and
     // Gemini has no native DOCX part type.
     if (attachment) {
@@ -633,7 +633,7 @@ export async function POST(request: Request) {
       if (!decoded) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "That Word document has no readable text — export it as PDF and try again"
+          "That Word document has no readable text. Export it as PDF and try again"
         );
       }
       attachment = decoded;
@@ -685,7 +685,7 @@ export async function POST(request: Request) {
     // Phase 4: pull recent customer memories so the dashboard agent has
     // ambient context about who the owner has been doing business with
     // across SMS and voice. Capped tightly so it doesn't dominate the
-    // prompt. Failure here MUST NOT break the chat — degraded customer
+    // prompt. Failure here MUST NOT break the chat, degraded customer
     // awareness is acceptable; a 502 because we couldn't read 5 rows is
     // not.
     let customerPreamble: string | null = null;
@@ -744,7 +744,7 @@ export async function POST(request: Request) {
       "business_knowledge_lookup"
     );
 
-    // Action tools for the INLINE path (worker parity — the Rowboat
+    // Action tools for the INLINE path (worker parity, the Rowboat
     // OwnerCoworker declares these same tools, gated per call by the
     // tool-call route). Each read resolves errors to the registry default.
     const [
@@ -781,7 +781,7 @@ export async function POST(request: Request) {
     // Settings mutation needs more than chat access: the tool is declared
     // only when THIS caller passes manage_settings (manager+, the same
     // matrix as the notifications settings page). Chat itself only requires
-    // operate_messages, which staff hold — a staff teammate must never be
+    // operate_messages, which staff hold, a staff teammate must never be
     // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
     const canManageSettings = user.isAdmin
       ? true
@@ -796,7 +796,7 @@ export async function POST(request: Request) {
         })().catch(() => false);
     const actionToolGates = {
       send_sms: smsToolEnabled,
-      // Declared only when a WhatsApp integration is actually connected —
+      // Declared only when a WhatsApp integration is actually connected,
       // the toggle alone shouldn't dangle a tool that can only fail.
       send_whatsapp:
         whatsappToolEnabled &&
@@ -818,7 +818,7 @@ export async function POST(request: Request) {
       // write is irreversible from the platform, so a staff-role teammate
       // must never be handed this tool.
       flag_contact_spam: flagSpamToolEnabled && canManageSettings,
-      // Reversible thread management — same operate_messages bar as the
+      // Reversible thread management, same operate_messages bar as the
       // dashboard thread's own reply-mode toggle, so chat access suffices.
       set_contact_reply_mode: replyModeToolEnabled,
       // Roster CRUD decides who receives leads, so it sits at the same
@@ -841,7 +841,7 @@ export async function POST(request: Request) {
     //     conversationId and Rowboat needs the context entirely from
     //     our prompt. Only built when we have a continuation to fall
     //     back FROM; on a fresh thread the first attempt is already
-    //     stateless, so a second stateless call wouldn't help — we
+    //     stateless, so a second stateless call wouldn't help, we
     //     pass null so the worker's "no fallback" path kicks in.
     // The stored user message carries a visible attachment marker so the
     // history tail / summaries reflect what the turn was about (the actual
@@ -885,7 +885,7 @@ export async function POST(request: Request) {
 
     // === Turn routing: inline (central Gemini) primary, worker fallback ===
     // The spend read fails OPEN to inline (quality over fuse on a transient
-    // DB blip — same posture as the worker's own cap read).
+    // DB blip, same posture as the worker's own cap read).
     const spend = await getChatSpendSnapshotForBusiness(
       body.businessId,
       undefined,
@@ -903,14 +903,14 @@ export async function POST(request: Request) {
       apiKeyPresent,
       spend
     });
-    // Non-cap worker routing means the PRIMARY path is unavailable — make
+    // Non-cap worker routing means the PRIMARY path is unavailable, make
     // that loud (over-cap worker routing is expected and stays silent).
     if (route.kind === "worker" && !apiKeyPresent) {
       void emitInlineFallbackTelemetry(body.businessId, "no_api_key");
     }
 
     // Persist the user message BEFORE running/enqueueing the turn. If the
-    // turn fails for any reason the user's typed message is still saved —
+    // turn fails for any reason the user's typed message is still saved,
     // they can retry without losing what they typed. Cheap insurance.
     const userMsg = await appendMessage(thread.id, "user", storedUserMessage);
 
@@ -929,7 +929,7 @@ export async function POST(request: Request) {
     if (route.kind === "inline") {
       // Prompt parity with the worker path: the same system blocks, joined
       // into Gemini's systemInstruction; the user turn is the marked message.
-      // PLUS the business identity/memory block — the worker path carries
+      // PLUS the business identity/memory block, the worker path carries
       // those inside the Rowboat agent's seeded instructions (vault sync),
       // so without this the primary path answered configuration questions
       // blind ("are you connected to Calendly?" guesses, invented policy).
@@ -970,7 +970,7 @@ export async function POST(request: Request) {
       }
 
       // Inline failed. Attachment turns have no fallback (the worker path
-      // is text-only) — store an honest failure reply. Text turns fall
+      // is text-only), store an honest failure reply. Text turns fall
       // through to the worker enqueue below.
       logger.warn("dashboard chat: inline turn failed", {
         businessId: body.businessId,
@@ -984,7 +984,7 @@ export async function POST(request: Request) {
           thread,
           userMsg,
           content:
-            "I couldn't read that attachment right now — please try again in a moment.",
+            "I couldn't read that attachment right now, please try again in a moment.",
           drafts: []
         });
       }
@@ -992,7 +992,7 @@ export async function POST(request: Request) {
       // (gemini-3.1-flash) demoted every text turn to the worker for weeks
       // with zero signal. Emitted only for turns that actually fall through
       // to the worker enqueue below (attachment turns store an inline
-      // failure reply instead — they never demote). Best-effort.
+      // failure reply instead, they never demote). Best-effort.
       void emitInlineFallbackTelemetry(body.businessId, "inline_failed", inline.detail ?? inline.error);
     }
 
@@ -1003,7 +1003,7 @@ export async function POST(request: Request) {
     // (no fallback). Forwarding "" anyway would have the worker call
     // Rowboat with an invalid empty conversationId and fail permanently.
     // NOTE: the worker still decides its own Gemini-vs-local routing at
-    // claim time from live period spend (vps/chat-worker/worker.mjs) — the
+    // claim time from live period spend (vps/chat-worker/worker.mjs), the
     // route check above only decides inline vs worker, and over-cap turns
     // always land here so the cap lives in exactly one enforcement point.
     const job = await insertChatJob({
@@ -1049,7 +1049,7 @@ async function finishInlineTurn(args: {
   userMsg: { id: number };
   content: string;
   drafts: InlineChatDraft[];
-  /** The owner's raw message — presence enables memory capture. */
+  /** The owner's raw message, presence enables memory capture. */
   ownerMessageForCapture?: string;
 }): Promise<Response> {
   const assistantMsg = await appendMessage(args.thread.id, "assistant", args.content);
@@ -1065,13 +1065,13 @@ async function finishInlineTurn(args: {
       error: threadErr.message
     });
   }
-  // Keep-warm touch at the END of the turn too (worker parity — the enqueue
+  // Keep-warm touch at the END of the turn too (worker parity, the enqueue
   // path touches at claim AND completion).
   await touchChatActivity(args.businessId).catch(() => undefined);
 
   // Fire-and-forget rolling-summary check: both turns are persisted, so
   // this sees the complete exchange (the exact ordering the PR #79 worker
-  // handoff was built to preserve). Self-healing — a dropped check just
+  // handoff was built to preserve). Self-healing, a dropped check just
   // runs on the next turn.
   void (async () => {
     try {
@@ -1091,9 +1091,9 @@ async function finishInlineTurn(args: {
     }
   })();
 
-  // Owner-rule capture (silent, best-effort — worker parity; see
+  // Owner-rule capture (silent, best-effort, worker parity; see
   // src/lib/dashboard-chat/memory-capture.ts). Deferred via after() so the
-  // capture — and the graph ingest it chains into — reliably completes on
+  // capture (and the graph ingest it chains into) reliably completes on
   // Vercel; a bare fire-and-forget promise is frozen when the response
   // flushes (same rationale as scheduleVaultSync).
   if (args.ownerMessageForCapture) {
@@ -1117,7 +1117,7 @@ async function finishInlineTurn(args: {
 }
 
 // =====================================================================
-// GET / DELETE — unchanged JSON envelope shape
+// GET / DELETE: unchanged JSON envelope shape
 // =====================================================================
 
 export async function GET(request: Request) {

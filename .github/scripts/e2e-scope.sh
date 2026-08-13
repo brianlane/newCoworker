@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-scope.sh — spend guard for the live e2e job (paid Gemini calls).
+# e2e-scope.sh: spend guard for the live e2e job (paid Gemini calls).
 # Decides WHICH of the tests/e2e/ suites a change can possibly affect, so a
 # PR that only touches one AI surface pays for that surface's tests instead
 # of the whole matrix. Replaces the older binary e2e-safe-paths.sh.
@@ -9,35 +9,35 @@
 #   e2e-scope.sh push <owner/repo> <sha> <before-sha>
 #
 # Emits to $GITHUB_OUTPUT:
-#   skip=true|false   — true = ZERO paid model calls needed for this change
+#   skip=true|false   true = ZERO paid model calls needed for this change
 #   files=all | space-separated tests/e2e/*.e2e.test.ts paths
 #
 # Decision rules, in order of trust:
 #   0. Admin cost toggle first: when Admin → Gemini has the CI e2e mode set
 #      to "nightly-only" (read live from /api/public/ci-e2e-mode), every
-#      per-change run skips the paid calls — the nightly cron is the only
+#      per-change run skips the paid calls, the nightly cron is the only
 #      live coverage and it emails the admin on failure. Any error reading
 #      the mode falls through to per-change (rules below), never the other
 #      way around.
 #   1. Fail open. Any error listing files, any file that doesn't match a
-#      mapping, an oversized diff, a force-push — anything surprising runs
+#      mapping, an oversized diff, a force-push, anything surprising runs
 #      the FULL suite. A mapping mistake can only waste a run, never lose
 #      coverage of an unmapped surface... except through rule 2:
 #   2. The mapping encodes IMPORTS, not vibes. Each scoped group below lists
 #      exactly the e2e files that import from that production surface (see
 #      the import audit in the PR that introduced this script). When an e2e
-#      file gains an import from a new surface, add the path here — the
+#      file gains an import from a new surface, add the path here, the
 #      full-suite default covers you until then only for UNLISTED paths, so
 #      keep the scoped patterns narrow.
 #   3. Push-to-main dedupe: the merge commit of a squash-merged PR whose
 #      branch was up to date has the IDENTICAL TREE as the PR head that the
-#      e2e job already gated. Re-running the paid suite on it buys nothing —
+#      e2e job already gated. Re-running the paid suite on it buys nothing,
 #      skip when the trees match AND that PR's e2e check succeeded. Any
 #      mismatch (branch was behind main, direct push, API error) falls back
 #      to scoping the push diff. Dependabot merges are EXCLUDED from the
 #      dedupe: their PR-side e2e is a secretless no-op SUCCESS, and the
 #      push-to-main run is where dependency bumps get their real live-suite
-#      coverage (see ci.yml) — their lockfile diffs scope to "all" anyway.
+#      coverage (see ci.yml), their lockfile diffs scope to "all" anyway.
 #   4. This is an in-job decision rather than a workflow `paths` filter on
 #      purpose: the check must still report SUCCESS when it opts out or
 #      narrows, because the merge policy treats a skipped/pending check as
@@ -159,23 +159,23 @@ emit_full() { emit false all "$*"; }
 # ---------------------------------------------------------------------------
 # Admin cost toggle (Admin → Gemini → "CI live e2e"): when the platform's
 # stored mode is "nightly-only", every per-change run skips the paid model
-# calls entirely — live coverage comes from the nightly cron, which emails
+# calls entirely, live coverage comes from the nightly cron, which emails
 # the admin on failure. Read from the production app so a flip needs no
 # deploy; ANY error (endpoint down, non-JSON, timeout) falls through to the
 # normal per-change scoping below, so an outage can never silently drop
 # merge-time coverage. Overridable for tests via CI_E2E_MODE_URL.
 # ---------------------------------------------------------------------------
 # Canonical www host: the apex 307-redirects to www, and without -L the
-# first deploy of this check read "Redirecting..." instead of JSON — which
+# first deploy of this check read "Redirecting..." instead of JSON, which
 # fail-opened to per-change and would have silently ignored the toggle
 # forever. -L stays as belt-and-suspenders against future edge rules.
 MODE_URL="${CI_E2E_MODE_URL:-https://www.newcoworker.com/api/public/ci-e2e-mode}"
 admin_mode=$(curl -fsSL --max-time 10 "$MODE_URL" 2>/dev/null | jq -r '.mode // empty' 2>/dev/null) || admin_mode=""
 if [ "${admin_mode:-}" = "nightly-only" ]; then
-  emit true "" "CI e2e mode is nightly-only (admin toggle) — paid live calls run on the nightly cron instead."
+  emit true "" "CI e2e mode is nightly-only (admin toggle), paid live calls run on the nightly cron instead."
 fi
 
-# scope_file <path> — accumulate the e2e files <path> can affect, or flip
+# scope_file <path>, accumulate the e2e files <path> can affect, or flip
 # FULL for anything unmapped/self-referential. Ordering matters: overrides
 # beat the broader safe globs (tests/e2e/* before tests/*, workflow files
 # before .github/*, the bad-phone one-shot before scripts/*).
@@ -185,7 +185,7 @@ scope_file() {
     # --- e2e harness: shared plumbing runs everything; scoped harnesses
     #     run their group; a test file runs itself -------------------------
     tests/e2e/gemini.ts | tests/e2e/judge.ts) FULL=true ;;
-    tests/e2e/usage-log.ts) ;; # token accounting only — asserts nothing
+    tests/e2e/usage-log.ts) ;; # token accounting only, asserts nothing
     tests/e2e/flow-walker.ts | tests/e2e/flow-run-replay.ts) add "$FLOW_TESTS" ;;
     tests/e2e/truly-privyr-flow.fixture.ts) add "$TRULY_FIXTURE_TESTS" ;;
     tests/e2e/*.e2e.test.ts) add "$f" ;;
@@ -259,7 +259,7 @@ files=""
 if [ "$MODE" = "pr" ]; then
   PR="$3"
   files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') ||
-    emit_full "Could not list PR files — running the full live suite (fail-open)."
+    emit_full "Could not list PR files, running the full live suite (fail-open)."
 
 elif [ "$MODE" = "push" ]; then
   SHA="$3"
@@ -272,7 +272,7 @@ elif [ "$MODE" = "push" ]; then
       [.[] | select(.merged_at != null and .merge_commit_sha == "'"$SHA"'")]
       | .[0] // empty | "\(.head.sha) \(.user.login)"' 2>/dev/null) || return 1
     [ -n "${pr_head:-}" ] && [ "$pr_head" != "null" ] || return 1
-    # Dependabot PRs run a secretless no-op e2e — the push run is their
+    # Dependabot PRs run a secretless no-op e2e, the push run is their
     # real coverage, so never dedupe them away.
     [ "$pr_user" != "dependabot[bot]" ] || return 1
     push_tree=$(gh api "repos/$REPO/git/commits/$SHA" -q .tree.sha) || return 1
@@ -286,34 +286,34 @@ elif [ "$MODE" = "push" ]; then
     echo "$pr_head"
   }
   if pr_head=$(dedupe); then
-    emit true "" "Identical tree to merged PR head ${pr_head}, whose e2e check already passed — skipping the paid live suite."
+    emit true "" "Identical tree to merged PR head ${pr_head}, whose e2e check already passed, skipping the paid live suite."
   fi
 
   # --- No dedupe: scope the push diff itself -----------------------------
   if [ -z "$BEFORE" ] || ! printf '%s' "$BEFORE" | grep -qv '^0*$'; then
-    emit_full "No usable before-SHA (new branch or force push) — running the full live suite (fail-open)."
+    emit_full "No usable before-SHA (new branch or force push), running the full live suite (fail-open)."
   fi
   compare=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" 2>/dev/null) ||
-    emit_full "Could not compare $BEFORE...$SHA — running the full live suite (fail-open)."
+    emit_full "Could not compare $BEFORE...$SHA, running the full live suite (fail-open)."
   # Fail-open on ANY unusable compare payload: `.files // []` absorbs a
   # missing/null array, and a jq parse error (non-JSON body) falls to
   # emit_full instead of dying under set -e.
   count=$(jq '(.files // []) | length' <<<"$compare" 2>/dev/null) ||
-    emit_full "Could not parse the compare response — running the full live suite (fail-open)."
-  # The compare API caps .files at 300 — a bigger diff is only partially
+    emit_full "Could not parse the compare response, running the full live suite (fail-open)."
+  # The compare API caps .files at 300, a bigger diff is only partially
   # visible, so scope decisions on it would be unsound.
   if [ "$count" -ge 300 ]; then
-    emit_full "Push diff has ${count}+ files (compare API cap) — running the full live suite (fail-open)."
+    emit_full "Push diff has ${count}+ files (compare API cap), running the full live suite (fail-open)."
   fi
   files=$(jq -r '(.files // [])[].filename' <<<"$compare" 2>/dev/null) ||
-    emit_full "Could not parse the compare response — running the full live suite (fail-open)."
+    emit_full "Could not parse the compare response, running the full live suite (fail-open)."
 
 else
-  emit_full "Unknown mode '$MODE' — running the full live suite (fail-open)."
+  emit_full "Unknown mode '$MODE', running the full live suite (fail-open)."
 fi
 
 if [ -z "$files" ]; then
-  emit_full "Empty file list — running the full live suite (fail-open)."
+  emit_full "Empty file list, running the full live suite (fail-open)."
 fi
 
 # ---------------------------------------------------------------------------
@@ -323,14 +323,14 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   scope_file "$f"
   if [ "$FULL" = true ]; then
-    emit_full "AI-relevant change outside the scoped map: $f — running the full live suite."
+    emit_full "AI-relevant change outside the scoped map: $f, running the full live suite."
   fi
 done <<< "$files"
 
-# `grep -v` exits 1 when nothing survives (the all-safe case) — that is a
+# `grep -v` exits 1 when nothing survives (the all-safe case), that is a
 # valid outcome, not an error, so neutralize it under set -e/pipefail.
 selected=$(printf '%s\n' "$SELECTED" | { grep -v '^$' || true; } | sort -u | tr '\n' ' ' | sed 's/ $//')
 if [ -z "$selected" ]; then
-  emit true "" "Every changed file is on the safe-path allowlist — skipping the paid live suite."
+  emit true "" "Every changed file is on the safe-path allowlist, skipping the paid live suite."
 fi
 emit false "$selected" "Scoped live suite for this change: $selected"
