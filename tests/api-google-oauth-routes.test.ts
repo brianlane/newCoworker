@@ -64,6 +64,8 @@ import {
   revokeGoogleToken
 } from "@/lib/google/oauth";
 import { fetchWorkspaceAccountIdentity } from "@/lib/nango/account-identity";
+import { findReconnectTarget, GOOGLE_KEYS } from "@/lib/workspace/reconnect";
+import type { WorkspaceOAuthConnectionRow } from "@/lib/db/workspace-oauth-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ROW_ID = "22222222-2222-4222-8222-222222222222";
@@ -286,6 +288,57 @@ describe("google callback route", () => {
     expect(flipWorkspaceConnectionToDirect).not.toHaveBeenCalled();
   });
 
+  it("matches a renamed account by its stable id, not its stale email", async () => {
+    // A Google Workspace rename changes the address but never the sub. The row
+    // still carries the OLD label, so an email-only match would read this
+    // reconnect as a brand-new account, insert a duplicate, and strand every
+    // flow on the stale row with connection_not_found. The stored id is what
+    // says "same account", so the route must pass it through.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      nangoRow({
+        metadata: { provider_account_email: "old.name@acme.com", provider_account_id: "sub-1" }
+      })
+    ] as never);
+
+    const res = await CALLBACK(callbackRequest());
+
+    expect(flipWorkspaceConnectionToDirect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ROW_ID })
+    );
+    expect(insertDirectWorkspaceConnection).not.toHaveBeenCalled();
+    // The flip relabels the row with the address the account answers to NOW.
+    const args = vi.mocked(flipWorkspaceConnectionToDirect).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(args.metadata.provider_account_email).toBe("Owner@Acme.com");
+    expect(args.metadata.provider_account_id).toBe("sub-1");
+    expect(res.headers.get("location")).toContain("workspace=connected");
+  });
+
+  it("never re-points a row whose account id differs, even on an email match", async () => {
+    // The address was deleted and re-provisioned to a different person: same
+    // email, different sub. Adopting the old row would silently send the
+    // tenant's mail from the other account AND overwrite the stored id,
+    // erasing the evidence. A duplicate row is the recoverable outcome, so
+    // this must insert, and the post-insert duplicate check must refuse to
+    // consolidate onto the vetoed row for the same reason.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      nangoRow({
+        metadata: { provider_account_email: "owner@acme.com", provider_account_id: "sub-OLD" }
+      })
+    ] as never);
+
+    await CALLBACK(callbackRequest());
+
+    expect(flipWorkspaceConnectionToDirect).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(assertWorkspaceConnectionAllowed).toHaveBeenCalledWith(BIZ);
+    const args = vi.mocked(insertDirectWorkspaceConnection).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(args.metadata.provider_account_id).toBe("sub-1");
+  });
+
   it("keeps provider_config_key as google, never a -direct synthetic key", async () => {
     // The key is identical across transports; that is what keeps every resolver
     // and mailbox binding transport-blind.
@@ -296,6 +349,34 @@ describe("google callback route", () => {
     };
     expect(args.providerConfigKey).toBe("google");
     expect(args.connectionId).toMatch(/^direct:/);
+  });
+
+  it("written metadata round-trips into the matcher, and the stored id vetoes a stranger", async () => {
+    // The producer contract: the KEY NAMES this route writes must be the ones
+    // findReconnectTarget reads. Feeding the route's own written metadata
+    // back in means renaming provider_account_* breaks here, not in
+    // production.
+    await CALLBACK(callbackRequest());
+    const written = vi.mocked(insertDirectWorkspaceConnection).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    const rowFromWrite = nangoRow({
+      id: "written-row",
+      transport: "direct",
+      metadata: written.metadata
+    }) as WorkspaceOAuthConnectionRow;
+
+    // The same account reconnecting later, after a Workspace address rename:
+    // only the stored id can say so.
+    expect(
+      findReconnectTarget([rowFromWrite], "renamed@acme.com", 3, GOOGLE_KEYS, "sub-1")
+    ).toMatchObject({ kind: "reconnect", matchedBy: "account_id" });
+
+    // A different account that inherited the address: the stored id vetoes
+    // the email match.
+    expect(
+      findReconnectTarget([rowFromWrite], "owner@acme.com", 3, GOOGLE_KEYS, "sub-2").kind
+    ).toBe("new");
   });
 
   it("hands the grant back when the account cannot be read", async () => {

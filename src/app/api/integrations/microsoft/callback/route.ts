@@ -58,7 +58,10 @@ import {
   OUTLOOK_KEY,
   OUTLOOK_KEYS
 } from "@/lib/workspace/reconnect";
-import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
+import {
+  fetchWorkspaceAccountIdentity,
+  type ProviderAccountIdentity
+} from "@/lib/nango/account-identity";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 
@@ -169,14 +172,15 @@ export async function GET(request: Request) {
       // duplicate is recoverable, re-pointing a live flow at a different
       // mailbox is not.
       const candidate = decision.row;
-      let probed: string | null = null;
+      // Through the transport seam, not the Nango-only proxy: the probe must
+      // follow the row's own transport, and an unlabeled DIRECT row probed
+      // through Nango could only ever fail.
+      let probed: ProviderAccountIdentity | null = null;
       try {
-        probed = (
-          await fetchProviderAccountIdentity(verified.businessId, {
-            connectionId: candidate.connection_id,
-            providerConfigKey: candidate.provider_config_key
-          })
-        ).email;
+        probed = await fetchWorkspaceAccountIdentity(verified.businessId, {
+          connectionId: candidate.connection_id,
+          providerConfigKey: candidate.provider_config_key
+        });
       } catch (err) {
         logger.warn("microsoft reconnect: identity probe on the unlabeled row failed", {
           businessId: verified.businessId,
@@ -184,7 +188,14 @@ export async function GET(request: Request) {
           error: (err as Error).message
         });
       }
-      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail, identity.aliases);
+      decision = resolveUnlabeledReconnect(
+        candidate,
+        probed?.email ?? null,
+        accountEmail,
+        identity.aliases,
+        probed?.accountId ?? null,
+        identity.accountId
+      );
     }
 
     const existing = decision.kind === "reconnect" ? decision.row : undefined;
@@ -250,7 +261,8 @@ export async function GET(request: Request) {
         inserted.id,
         accountEmail,
         OUTLOOK_KEYS,
-        identity.accountId
+        identity.accountId,
+        identity.aliases
       );
       if (duplicateOf) {
         await deleteWorkspaceOAuthConnection(verified.businessId, inserted.id);
@@ -274,10 +286,7 @@ export async function GET(request: Request) {
       // exactly as the Nango complete route does: re-read in deterministic
       // order and evict our own row if it landed past the cap. Seats belong to
       // the earliest rows, so racers can never end above the cap.
-      const settlement = await settleWorkspaceConnectionInsert(verified.businessId, {
-        providerConfigKey: OUTLOOK_KEY,
-        connectionId
-      });
+      const settlement = await settleWorkspaceConnectionInsert(verified.businessId, inserted.id);
       if (settlement.evictRowId) {
         await deleteWorkspaceOAuthConnection(verified.businessId, settlement.evictRowId);
         logger.warn("microsoft connect lost a cap race; evicted the new row", {

@@ -129,8 +129,6 @@ describe("resolveWorkspaceConnectionCapState", () => {
 });
 
 describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
-  const link = { providerConfigKey: "google-mail", connectionId: "c-new" };
-
   function rows(specs: Array<{ id: string; at: string; key?: string; conn?: string }>) {
     return specs.map((s) => ({
       id: s.id,
@@ -149,7 +147,7 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
         { id: "r2", at: "2026-07-02T00:00:00Z", conn: "c-new" }
       ])
     );
-    const settlement = await settleWorkspaceConnectionInsert("biz-1", link);
+    const settlement = await settleWorkspaceConnectionInsert("biz-1", "r2");
     expect(settlement.evictRowId).toBeNull();
     expect(settlement.state).toEqual({ used: 2, max: 10, atCap: false });
   });
@@ -162,9 +160,26 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
         { id: "r2", at: "2026-07-02T00:00:00Z", conn: "c-new" }
       ])
     );
-    const settlement = await settleWorkspaceConnectionInsert("biz-1", link, db as never);
+    const settlement = await settleWorkspaceConnectionInsert("biz-1", "r2", db as never);
     expect(settlement.evictRowId).toBe("r2");
     expect(settlement.state.atCap).toBe(true);
+  });
+
+  it("still evicts when a concurrent reconnect rewrote the row's connection_id", async () => {
+    // The reason settlement keys on the ROW ID. Every reconnect/consolidation
+    // flip rewrites connection_id to a fresh direct:<uuid>, so a settle that
+    // located its row by (provider key, connection id) went blind exactly when
+    // a racer adopted the row, and the row kept a seat past the cap forever.
+    // Row ids are immutable, so this lookup cannot be blinded.
+    const db = mockDb({ tier: "starter", enterprise_limits: null });
+    mockListConnections.mockResolvedValue(
+      rows([
+        { id: "r1", at: "2026-07-01T00:00:00Z" },
+        { id: "r2", at: "2026-07-02T00:00:00Z", conn: "direct:rewritten-by-racer" }
+      ])
+    );
+    const settlement = await settleWorkspaceConnectionInsert("biz-1", "r2", db as never);
+    expect(settlement.evictRowId).toBe("r2");
   });
 
   it("breaks created_at ties deterministically by row id (both directions)", async () => {
@@ -176,7 +191,7 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
       ])
     );
     // r1 < r2 on the tie, so the new row (r2) is past the starter cap of 1.
-    const tied = await settleWorkspaceConnectionInsert("biz-1", link, db as never);
+    const tied = await settleWorkspaceConnectionInsert("biz-1", "r2", db as never);
     expect(tied.evictRowId).toBe("r2");
 
     mockListConnections.mockResolvedValue(
@@ -186,14 +201,14 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
       ])
     );
     // r0 < r1: the new row holds the seat, nothing to evict for THIS caller.
-    const kept = await settleWorkspaceConnectionInsert("biz-1", link, db as never);
+    const kept = await settleWorkspaceConnectionInsert("biz-1", "r0", db as never);
     expect(kept.evictRowId).toBeNull();
   });
 
   it("returns no eviction for unlimited plans and for a row already gone", async () => {
     const unlimited = mockDb({ tier: "enterprise", enterprise_limits: null });
     mockListConnections.mockResolvedValue(rows([{ id: "r1", at: "2026-07-01T00:00:00Z" }]));
-    const ent = await settleWorkspaceConnectionInsert("biz-1", link, unlimited as never);
+    const ent = await settleWorkspaceConnectionInsert("biz-1", "r1", unlimited as never);
     expect(ent.evictRowId).toBeNull();
 
     const db = mockDb({ tier: "starter", enterprise_limits: null });
@@ -204,14 +219,14 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
         { id: "r2", at: "2026-07-02T00:00:00Z" }
       ])
     );
-    const gone = await settleWorkspaceConnectionInsert("biz-1", link, db as never);
+    const gone = await settleWorkspaceConnectionInsert("biz-1", "r-gone", db as never);
     expect(gone.evictRowId).toBeNull();
   });
 
   it("throws on a business read error (fail closed)", async () => {
     const db = mockDb(null, { message: "boom" });
     await expect(
-      settleWorkspaceConnectionInsert("biz-1", link, db as never)
+      settleWorkspaceConnectionInsert("biz-1", "r1", db as never)
     ).rejects.toThrow("settleWorkspaceConnectionInsert: boom");
   });
 });

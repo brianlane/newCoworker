@@ -125,7 +125,7 @@ export type WorkspaceConnectionInsertSettlement = {
  */
 export async function settleWorkspaceConnectionInsert(
   businessId: string,
-  link: { providerConfigKey: string; connectionId: string },
+  insertedRowId: string,
   client?: SupabaseClient
 ): Promise<WorkspaceConnectionInsertSettlement> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -144,12 +144,15 @@ export async function settleWorkspaceConnectionInsert(
     (a, b) =>
       Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id)
   );
-  const idx = ordered.findIndex(
-    (r) =>
-      r.provider_config_key === link.providerConfigKey && r.connection_id === link.connectionId
-  );
-  // idx === -1: the row is already gone (a concurrent delete), nothing to
-  // evict. Otherwise the row keeps its seat only inside the first `max`.
+  // Located by ROW ID, never by (provider key, connection id): every
+  // reconnect/consolidation flip rewrites connection_id to a fresh
+  // direct:<uuid>, so a link-keyed lookup went blind exactly when a racer
+  // adopted this row mid-settle, and the row kept a seat past the cap with
+  // nothing left to repair it. Row ids are immutable, so a miss here can only
+  // mean the row is already gone (a concurrent delete), which really is
+  // nothing to evict. Otherwise the row keeps its seat only inside the first
+  // `max`.
+  const idx = ordered.findIndex((r) => r.id === insertedRowId);
   if (idx === -1 || idx < state.max) return { state, evictRowId: null };
   return { state, evictRowId: ordered[idx].id };
 }

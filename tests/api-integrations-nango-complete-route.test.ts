@@ -98,7 +98,7 @@ describe("api/integrations/nango/complete", () => {
     mockGetConnection.mockResolvedValue({ id: "nango-conn" });
     vi.mocked(readConnectionEndUserId).mockReturnValue(businessId);
     vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue(null);
-    vi.mocked(upsertWorkspaceOAuthConnection).mockResolvedValue({} as never);
+    vi.mocked(upsertWorkspaceOAuthConnection).mockResolvedValue({ id: "row-new" } as never);
     vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
       used: 0,
       max: 3,
@@ -109,11 +109,12 @@ describe("api/integrations/nango/complete", () => {
       evictRowId: null
     });
     mockDeleteConnection.mockResolvedValue(undefined);
-    // Real contract: the probe never resolves null — a failed probe is
-    // { email: null, displayName: null }.
+    // Real contract: the probe never resolves null. A failed probe is the
+    // all-null identity.
     vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
     vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
       consolidated: false
@@ -149,10 +150,10 @@ describe("api/integrations/nango/complete", () => {
         connectionId: "conn-1"
       })
     );
-    expect(settleWorkspaceConnectionInsert).toHaveBeenCalledWith(businessId, {
-      providerConfigKey: "google-mail",
-      connectionId: "conn-1"
-    });
+    // Settled by ROW ID, never by the nango link: a concurrent first-party
+    // reconnect can adopt this very row and rewrite its connection_id, and a
+    // link-keyed settle would go blind exactly then.
+    expect(settleWorkspaceConnectionInsert).toHaveBeenCalledWith(businessId, "row-new");
     expect(maybeSendNangoQuotaAlert).toHaveBeenCalled();
   });
 
@@ -212,7 +213,8 @@ describe("api/integrations/nango/complete", () => {
     });
     vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
       email: "sam@example.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      accountId: null
     });
     vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
       consolidated: true,
@@ -281,7 +283,8 @@ describe("api/integrations/nango/complete", () => {
   it("consolidates a NEW connection onto the older row for the same account email", async () => {
     vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
       email: "sam@example.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      accountId: null
     });
     vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
       consolidated: true,
@@ -313,7 +316,8 @@ describe("api/integrations/nango/complete", () => {
   it("skips consolidation on a re-complete of an EXISTING connection", async () => {
     vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
       email: "sam@example.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      accountId: null
     });
     vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
       id: "row-1",
@@ -334,7 +338,8 @@ describe("api/integrations/nango/complete", () => {
   it("a consolidation failure is non-fatal (two working rows remain)", async () => {
     vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
       email: "sam@example.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      accountId: null
     });
     vi.mocked(consolidateReconnectedWorkspaceConnection).mockRejectedValue(
       new Error("db hiccup")

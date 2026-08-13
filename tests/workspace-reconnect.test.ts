@@ -138,8 +138,21 @@ describe("findReconnectTarget: unlabeled rows", () => {
     expect(d.kind).toBe("verify");
   });
 
-  it("returns new when a second Outlook row exists, rather than picking one", () => {
+  it("probes the sole unlabeled row even when a labeled row for a DIFFERENT account exists", () => {
+    // The labeled row conclusively identifies someone else, which says nothing
+    // about who the unlabeled one is. Refusing to probe here dead-ends the
+    // migration cohort this module exists to carry: the unlabeled Nango row
+    // keeps its dead grant and every flow bound to it dies with
+    // connection_not_found, while the owner gets a duplicate.
     const rows = [row({ id: "unlabeled" }), labeled("other@acme.com", { id: "labeled" })];
+    const d = findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS);
+    expect(d).toEqual({ kind: "verify", row: expect.objectContaining({ id: "unlabeled" }) });
+  });
+
+  it("returns new when TWO unlabeled rows exist, rather than picking one to probe", () => {
+    // With two anonymous candidates there is no principled pick, and probing
+    // one of them proves nothing about the other.
+    const rows = [row({ id: "u1" }), row({ id: "u2", created_at: "2026-07-02T00:00:00Z" })];
     expect(findReconnectTarget(rows, "sam@acme.com", ROOMY, OUTLOOK_KEYS).kind).toBe("new");
   });
 });
@@ -443,6 +456,58 @@ describe("resolveUnlabeledReconnect and the alias set", () => {
   });
 });
 
+describe("resolveUnlabeledReconnect and the probed account id", () => {
+  // The labeled path got its id veto in #1346; this is the same rule on the
+  // probe path. Two genuinely distinct accounts can both answer at one
+  // address (a work account via otherMails, a personal one as its primary),
+  // so a shared address is a coincidence, not an identity. The probe now
+  // reports the row's own account id, which settles it either way.
+  const candidate = row({ id: "unlabeled" });
+
+  it("refuses to adopt when the probed id proves a DIFFERENT account, despite an alias match", () => {
+    const d = resolveUnlabeledReconnect(
+      candidate,
+      "team@newcoworker.com",
+      "personal@outlook.com",
+      ["team@newcoworker.com"],
+      "graph-work-id",
+      "personal-cid"
+    );
+    expect(d.kind).toBe("new");
+  });
+
+  it("adopts on id equality even when the probe reports an unrecognized spelling", () => {
+    // The id is the representation-independent half of the identity, and the
+    // labeled path already treats its equality as conclusive.
+    const d = resolveUnlabeledReconnect(
+      candidate,
+      "unrecognized@spelling.com",
+      "sam@acme.com",
+      [],
+      "cid-1",
+      "cid-1"
+    );
+    expect(d).toEqual({ kind: "reconnect", row: candidate, matchedBy: "account_id" });
+  });
+
+  it("adopts on id equality even when the probe resolved no email at all", () => {
+    // Graph can return an account with a null mail and no UPN worth using;
+    // the id still identifies it.
+    const d = resolveUnlabeledReconnect(candidate, null, "sam@acme.com", [], "cid-1", "cid-1");
+    expect(d).toEqual({ kind: "reconnect", row: candidate, matchedBy: "account_id" });
+  });
+
+  it("falls back to the email when only the PROBE carries an id", () => {
+    const d = resolveUnlabeledReconnect(candidate, "sam@acme.com", "sam@acme.com", [], "cid-1", null);
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+
+  it("falls back to the email when only the CONNECT carries an id", () => {
+    const d = resolveUnlabeledReconnect(candidate, "sam@acme.com", "sam@acme.com", [], null, "cid-1");
+    expect(d.kind === "reconnect" && d.matchedBy).toBe("account_email");
+  });
+});
+
 describe("identitySet", () => {
   it("normalizes case and whitespace and drops empties", () => {
     expect([...identitySet("  Team@NewCoworker.com ", ["", "OTHER@acme.com", "  "])]).toEqual([
@@ -544,6 +609,61 @@ describe("a different account id vetoes an alias overlap", () => {
             metadata: { provider_account_email: "team@newcoworker.com", provider_account_id: PERSONAL_ID } })
     ];
     expect(findDuplicateRow(rows, "mine", "team@newcoworker.com", OUTLOOK_KEYS, PERSONAL_ID)?.id).toBe("theirs");
+  });
+});
+
+describe("findDuplicateRow matches identities, not label strings", () => {
+  // Two racing callbacks for ONE personal mailbox can resolve different
+  // representations: the tab whose token exchange carried the id_token email
+  // claim stores the real address, the tab whose exchange lacked it stores the
+  // synthetic outlook_<CID>@outlook.com UPN. Comparing labels as single
+  // strings called those two rows different accounts and kept both, which is
+  // the exact one-string-compare bug the module header warns about.
+  const SYNTHETIC = "outlook_5c3966be918a1c30@outlook.com";
+
+  it("consolidates two racers whose labels are different spellings of one account (same id)", () => {
+    const rows = [
+      row({ id: "theirs", created_at: "2026-01-01T00:00:00Z",
+            metadata: { provider_account_email: SYNTHETIC, provider_account_id: "cid-1" } }),
+      row({ id: "mine", created_at: "2026-08-13T00:00:00Z",
+            metadata: { provider_account_email: "jane@gmail.com", provider_account_id: "cid-1" } })
+    ];
+    expect(findDuplicateRow(rows, "mine", "jane@gmail.com", OUTLOOK_KEYS, "cid-1")?.id).toBe("theirs");
+  });
+
+  it("consolidates via the alias set when the older row is id-less", () => {
+    // A concurrent Nango-era write labels its row but never stores an id, so
+    // only the alias set can say the two rows are one account.
+    const rows = [
+      row({ id: "theirs", created_at: "2026-01-01T00:00:00Z",
+            metadata: { provider_account_email: SYNTHETIC } }),
+      row({ id: "mine", created_at: "2026-08-13T00:00:00Z",
+            metadata: { provider_account_email: "jane@gmail.com", provider_account_id: "cid-1" } })
+    ];
+    expect(
+      findDuplicateRow(rows, "mine", "jane@gmail.com", OUTLOOK_KEYS, "cid-1", [
+        SYNTHETIC,
+        "jane@gmail.com"
+      ])?.id
+    ).toBe("theirs");
+  });
+
+  it("does not let a shared alias consolidate two rows whose ids DIFFER", () => {
+    // The veto outranks every positive signal here exactly as it does in
+    // findReconnectTarget: this path deletes a row and flips another, so a
+    // false match does identical damage.
+    const rows = [
+      row({ id: "theirs", created_at: "2026-01-01T00:00:00Z",
+            metadata: { provider_account_email: SYNTHETIC, provider_account_id: "other-cid" } }),
+      row({ id: "mine", created_at: "2026-08-13T00:00:00Z",
+            metadata: { provider_account_email: "jane@gmail.com", provider_account_id: "cid-1" } })
+    ];
+    expect(
+      findDuplicateRow(rows, "mine", "jane@gmail.com", OUTLOOK_KEYS, "cid-1", [
+        SYNTHETIC,
+        "jane@gmail.com"
+      ])
+    ).toBeNull();
   });
 });
 
