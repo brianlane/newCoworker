@@ -23,6 +23,36 @@ export class SlackApiError extends Error {
 type SlackApiEnvelope = { ok?: boolean; error?: string } & Record<string, unknown>;
 
 /**
+ * Slack Web API method names are dotted lowercase identifiers
+ * ("chat.postMessage", "assistant.threads.setStatus").
+ */
+const SLACK_METHOD_PATTERN = /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)*$/;
+
+/**
+ * What goes into an exception message in place of `method`.
+ *
+ * Every throw below interpolates the method name, which is safe until a call
+ * site passes the arguments in the wrong order: `slackApiCall` takes
+ * (method, botToken, ...), so swapping the first two puts the WORKSPACE BOT
+ * TOKEN where the method label goes and the token lands in an error message,
+ * a stack trace, and any log line that records it. That happened twice on
+ * 2026-08-12 while smoke-testing.
+ *
+ * `log-redaction.ts` cannot catch this: it matches on KEYS, and its own
+ * header names "a secret interpolated into a message string by the caller"
+ * as the residual gap. This closes that gap here, where the interpolation is.
+ *
+ * An allowlist rather than a denylist of token prefixes (`xoxb-`, `xapp-`,
+ * ...): anything that is not a Slack method name is replaced, so an email, a
+ * bearer token, or a secret shape Slack has not invented yet all fail it
+ * too. The thrown error still carries its code, status, and stack, so a
+ * genuinely malformed call stays just as debuggable.
+ */
+function safeMethodLabel(method: string): string {
+  return SLACK_METHOD_PATTERN.test(method) ? method : "(redacted non-method argument)";
+}
+
+/**
  * POST https://slack.com/api/<method> with a JSON body. Returns the parsed
  * envelope (ok:true or ok:false+error); throws SlackApiError only on
  * transport failures or an unparseable body.
@@ -49,7 +79,9 @@ export async function slackApiCall(
     const aborted = (err as Error)?.name === "AbortError";
     throw new SlackApiError(
       aborted ? "upstream_timeout" : "upstream_unreachable",
-      aborted ? `Slack ${method} timed out` : `Slack ${method} unreachable`
+      aborted
+        ? `Slack ${safeMethodLabel(method)} timed out`
+        : `Slack ${safeMethodLabel(method)} unreachable`
     );
   } finally {
     clearTimeout(timeout);
@@ -57,7 +89,11 @@ export async function slackApiCall(
 
   const body = (await res.json().catch(() => null)) as SlackApiEnvelope | null;
   if (body === null) {
-    throw new SlackApiError("bad_response", `Slack ${method} returned a non-JSON body`, res.status);
+    throw new SlackApiError(
+      "bad_response",
+      `Slack ${safeMethodLabel(method)} returned a non-JSON body`,
+      res.status
+    );
   }
   return body;
 }
@@ -164,7 +200,9 @@ export async function slackApiCallForm(
     const aborted = (err as Error)?.name === "AbortError";
     throw new SlackApiError(
       aborted ? "upstream_timeout" : "upstream_unreachable",
-      aborted ? `Slack ${method} timed out` : `Slack ${method} unreachable`
+      aborted
+        ? `Slack ${safeMethodLabel(method)} timed out`
+        : `Slack ${safeMethodLabel(method)} unreachable`
     );
   } finally {
     clearTimeout(timeout);
@@ -172,7 +210,11 @@ export async function slackApiCallForm(
 
   const body = (await res.json().catch(() => null)) as SlackApiEnvelope | null;
   if (body === null) {
-    throw new SlackApiError("bad_response", `Slack ${method} returned a non-JSON body`, res.status);
+    throw new SlackApiError(
+      "bad_response",
+      `Slack ${safeMethodLabel(method)} returned a non-JSON body`,
+      res.status
+    );
   }
   return body;
 }
