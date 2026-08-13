@@ -152,31 +152,59 @@ function validate(def: Definition): void {
 }
 
 describe("the takeover branch shape", () => {
-  const branch = teamUnclaimedBranch("x", [
-    { id: "x_tag", type: "update_contact", phoneVar: "lead_phone", addTags: [FOLLOW_UP_TAG] }
+  const tagStep = {
+    id: "x_tag",
+    type: "update_contact",
+    phoneVar: "lead_phone",
+    addTags: [FOLLOW_UP_TAG]
+  };
+  const withType = teamUnclaimedBranch("x", [
+    { suffix: "_s", condition: { var: "route_lead_type", equals: "seller" }, tagSteps: [tagStep] }
   ]) as {
     when: unknown;
     branches: Array<{ condition: unknown; steps: Step[] }>;
   };
+  const sellerOnly = teamUnclaimedBranch("y", [{ suffix: "", tagSteps: [tagStep] }]) as {
+    branches: Array<{ condition: unknown; steps: Step[] }>;
+  };
 
   it("never runs on the AI-owned path (that path tags itself)", () => {
-    expect(branch.when).toEqual({ var: "price_gate", notEquals: "ai" });
+    expect(withType.when).toEqual({ var: "price_gate", notEquals: "ai" });
   });
 
-  it("checks claimed_agent twice, with the offer's whole course between", () => {
-    expect(branch.branches[0].condition).toEqual({ var: "claimed_agent", equals: "none" });
-    const [wait, check] = branch.branches[0].steps as [Step, { branches: Array<{ condition: unknown; steps: Step[] }> }];
-    expect(wait).toMatchObject({ type: "sleep", minutes: 120 });
-    expect(check.branches[0].condition).toEqual({ var: "claimed_agent", equals: "none" });
-  });
-
-  it("excludes $1M+ leads: they were never offered, they are Amy's own", () => {
-    const check = branch.branches[0].steps[1] as {
-      branches: Array<{ steps: Array<{ branches: Array<{ condition: unknown; steps: Step[] }> }> }>;
+  /**
+   * The Bugbot finding on this PR: the first cut slept FIRST and filtered
+   * after, parking unclaimed buyers and $1M+ owner-direct leads for two
+   * hours they had no business waiting. Every filter now sits in front of
+   * the sleep, so a run the rule does not cover ends instantly.
+   */
+  it("puts every filter BEFORE the sleep: band, lead type, and a claimed skip on the sleep itself", () => {
+    // Band is the outer arm condition: $1M+ never enters.
+    expect(withType.branches[0].condition).toEqual({ var: "price_band", equals: "under_1m" });
+    // Lead type wraps the sleep: a buyer skips the whole block.
+    const typeWrap = withType.branches[0].steps[0] as {
+      branches: Array<{ condition: unknown; steps: Step[] }>;
     };
-    const band = check.branches[0].steps[0];
-    expect(band.branches[0].condition).toEqual({ var: "price_band", equals: "under_1m" });
-    expect(band.branches[0].steps.map((s) => s.id)).toEqual(["x_tag"]);
+    expect(typeWrap.branches[0].condition).toEqual({ var: "route_lead_type", equals: "seller" });
+    // The sleep itself skips when the lead was claimed before flow end.
+    const [wait, check] = typeWrap.branches[0].steps as [
+      Step,
+      { branches: Array<{ condition: unknown; steps: Step[] }> }
+    ];
+    expect(wait).toMatchObject({
+      type: "sleep",
+      minutes: 120,
+      when: { var: "claimed_agent", equals: "none" }
+    });
+    // And the post-sleep re-check is what actually admits the tag.
+    expect(check.branches[0].condition).toEqual({ var: "claimed_agent", equals: "none" });
+    expect(check.branches[0].steps.map((s) => s.id)).toEqual(["x_tag"]);
+  });
+
+  it("a seller-only flow drops the lead-type wrapper and stays one level shallower", () => {
+    const [wait, check] = sellerOnly.branches[0].steps as [Step, Step];
+    expect(wait).toMatchObject({ id: "y_tu_wait", type: "sleep" });
+    expect(check).toMatchObject({ id: "y_tu_check", type: "branch" });
   });
 });
 
@@ -205,12 +233,18 @@ describe("ReferralExchange", () => {
     const def = reFixture();
     expect(patchReferralExchange(def).changed).toBe(true);
     expect(findStepDeep(def.steps, "re_tu_tag_s")).toMatchObject({
-      noteTemplate: AUTO_TAG_NOTE,
-      when: { var: "route_lead_type", equals: "seller" }
+      noteTemplate: AUTO_TAG_NOTE
     });
-    expect(findStepDeep(def.steps, "re_tu_tag_b")).toMatchObject({
-      when: { var: "route_lead_type", equals: "both" }
-    });
+    // The lead-type conditions live on the wrapper branches, in front of the
+    // sleep, so buyers never park.
+    expect(
+      (findStepDeep(def.steps, "re_tu_s_type") as { branches: Array<{ condition: unknown }> })
+        .branches[0].condition
+    ).toEqual({ var: "route_lead_type", equals: "seller" });
+    expect(
+      (findStepDeep(def.steps, "re_tu_b_type") as { branches: Array<{ condition: unknown }> })
+        .branches[0].condition
+    ).toEqual({ var: "route_lead_type", equals: "both" });
     for (const id of ["route_seller", "route_both"]) {
       expect(String(findStepDeep(def.steps, id)!.ownerFallbackTemplate)).toContain(
         FALLBACK_TAKEOVER_LINE.trim()
@@ -232,8 +266,11 @@ describe("Realtor.com", () => {
     // Ambiguity fails safe to buyer, so only a clear seller is ever tagged.
     expect(REALTOR_LEAD_TYPE_FIELD.description).toContain("in every other case");
     const tag = findStepDeep(def.steps, "rt_tu_tag")!;
-    expect(tag.when).toEqual({ var: "lead_type", equals: "seller" });
     expect((tag as { noteTemplate?: string }).noteTemplate).toBeUndefined();
+    expect(
+      (findStepDeep(def.steps, "rt_tu_s_type") as { branches: Array<{ condition: unknown }> })
+        .branches[0].condition
+    ).toEqual({ var: "lead_type", equals: "seller" });
     // s4 offers buyers too; the takeover line would be false for them.
     expect(String(findStepDeep(def.steps, "s4")!.ownerFallbackTemplate)).not.toContain(
       FALLBACK_TAKEOVER_LINE.trim()
@@ -248,12 +285,15 @@ describe("New Lead Intake", () => {
     const def = nliFixture();
     expect(patchNewLeadIntake(def).changed).toBe(true);
     const s = findStepDeep(def.steps, "nli_tu_tag_s")!;
-    expect(s.when).toEqual({ var: "route_variant", equals: "seller" });
     expect((s as { noteTemplate?: string }).noteTemplate).toBeUndefined();
-    expect(findStepDeep(def.steps, "nli_tu_tag_b")!.when).toEqual({
-      var: "route_variant",
-      equals: "both"
-    });
+    expect(
+      (findStepDeep(def.steps, "nli_tu_s_type") as { branches: Array<{ condition: unknown }> })
+        .branches[0].condition
+    ).toEqual({ var: "route_variant", equals: "seller" });
+    expect(
+      (findStepDeep(def.steps, "nli_tu_b_type") as { branches: Array<{ condition: unknown }> })
+        .branches[0].condition
+    ).toEqual({ var: "route_variant", equals: "both" });
     validate(def);
     expect(patchNewLeadIntake(def).changed).toBe(false);
   });

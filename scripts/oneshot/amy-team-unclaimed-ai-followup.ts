@@ -15,16 +15,21 @@
  * the gated path uses).
  *
  * SHAPE, appended at the END of each flow so it never delays the emails or
- * the bad-phone report chain, and evaluated well after the offer resolved:
+ * the bad-phone report chain, and evaluated well after the offer resolved.
+ * EVERY filter sits in front of the sleep, so a run this rule does not apply
+ * to (a buyer, a $1M+ owner-direct lead, an already-claimed lead) ends
+ * instantly instead of parking for two hours (Bugbot, this PR):
  *
  *   {p}_team_unclaimed (branch, when price_gate != "ai" — the under-$500K
  *   path has its own tagging and must not double-tag)
- *     arm: claimed_agent == "none" (nobody claimed at flow end)
- *       {p}_tu_wait   sleep 120min (the offer + reminders span ~70min; the
- *                     sleep clears it with margin)
- *       {p}_tu_check  branch: claimed_agent STILL "none"
- *         {p}_tu_band branch: price_band == "under_1m"
- *           tag "Needs Follow Up" (per-flow steps below)
+ *     arm: price_band == "under_1m" ($1M+ was never offered: Amy's own)
+ *       per seller variant (flows with buyer traffic get a branch per
+ *       seller-ish lead type; Clever is seller-only and skips the wrapper):
+ *         {p}_tu{v}_wait  sleep 120min, when claimed_agent == "none" (the
+ *                         offer + reminders span ~70min; 120 clears it with
+ *                         margin, and a claimed lead skips the sleep)
+ *         {p}_tu{v}_check branch: claimed_agent STILL "none"
+ *           tag "Needs Follow Up"
  *
  * DECISIONS baked in, called out for review:
  *  - SELLERS ONLY, same as the gate ("Do not change buyer leads" stands).
@@ -109,10 +114,70 @@ function tag(id: string, withAutoNote: boolean, when?: Step["when"]): Step {
 }
 
 /**
- * The whole takeover branch. `tagSteps` is what runs once the lead is
- * confirmed unclaimed, under $1M, and past the offer's whole course.
+ * One seller variant of the takeover: on flows with buyer traffic the
+ * variant is wrapped in a branch on its lead-type condition, so a lead the
+ * rule does not cover skips the whole block (including the sleep) instantly.
  */
-export function teamUnclaimedBranch(prefix: string, tagSteps: Step[]): Step {
+export type TakeoverVariant = {
+  /** Suffix for step ids, e.g. "_s" / "_b"; "" for a seller-only flow. */
+  suffix: string;
+  /** Lead-type condition; omitted on a seller-only flow (Clever). */
+  condition?: { var: string; equals: string };
+  /** What runs once the lead is confirmed unclaimed past the offer's course. */
+  tagSteps: Step[];
+  /** Label for the wrapper arm, when a condition is present. */
+  label?: string;
+};
+
+function variantSteps(prefix: string, v: TakeoverVariant): Step[] {
+  const inner: Step[] = [
+    {
+      id: `${prefix}_tu${v.suffix}_wait`,
+      type: "sleep",
+      minutes: 120,
+      // A lead claimed before flow end skips the wait outright.
+      when: { var: "claimed_agent", equals: "none" }
+    },
+    {
+      id: `${prefix}_tu${v.suffix}_check`,
+      type: "branch",
+      question: "Still unclaimed after the offer ran its course?",
+      branches: [
+        {
+          id: `${prefix}_tu${v.suffix}_still`,
+          label: "Still unclaimed: the AI owns the follow-up now",
+          condition: { var: "claimed_agent", equals: "none" },
+          steps: v.tagSteps
+        }
+      ],
+      else: []
+    }
+  ];
+  if (!v.condition) return inner;
+  return [
+    {
+      id: `${prefix}_tu${v.suffix}_type`,
+      type: "branch",
+      question: "Is this a lead type the takeover covers?",
+      branches: [
+        {
+          id: `${prefix}_tu${v.suffix}_match`,
+          label: v.label ?? "Covered lead type",
+          condition: v.condition,
+          steps: inner
+        }
+      ],
+      else: []
+    }
+  ];
+}
+
+/**
+ * The whole takeover branch. Nesting stays within the 3-level cap: the outer
+ * branch (1), the per-variant type wrapper (2), and the re-check (3); on
+ * Clever, which needs no type wrapper, it is one level shallower.
+ */
+export function teamUnclaimedBranch(prefix: string, variants: TakeoverVariant[]): Step {
   return {
     id: `${prefix}_team_unclaimed`,
     type: "branch",
@@ -121,40 +186,9 @@ export function teamUnclaimedBranch(prefix: string, tagSteps: Step[]): Step {
     branches: [
       {
         id: `${prefix}_tu_open`,
-        label: "Unclaimed at flow end: give the offer its full course, then check again",
-        condition: { var: "claimed_agent", equals: "none" },
-        steps: [
-          { id: `${prefix}_tu_wait`, type: "sleep", minutes: 120 },
-          {
-            id: `${prefix}_tu_check`,
-            type: "branch",
-            question: "Still unclaimed after the offer ran its course?",
-            branches: [
-              {
-                id: `${prefix}_tu_still`,
-                label: "Still unclaimed: the AI owns the follow-up now",
-                condition: { var: "claimed_agent", equals: "none" },
-                steps: [
-                  {
-                    id: `${prefix}_tu_band`,
-                    type: "branch",
-                    question: "Under $1M? ($1M+ is never offered to the team: it is Amy's own)",
-                    branches: [
-                      {
-                        id: `${prefix}_tu_under_1m`,
-                        label: "Under $1M: tag into the cadence",
-                        condition: { var: "price_band", equals: "under_1m" },
-                        steps: tagSteps
-                      }
-                    ],
-                    else: []
-                  }
-                ]
-              }
-            ],
-            else: []
-          }
-        ]
+        label: "Under $1M: the takeover can apply ($1M+ was never offered, it is Amy's own)",
+        condition: { var: "price_band", equals: "under_1m" },
+        steps: variants.flatMap((v) => variantSteps(prefix, v))
       }
     ],
     else: []
@@ -195,9 +229,11 @@ export type PatchResult = { changed: boolean; notes: string[] };
 
 export function patchClever(def: Definition): PatchResult {
   const notes: string[] = [];
-  // Every under-$1M Clever lead was called (ai_call_1 gates on under_1m), so
-  // the cadence starts at the 3-day wait.
-  let changed = appendBranch(def, teamUnclaimedBranch("clever", [tag("clever_tu_tag", true)]), notes);
+  // Seller-only flow, so no lead-type wrapper. Every under-$1M Clever lead
+  // was called (ai_call_1 gates on under_1m), so the cadence starts at the
+  // 3-day wait.
+  const variants = [{ suffix: "", tagSteps: [tag("clever_tu_tag", true)] }];
+  let changed = appendBranch(def, teamUnclaimedBranch("clever", variants), notes);
   if (appendFallbackLine(def, ["route"], notes)) changed = true;
   return { changed, notes };
 }
@@ -208,11 +244,21 @@ export function patchReferralExchange(def: Definition): PatchResult {
   // update_contact re-adding an existing tag is a no-op, so these steps are
   // safe on that path and REACH the answered / not_placed leads that had no
   // tag at all. Called leads get the auto note.
-  const tags = [
-    tag("re_tu_tag_s", true, { var: "route_lead_type", equals: "seller" }),
-    tag("re_tu_tag_b", true, { var: "route_lead_type", equals: "both" })
+  const variants: TakeoverVariant[] = [
+    {
+      suffix: "_s",
+      condition: { var: "route_lead_type", equals: "seller" },
+      label: "Seller",
+      tagSteps: [tag("re_tu_tag_s", true)]
+    },
+    {
+      suffix: "_b",
+      condition: { var: "route_lead_type", equals: "both" },
+      label: "Buying and selling",
+      tagSteps: [tag("re_tu_tag_b", true)]
+    }
   ];
-  let changed = appendBranch(def, teamUnclaimedBranch("re", tags), notes);
+  let changed = appendBranch(def, teamUnclaimedBranch("re", variants), notes);
   if (appendFallbackLine(def, ["route_seller", "route_both"], notes)) changed = true;
   return { changed, notes };
 }
@@ -236,8 +282,15 @@ export function patchRealtor(def: Definition): PatchResult {
   }
   // No AI call exists on this flow, so the tag is plain and the cadence's
   // immediate round-1 call is the AI actually taking over.
-  const tags = [tag("rt_tu_tag", false, { var: "lead_type", equals: "seller" })];
-  if (appendBranch(def, teamUnclaimedBranch("rt", tags), notes)) changed = true;
+  const variants: TakeoverVariant[] = [
+    {
+      suffix: "_s",
+      condition: { var: "lead_type", equals: "seller" },
+      label: "Clearly a seller",
+      tagSteps: [tag("rt_tu_tag", false)]
+    }
+  ];
+  if (appendBranch(def, teamUnclaimedBranch("rt", variants), notes)) changed = true;
   // s4 offers buyers too; a takeover line there would be false for them, so
   // its fallback copy is deliberately untouched.
   return { changed, notes };
@@ -249,11 +302,21 @@ export function patchNewLeadIntake(def: Definition): PatchResult {
   // the cadence's immediate call is the takeover. The rare call-gated lead
   // gets re-called ~3h after its first call, which beats delaying the
   // majority by three days.
-  const tags = [
-    tag("nli_tu_tag_s", false, { var: "route_variant", equals: "seller" }),
-    tag("nli_tu_tag_b", false, { var: "route_variant", equals: "both" })
+  const variants: TakeoverVariant[] = [
+    {
+      suffix: "_s",
+      condition: { var: "route_variant", equals: "seller" },
+      label: "Seller",
+      tagSteps: [tag("nli_tu_tag_s", false)]
+    },
+    {
+      suffix: "_b",
+      condition: { var: "route_variant", equals: "both" },
+      label: "Buying and selling",
+      tagSteps: [tag("nli_tu_tag_b", false)]
+    }
   ];
-  let changed = appendBranch(def, teamUnclaimedBranch("nli", tags), notes);
+  let changed = appendBranch(def, teamUnclaimedBranch("nli", variants), notes);
   if (appendFallbackLine(def, ["route_seller", "route_both"], notes)) changed = true;
   return { changed, notes };
 }
