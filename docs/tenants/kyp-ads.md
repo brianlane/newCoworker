@@ -70,6 +70,18 @@ How the pieces fit:
   to Liz hard-assigns them (`businesses.lead_auto_assign = true`, the Truly
   Issue 7 machinery; no other KYP flow uses route_to_team, verified before
   flipping). Ownership is what redirects `sms_customer_reply` pages to Liz.
+- **The Google workspace connection is calendar-only, and nothing uses it.**
+  Row `5498f3a8-7014-4ecd-9c05-4c132e890462`, `james@kypads.com`, moved to
+  FIRST-PARTY Google OAuth on 2026-08-13 (`transport = direct`, same row id, no
+  owner action needed: the refresh token Nango held was redeemed against our own
+  verified client). Its grant carries `calendar.events` and the identity scopes
+  and **no `gmail.modify` at all**, so it cannot serve mail and never could. No
+  AiFlow binds it (all 47 checked), so nothing is broken by that, but if James
+  ever wants email through Google it needs a fresh consent rather than a token
+  migration. The row is also unlabeled in the older sense, carrying only
+  `end_user_email`, which is why a dashboard reconnect would take the
+  identity-probe branch for this tenant. The superseded Nango grant
+  (`70df3986-...64cdbe`) is still alive as the rollback path.
 - **No booking integration, on purpose:** VFM books on Liz's own Calendly
   (`calendly.com/elizabethastone/30min`), which this tenant's Calendly
   connection cannot see (one connection per business, and it is James's).
