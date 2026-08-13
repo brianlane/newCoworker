@@ -30,7 +30,10 @@
  * safety net.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import {
+  listCalendlyCalendarConnections,
+  resolveCalendarConnection
+} from "@/lib/voice-tools/connections";
 import {
   lookupProviderBookingsForAttendee,
   hasAttendeeBookingAdapter,
@@ -95,6 +98,8 @@ const PROVIDER_LABEL = {
 export type BookingPrecheckDeps = AttendeeBookingDeps & {
   /** Injectable goal-firing helper (tests). */
   fireGoals?: typeof fireBookingGoalsForInvitees;
+  /** Injectable multi-account Calendly lister (tests). */
+  listCalendlyConnections?: typeof listCalendlyCalendarConnections;
 };
 
 type RunRow = {
@@ -136,6 +141,7 @@ export async function bookingPrecheckForRun(
   client?: SupabaseClient
 ): Promise<BookingPrecheckResult> {
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
+  const listConnections = deps.listCalendlyConnections ?? listCalendlyCalendarConnections;
   const fireGoals = deps.fireGoals ?? fireBookingGoalsForInvitees;
   const db = client ?? (await createSupabaseServiceClient());
 
@@ -175,17 +181,30 @@ export async function bookingPrecheckForRun(
   const { phones, emails } = leadIdentifiersFromContext(run.context);
   if (phones.length === 0 && emails.length === 0) return none("no_lead_identifiers");
 
+  // Calendly: a business can link SEVERAL accounts, and a booking on ANY of
+  // them counts (e.g. a lead booking on a teammate's own Calendly). Other
+  // providers stay single-connection.
+  const conns =
+    conn.provider === "calendly" ? await listConnections(businessId) : [conn];
+  /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
+  const lookupConns = conns.length > 0 ? conns : [conn];
+
   let booked = false;
   try {
-    const res = await lookupProviderBookingsForAttendee(
-      businessId,
-      conn,
-      { phones, email: emails[0] ?? null },
-      deps,
-      { mode: "existence" }
-    );
-    if (!res.ok) return none(refusedReason);
-    booked = res.bookings.length > 0;
+    for (const lookupConn of lookupConns) {
+      const res = await lookupProviderBookingsForAttendee(
+        businessId,
+        lookupConn,
+        { phones, email: emails[0] ?? null },
+        deps,
+        { mode: "existence" }
+      );
+      if (!res.ok) return none(refusedReason);
+      if (res.bookings.length > 0) {
+        booked = true;
+        break;
+      }
+    }
   } catch (err) {
     // Vagaro and Acuity transport trouble surfaces as a throw (see the
     // shared module's failure contract); fail open exactly as before the

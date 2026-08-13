@@ -31,7 +31,7 @@
 
 import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tools/calendly";
 import {
-  getActiveCalendlyConnectionUserUri,
+  getCalendlyConnectionUserUriById,
   setCalendlyConnectionUserUri
 } from "@/lib/db/calendly-connections";
 import {
@@ -313,8 +313,8 @@ export type CalendlyPollDeps = {
     config: CalendlyRequestConfig
   ) => Promise<{ data: unknown } | null>;
   /** Injectable user-URI cache reads/writes (tests). */
-  getCachedUserUri?: (businessId: string) => Promise<string | null>;
-  persistUserUri?: (businessId: string, userUri: string) => Promise<void>;
+  getCachedUserUri?: (connectionId: string) => Promise<string | null>;
+  persistUserUri?: (connectionId: string, userUri: string) => Promise<void>;
 };
 
 /**
@@ -347,18 +347,19 @@ export async function fetchCalendlyCandidateEvents(
 ): Promise<CalendlyFetch> {
   /* c8 ignore next 3 -- production defaults; tests inject */
   const request = deps.request ?? calendlyRequest;
-  const getCachedUserUri = deps.getCachedUserUri ?? getActiveCalendlyConnectionUserUri;
+  const getCachedUserUri = deps.getCachedUserUri ?? getCalendlyConnectionUserUriById;
   const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
   const { businessId, conn, nowMs, windows } = args;
 
-  // The cache lives on the dashboard-PAT row (calendly_connections); a conn
-  // carrying any other key — only possible via injected deps now that the
-  // direct PAT is the sole Calendly transport — has no row to cache on.
-  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY;
+  // The cache lives on the dashboard-PAT row (calendly_connections), keyed
+  // by conn.connectionId — a business can link several Calendly accounts,
+  // each caching its own URI. A conn carrying any other key (only possible
+  // via injected deps) has no row to cache on.
+  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY && conn.connectionId.length > 0;
   let userUri: string | null = null;
   if (cacheable) {
     try {
-      userUri = await getCachedUserUri(businessId);
+      userUri = await getCachedUserUri(conn.connectionId);
     } catch (err) {
       // Cache read trouble degrades to the uncached probe, never fails the poll.
       logger.warn("calendly poll: user-uri cache read failed", {
@@ -377,7 +378,7 @@ export async function fetchCalendlyCandidateEvents(
     userUri = resolved;
     if (cacheable) {
       try {
-        await persistUserUri(businessId, userUri);
+        await persistUserUri(conn.connectionId, userUri);
       } catch (err) {
         // Best-effort: a failed cache write just means the next tick probes again.
         logger.warn("calendly poll: user-uri cache write failed", {

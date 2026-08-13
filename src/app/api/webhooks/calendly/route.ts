@@ -17,7 +17,7 @@ import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getCalendlyWebhookSubscription } from "@/lib/db/calendly-webhook-subscriptions";
+import { listCalendlyWebhookSubscriptions } from "@/lib/db/calendly-webhook-subscriptions";
 import {
   CALENDLY_WEBHOOK_MAX_BODY_BYTES,
   CALENDLY_WEBHOOK_SIGNATURE_HEADER,
@@ -53,18 +53,22 @@ export async function POST(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
-    const sub = await getCalendlyWebhookSubscription(businessId, db);
-    if (!sub || sub.status !== "active" || !sub.signingKey) {
+    // A business can hold one subscription per linked Calendly account. The
+    // URL names only the business, so WHICH account delivered is proven by
+    // whichever subscription's signing key verifies. The set is tiny
+    // (bounded by linked accounts), so trying each is cheap; a forged
+    // payload still fails every key.
+    const subs = (await listCalendlyWebhookSubscriptions(businessId, db)).filter(
+      (s) => s.status === "active" && s.signingKey
+    );
+    if (subs.length === 0) {
       return errorResponse("UNAUTHORIZED", "No active webhook subscription");
     }
-    if (
-      !verifyCalendlyWebhookSignature(
-        rawBody,
-        request.headers.get(CALENDLY_WEBHOOK_SIGNATURE_HEADER),
-        sub.signingKey,
-        Date.now()
-      )
-    ) {
+    const signature = request.headers.get(CALENDLY_WEBHOOK_SIGNATURE_HEADER);
+    const sub = subs.find((s) =>
+      verifyCalendlyWebhookSignature(rawBody, signature, s.signingKey!, Date.now())
+    );
+    if (!sub) {
       return errorResponse("UNAUTHORIZED", "Invalid webhook signature");
     }
 

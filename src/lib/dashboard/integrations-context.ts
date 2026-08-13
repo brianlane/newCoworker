@@ -21,7 +21,7 @@ import {
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
-import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
+import { listPublicCalendlyConnections } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
@@ -49,7 +49,8 @@ export type IntegrationsContext = {
   customIntegrations: Awaited<ReturnType<typeof listCustomIntegrations>>;
   vagaroConnection: Awaited<ReturnType<typeof getPublicVagaroConnection>>;
   acuityConnection: Awaited<ReturnType<typeof getPublicAcuityConnection>>;
-  calendlyConnection: Awaited<ReturnType<typeof getPublicCalendlyConnection>>;
+  /** ALL direct Calendly connections, oldest (primary) first. */
+  calendlyConnections: Awaited<ReturnType<typeof listPublicCalendlyConnections>>;
   caldavConnection: Awaited<ReturnType<typeof getPublicCaldavConnection>>;
   metaConnection: Awaited<ReturnType<typeof getPublicMetaConnection>>;
   whatsappConnection: Awaited<ReturnType<typeof getPublicWhatsAppConnection>>;
@@ -115,7 +116,7 @@ export async function loadIntegrationsContext(
     customIntegrations: businessId ? await listCustomIntegrations(businessId) : [],
     vagaroConnection: businessId ? await getPublicVagaroConnection(businessId) : null,
     acuityConnection: businessId ? await getPublicAcuityConnection(businessId) : null,
-    calendlyConnection: businessId ? await getPublicCalendlyConnection(businessId) : null,
+    calendlyConnections: businessId ? await listPublicCalendlyConnections(businessId) : [],
     caldavConnection: businessId ? await getPublicCaldavConnection(businessId) : null,
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
     whatsappConnection: businessId ? await getPublicWhatsAppConnection(businessId) : null,
@@ -184,7 +185,16 @@ export function computeIntegrationStatuses(
         : disconnected,
     vagaro: ctx.vagaroConnection ? connected : disconnected,
     acuity: ctx.acuityConnection ? connected : disconnected,
-    calendly: ctx.calendlyConnection ? connected : disconnected,
+    calendly:
+      ctx.calendlyConnections.length > 0
+        ? {
+            state: "connected",
+            label:
+              ctx.calendlyConnections.length === 1
+                ? "Connected"
+                : `${ctx.calendlyConnections.length} accounts connected`
+          }
+        : disconnected,
     caldav: ctx.caldavConnection ? connected : disconnected,
     meta: metaStatus,
     whatsapp: whatsappStatus,

@@ -24,7 +24,10 @@
  */
 
 import { calendlyDirectRequest } from "@/lib/calendly/client";
-import { getActiveCalendlyConnection } from "@/lib/db/calendly-connections";
+import {
+  getActiveCalendlyConnection,
+  getCalendlyConnectionById
+} from "@/lib/db/calendly-connections";
 import {
   CALENDLY_DIRECT_KEY,
   type ResolvedVoiceConnection
@@ -85,6 +88,20 @@ export async function calendlyRequest(
   config: CalendlyRequestConfig
 ): Promise<{ data: unknown } | null> {
   if (conn.providerConfigKey !== CALENDLY_DIRECT_KEY) return null;
+  // conn.connectionId names WHICH calendly_connections row carries the PAT
+  // (a business can link several accounts). A row that RESOLVES but is
+  // disabled refuses — falling back to the primary here would query one
+  // account's calendar with another account's token. Only an id that
+  // matches no row at all (legacy conns from before ids were stamped,
+  // injected test shapes) falls back to the primary connection, the
+  // pre-multi behavior.
+  const byId = conn.connectionId
+    ? await getCalendlyConnectionById(businessId, conn.connectionId).catch(() => null)
+    : null;
+  if (byId) {
+    if (!byId.is_active) return null;
+    return calendlyDirectRequest(byId.accessToken, config);
+  }
   const row = await getActiveCalendlyConnection(businessId);
   if (!row) return null;
   return calendlyDirectRequest(row.accessToken, config);

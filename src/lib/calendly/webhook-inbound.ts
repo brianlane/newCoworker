@@ -15,7 +15,7 @@
  */
 import { createHmac, timingSafeEqual } from "crypto";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import { listCalendlyCalendarConnections } from "@/lib/voice-tools/connections";
 import {
   fireBookingGoalsForInvitees,
   type BookingGoalFireDeps,
@@ -73,8 +73,8 @@ export type CalendlyWebhookHandleResult = {
 };
 
 export type CalendlyWebhookHandleDeps = BookingGoalFireDeps & {
-  /** Injectable connection resolver (tests). */
-  resolveConnection?: typeof resolveCalendarConnection;
+  /** Injectable connection lister (tests). */
+  listConnections?: typeof listCalendlyCalendarConnections;
 };
 
 /**
@@ -93,18 +93,21 @@ export async function handleCalendlyWebhookEvent(
   db: SupabaseClient,
   businessId: string,
   body: unknown,
-  subscription: { connection_key: string | null },
+  subscription: { connection_id: string; connection_key: string | null },
   deps: CalendlyWebhookHandleDeps = {}
 ): Promise<CalendlyWebhookHandleResult> {
-  const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
+  const listConnections = deps.listConnections ?? listCalendlyCalendarConnections;
   const event = (body as { event?: unknown } | null)?.event;
   if (event !== "invitee.created") return { handled: false, reason: "ignored_event" };
 
   // A subscription can outlive a disconnect (e.g. the PAT connection was
-  // removed elsewhere): verify the business still resolves to Calendly
-  // before acting on the delivery.
-  const conn = await resolveConnection(businessId);
-  if (!conn || conn.provider !== "calendly") {
+  // removed elsewhere): verify the delivering subscription's OWN connection
+  // is still linked and active before acting. A business can hold several
+  // Calendly connections, so this checks the delivery's account, never
+  // "the" (primary) connection.
+  const conns = await listConnections(businessId);
+  const conn = conns.find((c) => c.connectionId === subscription.connection_id);
+  if (!conn) {
     return { handled: false, reason: "not_connected" };
   }
   if (subscription.connection_key !== `${conn.providerConfigKey}:${conn.connectionId}`) {

@@ -53,7 +53,7 @@ import {
 } from "@/lib/voice-tools/connections";
 import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tools/calendly";
 import {
-  getActiveCalendlyConnectionUserUri,
+  getCalendlyConnectionUserUriById,
   setCalendlyConnectionUserUri
 } from "@/lib/db/calendly-connections";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
@@ -120,8 +120,8 @@ export type AttendeeBookingDeps = {
   /** Injectable connection resolver (tests). */
   resolveConnection?: (businessId: string) => Promise<ResolvedVoiceConnection | null>;
   /** Injectable user-URI cache reads/writes (tests). */
-  getCachedUserUri?: (businessId: string) => Promise<string | null>;
-  persistUserUri?: (businessId: string, userUri: string) => Promise<void>;
+  getCachedUserUri?: (connectionId: string) => Promise<string | null>;
+  persistUserUri?: (connectionId: string, userUri: string) => Promise<void>;
   /** Injectable Vagaro connection lookup (tests). */
   getVagaroConnection?: typeof getActiveVagaroConnection;
   /** Injectable Vagaro appointments listing (tests). */
@@ -165,10 +165,12 @@ export async function resolveCalendlyUserUri(
   getCachedUserUri: NonNullable<AttendeeBookingDeps["getCachedUserUri"]>,
   persistUserUri: NonNullable<AttendeeBookingDeps["persistUserUri"]>
 ): Promise<string | null> {
-  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY;
+  // Cache keys on the CONNECTION row id: a business can link several
+  // Calendly accounts, and each caches its own account's URI.
+  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY && conn.connectionId.length > 0;
   if (cacheable) {
     try {
-      const cached = await getCachedUserUri(businessId);
+      const cached = await getCachedUserUri(conn.connectionId);
       if (cached) return cached;
     } catch (err) {
       logger.warn("booking precheck: user-uri cache read failed", {
@@ -182,7 +184,7 @@ export async function resolveCalendlyUserUri(
   if (typeof uri !== "string" || uri.length === 0) return null;
   if (cacheable) {
     try {
-      await persistUserUri(businessId, uri);
+      await persistUserUri(conn.connectionId, uri);
     } catch (err) {
       logger.warn("booking precheck: user-uri cache write failed", {
         businessId,
@@ -259,7 +261,7 @@ async function calendlyListUpcomingForAttendee(
   opts: AttendeeBookingLookupOptions
 ): Promise<AttendeeBookingLookupResult> {
   const request = deps.request ?? calendlyRequest;
-  const getCachedUserUri = deps.getCachedUserUri ?? getActiveCalendlyConnectionUserUri;
+  const getCachedUserUri = deps.getCachedUserUri ?? getCalendlyConnectionUserUriById;
   const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
   const mode = opts.mode ?? "existence";
   const budget = opts.budget ?? { remaining: ATTENDEE_BOOKING_INVITEE_FETCH_CAP };

@@ -37,10 +37,7 @@
  * be on a paid plan).
  */
 import { randomBytes } from "crypto";
-import {
-  resolveCalendarConnection,
-  type ResolvedVoiceConnection
-} from "@/lib/voice-tools/connections";
+import { CALENDLY_DIRECT_KEY, type ResolvedVoiceConnection } from "@/lib/voice-tools/connections";
 import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tools/calendly";
 import {
   deleteCalendlyWebhookSubscription,
@@ -116,7 +113,7 @@ export async function ensureCalendlyWebhookSubscription(
   const nowMs = deps.nowMs ?? Date.now();
   const connectionKey = `${conn.providerConfigKey}:${conn.connectionId}`;
   try {
-    const row = await getCalendlyWebhookSubscription(businessId, client);
+    const row = await getCalendlyWebhookSubscription(businessId, conn.connectionId, client);
     const sameConnection = row?.connection_key === connectionKey;
     if (row?.status === "active" && sameConnection) {
       return { status: "active", attempted: false };
@@ -137,7 +134,15 @@ export async function ensureCalendlyWebhookSubscription(
       userUri?: string
     ): Promise<CalendlyWebhookEnsureResult> => {
       await upsertCalendlyWebhookSubscription(
-        { businessId, status, subscriptionUri, signingKey, userUri, connectionKey },
+        {
+          businessId,
+          connectionId: conn.connectionId,
+          status,
+          subscriptionUri,
+          signingKey,
+          userUri,
+          connectionKey
+        },
         client
       );
       return { status, attempted: true };
@@ -310,36 +315,38 @@ export async function ensureCalendlyWebhookSubscription(
 
 export type CalendlyWebhookTeardownDeps = {
   request?: CalendlyWebhookEnsureDeps["request"];
-  /** Injectable connection resolver (tests). */
-  resolveConnection?: (businessId: string) => Promise<ResolvedVoiceConnection | null>;
 };
 
 /**
- * Best-effort teardown when the owner disconnects or disables Calendly:
- * delete the remote subscription (while we still can) and drop the row so
- * the receiver stops accepting deliveries. Never throws.
+ * Best-effort teardown when the owner disconnects or disables ONE Calendly
+ * connection: delete the remote subscription (while we still can, through
+ * THAT connection's own token — the primary's token cannot manage another
+ * account's hooks) and drop the row so the receiver stops accepting its
+ * deliveries. Never throws.
  */
 export async function teardownCalendlyWebhookSubscription(
   businessId: string,
+  connectionId: string,
   deps: CalendlyWebhookTeardownDeps = {},
   client?: SupabaseClient
 ): Promise<void> {
   const request = deps.request ?? calendlyRequest;
-  const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
   try {
-    const row = await getCalendlyWebhookSubscription(businessId, client);
+    const row = await getCalendlyWebhookSubscription(businessId, connectionId, client);
     if (!row) return;
     if (row.subscription_uri) {
       try {
-        const conn = await resolveConnection(businessId);
-        if (conn?.provider === "calendly") {
-          await request(businessId, conn, {
-            endpoint: `/webhook_subscriptions/${encodeURIComponent(
-              resourceUuid(row.subscription_uri)
-            )}`,
-            method: "DELETE"
-          });
-        }
+        const conn: ResolvedVoiceConnection = {
+          provider: "calendly",
+          providerConfigKey: CALENDLY_DIRECT_KEY,
+          connectionId
+        };
+        await request(businessId, conn, {
+          endpoint: `/webhook_subscriptions/${encodeURIComponent(
+            resourceUuid(row.subscription_uri)
+          )}`,
+          method: "DELETE"
+        });
       } catch (err) {
         // Remote delete is best-effort: the receiver refuses deliveries the
         // moment the row is gone, so an orphaned remote subscription is
@@ -350,7 +357,7 @@ export async function teardownCalendlyWebhookSubscription(
         });
       }
     }
-    await deleteCalendlyWebhookSubscription(businessId, client);
+    await deleteCalendlyWebhookSubscription(businessId, connectionId, client);
   } catch (err) {
     logger.warn("calendly webhook teardown failed", {
       businessId,

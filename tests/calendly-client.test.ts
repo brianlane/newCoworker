@@ -143,21 +143,31 @@ describe("calendlyDirectRequest", () => {
 describe("verifyCalendlyToken", () => {
   it("returns the connected account's identity on success", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(200, { resource: { name: "Acme Spa", email: "owner@acme.com" } })
+      jsonResponse(200, { resource: { uri: "https://api.calendly.com/users/U1", name: "Acme Spa", email: "owner@acme.com" } })
     );
     expect(await verifyCalendlyToken("pat")).toEqual({
       ok: true,
+      userUri: "https://api.calendly.com/users/U1",
       name: "Acme Spa",
       email: "owner@acme.com"
     });
   });
 
-  it("nulls missing identity fields", async () => {
+  it("nulls missing identity fields but REQUIRES the user uri (the account id)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { resource: { uri: "https://api.calendly.com/users/U1" } }));
+    expect(await verifyCalendlyToken("pat")).toEqual({
+      ok: true,
+      userUri: "https://api.calendly.com/users/U1",
+      name: null,
+      email: null
+    });
+
+    // No uri = no usable account identity: verification fails even on 200.
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { resource: {} }));
-    expect(await verifyCalendlyToken("pat")).toEqual({ ok: true, name: null, email: null });
+    expect(await verifyCalendlyToken("pat")).toEqual({ ok: false, reason: "invalid_token" });
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
-    expect(await verifyCalendlyToken("pat")).toEqual({ ok: true, name: null, email: null });
+    expect(await verifyCalendlyToken("pat")).toEqual({ ok: false, reason: "invalid_token" });
   });
 
   it("reports an invalid token distinctly from a transport failure", async () => {

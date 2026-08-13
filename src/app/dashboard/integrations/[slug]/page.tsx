@@ -101,7 +101,7 @@ function IntegrationBody({
       return (
         <CalendlyIntegrationCard
           businessId={businessId}
-          initialConnection={ctx.calendlyConnection}
+          initialConnections={ctx.calendlyConnections}
         />
       );
     case "caldav":

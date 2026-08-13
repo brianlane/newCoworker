@@ -92,7 +92,7 @@ export async function calendlyDirectRequest(
 }
 
 export type CalendlyTokenVerification =
-  | { ok: true; name: string | null; email: string | null }
+  | { ok: true; userUri: string; name: string | null; email: string | null }
   | { ok: false; reason: "invalid_token" | "request_failed" };
 
 /**
@@ -109,10 +109,17 @@ export async function verifyCalendlyToken(
       method: "GET"
     });
     if (!res) return { ok: false, reason: "invalid_token" };
-    const resource = (res.data as { resource?: { name?: string; email?: string } })
-      ?.resource;
+    const resource = (res.data as {
+      resource?: { uri?: string; name?: string; email?: string };
+    })?.resource;
+    // The user URI is the account's stable identity — the multi-connection
+    // dedupe key. A /users/me success without one is not a usable account.
+    if (typeof resource?.uri !== "string" || resource.uri.length === 0) {
+      return { ok: false, reason: "invalid_token" };
+    }
     return {
       ok: true,
+      userUri: resource.uri,
       name: typeof resource?.name === "string" ? resource.name : null,
       email: typeof resource?.email === "string" ? resource.email : null
     };

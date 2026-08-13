@@ -14,12 +14,15 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
+  // Empty by default: the single-connection fallback in each consumer
+  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
   CALENDLY_DIRECT_KEY: "calendly-direct"
 }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
 vi.mock("@/lib/db/calendly-connections", () => ({
-  getActiveCalendlyConnectionUserUri: vi.fn(),
+  getCalendlyConnectionUserUriById: vi.fn(),
   setCalendlyConnectionUserUri: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
@@ -236,6 +239,97 @@ describe("contactBookingContextForPhone", () => {
     const d = deps({ getCachedUserUri: vi.fn().mockResolvedValue(null) });
     const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
     expect(out.status).toBe("none");
+  });
+
+  it("multi-account: an ACTIVE booking on the second account beats a canceled one on the first", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const request = vi.fn(async (_b: string, conn: { connectionId: string }, config: Cfg) => {
+      if (config.endpoint === "/scheduled_events") {
+        const status = config.params?.status;
+        if (conn.connectionId === "cx-liz") {
+          // Liz's account holds the live booking.
+          return {
+            data: {
+              collection:
+                status === "active" ? [event("EV-LIZ", FUTURE, "VFM Strategy Call")] : []
+            }
+          };
+        }
+        // James's account: nothing active, one canceled.
+        return {
+          data: { collection: status === "canceled" ? [event("EV-OLD", FUTURE, "Old")] : [] }
+        };
+      }
+      const m = config.endpoint.match(/^\/scheduled_events\/(.+)\/invitees$/);
+      if (m) {
+        return {
+          data: {
+            collection: [
+              decodeURIComponent(m[1]) === "EV-OLD"
+                ? { status: "canceled", email: "tim@trustyourtalent.ca" }
+                : { status: "active", email: "tim@trustyourtalent.ca" }
+            ]
+          }
+        };
+      }
+      throw new Error(`unexpected endpoint ${config.endpoint}`);
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({
+        request: request as never,
+        listConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+        getCachedUserUri: vi.fn().mockResolvedValue(USER_URI)
+      }),
+      fakeDb([CONTACT_ROW]),
+      "America/Toronto"
+    );
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"VFM Strategy Call"');
+  });
+
+  it("multi-account: only the FIRST canceled match is kept (later accounts skip the scan)", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const canceledScans: string[] = [];
+    const request = vi.fn(async (_b: string, conn: { connectionId: string }, config: Cfg) => {
+      if (config.endpoint === "/scheduled_events") {
+        if (config.params?.status === "canceled") {
+          canceledScans.push(conn.connectionId);
+          return { data: { collection: [event("EV-OLD", FUTURE, "Old Call")] } };
+        }
+        return { data: { collection: [] } };
+      }
+      const m = config.endpoint.match(/^\/scheduled_events\/(.+)\/invitees$/);
+      if (m) {
+        return {
+          data: { collection: [{ status: "canceled", email: "tim@trustyourtalent.ca" }] }
+        };
+      }
+      throw new Error(`unexpected endpoint ${config.endpoint}`);
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({
+        request: request as never,
+        listConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+        getCachedUserUri: vi.fn().mockResolvedValue(USER_URI)
+      }),
+      fakeDb([CONTACT_ROW]),
+      "America/Toronto"
+    );
+    expect(out.status).toBe("canceled");
+    // Liz's account never paid a canceled scan: the answer was already held.
+    expect(canceledScans).toEqual([CONN.connectionId]);
   });
 
   it("reports an upcoming active booking as booked (email-narrowed listing, business-local time)", async () => {

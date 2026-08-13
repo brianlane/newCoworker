@@ -43,12 +43,13 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  listCalendlyCalendarConnections,
   resolveCalendarConnection,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
 import { calendlyRequest } from "@/lib/calendar-tools/calendly";
 import {
-  getActiveCalendlyConnectionUserUri,
+  getCalendlyConnectionUserUriById,
   setCalendlyConnectionUserUri
 } from "@/lib/db/calendly-connections";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
@@ -100,6 +101,8 @@ export type ContactBookingContextDeps = AttendeeBookingDeps & {
   getAcuityConnection?: typeof getActiveAcuityConnection;
   /** Injectable Acuity canceled-appointments listing (tests). */
   listAcuityCanceled?: typeof listAcuityAppointments;
+  /** Injectable multi-account Calendly lister (tests). */
+  listConnections?: typeof listCalendlyCalendarConnections;
 };
 
 const NONE: ContactBookingContext = { status: "none", line: null };
@@ -474,7 +477,8 @@ export async function contactBookingContextForPhone(
 ): Promise<ContactBookingContext> {
   const request = deps.request ?? calendlyRequest;
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
-  const getCachedUserUri = deps.getCachedUserUri ?? getActiveCalendlyConnectionUserUri;
+  const listConnections = deps.listConnections ?? listCalendlyCalendarConnections;
+  const getCachedUserUri = deps.getCachedUserUri ?? getCalendlyConnectionUserUriById;
   const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
 
   try {
@@ -494,18 +498,28 @@ export async function contactBookingContextForPhone(
     // gate narrowed to the adapter providers and the two listing-based ones
     // returned above. A future adapter provider fails typecheck in the
     // precheck's REFUSED_REASON map before it can silently land here.
+    //
+    // A business can link SEVERAL Calendly accounts; the texter's booking
+    // may live on any of them. Each account is scanned with the shared
+    // fetch budget; an upcoming booking on ANY account answers immediately,
+    // a canceled one is remembered in case a later account holds an active
+    // booking (booked beats canceled across accounts).
+    const conns = await listConnections(businessId);
+    /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
+    const scanConns = conns.length > 0 ? conns : [conn];
 
+    const nowMs = Date.now();
+    const budget = { remaining: BOOKING_CONTEXT_INVITEE_FETCH_CAP };
+    let canceledAnswer: ContactBookingContext | null = null;
+    for (const scanConn of scanConns) {
     const userUri = await resolveCalendlyUserUri(
       businessId,
-      conn,
+      scanConn,
       request,
       getCachedUserUri,
       persistUserUri
     );
-    if (!userUri) return NONE;
-
-    const nowMs = Date.now();
-    const budget = { remaining: BOOKING_CONTEXT_INVITEE_FETCH_CAP };
+    if (!userUri) continue;
 
     // Upcoming active booking first — the strongest, most actionable state.
     // The shared adapter's detail mode is this module's original scan: ONE
@@ -516,7 +530,7 @@ export async function contactBookingContextForPhone(
     // within one fetch cap.
     const activeRes = await lookupProviderBookingsForAttendee(
       businessId,
-      conn,
+      scanConn,
       { phones: ids.phoneDigits, email: ids.email },
       deps,
       { mode: "detail", budget, calendlyUserUri: userUri }
@@ -544,28 +558,32 @@ export async function contactBookingContextForPhone(
       };
     }
 
-    // No upcoming booking: a recent canceled one is worth telling the agent
-    // about ("canceled, not rebooked" vs "rescheduled away").
-    const canceled = await scanForCanceledMatch({
-      businessId,
-      conn,
-      request,
-      userUri,
-      ids,
-      budget,
-      nowMs
-    });
-    if (canceled) {
-      return {
-        status: "canceled",
-        line: bookingContextLine(
-          "canceled",
-          { name: canceled.event.name, startIso: canceled.event.start_time },
-          { rescheduledAway: canceled.invitee.rescheduled === true, timezone }
-        )
-      };
+    // No upcoming booking on this account: a recent canceled one is worth
+    // telling the agent about ("canceled, not rebooked" vs "rescheduled
+    // away") — remembered, so a later account's ACTIVE booking still wins.
+    if (!canceledAnswer) {
+      const canceled = await scanForCanceledMatch({
+        businessId,
+        conn: scanConn,
+        request,
+        userUri,
+        ids,
+        budget,
+        nowMs
+      });
+      if (canceled) {
+        canceledAnswer = {
+          status: "canceled",
+          line: bookingContextLine(
+            "canceled",
+            { name: canceled.event.name, startIso: canceled.event.start_time },
+            { rescheduledAway: canceled.invitee.rescheduled === true, timezone }
+          )
+        };
+      }
     }
-    return NONE;
+    }
+    return canceledAnswer ?? NONE;
   } catch (err) {
     logger.warn("contact booking context: lookup failed (answering none)", {
       businessId,

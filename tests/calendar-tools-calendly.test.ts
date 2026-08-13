@@ -8,7 +8,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/calendly/client", () => ({ calendlyDirectRequest: vi.fn() }));
-vi.mock("@/lib/db/calendly-connections", () => ({ getActiveCalendlyConnection: vi.fn() }));
+vi.mock("@/lib/db/calendly-connections", () => ({
+  getActiveCalendlyConnection: vi.fn(),
+  getCalendlyConnectionById: vi.fn(async () => null)
+}));
 
 import {
   CALENDLY_MAX_WINDOW_MS,
@@ -708,6 +711,90 @@ describe("createCalendlyRescheduleLink", () => {
     });
   });
 });
+describe("multi-account row selection (conn.connectionId)", () => {
+  // Persistent per-test impls (a flow makes SEVERAL transport calls), reset
+  // to the not-found default afterward so nothing leaks into later suites.
+  afterEach(async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    vi.mocked(getCalendlyConnectionById).mockReset();
+    vi.mocked(getCalendlyConnectionById).mockImplementation(async () => null);
+  });
+
+  it("uses the NAMED row's PAT when the id resolves (never the primary)", async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    vi.mocked(getCalendlyConnectionById).mockResolvedValue({
+      ...(DIRECT_ROW as Record<string, unknown>),
+      id: "calendly-row-2",
+      accessToken: "pat-liz"
+    } as never);
+    mockUserAndEventTypes([THIRTY_MIN]);
+    vi.mocked(calendlyDirectRequest).mockResolvedValueOnce({
+      data: { resource: { booking_url: "https://calendly.com/d/direct" } }
+    } as never);
+    const result = await createCalendlyBookingLink(BIZ, CONN, {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z"
+    });
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(calendlyDirectRequest)).toHaveBeenNthCalledWith(1, "pat-liz", {
+      endpoint: "/users/me",
+      method: "GET"
+    });
+    // The primary lookup never ran: the row id decided.
+    expect(getActiveCalendlyConnection).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a resolved-but-disabled row instead of falling back to the primary", async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    vi.mocked(getCalendlyConnectionById).mockResolvedValue({
+      ...(DIRECT_ROW as Record<string, unknown>),
+      is_active: false
+    } as never);
+    expect(
+      await createCalendlyBookingLink(BIZ, CONN, {
+        startIso: "2026-06-12T17:00:00.000Z",
+        endIso: "2026-06-12T17:30:00.000Z"
+      })
+    ).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(calendlyDirectRequest)).not.toHaveBeenCalled();
+    expect(getActiveCalendlyConnection).not.toHaveBeenCalled();
+  });
+
+  it("a conn with NO id at all goes straight to the primary (no byId probe)", async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    mockUserAndEventTypes([THIRTY_MIN]);
+    vi.mocked(calendlyDirectRequest).mockResolvedValueOnce({
+      data: { resource: { booking_url: "https://calendly.com/d/direct" } }
+    } as never);
+    const result = await createCalendlyBookingLink(
+      BIZ,
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "" } as never,
+      { startIso: "2026-06-12T17:00:00.000Z", endIso: "2026-06-12T17:30:00.000Z" }
+    );
+    expect(result.ok).toBe(true);
+    expect(getCalendlyConnectionById).not.toHaveBeenCalled();
+    expect(getActiveCalendlyConnection).toHaveBeenCalled();
+  });
+
+  it("falls back to the primary when the id matches no row (legacy conns, test shapes)", async () => {
+    const { getCalendlyConnectionById } = await import("@/lib/db/calendly-connections");
+    vi.mocked(getCalendlyConnectionById).mockRejectedValue(new Error("invalid uuid"));
+    mockUserAndEventTypes([THIRTY_MIN]);
+    vi.mocked(calendlyDirectRequest).mockResolvedValueOnce({
+      data: { resource: { booking_url: "https://calendly.com/d/direct" } }
+    } as never);
+    const result = await createCalendlyBookingLink(BIZ, CONN, {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z"
+    });
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(calendlyDirectRequest)).toHaveBeenNthCalledWith(1, "pat-secret", {
+      endpoint: "/users/me",
+      method: "GET"
+    });
+  });
+});
+
 describe("direct-PAT-only transport guard", () => {
   it("passes the stored PAT to every direct call", async () => {
     mockUserAndEventTypes([THIRTY_MIN]);
