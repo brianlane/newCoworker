@@ -80,8 +80,16 @@ the summary.
 ## Booking
 
 The public page is `/book/newcoworker` (token `ncb_df13…`), linked from both
-follow-up flows. Calendar is `newcoworkerteam@gmail.com` via Nango; Zoom is
-`team@newcoworker.com`.
+follow-up flows. Calendar and Gmail are `newcoworkerteam@gmail.com` via
+FIRST-PARTY Google OAuth since 2026-08-13, not Nango: connection row
+`16cff2b9-b4d3-421c-b25d-b40edd80c9a8` is `transport = direct` and we hold the
+tokens. The row ID did not change, which is what kept the 12 references to it
+across "Team inbox triage (HQ)" and "Google review demo reply (HQ)" working;
+`metadata.shared_calendar_id` still points at the app-created "NewCoworker"
+calendar. All seven frozen scopes are granted. The superseded Nango grant
+(`1b7f7c19-...d03278`) is deliberately still alive as the rollback path, recorded
+in `metadata.migrated_from_nango_connection_id`, and `debug/nango-audit.ts`
+refuses to reclaim it while that key is set. Zoom is `team@newcoworker.com`.
 
 | Meeting | Length | Visible |
 | --- | --- | --- |
