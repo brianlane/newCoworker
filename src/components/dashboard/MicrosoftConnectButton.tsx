@@ -33,6 +33,9 @@ export function MicrosoftConnectButton({ businessId, blocked }: Props) {
   const t = useTranslations("dashboard.integrationsWorkspace");
 
   function startConnect() {
+    // Full document load: the connect route 302s to login.microsoftonline.com
+    // (see the component docstring), so the browser must follow it natively.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = `/api/integrations/microsoft/connect?businessId=${encodeURIComponent(businessId)}`;
   }
 

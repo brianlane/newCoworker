@@ -169,6 +169,9 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
             variant="secondary"
             size="sm"
             onClick={() => {
+              // Full document load: the connect route 302s to Facebook's OAuth
+              // dialog, so the browser must follow it natively.
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination
               window.location.href = `/api/integrations/meta/connect?businessId=${businessId}`;
             }}
           >
@@ -281,6 +284,9 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
               variant="ghost"
               size="sm"
               onClick={() => {
+                // Full document load: the connect route 302s to Facebook's OAuth
+                // dialog, so the browser must follow it natively.
+                // eslint-disable-next-line @next/next/no-location-assign-relative-destination
                 window.location.href = `/api/integrations/meta/connect?businessId=${businessId}`;
               }}
             >

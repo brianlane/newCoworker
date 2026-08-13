@@ -88,6 +88,9 @@ export function SlackIntegrationCard({ businessId, initialConnection, tierAllowe
   }, [connectedAndActive, loadChannels]);
 
   function startConnect() {
+    // Full document load: the connect route 302s to Slack's consent screen,
+    // so the browser must follow it natively.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = connectHref;
   }
 

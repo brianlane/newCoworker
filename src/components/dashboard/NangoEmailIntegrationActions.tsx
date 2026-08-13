@@ -159,6 +159,10 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
             } | null;
             if (done.ok) {
               ui.close();
+              // Full reload so the server-rendered workspace list picks up the
+              // connection row /complete just wrote, landing the same way the
+              // first-party OAuth callbacks do (they 302 the browser here).
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination
               window.location.href = "/dashboard/integrations/workspace?workspace=connected";
             } else {
               setBanner(doneJson?.error?.message ?? "Could not save connection");

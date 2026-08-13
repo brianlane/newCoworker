@@ -44,6 +44,10 @@ export function ViewAsButton({
         VIEW_AS_RETURN_TO_KEY,
         window.location.pathname + window.location.search
       );
+      // Full document load on purpose: the POST above just swapped the session
+      // cookie to the tenant, so the admin tab's client-side caches and state
+      // must all be dropped; a client-side push would carry them into view-as.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start view-as");
