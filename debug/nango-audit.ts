@@ -65,9 +65,21 @@ async function main() {
   // PostgREST truncates silently, and a short read here would invent orphans:
   // every Nango connection whose DB row fell outside the window would look
   // deletable. Refuse rather than reclaim on a partial picture.
-  if (typeof count === "number" && count > dbRows.length) {
+  //
+  // The exact count is the authority when present, so completeness is
+  // `count === rows read`. When PostgREST reports NO count, a full page and a
+  // truncated page are indistinguishable, so a full page has to be treated as
+  // truncated. Checking only `count > rows` would let a missing count plus a
+  // full page read as complete, and the consequence here is not a partial
+  // report: it is `--apply` deleting the rollback seats the rest of this script
+  // exists to protect. Same shape as the guard in
+  // debug/google-nango-export-audit.ts.
+  const exactTotal = typeof count === "number" ? count : null;
+  const truncated =
+    exactTotal === null ? dbRows.length >= ROW_CEILING : exactTotal > dbRows.length;
+  if (truncated) {
     throw new Error(
-      `Read ${dbRows.length} of ${count} DB rows; the ${ROW_CEILING} ceiling truncated the result. Every unseen row's Nango connection would be misreported as an orphan.`
+      `Read ${dbRows.length} DB row(s), table holds ${exactTotal === null ? "an unreported number" : exactTotal}; the ${ROW_CEILING} ceiling truncated the result. Every unseen row's Nango connection would be misreported as a deletable orphan, so refusing rather than reporting.`
     );
   }
   const dbByKey = new Map(dbRows.map((r) => [linkKey(r.provider_config_key, r.connection_id), r]));
