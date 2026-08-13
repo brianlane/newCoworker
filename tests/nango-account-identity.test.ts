@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockProxy = vi.fn();
+const mockWorkspaceProxy = vi.fn();
 
 vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: (...a: unknown[]) => mockProxy(...a)
 }));
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: (...a: unknown[]) => mockWorkspaceProxy(...a)
+}));
 
 import {
   fetchProviderAccountIdentity,
+  fetchWorkspaceAccountIdentity,
   identityAttemptsForProviderKey,
   nangoIdentityPatchBody,
   providerAccountMetadata
@@ -262,5 +267,63 @@ describe("providerAccountMetadata", () => {
       provider_account_display_name: "A"
     });
     expect(providerAccountMetadata({ email: null, displayName: null })).toEqual({});
+  });
+});
+
+/**
+ * The transport-agnostic probe.
+ *
+ * `fetchProviderAccountIdentity` goes through the Nango transport specifically,
+ * so once Google was deleted from Nango (2026-08-13) it could only ever fail for
+ * a Google row. That is reachable: an unlabeled row takes the reconnect verify
+ * branch, and a failed probe resolves to "new", so the owner gets a duplicate
+ * row instead of their existing one being adopted.
+ */
+describe("fetchWorkspaceAccountIdentity", () => {
+  beforeEach(() => {
+    mockProxy.mockReset();
+    mockWorkspaceProxy.mockReset();
+  });
+
+  it("probes through the seam, so a DIRECT row resolves", async () => {
+    mockWorkspaceProxy.mockResolvedValue({
+      status: 200,
+      data: { emailAddress: "owner@acme.com" }
+    });
+
+    const identity = await fetchWorkspaceAccountIdentity(BIZ, {
+      connectionId: "direct:abc",
+      providerConfigKey: "google"
+    });
+
+    expect(identity.email).toBe("owner@acme.com");
+    // The Nango transport must not be consulted: it cannot serve a direct row,
+    // and reaching for it is the bug this function exists to fix.
+    expect(mockProxy).not.toHaveBeenCalled();
+    const [businessId, link, config] = mockWorkspaceProxy.mock.calls[0] as [
+      string,
+      { connectionId: string },
+      { endpoint: string; method: string }
+    ];
+    expect(businessId).toBe(BIZ);
+    expect(link.connectionId).toBe("direct:abc");
+    expect(config.method).toBe("GET");
+  });
+
+  it("still resolves a Nango row, since the seam dispatches on the row", async () => {
+    mockWorkspaceProxy.mockResolvedValue({
+      status: 200,
+      data: { emailAddress: "legacy@acme.com" }
+    });
+    const identity = await fetchWorkspaceAccountIdentity(BIZ, link("google"));
+    expect(identity.email).toBe("legacy@acme.com");
+  });
+
+  it("returns nulls when every probe fails, rather than throwing", async () => {
+    // A dead grant is often exactly WHY someone is reconnecting, so the caller
+    // has to be able to treat "cannot tell" as an answer.
+    mockWorkspaceProxy.mockResolvedValue(null);
+    const identity = await fetchWorkspaceAccountIdentity(BIZ, link("google"));
+    expect(identity.email).toBeNull();
   });
 });

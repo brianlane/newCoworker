@@ -40,7 +40,7 @@ vi.mock("@/lib/google/oauth", async (importOriginal) => ({
   revokeGoogleToken: vi.fn()
 }));
 vi.mock("@/lib/nango/account-identity", () => ({
-  fetchProviderAccountIdentity: vi.fn()
+  fetchWorkspaceAccountIdentity: vi.fn()
 }));
 
 import { GET as CONNECT } from "@/app/api/integrations/google/connect/route";
@@ -63,7 +63,7 @@ import {
   fetchGoogleIdentity,
   revokeGoogleToken
 } from "@/lib/google/oauth";
-import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
+import { fetchWorkspaceAccountIdentity } from "@/lib/nango/account-identity";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ROW_ID = "22222222-2222-4222-8222-222222222222";
@@ -338,16 +338,41 @@ describe("google callback route", () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       nangoRow({ metadata: {} })
     ] as never);
-    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+    vi.mocked(fetchWorkspaceAccountIdentity).mockResolvedValue({
       email: "owner@acme.com"
     } as never);
 
     await CALLBACK(callbackRequest());
 
-    expect(fetchProviderAccountIdentity).toHaveBeenCalled();
+    expect(fetchWorkspaceAccountIdentity).toHaveBeenCalled();
     expect(flipWorkspaceConnectionToDirect).toHaveBeenCalledWith(
       expect.objectContaining({ id: ROW_ID })
     );
+  });
+
+  it("probes an unlabeled DIRECT row through the seam, not through Nango", async () => {
+    // The reason fetchWorkspaceAccountIdentity exists. Google was deleted from
+    // Nango on 2026-08-13, so a Nango-only probe of a Google row can only fail,
+    // and KYP's row is unlabeled (end_user_email only). Without this the owner
+    // would get a DUPLICATE row on reconnect instead of their existing one
+    // being adopted, silently consuming a connection seat.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      nangoRow({ transport: "direct", connection_id: "direct:existing", metadata: {} })
+    ] as never);
+    vi.mocked(fetchWorkspaceAccountIdentity).mockResolvedValue({
+      email: "owner@acme.com"
+    } as never);
+
+    await CALLBACK(callbackRequest());
+
+    expect(fetchWorkspaceAccountIdentity).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ connectionId: "direct:existing" })
+    );
+    expect(flipWorkspaceConnectionToDirect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ROW_ID })
+    );
+    expect(insertDirectWorkspaceConnection).not.toHaveBeenCalled();
   });
 
   it("inserts rather than adopting when the probe fails", async () => {
@@ -356,7 +381,7 @@ describe("google callback route", () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       nangoRow({ metadata: {} })
     ] as never);
-    vi.mocked(fetchProviderAccountIdentity).mockRejectedValue(new Error("dead grant"));
+    vi.mocked(fetchWorkspaceAccountIdentity).mockRejectedValue(new Error("dead grant"));
 
     await CALLBACK(callbackRequest());
 
