@@ -210,6 +210,9 @@ describe("microsoft callback: insert race settlement", () => {
   });
 
 describe("connecting a SECOND, different Outlook account", () => {
+  const WORK_ID = "4ffc09dd-f1b2-4e9c-b6b1-10040358b815";
+  const PERSONAL_ID = "5c3966be918a1c30";
+
   function callbackRequest() {
     const state = createMicrosoftOAuthState(BIZ);
     return new Request(
@@ -217,55 +220,106 @@ describe("connecting a SECOND, different Outlook account", () => {
     );
   }
 
-  it("inserts a new row and leaves the first account's row alone", async () => {
-    // The reported symptom was that a second Outlook account replaced the
-    // first. This walks the whole callback with an existing PERSONAL account
-    // row and a work account arriving: different id, different aliases, room
-    // under the cap.
+  function arrivePersonalAccount() {
     vi.mocked(exchangeMicrosoftAuthCode).mockResolvedValue({
       accessToken: "at",
       refreshToken: "rt",
       expiresAt: new Date("2026-08-13T12:00:00Z"),
       scope: "Mail.Send",
-      idTokenEmail: "team@newcoworker.onmicrosoft.com"
+      idTokenEmail: "team@newcoworker.com"
     });
     vi.mocked(fetchMicrosoftIdentity).mockResolvedValue({
-      accountId: "work-account-id",
-      email: "team@newcoworker.onmicrosoft.com",
+      accountId: PERSONAL_ID,
+      email: "team@newcoworker.com",
       displayName: "Team",
-      aliases: ["team@newcoworker.onmicrosoft.com"]
+      aliases: ["team@newcoworker.com"]
     });
-    vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
-      used: 2,
-      max: 3,
-      atCap: false
-    });
-    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      outlookRow({
-        id: "personal-row",
-        transport: "direct",
-        metadata: {
-          provider_account_email: "outlook_5c3966be918a1c30@outlook.com",
-          provider_account_id: "personal-account-id",
-          provider_account_aliases: ["outlook_5c3966be918a1c30@outlook.com"]
-        }
-      })
-    ] as never);
+    vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({ used: 2, max: 3, atCap: false });
     vi.mocked(assertWorkspaceConnectionAllowed).mockResolvedValue(undefined as never);
-    vi.mocked(insertDirectWorkspaceConnection).mockResolvedValue(
-      outlookRow({ id: "work-row", transport: "direct" }) as never
-    );
     vi.mocked(settleWorkspaceConnectionInsert).mockResolvedValue({
       state: { used: 3, max: 3, atCap: true },
       evictRowId: null
     });
+  }
+
+  it("inserts a new row and leaves the other account's row alone", async () => {
+    // The production report. The existing row is a DIFFERENT Microsoft account
+    // that happens to answer at the same address, which is what collapsed the
+    // two onto one row before the account-id veto.
+    //
+    // The two list() calls return different things on purpose: the second is
+    // the post-insert read that feeds findDuplicateRow. Returning the same list
+    // twice would leave that path with a single row, where it bails on count
+    // alone and the no-delete assertion below would pass even if consolidation
+    // matching were wrong.
+    arrivePersonalAccount();
+    const existingWorkRow = outlookRow({
+      id: "work-row",
+      transport: "direct",
+      metadata: {
+        provider_account_email: "team@newcoworker.com",
+        provider_account_id: WORK_ID,
+        provider_account_aliases: ["team@newcoworker.onmicrosoft.com", "team@newcoworker.com"]
+      }
+    });
+    const insertedRow = outlookRow({
+      id: "personal-row",
+      transport: "direct",
+      created_at: "2026-08-13T15:26:00Z",
+      metadata: {
+        provider_account_email: "team@newcoworker.com",
+        provider_account_id: PERSONAL_ID
+      }
+    });
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([existingWorkRow] as never)
+      .mockResolvedValueOnce([existingWorkRow, insertedRow] as never);
+    vi.mocked(insertDirectWorkspaceConnection).mockResolvedValue(insertedRow as never);
 
     const res = await CALLBACK(callbackRequest());
 
-    // A new row, and the first account untouched: not flipped, not deleted.
+    // Both matchers see two same-address rows and must still decline: the ids
+    // differ. Without the veto this deletes the new row and flips the work row.
     expect(insertDirectWorkspaceConnection).toHaveBeenCalled();
     expect(flipWorkspaceConnectionToDirect).not.toHaveBeenCalled();
     expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(res.headers.get("location") ?? "").toContain("workspace=connected");
+  });
+
+  it("still consolidates a genuine duplicate of the SAME account", async () => {
+    // The counterweight: the veto must not disable real consolidation, or two
+    // concurrent connects for one mailbox leave split bindings.
+    arrivePersonalAccount();
+    const olderSameAccount = outlookRow({
+      id: "older-row",
+      transport: "direct",
+      created_at: "2026-01-01T00:00:00Z",
+      metadata: {
+        provider_account_email: "team@newcoworker.com",
+        provider_account_id: PERSONAL_ID
+      }
+    });
+    const insertedRow = outlookRow({
+      id: "raced-row",
+      transport: "direct",
+      created_at: "2026-08-13T15:26:00Z",
+      metadata: {
+        provider_account_email: "team@newcoworker.com",
+        provider_account_id: PERSONAL_ID
+      }
+    });
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([olderSameAccount, insertedRow] as never);
+    vi.mocked(insertDirectWorkspaceConnection).mockResolvedValue(insertedRow as never);
+    vi.mocked(flipWorkspaceConnectionToDirect).mockResolvedValue(olderSameAccount as never);
+
+    const res = await CALLBACK(callbackRequest());
+
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(BIZ, "raced-row");
+    expect(flipWorkspaceConnectionToDirect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "older-row" })
+    );
     expect(res.headers.get("location") ?? "").toContain("workspace=connected");
   });
 });
