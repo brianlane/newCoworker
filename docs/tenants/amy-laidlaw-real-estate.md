@@ -793,6 +793,48 @@ and `ensureCommitmentSchedule` are inert for this term. At the 24-month mark
 (renewal Jul 28 2028) the plan card's "Start a new contract" CTA is the path
 back onto a contract rate; it creates a fresh Stripe subscription.
 
+Under-$500K sellers are AI-owned (Aug 12 2026):
+`amy-under-500k-ai-owned.ts`. Amy: "if the lead price is unknown or below
+$500,000 then the AI worker will own this follow up (unclaimed) until they
+are ready and serious to speak with Amy's team... her employees are
+overwhelmed."
+
+- **Sellers only.** Buyers almost never carry a price, so "unknown" would
+  have gated every buyer; buyer routing is untouched. The seller-only scope
+  lives in the `price_gate` EXTRACTION on the three mixed flows ("answer ai
+  ONLY when this lead is selling..."), plus structural guards where routes
+  are lead-type keyed.
+- **Every guard fails toward the team.** Routes gate on
+  `price_gate notEquals "ai"` (extraction miss routes as today); gated extras
+  gate on `equals "ai"` (miss adds nothing). $1M+ leads always read "team",
+  so `ownerDirectWhen` owner-direct behavior is preserved by construction.
+- **Gated leads ride the cadence BY TAG**, the account's one follow-up
+  chokepoint. Where a call just happened the tag carries `AUTO_TAG_NOTE`
+  (round 1 skips straight to the 3-day wait); where none did (Realtor.com
+  has no call step; a dial that never went out) the tag is plain and the
+  cadence's immediate round-1 call IS the first contact.
+- **Promotion is either signal.** On a live call, `transferred` fires a claim
+  offer on the spot (`clever_route_promote` / `re_route_promote`, cloned from
+  the flow's own seller route, ownerDirect config dropped as unreachable). On
+  SMS, the cadence classifies every reply (`reply_intent`) and a
+  ready_to_talk reply earns the offer INSTEAD of the informational alert
+  (first-match branch): sellers/both broadcast to the trio, buyers keep the
+  rotation. A not-ready reply keeps today's alert; a timeout does nothing.
+- **Amy's emails keep flowing.** The owner line now reads "Unassigned when
+  blank", and the SECOND email, when someone claims after promotion, rides
+  the `claimedNotifyEmail: amy@amylaidlaw.com` every route step (including
+  the promotion routes) carries.
+- **HomeLight is exempt.** Contact info is revealed only after a connected
+  call and its connect call needs a human: gating that broadcast would lose
+  the lead outright.
+- **Known wart:** a gated Spanish-speaking New Lead Intake seller joins the
+  English-language cadence (the cadence has one language). Same limitation a
+  manual "F" tag on a Spanish lead always had.
+- The Clever gated branch sits AFTER the `lead_reached` goal on purpose:
+  steps after a goal run on BOTH paths, so a reply that goal-jumps out of the
+  retry ladder still passes the gate and lands in the cadence instead of
+  silence.
+
 `tests/tenant-dossiers.test.ts` fails if a tenant-named script exists without
 a mention here, so adding a one-shot means adding a line.
 

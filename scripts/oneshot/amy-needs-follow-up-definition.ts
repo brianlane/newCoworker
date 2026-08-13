@@ -60,6 +60,63 @@ const CALLBACK = "602-695-1142";
 /** Three days between rounds, in minutes. */
 export const ROUND_GAP_MINUTES = 3 * 24 * 60;
 
+/**
+ * Promotion (Aug 12 2026, the under-$500K AI-owned rule): when a lead the AI
+ * is working REPLIES and the reply reads as ready-for-a-human, the cadence
+ * does not just alert the team, it hands the lead over with a claim OFFER, so
+ * the moment of seriousness is also the moment of ownership. Sellers/both get
+ * the same simultaneous three-name broadcast every seller route on this
+ * account uses; buyers keep their rotation (Amy: "Do not change buyer leads").
+ * A not-ready reply keeps today's behavior: an informational alert, no offer.
+ *
+ * This is safe for leads that were never price-gated (a teammate's manual "F"
+ * tag on a $700K seller): a ready reply earning a claim offer is the desired
+ * speed-to-lead behavior at any price, and a lead already claimed cannot get
+ * here at all, because the `converted` goal ends the run on the claim event.
+ */
+export const BROADCAST_NAMES = ["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"];
+
+/** Quiet hours for offers, matching every other route step on this account. */
+const OFFER_WINDOW = {
+  timezone: "America/Phoenix",
+  quietStart: "21:00",
+  quietEnd: "08:30",
+  graceMinutes: 10
+};
+
+/** Offer copy for a promoted lead. `nextLine` differs by routing style. */
+function promoteOfferTemplate(nextLine: string): string {
+  return (
+    "READY LEAD, AI hands it over: {{vars.lead_name}} ({{vars.lead_phone}}) came back on the " +
+    "AI follow-up sequence about {{vars.lead_intent}} in {{vars.lead_city}} " +
+    "(source: {{vars.lead_site}}).\n" +
+    'They just said: "{{vars.lead_reply}}"\n\n' +
+    "Reply 1 to claim or 2 to pass by {{offer.deadline}}.\n" +
+    'You can also reply "1, <ETA>" to claim and tell us when you\'ll reach out ' +
+    '(e.g. "1, 20 min").\n' +
+    nextLine
+  );
+}
+
+/** The shared non-copy fields of a promotion route step. */
+function promoteRouteBase(): Record<string, unknown> {
+  return {
+    type: "route_to_team",
+    offerWindow: OFFER_WINDOW,
+    responseMinutes: 10,
+    shareContactHistory: true,
+    claimedNotifyEmail: "amy@amylaidlaw.com",
+    claimedNotifyTemplate:
+      "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}), the lead the AI " +
+      "follow-up promoted after they said: \"{{vars.lead_reply}}\"\n" +
+      "The AI has stopped working this lead.",
+    ownerFallbackTemplate:
+      "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}), who told the AI follow-up " +
+      'they are ready: "{{vars.lead_reply}}"\n' +
+      "{{vars.lead_intent}} in {{vars.lead_city}}, source {{vars.lead_site}}. It's back to you."
+  };
+}
+
 /** How many rounds before the AI stops. Eight rounds is a little over 3 weeks. */
 export const ROUNDS = 8;
 
@@ -248,27 +305,105 @@ function roundSteps(n: number): Step[] {
      * team-broadcast primitive. route_to_team broadcasts, but as a claim OFFER
      * with a deadline and a fallback, which is a different thing from an alert.
      */
+    /**
+     * Is the reply a "get me a human" or just talk? Only classified when a
+     * reply actually arrived: on a timeout `reply_intent` stays unset, and the
+     * react branch below matches nothing. Stale values across rounds are
+     * impossible by construction: any round that classified a reply also set
+     * `lead_reply`, and every later round is gated on `lead_reply` still
+     * being "no_reply".
+     */
     {
-      id: `r${n}_tell_owner`,
-      type: "notify_lead_owner",
-      phoneVar: "lead_phone",
-      nameVar: "lead_name",
-      message:
-        "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
-        "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
-        'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
-      // Nobody owns this lead, so the TEAM hears it rather than Amy. Her
-      // roster row already says team_broadcast_enabled false, so she is
-      // excluded without naming anyone: she is the backstop for an unowned
-      // lead, not its audience.
-      //
-      // The tag comes from the lead itself, so a buyer alert reaches whoever
-      // is tagged buyer and a seller alert whoever is tagged seller. A tag
-      // matching nobody alerts everyone, because a typo should cost noise and
-      // never a lead.
-      unownedFallback: "team",
-      teamTagTemplate: "{{vars.lead_type}}",
+      id: `r${n}_classify`,
+      type: "classify",
+      textVar: "lead_reply",
+      saveAs: "reply_intent",
+      question:
+        "A lead in our AI follow-up sequence sent this reply. Are they ready to speak with a " +
+        "human agent about their move now?",
+      categories: [
+        {
+          value: "ready_to_talk",
+          description:
+            "asks for a call or an agent, proposes or accepts a time, says yes or interested, " +
+            "asks about next steps, listing, touring, or getting their home priced"
+        },
+        {
+          value: "not_ready",
+          description:
+            "anything else: thanks, not now, stop or unsubscribe, a question with no ask to " +
+            "talk, or an unrelated message"
+        }
+      ],
       when: { var: "lead_reply", notEquals: "no_reply" }
+    },
+    /**
+     * First-match branch, so a ready lead gets exactly ONE thing: the claim
+     * offer (which quotes the reply). A not-ready reply falls to the else and
+     * keeps today's informational alert. A timeout matches neither arm nor
+     * fires the alert (its own when still requires a reply), which is rule 3:
+     * nothing to notify when the lead is cold.
+     */
+    {
+      id: `r${n}_react`,
+      type: "branch",
+      question: "The lead replied. Ready for a human, or just talking?",
+      branches: [
+        {
+          id: `r${n}_ready`,
+          label: "Ready: hand over with a claim offer",
+          condition: { var: "reply_intent", equals: "ready_to_talk" },
+          steps: [
+            // Buyers keep the rotation and its accurate "next agent" wording.
+            {
+              id: `r${n}_route_buyer`,
+              ...promoteRouteBase(),
+              offerTemplate: promoteOfferTemplate("Pass and it goes to the next agent."),
+              when: { var: "lead_type", equals: "buyer" }
+            },
+            // Sellers/both broadcast to the trio, first to claim, same as
+            // every other seller route on this account.
+            {
+              id: `r${n}_route_seller`,
+              ...promoteRouteBase(),
+              agentNames: BROADCAST_NAMES,
+              offerTemplate: promoteOfferTemplate("First to reply 1 gets it."),
+              when: { var: "lead_type", equals: "seller" }
+            },
+            {
+              id: `r${n}_route_both`,
+              ...promoteRouteBase(),
+              agentNames: BROADCAST_NAMES,
+              offerTemplate: promoteOfferTemplate("First to reply 1 gets it."),
+              when: { var: "lead_type", equals: "both" }
+            }
+          ]
+        }
+      ],
+      else: [
+        {
+          id: `r${n}_tell_owner`,
+          type: "notify_lead_owner",
+          phoneVar: "lead_phone",
+          nameVar: "lead_name",
+          message:
+            "FOLLOW-UP REPLY: {{vars.lead_name}} ({{vars.lead_phone}}) came back to us on the AI " +
+            "follow-up sequence. They enquired through {{vars.lead_site}} about {{vars.lead_intent}} " +
+            'in {{vars.lead_city}}. They said: "{{vars.lead_reply}}"',
+          // Nobody owns this lead, so the TEAM hears it rather than Amy. Her
+          // roster row already says team_broadcast_enabled false, so she is
+          // excluded without naming anyone: she is the backstop for an unowned
+          // lead, not its audience.
+          //
+          // The tag comes from the lead itself, so a buyer alert reaches whoever
+          // is tagged buyer and a seller alert whoever is tagged seller. A tag
+          // matching nobody alerts everyone, because a typo should cost noise and
+          // never a lead.
+          unownedFallback: "team",
+          teamTagTemplate: "{{vars.lead_type}}",
+          when: { var: "lead_reply", notEquals: "no_reply" }
+        }
+      ]
     }
   ];
 }
