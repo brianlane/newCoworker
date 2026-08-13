@@ -22,21 +22,27 @@ const parsed = parseAiFlowDefinition(def);
 const steps = parsed.steps as Array<Record<string, unknown>>;
 /** Depth-first: rounds 2+ live inside a branch arm. */
 function findStep(list: Array<Record<string, unknown>>, id: string): Record<string, unknown> {
+  const hit = tryFind(list, id);
+  if (hit) return hit;
+  throw new Error(`no step ${id}`);
+}
+/** Fully recursive: the react branch nests routes two branch levels down. */
+function tryFind(
+  list: Array<Record<string, unknown>>,
+  id: string
+): Record<string, unknown> | undefined {
   for (const s of list) {
     if (s.id === id) return s;
     if (s.type === "branch") {
       for (const arm of (s.branches as Array<{ steps: Array<Record<string, unknown>> }>) ?? []) {
-        const hit = tryFind(arm.steps, id);
+        const hit = tryFind(arm.steps ?? [], id);
         if (hit) return hit;
       }
       const inElse = tryFind((s.else as Array<Record<string, unknown>>) ?? [], id);
       if (inElse) return inElse;
     }
   }
-  throw new Error(`no step ${id}`);
-}
-function tryFind(list: Array<Record<string, unknown>>, id: string) {
-  return list.find((s) => s.id === id);
+  return undefined;
 }
 const byId = (id: string) => findStep(steps, id);
 /** Step ids of one round, in order (round 1 is top level, 2+ are in a branch arm). */
@@ -272,10 +278,62 @@ describe("who hears about a reply", () => {
    * call would have sent "they came back to us" quoting nothing, for a lead
    * who never said a word.
    */
-  it("puts each notice where lead_reply is guaranteed to have been written", () => {
+  it("puts each reply reaction where lead_reply is guaranteed to have been written", () => {
     for (let n = 1; n <= ROUNDS; n += 1) {
       const ids = roundStepIds(n);
-      expect(ids.indexOf(`r${n}_tell_owner`)).toBe(ids.indexOf(`r${n}_wait`) + 1);
+      expect(ids.indexOf(`r${n}_classify`)).toBe(ids.indexOf(`r${n}_wait`) + 1);
+      expect(ids.indexOf(`r${n}_react`)).toBe(ids.indexOf(`r${n}_wait`) + 2);
+      // The notice lives in the react branch's ELSE: a ready reply gets the
+      // claim offer INSTEAD of the alert (first-match branch), never both.
+      const react = byId(`r${n}_react`) as {
+        branches: Array<{ id: string; steps: Array<{ id: string }> }>;
+        else: Array<{ id: string }>;
+      };
+      expect(react.else.map((s) => s.id)).toEqual([`r${n}_tell_owner`]);
+      expect(react.branches[0].steps.map((s) => s.id)).toEqual([
+        `r${n}_route_buyer`,
+        `r${n}_route_seller`,
+        `r${n}_route_both`
+      ]);
+    }
+  });
+
+  /**
+   * Promotion (the under-$500K AI-owned rule): a reply that reads as ready
+   * for a human earns a claim OFFER, quoting the lead's own words. Sellers
+   * and both broadcast to the trio first-to-claim; buyers keep the rotation
+   * (Amy: "Do not change buyer leads"). Classification only runs on a real
+   * reply, so a timeout can never promote: reply_intent stays unset and the
+   * react branch matches nothing.
+   */
+  it("promotes a ready reply with an offer: sellers broadcast, buyers rotate", () => {
+    for (let n = 1; n <= ROUNDS; n += 1) {
+      expect(byId(`r${n}_classify`)).toMatchObject({
+        type: "classify",
+        textVar: "lead_reply",
+        saveAs: "reply_intent",
+        when: { var: "lead_reply", notEquals: "no_reply" }
+      });
+      const ready = (byId(`r${n}_react`) as { branches: Array<{ condition: unknown }> })
+        .branches[0];
+      expect(ready.condition).toEqual({ var: "reply_intent", equals: "ready_to_talk" });
+      const buyer = byId(`r${n}_route_buyer`);
+      const seller = byId(`r${n}_route_seller`);
+      const both = byId(`r${n}_route_both`);
+      expect(buyer.agentNames).toBeUndefined();
+      expect(String(buyer.offerTemplate)).toContain("next agent");
+      for (const r of [seller, both]) {
+        expect(r.agentNames).toEqual(["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"]);
+        expect(String(r.offerTemplate)).toContain("First to reply 1 gets it.");
+      }
+      for (const r of [buyer, seller, both]) {
+        expect(r.type).toBe("route_to_team");
+        expect(String(r.offerTemplate)).toContain("{{vars.lead_reply}}");
+        // The second email Amy asked for: she hears when a promoted lead
+        // gets claimed, through the same claimedNotifyEmail mechanism every
+        // route on this account uses.
+        expect(r.claimedNotifyEmail).toBe("amy@amylaidlaw.com");
+      }
     }
   });
 
