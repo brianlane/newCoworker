@@ -144,6 +144,16 @@ export function createTranscriptRecorder(
     return createInFlight;
   }
 
+  // Create the row NOW, not on the first completed turn. Lazy creation meant a
+  // call whose only audio was an answering machine's greeting got its row at
+  // stream teardown: started_at (a column default) equalled ended_at, so the
+  // dashboard showed 0s for a 30-second call, and the AMD handler's mid-call
+  // `answering_machine_result` update matched zero rows — silently, because
+  // PostgREST reports no error for an update that matches nothing. An answered
+  // call with no transcribable speech still gets a row under this contract,
+  // which is correct: the call happened.
+  void ensureTranscript();
+
   async function flushTurn(): Promise<void> {
     // Capture AND reserve indices synchronously — before any `await`. If we
     // allocated `turnIndex++` at the insertTurn call sites instead, two

@@ -126,14 +126,23 @@ describe("voice-bridge transcript recorder", () => {
     ]);
   });
 
-  it("does not create a transcript row when the call produced no speech", async () => {
+  it("creates the transcript row eagerly, even when the call produced no speech", async () => {
+    // The row used to be created lazily on the first completed turn. On a
+    // voicemail call the only "turn" is the machine's greeting, flushed at
+    // stream teardown, so started_at (a column default stamped at insert)
+    // equalled ended_at and the dashboard showed 0s — and the AMD handler's
+    // mid-call answering_machine_result update silently matched zero rows.
+    // Eager creation is the contract now: one row per attached call, stamped
+    // when the call starts.
     const { adapter, createCalls, turns, finalizeCalls } = makeAdapter();
     const r = createTranscriptRecorder(adapter, INIT);
     await r.ingest(frame({ turnComplete: true }));
     await r.finalize();
-    expect(createCalls).toHaveLength(0);
+    expect(createCalls).toEqual([INIT]);
     expect(turns).toHaveLength(0);
-    expect(finalizeCalls).toHaveLength(0);
+    expect(finalizeCalls).toEqual([
+      { transcriptId: "transcript-1", status: "completed" }
+    ]);
   });
 
   it("flushes dangling partials on finalize and marks the transcript completed", async () => {
