@@ -8,6 +8,7 @@ import {
   type FormEvent,
   type KeyboardEvent
 } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
@@ -191,6 +192,7 @@ function friendlyErrorMessage(code: string | null): string {
 }
 
 export function DashboardChat({ businessId, businessName }: Props) {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   // Trimmed length — the route validates AFTER trim(), so a paste with
@@ -301,7 +303,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
         } else {
           sessionStorage.removeItem("aiflow_adapt_warnings");
         }
-        window.location.href = "/dashboard/aiflows?adapt=1";
+        router.push("/dashboard/aiflows?adapt=1");
       } else {
         sessionStorage.setItem(
           "agent_create_draft",
@@ -311,10 +313,10 @@ export function DashboardChat({ businessId, businessName }: Props) {
             outputFormat: draft.outputFormat
           })
         );
-        window.location.href = "/dashboard/agents?draft=1";
+        router.push("/dashboard/agents?draft=1");
       }
     } catch {
-      setError("Could not open the draft — your browser blocked session storage.");
+      setError("Could not open the draft: your browser blocked session storage.");
     }
   }
 

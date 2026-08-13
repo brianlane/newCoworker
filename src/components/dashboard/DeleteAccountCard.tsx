@@ -100,7 +100,9 @@ export function DeleteAccountCard() {
         setDeleting(false);
         return;
       }
-      // The auth user may be gone — leave via a hard redirect.
+      // The auth user may be gone, so leave via a full document load; a
+      // client-side navigation would keep the dead session's client state.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = "/";
     } catch {
       setError("Network error. Please try again.");

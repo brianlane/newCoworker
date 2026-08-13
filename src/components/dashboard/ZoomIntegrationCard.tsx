@@ -71,6 +71,9 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
   const [togglingAutoImport, setTogglingAutoImport] = useState(false);
 
   function startConnect() {
+    // Full document load: the connect route 302s to Zoom's consent screen,
+    // so the browser must follow it natively.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = connectHref;
   }
 
