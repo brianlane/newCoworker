@@ -64,6 +64,8 @@ import {
   revokeGoogleToken
 } from "@/lib/google/oauth";
 import { fetchWorkspaceAccountIdentity } from "@/lib/nango/account-identity";
+import { findReconnectTarget, GOOGLE_KEYS } from "@/lib/workspace/reconnect";
+import type { WorkspaceOAuthConnectionRow } from "@/lib/db/workspace-oauth-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ROW_ID = "22222222-2222-4222-8222-222222222222";
@@ -347,6 +349,34 @@ describe("google callback route", () => {
     };
     expect(args.providerConfigKey).toBe("google");
     expect(args.connectionId).toMatch(/^direct:/);
+  });
+
+  it("written metadata round-trips into the matcher, and the stored id vetoes a stranger", async () => {
+    // The producer contract: the KEY NAMES this route writes must be the ones
+    // findReconnectTarget reads. Feeding the route's own written metadata
+    // back in means renaming provider_account_* breaks here, not in
+    // production.
+    await CALLBACK(callbackRequest());
+    const written = vi.mocked(insertDirectWorkspaceConnection).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    const rowFromWrite = nangoRow({
+      id: "written-row",
+      transport: "direct",
+      metadata: written.metadata
+    }) as WorkspaceOAuthConnectionRow;
+
+    // The same account reconnecting later, after a Workspace address rename:
+    // only the stored id can say so.
+    expect(
+      findReconnectTarget([rowFromWrite], "renamed@acme.com", 3, GOOGLE_KEYS, "sub-1")
+    ).toMatchObject({ kind: "reconnect", matchedBy: "account_id" });
+
+    // A different account that inherited the address: the stored id vetoes
+    // the email match.
+    expect(
+      findReconnectTarget([rowFromWrite], "owner@acme.com", 3, GOOGLE_KEYS, "sub-2").kind
+    ).toBe("new");
   });
 
   it("hands the grant back when the account cannot be read", async () => {

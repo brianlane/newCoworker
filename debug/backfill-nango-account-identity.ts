@@ -77,6 +77,10 @@ async function main() {
               typeof meta.provider_account_display_name === "string" &&
               meta.provider_account_display_name
                 ? meta.provider_account_display_name
+                : null,
+            accountId:
+              typeof meta.provider_account_id === "string" && meta.provider_account_id
+                ? meta.provider_account_id
                 : null
           }
         : null;

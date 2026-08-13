@@ -59,7 +59,9 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: { emailAddress: " real@gmail.com " } });
     await expect(fetchProviderAccountIdentity(BIZ, link("gmail"))).resolves.toEqual({
       email: "real@gmail.com",
-      displayName: null
+      displayName: null,
+      // The Gmail profile has no account id to offer; only Graph and Zoom do.
+      accountId: null
     });
     expect(mockProxy).toHaveBeenCalledWith(BIZ, link("gmail"), {
       endpoint: "/gmail/v1/users/me/profile",
@@ -73,7 +75,11 @@ describe("fetchProviderAccountIdentity", () => {
       .mockResolvedValueOnce({ data: { id: "real@gmail.com", summary: "Real Name" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("google"))).resolves.toEqual({
       email: "real@gmail.com",
-      displayName: "Real Name"
+      displayName: "Real Name",
+      // The calendar `id` IS the email, not an account id; claiming it as one
+      // would hand the reconnect veto a string that is not comparable across
+      // representations.
+      accountId: null
     });
     expect(mockProxy).toHaveBeenCalledTimes(2);
   });
@@ -84,17 +90,26 @@ describe("fetchProviderAccountIdentity", () => {
       .mockResolvedValueOnce({ data: { id: "real@gmail.com" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("google"))).resolves.toEqual({
       email: "real@gmail.com",
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
-  it("microsoft: uses mail, falling back to userPrincipalName", async () => {
+  it("microsoft: uses mail, falling back to userPrincipalName, and keeps the Graph id", async () => {
+    // The id is what lets the reconnect veto tell two accounts sharing an
+    // address apart, so the probe must not drop it on the floor.
     mockProxy.mockResolvedValue({
-      data: { mail: "owner@contoso.com", userPrincipalName: "upn@contoso.com", displayName: "Owner" }
+      data: {
+        id: "graph-object-1",
+        mail: "owner@contoso.com",
+        userPrincipalName: "upn@contoso.com",
+        displayName: "Owner"
+      }
     });
     await expect(fetchProviderAccountIdentity(BIZ, link("outlook"))).resolves.toEqual({
       email: "owner@contoso.com",
-      displayName: "Owner"
+      displayName: "Owner",
+      accountId: "graph-object-1"
     });
 
     mockProxy.mockResolvedValue({
@@ -102,7 +117,8 @@ describe("fetchProviderAccountIdentity", () => {
     });
     await expect(fetchProviderAccountIdentity(BIZ, link("outlook-calendar"))).resolves.toEqual({
       email: "upn@contoso.com",
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -110,7 +126,19 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: { displayName: "Owner Only" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("onedrive"))).resolves.toEqual({
       email: null,
-      displayName: "Owner Only"
+      displayName: "Owner Only",
+      accountId: null
+    });
+  });
+
+  it("microsoft: an id with no mail and no name still identifies the account", async () => {
+    // Graph permits a principal with neither a usable address nor a display
+    // name; the id alone is enough for the reconnect id comparison.
+    mockProxy.mockResolvedValue({ data: { id: "graph-object-2" } });
+    await expect(fetchProviderAccountIdentity(BIZ, link("outlook"))).resolves.toEqual({
+      email: null,
+      displayName: null,
+      accountId: "graph-object-2"
     });
   });
 
@@ -118,7 +146,8 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: {} });
     await expect(fetchProviderAccountIdentity(BIZ, link("outlook"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -126,17 +155,19 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: { summary: "No Id Here" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("google-calendar"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
-  it("zoom: reads email and display_name", async () => {
+  it("zoom: reads email, display_name, and the account id", async () => {
     mockProxy.mockResolvedValue({
-      data: { email: "z@zoom.us", display_name: "Zed" }
+      data: { id: "zoom-uid-1", email: "z@zoom.us", display_name: "Zed" }
     });
     await expect(fetchProviderAccountIdentity(BIZ, link("zoom"))).resolves.toEqual({
       email: "z@zoom.us",
-      displayName: "Zed"
+      displayName: "Zed",
+      accountId: "zoom-uid-1"
     });
   });
 
@@ -144,19 +175,22 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: { email: "z@zoom.us", first_name: "Zed", last_name: "Zoom" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("zoom"))).resolves.toEqual({
       email: "z@zoom.us",
-      displayName: "Zed Zoom"
+      displayName: "Zed Zoom",
+      accountId: null
     });
 
     mockProxy.mockResolvedValue({ data: { email: "z@zoom.us", last_name: "Zoom" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("zoom"))).resolves.toEqual({
       email: "z@zoom.us",
-      displayName: "Zoom"
+      displayName: "Zoom",
+      accountId: null
     });
 
     mockProxy.mockResolvedValue({ data: { email: "z@zoom.us" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("zoom"))).resolves.toEqual({
       email: "z@zoom.us",
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -164,7 +198,8 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: {} });
     await expect(fetchProviderAccountIdentity(BIZ, link("zoom"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -174,7 +209,8 @@ describe("fetchProviderAccountIdentity", () => {
     });
     await expect(fetchProviderAccountIdentity(BIZ, link("calendly"))).resolves.toEqual({
       email: "c@calendly.com",
-      displayName: "Cal"
+      displayName: "Cal",
+      accountId: null
     });
   });
 
@@ -182,14 +218,16 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: { resource: {} } });
     await expect(fetchProviderAccountIdentity(BIZ, link("calendly"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
   it("returns the null identity for unknown providers without calling the proxy", async () => {
     await expect(fetchProviderAccountIdentity(BIZ, link("slack"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
     expect(mockProxy).not.toHaveBeenCalled();
   });
@@ -198,7 +236,8 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue(null);
     await expect(fetchProviderAccountIdentity(BIZ, link("gmail"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -206,7 +245,8 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockRejectedValue(new Error("provider down"));
     await expect(fetchProviderAccountIdentity(BIZ, link("outlook"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 
@@ -214,14 +254,17 @@ describe("fetchProviderAccountIdentity", () => {
     mockProxy.mockResolvedValue({ data: "not json" });
     await expect(fetchProviderAccountIdentity(BIZ, link("gmail"))).resolves.toEqual({
       email: null,
-      displayName: null
+      displayName: null,
+      accountId: null
     });
   });
 });
 
 describe("nangoIdentityPatchBody", () => {
   it("builds end_user + tags from a full identity", () => {
-    expect(nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: "A" })).toEqual({
+    expect(
+      nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: "A", accountId: null })
+    ).toEqual({
       end_user: { id: "biz-1", email: "a@b.co", display_name: "A" },
       tags: {
         end_user_id: "biz-1",
@@ -232,7 +275,9 @@ describe("nangoIdentityPatchBody", () => {
   });
 
   it("falls back to the email as display name when the probe has none", () => {
-    expect(nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: null })).toEqual({
+    expect(
+      nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: null, accountId: null })
+    ).toEqual({
       end_user: { id: "biz-1", email: "a@b.co", display_name: "a@b.co" },
       tags: {
         end_user_id: "biz-1",
@@ -243,30 +288,46 @@ describe("nangoIdentityPatchBody", () => {
   });
 
   it("omits the email tag when only a display name resolved", () => {
-    expect(nangoIdentityPatchBody("biz-1", { email: null, displayName: "Owner" })).toEqual({
+    expect(
+      nangoIdentityPatchBody("biz-1", { email: null, displayName: "Owner", accountId: null })
+    ).toEqual({
       end_user: { id: "biz-1", display_name: "Owner" },
       tags: { end_user_id: "biz-1", end_user_display_name: "Owner" }
     });
   });
 
   it("returns null for the null identity (leave Nango untouched)", () => {
-    expect(nangoIdentityPatchBody("biz-1", { email: null, displayName: null })).toBeNull();
+    expect(
+      nangoIdentityPatchBody("biz-1", { email: null, displayName: null, accountId: null })
+    ).toBeNull();
   });
 });
 
 describe("providerAccountMetadata", () => {
   it("emits only the keys that were resolved", () => {
-    expect(providerAccountMetadata({ email: "a@b.co", displayName: "A" })).toEqual({
+    expect(providerAccountMetadata({ email: "a@b.co", displayName: "A", accountId: null })).toEqual({
       provider_account_email: "a@b.co",
       provider_account_display_name: "A"
     });
-    expect(providerAccountMetadata({ email: "a@b.co", displayName: null })).toEqual({
+    expect(providerAccountMetadata({ email: "a@b.co", displayName: null, accountId: null })).toEqual({
       provider_account_email: "a@b.co"
     });
-    expect(providerAccountMetadata({ email: null, displayName: "A" })).toEqual({
+    expect(providerAccountMetadata({ email: null, displayName: "A", accountId: null })).toEqual({
       provider_account_display_name: "A"
     });
-    expect(providerAccountMetadata({ email: null, displayName: null })).toEqual({});
+    expect(providerAccountMetadata({ email: null, displayName: null, accountId: null })).toEqual({});
+  });
+
+  it("stores the account id under the key the reconnect matcher reads", () => {
+    // provider_account_id is what findReconnectTarget's veto compares, so a
+    // probe-labeled row (nango complete, the backfill script) must write it
+    // whenever the probe resolved one.
+    expect(
+      providerAccountMetadata({ email: "a@b.co", displayName: null, accountId: "graph-1" })
+    ).toEqual({
+      provider_account_email: "a@b.co",
+      provider_account_id: "graph-1"
+    });
   });
 });
 

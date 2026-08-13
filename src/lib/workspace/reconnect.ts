@@ -28,8 +28,8 @@
  *
  * ## The one case that is decided without a probe
  *
- * A business whose cap is a single connection, holding a single row for this
- * provider,
+ * A business whose cap is a single connection, holding a single connection
+ * row in total (across every provider, which is how the cap itself counts),
  * cannot have a second mailbox: the cap forbids it. So the row can only be the
  * one being reconnected. That is not a guess, it is forced.
  *
@@ -46,14 +46,24 @@ export const OUTLOOK_KEY = "outlook";
 /**
  * Provider keys that mean "this provider", for matching purposes.
  *
- * Outlook has exactly one. Google has FOUR, because the Nango era accumulated
- * `google` (the broad Gmail + Calendar integration), `gmail` and `google-mail`
- * (mail only) and `google-calendar` (calendar only). A reconnect has to consider
- * all of them or a tenant on a legacy key gets a duplicate row and the
- * `connection_not_found` failure this module exists to prevent.
- *
- * Live production holds only `google`, but the resolvers still honour the other
+ * Google has FOUR, because the Nango era accumulated `google` (the broad
+ * Gmail + Calendar integration), `gmail` and `google-mail` (mail only) and
+ * `google-calendar` (calendar only). A reconnect has to consider all of them
+ * or a tenant on a legacy key gets a duplicate row and the
+ * `connection_not_found` failure this module exists to prevent. Live
+ * production holds only `google`, but the resolvers still honour the other
  * three, so matching must too.
+ *
+ * Outlook deliberately lists ONE key, even though a legacy `outlook-calendar`
+ * key exists and the calendar resolver still honours it. Adopting a
+ * calendar-only row on a MAILBOX connect would be wrong, not just useless:
+ * the flip preserves provider_config_key, and `outlook-calendar` is not a
+ * sendable email key, so the tenant would end "connected" with no mailbox row
+ * at all. The dead-end is also recoverable without matching: the delete guard
+ * tracks only email-flow references and calendar triggers store no connection
+ * id, so a stale calendar-only row can always be removed by hand. So a
+ * first-party Outlook connect next to a legacy calendar row correctly inserts
+ * a fresh mailbox row and leaves the calendar row alone.
  */
 export const OUTLOOK_KEYS = [OUTLOOK_KEY] as const;
 export const GOOGLE_KEYS = ["google", "gmail", "google-mail", "google-calendar"] as const;
@@ -76,11 +86,11 @@ function accountEmailOf(row: WorkspaceOAuthConnectionRow): string | null {
 /**
  * Every representation one account answers to, normalized.
  *
- * The single definition on purpose. `findReconnectTarget` and
- * `resolveUnlabeledReconnect` both compare identities, and when only the first
- * was taught about alias sets the second kept comparing one string and
- * quietly reintroduced the duplicate-row bug on its own path. Neither builds
- * its own set now.
+ * The single definition on purpose. `findReconnectTarget`,
+ * `resolveUnlabeledReconnect`, and `findDuplicateRow` all compare identities,
+ * and when only the first was taught about alias sets the others kept
+ * comparing one string and quietly reintroduced the duplicate-row bug on
+ * their own paths. None of them builds its own set now.
  */
 export function identitySet(
   primary: string | null | undefined,
@@ -195,8 +205,15 @@ export function findReconnectTarget(
   );
   if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
 
-  const soleUnlabeled =
-    candidates.length === 1 && accountEmailOf(candidates[0]) === null ? candidates[0] : null;
+  // Labeled candidates that survive to this point carry no matching identity
+  // (a matching id returned at step 1, a matching label or alias at step 2,
+  // and a conflicting id was vetoed out entirely), so they identify OTHER
+  // accounts, which says nothing about an unlabeled row sitting next to them.
+  // They therefore do not suppress the probe; only genuine ambiguity does.
+  // With TWO unlabeled rows there is no principled pick, and probing one
+  // proves nothing about the other, so that stays "new".
+  const unlabeled = candidates.filter((r) => accountEmailOf(r) === null);
+  const soleUnlabeled = unlabeled.length === 1 ? unlabeled[0] : null;
   if (!soleUnlabeled) return { kind: "new" };
 
   // 3. One seat, one row: a second mailbox is impossible, so this is it.
@@ -213,9 +230,21 @@ export function findReconnectTarget(
 /**
  * Settle a `verify` decision against the unlabeled row's REAL account.
  *
- * `probedEmail` is what the existing row's own grant reports (null when the
- * probe failed, which is common precisely because a dead grant is often WHY
- * someone is reconnecting).
+ * `probedEmail` and `probedAccountId` are what the existing row's own grant
+ * reports (null when the probe failed, which is common precisely because a
+ * dead grant is often WHY someone is reconnecting). `accountId` is the
+ * incoming connect's account id, the same value `findReconnectTarget` takes.
+ *
+ * When BOTH sides carry an account id, the ids settle it alone, in either
+ * direction, exactly as on the labeled path. Equality is conclusive sameness:
+ * the email is just a representation and representations drift, so an id
+ * match adopts even when the probed spelling is unrecognized (or missing
+ * entirely, which Graph permits). A DIFFERENT id is conclusive otherness:
+ * two genuinely distinct accounts can both answer at one address (a work
+ * account via otherMails, a personal one as its primary), so adopting on the
+ * shared address would re-point the row and every flow bound to it at a
+ * mailbox the owner never chose. That is the same incident class the labeled
+ * path's veto exists for, closed on the probe path too.
  *
  * A failed probe deliberately resolves to "new". The tenant gets a duplicate
  * row they can clean up, which is recoverable; adopting on a failed probe could
@@ -225,8 +254,15 @@ export function resolveUnlabeledReconnect(
   row: WorkspaceOAuthConnectionRow,
   probedEmail: string | null,
   accountEmail: string,
-  aliases: readonly string[] = []
+  aliases: readonly string[] = [],
+  probedAccountId: string | null = null,
+  accountId: string | null = null
 ): ReconnectDecision {
+  if (probedAccountId && accountId) {
+    return probedAccountId === accountId
+      ? { kind: "reconnect", row, matchedBy: "account_id" }
+      : { kind: "new" };
+  }
   if (!probedEmail) return { kind: "new" };
   // Compared against the whole incoming set, not just the primary. The probe
   // runs through the row's OWN grant, so for a personal account it reports the
@@ -254,20 +290,28 @@ export function findDuplicateRow(
   insertedRowId: string,
   accountEmail: string,
   providerKeys: readonly string[],
-  accountId: string | null = null
+  accountId: string | null = null,
+  aliases: readonly string[] = []
 ): WorkspaceOAuthConnectionRow | null {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return null;
+  const wantedSet = identitySet(wanted, aliases);
 
-  // Same veto as findReconnectTarget, for the same reason: this path deletes a
-  // row and flips another, so a false match here does the identical damage.
+  // Same identity rules as findReconnectTarget, for the same reasons. A false
+  // match here deletes a row and flips another, the identical damage, so a
+  // DIFFERENT account id vetoes everything. And a MISSED match leaves the
+  // split-row state this function exists to clean up: two racers for one
+  // personal mailbox can label their rows with different representations of
+  // the account (the real address vs the synthetic outlook_<CID> UPN), so a
+  // single-string label compare is not enough. Id equality is conclusive, and
+  // the alias set catches id-less rows written by the Nango-era path.
   const sameAccount = oldestFirst(
     rows.filter((r) => {
       if (!providerKeys.includes(r.provider_config_key)) return false;
-      if (accountEmailOf(r) !== wanted) return false;
-      if (!accountId) return true;
       const rowId = accountIdOf(r);
-      return rowId === null || rowId === accountId;
+      if (accountId && rowId !== null && rowId !== accountId) return false;
+      if (accountId && rowId === accountId) return true;
+      return accountAliasesOf(r).some((a) => wantedSet.has(a));
     })
   );
   if (sameAccount.length < 2) return null;

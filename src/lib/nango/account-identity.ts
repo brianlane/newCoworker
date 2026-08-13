@@ -19,6 +19,14 @@ import { nangoProxyForBusiness, type NangoWorkspaceLink } from "./workspace";
 export type ProviderAccountIdentity = {
   email: string | null;
   displayName: string | null;
+  /**
+   * The provider's own stable account id (Graph object id, Zoom user id),
+   * null where the probed payload has none (Gmail profile, primary calendar,
+   * Calendly). The reconnect matcher compares it in both directions: equality
+   * is conclusive sameness across representation drift, and a DIFFERENT id
+   * vetoes an address match, so the probe must carry it rather than drop it.
+   */
+  accountId: string | null;
 };
 
 type IdentityAttempt = {
@@ -34,17 +42,21 @@ function asRecord(data: unknown): Record<string, unknown> {
   return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
 }
 
-/** Gmail profile, works with any gmail.* scope. `{ emailAddress }`. */
+/** Gmail profile, works with any gmail.* scope. `{ emailAddress }`, no id. */
 function extractGmailProfile(data: unknown): ProviderAccountIdentity | null {
   const email = nonEmpty(asRecord(data).emailAddress);
-  return email ? { email, displayName: null } : null;
+  return email ? { email, displayName: null, accountId: null } : null;
 }
 
-/** Google Calendar primary calendar, its `id` IS the account email. */
+/**
+ * Google Calendar primary calendar, its `id` IS the account email. That makes
+ * it an email, not an account id: it drifts with representation exactly the
+ * way the id comparison exists to be immune to, so it is never claimed as one.
+ */
 function extractGoogleCalendarPrimary(data: unknown): ProviderAccountIdentity | null {
   const o = asRecord(data);
   const email = nonEmpty(o.id);
-  return email ? { email, displayName: nonEmpty(o.summary) } : null;
+  return email ? { email, displayName: nonEmpty(o.summary), accountId: null } : null;
 }
 
 /** Microsoft Graph /me, `mail` is null on some tenants; UPN is the fallback. */
@@ -52,8 +64,9 @@ function extractGraphMe(data: unknown): ProviderAccountIdentity | null {
   const o = asRecord(data);
   const email = nonEmpty(o.mail) ?? nonEmpty(o.userPrincipalName);
   const displayName = nonEmpty(o.displayName);
-  if (!email && !displayName) return null;
-  return { email, displayName };
+  const accountId = nonEmpty(o.id);
+  if (!email && !displayName && !accountId) return null;
+  return { email, displayName, accountId };
 }
 
 /** Zoom /v2/users/me. */
@@ -66,16 +79,16 @@ function extractZoomMe(data: unknown): ProviderAccountIdentity | null {
       ? [nonEmpty(o.first_name), nonEmpty(o.last_name)].filter(Boolean).join(" ")
       : null);
   if (!email && !displayName) return null;
-  return { email, displayName };
+  return { email, displayName, accountId: nonEmpty(o.id) };
 }
 
-/** Calendly /users/me, payload nests under `resource`. */
+/** Calendly /users/me, payload nests under `resource`. Its `uri` is not an id. */
 function extractCalendlyMe(data: unknown): ProviderAccountIdentity | null {
   const resource = asRecord(asRecord(data).resource);
   const email = nonEmpty(resource.email);
   const displayName = nonEmpty(resource.name);
   if (!email && !displayName) return null;
-  return { email, displayName };
+  return { email, displayName, accountId: null };
 }
 
 const GMAIL_PROFILE: IdentityAttempt = {
@@ -130,7 +143,7 @@ export async function probeProviderAccountIdentity(
       // next probe (or the null identity) rather than failing the connect.
     }
   }
-  return { email: null, displayName: null };
+  return { email: null, displayName: null, accountId: null };
 }
 
 /**
@@ -187,6 +200,9 @@ export function providerAccountMetadata(
   const meta: Record<string, unknown> = {};
   if (identity.email) meta.provider_account_email = identity.email;
   if (identity.displayName) meta.provider_account_display_name = identity.displayName;
+  // provider_account_id is what the reconnect matcher's veto compares, so a
+  // probe-labeled row carries it whenever the probe resolved one.
+  if (identity.accountId) meta.provider_account_id = identity.accountId;
   return meta;
 }
 

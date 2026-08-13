@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     // Defensive tier-cap re-check for NEW connections only (the session
     // route is the primary gate, but a Connect UI opened before the cap was
     // reached could complete after it). Re-completing an EXISTING row must
-    // stay allowed — that's the reconnect path.
+    // stay allowed: that's the reconnect path.
     //
     // At the cap the request is NOT refused yet: a reconnect of an
     // already-connected account nets ZERO rows (the continuity consolidation
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
       ...(existing?.metadata ?? {}),
       ...workspaceConnectionMetadataFromNangoConnection(connection)
     };
-    await upsertWorkspaceOAuthConnection({
+    const upserted = await upsertWorkspaceOAuthConnection({
       businessId: parsed.businessId,
       providerConfigKey: parsed.providerConfigKey,
       connectionId: parsed.connectionId,
@@ -103,16 +103,13 @@ export async function POST(request: Request) {
 
     // Post-insert settle: the pre-insert cap check is a read followed by an
     // upsert with no transaction, so PARALLEL connects can all pass it. Now
-    // that the row exists, re-read in deterministic order — if this row
+    // that the row exists, re-read in deterministic order, and if this row
     // landed past the cap, evict it (row + Nango side) and refuse. Seats
     // belong to the earliest rows, so racers can never end above the cap.
-    // (The at-cap tentative path settles AFTER consolidation instead — its
+    // (The at-cap tentative path settles AFTER consolidation instead: its
     // row is EXPECTED to be past the cap until the old row is replaced.)
     if (!existing && !overCapAwaitingConsolidation) {
-      const settlement = await settleWorkspaceConnectionInsert(parsed.businessId, {
-        providerConfigKey: parsed.providerConfigKey,
-        connectionId: parsed.connectionId
-      });
+      const settlement = await settleWorkspaceConnectionInsert(parsed.businessId, upserted.id);
       if (settlement.evictRowId) {
         await deleteWorkspaceOAuthConnection(parsed.businessId, settlement.evictRowId);
         try {
@@ -127,7 +124,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // Nango's end_user is whoever was logged into OUR dashboard — not the
+    // Nango's end_user is whoever was logged into OUR dashboard, not the
     // account picked on the provider's consent screen. Ask the provider for
     // the real account identity so two connections on the same integration
     // are distinguishable. Best-effort AFTER the row exists (the proxy
@@ -140,8 +137,8 @@ export async function POST(request: Request) {
     const identityMetadata = providerAccountMetadata(identity);
     if (Object.keys(identityMetadata).length > 0) {
       // Re-read the row: the probe was a network round-trip, and app-owned
-      // keys (e.g. the shared-calendar id) may have been written concurrently
-      // — merge onto the FRESH metadata, not the pre-probe snapshot.
+      // keys (e.g. the shared-calendar id) may have been written concurrently,
+      // so merge onto the FRESH metadata, not the pre-probe snapshot.
       const current = await getWorkspaceOAuthConnectionByNangoIds(
         parsed.businessId,
         parsed.providerConfigKey,
@@ -149,10 +146,13 @@ export async function POST(request: Request) {
       );
       const base = { ...(current?.metadata ?? mergedMetadata) };
       // A reconnect can be a DIFFERENT account: a resolved identity replaces
-      // the provider_account_* pair wholesale, so a partial probe (e.g. Graph
-      // display name without mail) can't leave the previous grant's email.
+      // the provider_account_* trio wholesale, so a partial probe (e.g. Graph
+      // display name without mail) can't leave the previous grant's email, and
+      // a probe that resolved no id can't leave the previous grant's id behind
+      // to veto the new account's own later reconnect.
       delete base.provider_account_email;
       delete base.provider_account_display_name;
+      delete base.provider_account_id;
       await upsertWorkspaceOAuthConnection({
         businessId: parsed.businessId,
         providerConfigKey: parsed.providerConfigKey,
@@ -162,7 +162,7 @@ export async function POST(request: Request) {
 
       // Push the real account onto NANGO's record too, so its dashboard's
       // "Customer" column shows the connected mailbox instead of whichever
-      // dashboard login started the session. Cosmetic on Nango's side —
+      // dashboard login started the session. Cosmetic on Nango's side,
       // never fail the connect over it.
       const patch = nangoIdentityPatchBody(parsed.businessId, identity);
       if (patch) {
@@ -186,7 +186,7 @@ export async function POST(request: Request) {
     // Reconnect continuity: if this NEW connection is the same provider
     // account an OLDER row already represents, keep the old row's id (the id
     // AiFlow mailbox bindings and email triggers reference) and re-point it
-    // at this fresh grant — deleting the duplicate row and the superseded
+    // at this fresh grant: deleting the duplicate row and the superseded
     // Nango connection. Best-effort below the cap (a failure leaves two
     // working rows, the pre-continuity behavior); at the cap the tentative
     // row is only allowed to STAY if consolidation nets it out.
@@ -215,7 +215,7 @@ export async function POST(request: Request) {
     }
 
     // At-cap tentative row: a consolidation replaced an old row (net zero
-    // seats) — allowed. Anything else at the cap is a genuinely NEW account
+    // seats): allowed. Anything else at the cap is a genuinely NEW account
     // (or an unprovable reconnect): evict the row + the Nango grant and
     // refuse, the same outcome the pre-insert refusal used to produce.
     if (!existing && overCapAwaitingConsolidation && !consolidated && atCapState) {
@@ -238,7 +238,7 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", workspaceConnectionCapMessage(atCapState), 403);
     }
 
-    // A NEW connection consumed account-wide Nango quota — check platform
+    // A NEW connection consumed account-wide Nango quota, so check platform
     // headroom and alert ops when it's nearly gone (deduped, best-effort).
     // A consolidated reconnect nets zero (the superseded grant was deleted).
     if (!existing && !consolidated) {
