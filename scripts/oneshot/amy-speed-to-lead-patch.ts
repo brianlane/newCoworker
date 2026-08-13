@@ -100,7 +100,6 @@ type RosterRow = {
 async function resolveTrio(
   // Loosely typed like the sibling patch scripts: the generic default of
   // createClient does not unify across call sites.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   businessId: string
 ): Promise<{ dave: Ref; gabby: Ref; amy: Ref }> {
@@ -255,7 +254,6 @@ async function main(): Promise<void> {
 
 /** Restore the previous_definition stored by the newest apply for each flow. */
 async function revert(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   businessId: string,
   args: Args
