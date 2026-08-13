@@ -80,8 +80,12 @@ How the pieces fit:
   ever wants email through Google it needs a fresh consent rather than a token
   migration. The row is also unlabeled in the older sense, carrying only
   `end_user_email`, which is why a dashboard reconnect would take the
-  identity-probe branch for this tenant. The superseded Nango grant
-  (`70df3986-...64cdbe`) is still alive as the rollback path.
+  identity-probe branch for this tenant, which is why #1352 had to route that
+  probe through the transport-aware seam: a Nango-only probe cannot resolve this
+  row any more, and a failed probe inserts a DUPLICATE rather than adopting the
+  existing row. **There is no rollback path:** the `google` integration was
+  deleted from Nango on 2026-08-13 and took its connections with it, so
+  `70df3986-...64cdbe` is gone and the dangling pointer was cleared the same day.
 - **VFM booking visibility:** VFM books on Liz's own Calendly
   (`calendly.com/elizabethastone/30min`). Historically invisible to this
   tenant (one Calendly connection per business, James's), so the T-60

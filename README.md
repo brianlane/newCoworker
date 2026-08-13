@@ -851,12 +851,16 @@ connection cap, cleanup, and every AiFlow mailbox binding transport-blind.
 
 ### The client is shared, and that is the main hazard
 
-**One OAuth client (`354099628168-...`) serves three consumers:** Supabase Auth
-"Log in with Google" at `/login`, this first-party workspace flow, and Nango
-(historically). One careless edit in the Cloud Console breaks **site login**, not
-just integrations. Its secret therefore lives in three places that must never
-diverge: Vercel (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`), the Supabase Auth
-Google provider config, and Nango's integration config.
+**One OAuth client (`354099628168-...`) serves two consumers:** Supabase Auth
+"Log in with Google" at `/login`, and this first-party workspace flow. One
+careless edit in the Cloud Console breaks **site login**, not just integrations.
+Its secret lives in two places that must never diverge: Vercel
+(`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) and the Supabase Auth Google
+provider config.
+
+Nango was a third consumer until 2026-08-13, when the `google` integration was
+deleted there. That is also why the client-secret rotation is no longer urgent:
+its point was that Nango still held a working secret for a verified client.
 
 ### The scope set is frozen, in code, on purpose
 
@@ -899,15 +903,26 @@ Only `invalid_grant` deactivates a row. `invalid_client` stays `request_failed`,
 because that is what a botched secret rotation looks like and treating it as a
 dead grant would soft-disable every tenant at once.
 
-### Reconnect is cross-transport, and that is the migration
+### Reconnect is cross-transport, and that is how the migration happened
 
-An owner still on Nango who clicks Connect Google gets their EXISTING row flipped
-in place, same row id, so every `send_email` binding, email trigger and
+An owner on Nango who clicks Connect Google gets their EXISTING row flipped in
+place, same row id, so every `send_email` binding, email trigger and
 `shared_calendar_id` survives. `scripts/oneshot/import-google-nango-tokens.ts`
-does the same thing without the owner present, by redeeming the refresh token
-Nango holds against our own client. Either way the Nango grant is left alive and
-recorded in `metadata.migrated_from_nango_connection_id`, which is the rollback
-path and which `debug/nango-audit.ts` refuses to reclaim.
+does the same without the owner present, by redeeming the refresh token Nango
+holds against our own client. Both leave the Nango grant alive and record it in
+`metadata.migrated_from_nango_connection_id`, which `debug/nango-audit.ts`
+refuses to reclaim while that key is set.
+
+**For Google this is now history rather than a live path.** All three tenants
+migrated on 2026-08-13 and the integration was deleted from Nango the same day,
+which took its connections with it, so there is no Google grant left to roll back
+to and the dangling pointers were cleared. The machinery stays because Microsoft
+is still mid-migration and uses the identical path.
+
+One consequence worth knowing, fixed in #1352: an identity probe of a Google row
+can no longer go through Nango, so `fetchWorkspaceAccountIdentity` routes it
+through the transport-aware seam. A Nango-only probe would fail, and a failed
+probe inserts a duplicate row rather than adopting the existing one.
 
 ### The client can be deleted for inactivity
 
