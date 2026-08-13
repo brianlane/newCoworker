@@ -95,10 +95,30 @@ registration.
 
    Take it seriously before rollout. Unverified, users in OTHER tenants can be
    blocked from consenting entirely, which is every customer who is not us.
-   Personal Microsoft accounts are unaffected, so a solo test against a personal
-   Outlook will pass and tell you nothing about org tenants. Verify the
-   publisher with the Microsoft partner (MPN) id, then re-test with a work
-   account before inviting anyone.
+
+   It is **two separate steps**, days apart, and the second is easy to forget
+   because the first one ends with a satisfying "verified" and no prompt to
+   continue:
+
+   1. **Get the Partner Center account verified.** partner.microsoft.com ->
+      Account settings -> Legal info. It walks five stages (Verification
+      Started, Email, Identity, Employment, Business) and is a review by
+      Microsoft, not a form: budget days, and expect it to ask for documents.
+   2. **Then come back to Entra** and add the Partner One ID under
+      Branding & properties -> Add MPN ID. Nothing about step 1 does this for
+      you. Until it is done the app is still unverified, no matter what Partner
+      Center says.
+
+   **Do not wait on either to start testing.** Publisher verification gates
+   ordinary users in OTHER tenants. It does not gate our own tenant, where an
+   admin can consent regardless, and it does not gate personal Microsoft
+   accounts at all. So connect and exercise the whole flow on day one; just
+   re-test with a work account in an unrelated tenant once the badge lands,
+   because that is the only case the badge changes.
+
+   The flip side of the same fact: a green test against a personal Outlook or
+   against our own tenant proves nothing about customer orgs. Do not read it as
+   "rollout is safe".
 
 6. **API permissions**: none need to be pre-added. Scopes are requested per
    authorize call (`src/lib/microsoft/oauth.ts`, `MICROSOFT_SCOPES`) and
