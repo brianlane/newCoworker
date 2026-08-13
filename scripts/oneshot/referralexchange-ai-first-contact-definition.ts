@@ -49,6 +49,16 @@
 /** The tag whose flow is the three-day AI cadence. */
 export const FOLLOW_UP_TAG = "Needs Follow Up";
 
+/**
+ * Marker on the tag event telling the cadence this ladder ALREADY called and
+ * texted the lead, so its round 1 starts with the 3-day wait instead of a
+ * second call two minutes later. Lockstep copy of AUTO_TAG_NOTE in
+ * amy-needs-follow-up-definition.ts (asserted equal in tests); the cadence
+ * matches on the `auto_first_contact` prefix.
+ */
+export const AUTO_TAG_NOTE =
+  "auto_first_contact: the AI already called and texted this lead just now";
+
 /** Roster refs the applier resolves by name at apply time, never hardcoded. */
 export type Ref = { id: string; label: string; source: "employee" };
 
@@ -193,6 +203,9 @@ export function buildAiFirstContactSteps(refs: { dave: Ref; gabby: Ref; amy: Ref
       type: "update_contact",
       phoneVar: "lead_phone",
       addTags: [FOLLOW_UP_TAG],
+      // Tell the cadence we already called and texted, so its round 1 starts
+      // at the 3-day wait rather than dialing again two minutes later.
+      noteTemplate: AUTO_TAG_NOTE,
       when: { var: "call_outcome", equals: "no_answer" }
     }
   ];

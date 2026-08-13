@@ -5554,6 +5554,12 @@ function StepFields({
           onChange={(v) => patchStep(index, { removeTags: parseTags(v) })}
           help='e.g. "New Lead" — removals apply before additions, so one step moves a lead between statuses.'
         />
+        <Field
+          label="Event note (optional)"
+          value={step.noteTemplate ?? ""}
+          onChange={(v) => patchStep(index, { noteTemplate: v.trim() ? v : undefined })}
+          help="Carried on the tag-change event as its note line ({{trigger.note}} in any flow the tag starts): how this step explains itself to the flow it triggers."
+        />
       </div>
     );
   }

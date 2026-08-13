@@ -318,6 +318,26 @@ describe("simulateTestAction", () => {
         scope()
       )
     ).toEqual({ simulated: "update_contact", customer_e164: "+1602", addTags: ["A"], removeTags: [] });
+    // With a rendered note, the simulation shows what the tag event's note
+    // line would say, so a test run proves the marker downstream flows key on.
+    expect(
+      simulateTestAction(
+        {
+          kind: "update_contact",
+          e164: "+1602",
+          addTags: ["Needs Follow Up"],
+          removeTags: [],
+          note: "auto_first_contact: already called"
+        } as StepAction,
+        scope()
+      )
+    ).toEqual({
+      simulated: "update_contact",
+      customer_e164: "+1602",
+      addTags: ["Needs Follow Up"],
+      removeTags: [],
+      note: "auto_first_contact: already called"
+    });
     expect(
       simulateTestAction(
         {

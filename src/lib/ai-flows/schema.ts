@@ -1799,6 +1799,12 @@ const nonBranchStepMembers = [
     phoneVar: varName,
     addTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
     removeTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
+    // Context for whatever the tag change sets in motion: rendered and carried
+    // as the tag_changed event's `note:` line ({{trigger.note}} in the
+    // triggered flow). This is how a tagger explains ITSELF to the flow the
+    // tag starts, e.g. "auto_first_contact: the AI already called and texted"
+    // lets a follow-up cadence skip the immediate call a manual tag warrants.
+    noteTemplate: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
   }),
   // ── Voice steps (real-time call routing; see VOICE_STEP_TYPES) ──
@@ -2216,6 +2222,10 @@ function templateStringsForStep(step: FlowStep): string[] {
     // The mid-call brief is built from what earlier steps extracted.
     case "voice_brief":
       return [step.noteTemplate];
+    // update_contact: tags are literal and phoneVar is a var NAME, but the
+    // event note is a template.
+    case "update_contact":
+      return [step.noteTemplate ?? ""];
     // wait_for_call carries a literal partner E.164 and var NAMES — no templates.
     case "wait_for_call":
     case "extract_url":
@@ -2223,8 +2233,6 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "extract_text":
     case "recall_url":
     case "upsert_customer":
-    // update_contact carries literal tag strings and a var NAME — no templates.
-    case "update_contact":
     // classify carries var NAMES, category tokens, and a plain-text question.
     case "classify":
     // goal carries a display label and literal event kinds/tags — no templates.

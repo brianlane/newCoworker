@@ -2212,6 +2212,28 @@ describe("trigger channels", () => {
     }
   });
 
+  it("scope-checks update_contact's noteTemplate like any other template", () => {
+    const base = {
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] as unknown[] }
+    };
+    const stepsWith = (noteTemplate: string) => [
+      { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }, { name: "lead_name" }] },
+      { id: "u", type: "update_contact", phoneVar: "lead_phone", addTags: ["Tagged"], noteTemplate }
+    ];
+    // A var an earlier step produced renders fine.
+    const ok = parseAiFlowDefinition({
+      ...base,
+      steps: stepsWith("auto_first_contact: already called {{vars.lead_name}}")
+    });
+    expect(ok.steps[1].type).toBe("update_contact");
+    // A var nothing produces is the usual semantic error, not a silent blank
+    // note at run time.
+    expect(() =>
+      parseAiFlowDefinition({ ...base, steps: stepsWith("{{vars.ghost_var}}") })
+    ).toThrow(AiFlowValidationError);
+  });
+
   it("accepts a webhook trigger (push from the public API; conditions only)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

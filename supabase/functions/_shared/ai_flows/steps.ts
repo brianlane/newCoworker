@@ -699,6 +699,8 @@ export type StepAction =
       e164: string;
       addTags: string[];
       removeTags: string[];
+      /** Rendered noteTemplate, forwarded as the tag_changed event's note. */
+      note?: string;
       skipReason?: string;
     }
   | {
@@ -1951,6 +1953,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
       const addTags = step.addTags ?? [];
       const removeTags = step.removeTags ?? [];
+      const note = step.noteTemplate ? renderTemplate(step.noteTemplate, scope).trim() : "";
       if (!e164) {
         // Skip (with a note), never fail: the tag write is auxiliary
         // bookkeeping and a missing lead phone must not kill the run.
@@ -1965,7 +1968,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
-      return { ok: true, action: { kind: "update_contact", e164, addTags, removeTags } };
+      return {
+        ok: true,
+        action: {
+          kind: "update_contact",
+          e164,
+          addTags,
+          removeTags,
+          ...(note ? { note } : {})
+        }
+      };
     }
     case "math": {
       // Pure compute: render the operands, do the arithmetic, save the
