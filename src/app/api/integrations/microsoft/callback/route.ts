@@ -249,7 +249,8 @@ export async function GET(request: Request) {
         await listWorkspaceOAuthConnections(verified.businessId),
         inserted.id,
         accountEmail,
-        OUTLOOK_KEYS
+        OUTLOOK_KEYS,
+        identity.accountId
       );
       if (duplicateOf) {
         await deleteWorkspaceOAuthConnection(verified.businessId, inserted.id);
