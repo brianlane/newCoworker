@@ -20,6 +20,7 @@ import {
   GOOGLE_KEYS,
   OUTLOOK_KEYS,
   findReconnectTarget,
+  identitySet,
   resolveUnlabeledReconnect
 } from "@/lib/workspace/reconnect";
 
@@ -400,6 +401,62 @@ describe("legacy rows labeled with a different representation of the account", (
     ];
     const d = findReconnectTarget(rows, "team@newcoworker.com", ROOMY, OUTLOOK_KEYS);
     expect(d.kind === "reconnect" && d.row.id).toBe("weird");
+  });
+});
+
+
+describe("resolveUnlabeledReconnect and the alias set", () => {
+  const SYNTHETIC = "outlook_5c3966be918a1c30@outlook.com";
+  const candidate = row({ id: "unlabeled" });
+
+  it("reconnects when the PROBE returns a different spelling of the same account", () => {
+    // The probe runs through the row's own grant, so for a personal account it
+    // reports the synthetic UPN while this connect resolved the real address.
+    // Comparing one string to one string called it a stranger and duplicated
+    // the row: the same bug as findReconnectTarget had, on the path that was
+    // not updated with it.
+    const d = resolveUnlabeledReconnect(candidate, SYNTHETIC, "team@newcoworker.com", [
+      SYNTHETIC,
+      "team@newcoworker.com"
+    ]);
+    expect(d).toEqual({ kind: "reconnect", row: candidate, matchedBy: "account_email" });
+  });
+
+  it("still inserts when the probe reports a genuinely different account", () => {
+    const d = resolveUnlabeledReconnect(candidate, "someone@else.com", "team@newcoworker.com", [
+      SYNTHETIC,
+      "team@newcoworker.com"
+    ]);
+    expect(d.kind).toBe("new");
+  });
+
+  it("keeps working with no aliases, matching on the primary alone", () => {
+    expect(
+      resolveUnlabeledReconnect(candidate, "Team@NewCoworker.com", "team@newcoworker.com").kind
+    ).toBe("reconnect");
+  });
+
+  it("still inserts when the probe failed", () => {
+    expect(resolveUnlabeledReconnect(candidate, null, "team@newcoworker.com", [SYNTHETIC]).kind).toBe(
+      "new"
+    );
+  });
+});
+
+describe("identitySet", () => {
+  it("normalizes case and whitespace and drops empties", () => {
+    expect([...identitySet("  Team@NewCoworker.com ", ["", "OTHER@acme.com", "  "])]).toEqual([
+      "team@newcoworker.com",
+      "other@acme.com"
+    ]);
+  });
+
+  it("dedupes across primary and aliases", () => {
+    expect(identitySet("a@b.com", ["A@B.com", "a@b.com"]).size).toBe(1);
+  });
+
+  it("is empty for a null primary and no aliases", () => {
+    expect(identitySet(null).size).toBe(0);
   });
 });
 

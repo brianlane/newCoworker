@@ -184,7 +184,7 @@ export async function GET(request: Request) {
           error: (err as Error).message
         });
       }
-      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail);
+      decision = resolveUnlabeledReconnect(candidate, probed, accountEmail, identity.aliases);
     }
 
     const existing = decision.kind === "reconnect" ? decision.row : undefined;
