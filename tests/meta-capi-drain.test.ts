@@ -20,15 +20,8 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 const getMetaConnection = vi.fn();
-const setMetaConnectionDataset = vi.fn();
 vi.mock("@/lib/db/meta-connections", () => ({
-  getMetaConnection: (...a: unknown[]) => getMetaConnection(...a),
-  setMetaConnectionDataset: (...a: unknown[]) => setMetaConnectionDataset(...a)
-}));
-
-const getOrCreatePageDataset = vi.fn();
-vi.mock("@/lib/meta/client", () => ({
-  getOrCreatePageDataset: (...a: unknown[]) => getOrCreatePageDataset(...a)
+  getMetaConnection: (...a: unknown[]) => getMetaConnection(...a)
 }));
 
 const buildConversionLeadBody = vi.fn();
@@ -137,8 +130,6 @@ beforeEach(() => {
   infoSpy.mockReset();
   warnSpy.mockReset();
   getMetaConnection.mockReset();
-  setMetaConnectionDataset.mockReset();
-  getOrCreatePageDataset.mockReset();
   buildConversionLeadBody.mockReset();
   sendConversionLeadBody.mockReset();
 });
@@ -518,88 +509,4 @@ describe("drainMetaCapiEvents", () => {
     expect(updates[0].fields.last_error).toBe("string boom");
   });
 
-  describe("late dataset discovery (post-App-Review self-heal)", () => {
-    // A FACTORY, not a shared const: the drain swaps in a patched copy of
-    // the row it discovered a dataset for, and a shared fixture would carry
-    // one test's discovered dataset into the next.
-    const darkConnection = () => ({
-      ...READY_CONNECTION,
-      dataset_id: null,
-      page_id: "pg-1"
-    });
-
-    it("discovers a NULL dataset on an otherwise-ready connection and uploads the same tick", async () => {
-      const { db } = makeDb({
-        ...outboxQueues([outboxRow()]),
-        contacts: [{ data: { alias_e164s: null, email: "jane@x.co" }, error: null }],
-        lead_submissions: [
-          { data: { leadgen_id: "1993202861289031", email: "jane@x.co" }, error: null }
-        ]
-      });
-      getMetaConnection.mockResolvedValue(darkConnection());
-      getOrCreatePageDataset.mockResolvedValue("ds-new");
-      setMetaConnectionDataset.mockResolvedValue(undefined);
-      buildConversionLeadBody.mockReturnValue("{}");
-      sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
-
-      const summary = await drainMetaCapiEvents(db as never);
-      expect(getOrCreatePageDataset).toHaveBeenCalledWith("pg-1", "page-tok");
-      expect(setMetaConnectionDataset).toHaveBeenCalledWith(BIZ, "ds-new", db);
-      expect(sendConversionLeadBody).toHaveBeenCalledWith("ds-new", "page-tok", "{}");
-      expect(summary).toMatchObject({ claimed: 1, sent: 1, deferred: 0 });
-    });
-
-    it("defers exactly as before when discovery still returns null, and never writes", async () => {
-      const { db, updates } = makeDb(outboxQueues([outboxRow()], [{ data: null, error: null }]));
-      getMetaConnection.mockResolvedValue(darkConnection());
-      getOrCreatePageDataset.mockResolvedValue(null);
-
-      const summary = await drainMetaCapiEvents(db as never);
-      expect(setMetaConnectionDataset).not.toHaveBeenCalled();
-      expect(sendConversionLeadBody).not.toHaveBeenCalled();
-      expect(summary).toMatchObject({ claimed: 1, deferred: 1 });
-      expect(updates.at(-1)?.fields).toMatchObject({
-        status: "pending",
-        last_error: "no capi-ready meta connection"
-      });
-    });
-
-    it("defers without uploading when the dataset persist fails (send never runs ahead of the row)", async () => {
-      const { db } = makeDb(outboxQueues([outboxRow()], [{ data: null, error: null }]));
-      getMetaConnection.mockResolvedValue(darkConnection());
-      getOrCreatePageDataset.mockResolvedValue("ds-new");
-      setMetaConnectionDataset.mockRejectedValue(new Error("persist down"));
-
-      const summary = await drainMetaCapiEvents(db as never);
-      expect(sendConversionLeadBody).not.toHaveBeenCalled();
-      expect(summary).toMatchObject({ claimed: 1, deferred: 1 });
-      expect(warnSpy).toHaveBeenCalledWith(
-        "meta capi drain: dataset persist failed",
-        expect.objectContaining({ businessId: BIZ, error: "persist down" })
-      );
-    });
-
-    it("stringifies a non-Error persist rejection in the warning", async () => {
-      const { db } = makeDb(outboxQueues([outboxRow()], [{ data: null, error: null }]));
-      getMetaConnection.mockResolvedValue(darkConnection());
-      getOrCreatePageDataset.mockResolvedValue("ds-new");
-      setMetaConnectionDataset.mockRejectedValue("plain string boom");
-
-      const summary = await drainMetaCapiEvents(db as never);
-      expect(summary).toMatchObject({ claimed: 1, deferred: 1 });
-      expect(warnSpy).toHaveBeenCalledWith(
-        "meta capi drain: dataset persist failed",
-        expect.objectContaining({ error: "plain string boom" })
-      );
-    });
-
-    it("never attempts discovery when the row has no page_id (pre-pick pending shapes)", async () => {
-      const { db } = makeDb(outboxQueues([outboxRow()], [{ data: null, error: null }]));
-      getMetaConnection.mockResolvedValue({ ...READY_CONNECTION, dataset_id: null });
-
-      const summary = await drainMetaCapiEvents(db as never);
-      expect(getOrCreatePageDataset).not.toHaveBeenCalled();
-      expect(summary).toMatchObject({ claimed: 1, deferred: 1 });
-    });
-  });
 });

@@ -402,21 +402,37 @@ describe("setMetaConnectionActive", () => {
 });
 
 describe("setMetaConnectionDataset", () => {
-  it("writes the dataset guarded on an ACTIVE row that still has none", async () => {
-    const c = chain({ error: null });
-    await setMetaConnectionDataset(BIZ, "ds-new", makeDb(c));
+  it("writes the owner-entered dataset on an ACTIVE row and returns the masked row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { ...ACTIVE, dataset_id: "ds-new" }, error: null });
+    const row = await setMetaConnectionDataset(BIZ, "ds-new", makeDb(c));
+    expect(row?.dataset_id).toBe("ds-new");
+    expect(row).not.toHaveProperty("page_token_encrypted");
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.dataset_id).toBe("ds-new");
     expect(patch.updated_at).toEqual(expect.any(String));
-    // The guards are what stop a late discovery from clobbering a working
-    // dataset or touching a pending row.
+    // Scoped to an ACTIVE row: a pending row has no Page to attach it to.
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
     expect(c.eq).toHaveBeenCalledWith("status", "active");
-    expect(c.is).toHaveBeenCalledWith("dataset_id", null);
+  });
+
+  it("clears the dataset when passed null (owner turning the loop off)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { ...ACTIVE, dataset_id: null }, error: null });
+    const row = await setMetaConnectionDataset(BIZ, null, makeDb(c));
+    expect(row?.dataset_id).toBeNull();
+    expect((c.update.mock.calls[0][0] as Record<string, unknown>).dataset_id).toBeNull();
+  });
+
+  it("returns null when no ACTIVE row matched, so a save is never reported that did not land", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await setMetaConnectionDataset(BIZ, "ds-new", makeDb(c))).toBeNull();
   });
 
   it("throws on a write error", async () => {
-    const c = chain({ error: { message: "dataset write fail" } });
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "dataset write fail" } });
     await expect(setMetaConnectionDataset(BIZ, "ds-new", makeDb(c))).rejects.toThrow(
       /dataset write fail/
     );

@@ -300,27 +300,32 @@ export async function activateMetaConnection(
 }
 
 /**
- * Late Conversions API dataset discovery: fill dataset_id on an ACTIVE
- * connection that predates the app's post-App-Review scopes (connect-time
- * discovery returned null for every pre-approval connection, and only a
- * reconnect re-attempted it). Scoped to status=active AND dataset_id IS
- * NULL so it can never clobber a working dataset or touch a pending row.
- * Matching zero rows is a no-op, not an error: the connection may have
- * been reconnected (dataset already set) or dropped since the caller read it.
+ * Set (or clear) the tenant's Conversions API dataset id — the owner-entered
+ * value from /dashboard/integrations/meta. Meta's platform flow has the
+ * ADVERTISER create the CRM dataset in Events Manager and hand it over;
+ * nothing derives it, so this is a plain edit and an owner may correct a
+ * typo by saving again. Scoped to an ACTIVE connection: a pending row has
+ * no Page yet, so it has nothing to attach a dataset to.
+ *
+ * Returns the updated public row, or null when no ACTIVE row matched
+ * (disconnected or still pending between the read and the write) — callers
+ * surface that instead of reporting a save that never landed.
  */
 export async function setMetaConnectionDataset(
   businessId: string,
-  datasetId: string,
+  datasetId: string | null,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<PublicMetaConnectionRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("meta_connections")
     .update({ dataset_id: datasetId, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("status", "active")
-    .is("dataset_id", null);
+    .select(ALL_COLUMNS)
+    .maybeSingle();
   if (error) throw new Error(`setMetaConnectionDataset: ${error.message}`);
+  return data ? toPublicMetaConnection(data as unknown as StoredMetaConnectionRow) : null;
 }
 
 /** Soft-disable / re-enable (webhook deliveries refuse while inactive). */

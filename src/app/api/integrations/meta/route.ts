@@ -7,6 +7,7 @@
  *   POST   {businessId, pageId} → finish setup: store the page token,
  *                               subscribe the Page to leadgen, activate
  *   PATCH  {businessId, isActive} → soft-disable / re-enable
+ *   PATCH  {businessId, datasetId} → set/clear the Conversions API dataset
  *   DELETE {businessId}       → best-effort unsubscribe, then remove
  *
  * Auth mirrors the other integration routes: owner/manager session with
@@ -21,11 +22,11 @@ import {
   getMetaConnection,
   getMetaPageClaim,
   getPublicMetaConnection,
-  setMetaConnectionActive
+  setMetaConnectionActive,
+  setMetaConnectionDataset
 } from "@/lib/db/meta-connections";
 import {
   getLinkedInstagramAccount,
-  getOrCreatePageDataset,
   listManagedPages,
   subscribePageToLeadgen,
   unsubscribePage
@@ -39,10 +40,23 @@ const selectPageSchema = z.object({
   pageId: z.string().min(1).max(64)
 });
 
-const patchSchema = z.object({
-  businessId: z.string().uuid(),
-  isActive: z.boolean()
-});
+/**
+ * Exactly one of `isActive` (soft-disable/re-enable) or `datasetId` (the
+ * owner-entered Conversions API dataset, "" clearing it) per call, so a
+ * single PATCH can never half-apply two unrelated intents.
+ */
+const patchSchema = z
+  .object({
+    businessId: z.string().uuid(),
+    isActive: z.boolean().optional(),
+    // Meta dataset (pixel) ids are numeric strings; reject anything else
+    // rather than storing a value every upload would 400 on.
+    datasetId: z.union([z.string().regex(/^\d{1,32}$/), z.literal("")]).optional()
+  })
+  .refine(
+    (b) => (b.isActive === undefined) !== (b.datasetId === undefined),
+    "Provide exactly one of isActive or datasetId"
+  );
 
 async function authorize(businessId: string) {
   const user = await getAuthUser();
@@ -122,15 +136,11 @@ export async function POST(request: Request) {
     // tokens missing the instagram scopes, simply skip Instagram DMs).
     const instagram = await getLinkedInstagramAccount(page.accessToken, page.id);
 
-    // Conversions API dataset (best-effort — tokens missing the
-    // post-App-Review ads scopes return null and the Conversion Leads
-    // feedback loop stays dark until a reconnect discovers one). A
-    // discovery hiccup on a reconnect that re-picks the SAME Page falls
-    // back to the stored dataset (the pending row keeps it), so a tenant
-    // with a working feedback loop can never lose it to one failed call.
-    const datasetId =
-      (await getOrCreatePageDataset(page.id, page.accessToken)) ??
-      (connection.page_id === page.id ? connection.dataset_id : null);
+    // Conversions API dataset: owner-entered, never derived (see the note
+    // in src/lib/meta/client.ts). Carried across a reconnect that re-picks
+    // the SAME Page so a working feedback loop survives reconnecting;
+    // switching Pages drops it, because a dataset belongs to one Page.
+    const datasetId = connection.page_id === page.id ? connection.dataset_id : null;
 
     let row;
     try {
@@ -169,7 +179,22 @@ export async function PATCH(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
     const existing = await getPublicMetaConnection(body.businessId);
     if (!existing) return errorResponse("NOT_FOUND", "No Meta connection");
-    const row = await setMetaConnectionActive(body.businessId, body.isActive);
+
+    if (body.datasetId !== undefined) {
+      const row = await setMetaConnectionDataset(
+        body.businessId,
+        body.datasetId === "" ? null : body.datasetId
+      );
+      if (!row) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Pick the Page that runs your lead ads first — a dataset attaches to a connected Page"
+        );
+      }
+      return successResponse(row);
+    }
+
+    const row = await setMetaConnectionActive(body.businessId, body.isActive!);
     return successResponse(row);
   } catch (err) {
     return handleRouteError(err);

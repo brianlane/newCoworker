@@ -64,6 +64,29 @@ postMessage) first.
   `public_profile`, and `leads_retrieval` permissions, so Embedded Signup
   and the direct Meta connect now work for any customer (no app role or
   tester status needed).
+- **Next submission (staged, not yet sent).** Meta's own requirement list
+  for the "Capture & manage ad leads with Marketing API" use case is
+  `public_profile`, `ads_management`, `ads_read`, Marketing API Access Tier,
+  `business_management`, `leads_retrieval`, `pages_manage_ads`,
+  `pages_read_engagement`, `pages_show_list` — the Aug 11 approval covered
+  only five of those nine, so `ads_management`, `ads_read`,
+  `business_management` and the tier still need requesting. Add
+  `instagram_manage_comments` (the IG comment webhook already fires
+  `instagram_comment` AiFlow triggers) and re-request
+  `instagram_content_publish`. **Delete everything else from the cart**: the
+  ~30 other staged items are the optional extras that ride along when a use
+  case is added (branded content, creator marketplace, insights, catalog,
+  shopping, the `instagram_business_*` family — that is the Instagram-Login
+  flavor, we use Instagram through Facebook Login — `pages_manage_posts`,
+  `pages_manage_engagement`, `pages_read_user_content`, `email`, the
+  `pages_user_*` trio, and the marketing-messaging permissions). No code path
+  touches any of them, and asking for permissions you cannot demonstrate is
+  itself a rejection reason. The tier threshold is 500 Marketing API calls in
+  the PAST 15 DAYS, and ~600 were made Aug 10-11, so submit before ~Aug 25 or
+  they age out.
+- **`page_events` / `pages_events` is NOT needed and cannot be obtained.**
+  See the README's direct-connection section: the dataset endpoint that
+  demands it is undocumented, and the permission belongs to no use case.
 - **Rejected in the same submission: `instagram_content_publish`**
   ("Screencast Not Aligned with Use Case Details", Developer Policy 1.6).
   The use case is allowed; the screencast did not show it end to end. To

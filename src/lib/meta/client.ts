@@ -26,10 +26,16 @@ export const META_OAUTH_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERS
  * Instagram content publishing (the Marketing page's scheduled posts):
  * read leads, list/choose the Page, manage its webhook subscription,
  * read/send messages on the Page and its linked IG professional account,
- * and publish media to that account. `ads_management` +
- * `business_management` power the Conversions API (Conversion Leads)
- * feedback loop — dataset discovery and stage-event uploads. Existing
- * connections must reconnect once to grant the newer scopes.
+ * and publish media to that account. `instagram_manage_comments` backs the
+ * IG comment webhook that fires `instagram_comment` AiFlow triggers (see
+ * src/lib/meta/webhook.ts). `ads_management` + `business_management` power
+ * the Conversions API (Conversion Leads) stage-event uploads; the dataset
+ * itself is entered per tenant, never discovered. Existing connections must
+ * reconnect once to grant the newer scopes.
+ *
+ * Requesting a scope App Review has not approved is safe: Meta grants it
+ * only to accounts holding a role on the app and silently omits it for
+ * everyone else, so login keeps working while a request is pending.
  */
 export const META_LOGIN_SCOPES = [
   "leads_retrieval",
@@ -40,6 +46,7 @@ export const META_LOGIN_SCOPES = [
   "pages_messaging",
   "instagram_basic",
   "instagram_manage_messages",
+  "instagram_manage_comments",
   "instagram_content_publish",
   "ads_management",
   "business_management"
@@ -403,35 +410,25 @@ export async function getInstagramMediaPermalink(
   }
 }
 
-/**
- * The Page's Conversions API dataset (pixel) id — created on first call,
- * returned on later ones (`POST /{page_id}/dataset` is get-or-create).
- * This is the upload target for Conversion Leads stage events. Best-effort
- * null: a token missing the post-App-Review scopes (ads_management /
- * business_management) simply can't discover a dataset yet, and the
- * feedback loop stays dark for that connection.
+/*
+ * There is deliberately NO dataset-discovery helper here.
+ *
+ * We used to call `POST /{page_id}/dataset` to get-or-create the Page's
+ * Conversions API dataset. That endpoint appears nowhere in Meta's public
+ * Graph API reference, and it answers every caller with
+ * `(#200) App does not have page_events permission on the Page` — the same
+ * 403 for a page token and for a user token carrying ads_management +
+ * business_management, so it is an app-level gap no scope of ours closes.
+ * `page_events` is not attached to any use case and is absent from this
+ * app's entire privilege list, so it cannot even be requested.
+ *
+ * Meta's documented flow for a platform (Conversions API for CRM: Integrate
+ * as a Platform) has no discovery step at all: the ADVERTISER creates the
+ * CRM dataset in Events Manager, connects it to the partner, and the
+ * partner posts to `/{dataset_id}/events`. So the dataset id is a per-tenant
+ * onboarding INPUT (owner-entered on /dashboard/integrations/meta), never
+ * something we derive. See src/lib/meta/capi.ts for the upload half.
  */
-export async function getOrCreatePageDataset(
-  pageId: string,
-  pageToken: string
-): Promise<string | null> {
-  try {
-    const payload = await graphRequest(
-      `/${pageId}/dataset`,
-      { access_token: pageToken },
-      { method: "POST" }
-    );
-    const id = (payload as { id?: unknown } | null)?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  } catch (err) {
-    // graphRequest only ever throws MetaApiError.
-    logger.warn("meta dataset discovery failed (ignored)", {
-      pageId,
-      error: (err as Error).message
-    });
-    return null;
-  }
-}
 
 /** Best-effort unsubscribe on disconnect — never throws. */
 export async function unsubscribePage(pageId: string, pageToken: string): Promise<void> {

@@ -21,7 +21,6 @@ and is **not** part of any automated path.
 
 | Script | What it does |
 | --- | --- |
-| `backfill-meta-capi-datasets.ts` | Fills `meta_connections.dataset_id` for direct Meta connections made BEFORE the app's App Review approval (Aug 11 2026), whose connect-time discovery returned null because the token lacked the ads scopes, leaving their Conversion Leads feedback loop dark and parking stage events in `deferred` until the 7-day window expired them. Global sweep by default (every active connection with a page token and no dataset), `--business <uuid>` narrows to one. The capi drain also self-heals a dark connection when an event flows; this activates them without waiting for the next conversion. Idempotent (Meta's `POST /{page_id}/dataset` is get-or-create, and a filled row stops being a candidate), dry-run by default, ledger-recorded. |
 | `apply-vfm-brand.ts` | Teaches the KYP Ads coworker its second brand, Vantage Flow Media (owner runs two businesses in one tenant, Aug 2026): splices marker-delimited sections into `identity_md` (VFM facts, booking link, the never-quote-price rule) and `soul_md` (one assistant, two businesses, never ask which), then syncs the vault to the box. Content in `vfm-brand-content.ts`, pinned by `tests/oneshot-vfm-definitions.test.ts`. Idempotent (sections replace in place), dry-run by default, ledger-recorded. |
 | `apply-vfm-team.ts` | Puts the VFM assignee on the KYP roster (upsert by phone; skipped without `--phone`, since `phone_e164` is NOT NULL) and sets `businesses.lead_auto_assign = true` so the VFM flow's route_to_team pin hard-assigns without a claim. Refuses if any non-VFM flow on the business already uses route_to_team. PII from argv/env only. Idempotent, dry-run by default, ledger-recorded. |
 | `seed-vfm-lead-aiflow.ts` | Seeds the VFM lead flow (`vfm-lead-flow-definition.ts`: three OR'd Meta form-name triggers, VFM tag, assignee hand-off, 5-minute-then-link, US Eastern nudge ladder, run_agent booked-time parse, T-60 confirmation) and its `business_agents` parser row. Roster mode (`--assignee-name`) or email-only mode until the assignee has a mobile. Validated through `parseAiFlowDefinition`; idempotent by flow name (`--force` overwrites in place), dry-run by default, ledger-recorded. |
@@ -36,6 +35,18 @@ and is **not** part of any automated path.
 | `fix-staff-contact-rows.ts` | Deletes contact rows a pre-fix AiFlow send filed for a ROSTER MEMBER (the Dave Lane defect, Jul 25 2026: a post-claim hand-off addressed the teammate through a phone var, so the engine filed them as a new customer and stamped the LEAD's name on the row). Audits every roster number for a business, or just the given `--phone` ones (repeatable); deletes only while the row still looks like the untouched artifact (type `customer`, `name_source` auto, no aliases/tags/owner/email/memory) and re-asserts that shape in the DELETE. Idempotent (a deleted row simply reports clean), dry-run by default, ledger-recorded. |
 
 ## Removed
+
+`backfill-meta-capi-datasets.ts` never applied anywhere and was deleted the
+day after it was written (Aug 13 2026). It filled `meta_connections.dataset_id`
+by calling `POST /{page_id}/dataset`, an endpoint absent from Meta's public
+Graph API reference that answers every caller with `(#200) App does not have
+page_events permission on the Page` — identically for a page token and for a
+user token holding ads_management + business_management, so no scope of ours
+closes it, and `page_events` is not attached to any use case nor present in
+this app's privilege list. Meta's documented platform flow has the advertiser
+create the CRM dataset in Events Manager and hand over its id, so the dataset
+is now an owner-entered field on /dashboard/integrations/meta.
+
 
 `patch-kyp-offer-branch.ts` (and its builder's old name,
 `kyp-offer-definition.ts`, now `kyp-lead-flow-definition.ts`) was retired

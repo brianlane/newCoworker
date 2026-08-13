@@ -2139,6 +2139,21 @@ rejection, `instagram_content_publish`, keeps Instagram publishing
 app-role-only until a resubmission with an end-to-end screencast clears
 (details in `PRDs/whatsapp-meta-app-config.md`).
 
+**The Conversions API dataset is entered by the owner, never discovered.**
+The Conversion Leads feedback loop (pipeline stage → `/{dataset_id}/events`,
+`src/lib/meta/capi*.ts`) needs a CRM dataset that, per Meta's platform flow,
+only the ADVERTISER can create: Events Manager → Connect data sources → CRM.
+The owner pastes that numeric id into the Meta card on
+`/dashboard/integrations` (`PATCH /api/integrations/meta {datasetId}`), and a
+reconnect that re-picks the SAME Page keeps it. We do not derive it: the
+`POST /{page_id}/dataset` call we shipped in #807 is absent from Meta's public
+Graph API reference and answers every caller with `(#200) App does not have
+page_events permission on the Page`, identically for a page token and for a
+user token holding `ads_management` + `business_management`, and
+`page_events` belongs to no use case and appears nowhere in this app's
+privilege list. Without a dataset the stage events simply defer, then expire
+at Meta's 7-day window; nothing errors.
+
 ### Messenger + Instagram DM conversation channel
 
 A connected Page's Messenger (and linked Instagram professional account's DM)
