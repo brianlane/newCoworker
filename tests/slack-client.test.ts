@@ -338,3 +338,85 @@ describe("slackApiCallForm", () => {
     }
   });
 });
+
+/**
+ * A caller that swaps the first two arguments (the signature is
+ * (method, botToken, ...)) puts the workspace bot token where the method
+ * label goes. Before this guard the token was interpolated verbatim into the
+ * exception message, so it reached stack traces and any log line recording
+ * the error. It happened twice on 2026-08-12 while smoke-testing.
+ */
+describe("error messages never carry a mis-passed secret", () => {
+  /**
+   * Assembled at runtime on purpose. Written as one literal it matches
+   * Slack's real token pattern, and GitHub push protection rejects the
+   * commit (it did, on the first attempt at this PR). Do not "simplify"
+   * this back into a single string.
+   */
+  const TOKEN = ["xoxb", "0".repeat(10), "1".repeat(10), "FIXTURENOTAREALTOKEN"].join("-");
+
+  function throwingFetch() {
+    return vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("nope");
+      }
+    }) as unknown as Response);
+  }
+
+  it("redacts a bot token passed where the method belongs, on both variants", async () => {
+    vi.stubGlobal("fetch", throwingFetch());
+
+    for (const call of [slackApiCall, slackApiCallForm]) {
+      const err = await (call as any)(TOKEN, "xoxb-real", {}).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(SlackApiError);
+      expect(err.message).not.toContain(TOKEN);
+      expect(err.message).not.toContain("xoxb-");
+      expect(err.message).toContain("(redacted non-method argument)");
+      // Still debuggable: the code and status survive redaction.
+      expect(err.code).toBe("bad_response");
+      expect(err.status).toBe(200);
+    }
+  });
+
+  it("redacts on the transport-failure path too", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("boom"))));
+    const err = await (slackApiCall as any)(TOKEN, "xoxb-real", {}).catch((e: Error) => e);
+    expect(err.message).toBe("Slack (redacted non-method argument) unreachable");
+
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(abortErr)));
+    const timedOut = await (slackApiCallForm as any)(TOKEN, "xoxb-real", {}).catch((e: Error) => e);
+    expect(timedOut.message).toBe("Slack (redacted non-method argument) timed out");
+  });
+
+  it("leaves every real method name intact, including dotted and camelCase ones", async () => {
+    vi.stubGlobal("fetch", throwingFetch());
+    for (const method of [
+      "chat.postMessage",
+      "conversations.list",
+      "users.info",
+      "assistant.threads.setStatus",
+      "chat.appendStream"
+    ]) {
+      const err = await slackApiCall(method, "xoxb-1", {}).catch((e: Error) => e);
+      expect(err.message).toBe(`Slack ${method} returned a non-JSON body`);
+    }
+  });
+
+  it("redacts other secret shapes too, not just Slack token prefixes", async () => {
+    vi.stubGlobal("fetch", throwingFetch());
+    for (const notAMethod of [
+      "owner@example.com",
+      "Bearer " + "not-a-real-credential",
+      "https://hooks.slack.com/services/T/B/xyz",
+      "Chat.postMessage",
+      ""
+    ]) {
+      const err = await slackApiCall(notAMethod, "xoxb-1", {}).catch((e: Error) => e);
+      expect(err.message).toBe("Slack (redacted non-method argument) returned a non-JSON body");
+    }
+  });
+});
