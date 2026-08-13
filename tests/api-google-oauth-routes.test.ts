@@ -229,6 +229,39 @@ describe("google callback route", () => {
     expect(args.metadata.connected_via).toBe("google_oauth");
   });
 
+  it("records the Nango connection it replaced, so rollback stays possible", async () => {
+    // The flip overwrites connection_id with a synthetic direct:<uuid>, so this
+    // is the ONLY remaining pointer to the Nango grant, which is left alive.
+    // debug/nango-audit.ts reads it to tell a deliberately-retained rollback
+    // grant from a genuine orphan; without it the audit offers to delete the one
+    // thing that makes this reversible.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([nangoRow()] as never);
+
+    await CALLBACK(callbackRequest());
+
+    const args = vi.mocked(flipWorkspaceConnectionToDirect).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(args.metadata.migrated_from_nango_connection_id).toBe("nango-conn");
+    expect(args.metadata.migrated_from_provider_config_key).toBe("google");
+    expect(args.metadata.migrated_at).toEqual(expect.any(String));
+  });
+
+  it("does not claim a rollback pointer when the row was already first-party", async () => {
+    // Re-consenting an already-direct row has no Nango grant behind it, and a
+    // stale pointer would make the audit protect a seat that no longer exists.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      nangoRow({ transport: "direct", connection_id: "direct:old" })
+    ] as never);
+
+    await CALLBACK(callbackRequest());
+
+    const args = vi.mocked(flipWorkspaceConnectionToDirect).mock.calls[0][0] as {
+      metadata: Record<string, unknown>;
+    };
+    expect(args.metadata).not.toHaveProperty("migrated_from_nango_connection_id");
+  });
+
   it("stores the GRANTED scope, not the scope set we asked for", async () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([nangoRow()] as never);
     await CALLBACK(callbackRequest());
