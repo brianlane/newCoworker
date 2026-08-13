@@ -1,9 +1,9 @@
 /**
  * Per-business direct Zoom connections (`zoom_connections`).
  *
- * The first-party OAuth path for Zoom (Nango-free primary; legacy Nango rows
- * in `workspace_oauth_connections` stay honored by the resolver). One row per
- * business holding the Zoom token pair, access token AND rotating refresh
+ * The ONLY OAuth path for Zoom since Aug 2026 (the legacy Nango transport
+ * was removed once production held zero legacy rows and the Nango-side
+ * integration was deleted). One row per business holding the Zoom token pair, access token AND rotating refresh
  * token, both encrypted at rest via `@/lib/integrations/secrets` (same crypto
  * as calendly_connections / vagaro_connections), plus the connected
  * account's identity captured at connect time.
