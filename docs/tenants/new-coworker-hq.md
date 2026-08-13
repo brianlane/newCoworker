@@ -86,10 +86,15 @@ FIRST-PARTY Google OAuth since 2026-08-13, not Nango: connection row
 tokens. The row ID did not change, which is what kept the 12 references to it
 across "Team inbox triage (HQ)" and "Google review demo reply (HQ)" working;
 `metadata.shared_calendar_id` still points at the app-created "NewCoworker"
-calendar. All seven frozen scopes are granted. The superseded Nango grant
-(`1b7f7c19-...d03278`) is deliberately still alive as the rollback path, recorded
-in `metadata.migrated_from_nango_connection_id`, and `debug/nango-audit.ts`
-refuses to reclaim it while that key is set. Zoom is `team@newcoworker.com`.
+calendar. All seven frozen scopes are granted. **There is no rollback path any
+more:** the `google` integration was deleted from Nango on 2026-08-13, which took
+its connections with it (irreversibly, per Nango's own warning), so the
+superseded grant `1b7f7c19-...d03278` no longer exists. The now-dangling
+`metadata.migrated_from_nango_connection_id` was cleared the same day and
+`nango_rollback_revoked_at` records it; leaving the key would have told
+`debug/nango-audit.ts` to protect a seat that is already gone, and told a reader
+a rollback was available when it is not. Reverting this tenant to Nango would now
+mean a fresh owner consent. Zoom is `team@newcoworker.com`.
 
 | Meeting | Length | Visible |
 | --- | --- | --- |
