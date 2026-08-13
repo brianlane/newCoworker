@@ -59,6 +59,19 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
 
   const pending = connection?.status === "pending";
 
+  /**
+   * Replace the connection AND re-seed the dataset field from it. Always use
+   * this instead of setConnection: a dataset belongs to ONE Page, so picking
+   * a different Page drops dataset_id server-side, and a field still holding
+   * the old id would let one Save click attach the previous Page's dataset
+   * to the new one (Bugbot 4cc8f6c4).
+   */
+  function applyConnection(next: MetaConnection | null) {
+    setConnection(next);
+    setDatasetInput(next?.dataset_id ?? "");
+    setDatasetMessage(null);
+  }
+
   // A pending connection needs its Page options (server-side Graph call).
   useEffect(() => {
     if (!pending) return;
@@ -75,7 +88,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         if (cancelled) return;
         setPages(json.data?.pages ?? []);
         if (json.data?.connection !== undefined) {
-          setConnection(json.data.connection ?? null);
+          applyConnection(json.data.connection ?? null);
         }
       } finally {
         if (!cancelled) setLoadingPages(false);
@@ -104,7 +117,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         setBanner(json.error?.message ?? "Could not connect the Page");
         return;
       }
-      setConnection(json.data ?? null);
+      applyConnection(json.data ?? null);
     } finally {
       setSaving(false);
     }
@@ -130,10 +143,10 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         );
         return;
       }
-      setConnection(json.data);
-      setDatasetInput(json.data.dataset_id ?? "");
+      const saved = json.data;
+      applyConnection(saved);
       setDatasetMessage(
-        json.data.dataset_id ? "Saved. Stage changes now report to Meta." : "Dataset cleared."
+        saved.dataset_id ? "Saved. Stage changes now report to Meta." : "Dataset cleared."
       );
     } catch {
       setDatasetMessage("Network error");
@@ -152,7 +165,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         body: JSON.stringify({ businessId })
       });
       if (res.ok) {
-        setConnection(null);
+        applyConnection(null);
         setPages([]);
         setSelectedPage("");
       } else {
