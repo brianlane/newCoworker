@@ -851,6 +851,91 @@ async function speakVoicemail(
 }
 
 /**
+ * Make the voicemail visible on the call record itself, at hangup time.
+ *
+ * Two writes, both of which were missing and left the dashboard blind to
+ * voicemails the system was genuinely leaving (Jessica Gutierrez, Aug 12 2026:
+ * two calls, two voicemails left, transcript page showed neither):
+ *
+ * 1. `answering_machine_result` + `voicemail_left` on the transcript row, which
+ *    the call page's AnsweringMachineBadge reads. The mid-call write in
+ *    stampMachine stays as belt-and-braces, but the row is only guaranteed to
+ *    exist by hangup, so this is the authoritative one.
+ * 2. A closing "[Voicemail] …" assistant turn carrying the spoken script. The
+ *    message goes out through Telnyx `speak` AFTER the media stream is stopped,
+ *    so the bridge's transcriber never hears it and nothing else can put it in
+ *    the transcript. Claim-guarded (voice_claim_voicemail_turn) because
+ *    call.hangup is delivered at-least-once and each redelivery runs this path.
+ *
+ * Best-effort throughout: the parked run's outcome is derived from the session
+ * context, never from these rows, so a failed decoration understates the record
+ * without changing behavior.
+ */
+async function decorateTranscriptForVoicemail(
+  supabase: SupabaseClient,
+  callControlId: string,
+  opts: { voicemailLeft: boolean; script: string; endedAtIso: string }
+): Promise<void> {
+  const { data: rows, error } = await supabase
+    .from("voice_call_transcripts")
+    .update({
+      answering_machine_result: "machine",
+      voicemail_left: opts.voicemailLeft,
+      // Overwrites the bridge's finalize stamp, which dates from the
+      // streaming stop BEFORE the message was spoken; without this the
+      // dashboard duration excludes the voicemail itself (Bugbot, #1335).
+      ended_at: opts.endedAtIso,
+      updated_at: opts.endedAtIso
+    })
+    .eq("call_control_id", callControlId)
+    .select("id");
+  if (error) {
+    console.error("amd: transcript voicemail decorate failed", callControlId, error);
+    return;
+  }
+  const transcriptId = ((rows ?? [])[0] as { id?: string } | undefined)?.id;
+  if (!transcriptId) {
+    // Zero rows matched. PostgREST reports success for that, which is exactly
+    // how the mid-call variant of this write went unnoticed — so say it out
+    // loud. Reachable when the bridge never created a row (pre-eager-create
+    // boxes, or a leg that died before attach).
+    console.error("amd: transcript voicemail decorate matched no row", callControlId);
+    return;
+  }
+  if (!opts.voicemailLeft || !opts.script) return;
+
+  const { data: claimed, error: claimErr } = await supabase.rpc("voice_claim_voicemail_turn", {
+    p_call_control_id: callControlId
+  });
+  if (claimErr) {
+    console.error("amd: voicemail turn claim failed", callControlId, claimErr);
+    return;
+  }
+  if (claimed !== true) return;
+
+  // Append after whatever the bridge transcribed (usually the machine's own
+  // greeting, recorded as a caller turn). The stream is stopped before the
+  // speak, so no bridge flush can still be racing for an index by now.
+  const { data: lastTurn } = await supabase
+    .from("voice_call_transcript_turns")
+    .select("turn_index")
+    .eq("transcript_id", transcriptId)
+    .order("turn_index", { ascending: false })
+    .limit(1);
+  const nextIndex =
+    (((lastTurn ?? [])[0] as { turn_index?: number } | undefined)?.turn_index ?? -1) + 1;
+  const { error: turnErr } = await supabase.from("voice_call_transcript_turns").insert({
+    transcript_id: transcriptId,
+    role: "assistant",
+    content: `[Voicemail] ${opts.script}`,
+    turn_index: nextIndex
+  });
+  if (turnErr) {
+    console.error("amd: voicemail turn insert failed", callControlId, turnErr);
+  }
+}
+
+/**
  * Record the machine verdict on the session, WITHOUT ending the leg.
  *
  * Split out from stampMachineAndHangUp because a step with a voicemail script
@@ -878,13 +963,20 @@ async function stampMachine(
   // Surface the verdict on the call itself, not just in flow vars. Without
   // this an owner reviewing the call cannot tell a voicemail from a person
   // answering, which is exactly the confusion AMD exists to remove.
-  // Best-effort: a transcript row may not exist yet for a leg that was hung up
-  // this early, and failing to decorate the record must never keep a call up.
-  const { error: markErr } = await supabase
+  // Best-effort: with lazy row creation this matched zero rows on EVERY call
+  // (PostgREST reports success for that), which is why the badge never showed.
+  // The bridge now creates the row at attach, and the hangup path re-writes
+  // the verdict either way, so this early write is belt-and-braces for owners
+  // watching a call live.
+  const { data: marked, error: markErr } = await supabase
     .from("voice_call_transcripts")
     .update({ answering_machine_result: "machine" })
-    .eq("call_control_id", callControlId);
+    .eq("call_control_id", callControlId)
+    .select("id");
   if (markErr) console.error("amd: transcript mark failed", markErr);
+  else if (!(marked ?? []).length) {
+    console.warn("amd: transcript mark matched no row (pre-eager-create bridge?)", callControlId);
+  }
   return true;
 }
 
@@ -976,6 +1068,7 @@ async function handleHandoffLifecycle(
       flow_run?: FlowRunLink;
       machine_detected?: unknown;
       voicemail_spoken?: unknown;
+      voicemail?: { script?: unknown };
     };
     await supabase
       .from("voice_handoff_sessions")
@@ -1001,6 +1094,24 @@ async function handleHandoffLifecycle(
       // is the same as nobody picking up, so a ladder written before AMD
       // existed keeps working unchanged, and the REASON carries the detail.
       const machine = obCtx.machine_detected === true;
+      // Surface the voicemail on the transcript itself. This is the one point
+      // where the row reliably exists (the bridge finalized it when the stream
+      // stopped, seconds before the speak ended and the leg hung up), unlike
+      // the mid-call stamp in stampMachine, which raced row creation for its
+      // whole life and silently matched zero rows.
+      if (machine) {
+        // The bridge finalized ended_at when the media stream stopped, which
+        // on a voicemail call is BEFORE the message plays: the recorded span
+        // covered only the machine's greeting. The hangup is the true end, so
+        // re-stamp it from the webhook's own end_time (wall clock as backstop).
+        const endMs = Date.parse(String(payload["end_time"] ?? ""));
+        await decorateTranscriptForVoicemail(supabase, callControlId, {
+          voicemailLeft: obCtx.voicemail_spoken === true,
+          script:
+            typeof obCtx.voicemail?.script === "string" ? obCtx.voicemail.script.trim() : "",
+          endedAtIso: new Date(Number.isFinite(endMs) ? endMs : Date.now()).toISOString()
+        });
+      }
       const outcome = obCtx.transfer_initiated === true
         ? "transferred"
         : machine
