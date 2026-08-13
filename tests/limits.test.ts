@@ -188,13 +188,13 @@ describe("tier limits", () => {
     });
   });
 
-  describe("workspaceConnectionsMax (Nango workspace connection cap)", () => {
+  describe("workspaceConnectionsMax (workspace connection cap)", () => {
     it("starter is capped at 1 workspace connection", () => {
       expect(TIER_LIMITS.starter.workspaceConnectionsMax).toBe(1);
     });
 
-    it("standard is capped at 3 workspace connections", () => {
-      expect(TIER_LIMITS.standard.workspaceConnectionsMax).toBe(3);
+    it("standard is capped at 10 workspace connections", () => {
+      expect(TIER_LIMITS.standard.workspaceConnectionsMax).toBe(10);
     });
 
     it("enterprise is unlimited by default and per-deal overridable", () => {

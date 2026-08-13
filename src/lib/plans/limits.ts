@@ -22,10 +22,14 @@ export type TierLimits = {
   /** Hard cap on AI image generations per conversation (dashboard thread / texter). */
   imageGenerationsPerSession: number;
   /**
-   * Max simultaneous Nango workspace connections (Gmail / Outlook / etc. on
-   * /dashboard/integrations/workspace). Every connection consumes the
-   * platform's ACCOUNT-WIDE Nango quota, so per-tenant caps keep one tenant
-   * from exhausting the shared pool. Infinity = unlimited (enterprise).
+   * Max simultaneous workspace connections (Gmail / Outlook / etc. on
+   * /dashboard/integrations/workspace), counted across BOTH transports:
+   * first-party (direct) rows and Nango-brokered ones. Since Google and
+   * Outlook went first-party (Aug 2026), this is a product tier benefit
+   * rather than a vendor quota: each connection costs email and calendar
+   * polling cycles, and long-tail Nango connects still draw from the shared
+   * account-wide Nango pool (src/lib/nango/account-usage.ts).
+   * Infinity = unlimited (enterprise).
    */
   workspaceConnectionsMax: number;
 };
@@ -50,7 +54,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     smsThrottled: false,
     memoryType: "lossless",
     imageGenerationsPerSession: 10,
-    workspaceConnectionsMax: 3
+    workspaceConnectionsMax: 10
   },
   enterprise: {
     voiceMinutesPerDay: Infinity,
