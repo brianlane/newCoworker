@@ -49,8 +49,10 @@ import {
 } from "../_shared/sms_destination_rates.ts";
 import {
   isInternationalSmsDestination,
+  internationalGatewayFrom,
   partitionInternationalSmsRecipients,
-  INTERNATIONAL_MMS_SKIP_REASON
+  INTERNATIONAL_MMS_SKIP_REASON,
+  INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON
 } from "../_shared/sms_international_gateway.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
@@ -5596,8 +5598,56 @@ async function sendSmsStep(
   // the P2P gateway cannot carry MMS and A2P numbers cannot reach the
   // destination, so the step skips with a designed reason at zero units
   // instead of bouncing off Telnyx.
-  if (action.mediaUrl && isInternationalSmsDestination(smsDestinationCountry(toE164))) {
+  const destinationCountry = smsDestinationCountry(toE164);
+  if (action.mediaUrl && isInternationalSmsDestination(destinationCountry)) {
     return { kind: "ok", skipped: true, result: { skipped: INTERNATIONAL_MMS_SKIP_REASON } };
+  }
+  // A TEXT to an international destination with no P2P gateway configured
+  // has no route either: it would ride the tenant's A2P long code, which
+  // cannot originate outside US/CA at all (Telnyx ticket #557577), into a
+  // guaranteed permanent 409 that fails the step terminally and kills the
+  // run, silently discarding every nurture, human-alert, and wrap-up step
+  // behind it (KYP Ads / VFM, Aug 12 2026: an Indian lead's run died at the
+  // greeting with 13 steps never run). The reserve's destination gate
+  // already SKIPS undeliverable-by-policy sends (denylist, velocity,
+  // unknown prefix); this is the same designed skip for
+  // undeliverable-by-route, logged at warn so the account's log tail shows
+  // the lead is unreachable by text. With TELNYX_INTL_GATEWAY_E164 set the
+  // send proceeds instead, and telnyxSendSms swaps the from-number to the
+  // gateway at its own seam.
+  if (isInternationalSmsDestination(destinationCountry) && !internationalGatewayFrom()) {
+    const countryLabel = destinationCountry ?? "unrecognized-country";
+    appendActionTaken(
+      scope,
+      `could not text ${recipientLabel} at ${toE164} (this account cannot send SMS to ` +
+        `${countryLabel} numbers); the text was skipped`
+    );
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_sms_international_skipped",
+      message:
+        `send_sms skipped: no SMS route to ${toE164} (${countryLabel}). Tenant numbers ` +
+        "are domestic-only (US/CA) and no international gateway is configured, so this " +
+        "recipient cannot be reached by text. The run continues without the send.",
+      payload: {
+        run_id: run.id,
+        flow_id: run.flow_id,
+        step_index: index,
+        to: toE164,
+        country: destinationCountry
+      }
+    });
+    return {
+      kind: "ok",
+      skipped: true,
+      result: {
+        skipped: INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON,
+        to: toE164,
+        country: destinationCountry
+      }
+    };
   }
 
   // Billable units for this send, computed on the prepared body BEFORE link
@@ -5608,7 +5658,7 @@ async function sendSmsStep(
   const reserveUnits =
     smsTextUnits(prepareSmsBody(bodyText), {
       mediaCount: action.mediaUrl ? 1 : 0
-    }) * smsDestinationMultiplier(smsDestinationCountry(toE164));
+    }) * smsDestinationMultiplier(destinationCountry);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id, p_text_units: reserveUnits, p_destination_e164: toE164 }
