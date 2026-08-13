@@ -113,7 +113,7 @@ export default function PrivacyPolicyPage() {
           and RCS), Resend (email delivery), Hostinger and OVHcloud (infrastructure hosting), Vercel
           (application hosting), Cloudflare (network services and email routing), Google (Gemini AI models,
           including real-time voice processing, and the Places directory used for optional prospect discovery),
-          and Nango (integration authentication). We may update this list as the product architecture evolves,
+          and Nango (Microsoft integration authentication; Google connects directly to us). We may update this list as the product architecture evolves,
           and we keep the current version on this page.
         </p>
         <p>
