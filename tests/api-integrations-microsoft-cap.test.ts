@@ -208,4 +208,66 @@ describe("microsoft callback: insert race settlement", () => {
     expect(settleWorkspaceConnectionInsert).not.toHaveBeenCalled();
     expect(res.headers.get("location") ?? "").toContain("workspace=connected");
   });
+
+describe("connecting a SECOND, different Outlook account", () => {
+  function callbackRequest() {
+    const state = createMicrosoftOAuthState(BIZ);
+    return new Request(
+      `http://localhost/api/integrations/microsoft/callback?code=abc&state=${encodeURIComponent(state)}`
+    );
+  }
+
+  it("inserts a new row and leaves the first account's row alone", async () => {
+    // The reported symptom was that a second Outlook account replaced the
+    // first. This walks the whole callback with an existing PERSONAL account
+    // row and a work account arriving: different id, different aliases, room
+    // under the cap.
+    vi.mocked(exchangeMicrosoftAuthCode).mockResolvedValue({
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: new Date("2026-08-13T12:00:00Z"),
+      scope: "Mail.Send",
+      idTokenEmail: "team@newcoworker.onmicrosoft.com"
+    });
+    vi.mocked(fetchMicrosoftIdentity).mockResolvedValue({
+      accountId: "work-account-id",
+      email: "team@newcoworker.onmicrosoft.com",
+      displayName: "Team",
+      aliases: ["team@newcoworker.onmicrosoft.com"]
+    });
+    vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
+      used: 2,
+      max: 3,
+      atCap: false
+    });
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      outlookRow({
+        id: "personal-row",
+        transport: "direct",
+        metadata: {
+          provider_account_email: "outlook_5c3966be918a1c30@outlook.com",
+          provider_account_id: "personal-account-id",
+          provider_account_aliases: ["outlook_5c3966be918a1c30@outlook.com"]
+        }
+      })
+    ] as never);
+    vi.mocked(assertWorkspaceConnectionAllowed).mockResolvedValue(undefined as never);
+    vi.mocked(insertDirectWorkspaceConnection).mockResolvedValue(
+      outlookRow({ id: "work-row", transport: "direct" }) as never
+    );
+    vi.mocked(settleWorkspaceConnectionInsert).mockResolvedValue({
+      state: { used: 3, max: 3, atCap: true },
+      evictRowId: null
+    });
+
+    const res = await CALLBACK(callbackRequest());
+
+    // A new row, and the first account untouched: not flipped, not deleted.
+    expect(insertDirectWorkspaceConnection).toHaveBeenCalled();
+    expect(flipWorkspaceConnectionToDirect).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(res.headers.get("location") ?? "").toContain("workspace=connected");
+  });
+});
+
 });
