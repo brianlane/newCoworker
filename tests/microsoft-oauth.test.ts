@@ -377,7 +377,9 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: "u1",
       email: "sam@acme.com",
-      displayName: "Sam"
+      displayName: "Sam",
+      // Every representation, so reconnect can match a row labeled with any.
+      aliases: ["sam@acme.com", "sam@acme.onmicrosoft.com"]
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -400,7 +402,8 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: "u1",
       email: null,
-      displayName: null
+      displayName: null,
+      aliases: []
     });
   });
 
@@ -416,7 +419,8 @@ describe("fetchMicrosoftIdentity", () => {
     await expect(fetchMicrosoftIdentity("at")).resolves.toEqual({
       accountId: null,
       email: null,
-      displayName: null
+      displayName: null,
+      aliases: []
     });
   });
 

@@ -68,6 +68,20 @@ function accountEmailOf(row: WorkspaceOAuthConnectionRow): string | null {
   return typeof value === "string" && value.length > 0 ? value.toLowerCase() : null;
 }
 
+/**
+ * Every address a row is known by: its label plus any aliases recorded at
+ * connect time. Rows written before aliases existed have just the label, which
+ * is exactly the legacy case this set exists to match against.
+ */
+function accountAliasesOf(row: WorkspaceOAuthConnectionRow): string[] {
+  const stored = row.metadata?.provider_account_aliases;
+  const list = Array.isArray(stored)
+    ? stored.filter((v): v is string => typeof v === "string" && v.length > 0)
+    : [];
+  const label = accountEmailOf(row);
+  return [...new Set([...(label ? [label] : []), ...list.map((v) => v.toLowerCase())])];
+}
+
 function oldestFirst(
   rows: readonly WorkspaceOAuthConnectionRow[]
 ): WorkspaceOAuthConnectionRow[] {
@@ -103,10 +117,16 @@ export function findReconnectTarget(
   accountEmail: string,
   capMax: number | null,
   providerKeys: readonly string[],
-  accountId: string | null = null
+  accountId: string | null = null,
+  aliases: readonly string[] = []
 ): ReconnectDecision {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return { kind: "new" };
+
+  // Every representation the incoming account answers to. A personal Microsoft
+  // account's synthetic outlook_<CID>@outlook.com lives here alongside the real
+  // address, which is what lets a row labeled with either one still match.
+  const wantedSet = new Set([wanted, ...aliases.map((a) => a.trim().toLowerCase()).filter(Boolean)]);
 
   const providerRows = rows.filter((r) => providerKeys.includes(r.provider_config_key));
   if (providerRows.length === 0) return { kind: "new" };
@@ -124,9 +144,13 @@ export function findReconnectTarget(
     if (byId.length > 0) return { kind: "reconnect", row: byId[0], matchedBy: "account_id" };
   }
 
-  // 2. The row says who it is. Oldest wins: that is the row flows have had
-  //    longest to bind to.
-  const labeled = oldestFirst(providerRows.filter((r) => accountEmailOf(r) === wanted));
+  // 2. The row says who it is. Compared as SETS, so a row labeled with one
+  //    representation of the account still matches a connect that resolved a
+  //    different one. Oldest wins: that is the row flows have had longest to
+  //    bind to.
+  const labeled = oldestFirst(
+    providerRows.filter((r) => accountAliasesOf(r).some((a) => wantedSet.has(a)))
+  );
   if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
 
   const soleUnlabeled =

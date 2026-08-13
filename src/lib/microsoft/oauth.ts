@@ -359,6 +359,20 @@ export type MicrosoftAccountIdentity = {
   accountId: string | null;
   email: string | null;
   displayName: string | null;
+  /**
+   * EVERY address this account answers to, lowercased and deduped, including
+   * the synthetic `outlook_<CID>@outlook.com` UPN.
+   *
+   * Reconnect matching needs this, not just the primary. A mailbox connected
+   * through Nango before this existed was labeled with whatever that probe
+   * resolved, which for a personal account is the synthetic UPN. Now that we
+   * resolve the owner's real address instead, the two representations of one
+   * account no longer compare equal, and matching on the primary alone would
+   * read a reconnect as a new account, duplicate the row, and strand the flows
+   * bound to the old one. Carrying the whole set makes the comparison
+   * representation-independent.
+   */
+  aliases: string[];
 };
 
 /**
@@ -428,12 +442,21 @@ export async function fetchMicrosoftIdentity(
     firstNonEmpty(idTokenEmail) ??
     otherMails[0] ??
     firstNonEmpty(body?.userPrincipalName);
+  const aliases = [
+    ...new Set(
+      [firstNonEmpty(body?.mail), firstNonEmpty(idTokenEmail), ...otherMails, firstNonEmpty(body?.userPrincipalName)]
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+        .map((v) => v.toLowerCase())
+    )
+  ];
+
   return {
     accountId: typeof body?.id === "string" ? body.id : null,
     email,
     displayName:
       typeof body?.displayName === "string" && body.displayName.length > 0
         ? body.displayName
-        : null
+        : null,
+    aliases
   };
 }

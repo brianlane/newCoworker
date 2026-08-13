@@ -157,7 +157,8 @@ export async function GET(request: Request) {
       accountEmail,
       capState.max,
       OUTLOOK_KEYS,
-      identity.accountId
+      identity.accountId,
+      identity.aliases
     );
 
     if (decision.kind === "verify") {
@@ -196,7 +197,11 @@ export async function GET(request: Request) {
       connected_via: "microsoft_oauth",
       provider_account_email: identity.email,
       ...(identity.displayName ? { provider_account_display_name: identity.displayName } : {}),
-      ...(identity.accountId ? { provider_account_id: identity.accountId } : {})
+      ...(identity.accountId ? { provider_account_id: identity.accountId } : {}),
+      // Kept so a later connect that resolves a DIFFERENT representation of
+      // this same account (the synthetic UPN vs the real address) still matches
+      // this row instead of duplicating it.
+      ...(identity.aliases.length > 0 ? { provider_account_aliases: identity.aliases } : {})
     };
 
     if (existing) {
