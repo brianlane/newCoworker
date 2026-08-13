@@ -196,7 +196,8 @@ export async function GET(request: Request) {
       await listWorkspaceOAuthConnections(verified.businessId),
       accountEmail,
       capState.max,
-      GOOGLE_KEYS
+      GOOGLE_KEYS,
+      identity.accountId
     );
 
     if (decision.kind === "verify") {
@@ -298,7 +299,8 @@ export async function GET(request: Request) {
         await listWorkspaceOAuthConnections(verified.businessId),
         inserted.id,
         accountEmail,
-        GOOGLE_KEYS
+        GOOGLE_KEYS,
+        identity.accountId
       );
       if (duplicateOf) {
         await deleteWorkspaceOAuthConnection(verified.businessId, inserted.id);
