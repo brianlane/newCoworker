@@ -83,7 +83,7 @@ take effect on the tenant's next deploy.
 | Cloudflare | Tunnel ingress, email routing | Global edge | Traffic in transit (TLS) |
 | Stripe | Billing | US | Owner billing PII only (no tenant customer content) |
 | Resend | Owner transactional email | US | Owner notification content |
-| Nango | Calendar/email OAuth proxy | US | Calendar/email payloads during tool calls |
+| Nango | Calendar/email OAuth proxy, **Microsoft only** | US | Microsoft calendar/email payloads during tool calls. Google moved to first-party OAuth Aug 2026, so no Google Workspace data reaches Nango. |
 | Hostinger / OVHcloud | Box hosting (per placement) | US / Canada | Full box contents (platform-owned placements) |
 
 **Voice caveat (state it plainly in the deal):** live call audio is
