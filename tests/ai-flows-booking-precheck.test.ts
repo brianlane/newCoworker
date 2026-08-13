@@ -327,6 +327,52 @@ describe("bookingPrecheckForRun user URI", () => {
 });
 
 describe("bookingPrecheckForRun multi-account (several linked Calendly)", () => {
+  it("a REFUSED first account does not stop the search; the second account's booking is found", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const request = vi.fn(
+      async (
+        _b: string,
+        conn: { connectionId: string },
+        config: { endpoint: string }
+      ) => {
+        // James's token is revoked: every call on his connection refuses.
+        if (conn.connectionId === "cx-1") return null;
+        if (config.endpoint === "/users/me") {
+          return { data: { resource: { uri: USER_URI } } };
+        }
+        return { data: { collection: [{ uri: "e-liz" }] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listCalendlyConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+      getCachedUserUri: vi.fn().mockResolvedValue(null)
+    });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result.booked).toBe(true);
+  });
+
+  it("only when EVERY account refuses does the check degrade to calendly_refused", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const d = deps({
+      request: vi.fn().mockResolvedValue(null),
+      listCalendlyConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+      getCachedUserUri: vi.fn().mockResolvedValue(null)
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toMatchObject({
+      booked: false,
+      reason: "calendly_refused"
+    });
+  });
+
   it("finds a booking on the SECOND account when the first has none", async () => {
     const CONN_LIZ = {
       provider: "calendly" as const,

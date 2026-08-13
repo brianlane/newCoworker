@@ -462,6 +462,12 @@ export async function sweepCalendlyBookingGoals(
           )
           .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
         result.bookings += bookings.length;
+        // This account READ successfully — stamp it before the zero-bookings
+        // early-out, or a quiet account plus one dead account would count as
+        // "every account failed" and misfile the sweep as a business-level
+        // failure (Bugbot Medium on PR #1349).
+        accountsSucceeded += 1;
+        bookingsSeen += bookings.length;
         if (bookings.length === 0) continue;
 
         // Invitee identities across this business's fresh bookings. The cap
@@ -501,9 +507,6 @@ export async function sweepCalendlyBookingGoals(
             ...(((invRes.data as { collection?: CalendlyBookingInvitee[] })?.collection) ?? [])
           );
         }
-
-        accountsSucceeded += 1;
-        bookingsSeen += bookings.length;
       } catch (err) {
         // One account failing (revoked PAT, Calendly 5xx) must not
         // starve the other accounts' bookings; the business-level

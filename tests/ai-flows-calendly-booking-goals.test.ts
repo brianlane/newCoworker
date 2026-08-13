@@ -529,6 +529,36 @@ describe("sweepCalendlyBookingGoals", () => {
     });
   });
 
+  it("multi-account: a QUIET account plus a dead one is not a business-level failure", async () => {
+    const CONN_DEAD = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-dead"
+    };
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1", created_at: isoAgoMin(1) }] }]
+    });
+    const request = vi.fn(
+      async (_b: string, conn: { connectionId: string }, config: { endpoint: string }) => {
+        if (conn.connectionId === "cx-dead") throw new Error("calendar_not_connected");
+        if (config.endpoint === "/users/me") return USER_RES;
+        // James's account reads fine but holds no fresh bookings.
+        return { data: { collection: [] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listConnections: vi.fn().mockResolvedValue([CONN, CONN_DEAD])
+    });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    // The quiet read counts as a success, so the dead account only warns.
+    expect(result).toMatchObject({ swept: 1, bookings: 0, goalsFired: 0 });
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_booking_goal_sweep_failed" })
+    );
+  });
+
   it("no young run: the same old future-start booking stays out of the firing set", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1")] }],

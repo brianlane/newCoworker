@@ -190,6 +190,7 @@ export async function bookingPrecheckForRun(
   const lookupConns = conns.length > 0 ? conns : [conn];
 
   let booked = false;
+  let anyOk = false;
   try {
     for (const lookupConn of lookupConns) {
       const res = await lookupProviderBookingsForAttendee(
@@ -199,12 +200,18 @@ export async function bookingPrecheckForRun(
         deps,
         { mode: "existence" }
       );
-      if (!res.ok) return none(refusedReason);
+      // A refused account must not stop the search: another linked account
+      // may hold the booking, and skipping it would fail-open a send to a
+      // lead who already booked (Bugbot High on PR #1349). Only when EVERY
+      // account refused does the whole check degrade to the refusal reason.
+      if (!res.ok) continue;
+      anyOk = true;
       if (res.bookings.length > 0) {
         booked = true;
         break;
       }
     }
+    if (!anyOk) return none(refusedReason);
   } catch (err) {
     // Vagaro and Acuity transport trouble surfaces as a throw (see the
     // shared module's failure contract); fail open exactly as before the
