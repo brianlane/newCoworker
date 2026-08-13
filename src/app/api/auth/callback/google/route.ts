@@ -231,6 +231,21 @@ export async function GET(request: Request) {
       // App-owned keys (the shared-calendar id and its ACL) must survive a
       // reconnect, so start from what the row already had.
       ...(existing?.metadata ?? {}),
+      // Coming FROM Nango, record the connection id being replaced.
+      //
+      // The flip overwrites connection_id with a synthetic direct:<uuid>, so
+      // this is the only remaining pointer to the Nango grant, which is left
+      // alive. Two things need it: a rollback has to know what to restore, and
+      // debug/nango-audit.ts uses it to tell a deliberately-retained rollback
+      // grant from a genuine orphan it should reclaim. Without it the audit
+      // offers to delete the one thing that makes this reversible.
+      ...(existing?.transport === "nango"
+        ? {
+            migrated_from_nango_connection_id: existing.connection_id,
+            migrated_from_provider_config_key: existing.provider_config_key,
+            migrated_at: new Date().toISOString()
+          }
+        : {}),
       connected_via: "google_oauth",
       provider_account_email: identity.email,
       ...(identity.displayName ? { provider_account_display_name: identity.displayName } : {}),
