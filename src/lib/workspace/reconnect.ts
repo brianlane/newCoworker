@@ -151,6 +151,28 @@ export function findReconnectTarget(
   const providerRows = rows.filter((r) => providerKeys.includes(r.provider_config_key));
   if (providerRows.length === 0) return { kind: "new" };
 
+  // A DIFFERENT account id is conclusive, and vetoes everything below.
+  //
+  // Alias overlap is not proof of sameness: two genuinely distinct accounts can
+  // list the same address. A work/school account and a personal Microsoft
+  // account can both answer at team@newcoworker.com, the work one via
+  // otherMails and the personal one as its primary, while being different
+  // mailboxes with different ids. Matching on the shared alias re-pointed a
+  // live row at the other mailbox, which is the worst outcome available here:
+  // flows keep their binding and silently start sending from an account the
+  // owner never chose.
+  //
+  // So when BOTH sides carry an id and they differ, that row is out. Rows with
+  // no id at all stay eligible, which is what keeps the legacy Nango migration
+  // working: those rows never got one.
+  const candidates = accountId
+    ? providerRows.filter((r) => {
+        const rowId = accountIdOf(r);
+        return rowId === null || rowId === accountId;
+      })
+    : providerRows;
+  if (candidates.length === 0) return { kind: "new" };
+
   // 1. The provider's own account id, when both sides have one.
   //
   //    Preferred over the email because it is the part of an account's identity
@@ -160,7 +182,7 @@ export function findReconnectTarget(
   //    is the SAME mailbox; matching on email alone would read that reconnect as a
   //    brand-new account and strand every flow on the old row.
   if (accountId) {
-    const byId = oldestFirst(providerRows.filter((r) => accountIdOf(r) === accountId));
+    const byId = oldestFirst(candidates.filter((r) => accountIdOf(r) === accountId));
     if (byId.length > 0) return { kind: "reconnect", row: byId[0], matchedBy: "account_id" };
   }
 
@@ -169,12 +191,12 @@ export function findReconnectTarget(
   //    different one. Oldest wins: that is the row flows have had longest to
   //    bind to.
   const labeled = oldestFirst(
-    providerRows.filter((r) => accountAliasesOf(r).some((a) => wantedSet.has(a)))
+    candidates.filter((r) => accountAliasesOf(r).some((a) => wantedSet.has(a)))
   );
   if (labeled.length > 0) return { kind: "reconnect", row: labeled[0], matchedBy: "account_email" };
 
   const soleUnlabeled =
-    providerRows.length === 1 && accountEmailOf(providerRows[0]) === null ? providerRows[0] : null;
+    candidates.length === 1 && accountEmailOf(candidates[0]) === null ? candidates[0] : null;
   if (!soleUnlabeled) return { kind: "new" };
 
   // 3. One seat, one row: a second mailbox is impossible, so this is it.
@@ -231,15 +253,22 @@ export function findDuplicateRow(
   rows: readonly WorkspaceOAuthConnectionRow[],
   insertedRowId: string,
   accountEmail: string,
-  providerKeys: readonly string[]
+  providerKeys: readonly string[],
+  accountId: string | null = null
 ): WorkspaceOAuthConnectionRow | null {
   const wanted = accountEmail.trim().toLowerCase();
   if (wanted.length === 0) return null;
 
+  // Same veto as findReconnectTarget, for the same reason: this path deletes a
+  // row and flips another, so a false match here does the identical damage.
   const sameAccount = oldestFirst(
-    rows.filter(
-      (r) => providerKeys.includes(r.provider_config_key) && accountEmailOf(r) === wanted
-    )
+    rows.filter((r) => {
+      if (!providerKeys.includes(r.provider_config_key)) return false;
+      if (accountEmailOf(r) !== wanted) return false;
+      if (!accountId) return true;
+      const rowId = accountIdOf(r);
+      return rowId === null || rowId === accountId;
+    })
   );
   if (sameAccount.length < 2) return null;
 

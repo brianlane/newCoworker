@@ -460,4 +460,91 @@ describe("identitySet", () => {
   });
 });
 
+
+describe("a different account id vetoes an alias overlap", () => {
+  // Found in production: a work/school row and a personal Microsoft account
+  // both answering at team@newcoworker.com, the work one via otherMails. Alias
+  // matching collapsed them and re-pointed the live row at the other mailbox,
+  // so flows kept their binding and would have started sending from an account
+  // the owner never chose. Worse than the duplicate it was avoiding.
+  const WORK_ID = "4ffc09dd-f1b2-4e9c-b6b1-10040358b815";
+  const PERSONAL_ID = "5c3966be918a1c30";
+
+  const workRow = row({
+    id: "work-row",
+    metadata: {
+      provider_account_email: "team@newcoworker.onmicrosoft.com",
+      provider_account_id: WORK_ID,
+      provider_account_aliases: ["team@newcoworker.onmicrosoft.com", "team@newcoworker.com"]
+    }
+  });
+
+  it("inserts rather than reconnecting when the ids differ", () => {
+    const d = findReconnectTarget([workRow], "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, PERSONAL_ID, [
+      "team@newcoworker.com"
+    ]);
+    expect(d.kind).toBe("new");
+  });
+
+  it("still reconnects the SAME account through a shared alias", () => {
+    const d = findReconnectTarget(
+      [workRow],
+      "team@newcoworker.onmicrosoft.com",
+      ROOMY,
+      OUTLOOK_KEYS,
+      WORK_ID,
+      ["team@newcoworker.onmicrosoft.com"]
+    );
+    expect(d.kind === "reconnect" && d.row.id).toBe("work-row");
+  });
+
+  it("leaves ID-LESS legacy rows eligible, so the Nango migration still works", () => {
+    // The whole point of alias matching. A Nango row never got an account id,
+    // so it must not be vetoed by one.
+    const legacy = row({
+      id: "legacy",
+      metadata: { provider_account_email: "outlook_5c3966be918a1c30@outlook.com" }
+    });
+    const d = findReconnectTarget([legacy], "team@newcoworker.com", ROOMY, OUTLOOK_KEYS, PERSONAL_ID, [
+      "outlook_5c3966be918a1c30@outlook.com",
+      "team@newcoworker.com"
+    ]);
+    expect(d.kind === "reconnect" && d.row.id).toBe("legacy");
+  });
+
+  it("does not adopt a provably different account even at a one-seat cap", () => {
+    // The cap shortcut assumes the sole row must be the one being reconnected.
+    // A known-different id disproves that, and adopting would hand the seat to
+    // the wrong mailbox.
+    const other = row({ id: "other", metadata: { provider_account_id: WORK_ID } });
+    expect(
+      findReconnectTarget([other], "team@newcoworker.com", ONE_SEAT, OUTLOOK_KEYS, PERSONAL_ID).kind
+    ).toBe("new");
+  });
+
+  it("does not consolidate onto a different account's row after insert", () => {
+    const rows = [
+      // A same-address row for ANOTHER provider must be skipped before the id
+      // veto is even consulted.
+      row({ id: "google-row", provider_config_key: "google",
+            metadata: { provider_account_email: "team@newcoworker.com" } }),
+      row({ id: "theirs", created_at: "2026-01-01T00:00:00Z",
+            metadata: { provider_account_email: "team@newcoworker.com", provider_account_id: WORK_ID } }),
+      row({ id: "mine", created_at: "2026-08-13T00:00:00Z",
+            metadata: { provider_account_email: "team@newcoworker.com", provider_account_id: PERSONAL_ID } })
+    ];
+    expect(findDuplicateRow(rows, "mine", "team@newcoworker.com", OUTLOOK_KEYS, PERSONAL_ID)).toBeNull();
+  });
+
+  it("still consolidates a true duplicate of the SAME account", () => {
+    const rows = [
+      row({ id: "theirs", created_at: "2026-01-01T00:00:00Z",
+            metadata: { provider_account_email: "team@newcoworker.com", provider_account_id: PERSONAL_ID } }),
+      row({ id: "mine", created_at: "2026-08-13T00:00:00Z",
+            metadata: { provider_account_email: "team@newcoworker.com", provider_account_id: PERSONAL_ID } })
+    ];
+    expect(findDuplicateRow(rows, "mine", "team@newcoworker.com", OUTLOOK_KEYS, PERSONAL_ID)?.id).toBe("theirs");
+  });
+});
+
 });
