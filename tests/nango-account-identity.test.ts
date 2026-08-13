@@ -131,14 +131,18 @@ describe("fetchProviderAccountIdentity", () => {
     });
   });
 
-  it("microsoft: an id with no mail and no name still identifies the account", async () => {
-    // Graph permits a principal with neither a usable address nor a display
-    // name; the id alone is enough for the reconnect id comparison.
+  it("microsoft: an id alone is a FAILED probe, not an identity", async () => {
+    // Bugbot on #1355. If an id-only payload counted as success, the nango
+    // complete route's wholesale identity replace would wipe the stored email
+    // and display name off a live row on re-complete: labels vanish from
+    // every surface, and at-cap consolidation (keyed on identity.email)
+    // silently never runs. The id ENRICHES a probe that resolved a name for
+    // the account; it must never turn a nameless payload into one.
     mockProxy.mockResolvedValue({ data: { id: "graph-object-2" } });
     await expect(fetchProviderAccountIdentity(BIZ, link("outlook"))).resolves.toEqual({
       email: null,
       displayName: null,
-      accountId: "graph-object-2"
+      accountId: null
     });
   });
 

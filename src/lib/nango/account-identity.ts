@@ -64,9 +64,12 @@ function extractGraphMe(data: unknown): ProviderAccountIdentity | null {
   const o = asRecord(data);
   const email = nonEmpty(o.mail) ?? nonEmpty(o.userPrincipalName);
   const displayName = nonEmpty(o.displayName);
-  const accountId = nonEmpty(o.id);
-  if (!email && !displayName && !accountId) return null;
-  return { email, displayName, accountId };
+  // An id alone is a FAILED probe, never an identity. Success here feeds the
+  // complete route's wholesale identity replace, so counting a nameless
+  // payload as success would wipe the stored email off a live row on
+  // re-complete. The id only ENRICHES a probe that resolved a name.
+  if (!email && !displayName) return null;
+  return { email, displayName, accountId: nonEmpty(o.id) };
 }
 
 /** Zoom /v2/users/me. */
