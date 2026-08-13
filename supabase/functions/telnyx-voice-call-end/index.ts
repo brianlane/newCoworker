@@ -874,13 +874,18 @@ async function speakVoicemail(
 async function decorateTranscriptForVoicemail(
   supabase: SupabaseClient,
   callControlId: string,
-  opts: { voicemailLeft: boolean; script: string }
+  opts: { voicemailLeft: boolean; script: string; endedAtIso: string }
 ): Promise<void> {
   const { data: rows, error } = await supabase
     .from("voice_call_transcripts")
     .update({
       answering_machine_result: "machine",
-      voicemail_left: opts.voicemailLeft
+      voicemail_left: opts.voicemailLeft,
+      // Overwrites the bridge's finalize stamp, which dates from the
+      // streaming stop BEFORE the message was spoken; without this the
+      // dashboard duration excludes the voicemail itself (Bugbot, #1335).
+      ended_at: opts.endedAtIso,
+      updated_at: opts.endedAtIso
     })
     .eq("call_control_id", callControlId)
     .select("id");
@@ -1095,10 +1100,16 @@ async function handleHandoffLifecycle(
       // the mid-call stamp in stampMachine, which raced row creation for its
       // whole life and silently matched zero rows.
       if (machine) {
+        // The bridge finalized ended_at when the media stream stopped, which
+        // on a voicemail call is BEFORE the message plays: the recorded span
+        // covered only the machine's greeting. The hangup is the true end, so
+        // re-stamp it from the webhook's own end_time (wall clock as backstop).
+        const endMs = Date.parse(String(payload["end_time"] ?? ""));
         await decorateTranscriptForVoicemail(supabase, callControlId, {
           voicemailLeft: obCtx.voicemail_spoken === true,
           script:
-            typeof obCtx.voicemail?.script === "string" ? obCtx.voicemail.script.trim() : ""
+            typeof obCtx.voicemail?.script === "string" ? obCtx.voicemail.script.trim() : "",
+          endedAtIso: new Date(Number.isFinite(endMs) ? endMs : Date.now()).toISOString()
         });
       }
       const outcome = obCtx.transfer_initiated === true
