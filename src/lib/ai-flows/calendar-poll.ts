@@ -41,6 +41,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { workspaceProxyForBusiness, type WorkspaceLink } from "@/lib/workspace/proxy";
 import {
   isWorkspaceCalendarProvider,
+  listCalendlyCalendarConnections,
   resolveCalendarConnection,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
@@ -55,6 +56,7 @@ import {
   type CalendarEventInput
 } from "@/lib/ai-flows/trigger-eval";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { logger } from "@/lib/logger";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
@@ -1021,6 +1023,11 @@ export async function pollCalendarTriggers(
         // on Calendly — shared-only flows quietly see no events). Windows
         // mirror the workspace path; the due filter is the poller's own
         // logic so invitee enrichment is spent only on events that can fire.
+        // EVERY linked Calendly account is polled (a business can connect
+        // several — e.g. a teammate's own Calendly) and the events union;
+        // per-account failures degrade to the other accounts rather than
+        // failing the business (first error is rethrown only when NO
+        // account could be read, preserving the escalation contract).
         const primaryFlows = group.filter((f) => f.sources.includes("primary"));
         if (primaryFlows.length > 0) {
           const leads = primaryFlows
@@ -1029,37 +1036,63 @@ export async function pollCalendarTriggers(
           const follows = primaryFlows
             .filter((f) => f.on === "event_end")
             .map((f) => f.followMinutes);
-          const fetched = await fetchCalendlyCandidateEvents({
-            businessId,
-            conn,
-            nowMs,
-            windows: {
-              createdScan: primaryFlows.some((f) => f.on === "event_created"),
-              startHorizonMinutes:
-                leads.length > 0
-                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
-                  : null,
-              endBackMinutes:
-                follows.length > 0
-                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
-                  : null,
-              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
-            },
-            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
-          });
-          if (fetched.overflowed) {
-            await recordSystemLog({
-              businessId,
-              source: "aiflow",
-              level: "warn",
-              event: "ai_flow_calendar_poll_overflow",
-              message:
-                "Calendly poll hit a listing/enrichment cap this tick; remainder deferred to later polls",
-              payload: { calendar: "primary", events_read: fetched.events.length }
-            });
+          const windows = {
+            createdScan: primaryFlows.some((f) => f.on === "event_created"),
+            startHorizonMinutes:
+              leads.length > 0
+                ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                : null,
+            endBackMinutes:
+              follows.length > 0
+                ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                : null,
+            canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+          };
+          const conns = await listCalendlyCalendarConnections(businessId);
+          /* c8 ignore next -- resolveCalendarConnection returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
+          const pollConns = conns.length > 0 ? conns : [conn];
+          const unioned: CalendarEventInput[] = [];
+          const seenIds = new Set<string>();
+          let firstError: unknown = null;
+          let succeeded = 0;
+          for (const pollConn of pollConns) {
+            try {
+              const fetched = await fetchCalendlyCandidateEvents({
+                businessId,
+                conn: pollConn,
+                nowMs,
+                windows,
+                dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
+              });
+              succeeded += 1;
+              if (fetched.overflowed) {
+                await recordSystemLog({
+                  businessId,
+                  source: "aiflow",
+                  level: "warn",
+                  event: "ai_flow_calendar_poll_overflow",
+                  message:
+                    "Calendly poll hit a listing/enrichment cap this tick; remainder deferred to later polls",
+                  payload: { calendar: "primary", events_read: fetched.events.length }
+                });
+              }
+              for (const ev of fetched.events) {
+                if (seenIds.has(ev.id)) continue;
+                seenIds.add(ev.id);
+                unioned.push(ev);
+              }
+            } catch (err) {
+              firstError ??= err;
+              logger.warn("calendar poll: calendly account read failed", {
+                businessId,
+                connectionId: pollConn.connectionId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
           }
-          eventsBySource.set("primary", fetched.events);
-          result.events += fetched.events.length;
+          if (succeeded === 0 && firstError !== null) throw firstError;
+          eventsBySource.set("primary", unioned);
+          result.events += unioned.length;
         }
       } else if (conn.provider === "vagaro") {
         // Vagaro branch: one "primary" source (no shared-calendar concept,

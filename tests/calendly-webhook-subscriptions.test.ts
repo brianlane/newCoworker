@@ -12,6 +12,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
+  CALENDLY_DIRECT_KEY: "calendly-direct",
   resolveCalendarConnection: vi.fn()
 }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
@@ -144,6 +145,7 @@ describe("ensureCalendlyWebhookSubscription", () => {
     expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
       {
         businessId: BIZ,
+        connectionId: CONN.connectionId,
         status: "active",
         subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
         signingKey: "sk-secret",
@@ -295,6 +297,7 @@ describe("ensureCalendlyWebhookSubscription", () => {
     expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
       {
         businessId: BIZ,
+        connectionId: CONN.connectionId,
         status: "active",
         subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
         signingKey: sentKey,
@@ -327,6 +330,7 @@ describe("ensureCalendlyWebhookSubscription", () => {
       expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
         {
           businessId: BIZ,
+          connectionId: CONN.connectionId,
           status: "error",
           subscriptionUri: undefined,
           signingKey: undefined,
@@ -597,7 +601,7 @@ describe("teardownCalendlyWebhookSubscription", () => {
 
   it("is a no-op when no row exists", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
-    await teardownCalendlyWebhookSubscription(BIZ, {}, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, {}, db);
     expect(deleteCalendlyWebhookSubscription).not.toHaveBeenCalled();
   });
 
@@ -611,16 +615,15 @@ describe("teardownCalendlyWebhookSubscription", () => {
       last_attempt_at: new Date(NOW).toISOString()
     } as never);
     const request = vi.fn().mockResolvedValue({ data: null });
-    const resolveConnection = vi.fn().mockResolvedValue(CONN);
-    await teardownCalendlyWebhookSubscription(BIZ, { request, resolveConnection }, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, { request }, db);
     expect(request).toHaveBeenCalledWith(BIZ, CONN, {
       endpoint: "/webhook_subscriptions/WH1",
       method: "DELETE"
     });
-    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, db);
+    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, CONN.connectionId, db);
   });
 
-  it("skips the remote delete when the calendar no longer resolves to Calendly", async () => {
+  it("builds the remote-delete conn from the CONNECTION id (never the primary)", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue({
       id: "cws-1",
       business_id: BIZ,
@@ -629,11 +632,14 @@ describe("teardownCalendlyWebhookSubscription", () => {
       signingKey: "sk-secret",
       last_attempt_at: new Date(NOW).toISOString()
     } as never);
-    const request = vi.fn();
-    const resolveConnection = vi.fn().mockResolvedValue(null);
-    await teardownCalendlyWebhookSubscription(BIZ, { request, resolveConnection }, db);
-    expect(request).not.toHaveBeenCalled();
-    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, db);
+    const request = vi.fn().mockResolvedValue({ data: null });
+    await teardownCalendlyWebhookSubscription(BIZ, "cx-other", { request }, db);
+    expect(request).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ connectionId: "cx-other" }),
+      expect.objectContaining({ method: "DELETE" })
+    );
+    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, "cx-other", db);
   });
 
   it("still drops the row when the remote delete fails (warn only)", async () => {
@@ -647,8 +653,7 @@ describe("teardownCalendlyWebhookSubscription", () => {
       last_attempt_at: new Date(NOW).toISOString()
     } as never);
     const request = vi.fn().mockRejectedValue(new Error("api down"));
-    const resolveConnection = vi.fn().mockResolvedValue(CONN);
-    await teardownCalendlyWebhookSubscription(BIZ, { request, resolveConnection }, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, { request }, db);
     expect(request).toHaveBeenCalledWith(BIZ, CONN, {
       endpoint: "/webhook_subscriptions/WH1",
       method: "DELETE"
@@ -657,11 +662,11 @@ describe("teardownCalendlyWebhookSubscription", () => {
       "calendly webhook remote delete failed",
       expect.objectContaining({ businessId: BIZ, error: "api down" })
     );
-    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, db);
+    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, CONN.connectionId, db);
 
     // Non-Error remote failures are stringified in the same warn.
     const requestStr = vi.fn().mockRejectedValue("flaky");
-    await teardownCalendlyWebhookSubscription(BIZ, { request: requestStr, resolveConnection }, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, { request: requestStr }, db);
     expect(logger.warn).toHaveBeenCalledWith(
       "calendly webhook remote delete failed",
       expect.objectContaining({ error: "flaky" })
@@ -678,23 +683,22 @@ describe("teardownCalendlyWebhookSubscription", () => {
       last_attempt_at: new Date(NOW).toISOString()
     } as never);
     const request = vi.fn();
-    await teardownCalendlyWebhookSubscription(BIZ, { request }, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, { request }, db);
     expect(request).not.toHaveBeenCalled();
-    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, db);
+    expect(deleteCalendlyWebhookSubscription).toHaveBeenCalledWith(BIZ, CONN.connectionId, db);
   });
 
   it("never throws (uses default deps): a read failure only warns", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockRejectedValue("string down");
-    await teardownCalendlyWebhookSubscription(BIZ, undefined, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, undefined, db);
     expect(logger.warn).toHaveBeenCalledWith(
       "calendly webhook teardown failed",
       expect.objectContaining({ businessId: BIZ, error: "string down" })
     );
-    expect(resolveCalendarConnection).not.toHaveBeenCalled();
 
     // Error failures report their message.
     vi.mocked(getCalendlyWebhookSubscription).mockRejectedValue(new Error("read blew up"));
-    await teardownCalendlyWebhookSubscription(BIZ, undefined, db);
+    await teardownCalendlyWebhookSubscription(BIZ, CONN.connectionId, undefined, db);
     expect(logger.warn).toHaveBeenCalledWith(
       "calendly webhook teardown failed",
       expect.objectContaining({ error: "read blew up" })

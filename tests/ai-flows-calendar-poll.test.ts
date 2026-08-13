@@ -4,6 +4,9 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
+  // Empty by default: the single-connection fallback in each consumer
+  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  listCalendlyCalendarConnections: vi.fn(async () => []),
   // Pure helper — real behavior inline so the guards under test stay honest.
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
 }));
@@ -45,7 +48,10 @@ import {
 } from "@/lib/ai-flows/calendar-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
-import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import {
+  listCalendlyCalendarConnections,
+  resolveCalendarConnection
+} from "@/lib/voice-tools/connections";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -759,6 +765,67 @@ describe("pollCalendarTriggers", () => {
     expect(enq).toMatchObject({ flowId: "f-start", dedupeKey: expect.stringContaining("cal:EV1:") });
     expect((enq.trigger as { windowText: string }).windowText).toContain(
       "invitee timezone: America/Toronto"
+    );
+  });
+
+  it("Calendly: polls EVERY linked account, unions + dedupes events, degrades per-account failures", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-james"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-james" },
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-liz" },
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-broken" }
+    ] as never);
+    const ev = (id: string) => ({
+      id,
+      title: "VFM Strategy",
+      startIso: isoIn(60),
+      endIso: isoIn(90),
+      attendees: [],
+      description: "",
+      calendar: "primary" as const
+    });
+    vi.mocked(fetchCalendlyCandidateEvents)
+      // James's account: EV1 + EVSHARED
+      .mockResolvedValueOnce({ events: [ev("EV1"), ev("EVSHARED")], overflowed: false })
+      // Liz's account: EV2 + EVSHARED again (dedupe by event id)
+      .mockResolvedValueOnce({ events: [ev("EV2"), ev("EVSHARED")], overflowed: false })
+      // Third account's transport dies with a NON-Error throw (covers the
+      // String(err) warn arm): degraded, not fatal.
+      .mockRejectedValueOnce("socket hiccup");
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    // 3 unique events across the accounts; the failing account only warns.
+    expect(res).toMatchObject({ businesses: 1, events: 3, enqueued: 3 });
+    const conns = vi
+      .mocked(fetchCalendlyCandidateEvents)
+      .mock.calls.map((c) => (c[0].conn as { connectionId: string }).connectionId);
+    expect(conns).toEqual(["cx-james", "cx-liz", "cx-broken"]);
+  });
+
+  it("Calendly: throws the first error when EVERY account fails (escalation contract kept)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-james"
+    } as never);
+    vi.mocked(listCalendlyCalendarConnections).mockResolvedValue([
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-james" }
+    ] as never);
+    vi.mocked(fetchCalendlyCandidateEvents).mockRejectedValue(
+      new Error("calendly_token_rejected")
+    );
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    // The business-level failure path ran: nothing enqueued, and the poll
+    // failure row carries the connection-class detail.
+    expect(res).toMatchObject({ businesses: 1, events: 0, enqueued: 0 });
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("calendly_token_rejected")
+      })
     );
   });
 

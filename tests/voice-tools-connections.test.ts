@@ -10,7 +10,8 @@ vi.mock("@/lib/db/acuity-connections", () => ({
   getActiveAcuityConnectionId: vi.fn()
 }));
 vi.mock("@/lib/db/calendly-connections", () => ({
-  getActiveCalendlyConnectionId: vi.fn()
+  getActiveCalendlyConnectionId: vi.fn(),
+  listActiveCalendlyConnections: vi.fn()
 }));
 vi.mock("@/lib/db/caldav-connections", () => ({
   getActiveCaldavConnectionId: vi.fn()
@@ -19,7 +20,10 @@ vi.mock("@/lib/db/caldav-connections", () => ({
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
-import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
+import {
+  getActiveCalendlyConnectionId,
+  listActiveCalendlyConnections
+} from "@/lib/db/calendly-connections";
 import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 import {
   CALDAV_DIRECT_KEY,
@@ -235,6 +239,21 @@ describe("resolveVoiceConnection", () => {
     const direct = await resolveCalendarConnection(businessId);
     expect(direct?.providerConfigKey).toBe(CALENDLY_DIRECT_KEY);
     expect(direct?.provider).toBe("calendly");
+  });
+});
+
+describe("listCalendlyCalendarConnections", () => {
+  it("maps every ACTIVE row to a resolved direct-Calendly conn, oldest first", async () => {
+    const { listCalendlyCalendarConnections } = await import("@/lib/voice-tools/connections");
+    vi.mocked(listActiveCalendlyConnections).mockResolvedValue([
+      { id: "cx-james" },
+      { id: "cx-liz" }
+    ] as never);
+    expect(await listCalendlyCalendarConnections("biz-1")).toEqual([
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-james" },
+      { provider: "calendly", providerConfigKey: "calendly-direct", connectionId: "cx-liz" }
+    ]);
+    expect(listActiveCalendlyConnections).toHaveBeenCalledWith("biz-1");
   });
 });
 

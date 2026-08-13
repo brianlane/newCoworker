@@ -20,7 +20,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 vi.mock("@/lib/db/custom-integrations", () => ({ listCustomIntegrations: vi.fn() }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getPublicVagaroConnection: vi.fn() }));
 vi.mock("@/lib/db/acuity-connections", () => ({ getPublicAcuityConnection: vi.fn() }));
-vi.mock("@/lib/db/calendly-connections", () => ({ getPublicCalendlyConnection: vi.fn() }));
+vi.mock("@/lib/db/calendly-connections", () => ({ listPublicCalendlyConnections: vi.fn() }));
 vi.mock("@/lib/db/caldav-connections", () => ({ getPublicCaldavConnection: vi.fn() }));
 vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
@@ -43,7 +43,7 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
-import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
+import { listPublicCalendlyConnections } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
@@ -82,7 +82,7 @@ beforeEach(() => {
   vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
   vi.mocked(listCustomIntegrations).mockResolvedValue([]);
   vi.mocked(getPublicVagaroConnection).mockResolvedValue(null);
-  vi.mocked(getPublicCalendlyConnection).mockResolvedValue(null);
+  vi.mocked(listPublicCalendlyConnections).mockResolvedValue([]);
   vi.mocked(getPublicCaldavConnection).mockResolvedValue(null);
   vi.mocked(getPublicMetaConnection).mockResolvedValue(null);
   vi.mocked(getPublicZoomConnection).mockResolvedValue(null);
@@ -119,7 +119,7 @@ describe("loadIntegrationsContext", () => {
     expect(listWorkspaceOAuthConnections).toHaveBeenCalledWith(BIZ);
     expect(listCustomIntegrations).toHaveBeenCalledWith(BIZ);
     expect(getPublicVagaroConnection).toHaveBeenCalledWith(BIZ);
-    expect(getPublicCalendlyConnection).toHaveBeenCalledWith(BIZ);
+    expect(listPublicCalendlyConnections).toHaveBeenCalledWith(BIZ);
     expect(getPublicCaldavConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicMetaConnection).toHaveBeenCalledWith(BIZ);
     expect(getPublicZoomConnection).toHaveBeenCalledWith(BIZ);
@@ -201,7 +201,7 @@ describe("loadIntegrationsContext", () => {
     expect(ctx.workspaceConnections).toEqual([]);
     expect(ctx.customIntegrations).toEqual([]);
     expect(ctx.vagaroConnection).toBeNull();
-    expect(ctx.calendlyConnection).toBeNull();
+    expect(ctx.calendlyConnections).toEqual([]);
     expect(ctx.caldavConnection).toBeNull();
     expect(ctx.metaConnection).toBeNull();
     expect(ctx.whatsappConnection).toBeNull();
@@ -233,7 +233,7 @@ describe("computeIntegrationStatuses", () => {
       workspaceConnections: [],
       customIntegrations: [],
       vagaroConnection: null,
-      calendlyConnection: null,
+      calendlyConnections: [],
       caldavConnection: null,
       metaConnection: null,
       whatsappConnection: null,
@@ -294,14 +294,20 @@ describe("computeIntegrationStatuses", () => {
       baseCtx({
         vagaroConnection: { id: "v" } as never,
         acuityConnection: { id: "a" } as never,
-        calendlyConnection: { id: "c" } as never,
+        calendlyConnections: [{ id: "c" }, { id: "c2" }] as never,
         caldavConnection: { id: "d" } as never
       })
     );
     expect(s.vagaro).toEqual({ state: "connected", label: "Connected" });
     expect(s.acuity).toEqual({ state: "connected", label: "Connected" });
-    expect(s.calendly).toEqual({ state: "connected", label: "Connected" });
+    expect(s.calendly).toEqual({ state: "connected", label: "2 accounts connected" });
     expect(s.caldav).toEqual({ state: "connected", label: "Connected" });
+
+    // A single Calendly account keeps the plain label.
+    const single = computeIntegrationStatuses(
+      baseCtx({ calendlyConnections: [{ id: "c" }] as never })
+    );
+    expect(single.calendly).toEqual({ state: "connected", label: "Connected" });
   });
 
   it("distinguishes active vs pending Meta connections", () => {

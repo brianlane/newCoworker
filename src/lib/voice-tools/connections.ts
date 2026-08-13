@@ -1,7 +1,10 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
-import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
+import {
+  getActiveCalendlyConnectionId,
+  listActiveCalendlyConnections
+} from "@/lib/db/calendly-connections";
 import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 
 /**
@@ -163,6 +166,25 @@ export async function resolveCalendarConnection(
   }
 
   return firstMatch(rows, FALLBACK_CALENDAR_KEYS);
+}
+
+/**
+ * EVERY active direct-Calendly connection as a resolved conn, oldest
+ * (primary) first. Booking-DETECTION surfaces (calendar-trigger poll,
+ * booking precheck/goals, attendee lookups) iterate these so a booking on
+ * ANY linked Calendly account is seen — a business can link several (e.g.
+ * a teammate's own Calendly). Single-calendar surfaces keep resolving
+ * through {@link resolveCalendarConnection}, which returns the primary.
+ */
+export async function listCalendlyCalendarConnections(
+  businessId: string
+): Promise<ResolvedVoiceConnection[]> {
+  const rows = await listActiveCalendlyConnections(businessId);
+  return rows.map((row) => ({
+    provider: "calendly" as const,
+    providerConfigKey: CALENDLY_DIRECT_KEY,
+    connectionId: row.id
+  }));
 }
 
 /**

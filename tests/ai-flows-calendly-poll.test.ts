@@ -13,7 +13,7 @@ vi.mock("@/lib/logger", () => ({
 // Default (non-injected) user-URI cache deps: empty cache, no-op persist —
 // existing tests keep probing /users/me exactly like before the cache landed.
 vi.mock("@/lib/db/calendly-connections", () => ({
-  getActiveCalendlyConnectionUserUri: vi.fn().mockResolvedValue(null),
+  getCalendlyConnectionUserUriById: vi.fn().mockResolvedValue(null),
   setCalendlyConnectionUserUri: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -597,7 +597,8 @@ describe("user-URI cache", () => {
       { request: fn, getCachedUserUri, persistUserUri }
     );
     expect(calls.some((c) => c.endpoint === "/users/me")).toBe(true);
-    expect(persistUserUri).toHaveBeenCalledWith(BIZ, "https://api.calendly.com/users/U1");
+    // The cache is keyed by the CONNECTION row id (multi-account).
+    expect(persistUserUri).toHaveBeenCalledWith(CONN.connectionId, "https://api.calendly.com/users/U1");
   });
 
   it("a cache read failure degrades to the probe; a persist failure is tolerated (Error and non-Error)", async () => {

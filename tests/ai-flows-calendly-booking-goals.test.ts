@@ -14,6 +14,7 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
+  listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
 }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
@@ -138,6 +139,7 @@ function deps(overrides: Partial<BookingGoalSweepDeps> = {}): BookingGoalSweepDe
   return {
     request: vi.fn().mockResolvedValue(null),
     resolveConnection: vi.fn().mockResolvedValue(CONN),
+    listConnections: vi.fn().mockResolvedValue([CONN]),
     applyGoal: vi.fn().mockResolvedValue({ jumpedRuns: 0 }),
     findByEmails: vi.fn().mockResolvedValue(new Map()),
     ...overrides
@@ -463,6 +465,98 @@ describe("sweepCalendlyBookingGoals", () => {
     expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+17808039935", {
       kind: "appointment_booked"
     });
+  });
+
+  it("multi-account: sweeps EVERY linked Calendly, unions bookings, degrades one dead account", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const CONN_DEAD = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-dead"
+    };
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1", created_at: isoAgoMin(1) }] }],
+      contacts: [{ data: null }, { data: null }]
+    });
+    const request = vi.fn(
+      async (_b: string, conn: { connectionId: string }, config: { endpoint: string }) => {
+        // Non-Error transport throw (covers the String(err) warn arm).
+        if (conn.connectionId === "cx-dead") throw "socket hiccup";
+        if (config.endpoint === "/users/me") return USER_RES;
+        if (config.endpoint === "/scheduled_events") {
+          return {
+            data: {
+              collection: [
+                conn.connectionId === "cx-liz"
+                  ? booking("EV-LIZ", isoAgoMin(5), isoAgoMin(-24 * 60))
+                  : booking("EV-JAMES", isoAgoMin(5), isoAgoMin(-24 * 60))
+              ]
+            }
+          };
+        }
+        return {
+          data: {
+            collection: [
+              {
+                status: "active",
+                text_reminder_number:
+                  conn.connectionId === "cx-liz" ? "+17808039936" : "+17808039935"
+              }
+            ]
+          }
+        };
+      }
+    );
+    const applyGoal = vi.fn().mockResolvedValue({ jumpedRuns: 1 });
+    const d = deps({
+      request: request as never,
+      listConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ, CONN_DEAD]),
+      applyGoal
+    });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    // Both live accounts' bookings fired; the dead account only warned.
+    expect(result).toMatchObject({ swept: 1, bookings: 2, goalsFired: 2 });
+    expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+17808039935", {
+      kind: "appointment_booked"
+    });
+    expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+17808039936", {
+      kind: "appointment_booked"
+    });
+  });
+
+  it("multi-account: a QUIET account plus a dead one is not a business-level failure", async () => {
+    const CONN_DEAD = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-dead"
+    };
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ data: [{ id: "run-1", created_at: isoAgoMin(1) }] }]
+    });
+    const request = vi.fn(
+      async (_b: string, conn: { connectionId: string }, config: { endpoint: string }) => {
+        if (conn.connectionId === "cx-dead") throw new Error("calendar_not_connected");
+        if (config.endpoint === "/users/me") return USER_RES;
+        // James's account reads fine but holds no fresh bookings.
+        return { data: { collection: [] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listConnections: vi.fn().mockResolvedValue([CONN, CONN_DEAD])
+    });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    // The quiet read counts as a success, so the dead account only warns.
+    expect(result).toMatchObject({ swept: 1, bookings: 0, goalsFired: 0 });
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_booking_goal_sweep_failed" })
+    );
   });
 
   it("no young run: the same old future-start booking stays out of the firing set", async () => {

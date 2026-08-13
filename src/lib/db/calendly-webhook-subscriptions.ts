@@ -1,8 +1,11 @@
 /**
- * Persistence for `calendly_webhook_subscriptions` — the per-business
- * record of the Calendly invitee.created webhook fast path.
+ * Persistence for `calendly_webhook_subscriptions` — the record of the
+ * Calendly invitee.created webhook fast path.
  *
- * One row per business, upserted by the lifecycle module
+ * One row per CONNECTION (a business can link several Calendly accounts,
+ * and each account's subscription carries its own signing key; the
+ * receiver verifies a delivery against every candidate row for the
+ * business), upserted by the lifecycle module
  * (src/lib/calendly/webhook-subscriptions.ts):
  *   - status 'active' carries the subscription URI plus the signing key
  *     the platform minted and supplied at creation (encrypted at rest, same
@@ -27,6 +30,8 @@ export type CalendlyWebhookSubscriptionStatus = "active" | "unsupported" | "erro
 type StoredRow = {
   id: string;
   business_id: string;
+  /** The calendly_connections row this subscription belongs to. */
+  connection_id: string;
   status: CalendlyWebhookSubscriptionStatus;
   subscription_uri: string | null;
   signing_key_encrypted: string | null;
@@ -44,7 +49,7 @@ export type CalendlyWebhookSubscriptionRow = Omit<StoredRow, "signing_key_encryp
 };
 
 const ALL_COLUMNS =
-  "id,business_id,status,subscription_uri,signing_key_encrypted,user_uri," +
+  "id,business_id,connection_id,status,subscription_uri,signing_key_encrypted,user_uri," +
   "connection_key,last_attempt_at";
 
 function toDecryptedRow(row: StoredRow): CalendlyWebhookSubscriptionRow {
@@ -52,9 +57,10 @@ function toDecryptedRow(row: StoredRow): CalendlyWebhookSubscriptionRow {
   return { ...rest, signingKey: decryptIntegrationSecret(encrypted) };
 }
 
-/** The business's subscription row (decrypted), or null. */
+/** One connection's subscription row (decrypted), or null. */
 export async function getCalendlyWebhookSubscription(
   businessId: string,
+  connectionId: string,
   client?: SupabaseClient
 ): Promise<CalendlyWebhookSubscriptionRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -62,14 +68,38 @@ export async function getCalendlyWebhookSubscription(
     .from("calendly_webhook_subscriptions")
     .select(ALL_COLUMNS)
     .eq("business_id", businessId)
+    .eq("connection_id", connectionId)
     .maybeSingle();
   if (error) throw new Error(`getCalendlyWebhookSubscription: ${error.message}`);
   if (!data) return null;
   return toDecryptedRow(data as unknown as StoredRow);
 }
 
+/**
+ * Every subscription row for the business (decrypted), oldest first. The
+ * webhook receiver tries each row's signing key against a delivery — the
+ * URL only carries the business id, so WHICH account delivered is proven
+ * by whichever key verifies.
+ */
+export async function listCalendlyWebhookSubscriptions(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<CalendlyWebhookSubscriptionRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendly_webhook_subscriptions")
+    .select(ALL_COLUMNS)
+    .eq("business_id", businessId)
+    .order("last_attempt_at", { ascending: true })
+    .limit(50);
+  if (error) throw new Error(`listCalendlyWebhookSubscriptions: ${error.message}`);
+  return ((data ?? []) as unknown as StoredRow[]).map(toDecryptedRow);
+}
+
 export type UpsertCalendlyWebhookSubscriptionInput = {
   businessId: string;
+  /** The calendly_connections row this subscription belongs to. */
+  connectionId: string;
   status: CalendlyWebhookSubscriptionStatus;
   /** Both required for 'active'; both cleared otherwise. */
   subscriptionUri?: string | null;
@@ -90,6 +120,7 @@ export async function upsertCalendlyWebhookSubscription(
   const { error } = await db.from("calendly_webhook_subscriptions").upsert(
     {
       business_id: input.businessId,
+      connection_id: input.connectionId,
       status: input.status,
       subscription_uri: input.subscriptionUri ?? null,
       signing_key_encrypted: encryptIntegrationSecret(input.signingKey ?? null),
@@ -98,20 +129,22 @@ export async function upsertCalendlyWebhookSubscription(
       last_attempt_at: now,
       updated_at: now
     },
-    { onConflict: "business_id" }
+    { onConflict: "connection_id" }
   );
   if (error) throw new Error(`upsertCalendlyWebhookSubscription: ${error.message}`);
 }
 
-/** Drop the row entirely (teardown: connection removed/disabled). */
+/** Drop one connection's row (teardown: connection removed/disabled). */
 export async function deleteCalendlyWebhookSubscription(
   businessId: string,
+  connectionId: string,
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
     .from("calendly_webhook_subscriptions")
     .delete()
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)
+    .eq("connection_id", connectionId);
   if (error) throw new Error(`deleteCalendlyWebhookSubscription: ${error.message}`);
 }

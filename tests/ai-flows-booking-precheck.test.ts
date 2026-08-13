@@ -16,6 +16,9 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
   resolveCalendarConnection: vi.fn(),
+  // Empty by default: the single-connection fallback in each consumer
+  // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
+  listCalendlyCalendarConnections: vi.fn(async () => []),
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
   CALENDLY_DIRECT_KEY: "calendly-direct"
 }));
@@ -23,7 +26,7 @@ vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.f
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
 vi.mock("@/lib/db/calendly-connections", () => ({
-  getActiveCalendlyConnectionUserUri: vi.fn(),
+  getCalendlyConnectionUserUriById: vi.fn(),
   setCalendlyConnectionUserUri: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
@@ -243,7 +246,7 @@ describe("bookingPrecheckForRun user URI", () => {
     const d = deps({ request: request as never, getCachedUserUri: vi.fn().mockResolvedValue(null) });
     const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
     expect(result.booked).toBe(true);
-    expect(d.persistUserUri).toHaveBeenCalledWith(BIZ, USER_URI);
+    expect(d.persistUserUri).toHaveBeenCalledWith(CONN.connectionId, USER_URI);
   });
 
   it("degrades a cache read failure to the probe and a write failure to a warning", async () => {
@@ -320,6 +323,89 @@ describe("bookingPrecheckForRun user URI", () => {
         reason: "calendly_refused"
       });
     }
+  });
+});
+
+describe("bookingPrecheckForRun multi-account (several linked Calendly)", () => {
+  it("a REFUSED first account does not stop the search; the second account's booking is found", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const request = vi.fn(
+      async (
+        _b: string,
+        conn: { connectionId: string },
+        config: { endpoint: string }
+      ) => {
+        // James's token is revoked: every call on his connection refuses.
+        if (conn.connectionId === "cx-1") return null;
+        if (config.endpoint === "/users/me") {
+          return { data: { resource: { uri: USER_URI } } };
+        }
+        return { data: { collection: [{ uri: "e-liz" }] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listCalendlyConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+      getCachedUserUri: vi.fn().mockResolvedValue(null)
+    });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result.booked).toBe(true);
+  });
+
+  it("only when EVERY account refuses does the check degrade to calendly_refused", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const d = deps({
+      request: vi.fn().mockResolvedValue(null),
+      listCalendlyConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+      getCachedUserUri: vi.fn().mockResolvedValue(null)
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toMatchObject({
+      booked: false,
+      reason: "calendly_refused"
+    });
+  });
+
+  it("finds a booking on the SECOND account when the first has none", async () => {
+    const CONN_LIZ = {
+      provider: "calendly" as const,
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-liz"
+    };
+    const seen: string[] = [];
+    const request = vi.fn(
+      async (
+        _b: string,
+        conn: { connectionId: string },
+        config: { endpoint: string }
+      ) => {
+        if (config.endpoint === "/users/me") {
+          return { data: { resource: { uri: `${USER_URI}-${conn.connectionId}` } } };
+        }
+        seen.push(conn.connectionId);
+        // James's calendar is empty; Liz's holds the booking.
+        return conn.connectionId === "cx-liz"
+          ? { data: { collection: [{ uri: "e-liz" }] } }
+          : { data: { collection: [] } };
+      }
+    );
+    const d = deps({
+      request: request as never,
+      listCalendlyConnections: vi.fn().mockResolvedValue([CONN, CONN_LIZ]),
+      getCachedUserUri: vi.fn().mockResolvedValue(null)
+    });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result.booked).toBe(true);
+    // cx-1 lists twice (email filter, then the phone-scan fallback) before
+    // the search moves on to Liz's account.
+    expect(seen).toEqual(["cx-1", "cx-1", "cx-liz"]);
   });
 });
 

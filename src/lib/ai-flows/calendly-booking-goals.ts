@@ -48,6 +48,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  listCalendlyCalendarConnections,
   resolveCalendarConnection,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
@@ -264,6 +265,8 @@ export type BookingGoalSweepDeps = {
   ) => Promise<{ data: unknown } | null>;
   /** Injectable connection resolver (tests). */
   resolveConnection?: (businessId: string) => Promise<ResolvedVoiceConnection | null>;
+  /** Injectable multi-account Calendly lister (tests). */
+  listConnections?: (businessId: string) => Promise<ResolvedVoiceConnection[]>;
   /** Injectable goal applier (tests). */
   applyGoal?: typeof applyGoalEvent;
   /** Injectable email→contact resolver (tests). */
@@ -311,6 +314,7 @@ export async function sweepCalendlyBookingGoals(
 ): Promise<BookingGoalSweepResult> {
   const request = deps.request ?? calendlyRequest;
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
+  const listConnections = deps.listConnections ?? listCalendlyCalendarConnections;
   const applyGoal = deps.applyGoal ?? applyGoalEvent;
   const findByEmails = deps.findByEmails ?? findContactsByEmails;
   const ensureWebhook = deps.ensureWebhook ?? ensureCalendlyWebhookSubscription;
@@ -385,104 +389,138 @@ export async function sweepCalendlyBookingGoals(
       if (!conn || conn.provider !== "calendly") continue;
       result.swept += 1;
 
-      // Opportunistic real-time upgrade: businesses on a paid Calendly plan
-      // get an invitee.created webhook subscription (seconds instead of the
-      // poll's ~1-2 min); refused attempts are cooldown-gated inside, and
-      // this sweep keeps running either way. Never throws.
-      await ensureWebhook(businessId, conn, { request }, db);
+      // EVERY linked Calendly account is swept (a business can connect
+      // several); bookings union across them before goal firing.
+      const allConns = await listConnections(businessId);
+      /* c8 ignore next 2 -- the resolver just returned calendly, so the list is non-empty; belt for a race with a concurrent disconnect */
+      const sweepConns = allConns.length > 0 ? allConns : [conn];
 
-      const userRes = await request(businessId, conn, { endpoint: "/users/me", method: "GET" });
-      const userUri = (userRes?.data as { resource?: { uri?: string } } | undefined)?.resource
-        ?.uri;
-      if (typeof userUri !== "string" || userUri.length === 0) {
-        throw new Error("calendar_not_connected");
-      }
-
-      // Same scan window as the poller's event_created mode: the listing
-      // can only filter on START time, so scan upcoming (+ a short back
-      // reach for retro bookings) and gate on created_at in JS.
-      const listRes = await request(businessId, conn, {
-        endpoint: "/scheduled_events",
-        method: "GET",
-        params: {
-          user: userUri,
-          status: "active",
-          sort: "start_time:asc",
-          count: String(CALENDLY_POLL_PAGE_COUNT),
-          min_start_time: iso(nowMs - CALENDLY_CREATED_SCAN_BACK_DAYS * dayMs),
-          max_start_time: iso(nowMs + CALENDLY_CREATED_SCAN_DAYS * dayMs)
-        }
-      });
-      if (!listRes) throw new Error("calendar_not_connected");
-      const listed = (listRes.data as { collection?: RawBooking[] })?.collection ?? [];
-      if (listed.length >= CALENDLY_POLL_PAGE_COUNT) {
-        // The single page may be truncating; fresh bookings could be hidden
-        // behind it (bounded like the poller — surface it, don't page).
-        await recordSystemLog({
-          businessId,
-          source: "aiflow",
-          level: "warn",
-          event: "ai_flow_booking_goal_sweep_overflow",
-          message:
-            "Calendly booking-goal sweep listing filled a full page; some fresh bookings may be deferred",
-          payload: { listed: listed.length }
-        });
-      }
-      // Oldest created first: a booking about to age out of the lookback
-      // must never be starved behind newer ones if the cap ever bites.
-      // With a young run, ANY active future-start booking also fires — a
-      // just-enrolled lead may have booked long before this run existed.
-      const bookings = listed
-        .filter(
-          (b): b is RawBooking & { uri: string; created_at: string } =>
-            typeof b?.uri === "string" &&
-            b.uri.length > 0 &&
-            typeof b.created_at === "string" &&
-            (bookingCreatedRecently(b.created_at, nowMs) ||
-              (hasYoungRun && bookingStartsInFuture(b.start_time, nowMs)))
-        )
-        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-      result.bookings += bookings.length;
-      if (bookings.length === 0) continue;
-
-      // Invitee identities across this business's fresh bookings. The cap
-      // equals the listing page size, so every booking listed this tick can
-      // be fetched this tick — a fresh booking cannot be starved past its
-      // lookback by a same-tick burst (Bugbot on PR #742). A capped/refused
-      // booking is retried next tick while it is still inside the lookback.
+      // Shared across the linked accounts: the invitee-fetch cap is a
+      // per-TICK budget, and bookings union before goal firing.
       const invitees: CalendlyBookingInvitee[] = [];
       let attempted = 0;
-      for (const booking of bookings) {
-        if (attempted >= BOOKING_GOAL_INVITEE_FETCH_CAP) {
+      let accountsSucceeded = 0;
+      let firstAccountError: unknown = null;
+      let bookingsSeen = 0;
+      for (const sweepConn of sweepConns) {
+      try {
+        // Opportunistic real-time upgrade: businesses on a paid Calendly plan
+        // get an invitee.created webhook subscription (seconds instead of the
+        // poll's ~1-2 min); refused attempts are cooldown-gated inside, and
+        // this sweep keeps running either way. Never throws.
+        await ensureWebhook(businessId, sweepConn, { request }, db);
+
+        const userRes = await request(businessId, sweepConn, { endpoint: "/users/me", method: "GET" });
+        const userUri = (userRes?.data as { resource?: { uri?: string } } | undefined)?.resource
+          ?.uri;
+        if (typeof userUri !== "string" || userUri.length === 0) {
+          throw new Error("calendar_not_connected");
+        }
+
+        // Same scan window as the poller's event_created mode: the listing
+        // can only filter on START time, so scan upcoming (+ a short back
+        // reach for retro bookings) and gate on created_at in JS.
+        const listRes = await request(businessId, sweepConn, {
+          endpoint: "/scheduled_events",
+          method: "GET",
+          params: {
+            user: userUri,
+            status: "active",
+            sort: "start_time:asc",
+            count: String(CALENDLY_POLL_PAGE_COUNT),
+            min_start_time: iso(nowMs - CALENDLY_CREATED_SCAN_BACK_DAYS * dayMs),
+            max_start_time: iso(nowMs + CALENDLY_CREATED_SCAN_DAYS * dayMs)
+          }
+        });
+        if (!listRes) throw new Error("calendar_not_connected");
+        const listed = (listRes.data as { collection?: RawBooking[] })?.collection ?? [];
+        if (listed.length >= CALENDLY_POLL_PAGE_COUNT) {
+          // The single page may be truncating; fresh bookings could be hidden
+          // behind it (bounded like the poller — surface it, don't page).
           await recordSystemLog({
             businessId,
             source: "aiflow",
             level: "warn",
             event: "ai_flow_booking_goal_sweep_overflow",
             message:
-              "Calendly booking-goal sweep hit its invitee-fetch cap this tick; remainder retried next tick",
-            payload: { bookings: bookings.length }
+              "Calendly booking-goal sweep listing filled a full page; some fresh bookings may be deferred",
+            payload: { listed: listed.length }
           });
-          break;
         }
-        attempted += 1;
-        const invRes = await request(businessId, conn, {
-          endpoint: `/scheduled_events/${encodeURIComponent(
-            calendlyEventUuid(booking.uri)
-          )}/invitees`,
-          method: "GET",
-          params: { count: "10" }
+        // Oldest created first: a booking about to age out of the lookback
+        // must never be starved behind newer ones if the cap ever bites.
+        // With a young run, ANY active future-start booking also fires — a
+        // just-enrolled lead may have booked long before this run existed.
+        const bookings = listed
+          .filter(
+            (b): b is RawBooking & { uri: string; created_at: string } =>
+              typeof b?.uri === "string" &&
+              b.uri.length > 0 &&
+              typeof b.created_at === "string" &&
+              (bookingCreatedRecently(b.created_at, nowMs) ||
+                (hasYoungRun && bookingStartsInFuture(b.start_time, nowMs)))
+          )
+          .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+        result.bookings += bookings.length;
+        // This account READ successfully — stamp it before the zero-bookings
+        // early-out, or a quiet account plus one dead account would count as
+        // "every account failed" and misfile the sweep as a business-level
+        // failure (Bugbot Medium on PR #1349).
+        accountsSucceeded += 1;
+        bookingsSeen += bookings.length;
+        if (bookings.length === 0) continue;
+
+        // Invitee identities across this business's fresh bookings. The cap
+        // equals the listing page size, so every booking listed this tick can
+        // be fetched this tick — a fresh booking cannot be starved past its
+        // lookback by a same-tick burst (Bugbot on PR #742). A capped/refused
+        // booking is retried next tick while it is still inside the lookback.
+        for (const booking of bookings) {
+          if (attempted >= BOOKING_GOAL_INVITEE_FETCH_CAP) {
+            await recordSystemLog({
+              businessId,
+              source: "aiflow",
+              level: "warn",
+              event: "ai_flow_booking_goal_sweep_overflow",
+              message:
+                "Calendly booking-goal sweep hit its invitee-fetch cap this tick; remainder retried next tick",
+              payload: { bookings: bookings.length }
+            });
+            break;
+          }
+          attempted += 1;
+          const invRes = await request(businessId, sweepConn, {
+            endpoint: `/scheduled_events/${encodeURIComponent(
+              calendlyEventUuid(booking.uri)
+            )}/invitees`,
+            method: "GET",
+            params: { count: "10" }
+          });
+          if (!invRes) {
+            logger.warn("booking goal sweep: invitee fetch refused; retried next tick", {
+              businessId,
+              bookingUri: booking.uri
+            });
+            continue;
+          }
+          invitees.push(
+            ...(((invRes.data as { collection?: CalendlyBookingInvitee[] })?.collection) ?? [])
+          );
+        }
+      } catch (err) {
+        // One account failing (revoked PAT, Calendly 5xx) must not
+        // starve the other accounts' bookings; the business-level
+        // failure log still fires when EVERY account failed.
+        firstAccountError ??= err;
+        logger.warn("booking goal sweep: account read failed", {
+          businessId,
+          connectionId: sweepConn.connectionId,
+          error: err instanceof Error ? err.message : String(err)
         });
-        if (!invRes) {
-          logger.warn("booking goal sweep: invitee fetch refused; retried next tick", {
-            businessId,
-            bookingUri: booking.uri
-          });
-          continue;
-        }
-        invitees.push(
-          ...(((invRes.data as { collection?: CalendlyBookingInvitee[] })?.collection) ?? [])
-        );
+      }
+      }
+      if (accountsSucceeded === 0 && firstAccountError !== null) {
+        throw firstAccountError;
       }
 
       const fired = await fireBookingGoalsForInvitees(db, businessId, invitees, {
@@ -499,7 +537,7 @@ export async function sweepCalendlyBookingGoals(
           level: "info",
           event: "ai_flow_goal_jumped_booking",
           message: `A new Calendly booking moved ${jumped} flow run(s) past their remaining follow-ups`,
-          payload: { bookings: bookings.length, jumped_runs: jumped }
+          payload: { bookings: bookingsSeen, jumped_runs: jumped }
         });
       }
     } catch (err) {

@@ -11,7 +11,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn(() => ({ success: true })) }));
 vi.mock("@/lib/db/calendly-webhook-subscriptions", () => ({
-  getCalendlyWebhookSubscription: vi.fn()
+  listCalendlyWebhookSubscriptions: vi.fn()
 }));
 vi.mock("@/lib/calendly/webhook-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/calendly/webhook-inbound")>();
@@ -25,7 +25,7 @@ vi.mock("@/lib/calendly/webhook-inbound", async (importOriginal) => {
 
 import { POST } from "@/app/api/webhooks/calendly/route";
 import { rateLimit } from "@/lib/rate-limit";
-import { getCalendlyWebhookSubscription } from "@/lib/db/calendly-webhook-subscriptions";
+import { listCalendlyWebhookSubscriptions } from "@/lib/db/calendly-webhook-subscriptions";
 import { handleCalendlyWebhookEvent } from "@/lib/calendly/webhook-inbound";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -58,7 +58,7 @@ function signedRequest(body: string, opts: { key?: string; business?: string } =
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(rateLimit).mockReturnValue({ success: true } as never);
-  vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(ACTIVE_SUB as never);
+  vi.mocked(listCalendlyWebhookSubscriptions).mockResolvedValue([ACTIVE_SUB] as never);
   vi.mocked(handleCalendlyWebhookEvent).mockResolvedValue({
     handled: true,
     goalsFired: 1,
@@ -105,7 +105,7 @@ describe("POST /api/webhooks/calendly", () => {
 
   it("401s when no active subscription (or signing key) exists", async () => {
     for (const sub of [null, { ...ACTIVE_SUB, status: "unsupported", signingKey: null }]) {
-      vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(sub as never);
+      vi.mocked(listCalendlyWebhookSubscriptions).mockResolvedValue(([sub].filter(Boolean)) as never);
       const res = await POST(signedRequest("{}"));
       expect(res.status).toBe(401);
     }
@@ -124,7 +124,7 @@ describe("POST /api/webhooks/calendly", () => {
   });
 
   it("routes unexpected failures through the shared error handler", async () => {
-    vi.mocked(getCalendlyWebhookSubscription).mockRejectedValue(new Error("db down"));
+    vi.mocked(listCalendlyWebhookSubscriptions).mockRejectedValue(new Error("db down"));
     const res = await POST(signedRequest("{}"));
     expect(res.status).toBe(500);
   });

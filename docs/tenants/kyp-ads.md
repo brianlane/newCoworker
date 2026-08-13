@@ -82,12 +82,17 @@ How the pieces fit:
   `end_user_email`, which is why a dashboard reconnect would take the
   identity-probe branch for this tenant. The superseded Nango grant
   (`70df3986-...64cdbe`) is still alive as the rollback path.
-- **No booking integration, on purpose:** VFM books on Liz's own Calendly
-  (`calendly.com/elizabethastone/30min`), which this tenant's Calendly
-  connection cannot see (one connection per business, and it is James's).
-  The T-60 confirmation gets its time from the lead's replies via the
-  run_agent parser ("VFM booked-time parser" in business_agents). A lead
-  who books silently gets no confirmation; accepted.
+- **VFM booking visibility:** VFM books on Liz's own Calendly
+  (`calendly.com/elizabethastone/30min`). Historically invisible to this
+  tenant (one Calendly connection per business, James's), so the T-60
+  confirmation parses the lead's replies via the run_agent parser ("VFM
+  booked-time parser" in business_agents) and a silent booker got no
+  confirmation. Multi-connection support (one row per Calendly ACCOUNT)
+  now lets Liz's PAT sit alongside James's on the Integrations card; once
+  she pastes it, her bookings become native (booking precheck stops the
+  nurture ladder, `appointment_booked` goals fire, calendar triggers see
+  her events). Until that PAT is connected, the reply-parsing path remains
+  the only signal.
 - **Timezones:** VFM nudge quiet hours are gated per-flow in
   America/New_York; the business timezone stays America/Toronto, so KYP's
   flows are unaffected.

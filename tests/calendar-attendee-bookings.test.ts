@@ -26,7 +26,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
 vi.mock("@/lib/db/calendly-connections", () => ({
-  getActiveCalendlyConnectionUserUri: vi.fn(),
+  getCalendlyConnectionUserUriById: vi.fn(),
   setCalendlyConnectionUserUri: vi.fn()
 }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
@@ -341,9 +341,9 @@ describe("lookupProviderBookingsForAttendee", () => {
     // production transport (mocked) refuses /users/me → refused, having
     // exercised every default-dep binding.
     const { calendlyRequest } = await import("@/lib/calendar-tools/calendly");
-    const { getActiveCalendlyConnectionUserUri } = await import("@/lib/db/calendly-connections");
+    const { getCalendlyConnectionUserUriById } = await import("@/lib/db/calendly-connections");
     vi.mocked(calendlyRequest).mockResolvedValue(null);
-    vi.mocked(getActiveCalendlyConnectionUserUri).mockResolvedValue(null);
+    vi.mocked(getCalendlyConnectionUserUriById).mockResolvedValue(null);
     const res = await lookupProviderBookingsForAttendee(
       BIZ,
       CALENDLY_CONN,

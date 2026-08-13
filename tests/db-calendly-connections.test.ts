@@ -21,12 +21,15 @@ import {
   deleteCalendlyConnection,
   getActiveCalendlyConnection,
   getActiveCalendlyConnectionId,
-  getActiveCalendlyConnectionUserUri,
-  getCalendlyConnection,
-  getPublicCalendlyConnection,
+  getCalendlyConnectionById,
+  getCalendlyConnectionUserUriById,
+  listActiveCalendlyConnections,
+  listCalendlyConnections,
+  listPublicCalendlyConnections,
+  saveCalendlyConnection,
+  setCalendlyConnectionActive,
   setCalendlyConnectionUserUri,
-  toPublicCalendlyConnection,
-  upsertCalendlyConnection
+  toPublicCalendlyConnection
 } from "@/lib/db/calendly-connections";
 
 type Chain = {
@@ -35,6 +38,8 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  order: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -46,6 +51,8 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
+    order: vi.fn(() => c),
+    limit: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -58,316 +65,351 @@ function makeDb(c: unknown) {
 }
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
+const CONN_A = "aaaaaaaa-1111-4111-8111-111111111111";
+const CONN_B = "bbbbbbbb-1111-4111-8111-111111111111";
+const URI_A = "https://api.calendly.com/users/AAA";
+const URI_B = "https://api.calendly.com/users/BBB";
 
-const STORED = {
-  id: "cl-1",
+const storedRow = (over: Record<string, unknown> = {}) => ({
+  id: CONN_A,
   business_id: BIZ,
-  access_token_encrypted: "enc(pat-secret)",
-  account_name: "Acme Spa",
-  account_email: "owner@acme.com",
-  user_uri: "https://api.calendly.com/users/U1",
+  access_token_encrypted: "enc(tok-a)",
+  account_name: "James",
+  account_email: "james@kyp.test",
+  user_uri: URI_A,
   is_active: true,
   created_at: "2026-07-01T00:00:00Z",
-  updated_at: "2026-07-01T00:00:00Z"
-};
-
-describe("toPublicCalendlyConnection", () => {
-  it("drops the ciphertext and reports has_token", () => {
-    const pub = toPublicCalendlyConnection(STORED as never);
-    expect(pub).not.toHaveProperty("access_token_encrypted");
-    expect(pub.has_token).toBe(true);
-  });
+  updated_at: "2026-07-01T00:00:00Z",
+  ...over
 });
 
-describe("getCalendlyConnection", () => {
-  it("returns null when no row exists", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await getCalendlyConnection(BIZ, makeDb(c))).toBeNull();
+describe("listCalendlyConnections / listActiveCalendlyConnections", () => {
+  it("lists oldest-first with tokens decrypted", async () => {
+    const rows = [storedRow(), storedRow({ id: CONN_B, user_uri: URI_B, is_active: false })];
+    const c = chain({ data: rows, error: null });
+    const list = await listCalendlyConnections(BIZ, makeDb(c));
+    expect(list).toHaveLength(2);
+    expect(list[0].accessToken).toBe("tok-a");
+    expect(c.order).toHaveBeenCalledWith("created_at", { ascending: true });
+    // Bounded read: multi-connection is a handful of accounts, never a scan.
+    expect(c.limit).toHaveBeenCalledWith(50);
   });
 
-  it("decrypts the stored token", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: STORED, error: null });
-    const row = await getCalendlyConnection(BIZ, makeDb(c));
-    expect(row?.accessToken).toBe("pat-secret");
-    expect(row).not.toHaveProperty("access_token_encrypted");
+  it("throws on a read error", async () => {
+    const c = chain({ data: null, error: { message: "boom" } });
+    await expect(listCalendlyConnections(BIZ, makeDb(c))).rejects.toThrow(
+      "listCalendlyConnections: boom"
+    );
   });
 
-  it("throws on a query error", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
-    await expect(getCalendlyConnection(BIZ, makeDb(c))).rejects.toThrow(/boom/);
+  it("active list filters out disabled rows", async () => {
+    const rows = [storedRow(), storedRow({ id: CONN_B, user_uri: URI_B, is_active: false })];
+    const c = chain({ data: rows, error: null });
+    const list = await listActiveCalendlyConnections(BIZ, makeDb(c));
+    expect(list.map((r) => r.id)).toEqual([CONN_A]);
   });
 
-  it("fails closed when the stored token decrypts to nothing", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({
-      data: { ...STORED, access_token_encrypted: "" },
-      error: null
-    });
-    await expect(getCalendlyConnection(BIZ, makeDb(c))).rejects.toThrow(
-      /no stored access token/
+  it("empty data resolves to an empty list (null-coalesce branch)", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await listCalendlyConnections(BIZ, makeDb(c))).toEqual([]);
+  });
+
+  it("throws when a stored token decrypts to nothing (fail closed)", async () => {
+    const c = chain({ data: [storedRow({ access_token_encrypted: "" })], error: null });
+    await expect(listCalendlyConnections(BIZ, makeDb(c))).rejects.toThrow(
+      "calendly connection has no stored access token"
     );
   });
 });
 
-describe("getActiveCalendlyConnection", () => {
-  it("returns null for an inactive row and the row when active", async () => {
+describe("getCalendlyConnectionById", () => {
+  it("returns the decrypted row scoped to the business", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { ...STORED, is_active: false }, error: null });
-    expect(await getActiveCalendlyConnection(BIZ, makeDb(c))).toBeNull();
+    c.maybeSingle.mockResolvedValue({ data: storedRow(), error: null });
+    const row = await getCalendlyConnectionById(BIZ, CONN_A, makeDb(c));
+    expect(row?.accessToken).toBe("tok-a");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
+  });
 
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: STORED, error: null });
-    expect((await getActiveCalendlyConnection(BIZ, makeDb(c2)))?.id).toBe("cl-1");
+  it("null when absent; throws on error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getCalendlyConnectionById(BIZ, CONN_A, makeDb(c))).toBeNull();
+    const cErr = chain();
+    cErr.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getCalendlyConnectionById(BIZ, CONN_A, makeDb(cErr))).rejects.toThrow(
+      "getCalendlyConnectionById: boom"
+    );
+  });
+});
+
+describe("getActiveCalendlyConnection (primary = oldest active)", () => {
+  it("returns the first active row", async () => {
+    const rows = [
+      storedRow({ is_active: false }),
+      storedRow({ id: CONN_B, user_uri: URI_B, access_token_encrypted: "enc(tok-b)" })
+    ];
+    const c = chain({ data: rows, error: null });
+    const row = await getActiveCalendlyConnection(BIZ, makeDb(c));
+    expect(row?.id).toBe(CONN_B);
+    expect(row?.accessToken).toBe("tok-b");
+  });
+
+  it("null when nothing is active", async () => {
+    const c = chain({ data: [storedRow({ is_active: false })], error: null });
+    expect(await getActiveCalendlyConnection(BIZ, makeDb(c))).toBeNull();
   });
 });
 
 describe("getActiveCalendlyConnectionId", () => {
-  it("returns the id for an active connection and null when absent", async () => {
+  it("id-only probe orders oldest-first and takes one", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: "cl-1" }, error: null });
-    expect(await getActiveCalendlyConnectionId(BIZ, makeDb(c))).toBe("cl-1");
+    c.maybeSingle.mockResolvedValue({ data: { id: CONN_A }, error: null });
+    expect(await getActiveCalendlyConnectionId(BIZ, makeDb(c))).toBe(CONN_A);
+    expect(c.order).toHaveBeenCalledWith("created_at", { ascending: true });
+    expect(c.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("null when none; throws on error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getActiveCalendlyConnectionId(BIZ, makeDb(c))).toBeNull();
+    const cErr = chain();
+    cErr.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getActiveCalendlyConnectionId(BIZ, makeDb(cErr))).rejects.toThrow(
+      "getActiveCalendlyConnectionId: boom"
+    );
+  });
+});
+
+describe("getCalendlyConnectionUserUriById / setCalendlyConnectionUserUri", () => {
+  it("reads the cached URI of one ACTIVE row by id", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { user_uri: URI_A }, error: null });
+    expect(await getCalendlyConnectionUserUriById(CONN_A, makeDb(c))).toBe(URI_A);
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
-
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await getActiveCalendlyConnectionId(BIZ, makeDb(c2))).toBeNull();
   });
 
-  it("throws on a query error", async () => {
+  it("null when unresolved/absent; throws on error", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "down" } });
-    await expect(getActiveCalendlyConnectionId(BIZ, makeDb(c))).rejects.toThrow(/down/);
+    c.maybeSingle.mockResolvedValue({ data: { user_uri: null }, error: null });
+    expect(await getCalendlyConnectionUserUriById(CONN_A, makeDb(c))).toBeNull();
+    const cErr = chain();
+    cErr.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getCalendlyConnectionUserUriById(CONN_A, makeDb(cErr))).rejects.toThrow(
+      "getCalendlyConnectionUserUriById: boom"
+    );
+  });
+
+  it("persists a resolved URI onto ONE row by id", async () => {
+    const c = chain({ error: null });
+    await setCalendlyConnectionUserUri(CONN_A, URI_A, makeDb(c));
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({ user_uri: URI_A })
+    );
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
+  });
+
+  it("set throws on error", async () => {
+    const c = chain({ error: { message: "boom" } });
+    await expect(setCalendlyConnectionUserUri(CONN_A, URI_A, makeDb(c))).rejects.toThrow(
+      "setCalendlyConnectionUserUri: boom"
+    );
   });
 });
 
-describe("getPublicCalendlyConnection", () => {
-  it("returns the masked row / null / throws on error", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: STORED, error: null });
-    const pub = await getPublicCalendlyConnection(BIZ, makeDb(c));
-    expect(pub?.has_token).toBe(true);
+describe("listPublicCalendlyConnections", () => {
+  it("masks token material into has_token", async () => {
+    const c = chain({ data: [storedRow()], error: null });
+    const list = await listPublicCalendlyConnections(BIZ, makeDb(c));
+    expect(list[0]).not.toHaveProperty("access_token_encrypted");
+    expect(list[0]).not.toHaveProperty("accessToken");
+    expect(list[0].has_token).toBe(true);
+  });
 
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await getPublicCalendlyConnection(BIZ, makeDb(c2))).toBeNull();
-
-    const c3 = chain();
-    c3.maybeSingle.mockResolvedValue({ data: null, error: { message: "err" } });
-    await expect(getPublicCalendlyConnection(BIZ, makeDb(c3))).rejects.toThrow(/err/);
+  it("throws on error; empty data resolves empty", async () => {
+    const cErr = chain({ data: null, error: { message: "boom" } });
+    await expect(listPublicCalendlyConnections(BIZ, makeDb(cErr))).rejects.toThrow(
+      "listPublicCalendlyConnections: boom"
+    );
+    const cEmpty = chain({ data: null, error: null });
+    expect(await listPublicCalendlyConnections(BIZ, makeDb(cEmpty))).toEqual([]);
   });
 });
 
-describe("upsertCalendlyConnection", () => {
+describe("toPublicCalendlyConnection", () => {
+  it("flags an empty stored token as has_token false", () => {
+    const pub = toPublicCalendlyConnection(storedRow({ access_token_encrypted: "" }) as never);
+    expect(pub.has_token).toBe(false);
+  });
+});
+
+describe("saveCalendlyConnection", () => {
+  const input = {
+    businessId: BIZ,
+    accessToken: "tok-new",
+    userUri: URI_B,
+    accountName: "Liz",
+    accountEmail: "liz@lizdev.test"
+  };
+
   it("rejects an empty or oversized token", async () => {
     await expect(
-      upsertCalendlyConnection({ businessId: BIZ, accessToken: "  " }, makeDb(chain()))
+      saveCalendlyConnection({ ...input, accessToken: "   " }, makeDb(chain()))
     ).rejects.toThrow(CalendlyConnectionValidationError);
     await expect(
-      upsertCalendlyConnection(
-        { businessId: BIZ, accessToken: "x".repeat(4097) },
-        makeDb(chain())
-      )
-    ).rejects.toThrow(/1-4096/);
+      saveCalendlyConnection({ ...input, accessToken: "x".repeat(4097) }, makeDb(chain()))
+    ).rejects.toThrow("Personal Access Token must be 1-4096 characters");
   });
 
-  it("throws on an existence-check error", async () => {
+  it("throws when the dedupe read fails", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "read fail" } });
-    await expect(
-      upsertCalendlyConnection({ businessId: BIZ, accessToken: "pat" }, makeDb(c))
-    ).rejects.toThrow(/read fail/);
-  });
-
-  it("requires a token on first connect", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    await expect(upsertCalendlyConnection({ businessId: BIZ }, makeDb(c))).rejects.toThrow(
-      /required to connect/
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(saveCalendlyConnection(input, makeDb(c))).rejects.toThrow(
+      "saveCalendlyConnection: boom"
     );
   });
 
-  it("creates a row with an encrypted token and optional identity", async () => {
+  it("INSERTS a new row for a not-yet-linked account (identity from verify)", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    const pub = await upsertCalendlyConnection(
-      {
-        businessId: BIZ,
-        accessToken: " pat-secret ",
-        accountName: "Acme Spa",
-        accountEmail: "owner@acme.com",
-        isActive: true
-      },
-      makeDb(c)
+    c.single.mockResolvedValue({
+      data: storedRow({
+        id: CONN_B,
+        user_uri: URI_B,
+        account_name: "Liz",
+        account_email: "liz@lizdev.test",
+        access_token_encrypted: "enc(tok-new)"
+      }),
+      error: null
+    });
+    const { connection, created } = await saveCalendlyConnection(input, makeDb(c));
+    expect(created).toBe(true);
+    expect(connection.user_uri).toBe(URI_B);
+    expect(c.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ,
+        access_token_encrypted: "enc(tok-new)",
+        user_uri: URI_B,
+        account_name: "Liz",
+        account_email: "liz@lizdev.test"
+      })
     );
-    expect(pub.has_token).toBe(true);
-    const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
-    expect(inserted.access_token_encrypted).toBe("enc(pat-secret)");
-    expect(inserted.account_name).toBe("Acme Spa");
-    expect(inserted.account_email).toBe("owner@acme.com");
-    expect(inserted.is_active).toBe(true);
   });
 
-  it("creates with explicit null identity fields", async () => {
+  it("insert error surfaces", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    await upsertCalendlyConnection(
-      { businessId: BIZ, accessToken: "pat", accountName: null, accountEmail: null },
-      makeDb(c)
+    c.single.mockResolvedValue({ data: null, error: { message: "dup" } });
+    await expect(saveCalendlyConnection(input, makeDb(c))).rejects.toThrow(
+      "saveCalendlyConnection: dup"
     );
-    const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
-    expect(inserted.account_name).toBeNull();
-    expect(inserted.account_email).toBeNull();
   });
 
-  it("clears the stored account name on update when explicitly nulled", async () => {
+  it("CONVERGES onto the existing row when the account is already linked (re-activates too)", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: "cl-1" }, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    await upsertCalendlyConnection({ businessId: BIZ, accountName: null }, makeDb(c));
-    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
-    expect(patch.account_name).toBeNull();
-    expect(patch).not.toHaveProperty("account_email");
-  });
-
-  it("creates without identity fields when they are omitted", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    await upsertCalendlyConnection({ businessId: BIZ, accessToken: "pat" }, makeDb(c));
-    const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
-    expect(inserted).not.toHaveProperty("account_name");
-    expect(inserted).not.toHaveProperty("account_email");
-    expect(inserted).not.toHaveProperty("is_active");
-  });
-
-  it("surfaces an insert error", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    c.single.mockResolvedValue({ data: null, error: { message: "insert fail" } });
-    await expect(
-      upsertCalendlyConnection({ businessId: BIZ, accessToken: "pat" }, makeDb(c))
-    ).rejects.toThrow(/insert fail/);
-  });
-
-  it("updates in place, keeping the stored token when none is supplied", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: "cl-1" }, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    await upsertCalendlyConnection(
-      { businessId: BIZ, accountName: "New Name", accountEmail: null, isActive: false },
-      makeDb(c)
+    c.maybeSingle.mockResolvedValue({ data: { id: CONN_B }, error: null });
+    c.single.mockResolvedValue({
+      data: storedRow({ id: CONN_B, user_uri: URI_B, access_token_encrypted: "enc(tok-new)" }),
+      error: null
+    });
+    const { connection, created } = await saveCalendlyConnection(input, makeDb(c));
+    expect(created).toBe(false);
+    expect(connection.id).toBe(CONN_B);
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access_token_encrypted: "enc(tok-new)",
+        is_active: true,
+        user_uri: URI_B
+      })
     );
-    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
-    expect(patch).not.toHaveProperty("access_token_encrypted");
-    // No token change → the cached user URI survives.
-    expect(patch).not.toHaveProperty("user_uri");
-    expect(patch.account_name).toBe("New Name");
-    expect(patch.account_email).toBeNull();
-    expect(patch.is_active).toBe(false);
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_B);
   });
 
-  it("rotates the token when supplied and surfaces update errors", async () => {
+  it("converge update error surfaces", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { id: "cl-1" }, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    await upsertCalendlyConnection({ businessId: BIZ, accessToken: "new-pat" }, makeDb(c));
-    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
-    expect(patch.access_token_encrypted).toBe("enc(new-pat)");
-    // A new PAT can belong to a different account — the cached user URI
-    // must not survive the rotation.
-    expect(patch.user_uri).toBeNull();
-    // Identity untouched when the keys are absent from the input.
-    expect(patch).not.toHaveProperty("account_name");
-    expect(patch).not.toHaveProperty("account_email");
-
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: { id: "cl-1" }, error: null });
-    c2.single.mockResolvedValue({ data: null, error: { message: "update fail" } });
-    await expect(upsertCalendlyConnection({ businessId: BIZ }, makeDb(c2))).rejects.toThrow(
-      /update fail/
+    c.maybeSingle.mockResolvedValue({ data: { id: CONN_B }, error: null });
+    c.single.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(saveCalendlyConnection(input, makeDb(c))).rejects.toThrow(
+      "saveCalendlyConnection: boom"
     );
   });
 });
 
-describe("getActiveCalendlyConnectionUserUri / setCalendlyConnectionUserUri", () => {
-  it("returns the cached URI for an active row, null when absent/unset", async () => {
+describe("setCalendlyConnectionActive", () => {
+  it("flips one row and returns it masked", async () => {
     const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: { user_uri: "https://api.calendly.com/users/U1" }, error: null });
-    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c))).toBe(
-      "https://api.calendly.com/users/U1"
-    );
-    expect(c.eq).toHaveBeenCalledWith("is_active", true);
-
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: { user_uri: null }, error: null });
-    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c2))).toBeNull();
-
-    const c3 = chain();
-    c3.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c3))).toBeNull();
-  });
-
-  it("throws on a read error", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "down" } });
-    await expect(getActiveCalendlyConnectionUserUri(BIZ, makeDb(c))).rejects.toThrow(/down/);
-  });
-
-  it("persists the URI and throws on a write error", async () => {
-    const c = chain({ error: null });
-    await setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U2", makeDb(c));
-    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
-    expect(patch.user_uri).toBe("https://api.calendly.com/users/U2");
+    c.maybeSingle.mockResolvedValue({ data: storedRow({ is_active: false }), error: null });
+    const row = await setCalendlyConnectionActive(BIZ, CONN_A, false, makeDb(c));
+    expect(row?.is_active).toBe(false);
+    expect(c.update).toHaveBeenCalledWith(expect.objectContaining({ is_active: false }));
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
-
-    const c2 = chain({ error: { message: "write fail" } });
-    await expect(
-      setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U2", makeDb(c2))
-    ).rejects.toThrow(/write fail/);
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
   });
 
-  it("falls back to the default service client", async () => {
-    defaultClientSpy.mockClear();
-    const c = chain({ error: null });
+  it("null when the row is missing; throws on error", async () => {
+    const c = chain();
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    defaultClientSpy.mockReturnValue(makeDb(c));
-    expect(await getActiveCalendlyConnectionUserUri(BIZ)).toBeNull();
-    await setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U3");
-    expect(defaultClientSpy).toHaveBeenCalledTimes(2);
-    // Reset so the shared default-client count test below stays exact.
-    defaultClientSpy.mockClear();
+    expect(await setCalendlyConnectionActive(BIZ, CONN_A, true, makeDb(c))).toBeNull();
+    const cErr = chain();
+    cErr.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(setCalendlyConnectionActive(BIZ, CONN_A, true, makeDb(cErr))).rejects.toThrow(
+      "setCalendlyConnectionActive: boom"
+    );
   });
 });
 
 describe("deleteCalendlyConnection", () => {
-  it("deletes by business id and throws on error", async () => {
+  it("deletes ONE row scoped to the business", async () => {
     const c = chain({ error: null });
-    await deleteCalendlyConnection(BIZ, makeDb(c));
+    await deleteCalendlyConnection(BIZ, CONN_A, makeDb(c));
     expect(c.delete).toHaveBeenCalled();
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("id", CONN_A);
+  });
 
-    const c2 = chain({ error: { message: "del fail" } });
-    await expect(deleteCalendlyConnection(BIZ, makeDb(c2))).rejects.toThrow(/del fail/);
+  it("throws on error", async () => {
+    const c = chain({ error: { message: "boom" } });
+    await expect(deleteCalendlyConnection(BIZ, CONN_A, makeDb(c))).rejects.toThrow(
+      "deleteCalendlyConnection: boom"
+    );
   });
 });
 
-describe("default service client", () => {
-  it("falls back to createSupabaseServiceClient when no client is passed", async () => {
-    const c = chain({ error: null });
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    c.single.mockResolvedValue({ data: STORED, error: null });
-    defaultClientSpy.mockReturnValue(makeDb(c));
+describe("default client resolution", () => {
+  it("every entry point resolves the service client when none is injected", async () => {
+    const listChain = chain({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(listChain));
+    expect(await listCalendlyConnections(BIZ)).toEqual([]);
+    expect(await listPublicCalendlyConnections(BIZ)).toEqual([]);
 
-    expect(await getCalendlyConnection(BIZ)).toBeNull();
+    const single = chain();
+    single.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(single));
+    expect(await getCalendlyConnectionById(BIZ, CONN_A)).toBeNull();
     expect(await getActiveCalendlyConnectionId(BIZ)).toBeNull();
-    expect(await getPublicCalendlyConnection(BIZ)).toBeNull();
-    await upsertCalendlyConnection({ businessId: BIZ, accessToken: "pat" });
-    await deleteCalendlyConnection(BIZ);
-    expect(defaultClientSpy).toHaveBeenCalledTimes(5);
+    expect(await getCalendlyConnectionUserUriById(CONN_A)).toBeNull();
+    expect(await setCalendlyConnectionActive(BIZ, CONN_A, true)).toBeNull();
+
+    const write = chain({ error: null });
+    defaultClientSpy.mockReturnValue(makeDb(write));
+    await setCalendlyConnectionUserUri(CONN_A, URI_A);
+    await deleteCalendlyConnection(BIZ, CONN_A);
+
+    const save = chain();
+    save.maybeSingle.mockResolvedValue({ data: null, error: null });
+    save.single.mockResolvedValue({ data: storedRow(), error: null });
+    defaultClientSpy.mockReturnValue(makeDb(save));
+    const { created } = await saveCalendlyConnection({
+      businessId: BIZ,
+      accessToken: "tok",
+      userUri: URI_A,
+      accountName: null,
+      accountEmail: null
+    });
+    expect(created).toBe(true);
+    expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
