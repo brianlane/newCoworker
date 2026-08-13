@@ -46,6 +46,22 @@ the summary.
   also caught the `users.info` JSON-body bug (owner identity resolved as
   team) fixed in the follow-up PR; docs/SLACK-INTEGRATION.md is the
   operational runbook.
+- **Slack approval buttons verified end to end** (Aug 13 2026), the one
+  path the Aug 10 smoke could not reach because nothing was parked at a
+  gate. A throwaway three-step flow (`notify_owner`, `approval_gate`,
+  `notify_owner`) was created on HQ, run, and deleted afterwards; HQ is
+  back to its usual flows and no test artifact remains. The card posted to
+  `#all-new-coworker` with Approve / Skip step / Cancel workflow, pressing
+  Approve moved the run from `awaiting_approval` to `queued` with
+  `decided_by: slack:U0BP96TFHB4`, the guarded final step then ran, and the
+  card rewrote itself to "Approved, sending it now. (newcoworkerteam)" with
+  the buttons removed. The owner-only guard was proved separately on the
+  Slack review sandbox, whose owner is `slack.reviewer@newcoworker.com`: a
+  correctly signed Approve from Brian's sandbox Slack user
+  (`brianlane2@gmail.com`) answered `refused: not_owner` and left the run
+  parked with no decision recorded. Reading the card back through the API
+  is impossible by design, since the app never requests `channels:history`;
+  it was confirmed in the Slack client instead.
 
 ## Flows
 
