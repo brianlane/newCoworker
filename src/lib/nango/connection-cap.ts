@@ -1,17 +1,21 @@
 /**
- * Tier cap on Nango workspace connections (`workspace_oauth_connections`).
+ * Tier cap on workspace connections (`workspace_oauth_connections`).
  *
- * Why: every Nango connection consumes the platform's ACCOUNT-WIDE Nango
- * quota (10 on the free plan), so unmetered per-tenant connects would let a
- * single business exhaust the pool for everyone. Starter gets 1, Standard 3,
- * Enterprise unlimited — per-deal overridable via
+ * Why: the cap is a product tier benefit with a real per-connection cost
+ * behind it. Every connected mailbox or calendar consumes email and calendar
+ * polling cycles, and connections brokered by Nango (the long tail; Google
+ * and Outlook are first-party since Aug 2026) also consume the platform's
+ * ACCOUNT-WIDE Nango quota (10 on the free plan). Direct rows count against
+ * the cap too, on purpose: exempting them would silently hand lower tiers
+ * unlimited mailboxes, a tier regression nobody decided to make. Starter
+ * gets 1, Standard 10, Enterprise unlimited, per-deal overridable via
  * `businesses.enterprise_limits.workspaceConnectionsMax` (same patch
  * mechanism as the other enterprise limits).
  *
  * Grandfathering: the cap gates NEW connects only. Existing rows keep
  * working (the proxy / email / calendar paths are untouched) and
  * re-completing an EXISTING connection is always allowed, so a tenant
- * already over a lowered cap is never wedged — they just can't add more.
+ * already over a lowered cap is never wedged: they just can't add more.
  *
  * The gate lives server-side (same pattern as src/lib/residency/tier-gate.ts)
  * so the connect-session and connect-complete routes enforce it regardless
@@ -39,7 +43,7 @@ function isPlanTier(value: unknown): value is PlanTier {
 
 /**
  * Pure cap computation. An unknown/missing tier is treated as starter (the
- * most conservative cap) — the connect routes should never mint quota for a
+ * most conservative cap): the connect routes should never mint quota for a
  * business whose plan can't be established.
  */
 export function workspaceConnectionCapState(
@@ -89,7 +93,7 @@ export async function resolveWorkspaceConnectionCapState(
 
 /**
  * Throws {@link WorkspaceConnectionCapError} when the business cannot add
- * another workspace connection. A DB read error propagates (fail closed —
+ * another workspace connection. A DB read error propagates (fail closed:
  * the connect can be retried; silently minting quota cannot be undone).
  */
 export async function assertWorkspaceConnectionAllowed(
@@ -114,7 +118,7 @@ export type WorkspaceConnectionInsertSettlement = {
  * PR): the pre-insert check reads a count and later upserts without a
  * transaction, so two parallel connects can BOTH pass it. Called after the
  * upsert, this re-reads the rows in deterministic order (created_at, id)
- * and tells the caller to evict its own row when it landed past the cap —
+ * and tells the caller to evict its own row when it landed past the cap:
  * seats belong to the earliest rows, so the final state can never exceed
  * the cap no matter how many connects race. A racer that over-evicts on a
  * created_at tie only leaves the tenant UNDER the cap (safe direction).
@@ -144,7 +148,7 @@ export async function settleWorkspaceConnectionInsert(
     (r) =>
       r.provider_config_key === link.providerConfigKey && r.connection_id === link.connectionId
   );
-  // idx === -1: the row is already gone (a concurrent delete) — nothing to
+  // idx === -1: the row is already gone (a concurrent delete), nothing to
   // evict. Otherwise the row keeps its seat only inside the first `max`.
   if (idx === -1 || idx < state.max) return { state, evictRowId: null };
   return { state, evictRowId: ordered[idx].id };

@@ -45,13 +45,21 @@ describe("workspaceConnectionCapState (pure)", () => {
     expect(workspaceConnectionCapState("starter", 1)).toEqual({ used: 1, max: 1, atCap: true });
   });
 
-  it("caps standard at 3", () => {
-    expect(workspaceConnectionCapState("standard", 2)).toEqual({ used: 2, max: 3, atCap: false });
-    expect(workspaceConnectionCapState("standard", 3)).toEqual({ used: 3, max: 3, atCap: true });
+  it("caps standard at 10", () => {
+    expect(workspaceConnectionCapState("standard", 9)).toEqual({ used: 9, max: 10, atCap: false });
+    expect(workspaceConnectionCapState("standard", 10)).toEqual({
+      used: 10,
+      max: 10,
+      atCap: true
+    });
   });
 
   it("treats a grandfathered over-cap count as at cap (blocks new, keeps existing)", () => {
-    expect(workspaceConnectionCapState("standard", 5)).toEqual({ used: 5, max: 3, atCap: true });
+    expect(workspaceConnectionCapState("standard", 12)).toEqual({
+      used: 12,
+      max: 10,
+      atCap: true
+    });
   });
 
   it("enterprise is unlimited (max null, never at cap)", () => {
@@ -143,7 +151,7 @@ describe("settleWorkspaceConnectionInsert (post-insert race settle)", () => {
     );
     const settlement = await settleWorkspaceConnectionInsert("biz-1", link);
     expect(settlement.evictRowId).toBeNull();
-    expect(settlement.state).toEqual({ used: 2, max: 3, atCap: false });
+    expect(settlement.state).toEqual({ used: 2, max: 10, atCap: false });
   });
 
   it("evicts the racer whose row landed past the cap (seats go to the earliest rows)", async () => {

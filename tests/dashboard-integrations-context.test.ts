@@ -158,13 +158,11 @@ describe("loadIntegrationsContext", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       mockDb([{ id: BIZ, tier: "standard" }]) as never
     );
-    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      { id: "a" },
-      { id: "b" },
-      { id: "c" }
-    ] as never);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue(
+      Array.from({ length: 10 }, (_, i) => ({ id: `row-${i}` })) as never
+    );
     const ctx = await loadIntegrationsContext("/dashboard/integrations");
-    expect(ctx.workspaceConnectionCap).toEqual({ used: 3, max: 3, atCap: true });
+    expect(ctx.workspaceConnectionCap).toEqual({ used: 10, max: 10, atCap: true });
     // Standard tier → the Slack integration is available.
     expect(ctx.slackEnabled).toBe(true);
 
