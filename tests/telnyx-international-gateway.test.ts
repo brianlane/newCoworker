@@ -8,7 +8,8 @@ import {
   internationalGatewayFrom as edgeGatewayFrom,
   partitionInternationalSmsRecipients,
   resolveGatewayInboundBusiness,
-  resolveInternationalFrom
+  resolveInternationalFrom,
+  INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON
 } from "../supabase/functions/_shared/sms_international_gateway";
 
 describe("isInternationalSmsDestination", () => {
@@ -52,6 +53,10 @@ describe("internationalGatewayFrom", () => {
 
   it("exports a stable user-facing MMS refusal message", () => {
     expect(INTERNATIONAL_MMS_ERROR).toMatch(/[Pp]icture/);
+  });
+
+  it("exports a stable no-gateway skip reason (recorded in step results and autopsies)", () => {
+    expect(INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON).toBe("international_sms_no_gateway");
   });
 });
 

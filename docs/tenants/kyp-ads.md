@@ -25,8 +25,7 @@ problem rather than a messaging problem.
 
 ## Flows
 
-Live snapshot 2026-08-10 (5 on / 8 total). The VFM flow joins this table
-when `seed-vfm-lead-aiflow.ts` runs.
+Live snapshot 2026-08-12 (6 on / 9 total).
 
 | Flow | State | Note |
 | --- | --- | --- |
@@ -35,6 +34,7 @@ when `seed-vfm-lead-aiflow.ts` runs.
 | Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation. `event_start`, 60 min lead, scoped to events containing "KYP Ads \| Free Strategy Call", so the VFM flow's T-60 confirmation never overlaps it |
 | No-show recovery text (calendar, 3) | **on** | Live since 2026-08-01, and it has sent. The row still says "awaiting approval" in its own name because James never approved it going live: treat that as an open question for him, not as a reason to flip it off. Fires only for no-shows marked in Calendly within 2h |
 | Follow-up send: Stefan, Windshield Place (manual, 1) | on | One-off manual send_email |
+| VFM lead follow-up (Vantage Flow Media) (webhook, 21) | on | Seeded 2026-08-10 by `seed-vfm-lead-aiflow.ts` in emailOnly mode (Liz has no roster row yet); claims the three VFM Meta form names. Live volume since 2026-08-12. See the VFM section and the international-lead sharp edge |
 | Proposal follow-up, email (tag_changed, 8) | off | Fires on the `proposal-sent` tag when enabled |
 | Wrong-link booking flag (calendar, 2) | off | Blocked on the warm list |
 | Proposal send + follow-up (manual, 6) | off | Awaiting approval; James triggers it manually |
@@ -99,6 +99,29 @@ How the pieces fit:
   `tests/e2e/kyp-invitee-timezone-label.e2e.test.ts` (live) and the hermetic
   block in `tests/oneshot-kyp-definitions.test.ts`. James is relocating to
   Hong Kong, so assume international invitees are normal here.
+- **A real international lead phone no longer kills a run, but no text ever
+  reaches that lead either.** 2026-08-12: the first live lead off the
+  "VF Media | High Intent v2" form arrived with a genuine Indian mobile
+  (+91...). The VFM greeting send died at Telnyx (409/40306, "Alpha sender
+  not configured": tenant long codes are domestic-only, ticket #557577), and
+  the terminal step failure killed the run with 13 steps never run: the
+  whole nudge ladder, the "lead went quiet" flag to Liz, and the wrap-up.
+  Only the earlier s_fyi email to Liz went out. The worker now skips any 1:1
+  text to a non-US/CA destination while no P2P gateway is configured
+  (TELNYX_INTL_GATEWAY_E164 unset): step result
+  `international_sms_no_gateway`, a note in actions_taken, a warn
+  (`ai_flow_sms_international_skipped`) in this account's log tail, and the
+  run continues (pinned by
+  `tests/worker-integration/international-sms-skip.itest.ts`, which also
+  covers the +852 roster-send class above). Still open, deliberately: the
+  bad-phone intake arm (email the lead, tell the human, skip the ladder)
+  keys on lead_phone = "none" and does NOT fire for a real international
+  number, because blanking it at extract would strip the number from the
+  contact record and the human alerts. Until that arm learns "textable" as
+  a separate idea from "present", an international lead gets no automated
+  outreach, just the FYI email and, about two days later, the ladder's
+  went-quiet flag with its "no reply to 3 messages" framing, which
+  overstates what was actually sent.
 - **If James switches his owner phone to a Hong Kong (+852) number, every
   SMS to him goes dark and stays dark.** Telnyx confirmed (ticket #557577,
   Aug 2026) that our long codes cannot originate SMS outside NANP at all,

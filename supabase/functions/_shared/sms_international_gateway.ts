@@ -58,6 +58,15 @@ export function resolveInternationalFrom(
 export const INTERNATIONAL_MMS_SKIP_REASON = "international_mms_unsupported";
 
 /**
+ * Machine-readable skip reason for a text whose destination is international
+ * while no P2P gateway is configured: the send has no route at all (tenant
+ * A2P long codes are domestic-only, Telnyx ticket #557577), so the step
+ * skips instead of dying on the carrier's guaranteed permanent rejection.
+ * Surfaced in step results, flow autopsies, and the per-business system log.
+ */
+export const INTERNATIONAL_SMS_NO_GATEWAY_SKIP_REASON = "international_sms_no_gateway";
+
+/**
  * Split group-send recipients into domestic (can ride the tenant's group
  * MMS) and international (cannot: group sends are MMS-billed and the
  * gateway is text-only). Unresolvable numbers count as international so a
