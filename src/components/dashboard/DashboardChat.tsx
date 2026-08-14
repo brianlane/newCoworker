@@ -21,6 +21,7 @@ import {
   useDashboardChatTransport,
   type ChatDraft
 } from "@/components/dashboard/useDashboardChatTransport";
+import { stashDraftForEditor } from "@/components/dashboard/chat-draft-handoff";
 
 type Props = {
   businessId: string;
@@ -172,31 +173,11 @@ export function DashboardChat({ businessId, businessName }: Props) {
     setAttachedDocumentId("");
   }
 
-  // Open a creation draft in its editor: stash it in sessionStorage (the
-  // same hand-off contract the AiFlows library "Adapt with AI" flow uses)
-  // and navigate. Nothing is saved until the owner saves it there.
+  // Open a creation draft in its editor via the shared hand-off (one
+  // sessionStorage contract for both shells; the companion panel uses the
+  // same helper). Nothing is saved until the owner saves it there.
   function openDraft(draft: ChatDraft) {
-    try {
-      if (draft.kind === "aiflow") {
-        sessionStorage.setItem("aiflow_adapt_draft", JSON.stringify(draft.definition));
-        if (draft.warnings.length > 0) {
-          sessionStorage.setItem("aiflow_adapt_warnings", JSON.stringify(draft.warnings));
-        } else {
-          sessionStorage.removeItem("aiflow_adapt_warnings");
-        }
-        router.push("/dashboard/aiflows?adapt=1");
-      } else {
-        sessionStorage.setItem(
-          "agent_create_draft",
-          JSON.stringify({
-            name: draft.name,
-            instructions: draft.instructions,
-            outputFormat: draft.outputFormat
-          })
-        );
-        router.push("/dashboard/agents?draft=1");
-      }
-    } catch {
+    if (!stashDraftForEditor(draft, (href) => router.push(href))) {
       setError("Could not open the draft: your browser blocked session storage.");
     }
   }

@@ -79,6 +79,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.activityFilters",
       "dashboard.billing.autoReload",
       "dashboard.bookings",
+      "dashboard.companion",
       "dashboard.contacts",
       "dashboard.employeeAvailability",
       "dashboard.humanHandoff",

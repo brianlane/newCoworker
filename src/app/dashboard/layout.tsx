@@ -2,6 +2,7 @@ import type { Viewport } from "next";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
+import { CompanionLauncher } from "@/components/dashboard/companion/CompanionLauncher";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
@@ -222,6 +223,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {requireAcceptance && <TermsAcceptanceGate />}
         {children}
       </main>
+      {/* Ask AI companion: the same conversation as /dashboard/chat, on
+          every page. Hidden on the chat page itself (inside the launcher),
+          read-only-noticed under admin view-as, and NOT mounted while the
+          terms clickwrap is due — the panel shares z-50 with the gate and
+          must never paint over it (Bugbot Medium on PR #1383). */}
+      {businessId && !requireAcceptance && (
+        <CompanionLauncher businessId={businessId} viewAsActive={!!viewAs} />
+      )}
     </div>
     </SectionMessages>
   );
