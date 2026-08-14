@@ -155,7 +155,7 @@ export function CalendlyIntegrationCard({ businessId, initialConnections }: Prop
             one account and bookings on any of them are seen.
           </p>
         </div>
-        <Badge variant={anyConnected ? "success" : "neutral"}>
+        <Badge variant={anyConnected ? "success" : "neutral"} className="whitespace-nowrap">
           {anyConnected
             ? connections.length === 1
               ? "Connected"
