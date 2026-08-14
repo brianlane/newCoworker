@@ -75,10 +75,24 @@ How the pieces fit:
   FIRST-PARTY Google OAuth on 2026-08-13 (`transport = direct`, same row id, no
   owner action needed: the refresh token Nango held was redeemed against our own
   verified client). Its grant carries `calendar.events` and the identity scopes
-  and **no `gmail.modify` at all**, so it cannot serve mail and never could. No
-  AiFlow binds it (all 47 checked), so nothing is broken by that, but if James
-  ever wants email through Google it needs a fresh consent rather than a token
-  migration. The row is also unlabeled in the older sense, carrying only
+  and **no `gmail.modify` at all**, so it cannot serve mail and never could. If
+  James ever wants email through Google it needs a fresh consent rather than a
+  token migration.
+  "No AiFlow binds it" was true and still is (all 47 checked), but it was the
+  wrong question, and reading it as "nothing uses it" was wrong. Nothing binds
+  this row EXPLICITLY; the resolver reached it IMPLICITLY. `resolveEmailConnection`
+  walks `EMAIL_PROVIDER_CONFIG_KEYS` in order and `google` precedes `outlook`, so
+  every caller that resolves a mailbox without a `fromConnectionId` got this
+  Gmail-less row and a 403, shadowing the two WORKING Outlook mailboxes this
+  tenant also has. The affected surfaces were `sendFromOwnerMailbox` (the voice
+  `send_follow_up_email` tool) and the email-coworker inbox poll. Ordinary flow
+  sends were never affected, because those go out through the tenant AI mailbox
+  (`sam@newcoworker.com`), which is why nothing looked broken. Fixed in #1358:
+  the resolver now skips a row whose recorded grant proves it cannot serve mail,
+  and KYP email resolves to `microsoft/outlook` (verified reachable, 200).
+  This predated the first-party migration; the row carried the same calendar-only
+  grant on Nango since 2026-07-22 and `google` already preceded `outlook`.
+  The row is also unlabeled in the older sense, carrying only
   `end_user_email`, which is why a dashboard reconnect would take the
   identity-probe branch for this tenant, which is why #1352 had to route that
   probe through the transport-aware seam: a Nango-only probe cannot resolve this
