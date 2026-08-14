@@ -404,3 +404,27 @@ describe("intakeSystemInstruction: voicemail deference", () => {
     expect(instr).toContain("Never read out lead details");
   });
 });
+
+/**
+ * The keypad exception has to be spent once used. The IVR cue stays in the
+ * session after the accept, so an open-ended "press when a recording asks"
+ * would follow the call into whatever recording comes next.
+ *
+ * This is not hypothetical: on the incident call (28f9c228) the seller's
+ * voicemail menu said "Replay your message. Press one. To continue
+ * recording, press two." Pressing into that is the same DTMF the partner
+ * gate wanted, aimed at a stranger's mailbox (Bugbot, PR #1377).
+ */
+describe("intakeSystemInstruction: the keypad exception is spent once used", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("scopes the press to the announcement it was told about", () => {
+    expect(instr).toContain("only the announcement you were told about");
+    expect(instr).toContain("spent once you have pressed");
+  });
+
+  it("names the later-recording case it must not press into", () => {
+    expect(instr).toContain("a voicemail menu offering to replay");
+    expect(instr).toContain("do not press anything");
+  });
+});
