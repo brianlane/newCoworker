@@ -29,6 +29,17 @@ type Props = {
   connections: WorkspaceConnectionClient[];
   /** Tier cap state; the server routes enforce it, this only explains it. */
   cap: WorkspaceConnectionCapClient;
+  /**
+   * Whether THIS page's connect action would actually be refused, which is
+   * not the same as being at the cap.
+   *
+   * A reconnect consumes no seat, so an at-cap owner who already holds a row
+   * for this provider still gets an enabled Connect button. Telling them to
+   * "remove one or upgrade" underneath a working button is worse than
+   * unhelpful: the row they would remove is the one their AiFlows are bound
+   * to, and removing it is exactly what the reconnect path exists to avoid.
+   */
+  connectBlocked: boolean;
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -89,7 +100,12 @@ function connectionPrimaryLabel(
  * lives on each page rather than here: first-party OAuth buttons for Google
  * and Microsoft, the Nango Connect UI for the long tail.
  */
-export function WorkspaceConnectionList({ businessId, connections, cap }: Props) {
+export function WorkspaceConnectionList({
+  businessId,
+  connections,
+  cap,
+  connectBlocked
+}: Props) {
   const t = useTranslations("dashboard.integrationsWorkspace");
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
@@ -172,8 +188,19 @@ export function WorkspaceConnectionList({ businessId, connections, cap }: Props)
         </p>
       ) : null}
 
-      {atCap ? (
+      {/* Two different messages, because at-cap means two different things
+          here. Blocked: the only way forward is a seat or an upgrade. Not
+          blocked: the button above still works, because reconnecting the
+          account already listed costs no seat, and the owner needs to be told
+          that rather than pointed at the remove button. */}
+      {atCap && connectBlocked ? (
         <p className="text-xs text-parchment/60">{t("capReached", { max: cap.max ?? 0 })}</p>
+      ) : null}
+
+      {atCap && !connectBlocked ? (
+        <p className="text-xs text-parchment/60">
+          {t("capReachedReconnectOk", { max: cap.max ?? 0 })}
+        </p>
       ) : null}
     </div>
   );

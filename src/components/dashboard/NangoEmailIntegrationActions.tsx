@@ -109,7 +109,14 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
     <div className="space-y-3">
       {banner ? <p className="text-xs text-spark-orange">{banner}</p> : null}
 
-      <WorkspaceConnectionList businessId={businessId} connections={connections} cap={cap} />
+      {/* No reconnect exemption on this tile: the Nango session route refuses
+          outright at the cap, so at-cap always means blocked here. */}
+      <WorkspaceConnectionList
+        businessId={businessId}
+        connections={connections}
+        cap={cap}
+        connectBlocked={atCap}
+      />
 
       <Button
         type="button"

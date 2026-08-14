@@ -69,6 +69,18 @@ function IntegrationBody({
   switch (slug) {
     case "google": {
       const rows = workspaceRowsFor(ctx, "google");
+      // Mirrors the connect route exactly: at the cap is not enough, because a
+      // reconnect consumes no seat. Any Google-family key counts, since the
+      // Nango era left four of them and a tenant on `google-mail` reconnects
+      // onto their existing row just like one on `google`. Matched against the
+      // route's own key list rather than the displayed rows, same as Outlook
+      // below. Computed ONCE so the button and the cap copy beneath it cannot
+      // contradict each other.
+      const blocked =
+        ctx.workspaceConnectionCap.atCap &&
+        !ctx.workspaceConnections.some((r) =>
+          (GOOGLE_KEYS as readonly string[]).includes(r.provider_config_key)
+        );
       return (
         <IntegrationCard
           title="Google"
@@ -77,25 +89,12 @@ function IntegrationBody({
           status={rows.length > 0 ? "connected" : "disconnected"}
         >
           <div className="space-y-3">
-            <GoogleConnectButton
-              businessId={businessId}
-              // Mirrors the connect route exactly: at the cap is not enough,
-              // because a reconnect consumes no seat. Any Google-family key
-              // counts, since the Nango era left four of them and a tenant on
-              // `google-mail` reconnects onto their existing row just like one
-              // on `google`. Matched against the route's own key list rather
-              // than the displayed rows, same as Outlook below.
-              blocked={
-                ctx.workspaceConnectionCap.atCap &&
-                !ctx.workspaceConnections.some((r) =>
-                  (GOOGLE_KEYS as readonly string[]).includes(r.provider_config_key)
-                )
-              }
-            />
+            <GoogleConnectButton businessId={businessId} blocked={blocked} />
             <WorkspaceConnectionList
               businessId={businessId}
               connections={rows}
               cap={workspaceCap(ctx)}
+              connectBlocked={blocked}
             />
           </div>
         </IntegrationCard>
@@ -103,6 +102,19 @@ function IntegrationBody({
     }
     case "microsoft": {
       const rows = workspaceRowsFor(ctx, "microsoft");
+      // Same reasoning as Google: at the cap is not enough, because a reconnect
+      // consumes no seat. An at-cap tenant holding an Outlook row is precisely
+      // who needs this button, to migrate off Nango.
+      //
+      // Matched against OUTLOOK_KEYS, not against the rows this tile DISPLAYS.
+      // The tile also shows legacy `outlook-calendar` rows, but the connect
+      // route will not reconnect onto one, so counting it here would enable a
+      // button the server then refuses.
+      const blocked =
+        ctx.workspaceConnectionCap.atCap &&
+        !ctx.workspaceConnections.some((r) =>
+          (OUTLOOK_KEYS as readonly string[]).includes(r.provider_config_key)
+        );
       return (
         <IntegrationCard
           title="Microsoft 365"
@@ -111,27 +123,12 @@ function IntegrationBody({
           status={rows.length > 0 ? "connected" : "disconnected"}
         >
           <div className="space-y-3">
-            <MicrosoftConnectButton
-              businessId={businessId}
-              // Same reasoning as Google: at the cap is not enough, because a
-              // reconnect consumes no seat. An at-cap tenant holding an Outlook
-              // row is precisely who needs this button, to migrate off Nango.
-              //
-              // Matched against OUTLOOK_KEYS, not against the rows this tile
-              // DISPLAYS. The tile also shows legacy `outlook-calendar` rows,
-              // but the connect route will not reconnect onto one, so counting
-              // it here would enable a button the server then refuses.
-              blocked={
-                ctx.workspaceConnectionCap.atCap &&
-                !ctx.workspaceConnections.some((r) =>
-                  (OUTLOOK_KEYS as readonly string[]).includes(r.provider_config_key)
-                )
-              }
-            />
+            <MicrosoftConnectButton businessId={businessId} blocked={blocked} />
             <WorkspaceConnectionList
               businessId={businessId}
               connections={rows}
               cap={workspaceCap(ctx)}
+              connectBlocked={blocked}
             />
           </div>
         </IntegrationCard>

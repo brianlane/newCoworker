@@ -1918,6 +1918,7 @@
     "integrationsWorkspace": {
       "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso entre Google, Microsoft 365 y otros servicios",
       "capReached": "Tu plan incluye {max, plural, one {# conexión de espacio de trabajo} other {# conexiones de espacio de trabajo}}. Elimina una o mejora tu plan para conectar otra.",
+      "capReachedReconnectOk": "{max, plural, one {La # conexión de espacio de trabajo de tu plan está} other {Las # conexiones de espacio de trabajo de tu plan están}} en uso. Aún puedes volver a conectar la cuenta de abajo, lo que no ocupa un espacio adicional. Añadir una cuenta distinta requiere un espacio libre o mejorar tu plan.",
       "connectMicrosoft": "Conectar Outlook",
       "connectMicrosoftHelp": "Microsoft 365 o una cuenta personal de Outlook. Incluye correo y calendario.",
       "connectGoogle": "Conectar Google",
