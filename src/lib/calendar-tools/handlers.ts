@@ -293,6 +293,78 @@ export function computeFreeSlots(
  * Callers pass google/microsoft connections only (the resolver's vagaro /
  * calendly / caldav providers never reach this fetch).
  */
+/**
+ * True when a thrown proxy error carries a real HTTP status, i.e. the provider
+ * answered and refused.
+ *
+ * The distinction is the whole point of the getSchedule fallback: "Microsoft
+ * says this mailbox has no getSchedule" is worth retrying a different way,
+ * while "we never reached Microsoft" is not, and trying anyway would turn one
+ * timeout into two.
+ */
+function isProviderRejection(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const response = (err as { response?: unknown }).response;
+  if (!response || typeof response !== "object") return false;
+  const status = (response as { status?: unknown }).status;
+  return typeof status === "number" && status >= 400 && status <= 599;
+}
+
+/** Graph events that do NOT make the owner busy. */
+const GRAPH_FREE_SHOW_AS = new Set(["free", "workingElsewhere"]);
+
+/**
+ * Busy blocks from a Graph calendarView window.
+ *
+ * Used for the shared "NewCoworker" calendar, and as the personal-account
+ * substitute for getSchedule. Unlike getSchedule, which returns availability
+ * directly, this returns EVENTS, so `showAs` has to be honored here: an event
+ * the owner marked free or working-elsewhere is not busy, and treating it as
+ * busy would quietly delete real availability.
+ *
+ * Cancelled events are dropped for the same reason. Returns null only when the
+ * connection itself yields nothing.
+ */
+async function readCalendarViewBusy(
+  businessId: string,
+  conn: { connectionId: string; providerConfigKey: string },
+  endpoint: string,
+  windowStart: Date,
+  windowEnd: Date
+): Promise<Array<{ start: Date; end: Date }> | null> {
+  const res = await workspaceProxyForBusiness(
+    businessId,
+    { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+    {
+      endpoint,
+      method: "GET",
+      params: {
+        startDateTime: windowStart.toISOString(),
+        endDateTime: windowEnd.toISOString()
+      }
+    }
+  );
+  if (!res) return null;
+
+  type GraphView = {
+    value?: Array<{
+      start?: { dateTime: string };
+      end?: { dateTime: string };
+      showAs?: string;
+      isCancelled?: boolean;
+    }>;
+  };
+  const items = ((res.data ?? null) as GraphView | null)?.value ?? [];
+  return items
+    .filter((i) => i.start?.dateTime && i.end?.dateTime)
+    .filter((i) => i.isCancelled !== true)
+    .filter((i) => !(typeof i.showAs === "string" && GRAPH_FREE_SHOW_AS.has(i.showAs)))
+    .map((i) => ({
+      start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+      end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+    }));
+}
+
 export async function getWorkspaceBusyBlocks(
   businessId: string,
   conn: { provider: string; connectionId: string; providerConfigKey: string },
@@ -326,62 +398,83 @@ export async function getWorkspaceBusyBlocks(
   }
 
   // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
-  const res = await workspaceProxyForBusiness(
-    businessId,
-    { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-    {
-      endpoint: "/v1.0/me/calendar/getSchedule",
-      method: "POST",
-      data: {
-        startTime: { dateTime: windowStart.toISOString(), timeZone: "UTC" },
-        endTime: { dateTime: windowEnd.toISOString(), timeZone: "UTC" },
-        availabilityViewInterval: opts.availabilityViewInterval ?? 30,
-        schedules: ["me"]
+  //
+  // Work/school only. A PERSONAL Microsoft account has no getSchedule at all
+  // and rejects the call, so this is wrapped: without the fallback below, every
+  // caller degrades to "calendar_lookup_failed" and a personal-Outlook tenant
+  // silently loses all availability (no slot offers, an unreadable booking
+  // page, and a waitlist that treats every slot as taken forever).
+  let res: Awaited<ReturnType<typeof workspaceProxyForBusiness>> = null;
+  let getScheduleFailed = false;
+  try {
+    res = await workspaceProxyForBusiness(
+      businessId,
+      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+      {
+        endpoint: "/v1.0/me/calendar/getSchedule",
+        method: "POST",
+        data: {
+          startTime: { dateTime: windowStart.toISOString(), timeZone: "UTC" },
+          endTime: { dateTime: windowEnd.toISOString(), timeZone: "UTC" },
+          availabilityViewInterval: opts.availabilityViewInterval ?? 30,
+          schedules: ["me"]
+        }
       }
-    }
-  );
-  if (!res) return null;
-  type GraphBusy = {
-    value?: Array<{
-      scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
-    }>;
-  };
-  const data = res.data as GraphBusy;
-  const items = data?.value?.[0]?.scheduleItems ?? [];
-  let busy = items
-    .filter((i) => i.start?.dateTime && i.end?.dateTime)
-    .map((i) => ({
-      start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
-      end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
-    }));
+    );
+  } catch (err) {
+    // Only a PROVIDER rejection falls back. A transport failure (no response
+    // at all) is not evidence the mailbox lacks getSchedule, and retrying it
+    // against a different endpoint would just double the outage.
+    if (!isProviderRejection(err)) throw err;
+    getScheduleFailed = true;
+    logger.info("getSchedule unavailable; falling back to calendarView", {
+      businessId,
+      providerConfigKey: conn.providerConfigKey
+    });
+  }
+
+  let busy: Array<{ start: Date; end: Date }>;
+  if (getScheduleFailed) {
+    // calendarView is supported on personal accounts. Busy is derived from the
+    // events themselves, so `showAs` decides: an event the owner marked free
+    // must not block a slot the way getSchedule would never have reported it.
+    const fallback = await readCalendarViewBusy(
+      businessId,
+      conn,
+      "/v1.0/me/calendarView",
+      windowStart,
+      windowEnd
+    );
+    if (fallback === null) return null;
+    busy = fallback;
+  } else {
+    if (!res) return null;
+    type GraphBusy = {
+      value?: Array<{
+        scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+      }>;
+    };
+    const data = res.data as GraphBusy;
+    const items = data?.value?.[0]?.scheduleItems ?? [];
+    busy = items
+      .filter((i) => i.start?.dateTime && i.end?.dateTime)
+      .map((i) => ({
+        start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+        end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+      }));
+  }
 
   // getSchedule only covers the default calendar; pull the shared
   // NewCoworker calendar's events separately and merge them in.
   if (shared) {
-    const viewRes = await workspaceProxyForBusiness(
+    const sharedBusy = await readCalendarViewBusy(
       businessId,
-      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-      {
-        endpoint: `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/calendarView`,
-        method: "GET",
-        params: {
-          startDateTime: windowStart.toISOString(),
-          endDateTime: windowEnd.toISOString()
-        }
-      }
+      conn,
+      `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/calendarView`,
+      windowStart,
+      windowEnd
     );
-    type GraphView = {
-      value?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
-    };
-    const viewItems = ((viewRes?.data ?? null) as GraphView | null)?.value ?? [];
-    busy = busy.concat(
-      viewItems
-        .filter((i) => i.start?.dateTime && i.end?.dateTime)
-        .map((i) => ({
-          start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
-          end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
-        }))
-    );
+    if (sharedBusy) busy = busy.concat(sharedBusy);
   }
   return busy;
 }

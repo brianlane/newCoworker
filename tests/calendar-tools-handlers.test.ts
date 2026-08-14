@@ -1882,3 +1882,116 @@ describe("getWorkspaceBusyBlocks (direct — the booking page's busy fetch)", ()
     expect(await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END)).toBeNull();
   });
 });
+
+describe("getWorkspaceBusyBlocks: personal Outlook has no getSchedule", () => {
+  const conn = {
+    provider: "microsoft",
+    connectionId: "direct:abc",
+    providerConfigKey: "outlook"
+  };
+  const windowStart = new Date("2026-08-20T09:00:00Z");
+  const windowEnd = new Date("2026-08-20T17:00:00Z");
+
+  /** What the transport throws on a provider rejection. */
+  function providerRejection(status: number) {
+    return Object.assign(new Error(`Provider request failed (${status})`), {
+      response: { status, data: { error: { code: "ErrorInvalidUser" } } }
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSharedCalendar).mockResolvedValue(null as never);
+  });
+
+  it("falls back to calendarView when getSchedule is rejected", async () => {
+    // A personal Microsoft account rejects getSchedule outright. Before the
+    // fallback this threw, every caller caught it, and the tenant silently had
+    // no availability at all: no slot offers, an unreadable booking page, and
+    // a waitlist that treated every slot as permanently taken.
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          value: [
+            { start: { dateTime: "2026-08-20T10:00:00" }, end: { dateTime: "2026-08-20T11:00:00" } }
+          ]
+        }
+      } as never);
+
+    const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
+
+    expect(busy).toEqual([
+      { start: new Date("2026-08-20T10:00:00Z"), end: new Date("2026-08-20T11:00:00Z") }
+    ]);
+    const second = vi.mocked(workspaceProxyForBusiness).mock.calls[1];
+    expect((second[2] as { endpoint: string }).endpoint).toBe("/v1.0/me/calendarView");
+  });
+
+  it("honors showAs: an event marked free does not block a slot", async () => {
+    // getSchedule returns availability; calendarView returns EVENTS. Without
+    // reading showAs the fallback would invent busy time the primary path
+    // would never have reported, quietly deleting real availability.
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          value: [
+            { start: { dateTime: "2026-08-20T10:00:00" }, end: { dateTime: "2026-08-20T11:00:00" }, showAs: "free" },
+            { start: { dateTime: "2026-08-20T12:00:00" }, end: { dateTime: "2026-08-20T13:00:00" }, showAs: "workingElsewhere" },
+            { start: { dateTime: "2026-08-20T14:00:00" }, end: { dateTime: "2026-08-20T15:00:00" }, showAs: "busy" },
+            { start: { dateTime: "2026-08-20T16:00:00" }, end: { dateTime: "2026-08-20T17:00:00" }, isCancelled: true }
+          ]
+        }
+      } as never);
+
+    const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
+
+    expect(busy).toEqual([
+      { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
+    ]);
+  });
+
+  it("does NOT fall back on a transport failure, which is not evidence about the mailbox", async () => {
+    // No response means we never reached Microsoft. Retrying a different
+    // endpoint would turn one timeout into two and delay the caller twice.
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce(new Error("Provider unreachable"));
+
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).rejects.toThrow(
+      "Provider unreachable"
+    );
+    expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null when the fallback also finds no connection", async () => {
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce(null as never);
+
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toBeNull();
+  });
+
+  it("leaves the work/school path untouched when getSchedule succeeds", async () => {
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
+      status: 200,
+      data: {
+        value: [
+          {
+            scheduleItems: [
+              { start: { dateTime: "2026-08-20T09:30:00" }, end: { dateTime: "2026-08-20T10:00:00" } }
+            ]
+          }
+        ]
+      }
+    } as never);
+
+    const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
+
+    expect(busy).toEqual([
+      { start: new Date("2026-08-20T09:30:00Z"), end: new Date("2026-08-20T10:00:00Z") }
+    ]);
+    expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
+  });
+});

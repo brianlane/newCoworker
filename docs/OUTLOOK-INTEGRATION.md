@@ -234,11 +234,25 @@ failure. The admin-consent leg returns to the same callback with
 `admin_consent=True` and **no code**, which the callback treats as success and
 sends the owner back through the normal authorize leg.
 
-**Known gap: `getSchedule` is work/school only.** On a personal Outlook account
-`POST /me/calendar/getSchedule` fails, and the free/busy handler does not catch
-a throw. This predates the migration (it behaved the same through Nango) but
-becomes more visible now that personal accounts can connect. Fix is a fallback
-to `calendarView`; tracked separately.
+**`getSchedule` is work/school only, and now falls back.** A personal Outlook
+account rejects `POST /me/calendar/getSchedule` outright.
+
+Nothing ever crashed: all four callers (the `calendar_find_slots` tool, the
+booking page probe, booking availability, and waitlist fill) catch. The cost was
+quieter and worse. A personal-Outlook tenant lost availability entirely and
+invisibly: the coworker could not offer times, the booking page read as
+unreadable, and waitlist fill treated every slot as taken forever.
+
+`getWorkspaceBusyBlocks` now falls back to `GET /v1.0/me/calendarView`, which
+personal accounts do support. Two details that matter:
+
+- It falls back only on a PROVIDER rejection (a real HTTP status). A transport
+  failure means we never reached Microsoft, which says nothing about the
+  mailbox, and retrying a second endpoint would turn one timeout into two.
+- calendarView returns EVENTS, not availability, so `showAs` is honored:
+  `free` and `workingElsewhere` events, and cancelled ones, do not block a slot.
+  Skipping that would invent busy time getSchedule would never have reported and
+  quietly delete real availability.
 
 **Polling is unchanged.** Connected-mailbox watching is still the roughly
 1/minute cron poll. No Graph push subscriptions were added.
