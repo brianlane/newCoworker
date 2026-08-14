@@ -51,7 +51,7 @@ touch them:
 | Clever - Spoke Check & Weekly Call Follow-Up (owner_assigned, 15) | Owner-assigned trigger, not lead-driven |
 | Clever Cue Text | Arms an expected-call window so a transfer from a rotating Clever number is recognized (PR #781) |
 | ReferralExchange Lead (sms, 31) | Browse-screenshot steps, gated owner emails, gated MMS routing, bad-phone retry tail |
-| Realtor.com Lead + Reply forward | Reply forwarding to the lead owner |
+| Realtor.com Lead + Reply forward | Reply forwarding to the lead owner. Routing forks on `lead_type` at `rt_route_gate`: buyers round robin (Dave, Gabby, Jason, one at a time), sellers broadcast to the trio |
 | New Lead Intake (manual, 10) | Owner hands the AI a lead by name; the AI calls the lead, speaks their language, and can pin the lead to a named teammate |
 | Follow Up Requested (Unclaimed Leads) (tag_changed, 3) | Day-of router for unclaimed leads who asked for a follow-up: adding the "Follow Up Requested" tag (or Run now with context text) races Dave + Gabby (seller/both) or Dave + Gabby + Jason (buyer), 15-min claim window, Amy is the owner fallback and never in the race. Offer SMS carries *asterisk* emphasis by request |
 | Voice routing - calls from ... | Five per-source voice-routing flows, keyed to each network's caller IDs |
@@ -497,7 +497,10 @@ Broadcast copy and Realtor.com (Aug 12 2026):
   leads." New Lead Intake `route_buyer` and ReferralExchange `route_buyer` keep
   their rotation AND their "next agent" wording, which is accurate for them.
   Broadcasting those would text three people for every buyer lead, a cost she
-  weighed and declined the same day.
+  weighed and declined the same day. **Superseded for Realtor.com on Aug 14**
+  (`amy-realtor-buyer-rotation.ts`, below): its buyer half is a rotation again,
+  Jason included. The seller broadcast is exactly as this patch left it, and
+  the other two buyer routes still are.
 - **Check the COPY when you change routing.** This is the second time a
   behavior change left its description behind (the first was the dossier's own
   claim about the seller AI-call). A run's outcome line is the source of truth
@@ -738,6 +741,57 @@ broadcast to Dave + Gabrielle, buyers add Jason, Amy stays out of the race
 auto-assigns the owner, which chains into the spoke check's weekly track for
 Clever-tagged leads: intended. The offer SMS uses *asterisk* emphasis on the
 header, "today", and the reply digits, per Amy's ask.
+
+Realtor.com buyer round robin (Aug 14 2026): `amy-realtor-buyer-rotation.ts`,
+pinned by `tests/amy-realtor-buyer-rotation.test.ts`. Brian, reading Carlos
+Gonzalez's run (`86383e8c`): "Why isn't Jason getting offered this buyer lead
+too? Not simultaneously but round robin for buyer."
+
+- **Jason could never be offered a Realtor.com lead.** The flow has exactly ONE
+  team-routing step, and the Aug 12 patch above made it an `agentNames`
+  broadcast to the seller trio. His only other appearance in a route step on
+  this account is the buyer arm of "Follow Up Requested (Unclaimed Leads)". The
+  roster was never the blocker: his row is active, `routing_enabled=true`, and
+  tagged `buyer`.
+- **`route_to_team` has no tag filter.** The roster tags
+  (`amy-roster-lead-type-tags.ts`) feed `notify_lead_owner` team alerts and
+  nothing else. Tagging somebody "buyer" does not put them in a race; a
+  rotation's only subset controls are the roster's own switches (active,
+  `routing_enabled`, time off, schedules).
+- **`s4` is now an `rt_route_gate` branch** in the same trunk position: arm
+  `rt_rg_buyer` (`lead_type` equals "buyer") holds the new `s4_buyer`, and the
+  else holds `s4` unchanged. A step `when` carries ONE condition and the seller
+  path needs two (not a buyer, not AI-gated), which is why this is a branch and
+  not two gated steps: the same shape `re_seller_gate` and `nli_seller_gate`
+  already use.
+- **The buyer step names NOBODY.** A rotation resolves the roster per run, so
+  the race is Dave + Gabby + Jason today and whoever carries `routing_enabled`
+  tomorrow. A new hire with lead rotation on joins buyer leads with no flow
+  edit; the script's pre-flight lists anyone eligible beyond the expected trio
+  so it is at least visible at apply time. Amy stays out of the race and stays
+  the owner fallback through `routing_enabled=false`, untouched.
+- **`lead_auto_assign` becomes load-bearing the moment a step stops
+  broadcasting.** Broadcast deliberately ignores it; rotation honors it and
+  would HARD ASSIGN buyer leads ("it's yours, no reply needed") instead of
+  offering them. It is false on this account, and the script aborts if it is
+  ever true.
+- **Both routes keep `price_gate notEquals "ai"`**, so the under-$500K
+  AI-owned gate outranks either path, including a self-contradicting
+  extraction: `price_gate` "ai" with `lead_type` "buyer" offers nobody, exactly
+  as before.
+- **Rotation is slower, and that is what "not simultaneously" costs.** 10
+  minutes per teammate in turn, then the 3-round, 20-minute reminder ladder
+  over everyone already offered, then Amy: up to roughly 90 minutes, against 10
+  plus the ladder while it was a broadcast. It is the same shape the
+  ReferralExchange and New Lead Intake buyer routes already run.
+- **Copy moved with the routing**, the third time of asking on this account.
+  The rotation offer regains ", or it goes to the next agent" and loses "First
+  to reply 1 gets it"; the broadcast keeps first-to-claim and its title stops
+  calling every Realtor.com lead a buyer. **The offer copy now lives in TWO
+  steps**: a later script that rewords `s4` has to reword `s4_buyer` too.
+- **This supersedes the Aug 12 "buyer routes are untouched" line for
+  Realtor.com only.** New Lead Intake and ReferralExchange `route_buyer` are
+  still exactly as Amy left them.
 
 Account-level: `seed-amy-new-lead-intake.ts`,
 `backfill-amy-lead-stages.ts`,
