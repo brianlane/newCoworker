@@ -36,6 +36,7 @@ describe("allMcpTools", () => {
         "delete_agent",
         "fetch",
         "get_business",
+        "get_business_knowledge",
         "get_contact",
         "get_flow",
         "get_flow_schema",
@@ -56,7 +57,10 @@ describe("allMcpTools", () => {
         "set_flow_enabled",
         "trigger_flow",
         "update_agent",
+        "update_business_knowledge",
+        "update_business_profile",
         "update_contact",
+        "update_coworker_tool_settings",
         "update_employee",
         "update_flow",
         "update_notification_preferences"

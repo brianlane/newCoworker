@@ -376,3 +376,27 @@ re-annotated without this file being updated in the same PR.
 - **Read Only: True** Reads the owner's current alert toggles. No writes.
 - **Open World: False** Reads one settings row from our own database. No external service is contacted.
 - **Destructive: False** Nothing is created, changed or removed. It reports the current settings only.
+
+### `update_business_profile`
+
+- **Read Only: False** It writes the business's weekly hours and/or timezone to our database.
+- **Open World: False** A profile write in our own database; the follow-up grounding refresh stays inside our platform. No message leaves and no third party is contacted.
+- **Destructive: True** Destructive because a submitted day or timezone overwrites the stored value, and an explicit null closes a day that previously had hours.
+
+### `get_business_knowledge`
+
+- **Read Only: True** Reads the coworker's identity document from our database and splits it into sections. No writes.
+- **Open World: False** Reads one row from our own database. No external service is contacted.
+- **Destructive: False** Nothing is created, changed or removed. It reports the document's current sections only.
+
+### `update_business_knowledge`
+
+- **Read Only: False** It rewrites one section of the coworker's identity document (or appends a new one).
+- **Open World: False** A document write in our own database; the follow-up knowledge-graph extract and agent sync stay inside our platform. No message leaves this call.
+- **Destructive: True** Destructive because the targeted section's body is replaced with the new text; the previous wording of that section is gone after the write.
+
+### `update_coworker_tool_settings`
+
+- **Read Only: False** It writes per-surface tool policy rows that control what the coworker may do on each channel.
+- **Open World: False** A settings write in our own database. No message is sent by this call.
+- **Destructive: True** Destructive because each listed surface's stored setting is overwritten, and disabling a tool immediately removes a capability the coworker was using on that channel.

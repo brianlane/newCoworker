@@ -34,6 +34,9 @@ import { flowTools } from "@/lib/mcp/tools/flows";
 import { agentTools } from "@/lib/mcp/tools/agents";
 import { notificationTools } from "@/lib/mcp/tools/notifications";
 import { searchTools } from "@/lib/mcp/tools/search";
+import { businessProfileTools } from "@/lib/mcp/tools/business-profile";
+import { businessKnowledgeTools } from "@/lib/mcp/tools/business-knowledge";
+import { coworkerToolSettingsTools } from "@/lib/mcp/tools/coworker-tool-settings";
 import {
   MCP_WIDGETS,
   MCP_WIDGET_MIME,
@@ -51,7 +54,10 @@ export const allMcpTools: McpToolDef[] = [
   ...employeeTools,
   ...flowTools,
   ...agentTools,
-  ...notificationTools
+  ...notificationTools,
+  ...businessProfileTools,
+  ...businessKnowledgeTools,
+  ...coworkerToolSettingsTools
 ];
 
 /**
