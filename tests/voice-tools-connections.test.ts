@@ -39,8 +39,19 @@ import {
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
-function fakeRow(provider_config_key: string, connection_id = `cx-${provider_config_key}`) {
-  return { provider_config_key, connection_id } as never;
+function fakeRow(
+  provider_config_key: string,
+  connection_id = `cx-${provider_config_key}`,
+  over: { is_active?: boolean; oauth_scope?: string | null } = {}
+) {
+  // Realistic defaults: a live row with no recorded scope, which is what every
+  // Nango row looks like. Cases that exercise the capability gate override them.
+  return {
+    provider_config_key,
+    connection_id,
+    is_active: over.is_active ?? true,
+    oauth_scope: over.oauth_scope ?? null
+  } as never;
 }
 
 describe("resolveVoiceConnection", () => {
@@ -296,7 +307,7 @@ describe("resolveSharedCalendarHost", () => {
   it("resolves a Google host for a business whose BOOK lives on Vagaro", async () => {
     // The headline fix. resolveCalendarConnection answers "who takes the
     // booking?" and Vagaro wins that, which used to mean the team calendar
-    // silently did not exist for this business at all — even though their
+    // silently did not exist for this business at all, even though their
     // Google Workspace was right there.
     vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-row-1");
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
@@ -342,5 +353,117 @@ describe("resolveSharedCalendarHost", () => {
     expect(getActiveVagaroConnectionId).not.toHaveBeenCalled();
     expect(getActiveCalendlyConnectionId).not.toHaveBeenCalled();
     expect(getActiveCaldavConnectionId).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The capability gate.
+ *
+ * Both rules exist because a row that CANNOT serve a request was being offered
+ * as the answer to it, and worse, offered INSTEAD of a working row the tenant
+ * also had. The rule is deliberately one-sided: reject only when the row proves
+ * it cannot serve.
+ */
+describe("canServe gating in email resolution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveAcuityConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCaldavConnectionId).mockResolvedValue(null);
+  });
+
+  it("skips a Google row that granted no Gmail scope and falls through to Outlook", async () => {
+    // KYP Ads, exactly: a calendar-only Google grant that precedes `outlook` in
+    // EMAIL_PROVIDER_CONFIG_KEYS, shadowing two working Outlook mailboxes so
+    // every implicit send resolved to a mailbox answering 403.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { oauth_scope: "openid https://www.googleapis.com/auth/calendar.events" }),
+      fakeRow("outlook", "cx-outlook")
+    ]);
+    const conn = await resolveEmailConnection(businessId);
+    expect(conn).toMatchObject({ provider: "microsoft", providerConfigKey: "outlook" });
+  });
+
+  it("keeps a Google row that DID grant Gmail", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { oauth_scope: "openid https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.modify" }),
+      fakeRow("outlook", "cx-outlook")
+    ]);
+    const conn = await resolveEmailConnection(businessId);
+    expect(conn).toMatchObject({ provider: "google", providerConfigKey: "google" });
+  });
+
+  it("treats a NULL scope as unknown and keeps the row", async () => {
+    // Every Nango row has a null scope. Reading null as "no scopes" would refuse
+    // every brokered mailbox on the fleet, which is the opposite of the fix.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { oauth_scope: null })
+    ]);
+    const conn = await resolveEmailConnection(businessId);
+    expect(conn).toMatchObject({ providerConfigKey: "google" });
+  });
+
+  it("treats an EMPTY scope as unknown too, rather than as proof of nothing", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { oauth_scope: "" })
+    ]);
+    await expect(resolveEmailConnection(businessId)).resolves.toMatchObject({
+      providerConfigKey: "google"
+    });
+  });
+
+  it("skips a soft-disabled row and falls through to a working one", async () => {
+    // The token manager sets is_active=false on invalid_grant. Resolving it hands
+    // out a known-dead connection, and does so instead of the tenant's other one.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { is_active: false, oauth_scope: "https://www.googleapis.com/auth/gmail.modify" }),
+      fakeRow("outlook", "cx-outlook")
+    ]);
+    const conn = await resolveEmailConnection(businessId);
+    expect(conn).toMatchObject({ providerConfigKey: "outlook" });
+  });
+
+  it("returns null when the only mailbox is unusable", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google", "cx-google", { oauth_scope: "openid https://www.googleapis.com/auth/calendar.events" })
+    ]);
+    await expect(resolveEmailConnection(businessId)).resolves.toBeNull();
+  });
+
+  it("accepts either half of the Microsoft mail pair", async () => {
+    for (const scope of ["Mail.Send", "Mail.ReadWrite"]) {
+      vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+        fakeRow("outlook", "cx-outlook", { oauth_scope: `User.Read ${scope}` })
+      ]);
+      await expect(resolveEmailConnection(businessId), scope).resolves.toMatchObject({
+        providerConfigKey: "outlook"
+      });
+    }
+  });
+
+  it("skips a Microsoft row with calendar scopes only", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("outlook", "cx-outlook", { oauth_scope: "User.Read Calendars.ReadWrite" })
+    ]);
+    await expect(resolveEmailConnection(businessId)).resolves.toBeNull();
+  });
+
+  it("does NOT gate calendar resolution on mail scopes", async () => {
+    // A calendar-only grant is a perfectly good calendar. Gating both on mail
+    // would have broken exactly the tenant this change is meant to help.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google-calendar", "cx-gcal", { oauth_scope: "openid https://www.googleapis.com/auth/calendar.events" })
+    ]);
+    await expect(resolveCalendarConnection(businessId)).resolves.toMatchObject({
+      providerConfigKey: "google-calendar"
+    });
+  });
+
+  it("still skips a soft-disabled row for CALENDAR resolution", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google-calendar", "cx-gcal", { is_active: false })
+    ]);
+    await expect(resolveCalendarConnection(businessId)).resolves.toBeNull();
   });
 });

@@ -60,6 +60,7 @@ const outlookRow = (over: Record<string, unknown> = {}) => ({
   metadata: { provider_account_email: "sam@acme.com" },
   transport: "nango" as const,
   is_active: true,
+  oauth_scope: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   ...over

@@ -37,6 +37,17 @@ export type WorkspaceOAuthConnectionRow = {
   metadata: Record<string, unknown>;
   transport: WorkspaceConnectionTransport;
   is_active: boolean;
+  /**
+   * Scopes the owner ACTUALLY granted, space delimited, as the provider
+   * reported them. Null on Nango rows, which is why every consumer must treat
+   * null as "unknown" rather than "none": see `canServe` in
+   * src/lib/voice-tools/connections.ts.
+   *
+   * Not a secret (it is a list of capability names), so unlike the token
+   * columns it belongs in the general read: resolution has to know whether a
+   * mailbox can actually send before offering it as one.
+   */
+  oauth_scope: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,7 +62,7 @@ export type WorkspaceOAuthConnectionRow = {
  * that path structurally rather than by convention.
  */
 const CONNECTION_COLUMNS =
-  "id, business_id, provider_config_key, connection_id, metadata, transport, is_active, created_at, updated_at";
+  "id, business_id, provider_config_key, connection_id, metadata, transport, is_active, oauth_scope, created_at, updated_at";
 
 export async function listWorkspaceOAuthConnections(
   businessId: string,

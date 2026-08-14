@@ -20,6 +20,7 @@ const row = (over: Partial<WorkspaceOAuthConnectionRow> = {}): WorkspaceOAuthCon
   metadata: { provider_account_email: "sam@example.com", shared_calendar_id: "cal-1" },
   transport: "nango",
   is_active: true,
+  oauth_scope: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
   ...over

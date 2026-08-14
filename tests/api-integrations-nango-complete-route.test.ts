@@ -175,6 +175,7 @@ describe("api/integrations/nango/complete", () => {
         metadata: {},
         transport: "nango" as const,
         is_active: true,
+        oauth_scope: null,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z"
       });
@@ -263,6 +264,7 @@ describe("api/integrations/nango/complete", () => {
       metadata: { shared_calendar_id: "cal-1" },
       transport: "nango" as const,
       is_active: true,
+      oauth_scope: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
@@ -327,6 +329,7 @@ describe("api/integrations/nango/complete", () => {
       metadata: {},
       transport: "nango" as const,
       is_active: true,
+      oauth_scope: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z"
     });
