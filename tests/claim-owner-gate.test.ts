@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   claimBlockedByOwner,
+  flowDealsInLeadPhone,
   ownerConflictReplyText,
   ownershipLeadPhone
 } from "../supabase/functions/_shared/ai_flows/claim_owner_gate";
@@ -84,5 +85,122 @@ describe("ownershipLeadPhone", () => {
     // The customer-texts-in case, where that is literally true.
     expect(ownershipLeadPhone(false, null, "+14165550100")).toBe("+14165550100");
     expect(ownershipLeadPhone(false, null, null)).toBeNull();
+  });
+});
+
+/**
+ * Amy C. (HomeLight, 2026-08-14). The Danfar guard above asked a RUNTIME
+ * question: does `vars.lead_phone` exist yet? On the HomeLight flow,
+ * route_to_team is step 5 and the extraction that declares lead_phone is
+ * step 6, so at route time the key does NOT exist and the sender fallback
+ * fired anyway. Ownership bound to HomeLight's own alert line
+ * (+1 415-915-7879), whose contact row a July claim had already stamped
+ * with an owner, and every referral from Aug 11 to Aug 14 was
+ * owner-assigned to one teammate with no team race.
+ *
+ * The fix reads the FLOW DEFINITION instead of the variable bag: whether a
+ * flow deals in lead phone numbers is fixed before step 0, so it answers
+ * the same at step 5 as it does at step 6.
+ */
+describe("flowDealsInLeadPhone", () => {
+  it("is true when a step EXTRACTS lead_phone, even though no step has run", () => {
+    // The exact HomeLight ordering: routing first, extraction second.
+    const def = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "route", type: "route_to_team", offerTemplate: "New lead." },
+        {
+          id: "card",
+          type: "browse_extract",
+          fields: [{ name: "lead_phone", description: "The lead's mobile." }]
+        }
+      ]
+    };
+    expect(flowDealsInLeadPhone(def)).toBe(true);
+  });
+
+  it("is true for a template mention, a when-condition, and a saveAs", () => {
+    expect(
+      flowDealsInLeadPhone({ steps: [{ id: "s", type: "send_sms", toTemplate: "{{vars.lead_phone}}" }] })
+    ).toBe(true);
+    expect(
+      flowDealsInLeadPhone({ steps: [{ id: "s", type: "sleep", when: { var: "lead_phone", equals: "" } }] })
+    ).toBe(true);
+    expect(flowDealsInLeadPhone({ steps: [{ id: "s", type: "math", saveAs: "lead_phone" }] })).toBe(
+      true
+    );
+  });
+
+  it("finds a declaration nested inside branch steps", () => {
+    const def = {
+      steps: [
+        {
+          id: "late",
+          type: "branch",
+          branches: [
+            {
+              id: "still_ours",
+              steps: [
+                {
+                  id: "deep",
+                  type: "email_extract",
+                  fields: [{ name: "lead_phone", description: "from the release email" }]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    expect(flowDealsInLeadPhone(def)).toBe(true);
+  });
+
+  it("is false for a flow that never mentions a lead phone at all", () => {
+    // The customer-texts-in case: the sender genuinely IS the contact, and
+    // the ownership fallback must keep working for them.
+    const def = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "reply", type: "send_sms", bodyTemplate: "Thanks {{vars.lead_first_name}}." },
+        { id: "route", type: "route_to_team", offerTemplate: "New lead." }
+      ]
+    };
+    expect(flowDealsInLeadPhone(def)).toBe(false);
+  });
+
+  it("is false for a missing or non-object definition, never throwing", () => {
+    expect(flowDealsInLeadPhone(null)).toBe(false);
+    expect(flowDealsInLeadPhone(undefined)).toBe(false);
+    expect(flowDealsInLeadPhone("lead_phone")).toBe(false);
+    expect(flowDealsInLeadPhone(42)).toBe(false);
+    expect(flowDealsInLeadPhone({})).toBe(false);
+  });
+
+  it("matches the identifier as an object KEY, not just as a value", () => {
+    // Config shapes carry var names on either side. HomeLight's own
+    // wait_for_call writes its backfill as [{ to: "lead_phone" }], a value,
+    // but a map-shaped variant puts the same name in key position, and a
+    // scan that only reads values would call that flow phone-free.
+    expect(flowDealsInLeadPhone({ steps: [{ id: "s", backfill: { lead_phone: "phone" } }] })).toBe(
+      true
+    );
+  });
+
+  it("counts a lead_phone-prefixed var too: dealing in one is dealing in all", () => {
+    // Conservative on purpose. A flow handling lead_phone_2 is a relay flow
+    // whatever it calls the field, and the cost of a false positive is one
+    // extra team race, versus a lead silently assigned to the wrong agent.
+    expect(
+      flowDealsInLeadPhone({ steps: [{ id: "s", type: "extract_text", fields: [{ name: "lead_phone_2" }] }] })
+    ).toBe(true);
+  });
+
+  it("drives the gate: a relay flow at step 0 refuses the sender", () => {
+    // The regression in one line. Nothing extracted yet (null), sender is
+    // the partner alert line, and ownership must resolve to nothing.
+    const relay = { steps: [{ id: "c", type: "browse_extract", fields: [{ name: "lead_phone" }] }] };
+    expect(ownershipLeadPhone(flowDealsInLeadPhone(relay), null, "+14159157879")).toBeNull();
   });
 });

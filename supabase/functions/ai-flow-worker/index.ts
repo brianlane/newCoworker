@@ -105,7 +105,7 @@ import {
 } from "../_shared/ai_flows/call_outcome_meta.ts";
 import { callDialGuard } from "../_shared/ai_flows/call_guards.ts";
 import { rotateReachOrder } from "../_shared/ai_flows/reach_rotation.ts";
-import { ownershipLeadPhone } from "../_shared/ai_flows/claim_owner_gate.ts";
+import { flowDealsInLeadPhone, ownershipLeadPhone } from "../_shared/ai_flows/claim_owner_gate.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
@@ -417,6 +417,14 @@ type Scope = {
   // "MX" makes a Mexican tenant's 10-digit leads read as +52 instead of a
   // random US number. Derived only; buildContext omits it.
   phoneCountry?: PhoneCountry;
+  // Does this flow deal in lead phone numbers anywhere in its DEFINITION?
+  // Read once per claim (flowDealsInLeadPhone), because the alternative,
+  // asking the variable bag, only becomes true once the extracting step has
+  // run: on HomeLight the roster is raced at step 5 and lead_phone is
+  // declared at step 6, so ownership bound to the partner's alert line for
+  // every referral in between (Amy C., 2026-08-14). Derived only;
+  // buildContext omits it.
+  dealsInLeadPhone?: boolean;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -641,6 +649,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger),
     captureScreenshots: def.options?.captureStepScreenshots === true,
+    dealsInLeadPhone: flowDealsInLeadPhone(def),
     // A test run must finish in seconds: its sends are simulated anyway, so
     // the business-hours gate (which would defer the run to the next open
     // slot) is skipped entirely.
@@ -9567,18 +9576,29 @@ function leadContactPhone(scope: Scope): string | null {
 
 /**
  * The phone OWNERSHIP may bind to, stricter than leadContactPhone: when the
- * flow extracts a lead_phone (the key exists in vars, even empty), an empty
- * result means the lead's number is UNKNOWN, never that the triggering
- * sender is the lead. HomeLight withholds the number until after claiming,
- * so the sender is HomeLight's own alert line; the old fallback made Dave
- * the "owner" of that partner contact and the next referral skipped the
- * team race (Danfar, 2026-08-10). Rule in
+ * flow deals in lead phone numbers, only an extracted value counts, and
+ * anything else means the lead's number is UNKNOWN, never that the
+ * triggering sender is the lead. HomeLight withholds the number until after
+ * claiming, so the sender is HomeLight's own alert line; the old fallback
+ * made Dave the "owner" of that partner contact and the next referral
+ * skipped the team race (Danfar, 2026-08-10).
+ *
+ * `scope.dealsInLeadPhone` reads the flow DEFINITION, so it is already true
+ * at a route_to_team that runs BEFORE the extracting step. The runtime key
+ * check stays as the OR fallback: it is what protects a scope built without
+ * a definition to hand. Asking only the variable bag is what let the same
+ * bug through a second time on a flow that routes at step 5 and extracts at
+ * step 6 (Amy C., 2026-08-14). Rule in
  * _shared/ai_flows/claim_owner_gate.ts (ownershipLeadPhone).
  */
 function ownershipContactPhone(scope: Scope): string | null {
   const hasKey = Object.prototype.hasOwnProperty.call(scope.vars, "lead_phone");
   const from = typeof scope.trigger?.from === "string" ? scope.trigger.from.trim() : "";
-  return ownershipLeadPhone(hasKey, leadPhoneE164(scope), from && isE164(from) ? from : null);
+  return ownershipLeadPhone(
+    scope.dealsInLeadPhone === true || hasKey,
+    leadPhoneE164(scope),
+    from && isE164(from) ? from : null
+  );
 }
 
 /**
