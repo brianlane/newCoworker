@@ -1,6 +1,6 @@
 # Per-tenant chat-worker image. Slim runtime: no app build step, just
 # `node worker.mjs` against a small ESM script. Image size ~70 MB on
-# disk, ~30 MB compressed — fine to pull on every VPS deploy.
+# disk, ~30 MB compressed, fine to pull on every VPS deploy.
 #
 # Node 24 (was 22, was 20): @supabase/supabase-js >= 2.108 bundles a
 # realtime-js that hard-throws at createClient() on Node < 22 ("Node.js 20
@@ -16,14 +16,14 @@ WORKDIR /app
 # changes; the worker source itself is the next layer so editing
 # worker.mjs doesn't re-run npm install.
 #
-# npm ci requires a committed package-lock.json — if the build fails
+# npm ci requires a committed package-lock.json: if the build fails
 # here with "lockfile not found", regenerate it from the repo root via
 # `cd vps/chat-worker && npm install --package-lock-only` and commit
 # the result.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY worker.mjs memory-capture.mjs email-tool.mjs graph-db-build.mjs ./
+COPY worker.mjs memory-capture.mjs email-tool.mjs graph-db-build.mjs queue-rpc-errors.mjs ./
 
 # Run as the unprivileged `node` user that comes with the base image.
 # The container talks only to: localhost (Rowboat over the rowboat_default
