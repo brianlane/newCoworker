@@ -83,6 +83,48 @@ describe("wait_for_call: authoring", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  it("publishes the outcome's _label and _reason companions, like place_ai_call", () => {
+    // The run really does produce them: wait_for_call shares the awaiting_call
+    // park and the timeout sweep with place_ai_call, so its "no_call" outcome
+    // reaches callOutcomeLabel and lands as {{vars.<saveAs>_label}} ("no call
+    // came in"). Amy Laidlaw's live HomeLight run 5ac0ee1b carried
+    // hl_call_outcome_label and hl_call_outcome_reason in its context.
+    //
+    // Only the authoring validator disagreed: it registered the companions for
+    // place_ai_call and not here, so a flow that templated the phrase failed to
+    // save. That is precisely the failure the neighbouring capture-fields
+    // comment warns about, an unregistered var the run genuinely produces.
+    const def = parseAiFlowDefinition(
+      waitFlow({ saveAs: "hl_call_outcome" }, [
+        {
+          id: "tell_dave",
+          type: "send_sms",
+          to: "+16025551234",
+          body: "HomeLight claim call: {{vars.hl_call_outcome_label}} ({{vars.hl_call_outcome_reason}}).",
+          when: { var: "hl_call_outcome", notEquals: "no_call" }
+        }
+      ])
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("scopes the companions to the step's own saveAs", () => {
+    // A copy/paste from a flow whose wait step used the default name must
+    // still fail, the same way a mismatched capturePrefix does.
+    expect(() =>
+      parseAiFlowDefinition(
+        waitFlow({ saveAs: "hl_call_outcome" }, [
+          {
+            id: "tell_dave",
+            type: "send_sms",
+            to: "+16025551234",
+            body: "Claim call: {{vars.call_outcome_label}}."
+          }
+        ])
+      )
+    ).toThrow(AiFlowValidationError);
+  });
+
   it("publishes the outcome var for a later branch", () => {
     const def = parseAiFlowDefinition(
       waitFlow({ saveAs: "hl_call" }, [
