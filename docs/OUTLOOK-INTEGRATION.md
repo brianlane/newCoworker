@@ -244,7 +244,7 @@ invisibly: the coworker could not offer times, the booking page read as
 unreadable, and waitlist fill treated every slot as taken forever.
 
 `getWorkspaceBusyBlocks` now falls back to `GET /v1.0/me/calendarView`, which
-personal accounts do support. Two details that matter:
+personal accounts do support. Three details that matter:
 
 - It falls back only on a PROVIDER rejection (a real HTTP status). A transport
   failure means we never reached Microsoft, which says nothing about the
@@ -253,6 +253,21 @@ personal accounts do support. Two details that matter:
   `free` and `workingElsewhere` events, and cancelled ones, do not block a slot.
   Skipping that would invent busy time getSchedule would never have reported and
   quietly delete real availability.
+- **It pages.** Graph defaults calendarView to TEN items and hides the rest
+  behind `@odata.nextLink`. Every error here runs one way: an event we never
+  read looks FREE, so a first-page-only read books on top of real meetings. The
+  read asks for `$top=250`, follows nextLink up to 4 pages, and past that
+  refuses the read (returns null, so the caller degrades to
+  `calendar_not_connected`) rather than handing back a short busy list. The same
+  applies to the shared NewCoworker calendar, which is where our own bookings
+  live: unreadable there fails the whole lookup instead of merging nothing.
+  Missing a booking is visible and recoverable; double-booking a customer is
+  neither.
+
+  This one was a live bug, not a hypothetical: the shared-calendar read had been
+  unpaginated since PR #149 (Jun 2026), so any tenant with more than ten events
+  in a booking window was already at risk. Bugbot caught it on #1364 when the
+  same helper started carrying the primary availability path too.
 
 **Polling is unchanged.** Connected-mailbox watching is still the roughly
 1/minute cron poll. No Graph push subscriptions were added.

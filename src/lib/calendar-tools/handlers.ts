@@ -314,7 +314,20 @@ function isProviderRejection(err: unknown): boolean {
 const GRAPH_FREE_SHOW_AS = new Set(["free", "workingElsewhere"]);
 
 /**
- * Busy blocks from a Graph calendarView window.
+ * Page size for calendarView busy reads, and the page budget behind it.
+ *
+ * Graph defaults calendarView to TEN items and hides the rest behind
+ * `@odata.nextLink`. Ten is nothing across a booking window, and here the
+ * truncation runs one way only: an event we never see reads as FREE, so a
+ * first-page-only read hands out slots on top of real meetings. 250 matches the
+ * calendarView read in reschedule.ts. The page budget bounds a pathological
+ * mailbox; 1000 events inside one booking window is far past any real tenant.
+ */
+const CALENDAR_VIEW_PAGE_SIZE = 250;
+const CALENDAR_VIEW_MAX_PAGES = 4;
+
+/**
+ * Busy blocks from a Graph calendarView window, following Graph's paging.
  *
  * Used for the shared "NewCoworker" calendar, and as the personal-account
  * substitute for getSchedule. Unlike getSchedule, which returns availability
@@ -322,8 +335,12 @@ const GRAPH_FREE_SHOW_AS = new Set(["free", "workingElsewhere"]);
  * the owner marked free or working-elsewhere is not busy, and treating it as
  * busy would quietly delete real availability.
  *
- * Cancelled events are dropped for the same reason. Returns null only when the
- * connection itself yields nothing.
+ * Cancelled events are dropped for the same reason.
+ *
+ * Returns null when the answer cannot be trusted, meaning either no connection
+ * or a window too large to read inside the page budget. Callers must treat that
+ * as a failed lookup rather than as "nothing is booked": a short busy list is
+ * exactly what double-books a customer.
  */
 async function readCalendarViewBusy(
   businessId: string,
@@ -332,20 +349,6 @@ async function readCalendarViewBusy(
   windowStart: Date,
   windowEnd: Date
 ): Promise<Array<{ start: Date; end: Date }> | null> {
-  const res = await workspaceProxyForBusiness(
-    businessId,
-    { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-    {
-      endpoint,
-      method: "GET",
-      params: {
-        startDateTime: windowStart.toISOString(),
-        endDateTime: windowEnd.toISOString()
-      }
-    }
-  );
-  if (!res) return null;
-
   type GraphView = {
     value?: Array<{
       start?: { dateTime: string };
@@ -353,16 +356,62 @@ async function readCalendarViewBusy(
       showAs?: string;
       isCancelled?: boolean;
     }>;
+    "@odata.nextLink"?: string;
   };
-  const items = ((res.data ?? null) as GraphView | null)?.value ?? [];
-  return items
-    .filter((i) => i.start?.dateTime && i.end?.dateTime)
-    .filter((i) => i.isCancelled !== true)
-    .filter((i) => !(typeof i.showAs === "string" && GRAPH_FREE_SHOW_AS.has(i.showAs)))
-    .map((i) => ({
-      start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
-      end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
-    }));
+
+  const busy: Array<{ start: Date; end: Date }> = [];
+  // The first page carries the window as params. Later pages come from
+  // nextLink, which already embeds the window plus a $skiptoken, so it is sent
+  // as a bare endpoint with nothing merged back on top of it.
+  let next: string | null = null;
+
+  for (let page = 0; page < CALENDAR_VIEW_MAX_PAGES; page += 1) {
+    const res = await workspaceProxyForBusiness(
+      businessId,
+      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+      next
+        ? { endpoint: next, method: "GET" }
+        : {
+            endpoint,
+            method: "GET",
+            params: {
+              startDateTime: windowStart.toISOString(),
+              endDateTime: windowEnd.toISOString(),
+              $top: String(CALENDAR_VIEW_PAGE_SIZE)
+            }
+          }
+    );
+    if (!res) return null;
+
+    const data = (res.data ?? null) as GraphView | null;
+    for (const i of data?.value ?? []) {
+      if (!i.start?.dateTime || !i.end?.dateTime) continue;
+      if (i.isCancelled === true) continue;
+      if (typeof i.showAs === "string" && GRAPH_FREE_SHOW_AS.has(i.showAs)) continue;
+      busy.push({
+        start: new Date(graphTimeIso({ dateTime: i.start.dateTime })!),
+        end: new Date(graphTimeIso({ dateTime: i.end.dateTime })!)
+      });
+    }
+
+    const link = data?.["@odata.nextLink"];
+    if (!link) return busy;
+    // nextLink is an absolute Graph URL; the proxy wants path + query.
+    const u = new URL(link);
+    next = u.pathname + u.search;
+  }
+
+  // Budget spent with pages still outstanding. Returning the partial list would
+  // under-report busy, and under-reporting busy is the direction that
+  // double-books, so refuse the read and let the caller degrade to "no
+  // availability" instead of offering a taken slot.
+  logger.warn("calendarView exceeded its page budget; availability treated as unreadable", {
+    businessId,
+    providerConfigKey: conn.providerConfigKey,
+    pages: CALENDAR_VIEW_MAX_PAGES,
+    eventsSeen: busy.length
+  });
+  return null;
 }
 
 export async function getWorkspaceBusyBlocks(
@@ -474,7 +523,13 @@ export async function getWorkspaceBusyBlocks(
       windowStart,
       windowEnd
     );
-    if (sharedBusy) busy = busy.concat(sharedBusy);
+    // An unreadable shared calendar fails the whole lookup rather than merging
+    // nothing. The shared calendar is where OUR OWN bookings live, so silently
+    // skipping it is the one case guaranteed to double-book. A deleted calendar
+    // already behaved this way (404s throw, and every caller catches); this
+    // extends it to the page-budget case.
+    if (sharedBusy === null) return null;
+    busy = busy.concat(sharedBusy);
   }
   return busy;
 }
