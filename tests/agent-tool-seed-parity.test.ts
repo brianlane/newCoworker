@@ -65,7 +65,20 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // INLINE-ONLY, and the sharpest case of the rule: the roster decides who
   // receives leads. A customer talking to the texting coworker must never be
   // able to add themselves to it, or take a real teammate off it.
-  manage_employee: null
+  manage_employee: null,
+  // The seven MCP-bridge gate groups (src/lib/dashboard-chat/mcp-bridge.ts)
+  // are all INLINE-ONLY by design, the update_notification_preferences
+  // posture generalized: bridged tools run as the authed caller's verified
+  // identity through requireMcpBusinessRole per call, and the Rowboat
+  // fallback carries no caller identity, so none of them get dashboard_
+  // twins in the seed.
+  read_business_data: null,
+  manage_contacts: null,
+  manage_flows: null,
+  manage_agents: null,
+  update_business_profile: null,
+  update_business_knowledge: null,
+  manage_coworker_tools: null
 };
 
 const WEBCHAT_CANONICAL = [

@@ -312,6 +312,31 @@ describe("identity and tool powers", () => {
     );
   });
 
+  it("bridge tools: declared for the verified owner, never for a teammate", async () => {
+    claimOnce();
+    await processSlackJobs();
+    const teamArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(teamArgs.extraTools).toBeNull();
+    expect(teamArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+
+    vi.mocked(runInlineChatTurn).mockClear();
+    claimOnce();
+    vi.mocked(slackUsersInfo).mockResolvedValue({
+      displayName: "Amy",
+      email: "owner@x.co",
+      isBot: false
+    });
+    await processSlackJobs();
+    const ownerArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(ownerArgs.maxToolSteps).toBe(6);
+    expect(ownerArgs.systemInstruction).toContain("DIRECT BUSINESS TOOLS");
+    const names = (ownerArgs.extraTools?.declarations ?? []).map(
+      (d: { name: string }) => d.name
+    );
+    expect(names).toContain("get_sms_thread");
+    expect(names).toContain("update_business_knowledge");
+  });
+
   it("owner with the email toggle off gets the disabled preamble", async () => {
     claimOnce();
     vi.mocked(slackUsersInfo).mockResolvedValue({

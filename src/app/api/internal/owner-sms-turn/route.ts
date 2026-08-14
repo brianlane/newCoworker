@@ -38,6 +38,10 @@ import {
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
+import {
+  buildMcpBridgeExtraTools,
+  MCP_BRIDGE_TOOLS_PREAMBLE
+} from "@/lib/dashboard-chat/mcp-bridge";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import {
   EMAIL_TOOL_DISABLED_PREAMBLE,
@@ -121,7 +125,14 @@ export async function POST(request: Request) {
           "flag_contact_spam",
           "set_contact_reply_mode",
           "manage_employee",
-          "send_email"
+          "send_email",
+          "read_business_data",
+          "manage_contacts",
+          "manage_flows",
+          "manage_agents",
+          "update_business_profile",
+          "update_business_knowledge",
+          "manage_coworker_tools"
         ] as const),
         buildIntegrationsStatusLine(body.businessId),
         buildBusinessContextBlock(body.businessId),
@@ -146,6 +157,28 @@ export async function POST(request: Request) {
       manage_employee: manageEmployeeToolEnabled,
       send_email: emailToolEnabled
     } = toolStates;
+
+    // MCP-bridge tools: this surface IS the verified owner (the SMS
+    // pipeline classified the sender before queueing), so every per-group
+    // role bar is satisfied and the gates are the Settings toggles alone.
+    // The handlers still re-run requireMcpBusinessRole against the owner
+    // email per call. No owner email on record ⇒ no bridge (handlers
+    // could only refuse).
+    const bridgeExtraTools = meta.ownerEmail
+      ? buildMcpBridgeExtraTools(
+          body.businessId,
+          { userId: "owner-sms-operator", email: meta.ownerEmail },
+          {
+            read_business_data: toolStates.read_business_data,
+            manage_contacts: toolStates.manage_contacts,
+            manage_flows: toolStates.manage_flows,
+            manage_agents: toolStates.manage_agents,
+            update_business_profile: toolStates.update_business_profile,
+            update_business_knowledge: toolStates.update_business_knowledge,
+            manage_coworker_tools: toolStates.manage_coworker_tools
+          }
+        )
+      : null;
 
     // Continuity: the recent SMS exchange with the owner's number (both
     // directions — inbound texts, AI replies, and logged outbound sends).
@@ -193,6 +226,7 @@ export async function POST(request: Request) {
       ...(integrationsLine ? [integrationsLine] : []),
       ...(bookingLinkLine ? [bookingLinkLine] : []),
       ...(businessContextBlock ? [businessContextBlock] : []),
+      ...(bridgeExtraTools ? [MCP_BRIDGE_TOOLS_PREAMBLE] : []),
       ...(transcript
         ? [
             `Recent SMS exchange with the owner (oldest first, ground truth for what was already said):\n${transcript}`
@@ -205,6 +239,10 @@ export async function POST(request: Request) {
       systemInstruction,
       userMessage: `[SMS from owner] ${body.text}`,
       knowledgeToolEnabled,
+      extraTools: bridgeExtraTools,
+      // Bridged read chains need headroom; the 60s budget below still
+      // bounds the wall clock regardless of the step count.
+      maxToolSteps: 6,
       // No builder UI on SMS to hand a draft card to — creation tools off,
       // so compile work can't succeed into a void (the model points the
       // owner to dashboard chat / /dashboard/aiflows for authoring instead).
@@ -302,19 +340,23 @@ export async function POST(request: Request) {
 /** Business timezone (date line) + tier (cap sizing). Nulls on failure. */
 async function readBusinessMeta(
   businessId: string
-): Promise<{ timezone: string | null; tier: PlanTier | null }> {
+): Promise<{ timezone: string | null; tier: PlanTier | null; ownerEmail: string | null }> {
   try {
     const db = await createSupabaseServiceClient();
     const { data } = await db
       .from("businesses")
-      .select("timezone, tier")
+      .select("timezone, tier, owner_email")
       .eq("id", businessId)
       .maybeSingle();
     return {
       timezone: typeof data?.timezone === "string" ? data.timezone : null,
-      tier: typeof data?.tier === "string" ? (data.tier as PlanTier) : null
+      tier: typeof data?.tier === "string" ? (data.tier as PlanTier) : null,
+      ownerEmail:
+        typeof data?.owner_email === "string" && data.owner_email.trim() !== ""
+          ? data.owner_email
+          : null
     };
   } catch {
-    return { timezone: null, tier: null };
+    return { timezone: null, tier: null, ownerEmail: null };
   }
 }

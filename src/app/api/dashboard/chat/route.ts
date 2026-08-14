@@ -119,6 +119,10 @@ import {
 } from "@/lib/dashboard-chat/email-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
+  buildMcpBridgeExtraTools,
+  MCP_BRIDGE_TOOLS_PREAMBLE
+} from "@/lib/dashboard-chat/mcp-bridge";
+import {
   buildBusinessContextBlock,
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
@@ -748,7 +752,14 @@ export async function POST(request: Request) {
       "update_notification_preferences",
       "flag_contact_spam",
       "set_contact_reply_mode",
-      "manage_employee"
+      "manage_employee",
+      "read_business_data",
+      "manage_contacts",
+      "manage_flows",
+      "manage_agents",
+      "update_business_profile",
+      "update_business_knowledge",
+      "manage_coworker_tools"
     ] as const);
     const emailToolEnabled = toolStates.send_email;
     const knowledgeToolEnabled = toolStates.business_knowledge_lookup;
@@ -768,22 +779,23 @@ export async function POST(request: Request) {
       set_contact_reply_mode: replyModeToolEnabled,
       manage_employee: manageEmployeeToolEnabled
     } = toolStates;
-    // Settings mutation needs more than chat access: the tool is declared
-    // only when THIS caller passes manage_settings (manager+, the same
-    // matrix as the notifications settings page). Chat itself only requires
+    // Settings mutation needs more than chat access: those tools are
+    // declared only when THIS caller's role passes the matching bar (the
+    // same matrix as the settings pages). Chat itself only requires
     // operate_messages, which staff hold, a staff teammate must never be
     // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
-    const canManageSettings = user.isAdmin
-      ? true
+    // The role is read ONCE and composed into the per-bar booleans below.
+    const callerRole = user.isAdmin
+      ? ("owner" as const)
       : await (async () => {
-          if (!user.email) return false;
-          const [{ getBusinessRoleForEmail }, { can }] = await Promise.all([
-            import("@/lib/db/business-members"),
-            import("@/lib/authz/policy")
-          ]);
-          const role = await getBusinessRoleForEmail(body.businessId, user.email);
-          return role != null && can(role, "manage_settings");
-        })().catch(() => false);
+          if (!user.email) return null;
+          const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
+          return await getBusinessRoleForEmail(body.businessId, user.email);
+        })().catch(() => null);
+    const { can } = await import("@/lib/authz/policy");
+    const canManageSettings = callerRole != null && can(callerRole, "manage_settings");
+    const canManageAiflows = callerRole != null && can(callerRole, "manage_aiflows");
+    const isOwner = callerRole === "owner";
     const actionToolGates = {
       send_sms: smsToolEnabled,
       // Declared only when a WhatsApp integration is actually connected,
@@ -817,6 +829,32 @@ export async function POST(request: Request) {
       // leads (or add themselves).
       manage_employee: manageEmployeeToolEnabled && canManageSettings
     };
+
+    // MCP-bridge tools (connector parity): Settings toggles composed with
+    // the caller's role per group. Admins get NO bridge: view-as is
+    // read-only by policy, and an impersonating admin's email holds no
+    // business role, so every bridged handler would refuse anyway — not
+    // declaring the tools keeps that silent-clean instead of error-noisy.
+    // Every bridged handler ALSO re-runs requireMcpBusinessRole per call,
+    // so this composition narrows, never widens.
+    const bridgeExtraTools = user.isAdmin
+      ? null
+      : buildMcpBridgeExtraTools(
+          body.businessId,
+          { userId: user.userId, email: user.email ?? "" },
+          {
+            read_business_data: toolStates.read_business_data,
+            manage_contacts: toolStates.manage_contacts,
+            // Flow/agent writes sit at the manage_aiflows bar (manager+),
+            // matching the AiFlows builder; declaring them to a staff role
+            // would only manufacture per-call refusals.
+            manage_flows: toolStates.manage_flows && canManageAiflows,
+            manage_agents: toolStates.manage_agents && canManageAiflows,
+            update_business_profile: toolStates.update_business_profile && canManageSettings,
+            update_business_knowledge: toolStates.update_business_knowledge && isOwner,
+            manage_coworker_tools: toolStates.manage_coworker_tools && canManageSettings
+          }
+        );
 
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
@@ -928,7 +966,10 @@ export async function POST(request: Request) {
       const businessContextBlock = await buildBusinessContextBlock(body.businessId);
       const systemInstruction = [
         ...inputMessages.filter((m) => m.role === "system").map((m) => m.content),
-        ...(businessContextBlock ? [businessContextBlock] : [])
+        ...(businessContextBlock ? [businessContextBlock] : []),
+        // The bridge ladder + human-only boundary, only when bridge tools
+        // are actually declared this turn.
+        ...(bridgeExtraTools ? [MCP_BRIDGE_TOOLS_PREAMBLE] : [])
       ].join("\n\n");
       const inline = await runInlineChatTurn({
         businessId: body.businessId,
@@ -936,7 +977,11 @@ export async function POST(request: Request) {
         userMessage: `[Dashboard] ${storedUserMessage}`,
         attachment,
         knowledgeToolEnabled,
-        actionToolGates
+        actionToolGates,
+        extraTools: bridgeExtraTools,
+        // Bridged read chains ("find the contact, read their thread,
+        // answer") need headroom beyond the default 4 steps.
+        maxToolSteps: 6
       });
 
       if (inline.ok) {
