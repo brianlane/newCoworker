@@ -788,6 +788,15 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   dashboard edits), AiFlow CRUD + `trigger_flow` (definitions validated by
   `parseAiFlowDefinition` + binding checks; `get_flow_schema` returns the
   authoring vocabulary), and agent CRUD (tier-capped).
+- Owner self-serve tools (added Aug 2026, the one-shot ask classes):
+  `update_business_profile` (hours + timezone through the same core as
+  Settings, with the profile_md refresh + vault sync; deliberately refuses
+  phone changes), `get_business_knowledge` / `update_business_knowledge`
+  (owner-only section splices of `business_configs.identity_md` through the
+  identity editor's exact pipeline — whole-document rewrites are structurally
+  impossible), and `update_coworker_tool_settings` (flip a Settings →
+  Coworker tools toggle per surface; takes an explicit surface list because
+  a policy reaches only the surfaces written).
 - Ops prerequisites (one-time, production Supabase dashboard): enable
   **Authentication → OAuth Server** with dynamic client registration, and set
   the authorization path to `/oauth/consent` (local config in
