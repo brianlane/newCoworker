@@ -101,7 +101,10 @@ describe("microsoft connect: cap gate before consent", () => {
     // Bounced back to the dashboard, never sent to Microsoft.
     expect(res.status).toBe(307);
     const loc = res.headers.get("location") ?? "";
-    expect(loc).toContain("/dashboard/integrations/workspace");
+    // The Microsoft 365 tile, not the old combined workspace page: that page
+    // is now the long-tail catch-all and would not show the error next to the
+    // connect button that produced it.
+    expect(loc).toContain("/dashboard/integrations/microsoft");
     expect(loc).toContain("error=");
     expect(loc).not.toContain("login.microsoftonline.com");
   });

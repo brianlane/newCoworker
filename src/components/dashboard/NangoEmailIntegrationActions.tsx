@@ -1,26 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import Nango from "@nangohq/frontend";
 import { Button } from "@/components/ui/Button";
-
-export type WorkspaceConnectionClient = {
-  id: string;
-  providerConfigKey: string;
-  connectionId: string;
-  createdAt: string;
-  metadata: Record<string, unknown>;
-};
-
-export type WorkspaceConnectionCapClient = {
-  used: number;
-  /** null = unlimited (enterprise). */
-  max: number | null;
-};
+import {
+  WorkspaceConnectionList,
+  type WorkspaceConnectionCapClient,
+  type WorkspaceConnectionClient
+} from "@/components/dashboard/WorkspaceConnectionList";
 
 type Props = {
   businessId: string;
+  /** The long-tail rows only; Google and Outlook have their own pages now. */
   connections: WorkspaceConnectionClient[];
   /** Tier cap state; the server routes enforce it, this only explains it. */
   cap: WorkspaceConnectionCapClient;
@@ -28,90 +20,21 @@ type Props = {
 
 const defaultApiHost = "https://api.nango.dev";
 
-const PROVIDER_LABELS: Record<string, string> = {
-  gmail: "Gmail",
-  "google-mail": "Gmail",
-  google: "Google",
-  "google-calendar": "Google Calendar",
-  outlook: "Microsoft Outlook",
-  "outlook-calendar": "Outlook Calendar",
-  calendly: "Calendly",
-  onedrive: "OneDrive",
-  slack: "Slack",
-  zoom: "Zoom"
-};
-
-function providerLabel(providerConfigKey: string): string {
-  const k = providerConfigKey.toLowerCase();
-  if (PROVIDER_LABELS[k]) return PROVIDER_LABELS[k];
-  return providerConfigKey
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function connectionPrimaryLabel(
-  c: WorkspaceConnectionClient,
-  sameProviderCount: number
-): string {
-  const m = c.metadata ?? {};
-  // The real account behind the OAuth grant (probed from the provider after
-  // connect). The end_user_* keys are only the dashboard login that started
-  // the session — identical across every account — so they are last-resort
-  // fallbacks for legacy rows.
-  const accountEmail = m.provider_account_email;
-  const accountName = m.provider_account_display_name;
-  if (typeof accountEmail === "string" && accountEmail.length > 0) return accountEmail;
-  if (typeof accountName === "string" && accountName.length > 0) return accountName;
-  const email = m.end_user_email;
-  const displayName = m.end_user_display_name;
-  if (typeof email === "string" && email.length > 0) return email;
-  if (typeof displayName === "string" && displayName.length > 0) return displayName;
-
-  const label = providerLabel(c.providerConfigKey);
-  if (sameProviderCount > 1) {
-    const tail =
-      c.connectionId.length > 10 ? `…${c.connectionId.slice(-6)}` : c.connectionId;
-    return `${label} (${tail})`;
-  }
-  return label;
-}
-
+/**
+ * The "Other 3rd Party Connections" tile: the Nango Connect UI plus the list
+ * of long-tail connections it produced.
+ *
+ * Google and Microsoft 365 moved to their own tiles with first-party OAuth
+ * buttons. The Connect UI can still broker a Google grant, which is exactly
+ * why the success landing goes to the integrations hub rather than back here:
+ * that row belongs to the Google tile, and dropping the owner on a page that
+ * does not list it would read as a failed connect.
+ */
 export function NangoEmailIntegrationActions({ businessId, connections, cap }: Props) {
   const t = useTranslations("dashboard.integrationsWorkspace");
   const [loadingConnect, setLoadingConnect] = useState(false);
-  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const atCap = cap.max !== null && cap.used >= cap.max;
-
-  const countsByProvider = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const c of connections) {
-      m.set(c.providerConfigKey, (m.get(c.providerConfigKey) ?? 0) + 1);
-    }
-    return m;
-  }, [connections]);
-
-  async function disconnectOne(id: string) {
-    setBanner(null);
-    setDisconnectingId(id);
-    try {
-      const res = await fetch("/api/integrations/workspace", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, id })
-      });
-      if (res.ok) {
-        window.location.reload();
-      } else {
-        const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
-        setBanner(body?.error?.message ?? "Could not disconnect");
-      }
-    } finally {
-      setDisconnectingId(null);
-    }
-  }
 
   async function connect() {
     if (atCap) return;
@@ -123,7 +46,11 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ businessId })
       });
-      const json = (await res.json()) as { ok?: boolean; data?: { token?: string }; error?: { message?: string } };
+      const json = (await res.json()) as {
+        ok?: boolean;
+        data?: { token?: string };
+        error?: { message?: string };
+      };
       if (!res.ok) {
         setBanner(json.error?.message ?? "Could not start connection");
         return;
@@ -159,11 +86,13 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
             } | null;
             if (done.ok) {
               ui.close();
-              // Full reload so the server-rendered workspace list picks up the
-              // connection row /complete just wrote, landing the same way the
-              // first-party OAuth callbacks do (they 302 the browser here).
+              // Full reload so the server-rendered tiles pick up the connection
+              // row /complete just wrote, landing the same way the first-party
+              // OAuth callbacks do (they 302 the browser). The hub, not this
+              // page: the Connect UI can broker a Google or Outlook grant, and
+              // those rows now belong to their own tiles.
               // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-              window.location.href = "/dashboard/integrations/workspace?workspace=connected";
+              window.location.href = "/dashboard/integrations?workspace=connected";
             } else {
               setBanner(doneJson?.error?.message ?? "Could not save connection");
             }
@@ -180,48 +109,14 @@ export function NangoEmailIntegrationActions({ businessId, connections, cap }: P
     <div className="space-y-3">
       {banner ? <p className="text-xs text-spark-orange">{banner}</p> : null}
 
-      {connections.length > 0 ? (
-        <ul className="space-y-2 text-sm text-parchment/80">
-          {connections.map((c) => {
-            const sameN = countsByProvider.get(c.providerConfigKey) ?? 1;
-            const primary = connectionPrimaryLabel(c, sameN);
-            const provider = providerLabel(c.providerConfigKey);
-            return (
-              <li
-                key={c.id}
-                className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-parchment/10 last:border-0"
-              >
-                <span className="text-parchment/70">
-                  <span className="text-parchment/90">{primary}</span>
-                  <span className="text-parchment/40 text-xs block sm:inline sm:ml-1">
-                    {primary === provider ? "" : `· ${provider} `}·{" "}
-                    {new Date(c.createdAt).toLocaleDateString()}
-                  </span>
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => disconnectOne(c.id)}
-                  loading={disconnectingId === c.id}
-                >
-                  Remove
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-
-      {cap.max !== null && connections.length > 0 ? (
-        <p className="text-xs text-parchment/40">
-          {t("capUsage", { used: cap.used, max: cap.max })}
-        </p>
-      ) : null}
-
-      {atCap ? (
-        <p className="text-xs text-parchment/60">{t("capReached", { max: cap.max ?? 0 })}</p>
-      ) : null}
+      {/* No reconnect exemption on this tile: the Nango session route refuses
+          outright at the cap, so at-cap always means blocked here. */}
+      <WorkspaceConnectionList
+        businessId={businessId}
+        connections={connections}
+        cap={cap}
+        connectBlocked={atCap}
+      />
 
       <Button
         type="button"

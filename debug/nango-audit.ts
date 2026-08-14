@@ -12,7 +12,7 @@
  *     revokes them on Nango and reclaims the quota.
  *   - DB-side orphans (row, no Nango connection): REPORT ONLY. The row may
  *     carry app-owned metadata (shared-calendar id, ACL grants); the owner
- *     should reconnect or remove it from /dashboard/integrations/workspace.
+ *     should reconnect or remove it from its tile under /dashboard/integrations.
  *
  * Dry-run by default; pass --apply to delete Nango-side orphans.
  */

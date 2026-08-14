@@ -5,7 +5,7 @@
  * Resolves auth + the active business (manage_settings gate), then loads
  * the connection state for every integration in one place so the hub grid
  * can show per-tile status and each detail page gets the exact props its
- * card component needs — without duplicating the resolution logic.
+ * card component needs, without duplicating the resolution logic.
  */
 
 import { redirect } from "next/navigation";
@@ -35,6 +35,7 @@ import {
   getMcpConnectorStatus,
   type McpConnectorStatus
 } from "@/lib/mcp/connector-status";
+import { groupByWorkspaceFamily } from "@/lib/integrations/workspace-families";
 import type { IntegrationSlug, IntegrationStatus } from "@/lib/integrations/registry";
 
 export type IntegrationsContext = {
@@ -62,7 +63,7 @@ export type IntegrationsContext = {
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
    * The SIGNED-IN USER's Claude connector status (user-scoped, not business-
-   * scoped — the MCP bearer belongs to the login). Null = never connected,
+   * scoped: the MCP bearer belongs to the login). Null = never connected,
    * or the best-effort read failed.
    */
   mcpConnectorStatuses: Record<"claude" | "chatgpt", McpConnectorStatus | null>;
@@ -83,7 +84,7 @@ export async function loadIntegrationsContext(
   const ctx = await resolveActiveBusinessContext(user, db);
   const activeBusinessId =
     ctx.businessId && ctx.role && can(ctx.role, "manage_settings") ? ctx.businessId : null;
-  // API keys are a manage_billing (owner) capability — the key routes refuse
+  // API keys are a manage_billing (owner) capability: the key routes refuse
   // managers, so don't server-render key metadata into their HTML either.
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
@@ -123,11 +124,11 @@ export async function loadIntegrationsContext(
     zoomConnection: businessId ? await getPublicZoomConnection(businessId) : null,
     slackConnection: businessId ? await getPublicSlackConnection(businessId) : null,
     slackEnabled: slackAllowedForTier(businessRow?.tier),
-    // Never load key metadata for non-owners — the key routes refuse
+    // Never load key metadata for non-owners: the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
     activeHooks: businessId ? await listWebhookSubscriptions(businessId) : [],
-    // Best-effort: a status-read failure must not take the page down — the
+    // Best-effort: a status-read failure must not take the page down, the
     // card just falls back to the instructions-only state.
     // One read per client. Best-effort: a status-read failure must not take
     // the page down, the card just falls back to the instructions-only state.
@@ -172,17 +173,23 @@ export function computeIntegrationStatuses(
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
 
+  // Google, Microsoft 365, and the Nango long tail are three tiles over one
+  // table, so each tile counts only the rows it actually shows. Counting the
+  // whole table on each would light up all three the moment a tenant connected
+  // any one of them.
+  const families = groupByWorkspaceFamily(
+    ctx.workspaceConnections,
+    (r) => r.provider_config_key
+  );
+  const countStatus = (n: number): IntegrationStatus =>
+    n === 0
+      ? disconnected
+      : { state: "connected", label: n === 1 ? "Connected" : `${n} connected` };
+
   return {
-    workspace:
-      ctx.workspaceConnections.length > 0
-        ? {
-            state: "connected",
-            label:
-              ctx.workspaceConnections.length === 1
-                ? "Connected"
-                : `${ctx.workspaceConnections.length} connected`
-          }
-        : disconnected,
+    google: countStatus(families.google.length),
+    microsoft: countStatus(families.microsoft.length),
+    workspace: countStatus(families.other.length),
     vagaro: ctx.vagaroConnection ? connected : disconnected,
     acuity: ctx.acuityConnection ? connected : disconnected,
     calendly:

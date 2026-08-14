@@ -22,8 +22,9 @@ export type TierLimits = {
   /** Hard cap on AI image generations per conversation (dashboard thread / texter). */
   imageGenerationsPerSession: number;
   /**
-   * Max simultaneous workspace connections (Gmail / Outlook / etc. on
-   * /dashboard/integrations/workspace), counted across BOTH transports:
+   * Max simultaneous workspace connections (Gmail / Outlook / etc.), counted
+   * as ONE shared pool across the Google, Microsoft 365, and Other 3rd Party
+   * Connections tiles on /dashboard/integrations, and across BOTH transports:
    * first-party (direct) rows and Nango-brokered ones. Since Google and
    * Outlook went first-party (Aug 2026), this is a product tier benefit
    * rather than a vendor quota: each connection costs email and calendar

@@ -264,6 +264,8 @@ describe("computeIntegrationStatuses", () => {
 
   it("reports everything disconnected on an empty context", () => {
     const s = computeIntegrationStatuses(baseCtx());
+    expect(s.google).toEqual({ state: "disconnected", label: "Not connected" });
+    expect(s.microsoft).toEqual({ state: "disconnected", label: "Not connected" });
     expect(s.workspace).toEqual({ state: "disconnected", label: "Not connected" });
     expect(s.vagaro.state).toBe("disconnected");
     expect(s.calendly.state).toBe("disconnected");
@@ -277,16 +279,65 @@ describe("computeIntegrationStatuses", () => {
     expect(s.claude).toEqual({ state: "disconnected", label: "Available" });
   });
 
-  it("labels a single workspace connection Connected and counts multiples", () => {
+  it("labels a single long-tail connection Connected and counts multiples", () => {
     const one = computeIntegrationStatuses(
-      baseCtx({ workspaceConnections: [{ id: "a" }] as never })
+      baseCtx({
+        workspaceConnections: [{ id: "a", provider_config_key: "onedrive" }] as never
+      })
     );
     expect(one.workspace).toEqual({ state: "connected", label: "Connected" });
 
     const two = computeIntegrationStatuses(
-      baseCtx({ workspaceConnections: [{ id: "a" }, { id: "b" }] as never })
+      baseCtx({
+        workspaceConnections: [
+          { id: "a", provider_config_key: "onedrive" },
+          { id: "b", provider_config_key: "some-crm" }
+        ] as never
+      })
     );
     expect(two.workspace).toEqual({ state: "connected", label: "2 connected" });
+  });
+
+  it("counts each workspace tile from only the rows it shows", () => {
+    // One table, one plan cap, three tiles. Counting the whole table per tile
+    // would light all three up the moment a tenant connected any one of them,
+    // which is exactly what the old single Workspace tile did.
+    const s = computeIntegrationStatuses(
+      baseCtx({
+        workspaceConnections: [
+          { id: "g1", provider_config_key: "google" },
+          { id: "g2", provider_config_key: "google-mail" },
+          { id: "m1", provider_config_key: "outlook" },
+          { id: "o1", provider_config_key: "onedrive" }
+        ] as never
+      })
+    );
+    expect(s.google).toEqual({ state: "connected", label: "2 connected" });
+    expect(s.microsoft).toEqual({ state: "connected", label: "Connected" });
+    expect(s.workspace).toEqual({ state: "connected", label: "Connected" });
+  });
+
+  it("leaves the other two tiles disconnected when only Google is connected", () => {
+    const s = computeIntegrationStatuses(
+      baseCtx({
+        workspaceConnections: [{ id: "g1", provider_config_key: "google" }] as never
+      })
+    );
+    expect(s.google).toEqual({ state: "connected", label: "Connected" });
+    expect(s.microsoft.state).toBe("disconnected");
+    expect(s.workspace.state).toBe("disconnected");
+  });
+
+  it("shows a legacy outlook-calendar row on the Microsoft tile, not the long tail", () => {
+    const s = computeIntegrationStatuses(
+      baseCtx({
+        workspaceConnections: [
+          { id: "m1", provider_config_key: "outlook-calendar" }
+        ] as never
+      })
+    );
+    expect(s.microsoft).toEqual({ state: "connected", label: "Connected" });
+    expect(s.workspace.state).toBe("disconnected");
   });
 
   it("marks direct calendar connections connected when a row exists", () => {

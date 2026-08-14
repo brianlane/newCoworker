@@ -22,6 +22,19 @@ describe("integrations registry", () => {
     }
   });
 
+  it("splits workspace OAuth into Google, Microsoft 365, and a trailing catch-all", () => {
+    const workspaceSection = INTEGRATIONS.filter((i) => i.category === "Workspace").map(
+      (i) => i.slug
+    );
+    expect(workspaceSection).toContain("google");
+    expect(workspaceSection).toContain("microsoft");
+    // The catch-all renders last in its section: it is defined by what the
+    // named tiles above it do not cover, so listing it first reads as the
+    // default choice.
+    expect(workspaceSection[workspaceSection.length - 1]).toBe("workspace");
+    expect(getIntegration("workspace")?.name).toBe("Other 3rd Party Connections");
+  });
+
   it("marks only the API-key surface as owner-only", () => {
     const ownerOnly = INTEGRATIONS.filter((i) => i.ownerOnly).map((i) => i.slug);
     expect(ownerOnly).toEqual(["zapier-api"]);

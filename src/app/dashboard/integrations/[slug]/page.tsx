@@ -6,6 +6,7 @@ import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { GoogleConnectButton } from "@/components/dashboard/GoogleConnectButton";
 import { MicrosoftConnectButton } from "@/components/dashboard/MicrosoftConnectButton";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
+import { WorkspaceConnectionList } from "@/components/dashboard/WorkspaceConnectionList";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
 import { AcuityIntegrationCard } from "@/components/dashboard/AcuityIntegrationCard";
@@ -23,11 +24,38 @@ import {
   type IntegrationsContext
 } from "@/lib/dashboard/integrations-context";
 import { getIntegration, type IntegrationSlug } from "@/lib/integrations/registry";
+import {
+  groupByWorkspaceFamily,
+  type WorkspaceFamily
+} from "@/lib/integrations/workspace-families";
+import { GOOGLE_KEYS, OUTLOOK_KEYS } from "@/lib/workspace/reconnect";
 
 export const dynamic = "force-dynamic";
 
 type Params = Promise<{ slug: string }>;
 type SearchParams = Promise<{ error?: string; workspace?: string; meta?: string }>;
+
+/**
+ * The rows one workspace tile owns, in the shape its client components take.
+ *
+ * Every tile reads the SAME loaded list and filters it here rather than
+ * issuing its own query: the plan cap counts one shared pool, so the three
+ * pages have to be looking at one snapshot of it.
+ */
+function workspaceRowsFor(ctx: IntegrationsContext, family: WorkspaceFamily) {
+  const grouped = groupByWorkspaceFamily(ctx.workspaceConnections, (r) => r.provider_config_key);
+  return grouped[family].map((r) => ({
+    id: r.id,
+    providerConfigKey: r.provider_config_key,
+    connectionId: r.connection_id,
+    createdAt: r.created_at,
+    metadata: r.metadata
+  }));
+}
+
+function workspaceCap(ctx: IntegrationsContext) {
+  return { used: ctx.workspaceConnectionCap.used, max: ctx.workspaceConnectionCap.max };
+}
 
 function IntegrationBody({
   slug,
@@ -39,56 +67,90 @@ function IntegrationBody({
   ctx: IntegrationsContext;
 }) {
   switch (slug) {
-    case "workspace":
+    case "google": {
+      const rows = workspaceRowsFor(ctx, "google");
+      // Mirrors the connect route exactly: at the cap is not enough, because a
+      // reconnect consumes no seat. Any Google-family key counts, since the
+      // Nango era left four of them and a tenant on `google-mail` reconnects
+      // onto their existing row just like one on `google`. Matched against the
+      // route's own key list rather than the displayed rows, same as Outlook
+      // below. Computed ONCE so the button and the cap copy beneath it cannot
+      // contradict each other.
+      const blocked =
+        ctx.workspaceConnectionCap.atCap &&
+        !ctx.workspaceConnections.some((r) =>
+          (GOOGLE_KEYS as readonly string[]).includes(r.provider_config_key)
+        );
       return (
         <IntegrationCard
-          title="Workspace"
-          description="Google and Outlook connect directly. Drive and the long tail still connect through Nango. Slack and Zoom connect from their own integration pages."
-          icon={getIntegration("workspace")!.icon}
-          status={ctx.workspaceConnections.length > 0 ? "connected" : "disconnected"}
+          title="Google"
+          description="Gmail and Google Calendar, including a personal Google account. Connect one account per seat on your plan."
+          icon={getIntegration("google")!.icon}
+          status={rows.length > 0 ? "connected" : "disconnected"}
         >
-          <MicrosoftConnectButton
-            businessId={businessId}
-            // Mirrors the connect route exactly: at the cap is not enough,
-            // because a reconnect consumes no seat. An at-cap tenant holding an
-            // Outlook row is precisely who needs this button, to migrate off
-            // Nango.
-            blocked={
-              ctx.workspaceConnectionCap.atCap &&
-              !ctx.workspaceConnections.some((r) => r.provider_config_key === "outlook")
-            }
-          />
-          <GoogleConnectButton
-            businessId={businessId}
-            // Same reasoning as Outlook: at the cap is not enough, because a
-            // reconnect consumes no seat. Any Google-family key counts, since
-            // the Nango era left four of them and a tenant on `google-mail`
-            // reconnects onto their existing row just like one on `google`.
-            blocked={
-              ctx.workspaceConnectionCap.atCap &&
-              !ctx.workspaceConnections.some((r) =>
-                ["google", "gmail", "google-mail", "google-calendar"].includes(
-                  r.provider_config_key
-                )
-              )
-            }
-          />
+          <div className="space-y-3">
+            <GoogleConnectButton businessId={businessId} blocked={blocked} />
+            <WorkspaceConnectionList
+              businessId={businessId}
+              connections={rows}
+              cap={workspaceCap(ctx)}
+              connectBlocked={blocked}
+            />
+          </div>
+        </IntegrationCard>
+      );
+    }
+    case "microsoft": {
+      const rows = workspaceRowsFor(ctx, "microsoft");
+      // Same reasoning as Google: at the cap is not enough, because a reconnect
+      // consumes no seat. An at-cap tenant holding an Outlook row is precisely
+      // who needs this button, to migrate off Nango.
+      //
+      // Matched against OUTLOOK_KEYS, not against the rows this tile DISPLAYS.
+      // The tile also shows legacy `outlook-calendar` rows, but the connect
+      // route will not reconnect onto one, so counting it here would enable a
+      // button the server then refuses.
+      const blocked =
+        ctx.workspaceConnectionCap.atCap &&
+        !ctx.workspaceConnections.some((r) =>
+          (OUTLOOK_KEYS as readonly string[]).includes(r.provider_config_key)
+        );
+      return (
+        <IntegrationCard
+          title="Microsoft 365"
+          description="Outlook mail and calendar, on Microsoft 365 or a personal Outlook account. Connect one account per seat on your plan."
+          icon={getIntegration("microsoft")!.icon}
+          status={rows.length > 0 ? "connected" : "disconnected"}
+        >
+          <div className="space-y-3">
+            <MicrosoftConnectButton businessId={businessId} blocked={blocked} />
+            <WorkspaceConnectionList
+              businessId={businessId}
+              connections={rows}
+              cap={workspaceCap(ctx)}
+              connectBlocked={blocked}
+            />
+          </div>
+        </IntegrationCard>
+      );
+    }
+    case "workspace": {
+      const rows = workspaceRowsFor(ctx, "other");
+      return (
+        <IntegrationCard
+          title="Other 3rd Party Connections"
+          description="Drive, OneDrive, and the rest of the long tail connect here through Nango. Google and Microsoft 365 have their own pages, and so do Slack and Zoom."
+          icon={getIntegration("workspace")!.icon}
+          status={rows.length > 0 ? "connected" : "disconnected"}
+        >
           <NangoEmailIntegrationActions
             businessId={businessId}
-            connections={ctx.workspaceConnections.map((r) => ({
-              id: r.id,
-              providerConfigKey: r.provider_config_key,
-              connectionId: r.connection_id,
-              createdAt: r.created_at,
-              metadata: r.metadata
-            }))}
-            cap={{
-              used: ctx.workspaceConnectionCap.used,
-              max: ctx.workspaceConnectionCap.max
-            }}
+            connections={rows}
+            cap={workspaceCap(ctx)}
           />
         </IntegrationCard>
       );
+    }
     case "vagaro":
       return (
         <VagaroIntegrationCard businessId={businessId} initialConnection={ctx.vagaroConnection} />
@@ -224,8 +286,10 @@ export default async function IntegrationDetailPage({
         </Card>
       )}
 
-      {/* Generic success banner: the Nango and Zoom flows both land with
-          workspace=connected on their own detail page. */}
+      {/* Generic success banner: the Google, Outlook, and Zoom callbacks all
+          land with workspace=connected on their own detail page. The Nango
+          flow lands on the hub instead, because the Connect UI can broker a
+          grant that belongs to one of the other tiles. */}
       {q.workspace === "connected" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
           <p className="text-sm text-claw-green">Connected successfully.</p>

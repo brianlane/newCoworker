@@ -1916,13 +1916,14 @@
       "upgradeMessage": "The Slack integration is available on Standard and Enterprise plans."
     },
     "integrationsWorkspace": {
-      "capUsage": "{used} of {max} workspace connections used",
+      "capUsage": "{used} of {max} workspace connections used across Google, Microsoft 365, and other services",
       "capReached": "Your plan includes {max, plural, one {# workspace connection} other {# workspace connections}}. Remove one or upgrade your plan to connect another.",
+      "capReachedReconnectOk": "All {max, plural, one {# workspace connection on your plan is} other {# workspace connections on your plan are}} in use. You can still reconnect the account below, which uses no extra seat. Adding a different account needs a free seat or a plan upgrade.",
       "connectMicrosoft": "Connect Outlook",
       "connectMicrosoftHelp": "Microsoft 365 or a personal Outlook account. Covers mail and calendar.",
       "connectGoogle": "Connect Google",
       "connectGoogleHelp": "Gmail and Google Calendar, including a personal Google account. Covers mail and calendar.",
-      "connectOther": "Connect Google or another service"
+      "connectOther": "Connect another service"
     },
     "humanHandoff": {
       "title": "Human handoff",
