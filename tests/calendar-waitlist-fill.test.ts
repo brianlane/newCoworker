@@ -141,7 +141,7 @@ beforeEach(() => {
   mockSettings.mockResolvedValue({ enabled: true, offerTtlMinutes: 60 });
   mockList.mockResolvedValue([entry()]);
   mockConn.mockResolvedValue(GOOGLE);
-  mockBusy.mockResolvedValue([]);
+  mockBusy.mockResolvedValue({ busy: [], complete: true });
   mockBusiness.mockResolvedValue({ name: "Acme Plumbing", timezone: "America/Phoenix" } as never);
   mockLanguage.mockResolvedValue({ preferred_language: null, language_source: null });
   mockOptOut.mockResolvedValue({ ok: true, optedOut: false } as never);
@@ -342,17 +342,32 @@ describe("verifyFreedSlotOpen", () => {
   });
 
   it("Google/Microsoft: free/busy overlap fails closed; null fetch fails closed; throws fail closed", async () => {
-    mockBusy.mockResolvedValue([
-      { start: new Date(SLOT_MS - 60_000), end: new Date(SLOT_MS) }
-    ]);
+    mockBusy.mockResolvedValue({
+      busy: [
+        { start: new Date(SLOT_MS - 60_000), end: new Date(SLOT_MS) }
+      ],
+      complete: true
+    });
     expect(await verifyFreedSlotOpen(BIZ, GOOGLE, SLOT_MS, END_MS)).toBe(true);
 
-    mockBusy.mockResolvedValue([
-      { start: new Date(SLOT_MS), end: new Date(SLOT_MS + 60_000) }
-    ]);
+    mockBusy.mockResolvedValue({
+      busy: [
+        { start: new Date(SLOT_MS), end: new Date(SLOT_MS + 60_000) }
+      ],
+      complete: true
+    });
     expect(await verifyFreedSlotOpen(BIZ, GOOGLE, SLOT_MS, END_MS)).toBe(false);
 
     mockBusy.mockResolvedValue(null);
+    expect(await verifyFreedSlotOpen(BIZ, GOOGLE, SLOT_MS, END_MS)).toBe(false);
+
+    // An INCOMPLETE read fails closed too, even when the blocks it did return
+    // leave the slot looking open. This path texts a customer an offer for the
+    // slot, so "free" has to mean proven free, and unread reads as free.
+    mockBusy.mockResolvedValue({
+      busy: [{ start: new Date(SLOT_MS - 60_000), end: new Date(SLOT_MS) }],
+      complete: false
+    });
     expect(await verifyFreedSlotOpen(BIZ, GOOGLE, SLOT_MS, END_MS)).toBe(false);
 
     mockBusy.mockRejectedValue(new Error("nango down"));
@@ -445,9 +460,12 @@ describe("offerFreedSlot", () => {
     mockList.mockResolvedValue([long, short]);
     // Busy block 30 minutes after the freed start: 60 min does not fit,
     // 30 min does.
-    mockBusy.mockResolvedValue([
-      { start: new Date(SLOT_MS + 30 * 60_000), end: new Date(SLOT_MS + 60 * 60_000) }
-    ]);
+    mockBusy.mockResolvedValue({
+      busy: [
+        { start: new Date(SLOT_MS + 30 * 60_000), end: new Date(SLOT_MS + 60 * 60_000) }
+      ],
+      complete: true
+    });
     expect(await offerFreedSlot(BIZ, SLOT)).toBe("offered");
     expect(mockMark).toHaveBeenCalledTimes(1);
     expect(mockMark).toHaveBeenCalledWith("wl-short", expect.anything(), undefined);
@@ -517,7 +535,7 @@ describe("offerFreedSlot", () => {
     mockSettings.mockResolvedValue({ enabled: true, offerTtlMinutes: 60 });
     mockList.mockResolvedValue([entry(), second]);
     mockConn.mockResolvedValue(GOOGLE);
-    mockBusy.mockResolvedValue([]);
+    mockBusy.mockResolvedValue({ busy: [], complete: true });
     mockBusiness.mockResolvedValue({ name: "Acme", timezone: "America/Phoenix" } as never);
     mockLanguage.mockResolvedValue({ preferred_language: null, language_source: null });
     mockMark.mockResolvedValue(true);
@@ -617,7 +635,7 @@ describe("handleObservedCancellation", () => {
     mockSettings.mockResolvedValue({ enabled: true, offerTtlMinutes: 60 });
     mockList.mockResolvedValue([entry()]);
     mockConn.mockResolvedValue(GOOGLE);
-    mockBusy.mockResolvedValue([]);
+    mockBusy.mockResolvedValue({ busy: [], complete: true });
     mockBusiness.mockResolvedValue({ name: "Acme", timezone: "America/Phoenix" } as never);
     mockLanguage.mockResolvedValue({ preferred_language: null, language_source: null });
     mockOptOut.mockResolvedValue({ ok: true, optedOut: false } as never);

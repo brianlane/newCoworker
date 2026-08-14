@@ -67,7 +67,8 @@ import {
 import {
   bookCalendarAppointment,
   formatBookingStartLocal,
-  getWorkspaceBusyBlocks
+  getWorkspaceBusyBlocks,
+  type WorkspaceBusyRead
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { getBusiness } from "@/lib/db/businesses";
@@ -236,17 +237,24 @@ export async function getBookingPageContext(
   };
 }
 
-/** Provider busy blocks for the page's whole bookable window. */
+/**
+ * Provider busy blocks for the page's whole bookable window.
+ *
+ * `complete: false` means the provider answered with a REAL but partial list
+ * (Graph paging cut short). Kept distinct from null all the way to the caller,
+ * because partial is worth using here and must never be cached.
+ */
 async function fetchBusyBlocks(
   businessId: string,
   provider: "google" | "microsoft" | "caldav",
   conn: { provider: string; connectionId: string; providerConfigKey: string },
   windowStart: Date,
   windowEnd: Date
-): Promise<BusyBlock[] | null> {
+): Promise<WorkspaceBusyRead | null> {
   if (provider === "caldav") {
     const res = await getCaldavBusyBlocks(businessId, windowStart, windowEnd);
-    return res.ok ? res.busy : null;
+    // CalDAV reports the window in one response; there is no paging to cut off.
+    return res.ok ? { busy: res.busy, complete: true } : null;
   }
   return getWorkspaceBusyBlocks(businessId, conn, windowStart, windowEnd);
 }
@@ -276,7 +284,10 @@ export async function probeCalendarAvailability(
       now,
       new Date(now.getTime() + DAY_MS)
     );
-    return busy === null ? "unreadable" : "ok";
+    // Incomplete counts as unreadable for the OWNER's health probe: the
+    // dashboard warning is how they learn availability is not fully readable,
+    // even though the public page still serves the partial list.
+    return busy === null || !busy.complete ? "unreadable" : "ok";
   } catch {
     return "unreadable";
   }
@@ -423,7 +434,7 @@ async function listSlotsForContext(
       // sees the "cannot read availability" warning on the Bookings
       // dashboard either way; only events created DURING the outage can
       // be double-booked.
-      let fetched: BusyBlock[] | null = null;
+      let fetched: WorkspaceBusyRead | null = null;
       try {
         fetched = await fetchBusyBlocks(context.businessId, conn.provider, conn, now, windowEnd);
       } catch (err) {
@@ -441,11 +452,28 @@ async function listSlotsForContext(
         // The ledger union covers bookings the outage kept off the
         // snapshot; overlapping spans are harmless to the slot walk.
         busy = cached ? [...ledgerBusy, ...cached] : ledgerBusy;
+      } else if (!fetched.complete) {
+        // A partial read is USED, not discarded. Every block in it is really
+        // busy, so it blocks strictly more than the degraded baseline would;
+        // throwing it away to fall back on ledger-plus-cache would offer MORE
+        // taken slots, not fewer. The ledger is unioned in for the same reason
+        // it is during an outage.
+        //
+        // It is deliberately NOT written through. The cache is last-known-GOOD
+        // and serves future outages, so persisting an under-report would let
+        // one oversized window poison availability long after the read that
+        // produced it. A window that never fits the budget would otherwise
+        // never refresh the snapshot at all.
+        logger.warn("booking-page: provider busy incomplete; using partial read uncached", {
+          businessId: context.businessId,
+          blocks: fetched.busy.length
+        });
+        busy = [...ledgerBusy, ...fetched.busy];
       } else {
-        busy = fetched;
+        busy = fetched.busy;
         // Write-through (best-effort inside): the snapshot future outages
         // will serve.
-        await saveBusyCache(context.businessId, now, windowEnd, fetched);
+        await saveBusyCache(context.businessId, now, windowEnd, fetched.busy);
       }
     }
 

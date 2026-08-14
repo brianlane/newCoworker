@@ -253,21 +253,44 @@ personal accounts do support. Three details that matter:
   `free` and `workingElsewhere` events, and cancelled ones, do not block a slot.
   Skipping that would invent busy time getSchedule would never have reported and
   quietly delete real availability.
-- **It pages.** Graph defaults calendarView to TEN items and hides the rest
-  behind `@odata.nextLink`. Every error here runs one way: an event we never
-  read looks FREE, so a first-page-only read books on top of real meetings. The
-  read asks for `$top=250`, follows nextLink up to 4 pages, and past that
-  refuses the read (returns null, so the caller degrades to
-  `calendar_not_connected`) rather than handing back a short busy list. The same
-  applies to the shared NewCoworker calendar, which is where our own bookings
-  live: unreadable there fails the whole lookup instead of merging nothing.
-  Missing a booking is visible and recoverable; double-booking a customer is
-  neither.
+- **It pages, and it says when it could not finish.** Graph defaults
+  calendarView to TEN items and hides the rest behind `@odata.nextLink`. Every
+  error here runs one way: an event we never read looks FREE, so a
+  first-page-only read books on top of real meetings. The read asks for
+  `$top=250` and follows nextLink up to 4 pages.
 
   This one was a live bug, not a hypothetical: the shared-calendar read had been
   unpaginated since PR #149 (Jun 2026), so any tenant with more than ten events
   in a booking window was already at risk. Bugbot caught it on #1364 when the
   same helper started carrying the primary availability path too.
+
+**`getWorkspaceBusyBlocks` returns `{ busy, complete }`, and `complete` is
+load-bearing.** A read that runs out of page budget comes back with
+`complete: false`: the blocks are real, there are just more unread. That has to
+survive the return, because the callers need opposite things and neither answer
+is safe for both.
+
+| Caller | On `complete: false` | Why |
+| --- | --- | --- |
+| `calendar_find_slots` | refuse (`calendar_lookup_failed`) | no other availability source; a partial list offers times that are free only because their event went unread |
+| waitlist fill | treat the slot as taken | it texts a customer an offer, so "free" must mean proven free |
+| public booking page | USE it, unioned with the ledger, and do NOT cache it | provider busy is additive there; discarding it degrades to ledger-plus-cache, which blocks LESS |
+
+The booking-page row is the counter-intuitive one and the reason `null` was not
+good enough. That page treats an unreadable provider as a degrade, not an
+outage: it falls back to a last-known-good snapshot plus the booking ledger. So
+returning `null` for a partial read would have handed out MORE taken slots, not
+fewer. Worse, `saveBusyCache` only runs on the complete path, so a mailbox that
+never fits the budget would never write a snapshot and would degrade to
+ledger-only forever.
+
+The budget is reachable by a real tenant: the window runs to
+`max_advance_days + 2`, `max_advance_days` caps at 60, and a clinic or salon at
+20 to 40 appointments a day clears 1000 events inside one window. Raising the
+budget instead would put twenty-odd sequential Graph round trips in front of a
+public page load, which is why the fix is to report incompleteness rather than
+to page harder. The owner still finds out: `probeCalendarAvailability` reports
+an incomplete read as `unreadable` on the Bookings dashboard.
 
 **Polling is unchanged.** Connected-mailbox watching is still the roughly
 1/minute cron poll. No Graph push subscriptions were added.

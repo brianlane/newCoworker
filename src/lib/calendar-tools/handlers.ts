@@ -327,6 +327,38 @@ const CALENDAR_VIEW_PAGE_SIZE = 250;
 const CALENDAR_VIEW_MAX_PAGES = 4;
 
 /**
+ * A free/busy read, and whether it is the WHOLE answer.
+ *
+ * `complete: false` means paging was cut short, so `busy` is a real but partial
+ * list: everything in it is genuinely busy, and there is more that was not
+ * read. That distinction has to survive the return, because the two kinds of
+ * caller need opposite things from it and neither answer is safe for both.
+ *
+ * A caller with no other availability signal (the `calendar_find_slots` tool,
+ * waitlist fill) must REFUSE an incomplete read. It would otherwise offer a
+ * time that only looks free because the event covering it was never read, and
+ * unread always reads as free.
+ *
+ * The public booking page must USE it. There, provider busy is additive on top
+ * of the booking ledger and a cached snapshot, and an unreadable provider
+ * degrades to those instead of taking the page down. A partial list is strictly
+ * more conservative than that degradation, so discarding it would hand out MORE
+ * taken slots, not fewer. What it must not do is persist an under-report as
+ * last-known-good.
+ *
+ * The budget is reachable by a real tenant, not just a pathological one: a
+ * booking window runs to `max_advance_days + 2` and max_advance_days caps at
+ * 60, so a clinic or salon at 20 to 40 appointments a day clears 1000 events
+ * inside one window. Raising the budget instead would put twenty-odd sequential
+ * Graph round trips in front of a public page load, which is why the answer is
+ * to report incompleteness rather than to page harder.
+ */
+export type WorkspaceBusyRead = {
+  busy: Array<{ start: Date; end: Date }>;
+  complete: boolean;
+};
+
+/**
  * Busy blocks from a Graph calendarView window, following Graph's paging.
  *
  * Used for the shared "NewCoworker" calendar, and as the personal-account
@@ -337,10 +369,10 @@ const CALENDAR_VIEW_MAX_PAGES = 4;
  *
  * Cancelled events are dropped for the same reason.
  *
- * Returns null when the answer cannot be trusted, meaning either no connection
- * or a window too large to read inside the page budget. Callers must treat that
- * as a failed lookup rather than as "nothing is booked": a short busy list is
- * exactly what double-books a customer.
+ * Returns null when there is no usable connection. A read that ran out of page
+ * budget comes back with `complete: false` instead: the blocks are real, there
+ * are just more of them unread, and only the caller knows whether an
+ * under-report is survivable. See WorkspaceBusyRead.
  */
 async function readCalendarViewBusy(
   businessId: string,
@@ -348,7 +380,7 @@ async function readCalendarViewBusy(
   endpoint: string,
   windowStart: Date,
   windowEnd: Date
-): Promise<Array<{ start: Date; end: Date }> | null> {
+): Promise<WorkspaceBusyRead | null> {
   type GraphView = {
     value?: Array<{
       start?: { dateTime: string };
@@ -395,23 +427,22 @@ async function readCalendarViewBusy(
     }
 
     const link = data?.["@odata.nextLink"];
-    if (!link) return busy;
+    if (!link) return { busy, complete: true };
     // nextLink is an absolute Graph URL; the proxy wants path + query.
     const u = new URL(link);
     next = u.pathname + u.search;
   }
 
-  // Budget spent with pages still outstanding. Returning the partial list would
-  // under-report busy, and under-reporting busy is the direction that
-  // double-books, so refuse the read and let the caller degrade to "no
-  // availability" instead of offering a taken slot.
-  logger.warn("calendarView exceeded its page budget; availability treated as unreadable", {
+  // Budget spent with pages still outstanding. The blocks gathered so far are
+  // real, so they are handed back rather than discarded; `complete: false` is
+  // what stops a caller from reading the gap as free time.
+  logger.warn("calendarView exceeded its page budget; busy list is an under-report", {
     businessId,
     providerConfigKey: conn.providerConfigKey,
     pages: CALENDAR_VIEW_MAX_PAGES,
     eventsSeen: busy.length
   });
-  return null;
+  return { busy, complete: false };
 }
 
 export async function getWorkspaceBusyBlocks(
@@ -420,7 +451,7 @@ export async function getWorkspaceBusyBlocks(
   windowStart: Date,
   windowEnd: Date,
   opts: { availabilityViewInterval?: number } = {}
-): Promise<Array<{ start: Date; end: Date }> | null> {
+): Promise<WorkspaceBusyRead | null> {
   // Read-only: never creates the shared calendar from the search path.
   const shared = await getSharedCalendar(businessId);
 
@@ -443,7 +474,11 @@ export async function getWorkspaceBusyBlocks(
     if (!res) return null;
     const data = res.data as FreeBusyBody;
     const blocks = Object.values(data?.calendars ?? {}).flatMap((c) => c.busy ?? []);
-    return blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+    // freeBusy answers for every calendar in one response, with no paging.
+    return {
+      busy: blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) })),
+      complete: true
+    };
   }
 
   // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
@@ -483,6 +518,8 @@ export async function getWorkspaceBusyBlocks(
   }
 
   let busy: Array<{ start: Date; end: Date }>;
+  // Every read that follows has to agree before the answer counts as whole.
+  let complete = true;
   if (getScheduleFailed) {
     // calendarView is supported on personal accounts. Busy is derived from the
     // events themselves, so `showAs` decides: an event the owner marked free
@@ -495,7 +532,8 @@ export async function getWorkspaceBusyBlocks(
       windowEnd
     );
     if (fallback === null) return null;
-    busy = fallback;
+    busy = fallback.busy;
+    complete = fallback.complete;
   } else {
     if (!res) return null;
     type GraphBusy = {
@@ -523,15 +561,16 @@ export async function getWorkspaceBusyBlocks(
       windowStart,
       windowEnd
     );
-    // An unreadable shared calendar fails the whole lookup rather than merging
-    // nothing. The shared calendar is where OUR OWN bookings live, so silently
-    // skipping it is the one case guaranteed to double-book. A deleted calendar
-    // already behaved this way (404s throw, and every caller catches); this
-    // extends it to the page-budget case.
+    // A shared calendar that cannot be reached at all fails the whole lookup
+    // rather than merging nothing. This is where OUR OWN bookings live, so
+    // silently skipping it is the one case guaranteed to double-book. A deleted
+    // calendar already behaved this way (404s throw, and every caller catches).
     if (sharedBusy === null) return null;
-    busy = busy.concat(sharedBusy);
+    busy = busy.concat(sharedBusy.busy);
+    // Partial on either calendar makes the merged answer partial.
+    complete = complete && sharedBusy.complete;
   }
-  return busy;
+  return { busy, complete };
 }
 
 export async function findCalendarSlots(
@@ -616,7 +655,11 @@ export async function findCalendarSlots(
       availabilityViewInterval: args.durationMinutes
     });
     if (workspaceBusy === null) return { ok: false, detail: "calendar_not_connected" };
-    busy = workspaceBusy;
+    // An under-report is refused here. This tool has no second availability
+    // source to fall back on, so offering from a partial busy list means
+    // offering a time that is only free because its event went unread.
+    if (!workspaceBusy.complete) return { ok: false, detail: "calendar_lookup_failed" };
+    busy = workspaceBusy.busy;
 
     // Resolved BEFORE the slot walk: quarter-hour candidates prefer :00/:30
     // in the requester's local clock, and the echo lets the model present

@@ -673,6 +673,36 @@ describe("findCalendarSlots", () => {
     );
   });
 
+  it("refuses to offer slots from an incomplete busy read", async () => {
+    // Unlike the booking page, this tool has no ledger or cached snapshot to
+    // union underneath a partial answer. Offering from an under-report means
+    // offering a time that is free only because its event went unread, so it
+    // declines instead and the coworker says it cannot check the calendar.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(getSharedCalendar).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      status: 200,
+      data: {
+        value: [
+          {
+            start: { dateTime: "2026-06-12T10:00:00" },
+            end: { dateTime: "2026-06-12T11:00:00" }
+          }
+        ],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=X"
+      }
+    } as never);
+    // Force the calendarView path: getSchedule rejected by a personal account.
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce(
+      Object.assign(new Error("Provider request failed (403)"), { response: { status: 403 } })
+    );
+
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+
+    expect(result.ok).toBe(false);
+    expect((result as { detail: string }).detail).toBe("calendar_lookup_failed");
+  });
+
   it("refuses to offer slots when the Microsoft shared calendar cannot be read", async () => {
     // This asserted `ok: true` from #149 (Jun 2026) until the direct transport
     // landed, and the flip is deliberate. Back then a null second response was
@@ -1883,7 +1913,7 @@ describe("getWorkspaceBusyBlocks (direct — the booking page's busy fetch)", ()
     } as never);
 
     const busy = await getWorkspaceBusyBlocks(BIZ, MS_CONN, WINDOW_START, WINDOW_END);
-    expect(busy).toEqual([]);
+    expect(busy).toEqual({ busy: [], complete: true });
     const payload = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
       data: { availabilityViewInterval: number };
     };
@@ -1935,9 +1965,10 @@ describe("getWorkspaceBusyBlocks: personal Outlook has no getSchedule", () => {
 
     const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
 
-    expect(busy).toEqual([
-      { start: new Date("2026-08-20T10:00:00Z"), end: new Date("2026-08-20T11:00:00Z") }
-    ]);
+    expect(busy).toEqual({
+      busy: [{ start: new Date("2026-08-20T10:00:00Z"), end: new Date("2026-08-20T11:00:00Z") }],
+      complete: true
+    });
     const second = vi.mocked(workspaceProxyForBusiness).mock.calls[1];
     expect((second[2] as { endpoint: string }).endpoint).toBe("/v1.0/me/calendarView");
   });
@@ -1962,9 +1993,10 @@ describe("getWorkspaceBusyBlocks: personal Outlook has no getSchedule", () => {
 
     const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
 
-    expect(busy).toEqual([
-      { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
-    ]);
+    expect(busy).toEqual({
+      busy: [{ start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }],
+      complete: true
+    });
   });
 
   it("does NOT fall back on a transport failure, which is not evidence about the mailbox", async () => {
@@ -2012,9 +2044,10 @@ describe("getWorkspaceBusyBlocks: personal Outlook has no getSchedule", () => {
 
     const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
 
-    expect(busy).toEqual([
-      { start: new Date("2026-08-20T09:30:00Z"), end: new Date("2026-08-20T10:00:00Z") }
-    ]);
+    expect(busy).toEqual({
+      busy: [{ start: new Date("2026-08-20T09:30:00Z"), end: new Date("2026-08-20T10:00:00Z") }],
+      complete: true
+    });
     expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
   });
 });
@@ -2081,10 +2114,13 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
     const busy = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
 
     // Page two's event must be present. Without paging it reads as free.
-    expect(busy).toEqual([
-      { start: new Date("2026-08-20T10:00:00Z"), end: new Date("2026-08-20T11:00:00Z") },
-      { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
-    ]);
+    expect(busy).toEqual({
+      busy: [
+        { start: new Date("2026-08-20T10:00:00Z"), end: new Date("2026-08-20T11:00:00Z") },
+        { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
+      ],
+      complete: true
+    });
 
     // The follow-up goes to nextLink's path+query with NOTHING merged on top:
     // the link already carries the window and a $skiptoken, and re-merging
@@ -2097,15 +2133,21 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
     expect(third.params).toBeUndefined();
   });
 
-  it("refuses the read rather than returning a partial busy list when paging runs long", async () => {
-    // Truncating busy is the direction that double-books, so an unreadably
-    // large window must degrade to "no availability", never to "all free".
+  it("reports the read as incomplete, keeping the blocks, when paging runs long", async () => {
+    // The blocks gathered so far are real, so they are kept: discarding them
+    // would make the booking page fall back on ledger-plus-cache, which blocks
+    // LESS. `complete: false` is what stops a caller with no other
+    // availability source from reading the unread remainder as free.
     const more = page([{ h: 10 }], "https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=X");
     vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(providerRejection(403))
       .mockResolvedValue(more as never);
 
-    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toBeNull();
+    const read = await getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd);
+
+    expect(read?.complete).toBe(false);
+    // One block per page walked, so the partial answer is genuinely populated.
+    expect(read?.busy).toHaveLength(4);
 
     // One getSchedule attempt plus the bounded page budget, and no more.
     expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1 + 4);
@@ -2119,14 +2161,20 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
     vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(providerRejection(403))
       .mockResolvedValueOnce({ status: 200 } as never);
-    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([]);
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual({
+      busy: [],
+      complete: true
+    });
 
     vi.clearAllMocks();
     vi.mocked(getSharedCalendar).mockResolvedValue(null as never);
     vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(providerRejection(403))
       .mockResolvedValueOnce({ status: 200, data: {} } as never);
-    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([]);
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual({
+      busy: [],
+      complete: true
+    });
   });
 
   it("skips an event missing either endpoint rather than minting an Invalid Date", async () => {
@@ -2146,9 +2194,10 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
         }
       } as never);
 
-    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([
-      { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
-    ]);
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual({
+      busy: [{ start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }],
+      complete: true
+    });
   });
 
   it("fails the whole lookup when the shared calendar cannot be read", async () => {
