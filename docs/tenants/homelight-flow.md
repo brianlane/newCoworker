@@ -52,9 +52,36 @@ a key to accept it. Everything downstream follows from that:
   `withinMinutes` is a lookup filter and `timeoutMinutes` is the ceiling on
   waiting for a LIVE call to end, so the flow's `timeoutMinutes: 45` was inert:
   with no session the step resolved `no_call` in zero seconds.
-  `awaitStartMinutes` (set to 3 by `homelight-await-call-start.ts`) polls for a
-  call to begin. Keep it small. Every step after it waits too, and latency is
-  the product here.
+  `awaitStartMinutes` polls for a call to begin. Keep it small. Every step
+  after it waits too, and latency is the product here. It is **6** since
+  2026-08-14 (`homelight-claim-status-honesty.ts`), raised from the original 3
+  because Kevin's real callback landed at 3.1 minutes and was missed by six
+  seconds. Measured callbacks since Jul 1 2026: -0.8, -0.5, 3.1, 19.0 and 137
+  minutes, with five referrals getting no call at all. Do not chase the tail:
+  half of all referrals never get a callback, so every added minute is paid by
+  those runs for nothing, and missing the call is recoverable on its own since
+  the late-contact ladder re-reads HomeLight's email.
+- **Requesting the claim callback is not the same as claiming, and the copy
+  used to say it was.** On Amy C. (2026-08-14, run `5ac0ee1b`) the flow clicked
+  "Call me to claim referral", waited its 3 minutes, recorded `no_call`, and
+  then texted the teammate "HomeLight lead is yours" and emailed Amy
+  "HomeLight referral claimed by Gabrielle Mota". The portal HTML saved that
+  same minute still showed the unclicked claim button, and HomeLight's own
+  90-minute nudge confirms it considered the referral unanswered. HomeLight
+  called at 10:26, 137 minutes after the click.
+  The copy now separates the two facts: routing DID assign the lead, so
+  "assigned to you" is true, and the claim outcome is templated from
+  `{{vars.hl_call_outcome_label}}`, the engine's own phrase ("no call came
+  in", "spoke with them"), so it stays right for outcomes added later. The
+  teammate SMS also carries the portal link now, which is what makes a
+  `no_call` actionable: they can finish the claim by hand.
+  This also retired the offer line "Our AI coworker answered HomeLight's call
+  and is talking to them now", which was sent before any call existed and was
+  always false on the text-claim path.
+  Note `wait_for_call` publishes `<saveAs>_label` and `<saveAs>_reason` at run
+  time exactly like `place_ai_call`; the authoring validator only registered
+  them for the dialing step until PR #1371, so templating the phrase used to
+  fail to save.
 - **HomeLight alerts arrive in two wordings, from two different sender lines**,
   and the flow has to match both. They open with either
   `New HomeLight Referral: <name> - $250K seller in ...` or
@@ -89,9 +116,8 @@ a key to accept it. Everything downstream follows from that:
   never reached the team.
   Two follow-on rules: match the claim button on its `data-test`, never its
   visible text, since the text is exactly what changed; and never use its
-  `sc-*` classes, which are styled-components build hashes. The `route` step's
-  offer still says "answered HomeLight's call and is talking to them now", which
-  is wrong on the text path and needs its own fix.
+  `sc-*` classes, which are styled-components build hashes. (The offer line
+  that was wrong on this path is gone; see the claim-status edge above.)
 - **`route` runs BEFORE anything is known about the lead, which twice bound
   ownership to HomeLight's own alert line.** `route_to_team` is step 5; the
   extraction that produces `lead_phone` is step 6. Contact-ownership routing
@@ -121,7 +147,9 @@ Seeds: `seed-homelight-lead-aiflow.ts`,
 `seed-homelight-ai-call-voice-flow.ts`, `seed-homelight-voice-handoff.ts`.
 
 Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
-`homelight-await-call-start.ts`, `homelight-call-end-details.ts`,
+`homelight-await-call-start.ts` (superseded by
+`homelight-claim-status-honesty.ts`), `homelight-claim-status-honesty.ts`,
+`homelight-call-end-details.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
 `homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
@@ -132,4 +160,4 @@ re-run: several supersede each other.
 
 ## History
 
-PRs #790, #911, #913, #920, #927, #932, #936, #986, #990.
+PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371.

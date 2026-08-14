@@ -3241,7 +3241,16 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(outcomeVar);
       for (const v of callOutcomeCompanionVars(outcomeVar)) vars.add(v);
     } else if (step.type === "wait_for_call") {
-      vars.add(step.saveAs ?? "call_outcome");
+      const outcomeVar = step.saveAs ?? "call_outcome";
+      vars.add(outcomeVar);
+      // Same two companions place_ai_call publishes, because the RUN produces
+      // them here too: this step shares the awaiting_call park and the timeout
+      // sweep, so its "no_call" outcome reaches callOutcomeLabel and lands as
+      // {{vars.<saveAs>_label}} ("no call came in"). Registering them only for
+      // the dialing step meant a flow that templated that phrase failed to
+      // save while the var existed at run time (Amy Laidlaw's HomeLight run
+      // 5ac0ee1b carried both).
+      for (const v of callOutcomeCompanionVars(outcomeVar)) vars.add(v);
       // What the AI captured on the call. The exact set depends on the voice
       // flow's captureFields, which lives in a DIFFERENT flow and cannot be read
       // from here, so the standard intake fields are registered: an unregistered
