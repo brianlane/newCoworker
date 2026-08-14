@@ -946,7 +946,7 @@ The sequence is read, delete, revoke, and each position matters:
   `google.revoke_failed` and returns 200, because the row IS gone; a Google
   outage must not stop an owner from disconnecting.
 
-This was in the migration plan and shipped late, in #1359. Between Aug 13 and
+This was in the migration plan and shipped late, in #1360. Between Aug 13 and
 then, Disconnect deleted our copy and left the grant live on the owner's Google
 account, which is the same defect the Zoom section calls out as "leaving the app
 authorized after a Disconnect".
