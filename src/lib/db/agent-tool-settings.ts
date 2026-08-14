@@ -105,6 +105,54 @@ export async function isAgentToolEnabled(
   }
 }
 
+/**
+ * Effective enabled state for MANY (agent, tool) keys in ONE query — the
+ * batched sibling of `isAgentToolEnabled` with identical per-key semantics:
+ * unknown keys fail closed (false), display-only tools pin to their registry
+ * default (a stale row must not lie), and a failed read resolves every
+ * queried key to its registry default so a transient DB blip cannot flip
+ * behavior away from what the owner expects. Exists because the chat
+ * surfaces read 15+ gates per turn and were paying one round-trip each.
+ */
+export async function getAgentToolStates<K extends string>(
+  businessId: string,
+  agentKey: AgentKey,
+  toolKeys: readonly K[],
+  client?: SupabaseClient
+): Promise<Record<K, boolean>> {
+  const states = {} as Record<K, boolean>;
+  const queryable: K[] = [];
+  for (const toolKey of toolKeys) {
+    const def = findAgentToolDefinition(agentKey, toolKey);
+    if (!def) {
+      states[toolKey] = false;
+      continue;
+    }
+    states[toolKey] = def.tool.defaultEnabled;
+    if (def.tool.configurable && !queryable.includes(toolKey)) queryable.push(toolKey);
+  }
+  if (queryable.length === 0) return states;
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("agent_tool_settings")
+      .select("tool_key, enabled")
+      .eq("business_id", businessId)
+      .eq("agent_key", agentKey)
+      .in("tool_key", queryable);
+    if (error) throw new Error(error.message);
+    const requested = new Set<string>(queryable);
+    for (const row of (data ?? []) as Array<{ tool_key: string; enabled: unknown }>) {
+      if (typeof row.enabled === "boolean" && requested.has(row.tool_key)) {
+        states[row.tool_key as K] = row.enabled;
+      }
+    }
+  } catch {
+    // `states` already holds the registry defaults for every queried key.
+  }
+  return states;
+}
+
 export async function upsertAgentToolSetting(
   args: { businessId: string; agentKey: AgentKey; toolKey: string; enabled: boolean },
   client?: SupabaseClient

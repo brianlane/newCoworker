@@ -28,7 +28,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { gatewayBusinessGuard } from "@/lib/voice-tools/common";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
@@ -102,48 +102,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, detail: "over_cap" });
     }
 
-    // Same per-turn reads as the dashboard chat route (identical gates).
-    const [
-      knowledgeToolEnabled,
-      smsToolEnabled,
-      whatsappToolEnabled,
-      calFindEnabled,
-      calBookEnabled,
-      calRescheduleEnabled,
-      calCancelEnabled,
-      calWaitlistEnabled,
-      runAiflowEnabled,
-      editAiflowEnabled,
-      notificationPrefsToolEnabled,
-      flagSpamToolEnabled,
-      replyModeToolEnabled,
-      manageEmployeeToolEnabled,
-      emailToolEnabled,
-      integrationsLine,
-      businessContextBlock,
-      bookingLinkLine
-    ] = await Promise.all([
-      isAgentToolEnabled(body.businessId, "dashboard", "business_knowledge_lookup"),
-      isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
-      isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_join_waitlist"),
-      isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
-      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
-      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
-      isAgentToolEnabled(body.businessId, "dashboard", "manage_employee"),
-      isAgentToolEnabled(body.businessId, "dashboard", "send_email"),
-      buildIntegrationsStatusLine(body.businessId),
-      buildBusinessContextBlock(body.businessId),
-      // The public booking link, so "schedule Liz through her assistant"
-      // can send the page instead of negotiating times over email.
-      bookingLinkPromptLine(body.businessId)
-    ]);
+    // Same per-turn gates as the dashboard chat route (identical semantics),
+    // batched into one settings query instead of fifteen.
+    const [toolStates, integrationsLine, businessContextBlock, bookingLinkLine] =
+      await Promise.all([
+        getAgentToolStates(body.businessId, "dashboard", [
+          "business_knowledge_lookup",
+          "send_sms",
+          "send_whatsapp",
+          "calendar_find_slots",
+          "calendar_book_appointment",
+          "calendar_reschedule_appointment",
+          "calendar_cancel_appointment",
+          "calendar_join_waitlist",
+          "run_aiflow",
+          "edit_aiflow",
+          "update_notification_preferences",
+          "flag_contact_spam",
+          "set_contact_reply_mode",
+          "manage_employee",
+          "send_email"
+        ] as const),
+        buildIntegrationsStatusLine(body.businessId),
+        buildBusinessContextBlock(body.businessId),
+        // The public booking link, so "schedule Liz through her assistant"
+        // can send the page instead of negotiating times over email.
+        bookingLinkPromptLine(body.businessId)
+      ]);
+    const {
+      business_knowledge_lookup: knowledgeToolEnabled,
+      send_sms: smsToolEnabled,
+      send_whatsapp: whatsappToolEnabled,
+      calendar_find_slots: calFindEnabled,
+      calendar_book_appointment: calBookEnabled,
+      calendar_reschedule_appointment: calRescheduleEnabled,
+      calendar_cancel_appointment: calCancelEnabled,
+      calendar_join_waitlist: calWaitlistEnabled,
+      run_aiflow: runAiflowEnabled,
+      edit_aiflow: editAiflowEnabled,
+      update_notification_preferences: notificationPrefsToolEnabled,
+      flag_contact_spam: flagSpamToolEnabled,
+      set_contact_reply_mode: replyModeToolEnabled,
+      manage_employee: manageEmployeeToolEnabled,
+      send_email: emailToolEnabled
+    } = toolStates;
 
     // Continuity: the recent SMS exchange with the owner's number (both
     // directions — inbound texts, AI replies, and logged outbound sends).

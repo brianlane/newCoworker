@@ -30,7 +30,7 @@ vi.mock("@/lib/slack/client", () => ({
 }));
 vi.mock("@/lib/slack/tier-gate", () => ({ slackAllowedForBusiness: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
-vi.mock("@/lib/db/agent-tool-settings", () => ({ isAgentToolEnabled: vi.fn() }));
+vi.mock("@/lib/db/agent-tool-settings", () => ({ getAgentToolStates: vi.fn() }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
 vi.mock("@/lib/db/chat-usage", () => ({ getChatSpendSnapshotForBusiness: vi.fn() }));
 vi.mock("@/lib/dashboard-chat/inline-turn", () => ({ runInlineChatTurn: vi.fn() }));
@@ -76,7 +76,7 @@ import {
 } from "@/lib/slack/client";
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
 import { getBusiness } from "@/lib/db/businesses";
-import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
@@ -139,7 +139,10 @@ beforeEach(() => {
     effectiveCapMicros: 10_000_000
   } as never);
   vi.mocked(listSlackMessages).mockResolvedValue(HISTORY as never);
-  vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+  vi.mocked(getAgentToolStates).mockImplementation(
+    async (_biz: string, _agent: string, keys: readonly string[]) =>
+      Object.fromEntries(keys.map((k) => [k, true]))
+  );
   vi.mocked(getPublicWhatsAppConnection).mockResolvedValue({ is_active: true } as never);
   vi.mocked(slackSetAssistantStatus).mockResolvedValue(true);
   vi.mocked(slackStartStream).mockResolvedValue({ channel: "D-1", ts: "3.0" });
@@ -316,8 +319,9 @@ describe("identity and tool powers", () => {
       email: "owner@x.co",
       isBot: false
     });
-    vi.mocked(isAgentToolEnabled).mockImplementation(
-      async (_biz: string, _agent: string, tool: string) => tool !== "send_email"
+    vi.mocked(getAgentToolStates).mockImplementation(
+      async (_biz: string, _agent: string, keys: readonly string[]) =>
+        Object.fromEntries(keys.map((k) => [k, k !== "send_email"]))
     );
     await processSlackJobs();
     expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].systemInstruction).toContain(

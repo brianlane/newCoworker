@@ -57,7 +57,11 @@ vi.mock("@/lib/agent-tools/registry", () => {
   };
 });
 
-import { isAgentToolEnabled, resolveAgentTools } from "@/lib/db/agent-tool-settings";
+import {
+  getAgentToolStates,
+  isAgentToolEnabled,
+  resolveAgentTools
+} from "@/lib/db/agent-tool-settings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -88,6 +92,13 @@ describe("display-only tools", () => {
 
   it("isAgentToolEnabled returns the default without reading the DB", async () => {
     await expect(isAgentToolEnabled(BIZ, "sms", "platform_managed_tool")).resolves.toBe(true);
+    expect(supabaseStub.from).not.toHaveBeenCalled();
+  });
+
+  it("getAgentToolStates pins display-only tools to their default without querying them", async () => {
+    const states = await getAgentToolStates(BIZ, "sms", ["platform_managed_tool"]);
+    expect(states).toEqual({ platform_managed_tool: true });
+    // The only requested key is display-only, so no query should run at all.
     expect(supabaseStub.from).not.toHaveBeenCalled();
   });
 });

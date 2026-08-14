@@ -55,9 +55,9 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
-  // Registry default for dashboard send_email is OFF; tests that exercise
-  // the enabled path override per-call.
-  isAgentToolEnabled: vi.fn(async () => false)
+  // Batched gates read; every key defaults OFF here so tests that exercise
+  // an enabled path flip it per-call via gateStates(true).
+  getAgentToolStates: vi.fn()
 }));
 
 vi.mock("@/lib/db/chat-usage", () => ({
@@ -101,7 +101,15 @@ vi.mock("@/lib/db/business-members", () => ({
 }));
 
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
-import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
+
+/** Point the batched gates mock at a uniform enabled state for every key. */
+function gateStates(enabled: boolean) {
+  vi.mocked(getAgentToolStates).mockImplementation(
+    async (_biz: string, _agent: string, keys: readonly string[]) =>
+      Object.fromEntries(keys.map((k) => [k, enabled]))
+  );
+}
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -175,7 +183,7 @@ beforeEach(() => {
     isAdmin: false
   } as never);
   vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
-  vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+  gateStates(false);
   vi.mocked(rateLimit).mockReturnValue({
     success: true,
     limit: 30,
@@ -379,11 +387,15 @@ describe("POST /api/dashboard/chat, email tool preamble (Settings → Coworker t
     expect(emailBlock?.content).toContain("EMAIL TOOL: DISABLED");
     expect(emailBlock?.content).toContain("Settings → Coworker tools");
     expect(inputMessages.some((m) => m.content.includes("EMAIL TOOL: ENABLED"))).toBe(false);
-    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "send_email");
+    expect(vi.mocked(getAgentToolStates)).toHaveBeenCalledWith(
+      BIZ,
+      "dashboard",
+      expect.arrayContaining(["send_email"])
+    );
   });
 
   it("injects the ENABLED protocol block (with the EMAIL_SEND sentinels) when the owner enabled the tool", async () => {
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    gateStates(true);
     vi.mocked(listMessages).mockResolvedValueOnce([
       { role: "user", content: "earlier" }
     ] as never);
@@ -416,7 +428,7 @@ describe("POST /api/dashboard/chat, email tool preamble (Settings → Coworker t
    * the live e2e that caught it only reproduces about half the time.
    */
   it("shows no usable example address the model can fill a name into", async () => {
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    gateStates(true);
     await POST(jsonRequest({ businessId: BIZ, message: "email beth" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     const block = inputMessages.find(
@@ -823,16 +835,16 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(inlineArgs.userMessage).toBe("[Dashboard] hi");
     // Knowledge-tool gate: read from Settings (mocked disabled here) and
     // forwarded so the inline turn only declares the tool when allowed.
-    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+    expect(vi.mocked(getAgentToolStates)).toHaveBeenCalledWith(
       BIZ,
       "dashboard",
-      "business_knowledge_lookup"
+      expect.arrayContaining(["business_knowledge_lookup"])
     );
     expect(inlineArgs.knowledgeToolEnabled).toBe(false);
   });
 
   it("forwards an enabled knowledge-tool toggle to the inline turn", async () => {
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    gateStates(true);
     const res = await POST(jsonRequest({ businessId: BIZ, message: "what's our renewal process?" }));
     expect(res.status).toBe(200);
     const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
@@ -843,14 +855,18 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     // Truly Insurance (Jul 16 2026): the inline PRIMARY path never declared
     // the image tool, so a healthy inline turn answered "I don't have an
     // image creation tool" while only worker-fallback turns could generate.
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    gateStates(true);
     await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
-    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "generate_image");
+    expect(vi.mocked(getAgentToolStates)).toHaveBeenCalledWith(
+      BIZ,
+      "dashboard",
+      expect.arrayContaining(["generate_image"])
+    );
     const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
     expect(inlineArgs.actionToolGates).toMatchObject({ generate_image: true });
 
     vi.mocked(runInlineChatTurn).mockClear();
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    gateStates(false);
     await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
     const disabledArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
     expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
@@ -860,7 +876,7 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     // A staff-role teammate uses chat freely but must never be handed a
     // settings-mutation tool, manage_settings is manager+ in the policy
     // matrix, matching the notifications settings page.
-    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    gateStates(true);
 
     vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("staff" as never);
     await POST(jsonRequest({ businessId: BIZ, message: "turn on client reply alerts" }));
