@@ -862,6 +862,43 @@ flow end, re-checks `claimed_agent`, and tags the lead into the cadence.
   (Unclaimed Leads)" flow has the same disease (unclaimed request → "back to
   you" → nothing); flagged to Brian rather than silently included.
 
+The $1M band is arithmetic now (Aug 14 2026):
+`amy-deterministic-price-band.ts`. Corinna Bennett (run `36f319be`), a $613K
+RealEstateAgents.com seller, was extracted price "$613K" AND price_band
+"over_1m" IN THE SAME extraction call. Three gates keyed on the judgment, so
+one flake silenced everything at once: no AI call (gated under_1m), no team
+offer (ownerDirectWhen kept it for Amy as "$1M+", who did not acknowledge two
+reminders), no unclaimed takeover (its arm required under_1m). An audit of
+118 recent runs with a parseable price found exactly one mismatch: rare, but
+it lands on the only path with no recovery.
+
+- Each reader now extracts `price_digits` (bare digits, "0" when none), and a
+  `math` step with the new `less_than` operation computes `price_under_1m`
+  deterministically. Every band gate keys on the computed var: call gates
+  `notEquals "no"` (unknown still gets the call), ownerDirectWhen
+  `equals "no"` (only a PROVEN $1M+ is kept from the team), takeover arms
+  `notEquals "no"`.
+- `price_band` and `price_gate` extractions remain (templates and the
+  seller-scoping half of the gate are inherently extraction), but nothing
+  gates on `price_band` any more, and `assertNoBandGates` in the script
+  aborts if a straggler gate survives.
+- Corinna herself was remediated by hand the same day: tagged into the
+  cadence (run `0ee2e205`) with a plain tag, since she was never called.
+
+Unclaimed follow-up REQUESTS become AI-owned (Aug 14 2026):
+`amy-followup-request-takeover.ts`. Brian: "Yes extend it to the Follow Up
+Requested flow too." Same `{p}_team_unclaimed` shape appended to
+"Follow Up Requested (Unclaimed Leads)": two hours after flow end, still
+unclaimed and not a proven $1M+, the lead is tagged into the cadence. The
+tag is PLAIN (the lead asked for a follow-up TODAY; the cadence's immediate
+call is that follow-up). Its seller variant matches
+`route_lead_type notEquals "buyer"`, mirroring the flow's own seller route;
+the takeover branch carries NO `price_gate` when (nothing produces the var
+here, and the validator rejects a when on an unproduced var), and the
+reader gains the same `price_digits` + computed band the arrival flows use.
+`route_seller`'s fallback copy gains the takeover line; `route_buyer` is
+untouched.
+
 `tests/tenant-dossiers.test.ts` fails if a tenant-named script exists without
 a mention here, so adding a one-shot means adding a line.
 

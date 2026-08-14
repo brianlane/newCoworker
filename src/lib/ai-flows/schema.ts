@@ -724,6 +724,12 @@ export const MATH_OPERATIONS = [
   "multiply",
   "divide",
   "round",
+  // "yes" when left < right, "no" otherwise (numeric). Exists so a threshold
+  // gate can be ARITHMETIC instead of a second LLM judgment that can
+  // contradict the number it was judged from: a $613K lead was extracted as
+  // price "$613K" and price_band "over_1m" in the same call, which kept it
+  // from the team, from the AI call, and from the unclaimed takeover at once.
+  "less_than",
   "date_add_minutes",
   "date_diff_days"
 ] as const;
