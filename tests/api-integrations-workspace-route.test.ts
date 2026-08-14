@@ -8,11 +8,16 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   listWorkspaceOAuthConnections: vi.fn(),
   getWorkspaceOAuthConnection: vi.fn(),
-  deleteWorkspaceOAuthConnection: vi.fn()
+  deleteWorkspaceOAuthConnection: vi.fn(),
+  getWorkspaceConnectionSecrets: vi.fn()
 }));
 
 vi.mock("@/lib/nango/server", () => ({
   getNangoClient: vi.fn()
+}));
+
+vi.mock("@/lib/google/oauth", () => ({
+  revokeGoogleToken: vi.fn()
 }));
 
 vi.mock("@/lib/ai-flows/mailbox-steps", async (importOriginal) => ({
@@ -24,14 +29,41 @@ import { DELETE, GET } from "@/app/api/integrations/workspace/route";
 import { flowsReferencingWorkspaceConnection } from "@/lib/ai-flows/mailbox-steps";
 import {
   deleteWorkspaceOAuthConnection,
+  getWorkspaceConnectionSecrets,
   getWorkspaceOAuthConnection,
   listWorkspaceOAuthConnections
 } from "@/lib/db/workspace-oauth-connections";
 import { getNangoClient } from "@/lib/nango/server";
+import { revokeGoogleToken } from "@/lib/google/oauth";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 const connectionRowId = "22222222-2222-4222-8222-222222222222";
+
+/** A stored connection row, defaulted to the common Nango shape. */
+function row(over: Partial<Awaited<ReturnType<typeof getWorkspaceOAuthConnection>>> = {}) {
+  return {
+    id: connectionRowId,
+    business_id: businessId,
+    provider_config_key: "gmail",
+    connection_id: "c1",
+    metadata: {},
+    transport: "nango" as const,
+    is_active: true,
+    oauth_scope: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...over
+  };
+}
+
+function deleteRequest() {
+  return new Request("http://localhost/api/integrations/workspace", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ businessId, id: connectionRowId })
+  });
+}
 
 describe("api/integrations/workspace", () => {
   const OLD = process.env;
@@ -50,6 +82,8 @@ describe("api/integrations/workspace", () => {
     } as never);
     vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(flowsReferencingWorkspaceConnection).mockResolvedValue([]);
+    vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(null);
+    vi.mocked(revokeGoogleToken).mockResolvedValue(true);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       {
         id: connectionRowId,
@@ -264,6 +298,120 @@ describe("api/integrations/workspace", () => {
     expect(res.status).toBe(200);
     expect(deleteNango).not.toHaveBeenCalled();
     expect(deleteWorkspaceOAuthConnection).toHaveBeenCalled();
+    // Microsoft publishes no scoped revoke endpoint, so there is nothing to
+    // read the ciphertext FOR on an Outlook row.
+    expect(getWorkspaceConnectionSecrets).not.toHaveBeenCalled();
+    expect(revokeGoogleToken).not.toHaveBeenCalled();
   });
 
+  describe("revoking a direct Google grant", () => {
+    const googleRow = row({
+      provider_config_key: "google",
+      connection_id: "direct:abc",
+      transport: "direct" as const
+    });
+
+    beforeEach(() => {
+      vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(googleRow as never);
+      vi.mocked(deleteWorkspaceOAuthConnection).mockResolvedValue(googleRow as never);
+      vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue({
+        id: connectionRowId,
+        accessToken: "at",
+        refreshToken: "rt",
+        tokenExpiresAt: "2026-01-01T01:00:00Z",
+        isActive: true,
+        updatedAt: "2026-01-01T00:00:00Z"
+      });
+    });
+
+    it("revokes at Google with the REFRESH token, which kills the whole grant", async () => {
+      // Revoking the access token would leave the refresh token able to mint
+      // more, so Disconnect would still not mean disconnected.
+      const res = await DELETE(deleteRequest());
+
+      expect(res.status).toBe(200);
+      expect(revokeGoogleToken).toHaveBeenCalledWith("rt");
+      expect(getNangoClient).not.toHaveBeenCalled();
+    });
+
+    it("revokes AFTER the row is deleted, never before", async () => {
+      // Ordering contract, same as src/lib/nango/cleanup.ts: a failed delete
+      // must leave the tenant intact rather than holding a row whose grant we
+      // already killed. The read has to precede the delete, though, because
+      // deleting the row destroys the only copy of the ciphertext.
+      const order: string[] = [];
+      vi.mocked(getWorkspaceConnectionSecrets).mockImplementation(async () => {
+        order.push("read");
+        return {
+          id: connectionRowId,
+          accessToken: "at",
+          refreshToken: "rt",
+          tokenExpiresAt: "2026-01-01T01:00:00Z",
+          isActive: true,
+          updatedAt: "2026-01-01T00:00:00Z"
+        };
+      });
+      vi.mocked(deleteWorkspaceOAuthConnection).mockImplementation(async () => {
+        order.push("delete");
+        return googleRow as never;
+      });
+      vi.mocked(revokeGoogleToken).mockImplementation(async () => {
+        order.push("revoke");
+        return true;
+      });
+
+      await DELETE(deleteRequest());
+
+      expect(order).toEqual(["read", "delete", "revoke"]);
+    });
+
+    it("does not revoke when the row delete found nothing", async () => {
+      vi.mocked(deleteWorkspaceOAuthConnection).mockResolvedValue(null as never);
+
+      const res = await DELETE(deleteRequest());
+
+      expect(res.status).toBe(404);
+      expect(revokeGoogleToken).not.toHaveBeenCalled();
+    });
+
+    it("still succeeds when Google refuses the revoke", async () => {
+      // Best-effort by design: a Google outage must not stop an owner from
+      // disconnecting. The row is already gone, so failing here would report an
+      // error for a disconnect that DID happen.
+      vi.mocked(revokeGoogleToken).mockResolvedValue(false);
+
+      const res = await DELETE(deleteRequest());
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ data: { deleted: true } });
+    });
+
+    it("skips the revoke when the row carries no usable token pair", async () => {
+      // A wiped or half-written pair reads as null. Passing an empty string to
+      // the revoke endpoint would be a pointless round-trip.
+      vi.mocked(getWorkspaceConnectionSecrets).mockResolvedValue(null);
+
+      const res = await DELETE(deleteRequest());
+
+      expect(res.status).toBe(200);
+      expect(revokeGoogleToken).not.toHaveBeenCalled();
+    });
+
+    it("does not revoke for a Google row still on the Nango transport", async () => {
+      // Nango holds those tokens; deleteConnection above is what revokes them.
+      // We have no ciphertext of our own to present.
+      vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(
+        row({ provider_config_key: "google", transport: "nango" as const }) as never
+      );
+      vi.mocked(getNangoClient).mockReturnValue({
+        deleteConnection: vi.fn().mockResolvedValue(undefined)
+      } as never);
+
+      const res = await DELETE(deleteRequest());
+
+      expect(res.status).toBe(200);
+      expect(revokeGoogleToken).not.toHaveBeenCalled();
+      expect(getWorkspaceConnectionSecrets).not.toHaveBeenCalled();
+    });
+  });
 });
