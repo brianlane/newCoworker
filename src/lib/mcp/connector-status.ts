@@ -107,6 +107,32 @@ export async function getMcpConnectorStatusForBusiness(
 }
 
 /**
+ * Is THIS login one of the ones whose assistant has acted on this business?
+ *
+ * The Disconnect button asks before it revokes anything. `auth.oauth` acts on
+ * the signed-in user's own grants, so revoking unconditionally would let an
+ * admin using view-as destroy their OWN Claude access while clearing someone
+ * else's tile, and leave the tenant's connector untouched to re-light it.
+ */
+export async function hasMcpConnectorRow(
+  userId: string,
+  businessId: string,
+  mcpClient: McpClient,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = await resolveClient(client);
+  const { data, error } = await db
+    .from("mcp_connector_status")
+    .select("user_id")
+    .eq("user_id", userId)
+    .eq("business_id", businessId)
+    .eq("client", mcpClient)
+    .maybeSingle();
+  if (error) throw new Error(`hasMcpConnectorRow: ${error.message}`);
+  return data !== null;
+}
+
+/**
  * Stamp "an authorized MCP call just touched this business" for this user.
  * Inserts the row on the first call; afterwards refreshes `last_seen_at` at
  * most once per debounce window. NEVER throws — status bookkeeping must not

@@ -18,6 +18,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   deleteMcpConnectorStatus,
   getMcpConnectorStatusForBusiness,
+  hasMcpConnectorRow,
   isMcpConnectorStale,
   recordMcpConnectorSeen,
   MCP_SEEN_DEBOUNCE_MS,
@@ -318,6 +319,43 @@ describe("recordMcpConnectorSeen", () => {
     const stamped = Date.parse(insert.mock.calls[0][0].last_seen_at);
     expect(stamped).toBeGreaterThanOrEqual(before);
     expect(stamped).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("hasMcpConnectorRow", () => {
+  /**
+   * The Disconnect button's guard against revoking the wrong login's OAuth
+   * grant, so it has to be keyed on all three parts. A check that ignored the
+   * business would let an admin using view-as revoke their own Claude access
+   * while clearing a tenant's card.
+   */
+  it("asks about this login, this business, and this client", async () => {
+    const { db, selectFilters } = makeDb({ read: { data: { user_id: USER }, error: null } });
+    expect(await hasMcpConnectorRow(USER, BUSINESS, "chatgpt", db)).toBe(true);
+    expect(selectFilters).toEqual([
+      ["user_id", USER],
+      ["business_id", BUSINESS],
+      ["client", "chatgpt"]
+    ]);
+  });
+
+  it("is false when this login has no row here", async () => {
+    const { db } = makeDb({ read: { data: null, error: null } });
+    expect(await hasMcpConnectorRow(USER, BUSINESS, "claude", db)).toBe(false);
+  });
+
+  it("throws on a read error rather than guessing", async () => {
+    const { db } = makeDb({ read: { data: null, error: { message: "boom" } } });
+    await expect(hasMcpConnectorRow(USER, BUSINESS, "claude", db)).rejects.toThrow(
+      "hasMcpConnectorRow: boom"
+    );
+  });
+
+  it("creates a service client when none is provided", async () => {
+    const { db } = makeDb({ read: { data: null, error: null } });
+    createSupabaseServiceClient.mockResolvedValue(db);
+    expect(await hasMcpConnectorRow(USER, BUSINESS, "claude")).toBe(false);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 

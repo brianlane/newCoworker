@@ -70,11 +70,19 @@ export type McpGrantRevokeResult = {
   /** How many of the caller's grants for this assistant were revoked. */
   revoked: number;
   /**
-   * Why nothing was revoked, when nothing was: no grant of the caller's
-   * matched, or the Auth call failed. Null when at least one was revoked.
+   * Why nothing was revoked, when nothing was. Null when at least one was.
    * The route reports it so the UI can say what Disconnect did and did not do.
+   *
+   *  - `caller_not_connected_here`: the caller's own login has no row on this
+   *    business, so their grant is not what this card is showing. The route
+   *    decides this and never calls the revoke at all. This is the admin
+   *    view-as case, where revoking would destroy the admin's own access to a
+   *    connector belonging to someone else entirely.
+   *  - `no_matching_grant`: the caller is connected here, but Auth reports no
+   *    grant for this assistant (already revoked on the assistant's side).
+   *  - `revoke_failed`: the Auth call itself failed.
    */
-  skippedReason: "no_matching_grant" | "revoke_failed" | null;
+  skippedReason: "caller_not_connected_here" | "no_matching_grant" | "revoke_failed" | null;
 };
 
 /**

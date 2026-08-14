@@ -13,12 +13,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn(), requireBusinessRole: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServerClient: vi.fn() }));
-vi.mock("@/lib/mcp/connector-status", () => ({ deleteMcpConnectorStatus: vi.fn() }));
+vi.mock("@/lib/mcp/connector-status", () => ({
+  deleteMcpConnectorStatus: vi.fn(),
+  hasMcpConnectorRow: vi.fn()
+}));
 vi.mock("@/lib/mcp/grants", () => ({ revokeMcpGrantsForClient: vi.fn() }));
 
 import { DELETE } from "@/app/api/integrations/mcp/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { deleteMcpConnectorStatus } from "@/lib/mcp/connector-status";
+import { deleteMcpConnectorStatus, hasMcpConnectorRow } from "@/lib/mcp/connector-status";
 import { revokeMcpGrantsForClient } from "@/lib/mcp/grants";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -42,6 +45,7 @@ beforeEach(() => {
   vi.mocked(createSupabaseServerClient).mockResolvedValue(SESSION_CLIENT as never);
   vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(deleteMcpConnectorStatus).mockResolvedValue(1);
+  vi.mocked(hasMcpConnectorRow).mockResolvedValue(true);
   vi.mocked(revokeMcpGrantsForClient).mockResolvedValue({ revoked: 1, skippedReason: null });
 });
 
@@ -71,6 +75,31 @@ describe("DELETE /api/integrations/mcp", () => {
     const res = await DELETE(req({ businessId: BUSINESS, client: "claude" }));
     expect(res.status).toBe(200);
     expect(requireBusinessRole).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The admin view-as case, and the teammate case with it. `auth.oauth` acts
+   * on the SIGNED-IN session, so revoking whatever it holds would destroy the
+   * caller's own Claude access to clear a card belonging to someone else, and
+   * leave the real connector alive to re-light the tile on its next call.
+   * Nothing is revoked unless the caller is connected to THIS business.
+   */
+  it("never revokes when the caller is not connected to this business", async () => {
+    vi.mocked(hasMcpConnectorRow).mockResolvedValue(false);
+    const res = await DELETE(req({ businessId: BUSINESS, client: "claude" }));
+    expect(res.status).toBe(200);
+    expect(revokeMcpGrantsForClient).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({
+      ok: true,
+      data: { cleared: 1, revoked: 0, revokeSkippedReason: "caller_not_connected_here" }
+    });
+    // The card still clears: that half is ours and always lands.
+    expect(deleteMcpConnectorStatus).toHaveBeenCalledWith(BUSINESS, "claude");
+  });
+
+  it("checks the caller against this business and this client, not just any row", async () => {
+    await DELETE(req({ businessId: BUSINESS, client: "chatgpt" }));
+    expect(hasMcpConnectorRow).toHaveBeenCalledWith(OWNER.userId, BUSINESS, "chatgpt");
   });
 
   it("refuses an unauthenticated caller", async () => {
