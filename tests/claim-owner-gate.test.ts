@@ -178,6 +178,16 @@ describe("flowDealsInLeadPhone", () => {
     expect(flowDealsInLeadPhone({})).toBe(false);
   });
 
+  it("matches the identifier as an object KEY, not just as a value", () => {
+    // Config shapes carry var names on either side. HomeLight's own
+    // wait_for_call writes its backfill as [{ to: "lead_phone" }], a value,
+    // but a map-shaped variant puts the same name in key position, and a
+    // scan that only reads values would call that flow phone-free.
+    expect(flowDealsInLeadPhone({ steps: [{ id: "s", backfill: { lead_phone: "phone" } }] })).toBe(
+      true
+    );
+  });
+
   it("counts a lead_phone-prefixed var too: dealing in one is dealing in all", () => {
     // Conservative on purpose. A flow handling lead_phone_2 is a relay flow
     // whatever it calls the field, and the cost of a false positive is one
