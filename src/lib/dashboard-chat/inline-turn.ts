@@ -98,6 +98,22 @@ export type InlineTurnResult =
   | { ok: true; content: string; drafts: InlineChatDraft[] }
   | { ok: false; error: "model_failed" | "empty"; detail?: string };
 
+/**
+ * A caller-composed extra tool set (the MCP bridge). The engine stays
+ * ignorant of what the tools are: the caller supplies declarations that
+ * are appended to the turn's tool list, a never-throwing executor for
+ * calls to those names, the subset of names whose ok:true result COMMITS
+ * a side effect (pinning the turn against the worker-fallback rerun,
+ * exactly like SIDE_EFFECT_TOOLS), and the owner-facing fact line a
+ * degraded wrap-up must carry for each committed effect.
+ */
+export type InlineExtraTools = {
+  declarations: GeminiFunctionDeclaration[];
+  execute: (call: { name: string; args: Record<string, unknown> }) => Promise<unknown>;
+  sideEffectNames: ReadonlySet<string>;
+  noteFor: (name: string, result: unknown) => string;
+};
+
 const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
   {
     name: "create_aiflow",
@@ -386,7 +402,9 @@ async function executeToolCall(
   lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>,
   runActionTool: NonNullable<InlineTurnDeps["runActionTool"]>,
   declaredActionTools: ReadonlySet<string>,
-  sideEffects: SideEffectLog
+  sideEffects: SideEffectLog,
+  extraTools: InlineExtraTools | null,
+  declaredExtraNames: ReadonlySet<string>
 ): Promise<unknown> {
   // Action tools (send_sms + calendar lifecycle): only dispatch names that
   // were actually DECLARED this turn — a Settings-disabled tool the model
@@ -491,6 +509,38 @@ async function executeToolCall(
       note: "Agent draft created. The owner will see an 'Open in Agents' card under your reply, tell them to review and save it there."
     };
   }
+  // Extra (bridged) tools, LAST so the built-in names above can never be
+  // shadowed by a caller-supplied declaration. Only names the caller
+  // actually declared this turn dispatch — a hallucinated call to a
+  // gate-filtered bridge tool falls through to the unknown-tool refusal.
+  if (extraTools && declaredExtraNames.has(call.name)) {
+    let result: unknown;
+    try {
+      result = await extraTools.execute(call);
+    } catch (err) {
+      // The executor's contract is never-throw; if it breaks anyway the
+      // turn must degrade to an honest tool failure, not die mid-loop.
+      logger.warn("dashboard-chat extra tool failed", {
+        businessId,
+        tool: call.name,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return {
+        ok: false,
+        message: `The ${call.name} tool hit an internal error, try again shortly.`
+      };
+    }
+    if (
+      extraTools.sideEffectNames.has(call.name) &&
+      typeof result === "object" &&
+      result !== null &&
+      (result as { ok?: unknown }).ok === true
+    ) {
+      sideEffects.happened = true;
+      sideEffects.notes.push(extraTools.noteFor(call.name, result));
+    }
+    return result;
+  }
   return { ok: false, message: `unknown tool: ${call.name}` };
 }
 
@@ -527,6 +577,21 @@ export async function runInlineChatTurn(
      * pass false so compile work can't succeed into a void.
      */
     includeCreationTools?: boolean;
+    /**
+     * Caller-composed extra tools (the MCP bridge). The engine appends the
+     * declarations, dispatches matching calls through `execute`, and applies
+     * the same side-effect pinning rules as the action tools. A name the
+     * caller did not declare this turn fails closed like any unknown tool.
+     * Omitted/null ⇒ nothing extra is declared.
+     */
+    extraTools?: InlineExtraTools | null;
+    /**
+     * Model↔tool round-trip bound for this turn (default MAX_TOOL_STEPS).
+     * Surfaces declaring bridged read tools pass a higher bound: "find the
+     * contact → read their thread → answer" is three tool steps plus the
+     * wrap-up, and the default would truncate legitimate chains mid-work.
+     */
+    maxToolSteps?: number;
     /**
      * Whole-turn wall-clock budget (ms). Callers whose OWN caller enforces a
      * hard timeout (the SMS worker aborts owner turns at 75s) MUST pass a
@@ -574,10 +639,15 @@ export async function runInlineChatTurn(
     actionDeclarations.map((d) => d.name)
   );
   const creationTools = args.includeCreationTools === false ? [] : CREATION_TOOLS;
+  const extraTools = args.extraTools ?? null;
+  const declaredExtraNames: ReadonlySet<string> = new Set(
+    extraTools?.declarations.map((d) => d.name) ?? []
+  );
   const tools = [
     ...creationTools,
     ...(args.knowledgeToolEnabled === false ? [] : [KNOWLEDGE_TOOL]),
-    ...actionDeclarations
+    ...actionDeclarations,
+    ...(extraTools?.declarations ?? [])
   ];
 
   const userParts: Array<Record<string, unknown>> = [{ text: args.userMessage }];
@@ -598,8 +668,9 @@ export async function runInlineChatTurn(
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
   const deadlineMs =
     typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
+  const maxToolSteps = Math.max(1, args.maxToolSteps ?? MAX_TOOL_STEPS);
 
-  for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+  for (let step = 0; step < maxToolSteps; step++) {
     // Budget check BEFORE starting another model step: once the caller's
     // own timeout is near, committing more work (tool calls!) risks acting
     // after the caller already fell back to another reply path.
@@ -719,7 +790,9 @@ export async function runInlineChatTurn(
           lookupKnowledge,
           runActionTool,
           declaredActionTools,
-          sideEffects
+          sideEffects,
+          extraTools,
+          declaredExtraNames
         )
       });
     }
