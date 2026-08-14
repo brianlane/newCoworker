@@ -19,6 +19,8 @@ import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCar
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { McpConnectorCard } from "@/components/dashboard/McpConnectorCard";
 import { MCP_ROUTES } from "@/lib/mcp/routes";
+import { isMcpConnectorStale } from "@/lib/mcp/connector-status";
+import { findAuthUserEmailById } from "@/lib/auth";
 import {
   loadIntegrationsContext,
   type IntegrationsContext
@@ -60,11 +62,14 @@ function workspaceCap(ctx: IntegrationsContext) {
 function IntegrationBody({
   slug,
   businessId,
-  ctx
+  ctx,
+  mcpConnectedByEmail
 }: {
   slug: IntegrationSlug;
   businessId: string;
   ctx: IntegrationsContext;
+  /** Who on the team the connector card should name; null when unresolved. */
+  mcpConnectedByEmail: string | null;
 }) {
   switch (slug) {
     case "google": {
@@ -223,14 +228,26 @@ function IntegrationBody({
         />
       );
     case "claude":
-    case "chatgpt":
+    case "chatgpt": {
+      const status = ctx.mcpConnectorStatuses[slug];
       return (
         <McpConnectorCard
           client={slug}
+          businessId={businessId}
           mcpUrl={`${(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}${MCP_ROUTES[slug]}`}
-          status={ctx.mcpConnectorStatuses[slug]}
+          status={
+            status
+              ? {
+                  firstConnectedAt: status.firstConnectedAt,
+                  lastSeenAt: status.lastSeenAt,
+                  stale: isMcpConnectorStale(status.lastSeenAt),
+                  connectedByEmail: mcpConnectedByEmail
+                }
+              : null
+          }
         />
       );
+    }
   }
 }
 
@@ -259,6 +276,14 @@ export default async function IntegrationDetailPage({
   }
 
   const Icon = integration.icon;
+
+  // Only the two connector pages name a teammate, and only when a row exists,
+  // so the auth lookup stays off every other detail page and off the hub.
+  const mcpStatus =
+    integration.slug === "claude" || integration.slug === "chatgpt"
+      ? ctx.mcpConnectorStatuses[integration.slug]
+      : null;
+  const mcpConnectedByEmail = mcpStatus ? await findAuthUserEmailById(mcpStatus.userId) : null;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -304,7 +329,12 @@ export default async function IntegrationDetailPage({
         </Card>
       )}
 
-      <IntegrationBody slug={integration.slug} businessId={ctx.businessId} ctx={ctx} />
+      <IntegrationBody
+        slug={integration.slug}
+        businessId={ctx.businessId}
+        ctx={ctx}
+        mcpConnectedByEmail={mcpConnectedByEmail}
+      />
     </div>
   );
 }

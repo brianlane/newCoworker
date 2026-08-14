@@ -6,7 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
-import { authUserExistsByEmail, getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
+import { authUserExistsByEmail, findAuthUserEmailById, getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
 
 function mockSupabase(
   user: Record<string, unknown> | null,
@@ -248,6 +248,42 @@ describe("auth", () => {
   it("verifySignupIdentity returns false when service client lookup throws", async () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("service unavailable"));
     await expect(verifySignupIdentity("user-1", "owner@test.com")).resolves.toBe(false);
+  });
+
+  /**
+   * Names the teammate whose assistant is connected, on the connector card.
+   * Context, never a gate, so every failure shape has to degrade to null
+   * rather than take the integrations page down.
+   */
+  describe("findAuthUserEmailById", () => {
+    function withUser(result: unknown) {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        auth: { admin: { getUserById: vi.fn().mockResolvedValue(result) } }
+      } as never);
+    }
+
+    it("returns the trimmed email", async () => {
+      withUser({ data: { user: { email: "  teammate@biz.com  " } }, error: null });
+      await expect(findAuthUserEmailById("user-1")).resolves.toBe("teammate@biz.com");
+    });
+
+    it("returns null for an empty id, a lookup error, a deleted user, or a blank email", async () => {
+      await expect(findAuthUserEmailById("")).resolves.toBeNull();
+
+      withUser({ data: null, error: { message: "gone" } });
+      await expect(findAuthUserEmailById("user-1")).resolves.toBeNull();
+
+      withUser({ data: { user: null }, error: null });
+      await expect(findAuthUserEmailById("user-1")).resolves.toBeNull();
+
+      withUser({ data: { user: { email: "   " } }, error: null });
+      await expect(findAuthUserEmailById("user-1")).resolves.toBeNull();
+    });
+
+    it("returns null when the service client itself throws", async () => {
+      vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("service unavailable"));
+      await expect(findAuthUserEmailById("user-1")).resolves.toBeNull();
+    });
   });
 
   describe("authUserExistsByEmail (strict variant)", () => {

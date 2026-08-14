@@ -137,6 +137,21 @@ async function mcpBusinessRoleOutcome(
   const { can } = await import("@/lib/authz/policy");
   if (!can(role, action)) return { allowed: false, reason: `role_${role}_insufficient` };
 
+  // The dashboard's "Connected" badge is stamped HERE, not at the bearer
+  // check, because this is the first point where the business is known, and
+  // an allowed call is stronger proof the connector works than a verified
+  // token is. Refusals deliberately do not stamp: an assistant that cannot
+  // act on a business has not connected to it.
+  //
+  // Debounced inside, and swallowed here as well as there. The inner catch is
+  // the contract, this one makes it structural: every tool call in the
+  // product now runs through this line, so bookkeeping that starts throwing
+  // would take down the whole connector rather than one badge.
+  const { recordMcpConnectorSeen } = await import("@/lib/mcp/connector-status");
+  await recordMcpConnectorSeen(auth.userId, auth.client ?? "claude", businessId).catch(
+    () => undefined
+  );
+
   return { allowed: true, role };
 }
 

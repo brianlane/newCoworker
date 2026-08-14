@@ -1863,10 +1863,19 @@
     },
     "integrationsMcp": {
       "connectedBadge": "Conectado",
+      "quietBadge": "Sin actividad",
       "firstConnected": "primera conexion",
+      "connectedBy": "conectado por {email}",
       "copy": "Copiar",
       "copied": "Copiado",
+      "notYetHint": "Esta tarjeta se activa con la primera solicitud real de tu asistente para este negocio, no al terminar de conectarlo. Anadir un conector no prueba que funcione, asi que esperamos a una solicitud que si lo demuestre.",
+      "quietHint": "Este asistente no ha hecho ninguna solicitud en los ultimos 30 dias. Si lo quitaste del lado del asistente, desconectalo aqui tambien para que la tarjeta coincida.",
+      "disconnect": "Desconectar",
+      "disconnectFailed": "No se pudo desconectar. Intentalo de nuevo.",
+      "disconnectedRevoked": "Desconectado. {assistant} perdio el acceso con tu cuenta y esta tarjeta quedo limpia.",
+      "disconnectedClearedOnly": "Se limpio esta tarjeta. Tu cuenta no tenia acceso de {assistant} que revocar, asi que si lo conecto un companero de equipo, pidele que tambien lo quite en {assistant}.",
       "claude": {
+        "name": "Claude",
         "title": "Conector de Claude",
         "blurb": "Deja que Claude trabaje con tu companero: buscar contactos, leer mensajes y resumenes de llamadas, enviar mensajes, agendar citas y crear AiFlows, con tu sesion y limitado a tu rol.",
         "lastUsed": "Claude uso este conector por ultima vez",
@@ -1876,6 +1885,7 @@
         "footer": "Puedes desconectarlo cuando quieras desde la configuracion de conectores de Claude. El acceso sigue tu rol de equipo, asi que una cuenta de personal tampoco puede gestionar automatizaciones desde Claude."
       },
       "chatgpt": {
+        "name": "ChatGPT",
         "title": "Aplicacion de ChatGPT",
         "blurb": "Deja que ChatGPT trabaje con tu companero: buscar contactos, leer mensajes y resumenes de llamadas, enviar mensajes y agendar citas, con tu sesion y limitado a tu rol.",
         "lastUsed": "ChatGPT uso esta aplicacion por ultima vez",

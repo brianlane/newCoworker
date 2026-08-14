@@ -242,6 +242,28 @@ export async function findAuthUserIdByEmail(email: string): Promise<string | nul
 }
 
 /**
+ * The reverse of `findAuthUserIdByEmail`: an auth user's email from their
+ * id, or null when the user is gone or the lookup fails.
+ *
+ * Deliberately best-effort. The caller is the connector card, which names
+ * WHICH teammate's assistant is connected — useful context, never a gate, so
+ * a failed lookup should drop the name rather than break the page.
+ */
+export async function findAuthUserEmailById(userId: string): Promise<string | null> {
+  if (!userId) return null;
+  try {
+    const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+    const db = await createSupabaseServiceClient();
+    const { data, error } = await db.auth.admin.getUserById(userId);
+    if (error) return null;
+    const email = data?.user?.email?.trim() ?? "";
+    return email.length > 0 ? email : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Strict variant of `findAuthUserIdByEmail` that throws on lookup
  * failure instead of collapsing it into a "no user found" result.
  *

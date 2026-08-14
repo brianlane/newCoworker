@@ -15,8 +15,12 @@ vi.mock("@/lib/dashboard/active-business", () => ({
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/mcp/connector-status", () => ({
+  recordMcpConnectorSeen: vi.fn()
+}));
 
 import {
+  mcpBusinessRoleAllows,
   McpToolError,
   requireMcpBusinessRole,
   resolveMcpBusinessId,
@@ -24,6 +28,7 @@ import {
   verifySupabaseAccessToken
 } from "@/lib/mcp/auth";
 import { getBusinessRoleForEmail } from "@/lib/db/business-members";
+import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
 import { listAccessibleBusinesses } from "@/lib/dashboard/active-business";
 import { logger } from "@/lib/logger";
 
@@ -37,6 +42,7 @@ const VALID_CLAIMS = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(recordMcpConnectorSeen).mockResolvedValue(undefined);
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
 });
@@ -156,6 +162,59 @@ describe("requireMcpBusinessRole", () => {
       "mcp authorization refused",
       expect.objectContaining({ reason: "role_staff_insufficient" })
     );
+  });
+});
+
+/**
+ * The dashboard's Connected badge is stamped here rather than at the bearer
+ * check, because this is the first point that knows WHICH BUSINESS the call
+ * is for. Stamping without one is what showed an admin their own connector on
+ * every tenant's tile.
+ */
+describe("connector-status stamping", () => {
+  it("stamps the caller, the client, and the business on an allowed call", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    await requireMcpBusinessRole({ ...AUTH, client: "chatgpt" }, "biz-1", "manage_aiflows");
+    expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "chatgpt", "biz-1");
+  });
+
+  it("defaults to Claude for a caller with no client (every row predating the second route)", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    await requireMcpBusinessRole(AUTH, "biz-1", "manage_aiflows");
+    expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "claude", "biz-1");
+  });
+
+  it("does not stamp a business the caller was refused on", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue(null);
+    await expect(
+      requireMcpBusinessRole(AUTH, "biz-1", "view_dashboard")
+    ).rejects.toBeInstanceOf(McpToolError);
+
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("staff");
+    await expect(
+      requireMcpBusinessRole(AUTH, "biz-2", "manage_aiflows")
+    ).rejects.toBeInstanceOf(McpToolError);
+
+    expect(recordMcpConnectorSeen).not.toHaveBeenCalled();
+  });
+
+  // search's fan-out goes through the non-throwing twin, and a business it
+  // could actually use is a business the assistant reached.
+  it("stamps through the non-throwing permission check too", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    expect(await mcpBusinessRoleAllows(AUTH, "biz-9", "view_dashboard")).toBe(true);
+    expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "claude", "biz-9");
+  });
+
+  // Every business-scoped tool call in the product now runs through this
+  // line. A bookkeeping write that started throwing must cost a badge, not
+  // the connector.
+  it("never lets a stamp failure break the tool call", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
+    vi.mocked(recordMcpConnectorSeen).mockRejectedValueOnce(new Error("status down"));
+    await expect(
+      requireMcpBusinessRole(AUTH, "biz-1", "manage_aiflows")
+    ).resolves.toBe("owner");
   });
 });
 

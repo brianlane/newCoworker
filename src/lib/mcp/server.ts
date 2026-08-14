@@ -4,15 +4,13 @@
  * This used to live inline in src/app/api/mcp/route.ts. It moved here for two
  * reasons: a second client is coming and the glue should not be copy-pasted,
  * and `src/app/**` is outside the coverage gate while `src/lib/**` is at 100%.
- * The auth wrapper, the connection stamp, and the 401 shaping are exactly the
- * code where a silent failure is most expensive, and until now none of it was
- * covered.
+ * The auth wrapper and the 401 shaping are exactly the code where a silent
+ * failure is most expensive, and until now none of it was covered.
  */
 
 import type { AuthInfo } from "@modelcontextprotocol/server";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { verifySupabaseAccessToken } from "@/lib/mcp/auth";
-import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
 import { mcpResourceMetadataPath, type McpClient } from "@/lib/mcp/routes";
 import { registerMcpTools } from "@/lib/mcp/registry";
 
@@ -125,10 +123,11 @@ export function createMcpRouteHandlers(options: {
     if (!bearerToken || !looksLikeJwt(bearerToken)) return undefined;
     const user = await verifySupabaseAccessToken(bearerToken);
     if (!user) return undefined;
-    // Connection-status stamp: the first authenticated request is the moment
-    // this connector provably works end to end (OAuth alone can succeed while
-    // the edge blocks the vendor's POSTs). Debounced inside; never throws.
-    await recordMcpConnectorSeen(user.userId, options.client);
+    // No connection-status stamp here. This point knows the user and the
+    // client but NOT the business, and a status row without one is what
+    // painted an admin's own connector onto every tenant's dashboard tile.
+    // The stamp lives in mcpBusinessRoleOutcome (src/lib/mcp/auth.ts), where
+    // the business is resolved and the call is authorized.
     return {
       token: bearerToken,
       clientId: user.userId,

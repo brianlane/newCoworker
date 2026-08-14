@@ -28,7 +28,10 @@ vi.mock("@/lib/db/zoom-connections", () => ({ getPublicZoomConnection: vi.fn() }
 vi.mock("@/lib/db/slack-connections", () => ({ getPublicSlackConnection: vi.fn() }));
 vi.mock("@/lib/db/api-keys", () => ({ listApiKeys: vi.fn() }));
 vi.mock("@/lib/db/webhook-subscriptions", () => ({ listWebhookSubscriptions: vi.fn() }));
-vi.mock("@/lib/mcp/connector-status", () => ({ getMcpConnectorStatus: vi.fn() }));
+vi.mock("@/lib/mcp/connector-status", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/mcp/connector-status")>()),
+  getMcpConnectorStatusForBusiness: vi.fn()
+}));
 
 import {
   computeIntegrationStatuses,
@@ -51,7 +54,10 @@ import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { getPublicSlackConnection } from "@/lib/db/slack-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
-import { getMcpConnectorStatus } from "@/lib/mcp/connector-status";
+import {
+  getMcpConnectorStatusForBusiness,
+  MCP_STALE_MS
+} from "@/lib/mcp/connector-status";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const USER = { userId: "u1", email: "o@o.com", isAdmin: false };
@@ -89,7 +95,7 @@ beforeEach(() => {
   vi.mocked(getPublicSlackConnection).mockResolvedValue(null);
   vi.mocked(listApiKeys).mockResolvedValue([]);
   vi.mocked(listWebhookSubscriptions).mockResolvedValue([]);
-  vi.mocked(getMcpConnectorStatus).mockResolvedValue(null);
+  vi.mocked(getMcpConnectorStatusForBusiness).mockResolvedValue(null);
 });
 
 describe("loadIntegrationsContext", () => {
@@ -128,30 +134,47 @@ describe("loadIntegrationsContext", () => {
     expect(ctx.slackEnabled).toBe(false);
     expect(listApiKeys).toHaveBeenCalledWith(BIZ);
     expect(listWebhookSubscriptions).toHaveBeenCalledWith(BIZ);
-    // Explicitly the Claude connector: the table is keyed on (user, client)
-    // now, so an unqualified read would be ambiguous the moment a second
-    // connector exists.
-    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "claude");
+    // The BUSINESS and the client, never the signed-in user. Reading by user
+    // is the bug this page shipped with: an admin using view-as saw their own
+    // connector on every tenant's tile.
+    expect(getMcpConnectorStatusForBusiness).toHaveBeenCalledWith(BIZ, "claude");
+    expect(getMcpConnectorStatusForBusiness).not.toHaveBeenCalledWith(
+      USER.userId,
+      expect.anything()
+    );
   });
 
-  it("loads a status per MCP client (user-scoped) and tolerates a read failure", async () => {
+  it("loads a status per MCP client (business-scoped) and tolerates a read failure", async () => {
     const status = {
       firstConnectedAt: "2026-07-18T00:00:00Z",
-      lastSeenAt: "2026-07-19T00:00:00Z"
+      lastSeenAt: "2026-07-19T00:00:00Z",
+      userId: "someone-else"
     };
     // One connector connected and the other not is the normal state, so the
     // two reads have to be independent rather than one shared answer.
-    vi.mocked(getMcpConnectorStatus).mockImplementation(
-      async (_userId: string, client: string) => (client === "claude" ? status : null) as never
+    vi.mocked(getMcpConnectorStatusForBusiness).mockImplementation(
+      async (_businessId: string, client: string) => (client === "claude" ? status : null) as never
     );
     const ctx = await loadIntegrationsContext("/dashboard/integrations");
     expect(ctx.mcpConnectorStatuses).toEqual({ claude: status, chatgpt: null });
-    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "claude");
-    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId, "chatgpt");
+    expect(getMcpConnectorStatusForBusiness).toHaveBeenCalledWith(BIZ, "claude");
+    expect(getMcpConnectorStatusForBusiness).toHaveBeenCalledWith(BIZ, "chatgpt");
 
-    vi.mocked(getMcpConnectorStatus).mockRejectedValue(new Error("status down"));
+    vi.mocked(getMcpConnectorStatusForBusiness).mockRejectedValue(new Error("status down"));
     const degraded = await loadIntegrationsContext("/dashboard/integrations");
     expect(degraded.mcpConnectorStatuses).toEqual({ claude: null, chatgpt: null });
+  });
+
+  /**
+   * The reported bug, end to end: a signed-in login whose own assistant is
+   * connected, viewing a business that has never been touched by one. Nothing
+   * may be read on the user's behalf, so the tiles stay dark.
+   */
+  it("reads no connector status at all when there is no active business", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(mockDb([]) as never);
+    const ctx = await loadIntegrationsContext("/dashboard/integrations");
+    expect(getMcpConnectorStatusForBusiness).not.toHaveBeenCalled();
+    expect(ctx.mcpConnectorStatuses).toEqual({ claude: null, chatgpt: null });
   });
 
   it("computes the workspace connection cap from tier, count, and enterprise override", async () => {
@@ -413,16 +436,17 @@ describe("computeIntegrationStatuses", () => {
     expect(many["zapier-api"]).toEqual({ state: "connected", label: "2 keys" });
   });
 
-  it("marks each connector connected independently, once that client has made a request", () => {
+  it("marks each connector connected independently, once that client has made a call", () => {
     const stamp = {
       firstConnectedAt: "2026-07-18T00:00:00Z",
-      lastSeenAt: "2026-07-19T00:00:00Z"
+      lastSeenAt: new Date().toISOString(),
+      userId: "u1"
     };
     const connected = computeIntegrationStatuses(
       baseCtx({ mcpConnectorStatuses: { claude: stamp, chatgpt: null } })
     );
-    // The whole point of keying the table on (user, client): one assistant's
-    // traffic must not light the other one's tile.
+    // The whole point of keying the table on (user, client, business): one
+    // assistant's traffic must not light the other one's tile.
     expect(connected.chatgpt).toEqual({ state: "disconnected", label: "Available" });
     expect(connected.claude).toEqual({ state: "connected", label: "Connected" });
 
@@ -432,5 +456,22 @@ describe("computeIntegrationStatuses", () => {
     );
     expect(swapped.chatgpt).toEqual({ state: "connected", label: "Connected" });
     expect(swapped.claude).toEqual({ state: "disconnected", label: "Available" });
+  });
+
+  /**
+   * Nothing tells us a connector was removed inside Claude or ChatGPT, so a
+   * long silence is the only signal there is. Without this the badge stayed
+   * green forever, including for connectors that had been deleted.
+   */
+  it("drops a long-silent connector out of Connected", () => {
+    const quiet = {
+      firstConnectedAt: "2026-01-01T00:00:00Z",
+      lastSeenAt: new Date(Date.now() - MCP_STALE_MS - 1000).toISOString(),
+      userId: "u1"
+    };
+    const s = computeIntegrationStatuses(
+      baseCtx({ mcpConnectorStatuses: { claude: quiet, chatgpt: null } })
+    );
+    expect(s.claude).toEqual({ state: "attention", label: "Gone quiet" });
   });
 });
