@@ -536,8 +536,15 @@ async function executeToolCall(
       result !== null &&
       (result as { ok?: unknown }).ok === true
     ) {
+      // The effect COMMITTED: pin the turn before formatting anything, and
+      // never let a throwing caller-supplied noteFor unpin it by killing
+      // the turn after the fact.
       sideEffects.happened = true;
-      sideEffects.notes.push(extraTools.noteFor(call.name, result));
+      try {
+        sideEffects.notes.push(extraTools.noteFor(call.name, result));
+      } catch {
+        sideEffects.notes.push(`The ${call.name} action went through.`);
+      }
     }
     return result;
   }

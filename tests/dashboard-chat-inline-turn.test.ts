@@ -1417,6 +1417,33 @@ describe("runInlineChatTurn, extra (bridged) tools", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("a throwing noteFor never kills a turn whose side effect committed", async () => {
+    // noteFor is caller code too (Bugbot Medium on PR #1380): the effect
+    // already happened, so the turn must stay pinned with a generic fact
+    // line rather than crash or fall back to the worker rerun.
+    const execute = vi.fn(async () => ({ ok: true, updated: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+    const res = await runInlineChatTurn(
+      baseArgs({
+        extraTools: extraTools({
+          execute,
+          sideEffectNames: new Set(["search_contacts"]),
+          noteFor: () => {
+            throw new Error("formatter exploded");
+          }
+        })
+      }),
+      { chatStep }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("The search_contacts action went through.");
+    }
+  });
+
   it("a malformed executor result (primitive or null) never pins the turn", async () => {
     // The executor contract returns an object payload; if a bridge bug
     // yields a primitive or null anyway, side-effect pinning must not fire.
