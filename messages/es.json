@@ -1916,13 +1916,13 @@
       "upgradeMessage": "La integración con Slack está disponible en los planes Standard y Enterprise."
     },
     "integrationsWorkspace": {
-      "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso",
+      "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso entre Google, Microsoft 365 y otros servicios",
       "capReached": "Tu plan incluye {max, plural, one {# conexión de espacio de trabajo} other {# conexiones de espacio de trabajo}}. Elimina una o mejora tu plan para conectar otra.",
       "connectMicrosoft": "Conectar Outlook",
       "connectMicrosoftHelp": "Microsoft 365 o una cuenta personal de Outlook. Incluye correo y calendario.",
       "connectGoogle": "Conectar Google",
       "connectGoogleHelp": "Gmail y Google Calendar, incluida una cuenta personal de Google. Incluye correo y calendario.",
-      "connectOther": "Conectar Google u otro servicio"
+      "connectOther": "Conectar otro servicio"
     },
     "humanHandoff": {
       "title": "Traspaso a humano",

@@ -213,11 +213,17 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </h2>
           <p className="mt-2 text-sm text-parchment/60">{t("calendarUnreadableBody")}</p>
           <Link
-            href={
+            // Straight to the tile that owns the unreadable calendar. Google
+            // and Microsoft split off the old combined workspace page, so
+            // sending both there would land half of these owners on a page
+            // that no longer lists their connection.
+            href={`/dashboard/integrations/${
               state.calendarProvider === "caldav"
-                ? "/dashboard/integrations/caldav"
-                : "/dashboard/integrations/workspace"
-            }
+                ? "caldav"
+                : state.calendarProvider === "microsoft"
+                  ? "microsoft"
+                  : "google"
+            }`}
             className="mt-3 inline-block text-sm text-claw-green hover:underline"
           >
             {t("calendarUnreadableAction")}

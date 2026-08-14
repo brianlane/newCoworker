@@ -4,7 +4,7 @@
  * directory tiles and the per-integration detail pages
  * (/dashboard/integrations/[slug]), so the two can never drift.
  *
- * No secrets or server-only imports belong here — this module is imported
+ * No secrets or server-only imports belong here: this module is imported
  * from server AND client components.
  */
 
@@ -12,19 +12,23 @@ import type { LucideIcon } from "lucide-react";
 import {
   Blocks,
   Bot,
+  Building2,
   CalendarCheck,
   CalendarClock,
   CalendarDays,
   CalendarRange,
   Hash,
-  Inbox,
   KeyRound,
+  Mail,
   Megaphone,
   MessageCircle,
+  Plug,
   Video
 } from "lucide-react";
 
 export type IntegrationSlug =
+  | "google"
+  | "microsoft"
   | "workspace"
   | "slack"
   | "vagaro"
@@ -63,12 +67,20 @@ export const INTEGRATION_CATEGORIES = [
 
 export const INTEGRATIONS: IntegrationDef[] = [
   {
-    slug: "workspace",
-    name: "Workspace",
+    slug: "google",
+    name: "Google",
     category: "Workspace",
     benefit:
-      "Connect Gmail, Google Calendar, Drive, Microsoft 365, and more so your coworker can send email and manage your calendar.",
-    icon: Inbox
+      "Connect Gmail and Google Calendar, including a personal Google account, so your coworker can send email and manage your calendar.",
+    icon: Mail
+  },
+  {
+    slug: "microsoft",
+    name: "Microsoft 365",
+    category: "Workspace",
+    benefit:
+      "Connect Outlook mail and calendar, on Microsoft 365 or a personal Outlook account, so your coworker can send email and book meetings.",
+    icon: Building2
   },
   {
     slug: "slack",
@@ -112,11 +124,21 @@ export const INTEGRATIONS: IntegrationDef[] = [
     icon: CalendarDays
   },
   {
+    // Last in the Workspace section on purpose: it is the catch-all for
+    // everything the named tiles above do not cover.
+    slug: "workspace",
+    name: "Other 3rd Party Connections",
+    category: "Workspace",
+    benefit:
+      "Connect Drive, OneDrive, and the rest of the long tail through the Nango Connect flow. Google and Microsoft 365 have their own pages.",
+    icon: Plug
+  },
+  {
     slug: "meta",
     name: "Meta Lead Ads",
     category: "Lead sources",
     benefit:
-      "Connect your Facebook Page and every new ad lead starts your webhook AiFlows within seconds — no Zapier or Make account needed.",
+      "Connect your Facebook Page and every new ad lead starts your webhook AiFlows within seconds, no Zapier or Make account needed.",
     icon: Megaphone
   },
   {
@@ -124,7 +146,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "WhatsApp Business",
     category: "Lead sources",
     benefit:
-      "Chat with leads on WhatsApp — your coworker answers automatically, and AiFlows and owner alerts can message contacts there too.",
+      "Chat with leads on WhatsApp: your coworker answers automatically, and AiFlows and owner alerts can message contacts there too.",
     icon: MessageCircle
   },
   {
@@ -140,7 +162,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "Custom integrations",
     category: "Custom",
     benefit:
-      "Point your coworker at your own tools and portals — CRM, order system, scheduling tool — with an API key or login.",
+      "Point your coworker at your own tools and portals (CRM, order system, scheduling tool) with an API key or login.",
     icon: Blocks
   },
   {
@@ -157,7 +179,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "Claude connector",
     category: "AI assistants",
     benefit:
-      "Let Claude work with your coworker — look up contacts, read texts and call summaries, send messages, and book appointments as you.",
+      "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments as you.",
     icon: Bot
   },
   {

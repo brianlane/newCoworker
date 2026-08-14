@@ -29,7 +29,7 @@ const businessIdSchema = z.string().uuid();
 const OUTLOOK_KEY = "outlook";
 
 function dashboardRedirect(request: Request, params: Record<string, string>) {
-  const url = new URL("/dashboard/integrations/workspace", request.url);
+  const url = new URL("/dashboard/integrations/microsoft", request.url);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }
