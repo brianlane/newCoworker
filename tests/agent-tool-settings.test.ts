@@ -13,6 +13,7 @@ function makeBuilder(result: StubResult) {
   const b = {
     select: vi.fn(() => b),
     eq: vi.fn(() => b),
+    in: vi.fn(() => b),
     upsert: vi.fn(() => b),
     single: vi.fn(async () => result),
     maybeSingle: vi.fn(async () => result),
@@ -29,6 +30,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  getAgentToolStates,
   isAgentToolEnabled,
   resolveAgentTools,
   upsertAgentToolSetting
@@ -172,6 +174,91 @@ describe("isAgentToolEnabled", () => {
     // rather than silently disabling a live surface.
     await expect(isAgentToolEnabled(BIZ, "dashboard", "send_email")).resolves.toBe(true);
     await expect(isAgentToolEnabled(BIZ, "voice", "send_follow_up_email")).resolves.toBe(true);
+  });
+});
+
+describe("getAgentToolStates", () => {
+  it("merges override rows over registry defaults with ONE query", async () => {
+    const builder = makeBuilder({
+      data: [{ tool_key: "send_sms", enabled: false }],
+      error: null
+    });
+    supabaseStub.from.mockReturnValue(builder);
+    const states = await getAgentToolStates(BIZ, "dashboard", [
+      "send_sms",
+      "send_email",
+      "business_knowledge_lookup"
+    ]);
+    expect(states).toEqual({
+      send_sms: false,
+      send_email: true,
+      business_knowledge_lookup: true
+    });
+    expect(supabaseStub.from).toHaveBeenCalledTimes(1);
+    expect(builder.in).toHaveBeenCalledWith("tool_key", [
+      "send_sms",
+      "send_email",
+      "business_knowledge_lookup"
+    ]);
+  });
+
+  it("fails closed for unknown tools and leaves them out of the query", async () => {
+    const builder = makeBuilder({ data: [], error: null });
+    supabaseStub.from.mockReturnValue(builder);
+    const states = await getAgentToolStates(BIZ, "dashboard", ["made_up", "send_email"]);
+    expect(states).toEqual({ made_up: false, send_email: true });
+    expect(builder.in).toHaveBeenCalledWith("tool_key", ["send_email"]);
+  });
+
+  it("skips the query entirely when no key is queryable", async () => {
+    const states = await getAgentToolStates(BIZ, "dashboard", ["made_up", "also_fake"]);
+    expect(states).toEqual({ made_up: false, also_fake: false });
+    expect(supabaseStub.from).not.toHaveBeenCalled();
+  });
+
+  it("treats a null data payload (no rows) as no overrides", async () => {
+    supabaseStub.from.mockReturnValue(makeBuilder({ data: null, error: null }));
+    const states = await getAgentToolStates(BIZ, "dashboard", ["send_sms", "send_email"]);
+    expect(states).toEqual({ send_sms: true, send_email: true });
+  });
+
+  it("resolves a read error to every key's registry default (same posture as isAgentToolEnabled)", async () => {
+    supabaseStub.from.mockReturnValue(makeBuilder({ data: null, error: { message: "boom" } }));
+    const states = await getAgentToolStates(BIZ, "dashboard", ["send_sms", "send_email"]);
+    expect(states).toEqual({ send_sms: true, send_email: true });
+  });
+
+  it("tolerates duplicate keys and ignores rows with a non-boolean enabled", async () => {
+    supabaseStub.from.mockReturnValue(
+      makeBuilder({
+        data: [
+          { tool_key: "send_sms", enabled: "yes" },
+          { tool_key: "send_email", enabled: false }
+        ],
+        error: null
+      })
+    );
+    const states = await getAgentToolStates(BIZ, "dashboard", [
+      "send_sms",
+      "send_sms",
+      "send_email"
+    ]);
+    // The malformed send_sms row falls back to the registry default.
+    expect(states).toEqual({ send_sms: true, send_email: false });
+  });
+
+  it("ignores returned rows for keys that were never requested", async () => {
+    supabaseStub.from.mockReturnValue(
+      makeBuilder({
+        data: [
+          { tool_key: "send_email", enabled: false },
+          { tool_key: "generate_image", enabled: false }
+        ],
+        error: null
+      })
+    );
+    const states = await getAgentToolStates(BIZ, "dashboard", ["send_email"]);
+    expect(states).toEqual({ send_email: false });
   });
 });
 

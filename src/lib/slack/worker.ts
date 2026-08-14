@@ -47,7 +47,7 @@ import {
 } from "@/lib/slack/chat";
 import { slackAllowedForBusiness } from "@/lib/slack/tier-gate";
 import { getBusiness } from "@/lib/db/businesses";
-import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
@@ -256,48 +256,49 @@ async function runOneSlackJob(
     .map((m) => `[${m.role === "user" ? speaker : "Coworker"}]: ${m.content.slice(0, 500)}`)
     .join("\n");
 
-  // Same per-turn reads as the owner-SMS operator, keyed to THIS surface's
+  // Same per-turn gates as the owner-SMS operator, keyed to THIS surface's
   // agent settings so Settings → Coworker → Slack coworker is authoritative.
-  const gate = (tool: string) => isAgentToolEnabled(businessId, "slack", tool);
-  const [
-    knowledgeToolEnabled,
-    smsToolEnabled,
-    whatsappToolEnabled,
-    calFindEnabled,
-    calBookEnabled,
-    calRescheduleEnabled,
-    calCancelEnabled,
-    calWaitlistEnabled,
-    runAiflowEnabled,
-    editAiflowEnabled,
-    notificationPrefsToolEnabled,
-    flagSpamToolEnabled,
-    replyModeToolEnabled,
-    manageEmployeeToolEnabled,
-    emailToolEnabled,
-    integrationsLine,
-    businessContextBlock,
-    bookingLinkLine
-  ] = await Promise.all([
-    gate("business_knowledge_lookup"),
-    gate("send_sms"),
-    gate("send_whatsapp"),
-    gate("calendar_find_slots"),
-    gate("calendar_book_appointment"),
-    gate("calendar_reschedule_appointment"),
-    gate("calendar_cancel_appointment"),
-    gate("calendar_join_waitlist"),
-    gate("run_aiflow"),
-    gate("edit_aiflow"),
-    gate("update_notification_preferences"),
-    gate("flag_contact_spam"),
-    gate("set_contact_reply_mode"),
-    gate("manage_employee"),
-    gate("send_email"),
-    buildIntegrationsStatusLine(businessId),
-    buildBusinessContextBlock(businessId),
-    bookingLinkPromptLine(businessId)
-  ]);
+  // Batched: one settings query instead of fifteen round-trips per message.
+  const [toolStates, integrationsLine, businessContextBlock, bookingLinkLine] =
+    await Promise.all([
+      getAgentToolStates(businessId, "slack", [
+        "business_knowledge_lookup",
+        "send_sms",
+        "send_whatsapp",
+        "calendar_find_slots",
+        "calendar_book_appointment",
+        "calendar_reschedule_appointment",
+        "calendar_cancel_appointment",
+        "calendar_join_waitlist",
+        "run_aiflow",
+        "edit_aiflow",
+        "update_notification_preferences",
+        "flag_contact_spam",
+        "set_contact_reply_mode",
+        "manage_employee",
+        "send_email"
+      ] as const),
+      buildIntegrationsStatusLine(businessId),
+      buildBusinessContextBlock(businessId),
+      bookingLinkPromptLine(businessId)
+    ]);
+  const {
+    business_knowledge_lookup: knowledgeToolEnabled,
+    send_sms: smsToolEnabled,
+    send_whatsapp: whatsappToolEnabled,
+    calendar_find_slots: calFindEnabled,
+    calendar_book_appointment: calBookEnabled,
+    calendar_reschedule_appointment: calRescheduleEnabled,
+    calendar_cancel_appointment: calCancelEnabled,
+    calendar_join_waitlist: calWaitlistEnabled,
+    run_aiflow: runAiflowEnabled,
+    edit_aiflow: editAiflowEnabled,
+    update_notification_preferences: notificationPrefsToolEnabled,
+    flag_contact_spam: flagSpamToolEnabled,
+    set_contact_reply_mode: replyModeToolEnabled,
+    manage_employee: manageEmployeeToolEnabled,
+    send_email: emailToolEnabled
+  } = toolStates;
 
   const speakerLine = isOwner
     ? `The speaker is the business OWNER${displayName ? `, ${displayName}` : ""}, verified from their Slack profile email.`

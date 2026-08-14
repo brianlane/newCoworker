@@ -102,7 +102,7 @@ import {
   buildDashboardCustomerPreamble,
   DASHBOARD_PREAMBLE_MAX_CUSTOMERS
 } from "@/lib/customer-memory/dashboard-preamble";
-import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
@@ -724,60 +724,50 @@ export async function POST(request: Request) {
       typeof thread.rowboat_conversation_id === "string" &&
       thread.rowboat_conversation_id.trim().length > 0;
 
-    // Settings → Coworker tools: decides which email-tool system block the
-    // model sees this turn. Default OFF (registry); isAgentToolEnabled
-    // resolves read errors to that default, so a DB blip degrades to "tool
-    // disabled" rather than failing the turn. The adapter the worker calls
-    // re-checks authoritatively before any mail leaves.
-    const emailToolEnabled = await isAgentToolEnabled(
-      body.businessId,
-      "dashboard",
-      "send_email"
-    );
-
-    // Same gate the Rowboat tool-call route checks before dispatching
-    // dashboard_business_knowledge_lookup (default ON in the registry).
-    // Read here so the inline path only declares the tool when allowed.
-    const knowledgeToolEnabled = await isAgentToolEnabled(
-      body.businessId,
-      "dashboard",
-      "business_knowledge_lookup"
-    );
-
-    // Action tools for the INLINE path (worker parity, the Rowboat
-    // OwnerCoworker declares these same tools, gated per call by the
-    // tool-call route). Each read resolves errors to the registry default.
-    const [
-      smsToolEnabled,
-      whatsappToolEnabled,
-      calFindEnabled,
-      calBookEnabled,
-      calRescheduleEnabled,
-      calCancelEnabled,
-      calWaitlistEnabled,
-      runAiflowEnabled,
-      editAiflowEnabled,
-      generateImageEnabled,
-      notificationPrefsToolEnabled,
-      flagSpamToolEnabled,
-      replyModeToolEnabled,
-      manageEmployeeToolEnabled
-    ] = await Promise.all([
-      isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
-      isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_join_waitlist"),
-      isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
-      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
-      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
-      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
-      isAgentToolEnabled(body.businessId, "dashboard", "manage_employee")
-    ]);
+    // Settings → Coworker tools, batched: ONE query resolves every gate the
+    // inline path may declare this turn (the email prompt block, knowledge
+    // lookup, and the action tools — worker parity with the Rowboat
+    // OwnerCoworker, whose tool-call route gates per call). Same per-key
+    // semantics as isAgentToolEnabled: a read error resolves each key to its
+    // registry default, so a DB blip degrades to the owner's expected state
+    // rather than failing the turn. The adapters behind the side-effect
+    // tools re-check authoritatively before acting (mail, roster, opt-outs).
+    const toolStates = await getAgentToolStates(body.businessId, "dashboard", [
+      "send_email",
+      "business_knowledge_lookup",
+      "send_sms",
+      "send_whatsapp",
+      "calendar_find_slots",
+      "calendar_book_appointment",
+      "calendar_reschedule_appointment",
+      "calendar_cancel_appointment",
+      "calendar_join_waitlist",
+      "run_aiflow",
+      "edit_aiflow",
+      "generate_image",
+      "update_notification_preferences",
+      "flag_contact_spam",
+      "set_contact_reply_mode",
+      "manage_employee"
+    ] as const);
+    const emailToolEnabled = toolStates.send_email;
+    const knowledgeToolEnabled = toolStates.business_knowledge_lookup;
+    const {
+      send_sms: smsToolEnabled,
+      send_whatsapp: whatsappToolEnabled,
+      calendar_find_slots: calFindEnabled,
+      calendar_book_appointment: calBookEnabled,
+      calendar_reschedule_appointment: calRescheduleEnabled,
+      calendar_cancel_appointment: calCancelEnabled,
+      calendar_join_waitlist: calWaitlistEnabled,
+      run_aiflow: runAiflowEnabled,
+      edit_aiflow: editAiflowEnabled,
+      generate_image: generateImageEnabled,
+      update_notification_preferences: notificationPrefsToolEnabled,
+      flag_contact_spam: flagSpamToolEnabled,
+      set_contact_reply_mode: replyModeToolEnabled,
+      manage_employee: manageEmployeeToolEnabled
+    } = toolStates;
     // Settings mutation needs more than chat access: the tool is declared
     // only when THIS caller passes manage_settings (manager+, the same
     // matrix as the notifications settings page). Chat itself only requires
