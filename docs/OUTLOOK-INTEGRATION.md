@@ -292,5 +292,12 @@ public page load, which is why the fix is to report incompleteness rather than
 to page harder. The owner still finds out: `probeCalendarAvailability` reports
 an incomplete read as `unreadable` on the Bookings dashboard.
 
+That probe reads the SAME window as the public page (`bookableWindowEnd`, which
+both call), and that sharing is the point rather than tidiness. It used to probe
+a hardcoded one day, which cannot overflow a budget sized for 62, so the one
+owner-facing signal for a partial read could never fire on the tenants it was
+built for. A probe that reads a different window than the page it reports on
+does not report on that page.
+
 **Polling is unchanged.** Connected-mailbox watching is still the roughly
 1/minute cron poll. No Graph push subscriptions were added.

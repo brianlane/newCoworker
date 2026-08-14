@@ -138,6 +138,23 @@ export const PUBLIC_SLOT_CLAIM_KEY = "slot:public-booking-page";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** `booking_pages.max_advance_days` default, for a business with no page row yet. */
+const DEFAULT_MAX_ADVANCE_DAYS = 14;
+
+/**
+ * The far edge of the window the public page reads free/busy for.
+ *
+ * Shared by the visitor-facing slot walk and the owner-facing health probe on
+ * purpose. The probe exists to tell the owner what visitors are experiencing,
+ * so reading a different window is how it ends up reporting healthy on a
+ * calendar the page cannot fully read. That is exactly what it did while this
+ * was a hardcoded one day: paging only runs out over a long horizon, so the
+ * one signal built for it could never fire.
+ */
+function bookableWindowEnd(now: Date, maxAdvanceDays: number): Date {
+  return new Date(now.getTime() + (maxAdvanceDays + 2) * DAY_MS);
+}
+
 /**
  * Platform-mode busy padding: the ledger stores booking STARTS only, so
  * each one blocks a conservative hour (the longest offered duration).
@@ -276,13 +293,17 @@ export async function probeCalendarAvailability(
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) return "platform";
     if (!bookingPageSupportsProvider(conn)) return "unsupported";
+    // Same horizon the public page reads, via bookableWindowEnd: a partial
+    // read only happens over a long window, so probing a short one would
+    // always report healthy no matter how unreadable the real window is.
+    const page = await getBookingPageForBusiness(businessId);
     const now = new Date();
     const busy = await fetchBusyBlocks(
       businessId,
       conn.provider,
       conn,
       now,
-      new Date(now.getTime() + DAY_MS)
+      bookableWindowEnd(now, page?.max_advance_days ?? DEFAULT_MAX_ADVANCE_DAYS)
     );
     // Incomplete counts as unreadable for the OWNER's health probe: the
     // dashboard warning is how they learn availability is not fully readable,
@@ -392,7 +413,7 @@ async function listSlotsForContext(
 
   try {
     const now = nowOverride ?? new Date();
-    const windowEnd = new Date(now.getTime() + (page.max_advance_days + 2) * DAY_MS);
+    const windowEnd = bookableWindowEnd(now, page.max_advance_days);
 
     // Ledger starts serve the daily cap in both modes, the busy blocks in
     // platform mode, and the DEGRADED busy baseline in provider mode, so

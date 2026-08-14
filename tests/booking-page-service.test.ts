@@ -380,6 +380,17 @@ describe("probeCalendarAvailability", () => {
     });
     expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
 
+    // ...and it must probe the window the PUBLIC PAGE reads, not a token one.
+    // Paging only runs out over a long horizon, so a short probe window would
+    // report healthy on exactly the calendars this signal exists to catch.
+    mockPageByBusiness.mockResolvedValueOnce({ ...PAGE, max_advance_days: 60 } as never);
+    mockBusy.mockClear();
+    mockBusy.mockResolvedValueOnce({ busy: [], complete: true });
+    await probeCalendarAvailability(BIZ);
+    const [, , probeStart, probeEnd] = mockBusy.mock.calls[0];
+    const probedDays = (probeEnd.getTime() - probeStart.getTime()) / (24 * 60 * 60 * 1000);
+    expect(probedDays).toBe(62);
+
     // CalDAV rides the same probe.
     mockConn.mockResolvedValueOnce({
       provider: "caldav",
