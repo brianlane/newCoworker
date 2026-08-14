@@ -924,6 +924,33 @@ can no longer go through Nango, so `fetchWorkspaceAccountIdentity` routes it
 through the transport-aware seam. A Nango-only probe would fail, and a failed
 probe inserts a duplicate row rather than adopting the existing one.
 
+### Disconnect revokes at Google, and the ordering is deliberate
+
+Google publishes a scoped revoke endpoint, so for a direct Google row
+`DELETE /api/integrations/workspace` presents the **refresh** token to
+`https://oauth2.googleapis.com/revoke`, which kills the whole grant, access
+token included. Revoking the access token instead would leave the refresh token
+able to mint more, so Disconnect would not mean disconnected. Outlook has no
+equivalent: Microsoft publishes nothing like Zoom's `POST /oauth/revoke`, so an
+Outlook row's teardown is deleting the ciphertext and waiting out the token
+lifetimes (`docs/OUTLOOK-INTEGRATION.md`).
+
+The sequence is read, delete, revoke, and each position matters:
+
+- **Read before the delete**, because deleting the row destroys the only copy of
+  the ciphertext.
+- **Revoke after the delete**, matching the snapshot-then-delete-then-revoke
+  contract in `src/lib/nango/cleanup.ts`. A failed delete must leave the tenant
+  fully intact rather than holding a row whose grant we already killed.
+- **Never fail the request on a failed revoke.** It logs
+  `google.revoke_failed` and returns 200, because the row IS gone; a Google
+  outage must not stop an owner from disconnecting.
+
+This was in the migration plan and shipped late, in #1360. Between Aug 13 and
+then, Disconnect deleted our copy and left the grant live on the owner's Google
+account, which is the same defect the Zoom section calls out as "leaving the app
+authorized after a Disconnect".
+
 ### The client can be deleted for inactivity
 
 Google deletes OAuth clients unused for six months, and token refreshes do not

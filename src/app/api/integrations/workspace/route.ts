@@ -1,6 +1,7 @@
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   deleteWorkspaceOAuthConnection,
+  getWorkspaceConnectionSecrets,
   getWorkspaceOAuthConnection,
   listWorkspaceOAuthConnections
 } from "@/lib/db/workspace-oauth-connections";
@@ -10,6 +11,9 @@ import {
   flowsReferencingWorkspaceConnection
 } from "@/lib/ai-flows/mailbox-steps";
 import { getNangoClient } from "@/lib/nango/server";
+import { revokeGoogleToken } from "@/lib/google/oauth";
+import { providerFromKey } from "@/lib/voice-tools/connections";
+import { logger } from "@/lib/logger";
 import { z } from "zod";
 
 const businessIdSchema = z.string().uuid();
@@ -68,7 +72,7 @@ export async function DELETE(request: Request) {
     }
 
     // Fail closed: a connection some flow still sends from (or triggers on)
-    // must not be silently orphaned — every later run would die at send time
+    // must not be silently orphaned: every later run would die at send time
     // with connection_not_found (the KYP Jul 22 2026 incident class). The
     // owner re-points or removes those flows first.
     const referencingFlows = await flowsReferencingWorkspaceConnection(body.businessId, body.id);
@@ -80,14 +84,6 @@ export async function DELETE(request: Request) {
     // connection_id is a synthetic `direct:<uuid>` that Nango has never heard
     // of, so calling deleteConnection with it fails and would 500 every single
     // direct disconnect.
-    //
-    // For a direct row the teardown IS deleting the ciphertext below. Microsoft
-    // publishes no scoped revoke endpoint (there is no equivalent of Zoom's
-    // POST /oauth/revoke), so the access token dies within the hour and the
-    // refresh token at the tenant's inactivity window. An owner who wants the
-    // grant gone from their side immediately does it at
-    // account.live.com/consent/Manage or myapps.microsoft.com; the disconnect
-    // copy says so.
     if (row.transport === "nango" && process.env.NANGO_SECRET_KEY) {
       try {
         const nango = getNangoClient();
@@ -98,9 +94,39 @@ export async function DELETE(request: Request) {
       }
     }
 
+    // A direct row's tokens have to be read BEFORE the row goes away, because
+    // deleting the row deletes the only copy of the ciphertext. Google publishes
+    // a scoped revoke endpoint, so for Google "disconnected" can mean revoked
+    // rather than merely forgotten. Microsoft publishes no equivalent of Zoom's
+    // POST /oauth/revoke (see docs/OUTLOOK-INTEGRATION.md), so an Outlook row's
+    // teardown IS deleting the ciphertext: its access token dies within the hour
+    // and its refresh token at the tenant's inactivity window, and an owner who
+    // wants the grant gone immediately does it at account.live.com/consent/Manage
+    // or myapps.microsoft.com.
+    const revocable =
+      row.transport === "direct" && providerFromKey(row.provider_config_key) === "google"
+        ? await getWorkspaceConnectionSecrets(row.id)
+        : null;
+
     const removed = await deleteWorkspaceOAuthConnection(body.businessId, body.id);
     if (!removed) {
       return errorResponse("NOT_FOUND", "Connection not found");
+    }
+
+    // Revoke AFTER the row is gone, never before, matching the snapshot-then-
+    // delete-then-revoke ordering in src/lib/nango/cleanup.ts: a failed delete
+    // must leave the tenant fully intact rather than holding a row whose grant
+    // we already killed. Best-effort by design, so a Google outage cannot stop
+    // an owner from disconnecting. Revoking the refresh token kills the whole
+    // grant, access token included.
+    if (revocable) {
+      const revoked = await revokeGoogleToken(revocable.refreshToken);
+      if (!revoked) {
+        logger.warn("google.revoke_failed", {
+          businessId: body.businessId,
+          connectionId: row.id
+        });
+      }
     }
     return successResponse({ deleted: true });
   } catch (err) {
