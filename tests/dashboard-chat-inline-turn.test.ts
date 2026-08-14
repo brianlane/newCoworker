@@ -1284,3 +1284,203 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
   });
 });
+
+describe("runInlineChatTurn, extra (bridged) tools", () => {
+  const EXTRA_DECL = {
+    name: "search_contacts",
+    description: "Find a contact.",
+    parameters: {
+      type: "object" as const,
+      properties: { query: { type: "string" } },
+      required: ["query"]
+    }
+  };
+
+  function extraTools(overrides: Partial<import("@/lib/dashboard-chat/inline-turn").InlineExtraTools> = {}) {
+    return {
+      declarations: [EXTRA_DECL],
+      execute: vi.fn(async () => ({ ok: true, data: { contacts: [] } })),
+      sideEffectNames: new Set<string>(),
+      noteFor: () => "Extra effect committed.",
+      ...overrides
+    };
+  }
+
+  it("appends the declarations to the turn's tool list", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs({ extraTools: extraTools() }), { chatStep });
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).toContain("search_contacts");
+    // The built-ins are unchanged alongside.
+    expect(declared).toContain("create_aiflow");
+  });
+
+  it("dispatches a declared extra call and feeds its result back to the model", async () => {
+    const execute = vi.fn(async () => ({ ok: true, data: { contacts: [{ name: "Ally" }] } }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "ally" }))
+      .mockResolvedValueOnce(textStep("Found Ally."));
+    const res = await runInlineChatTurn(
+      baseArgs({ extraTools: extraTools({ execute }) }),
+      { chatStep }
+    );
+    expect(res).toEqual({ ok: true, content: "Found Ally.", drafts: [] });
+    expect(execute).toHaveBeenCalledWith({ name: "search_contacts", args: { query: "ally" } });
+    const secondContents = chatStep.mock.calls[1][0].contents;
+    expect(JSON.stringify(secondContents)).toContain('"contacts"');
+  });
+
+  it("fails closed for an extra name the caller did not declare this turn", async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("get_sms_thread", { contact_id: "c1" }))
+      .mockResolvedValueOnce(textStep("Understood."));
+    await runInlineChatTurn(baseArgs({ extraTools: extraTools({ execute }) }), { chatStep });
+    expect(execute).not.toHaveBeenCalled();
+    const secondContents = JSON.stringify(chatStep.mock.calls[1][0].contents);
+    expect(secondContents).toContain("unknown tool: get_sms_thread");
+  });
+
+  it("pins the turn after a committed extra side effect (degrades instead of falling back)", async () => {
+    const execute = vi.fn(async () => ({ ok: true, updated: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+    const res = await runInlineChatTurn(
+      baseArgs({
+        extraTools: extraTools({
+          execute,
+          sideEffectNames: new Set(["search_contacts"]),
+          noteFor: (name) => `Committed via ${name}.`
+        })
+      }),
+      { chatStep }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("Committed via search_contacts.");
+    }
+  });
+
+  it("does NOT pin the turn for a non-side-effect extra tool (fallback stays legitimate)", async () => {
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+    const res = await runInlineChatTurn(baseArgs({ extraTools: extraTools() }), { chatStep });
+    expect(res).toEqual({
+      ok: false,
+      error: "model_failed",
+      detail: "gemini_http_500: wobble"
+    });
+  });
+
+  it("degrades an executor crash to an honest tool failure instead of killing the turn", async () => {
+    // Both throw shapes: an Error and a bare value (String(err) logging arm).
+    for (const boom of [new Error("bridge exploded"), "bare failure" as unknown]) {
+      const execute = vi.fn(async () => {
+        throw boom;
+      });
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+        .mockResolvedValueOnce(textStep("I hit a hiccup checking contacts."));
+      const res = await runInlineChatTurn(
+        baseArgs({ extraTools: extraTools({ execute }) }),
+        { chatStep }
+      );
+      expect(res).toEqual({
+        ok: true,
+        content: "I hit a hiccup checking contacts.",
+        drafts: []
+      });
+      const secondContents = JSON.stringify(chatStep.mock.calls[1][0].contents);
+      expect(secondContents).toContain("internal error");
+    }
+  });
+
+  it("an ok:false extra result is not treated as a committed side effect", async () => {
+    const execute = vi.fn(async () => ({ ok: false, message: "no permission" }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+    const res = await runInlineChatTurn(
+      baseArgs({
+        extraTools: extraTools({ execute, sideEffectNames: new Set(["search_contacts"]) })
+      }),
+      { chatStep }
+    );
+    expect(res.ok).toBe(false);
+  });
+
+  it("a throwing noteFor never kills a turn whose side effect committed", async () => {
+    // noteFor is caller code too (Bugbot Medium on PR #1380): the effect
+    // already happened, so the turn must stay pinned with a generic fact
+    // line rather than crash or fall back to the worker rerun.
+    const execute = vi.fn(async () => ({ ok: true, updated: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+    const res = await runInlineChatTurn(
+      baseArgs({
+        extraTools: extraTools({
+          execute,
+          sideEffectNames: new Set(["search_contacts"]),
+          noteFor: () => {
+            throw new Error("formatter exploded");
+          }
+        })
+      }),
+      { chatStep }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("The search_contacts action went through.");
+    }
+  });
+
+  it("a malformed executor result (primitive or null) never pins the turn", async () => {
+    // The executor contract returns an object payload; if a bridge bug
+    // yields a primitive or null anyway, side-effect pinning must not fire.
+    for (const bad of ["done" as unknown, null as unknown]) {
+      const execute = vi.fn(async () => bad);
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep("search_contacts", { query: "x" }))
+        .mockRejectedValueOnce(new Error("gemini_http_500: wobble"));
+      const res = await runInlineChatTurn(
+        baseArgs({
+          extraTools: extraTools({ execute, sideEffectNames: new Set(["search_contacts"]) })
+        }),
+        { chatStep }
+      );
+      expect(res.ok).toBe(false);
+    }
+  });
+});
+
+describe("runInlineChatTurn, maxToolSteps", () => {
+  it("honors a raised bound and the default", async () => {
+    const looping = () =>
+      vi.fn(async (_p: GeminiChatStepParams) => toolStep("business_knowledge_lookup", { question: "q" }));
+    const lookupKnowledge = vi.fn(async () => ({ ok: true, answer: "a" })) as never;
+
+    const chatStep6 = looping();
+    await runInlineChatTurn(baseArgs({ maxToolSteps: 6 }), { chatStep: chatStep6, lookupKnowledge });
+    expect(chatStep6).toHaveBeenCalledTimes(6);
+
+    const chatStepDefault = looping();
+    await runInlineChatTurn(baseArgs(), { chatStep: chatStepDefault, lookupKnowledge });
+    expect(chatStepDefault).toHaveBeenCalledTimes(4);
+
+    // A nonsensical bound is clamped to at least one step.
+    const chatStepClamped = looping();
+    await runInlineChatTurn(baseArgs({ maxToolSteps: 0 }), { chatStep: chatStepClamped, lookupKnowledge });
+    expect(chatStepClamped).toHaveBeenCalledTimes(1);
+  });
+});
