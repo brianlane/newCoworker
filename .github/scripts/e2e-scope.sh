@@ -243,6 +243,10 @@ scope_file() {
     src/lib/messenger/* | src/lib/webchat/*) add "$MESSENGER_TESTS" ;;
     src/lib/dashboard-chat/* | src/app/api/dashboard/chat/* | \
     src/app/api/internal/owner-sms-turn/*) add "$OPERATOR_TESTS" ;;
+    # The MCP catalog now feeds the operator surfaces through the bridge
+    # (src/lib/dashboard-chat/mcp-bridge.ts imports src/lib/mcp/registry),
+    # so an MCP tool edit exercises the operator scenarios, not the world.
+    src/lib/mcp/*) add "$OPERATOR_TESTS" ;;
     src/lib/gemini-chat.ts) add "$OPERATOR_TESTS"; add "$MESSENGER_TESTS" ;;
     src/lib/ai-flows/*) add "$FLOW_TESTS" ;;
     vps/voice-bridge/*) add "$VOICE_TESTS" ;;

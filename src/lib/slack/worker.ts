@@ -58,6 +58,10 @@ import {
 } from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
+  buildMcpBridgeExtraTools,
+  mcpBridgeToolsPreamble
+} from "@/lib/dashboard-chat/mcp-bridge";
+import {
   EMAIL_TOOL_DISABLED_PREAMBLE,
   EMAIL_TOOL_ENABLED_PREAMBLE,
   OWNER_PREAMBLE
@@ -276,7 +280,14 @@ async function runOneSlackJob(
         "flag_contact_spam",
         "set_contact_reply_mode",
         "manage_employee",
-        "send_email"
+        "send_email",
+        "read_business_data",
+        "manage_contacts",
+        "manage_flows",
+        "manage_agents",
+        "update_business_profile",
+        "update_business_knowledge",
+        "manage_coworker_tools"
       ] as const),
       buildIntegrationsStatusLine(businessId),
       buildBusinessContextBlock(businessId),
@@ -300,6 +311,29 @@ async function runOneSlackJob(
     send_email: emailToolEnabled
   } = toolStates;
 
+  // MCP-bridge tools: OWNER-VERIFIED turns only, the same double gate as
+  // the other owner-power tools on this surface. A teammate never sees the
+  // declarations, and even a smuggled call would refuse inside the handler
+  // (requireMcpBusinessRole re-checks the caller email per call).
+  const verifiedOwnerEmail = (business?.owner_email ?? "").trim();
+  const bridgeExtraTools =
+    isOwner && verifiedOwnerEmail
+      ? buildMcpBridgeExtraTools(
+          businessId,
+          { userId: `slack:${conversation.slack_user_id}`, email: verifiedOwnerEmail },
+          {
+            read_business_data: toolStates.read_business_data,
+            manage_contacts: toolStates.manage_contacts,
+            manage_flows: toolStates.manage_flows,
+            manage_agents: toolStates.manage_agents,
+            update_business_profile: toolStates.update_business_profile,
+            update_business_knowledge: toolStates.update_business_knowledge,
+            manage_coworker_tools: toolStates.manage_coworker_tools
+          },
+          "owner"
+        )
+      : null;
+
   const speakerLine = isOwner
     ? `The speaker is the business OWNER${displayName ? `, ${displayName}` : ""}, verified from their Slack profile email.`
     : `The speaker is team member ${speaker} in the business's Slack workspace.`;
@@ -316,6 +350,9 @@ async function runOneSlackJob(
     ...(integrationsLine ? [integrationsLine] : []),
     ...(bookingLinkLine ? [bookingLinkLine] : []),
     ...(businessContextBlock ? [businessContextBlock] : []),
+    // includeCreationTools is false on this surface, so the ladder must
+    // not advertise create_aiflow (Bugbot Medium on PR #1382).
+    ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: false })] : []),
     ...(transcript
       ? [
           `Recent Slack exchange (oldest first, ground truth for what was already said):\n${transcript}`
@@ -340,6 +377,10 @@ async function runOneSlackJob(
     userMessage: `[Slack from ${isOwner ? "owner" : "team member"} ${speaker}] ${latestUser.content}`,
     knowledgeToolEnabled,
     includeCreationTools: false,
+    extraTools: bridgeExtraTools,
+    // Bridged read chains need headroom; the turn budget still bounds the
+    // wall clock regardless of the step count.
+    maxToolSteps: 6,
     budgetMs: SLACK_TURN_BUDGET_MS,
     spendSurface: "slack_chat",
     onTextDelta: (text) => {

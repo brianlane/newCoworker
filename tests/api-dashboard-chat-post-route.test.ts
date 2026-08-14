@@ -872,6 +872,71 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
   });
 
+  it("declares the MCP-bridge tools per role and never for admins", async () => {
+    gateStates(true);
+
+    // Owner: full bridge, ladder preamble appended, step headroom raised.
+    await POST(jsonRequest({ businessId: BIZ, message: "look at david's texts" }));
+    const ownerArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(ownerArgs.maxToolSteps).toBe(6);
+    expect(ownerArgs.systemInstruction).toContain("DIRECT BUSINESS TOOLS");
+    const ownerNames = (ownerArgs.extraTools?.declarations ?? []).map((d) => d.name);
+    expect(ownerNames).toContain("get_sms_thread");
+    expect(ownerNames).toContain("update_business_knowledge");
+    expect(ownerNames).toContain("set_flow_enabled");
+
+    // Manager: owner-only knowledge editing is NOT declared; the rest is.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("manager" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const managerNames = (
+      vi.mocked(runInlineChatTurn).mock.calls[0][0].extraTools?.declarations ?? []
+    ).map((d) => d.name);
+    expect(managerNames).toContain("get_sms_thread");
+    expect(managerNames).toContain("set_flow_enabled");
+    expect(managerNames).not.toContain("update_business_knowledge");
+    expect(managerNames).not.toContain("get_business_knowledge");
+
+    // Staff: reads and contacts only; flow/agent/settings groups stay off.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("staff" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const staffNames = (
+      vi.mocked(runInlineChatTurn).mock.calls[0][0].extraTools?.declarations ?? []
+    ).map((d) => d.name);
+    expect(staffNames).toContain("search_contacts");
+    expect(staffNames).toContain("create_contact");
+    expect(staffNames).not.toContain("set_flow_enabled");
+    expect(staffNames).not.toContain("update_business_profile");
+    expect(staffNames).not.toContain("update_coworker_tool_settings");
+    // Reads whose handlers sit at a higher bar are pruned too, not just
+    // writes: a staff turn must not burn tool steps on guaranteed refusals
+    // (Bugbot Medium on PR #1382).
+    expect(staffNames).not.toContain("get_flow");
+    expect(staffNames).not.toContain("list_employees");
+    expect(staffNames).not.toContain("get_notification_preferences");
+
+    // Admin (view-as is read-only by policy): no bridge, no preamble.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getAuthUser).mockResolvedValueOnce({
+      userId: "admin-1",
+      email: "admin@newcoworker.com",
+      isAdmin: true
+    } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const adminArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(adminArgs.extraTools).toBeNull();
+    expect(adminArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+  });
+
+  it("declares no bridge tools when every bridge toggle is off", async () => {
+    gateStates(false);
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const args = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(args.extraTools).toBeNull();
+    expect(args.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+  });
+
   it("gates update_notification_preferences on the caller's manage_settings role, not just the toggle", async () => {
     // A staff-role teammate uses chat freely but must never be handed a
     // settings-mutation tool, manage_settings is manager+ in the policy

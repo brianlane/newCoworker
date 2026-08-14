@@ -178,10 +178,14 @@ describe("connector-status stamping", () => {
     expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "chatgpt", "biz-1");
   });
 
-  it("defaults to Claude for a caller with no client (every row predating the second route)", async () => {
+  it("does NOT stamp a caller with no client (bridge turns are not connector sessions)", async () => {
+    // authFromContext always sets client on real MCP requests; the inline
+    // Gemini surfaces run these handlers through the bridge with client
+    // absent. Stamping those would light the Claude badge for owners who
+    // never connected Claude (Bugbot High on PR #1382).
     vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
     await requireMcpBusinessRole(AUTH, "biz-1", "manage_aiflows");
-    expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "claude", "biz-1");
+    expect(recordMcpConnectorSeen).not.toHaveBeenCalled();
   });
 
   it("does not stamp a business the caller was refused on", async () => {
@@ -202,7 +206,9 @@ describe("connector-status stamping", () => {
   // could actually use is a business the assistant reached.
   it("stamps through the non-throwing permission check too", async () => {
     vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
-    expect(await mcpBusinessRoleAllows(AUTH, "biz-9", "view_dashboard")).toBe(true);
+    expect(
+      await mcpBusinessRoleAllows({ ...AUTH, client: "claude" }, "biz-9", "view_dashboard")
+    ).toBe(true);
     expect(recordMcpConnectorSeen).toHaveBeenCalledWith(AUTH.userId, "claude", "biz-9");
   });
 
@@ -213,7 +219,7 @@ describe("connector-status stamping", () => {
     vi.mocked(getBusinessRoleForEmail).mockResolvedValue("owner");
     vi.mocked(recordMcpConnectorSeen).mockRejectedValueOnce(new Error("status down"));
     await expect(
-      requireMcpBusinessRole(AUTH, "biz-1", "manage_aiflows")
+      requireMcpBusinessRole({ ...AUTH, client: "claude" }, "biz-1", "manage_aiflows")
     ).resolves.toBe("owner");
   });
 });

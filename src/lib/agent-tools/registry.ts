@@ -236,6 +236,62 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "Add a teammate, change their number, hours, or name, deactivate them, and turn any of their four lead-availability switches on or off when you ask in chat (or by texting your coworker). Managers and owners only; every change is also visible and reversible on the Employees page.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "read_business_data",
+        label: "Business data reads",
+        description:
+          "Let your coworker look things up to answer you: contacts, text conversations, call transcripts, recent activity, tasks, automation details, the roster, and notification settings. Read-only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_contacts",
+        label: "Add and edit contacts",
+        description:
+          "Create or update a contact when you ask in chat. A new or retagged contact can start its matching automations (which may message them), same as an edit on the Contacts page.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_flows",
+        label: "Turn automations on/off and start runs",
+        description:
+          "Enable or disable an automation and start one for a lead when you ask in chat. Editing an automation's steps has its own toggle (Edit automations).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_agents",
+        label: "Edit document agents",
+        description:
+          "Update or delete a saved document agent when you ask in chat. Managers and owners only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_business_profile",
+        label: "Update business hours and timezone",
+        description:
+          "Change your weekly hours or timezone from chat, the same save as the Settings page (your coworker picks the change up right away). Managers and owners only. Phone numbers can never be changed this way.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_business_knowledge",
+        label: "Edit coworker knowledge (owner only)",
+        description:
+          "Fix or add ONE section of your coworker's knowledge (services, pricing, greetings) from chat. Section-by-section edits only, never a full rewrite; owner only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_coworker_tools",
+        label: "Change coworker tool settings",
+        description:
+          "Turn another coworker tool on or off per channel when you ask in chat (for example, stop appointment cancellations over text). Managers and owners only; the same switches as this page.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -700,6 +756,61 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "manage_employee",
         label: "Manage the roster (owner only)",
         description: "Add or update team members when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "read_business_data",
+        label: "Business data reads",
+        description:
+          "Look up contacts, conversations, calls, tasks, automations, and settings to answer questions in Slack. Read-only.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_contacts",
+        label: "Add and edit contacts (owner only)",
+        description:
+          "Create or update a contact when the verified owner asks (automations may message them).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_flows",
+        label: "Turn automations on/off (owner only)",
+        description:
+          "Enable/disable an automation or start a run when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_agents",
+        label: "Edit document agents (owner only)",
+        description: "Update or delete a saved document agent when the verified owner asks.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_business_profile",
+        label: "Update hours/timezone (owner only)",
+        description:
+          "Change weekly hours or the timezone when the verified owner asks. Never phone numbers.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_business_knowledge",
+        label: "Edit coworker knowledge (owner only)",
+        description:
+          "Fix or add one knowledge section when the verified owner asks. Never a full rewrite.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "manage_coworker_tools",
+        label: "Change tool settings (owner only)",
+        description:
+          "Turn another coworker tool on or off per channel when the verified owner asks.",
         defaultEnabled: true,
         configurable: true
       }

@@ -2601,6 +2601,20 @@ owner-verified surfaces because the Rowboat paths carry no caller identity,
 and the **webchat surface is a frozen 5-tool allowlist** (anonymous internet,
 so never add side-effect tools there).
 
+**The MCP-bridge gate groups are inline-only the same way.** The seven
+`read_business_data` / `manage_contacts` / `manage_flows` / `manage_agents` /
+`update_business_profile` / `update_business_knowledge` /
+`manage_coworker_tools` toggles gate the connector tool catalog bridged into
+the inline engine
+([src/lib/dashboard-chat/mcp-bridge.ts](src/lib/dashboard-chat/mcp-bridge.ts)):
+every bridged call runs as the authed caller's verified identity through
+`requireMcpBusinessRole`, which the Rowboat fallback cannot host, so none of
+them get seed twins. The bridge enforces one-tool-per-capability per surface
+(duplicates of inline tools are excluded with recorded reasons) and pins
+every call to the surface's active business; a unit test holds the
+bridged + excluded sets as an exact disjoint cover of `allMcpTools`, so a
+new MCP tool forces an explicit bridge decision.
+
 **Owner email is a prompt BLOCK, not a declared tool**, on both inline owner
 surfaces: the model emits an `EMAIL_SEND` sentinel block (taught by
 `EMAIL_TOOL_ENABLED_PREAMBLE`) and the platform sends it afterwards through
