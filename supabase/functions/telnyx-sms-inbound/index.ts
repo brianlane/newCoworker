@@ -13,6 +13,7 @@ import {
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
   claimBlockedByOwner,
+  flowDealsInLeadPhone,
   ownerConflictReplyText,
   ownershipLeadPhone
 } from "../_shared/ai_flows/claim_owner_gate.ts";
@@ -785,7 +786,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   // teammate is theirs; refuse with the courteous no instead of splitting
   // one person across two owners (Austin Happ, 2026-08-08).
   {
-    const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from);
+    const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from, offer.id);
     if (blocked) return await consumeOwnerBlockedClaim({ ...args, runId: offer.id, ...blocked });
   }
   // Broadcast: a competing offeree's claim already in flight wins; this "1"
@@ -1012,11 +1013,45 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
  * (assignContactOwnerOnClaim, which never steals), so the contact row is
  * the authority this gate reads.
  */
+/**
+ * Does the flow behind this run deal in lead phone numbers? The worker asks
+ * its in-memory definition (scope.dealsInLeadPhone); the webhook has only a
+ * run id, so it reads the same fact from the flow row.
+ *
+ * Fails CLOSED to `false`, which is not a hole: the caller ORs this with the
+ * runtime key check, so a failed read degrades to the older, narrower Danfar
+ * behavior rather than to no protection at all.
+ */
+async function runFlowDealsInLeadPhone(
+  supabase: SupabaseClient,
+  runId: string
+): Promise<boolean> {
+  try {
+    const { data: runRow } = await supabase
+      .from("ai_flow_runs")
+      .select("flow_id")
+      .eq("id", runId)
+      .maybeSingle();
+    const flowId = (runRow as { flow_id?: string } | null)?.flow_id;
+    if (!flowId) return false;
+    const { data: flowRow } = await supabase
+      .from("ai_flows")
+      .select("definition")
+      .eq("id", flowId)
+      .maybeSingle();
+    return flowDealsInLeadPhone((flowRow as { definition?: unknown } | null)?.definition);
+  } catch (e) {
+    console.error("runFlowDealsInLeadPhone", e);
+    return false;
+  }
+}
+
 async function contactOwnerBlocking(
   supabase: SupabaseClient,
   businessId: string,
   runContext: Record<string, unknown> | null | undefined,
-  from: string
+  from: string,
+  runId: string
 ): Promise<{ ownerName: string; leadLabel: string } | null> {
   try {
     const vars = ((runContext as { vars?: Record<string, unknown> } | null)?.vars ?? {}) as Record<
@@ -1026,17 +1061,24 @@ async function contactOwnerBlocking(
     const trigger = ((runContext as { trigger?: Record<string, unknown> } | null)?.trigger ??
       {}) as Record<string, unknown>;
     // EXACTLY the worker's ownershipContactPhone resolution: when the flow
-    // extracts a lead_phone (key present, even empty), ownership binds ONLY
-    // to that value; an empty extraction means the lead's number is
-    // unknown, never that the sender is the lead (Danfar, 2026-08-10:
-    // HomeLight withholds the number pre-claim and the sender is
-    // HomeLight's own alert line). Rule shared via ownershipLeadPhone.
+    // deals in lead phone numbers, ownership binds ONLY to an extracted
+    // value; anything else means the lead's number is unknown, never that
+    // the sender is the lead (Danfar, 2026-08-10: HomeLight withholds the
+    // number pre-claim and the sender is HomeLight's own alert line). Rule
+    // shared via ownershipLeadPhone.
+    //
+    // The definition is the authority, not the variable bag, because a claim
+    // can land while the run is still parked at a route_to_team that ran
+    // BEFORE the extracting step: on HomeLight that is steps 5 and 6, so the
+    // key is absent and the bag looks like a customer-texts-in flow's. That
+    // is how a claim stamped a teammate onto HomeLight's alert-line contact
+    // and every later referral skipped the race (Amy C., 2026-08-14).
     const hasKey = Object.prototype.hasOwnProperty.call(vars, "lead_phone");
     const rawLead = typeof vars.lead_phone === "string" ? vars.lead_phone.trim() : "";
     const fromVars = rawLead ? (isE164(rawLead) ? rawLead : normalizeNanpToE164(rawLead)) : null;
     const rawTrigger = typeof trigger.from === "string" ? trigger.from.trim() : "";
     const leadPhone = ownershipLeadPhone(
-      hasKey,
+      (await runFlowDealsInLeadPhone(supabase, runId)) || hasKey,
       fromVars,
       rawTrigger && isE164(rawTrigger) ? rawTrigger : null
     );
@@ -1399,7 +1441,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // Ownership gate: late and yank claims are still claims; a contact owned
   // by another active teammate is refused the same way a live claim is.
   {
-    const blocked = await contactOwnerBlocking(supabase, businessId, match.context, from);
+    const blocked = await contactOwnerBlocking(supabase, businessId, match.context, from, match.id);
     if (blocked) {
       await ack(ownerConflictReplyText(blocked.ownerName, blocked.leadLabel), "owner-conflict");
       await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
@@ -2706,7 +2748,7 @@ serve(async (req: Request) => {
           // Ownership gate (claims only; a pass is always welcome): see
           // contactOwnerBlocking.
           if (claimed) {
-            const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from);
+            const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from, offer.id);
             if (blocked) {
               return await consumeOwnerBlockedClaim({
                 supabase,

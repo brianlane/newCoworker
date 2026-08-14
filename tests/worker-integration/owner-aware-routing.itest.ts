@@ -63,6 +63,54 @@ function routeFlow(extra: Record<string, unknown> = {}): Record<string, unknown>
   return def;
 }
 
+/**
+ * The HomeLight shape: the roster is raced BEFORE anything is known about
+ * the lead, and the step that declares lead_phone comes after. At route
+ * time `vars.lead_phone` does not exist, so only the definition can say
+ * this is a relay flow.
+ */
+function routeBeforeExtractFlow(): Record<string, unknown> {
+  const def = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      {
+        id: "route",
+        type: "route_to_team",
+        offerTemplate: "New referral. Reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed the referral.",
+        responseMinutes: 10
+      },
+      {
+        id: "card",
+        type: "extract_text",
+        fields: [{ name: "lead_phone", description: "The lead's phone number" }]
+      }
+    ]
+  };
+  parseAiFlowDefinition(def);
+  return def;
+}
+
+/** A flow that never deals in lead phones: the sender genuinely is the lead. */
+function noLeadPhoneFlow(): Record<string, unknown> {
+  const def = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      {
+        id: "route",
+        type: "route_to_team",
+        offerTemplate: "New enquiry. Reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed the enquiry.",
+        responseMinutes: 10
+      }
+    ]
+  };
+  parseAiFlowDefinition(def);
+  return def;
+}
+
 function trigger(lead: string): Record<string, unknown> {
   return { channel: "sms", from: lead, windowText: `New lead. Phone: ${lead}.` };
 }
@@ -202,5 +250,61 @@ describe("owned-contact routing short-circuit", () => {
     expect(routing.owner_assigned).toBeUndefined();
     expect(routing.offered).toBe(GABBY);
     expect(run.status).toBe("awaiting_agent");
+  }, 120_000);
+
+  it("a relay flow that routes BEFORE it extracts still never binds to the sender (Amy C.)", async () => {
+    // Amy C., HomeLight, 2026-08-14. Same partner-line poisoning as Danfar
+    // above, but the variable bag cannot see it: route_to_team runs at step
+    // 0 and the step that declares lead_phone is step 1, so at route time
+    // there is no lead_phone key to trip the guard. The flow DEFINITION
+    // still says this flow deals in lead phones, which is the signal that
+    // holds at every step.
+    const PARTNER = "+14165550176";
+    const biz = await seedBusiness(db, "Owner Aware Route Before Extract");
+    const ids = await seedRoster(biz);
+    await seedContact(db, biz, PARTNER);
+    await setOwner(biz, PARTNER, ids.gabby);
+
+    const flowId = await createFlow(db, biz, routeBeforeExtractFlow());
+    // No vars seeded at all: the key is ABSENT, not empty.
+    const runId = await enqueueRun(db, flowId, biz, {
+      channel: "sms",
+      from: PARTNER,
+      windowText: "New HomeLight Referral: Amy - $644K seller in Mesa, AZ."
+    });
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    const routing = (run.context as { routing?: Record<string, unknown> }).routing ?? {};
+    expect(routing.owner_assigned).toBeUndefined();
+    // The race ran: a live offer went out instead of a silent assignment.
+    expect(typeof routing.offered).toBe("string");
+    expect(run.status).toBe("awaiting_agent");
+  }, 120_000);
+
+  it("a flow with no lead_phone anywhere keeps the sender fallback", async () => {
+    // The other side of the same rule: when the customer texts in directly,
+    // the sender IS the contact and their owner should still short-circuit
+    // the race. This is what the definition check must not break.
+    const LEAD = "+14165550177";
+    const biz = await seedBusiness(db, "Owner Aware Sender Is Lead");
+    const ids = await seedRoster(biz);
+    await seedContact(db, biz, LEAD);
+    await setOwner(biz, LEAD, ids.dave);
+
+    const flowId = await createFlow(db, biz, noLeadPhoneFlow());
+    const runId = await enqueueRun(db, flowId, biz, {
+      channel: "sms",
+      from: LEAD,
+      windowText: "Hi, I would like to sell my house."
+    });
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    const routing = (run.context as { routing?: Record<string, unknown> }).routing ?? {};
+    expect(routing.owner_assigned).toBe(true);
+    expect(routing.claimed_by).toBe(DAVE);
+    expect(routing.offered_all).toBeUndefined();
+    expect(run.status).toBe("done");
   }, 120_000);
 });

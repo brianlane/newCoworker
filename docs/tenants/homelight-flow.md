@@ -92,6 +92,25 @@ a key to accept it. Everything downstream follows from that:
   `sc-*` classes, which are styled-components build hashes. The `route` step's
   offer still says "answered HomeLight's call and is talking to them now", which
   is wrong on the text path and needs its own fix.
+- **`route` runs BEFORE anything is known about the lead, which twice bound
+  ownership to HomeLight's own alert line.** `route_to_team` is step 5; the
+  extraction that produces `lead_phone` is step 6. Contact-ownership routing
+  used to ask the run's variable bag "is there a `lead_phone` key yet?", and
+  at step 5 the honest answer is no, which is indistinguishable from a
+  customer-texts-in flow where the sender genuinely IS the lead. So the
+  sender fallback fired and ownership bound to `+1 415-915-7879`
+  ("HomeLight Referral"), whose row an earlier claim had already stamped
+  with an owner. Every referral from Aug 11 to Aug 14 2026 was
+  owner-assigned to one teammate with no team race, 17 leads in all, and it
+  surfaced only because someone asked what had happened to one of them
+  (Amy C., run `5ac0ee1b`). The 2026-08-10 Danfar fix had closed the
+  narrower version of the same hole (extracted-but-EMPTY) but kept asking
+  the variable bag, so this ordering walked straight around it.
+  The rule now reads the flow DEFINITION (`flowDealsInLeadPhone`), which is
+  settled before step 0 and cannot drift with execution order. Two habits
+  follow: never assume a var-existence check is safe at a step that runs
+  before the var is declared, and run
+  `tsx debug/audit-relay-contact-owners.ts` after touching ownership code.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
