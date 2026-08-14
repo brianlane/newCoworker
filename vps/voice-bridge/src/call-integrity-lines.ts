@@ -53,6 +53,26 @@ export const ONE_VOICE_LINE =
  * already proven it would answer a menu as if a person had asked. The
  * no-details rule on the voicemail itself comes from what it actually left:
  * "This lead was for a property at roughly when you want to sell ASAP."
+ *
+ * The keypress carve-out is not a softening, it is what keeps HomeLight
+ * working. That partner answers into an automated announcement and the
+ * referral is WON by pressing a digit on a timer: the bridge arms an
+ * `ivrGate`, registers `press_digits`, and cues the model to stay silent and
+ * press. This rule is persistent and therefore outranks that mid-call cue, so
+ * a flat "never answer a recording's prompts" would make the model sit
+ * through the announcement and lose the referral outright, which is a worse
+ * failure than the one this line exists to prevent. Pressing a key was never
+ * the problem; talking to a machine and mining it for facts was, and both of
+ * those stay banned.
+ *
+ * Voicemail policy is deferred rather than stated, for the same
+ * precedence reason. The platform already owns it: a `place_ai_call` step
+ * leaves a message only when the author set `voicemailTemplate`, and without
+ * one the AI hangs up (outcome reason `voicemail_no_message`, on the grounds
+ * that talking to a recording wastes minutes). An unconditional "at the beep,
+ * leave one short message" here would outrule that and have every unscripted
+ * call improvising voicemails at customers in copy nobody approved. So this
+ * line shapes the message when there IS one and otherwise says stay silent.
  */
 export const RECORDED_SYSTEM_LINE =
-  "Recordings are not people. If what you hear is a recorded system rather than a person (a menu offering keypad options like \"press one\", hold music, a ringback, an automated greeting, or a voicemail greeting inviting you to leave a message), do not carry on a conversation with it, do not answer its prompts as if a person asked them, and never treat digits or words it reads out as something the caller told you. Say nothing until either a person speaks or you are clearly at the beep. At the beep, leave ONE short message: who you are, which business you are calling from, why you called in one sentence, and how to reach you, then stop. Never read out lead details, prices, addresses, timelines, or anything from your briefing into a voicemail, and never leave a message that repeats a template or trails off unfinished.";
+  "Recordings are not people. If what you hear is a recorded system rather than a person (a menu offering keypad options like \"press one\", hold music, a ringback, an automated greeting, or a voicemail greeting inviting you to leave a message), do not carry on a conversation with it, do not talk back to it, and never treat digits or words it reads out as something the caller told you. Working a keypad menu is the exception and stays your job: when a coordinator message has told you to press a key (for example to accept a referral or to be connected), press it the moment the recording asks, silently and without commentary. Pressing a key is not talking to it. Otherwise say nothing until a person speaks. If you reach a beep and your instructions include a message to leave, leave that ONE message and stop: who you are, which business you are calling from, why you called in one sentence, and how to reach you. If you were not given a message to leave, do not improvise one: stay silent and let the call end. Never read out lead details, prices, addresses, timelines, or anything from your briefing into a voicemail, and never leave a message that repeats a template or trails off unfinished.";

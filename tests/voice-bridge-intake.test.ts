@@ -351,3 +351,56 @@ describe("intakeSystemInstruction: call-integrity rules", () => {
     });
   }
 });
+
+/**
+ * The accept keypress is the whole HomeLight mechanic: the call is answered
+ * into a partner announcement and the referral is won by pressing a digit on
+ * a timer (docs/tenants/homelight-flow.md, "the accept is a DTMF keypress").
+ * The bridge arms that with an ivrGate, a `press_digits` tool, and a
+ * coordinator cue telling the model to stay silent and press the key.
+ *
+ * RECORDED_SYSTEM_LINE rides every intake session, gated ones included, and
+ * a persistent system-instruction rule outranks a mid-call cue. Written
+ * without a carve-out it forbade answering a recording's prompts at all,
+ * which would have made the model sit through the announcement and lose the
+ * referral: a worse failure than the voicemail incident it was written for
+ * (Bugbot, PR #1377).
+ */
+describe("intakeSystemInstruction: the recording rule leaves the accept press alone", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("permits pressing a key when a coordinator message asks for it", () => {
+    expect(instr).toContain("press a key");
+    expect(instr).toContain("Pressing a key is not talking to it");
+  });
+
+  it("still bans conversing with the recording and mining it for caller facts", () => {
+    // The carve-out must not swallow the rule it is carved out of.
+    expect(instr).toContain("do not carry on a conversation with it");
+    expect(instr).toContain("never treat digits or words it reads out as something the caller told you");
+  });
+});
+
+/**
+ * The platform already owns voicemail policy for outbound calls: a
+ * `place_ai_call` step leaves a message ONLY when the author set
+ * `voicemailTemplate`, and without one the AI hangs up rather than talk to a
+ * recording (the outcome reason is `voicemail_no_message`, and the compile
+ * docs say plainly that talking to a recording wastes minutes).
+ *
+ * An unconditional "at the beep, leave one short message" in the persistent
+ * instruction would override that: every unscripted call would start
+ * improvising voicemails at customers, in copy nobody approved.
+ */
+describe("intakeSystemInstruction: voicemail deference", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("leaves a message only when it was given one to leave", () => {
+    expect(instr).toContain("your instructions include a message to leave");
+    expect(instr).toContain("do not improvise one");
+  });
+
+  it("still bans reading the briefing into a voicemail", () => {
+    expect(instr).toContain("Never read out lead details");
+  });
+});
