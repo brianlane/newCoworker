@@ -109,6 +109,7 @@ tests/e2e/truly-renewal-context.e2e.test.ts
 OPERATOR_TESTS="
 tests/e2e/kyp-owner-sms-operator.e2e.test.ts
 tests/e2e/beth-delegation.e2e.test.ts
+tests/e2e/dashboard-companion-bridge.e2e.test.ts
 "
 
 # The email surfaces: the autonomous email coworker (its turn/poll/mailbox
