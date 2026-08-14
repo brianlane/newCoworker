@@ -143,14 +143,20 @@ async function mcpBusinessRoleOutcome(
   // token is. Refusals deliberately do not stamp: an assistant that cannot
   // act on a business has not connected to it.
   //
+  // ONLY for real connector sessions: `client` is set by authFromContext on
+  // every MCP request, and deliberately absent when the inline Gemini
+  // surfaces run these handlers through the bridge — a dashboard turn must
+  // not light the Claude badge for an owner who never connected Claude
+  // (and the bridge's synthetic caller ids would fail the uuid key).
+  //
   // Debounced inside, and swallowed here as well as there. The inner catch is
   // the contract, this one makes it structural: every tool call in the
   // product now runs through this line, so bookkeeping that starts throwing
   // would take down the whole connector rather than one badge.
-  const { recordMcpConnectorSeen } = await import("@/lib/mcp/connector-status");
-  await recordMcpConnectorSeen(auth.userId, auth.client ?? "claude", businessId).catch(
-    () => undefined
-  );
+  if (auth.client) {
+    const { recordMcpConnectorSeen } = await import("@/lib/mcp/connector-status");
+    await recordMcpConnectorSeen(auth.userId, auth.client, businessId).catch(() => undefined);
+  }
 
   return { allowed: true, role };
 }

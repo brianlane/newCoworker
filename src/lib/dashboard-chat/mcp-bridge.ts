@@ -34,6 +34,7 @@ import { parseMcpResourceId } from "@/lib/mcp/resource-id";
 import type { McpToolDef } from "@/lib/mcp/tooling";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import type { InlineExtraTools } from "@/lib/dashboard-chat/inline-turn";
+import { can, type BusinessAction, type BusinessRole } from "@/lib/authz/policy";
 import { logger } from "@/lib/logger";
 
 /** Settings gate GROUPS (Settings → Coworker tools toggles), not per-tool. */
@@ -88,6 +89,47 @@ export const MCP_BRIDGE_TOOL_NAMES: readonly string[] = Object.keys(MCP_BRIDGE_T
 export function isMcpBridgeToolName(name: string): boolean {
   return name in MCP_BRIDGE_TOOL_GATES;
 }
+
+/**
+ * The role bar each bridged handler enforces internally
+ * (requireMcpBusinessRole's `action` argument), mirrored here so the
+ * DECLARATION layer can drop tools the caller's role can only get refused
+ * on — a staff turn must not burn scarce tool steps on get_flow calls that
+ * always fail (Bugbot Medium on PR #1382). The handlers stay the
+ * enforcement point; this mirror only prunes declarations, and the bridge
+ * test pins every bridged name to an entry so the map cannot drift silently.
+ */
+export const MCP_BRIDGE_TOOL_ACTIONS: Readonly<Record<string, BusinessAction>> = {
+  get_business: "view_dashboard",
+  list_recent_events: "view_dashboard",
+  list_call_transcripts: "view_dashboard",
+  list_tasks: "view_dashboard",
+  search_contacts: "operate_messages",
+  get_contact: "operate_messages",
+  get_sms_thread: "operate_messages",
+  fetch: "operate_messages",
+  get_flow: "manage_aiflows",
+  get_flow_schema: "manage_aiflows",
+  list_agents: "manage_aiflows",
+  list_employees: "manage_settings",
+  get_notification_preferences: "manage_settings",
+  create_contact: "operate_messages",
+  update_contact: "operate_messages",
+  set_flow_enabled: "manage_aiflows",
+  trigger_flow: "manage_aiflows",
+  update_agent: "manage_aiflows",
+  delete_agent: "manage_aiflows",
+  update_business_profile: "manage_settings",
+  get_business_knowledge: "manage_settings",
+  update_business_knowledge: "manage_settings",
+  update_coworker_tool_settings: "manage_settings"
+};
+
+/** Handlers that additionally require the literal owner role. */
+export const MCP_BRIDGE_OWNER_ONLY: ReadonlySet<string> = new Set([
+  "get_business_knowledge",
+  "update_business_knowledge"
+]);
 
 /**
  * MCP tools deliberately NOT bridged, with the reason. Unit-pinned together
@@ -161,13 +203,22 @@ const BRIDGE_DESCRIPTION_OVERRIDES: Readonly<Record<string, string>> = {
 /**
  * System block appended whenever bridge tools are declared: the one-obvious-
  * path ladder for overlapping capabilities, plus the human-only boundary
- * (the one-shot classes that stay with Settings/support).
+ * (the one-shot classes that stay with Settings/support). A function
+ * because the automations line must only advertise `create_aiflow` on
+ * surfaces that actually declare the creation tools — owner-SMS and Slack
+ * pass includeCreationTools: false, and a preamble naming a missing tool
+ * invites calls to nothing (Bugbot Medium on PR #1382).
  */
-export const MCP_BRIDGE_TOOLS_PREAMBLE = `DIRECT BUSINESS TOOLS: you can read and change this business's real data (contacts, text conversations, call transcripts, recent activity, tasks, automations, roster, hours, knowledge, per-channel tool policies). Ground answers in tool reads; when a read tool can answer, call it instead of guessing.
-- Automations, one path each: list_aiflows finds one; get_flow inspects its steps; edit_aiflow applies a plain-English change to a live automation (validated; prefer it for ANY edit); create_aiflow drafts a new one for the owner to activate in the builder; set_flow_enabled turns one on or off; run_aiflow starts one for a contact.
+export function mcpBridgeToolsPreamble(opts: { creationToolsDeclared: boolean }): string {
+  const creationArm = opts.creationToolsDeclared
+    ? " create_aiflow drafts a new one for the owner to activate in the builder;"
+    : " there is NO creation tool on this surface, to build a new automation point the owner at dashboard chat or the AiFlows builder;";
+  return `DIRECT BUSINESS TOOLS: you can read and change this business's real data (contacts, text conversations, call transcripts, recent activity, tasks, automations, roster, hours, knowledge, per-channel tool policies). Ground answers in tool reads; when a read tool can answer, call it instead of guessing.
+- Automations, one path each: list_aiflows finds one; get_flow inspects its steps; edit_aiflow applies a plain-English change to a live automation (validated; prefer it for ANY edit);${creationArm} set_flow_enabled turns one on or off; run_aiflow starts one for a contact.
 - Look the contact up with search_contacts BEFORE texting or calling anyone by name. Never invent or guess a phone number or email.
 - Knowledge edits: get_business_knowledge first, then update_business_knowledge targeting ONE section.
 - OUT OF SCOPE, never attempt with any tool; direct the owner to Settings or support instead: changing any phone number (business line, owner phone), plan or billing changes, buying/porting numbers, connecting or disconnecting integrations, bulk deletions, refunds.`;
+}
 
 export type McpBridgeCaller = { userId: string; email: string };
 
@@ -254,13 +305,25 @@ function toGeminiDeclaration(def: McpToolDef): GeminiFunctionDeclaration {
   };
 }
 
-/** Declarations for every bridged tool whose gate is ON, stable order. */
+/**
+ * Declarations for every bridged tool whose Settings gate is ON and whose
+ * handler bar the caller's role can actually pass, stable order. The role
+ * pruning mirrors the handlers (MCP_BRIDGE_TOOL_ACTIONS); a null role
+ * declares nothing.
+ */
 export function mcpBridgeDeclarations(
   gates: McpBridgeGates,
+  role: BusinessRole | null,
   deps: McpBridgeDeps = {}
 ): GeminiFunctionDeclaration[] {
+  if (role == null) return [];
   return bridgedDefs(deps)
-    .filter((def) => gates[MCP_BRIDGE_TOOL_GATES[def.name]])
+    .filter(
+      (def) =>
+        gates[MCP_BRIDGE_TOOL_GATES[def.name]] &&
+        can(role, MCP_BRIDGE_TOOL_ACTIONS[def.name]) &&
+        (!MCP_BRIDGE_OWNER_ONLY.has(def.name) || role === "owner")
+    )
     .map((def) => toGeminiDeclaration(def));
 }
 
@@ -279,7 +342,21 @@ export async function executeMcpBridgeTool(
     return { ok: false, message: `unknown tool: ${call.name}` };
   }
   // Pin the scope: the surface's business wins over anything model-supplied.
-  const args: Record<string, unknown> = { ...call.args, business_id: businessId };
+  const raw: Record<string, unknown> = { ...call.args, business_id: businessId };
+  // The connector path's SDK validates inputSchema before the handler runs;
+  // handlers do NOT re-parse. Mirror that here or missing/mistyped fields
+  // skip every length/email/uuid/union check (Bugbot Medium on PR #1382).
+  const parsedArgs = z.object(def.schema).safeParse(raw);
+  if (!parsedArgs.success) {
+    // A failed safeParse always carries at least one issue, and z.object
+    // shape errors are always field-addressed, so no defensive arms here.
+    const first = parsedArgs.error.issues[0];
+    return {
+      ok: false,
+      message: `Invalid ${call.name} arguments: ${first.path.join(".")} ${first.message}.`
+    };
+  }
+  const args = parsedArgs.data as Record<string, unknown>;
   try {
     if (call.name === "fetch") {
       // The embedded business must match the pin. Same single generic
@@ -319,9 +396,10 @@ export function buildMcpBridgeExtraTools(
   businessId: string,
   caller: McpBridgeCaller,
   gates: McpBridgeGates,
+  role: BusinessRole | null,
   deps: McpBridgeDeps = {}
 ): InlineExtraTools | null {
-  const declarations = mcpBridgeDeclarations(gates, deps);
+  const declarations = mcpBridgeDeclarations(gates, role, deps);
   if (declarations.length === 0) return null;
   return {
     declarations,

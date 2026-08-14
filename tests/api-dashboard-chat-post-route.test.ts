@@ -909,6 +909,12 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(staffNames).not.toContain("set_flow_enabled");
     expect(staffNames).not.toContain("update_business_profile");
     expect(staffNames).not.toContain("update_coworker_tool_settings");
+    // Reads whose handlers sit at a higher bar are pruned too, not just
+    // writes: a staff turn must not burn tool steps on guaranteed refusals
+    // (Bugbot Medium on PR #1382).
+    expect(staffNames).not.toContain("get_flow");
+    expect(staffNames).not.toContain("list_employees");
+    expect(staffNames).not.toContain("get_notification_preferences");
 
     // Admin (view-as is read-only by policy): no bridge, no preamble.
     vi.mocked(runInlineChatTurn).mockClear();

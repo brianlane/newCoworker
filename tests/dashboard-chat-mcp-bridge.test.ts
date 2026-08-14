@@ -29,8 +29,10 @@ import {
   MCP_BRIDGE_GATE_KEYS,
   MCP_BRIDGE_SIDE_EFFECT_TOOLS,
   MCP_BRIDGE_TOOL_GATES,
+  MCP_BRIDGE_OWNER_ONLY,
+  MCP_BRIDGE_TOOL_ACTIONS,
   MCP_BRIDGE_TOOL_NAMES,
-  MCP_BRIDGE_TOOLS_PREAMBLE,
+  mcpBridgeToolsPreamble,
   mcpBridgeDeclarations,
   mcpBridgeSideEffectNote,
   sanitizeSchemaNode,
@@ -99,7 +101,7 @@ describe("the partition", () => {
   it("no capability is reachable through two declared tools on one surface", () => {
     const declared = new Set<string>([
       ...INLINE_TOOL_NAMES,
-      ...mcpBridgeDeclarations(allGates(true)).map((d) => d.name)
+      ...mcpBridgeDeclarations(allGates(true), "owner").map((d) => d.name)
     ]);
     for (const [a, b] of CAPABILITY_MAP) {
       expect(
@@ -118,6 +120,47 @@ describe("the partition", () => {
     }
     expect(isMcpBridgeToolName("get_sms_thread")).toBe(true);
     expect(isMcpBridgeToolName("send_sms")).toBe(false);
+  });
+
+  it("every bridged name has a handler-bar mirror, and owner-only is a bridged subset", () => {
+    for (const name of MCP_BRIDGE_TOOL_NAMES) {
+      expect(
+        MCP_BRIDGE_TOOL_ACTIONS[name],
+        `${name} has no MCP_BRIDGE_TOOL_ACTIONS entry`
+      ).toBeTruthy();
+    }
+    expect(Object.keys(MCP_BRIDGE_TOOL_ACTIONS).sort()).toEqual(
+      [...MCP_BRIDGE_TOOL_NAMES].sort()
+    );
+    for (const name of MCP_BRIDGE_OWNER_ONLY) {
+      expect(isMcpBridgeToolName(name), `${name} owner-only but not bridged`).toBe(true);
+    }
+  });
+
+  it("prunes declarations by the caller's role, mirroring the handler bars", () => {
+    const ownerNames = mcpBridgeDeclarations(allGates(true), "owner").map((d) => d.name);
+    const managerNames = mcpBridgeDeclarations(allGates(true), "manager").map((d) => d.name);
+    const staffNames = mcpBridgeDeclarations(allGates(true), "staff").map((d) => d.name);
+
+    // Owner sees everything.
+    expect(ownerNames.sort()).toEqual([...MCP_BRIDGE_TOOL_NAMES].sort());
+    // Manager loses only the owner-only knowledge pair.
+    expect(managerNames).toContain("update_business_profile");
+    expect(managerNames).toContain("set_flow_enabled");
+    expect(managerNames).not.toContain("get_business_knowledge");
+    expect(managerNames).not.toContain("update_business_knowledge");
+    // Staff keep the reads their role can actually pass, and nothing that
+    // would just burn tool steps on per-call refusals (Bugbot Medium on
+    // PR #1382): no flow reads, no roster read, no settings read.
+    expect(staffNames).toContain("search_contacts");
+    expect(staffNames).toContain("get_sms_thread");
+    expect(staffNames).toContain("create_contact");
+    expect(staffNames).not.toContain("get_flow");
+    expect(staffNames).not.toContain("list_agents");
+    expect(staffNames).not.toContain("list_employees");
+    expect(staffNames).not.toContain("get_notification_preferences");
+    expect(staffNames).not.toContain("set_flow_enabled");
+    expect(staffNames).not.toContain("update_business_profile");
   });
 
   it("every side-effect name is a bridged write with mutating/writing annotations", () => {
@@ -142,7 +185,7 @@ describe("the partition", () => {
 describe("declarations", () => {
   it("declares only gated-on groups, strips business_id, keeps Gemini-legal keys", () => {
     const gates = { ...allGates(false), read_business_data: true };
-    const decls = mcpBridgeDeclarations(gates);
+    const decls = mcpBridgeDeclarations(gates, "owner");
     const names = decls.map((d) => d.name);
     expect(names).toContain("search_contacts");
     expect(names).toContain("get_sms_thread");
@@ -174,7 +217,7 @@ describe("declarations", () => {
         }
       }
     };
-    for (const decl of mcpBridgeDeclarations(allGates(true))) {
+    for (const decl of mcpBridgeDeclarations(allGates(true), "owner")) {
       expect(decl.parameters.type).toBe("object");
       expect(Object.keys(decl.parameters.properties)).not.toContain("business_id");
       expect(decl.parameters.required ?? []).not.toContain("business_id");
@@ -205,6 +248,7 @@ describe("declarations", () => {
     });
     const [decl] = mcpBridgeDeclarations(
       { ...allGates(false), read_business_data: true },
+      "owner",
       { tools: [def] }
     );
     const props = decl.parameters.properties as Record<string, Record<string, unknown>>;
@@ -229,6 +273,7 @@ describe("declarations", () => {
     });
     const [decl] = mcpBridgeDeclarations(
       { ...allGates(false), read_business_data: true },
+      "owner",
       { tools: [def] }
     );
     expect(Object.keys(decl.parameters.properties)).toEqual(["topic"]);
@@ -267,14 +312,16 @@ describe("declarations", () => {
   });
 
   it("applies the fetch description override", () => {
-    const decls = mcpBridgeDeclarations(allGates(true));
+    const decls = mcpBridgeDeclarations(allGates(true), "owner");
     const fetchDecl = decls.find((d) => d.name === "fetch");
     expect(fetchDecl?.description).toContain("list_call_transcripts");
   });
 
   it("buildMcpBridgeExtraTools returns null when every gate is off", () => {
-    expect(buildMcpBridgeExtraTools(BIZ, CALLER, allGates(false))).toBeNull();
-    const bundle = buildMcpBridgeExtraTools(BIZ, CALLER, allGates(true));
+    expect(buildMcpBridgeExtraTools(BIZ, CALLER, allGates(false), "owner")).toBeNull();
+    // A missing role (no membership resolved) declares nothing either.
+    expect(buildMcpBridgeExtraTools(BIZ, CALLER, allGates(true), null)).toBeNull();
+    const bundle = buildMcpBridgeExtraTools(BIZ, CALLER, allGates(true), "owner");
     expect(bundle).not.toBeNull();
     expect(bundle!.sideEffectNames).toBe(MCP_BRIDGE_SIDE_EFFECT_TOOLS);
     expect(bundle!.noteFor).toBe(mcpBridgeSideEffectNote);
@@ -283,7 +330,7 @@ describe("declarations", () => {
 
   it("the bundle's execute runs the pinned executor against the same tool set", async () => {
     const handler = vi.fn(async () => ({ found: 1 }));
-    const bundle = buildMcpBridgeExtraTools(BIZ, CALLER, allGates(true), {
+    const bundle = buildMcpBridgeExtraTools(BIZ, CALLER, allGates(true), "owner", {
       tools: [
         defineMcpTool({
           name: "search_contacts",
@@ -291,7 +338,10 @@ describe("declarations", () => {
           description: "Test double proving the bundle executes with its own deps.",
           annotations: TOOL_BEHAVIOR.readLocal,
           outputSchema: z.object({ ok: z.boolean() }),
-          schema: { business_id: z.string().uuid().optional() },
+          schema: {
+            business_id: z.string().uuid().optional(),
+            query: z.string().optional()
+          },
           handler: handler as never
         })
       ]
@@ -319,7 +369,14 @@ describe("executeMcpBridgeTool", () => {
       description: "Test double standing in for the real connector tool.",
       annotations: TOOL_BEHAVIOR.readLocal,
       outputSchema: z.object({ ok: z.boolean() }),
-      schema: { business_id: z.string().uuid().optional() },
+      // The bridge parses through this schema (unknown keys strip, exactly
+      // like the SDK on the connector path), so the double declares the
+      // fields the tests send.
+      schema: {
+        business_id: z.string().uuid().optional(),
+        query: z.string().optional(),
+        id: z.string().optional()
+      },
       handler: handler as never
     });
   }
@@ -429,6 +486,56 @@ describe("executeMcpBridgeTool", () => {
     expect(bare).toMatchObject({ ok: false });
   });
 
+  it("validates arguments against the tool's own zod schema before the handler runs", async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    const def = defineMcpTool({
+      name: "get_contact",
+      title: "Fake with a strict schema",
+      description: "Covers the bridge-side input validation the SDK did on the connector path.",
+      annotations: TOOL_BEHAVIOR.readLocal,
+      outputSchema: z.object({ ok: z.boolean() }),
+      schema: {
+        business_id: z.string().uuid().optional(),
+        query: z.string().trim().min(2)
+      },
+      handler: handler as never
+    });
+    // Too short: refused with the field named, handler never runs.
+    const refused = await executeMcpBridgeTool(
+      BIZ,
+      CALLER,
+      { name: "get_contact", args: { query: "x" } },
+      { tools: [def] }
+    );
+    expect(refused).toEqual({
+      ok: false,
+      message: expect.stringContaining("Invalid get_contact arguments: query")
+    });
+    expect(handler).not.toHaveBeenCalled();
+    // Valid input reaches the handler PARSED (trim applied), not raw.
+    await executeMcpBridgeTool(
+      BIZ,
+      CALLER,
+      { name: "get_contact", args: { query: "  ally  " } },
+      { tools: [def] }
+    );
+    expect(handler).toHaveBeenCalledWith(
+      { query: "ally", business_id: BIZ },
+      { userId: "user-1", email: "owner@biz.com" }
+    );
+    // A missing required field names the field too.
+    const missing = await executeMcpBridgeTool(
+      BIZ,
+      CALLER,
+      { name: "get_contact", args: {} },
+      { tools: [def] }
+    );
+    expect(missing).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("query")
+    });
+  });
+
   it("fails closed for names outside the bridged set", async () => {
     const result = await executeMcpBridgeTool(BIZ, CALLER, {
       name: "send_sms",
@@ -454,12 +561,21 @@ describe("side-effect notes and the preamble", () => {
     expect(mcpBridgeSideEffectNote("something_else", null)).toContain("went through");
   });
 
-  it("the preamble names the ladder and the out-of-scope boundary", () => {
-    expect(MCP_BRIDGE_TOOLS_PREAMBLE).toContain("edit_aiflow");
-    expect(MCP_BRIDGE_TOOLS_PREAMBLE).toContain("search_contacts");
-    expect(MCP_BRIDGE_TOOLS_PREAMBLE).toContain("OUT OF SCOPE");
-    expect(MCP_BRIDGE_TOOLS_PREAMBLE).toContain("phone number");
+  it("the preamble names the ladder, the boundary, and only real creation paths", () => {
+    const withCreation = mcpBridgeToolsPreamble({ creationToolsDeclared: true });
+    expect(withCreation).toContain("edit_aiflow");
+    expect(withCreation).toContain("search_contacts");
+    expect(withCreation).toContain("OUT OF SCOPE");
+    expect(withCreation).toContain("phone number");
+    expect(withCreation).toContain("create_aiflow");
+    // Surfaces without the creation tools must not have it advertised
+    // (owner-SMS and Slack pass includeCreationTools: false).
+    const withoutCreation = mcpBridgeToolsPreamble({ creationToolsDeclared: false });
+    expect(withoutCreation).toContain("NO creation tool on this surface");
+    expect(withoutCreation).not.toContain("create_aiflow drafts");
     // The repo-wide ban applies to prompt copy most of all.
-    expect(MCP_BRIDGE_TOOLS_PREAMBLE).not.toContain("—");
+    for (const text of [withCreation, withoutCreation]) {
+      expect(text).not.toContain("\u2014");
+    }
   });
 });

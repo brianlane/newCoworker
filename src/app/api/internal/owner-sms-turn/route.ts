@@ -40,7 +40,7 @@ import {
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
   buildMcpBridgeExtraTools,
-  MCP_BRIDGE_TOOLS_PREAMBLE
+  mcpBridgeToolsPreamble
 } from "@/lib/dashboard-chat/mcp-bridge";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import {
@@ -176,7 +176,8 @@ export async function POST(request: Request) {
             update_business_profile: toolStates.update_business_profile,
             update_business_knowledge: toolStates.update_business_knowledge,
             manage_coworker_tools: toolStates.manage_coworker_tools
-          }
+          },
+          "owner"
         )
       : null;
 
@@ -226,7 +227,9 @@ export async function POST(request: Request) {
       ...(integrationsLine ? [integrationsLine] : []),
       ...(bookingLinkLine ? [bookingLinkLine] : []),
       ...(businessContextBlock ? [businessContextBlock] : []),
-      ...(bridgeExtraTools ? [MCP_BRIDGE_TOOLS_PREAMBLE] : []),
+      // includeCreationTools is false on this surface, so the ladder must
+      // not advertise create_aiflow (Bugbot Medium on PR #1382).
+      ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: false })] : []),
       ...(transcript
         ? [
             `Recent SMS exchange with the owner (oldest first, ground truth for what was already said):\n${transcript}`

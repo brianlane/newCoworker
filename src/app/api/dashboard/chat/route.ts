@@ -120,7 +120,7 @@ import {
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
   buildMcpBridgeExtraTools,
-  MCP_BRIDGE_TOOLS_PREAMBLE
+  mcpBridgeToolsPreamble
 } from "@/lib/dashboard-chat/mcp-bridge";
 import {
   buildBusinessContextBlock,
@@ -794,8 +794,6 @@ export async function POST(request: Request) {
         })().catch(() => null);
     const { can } = await import("@/lib/authz/policy");
     const canManageSettings = callerRole != null && can(callerRole, "manage_settings");
-    const canManageAiflows = callerRole != null && can(callerRole, "manage_aiflows");
-    const isOwner = callerRole === "owner";
     const actionToolGates = {
       send_sms: smsToolEnabled,
       // Declared only when a WhatsApp integration is actually connected,
@@ -830,13 +828,16 @@ export async function POST(request: Request) {
       manage_employee: manageEmployeeToolEnabled && canManageSettings
     };
 
-    // MCP-bridge tools (connector parity): Settings toggles composed with
-    // the caller's role per group. Admins get NO bridge: view-as is
-    // read-only by policy, and an impersonating admin's email holds no
-    // business role, so every bridged handler would refuse anyway — not
-    // declaring the tools keeps that silent-clean instead of error-noisy.
-    // Every bridged handler ALSO re-runs requireMcpBusinessRole per call,
-    // so this composition narrows, never widens.
+    // MCP-bridge tools (connector parity): the Settings toggles gate the
+    // groups, and the bridge itself prunes any tool whose handler bar the
+    // caller's role cannot pass (per-tool, mirroring the handlers) — so a
+    // staff turn is never handed a get_flow that can only refuse. Admins
+    // get NO bridge: view-as is read-only by policy, and an impersonating
+    // admin's email holds no business role, so every bridged handler would
+    // refuse anyway — not declaring the tools keeps that silent-clean
+    // instead of error-noisy. Every bridged handler ALSO re-runs
+    // requireMcpBusinessRole per call, so this composition narrows, never
+    // widens.
     const bridgeExtraTools = user.isAdmin
       ? null
       : buildMcpBridgeExtraTools(
@@ -845,15 +846,13 @@ export async function POST(request: Request) {
           {
             read_business_data: toolStates.read_business_data,
             manage_contacts: toolStates.manage_contacts,
-            // Flow/agent writes sit at the manage_aiflows bar (manager+),
-            // matching the AiFlows builder; declaring them to a staff role
-            // would only manufacture per-call refusals.
-            manage_flows: toolStates.manage_flows && canManageAiflows,
-            manage_agents: toolStates.manage_agents && canManageAiflows,
-            update_business_profile: toolStates.update_business_profile && canManageSettings,
-            update_business_knowledge: toolStates.update_business_knowledge && isOwner,
-            manage_coworker_tools: toolStates.manage_coworker_tools && canManageSettings
-          }
+            manage_flows: toolStates.manage_flows,
+            manage_agents: toolStates.manage_agents,
+            update_business_profile: toolStates.update_business_profile,
+            update_business_knowledge: toolStates.update_business_knowledge,
+            manage_coworker_tools: toolStates.manage_coworker_tools
+          },
+          callerRole
         );
 
     // Two message arrays:
@@ -968,8 +967,9 @@ export async function POST(request: Request) {
         ...inputMessages.filter((m) => m.role === "system").map((m) => m.content),
         ...(businessContextBlock ? [businessContextBlock] : []),
         // The bridge ladder + human-only boundary, only when bridge tools
-        // are actually declared this turn.
-        ...(bridgeExtraTools ? [MCP_BRIDGE_TOOLS_PREAMBLE] : [])
+        // are actually declared this turn. Dashboard chat declares the
+        // creation tools, so the ladder may advertise create_aiflow.
+        ...(bridgeExtraTools ? [mcpBridgeToolsPreamble({ creationToolsDeclared: true })] : [])
       ].join("\n\n");
       const inline = await runInlineChatTurn({
         businessId: body.businessId,
