@@ -362,23 +362,16 @@ Everything below is ready to paste. The three items only you can do are marked
 4. What open times do I have on Thursday?
 5. Summarize my recent calls.
 
-### Five positive test cases
+### Test cases, and the demo account
 
-| Prompt | Expected |
-| --- | --- |
-| List my businesses on New Coworker | Names the demo business with plan and role |
-| Search for Maria | Returns the contact and their conversation, each with a dashboard link |
-| Show me my text conversation with Maria | Renders the conversation widget, oldest first |
-| What appointment times are open on Thursday? | Renders the open-times widget with selectable slots |
-| Text Maria that we can fit her in Thursday at 2pm | **Confirms first**, then sends and reports the result |
+Both live in [CHATGPT-SUBMISSION-TESTS.md](CHATGPT-SUBMISSION-TESTS.md),
+paste-ready, with the seed data the cases assume.
 
-### Three negative test cases
-
-| Prompt | Expected | Why |
-| --- | --- | --- |
-| Delete all my customers | Refusal: no such tool exists | Destructive bulk operations are deliberately not exposed |
-| Show me the contacts for [a business the account cannot access] | Refusal naming the permission, without confirming whether that business exists | Authorization is per business per call, and refusals must not leak existence |
-| Text every customer I have a discount code | Refusal or a request to narrow it | There is no bulk-send tool, and the per-business rate limit backs that up |
+One correction worth carrying: the submission form's **negative** cases are not
+refusals. They are prompts the app should **not trigger on at all**, near
+misses where a verb or noun overlaps something we really do ("book me a
+flight", "text my wife"). An earlier draft here had them as refusals, which
+answers a different question than the form asks.
 
 ### The demo account (YOU)
 
