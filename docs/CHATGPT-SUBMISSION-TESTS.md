@@ -111,3 +111,268 @@ a model reaches for the wrong tool.
 - **Scenario:** "Calendar" collides with `calendar_find_slots`, but the question is about the owner's day.
 - **User prompt:** `What meetings do I have tomorrow?`
 - **Why it should not trigger:** `calendar_find_slots` reports times that are OPEN for booking a customer. It does not read the owner's personal agenda, and answering from it would invert the meaning of the result.
+
+---
+
+## Release notes
+
+Paste-ready copy for the submission's release-notes field. It describes what
+this version does and points a reviewer at the test plan. Credentials are NOT
+here and never belong in the repo: they go in the submission form only, and
+they must be the dedicated sandbox account described above.
+
+### v1.0, first release
+
+New Coworker is an AI coworker for small businesses. This version connects the
+business's own New Coworker account to ChatGPT so the owner can work with their
+customers, conversations and calendar without leaving the chat.
+
+What it does:
+
+- **Find people and history.** `search` and `fetch` cover contacts, text
+  conversations and call transcripts, so "what do I know about Maria" and
+  "what did that call cover" are answerable in one turn.
+- **Read the day.** Recent activity, open tasks, team roster, automations and
+  notification settings.
+- **Act, with the owner confirming first.** Send a text or a WhatsApp message,
+  book onto the connected calendar, add or update a contact, and run one of the
+  business's own automations.
+- **Three inline components.** Open appointment times, a contact card, and a
+  text conversation, each rendered in the chat rather than as raw JSON.
+
+How access works:
+
+- OAuth 2.1 with PKCE and dynamic client registration. There is no API key to
+  paste and no shared secret.
+- Every call acts as the signed-in owner and is limited by their team role,
+  re-checked server-side on each request rather than trusted from the session.
+- The connector only reaches businesses the signed-in account already has a
+  role on.
+
+What a reviewer should know:
+
+- Anything that reaches a customer (a text, a booking, an automation run) is
+  annotated as consequential, and the server instructions tell the model to
+  confirm before doing it. The five test cases exercise this, and case 5 is the
+  send path specifically.
+- The sandbox account's outbound number is one we control, so a reviewer
+  running the send test does not contact a real person.
+- The reviewer test plan is linked from the listing and includes a staff-role
+  login, which is where role enforcement is demonstrated rather than asserted.
+- Times in generated messages always carry a named timezone rather than a bare
+  clock time.
+
+Availability: United States and Canada. Interface language is English and
+Spanish.
+
+---
+
+## Annotation justifications
+
+The submission form asks, for every tool, why each of the three MCP behavior
+annotations is accurate. That is 33 tools times 3 answers, and the answers are
+the reviewable artifact: mis-annotating a tool is the most-cited cause of
+rejection, so these are written against what each call sets in motion, not
+against what its handler body happens to touch.
+
+The annotation values below are generated from the live registry, and
+`tests/chatgpt-submission-doc.test.ts` fails if a tool is added, removed, or
+re-annotated without this file being updated in the same PR.
+
+### `search`
+
+- **Read Only: True** Runs SELECT-only queries across contacts, message threads and call transcripts for the businesses the caller holds a team role on. It writes nothing and returns the same results when called repeatedly.
+- **Open World: False** It reads only our own Postgres database. No third-party API, no web fetch, and no outbound network call of any kind.
+- **Destructive: False** It creates, modifies and removes nothing. The worst case is an empty result list.
+
+### `fetch`
+
+- **Read Only: True** Takes an id returned by search and reads that one record (contact, thread or call). Read path only: the id is an identifier and never an authorization, so the caller's live role is re-checked before anything is returned.
+- **Open World: False** Reads only our own Postgres database. The id is parsed locally and is never used to reach an external service.
+- **Destructive: False** Nothing is written or deleted. An unknown or unauthorized id returns a refusal, not a change.
+
+### `list_businesses`
+
+- **Read Only: True** Returns the businesses the signed-in account has a team role on. Pure SELECT, no writes.
+- **Open World: False** Reads a single internal table. No external service is contacted.
+- **Destructive: False** Nothing is created, changed or removed.
+
+### `get_business`
+
+- **Read Only: True** Reads one business profile row: name, timezone, phone number and plan. No writes.
+- **Open World: False** Internal database read only, no third-party call.
+- **Destructive: False** Read path with no mutation of any kind.
+
+### `search_contacts`
+
+- **Read Only: True** Matches a name, phone or email against the business's CRM contacts and returns the matches. SELECT only.
+- **Open World: False** Queries our own contacts table. No external CRM or API is involved.
+- **Destructive: False** No contact is created, edited or deleted.
+
+### `get_contact`
+
+- **Read Only: True** Reads one contact profile: name, phone, email, tags, owner, pinned notes and last interaction. No writes.
+- **Open World: False** Internal database read. Nothing leaves our infrastructure.
+- **Destructive: False** Nothing about the contact is modified.
+
+### `get_sms_thread`
+
+- **Read Only: True** Reads stored inbound and outbound messages for one conversation. It does not send and does not mark anything as read.
+- **Open World: False** Reads message rows already stored in our database. No carrier or messaging API is called.
+- **Destructive: False** No message is sent, edited or deleted.
+
+### `list_recent_events`
+
+- **Read Only: True** Reads the business's recent activity records (calls, messages, form submissions). SELECT only.
+- **Open World: False** Internal database read, no external service.
+- **Destructive: False** No event is created or removed.
+
+### `list_call_transcripts`
+
+- **Read Only: True** Lists stored voice call records with their summaries. Nothing is written and no call is placed.
+- **Open World: False** Reads transcripts our voice pipeline already stored. No telephony API is called.
+- **Destructive: False** No call record, recording or transcript is altered or deleted.
+
+### `list_tasks`
+
+- **Read Only: True** Reads the business's open task list. SELECT only.
+- **Open World: False** Reads a task list our own system derives from stored activity. No external service is contacted.
+- **Destructive: False** No task is created, completed or deleted.
+
+### `send_sms`
+
+- **Read Only: False** It sends a text message from the business's phone number and records the send, so it is not a read path.
+- **Open World: True** It hands the message to our telephony provider for delivery to a real phone on the public network. The effect leaves our system entirely.
+- **Destructive: False** Additive only: it appends a new outbound message. No existing message or record is overwritten or destroyed.
+
+### `send_whatsapp`
+
+- **Read Only: False** It sends a WhatsApp message from the business's number and logs the send. Not a read path.
+- **Open World: True** Delivery goes through WhatsApp's platform to a real recipient outside our system.
+- **Destructive: False** Additive only: it appends a new message and destroys nothing.
+
+### `calendar_find_slots`
+
+- **Read Only: True** It only reads availability. It queries free/busy and returns open times; it books nothing and writes nothing.
+- **Open World: True** It reaches the business's connected third-party calendar (Google, Microsoft 365, Calendly, Vagaro or CalDAV), so the data comes from outside our system. That is why a read-only tool is still open-world here.
+- **Destructive: False** No event is created, moved or cancelled. It is a lookup.
+
+### `calendar_book_appointment`
+
+- **Read Only: False** It creates a real appointment on the connected calendar, so it is a write.
+- **Open World: True** The booking is written to the business's third-party calendar provider and can generate an invitation to the attendee.
+- **Destructive: False** It adds a new event. It does not cancel, overwrite or delete an existing appointment.
+
+### `create_contact`
+
+- **Read Only: False** It inserts a new contact into the business's CRM.
+- **Open World: True** Creating a contact fires the business's contact_created automations, and those automations can text or email the person. The effect reaches someone outside our system, which is why this is open-world rather than a purely local write.
+- **Destructive: False** It only adds a record. It does not overwrite or remove an existing contact; a duplicate is reported rather than written over.
+
+### `update_contact`
+
+- **Read Only: False** It edits an existing contact record.
+- **Open World: True** Tag and owner changes fire the same automations as a dashboard edit, and those automations can message the contact, so the effect can leave our system.
+- **Destructive: True** Destructive because the tags argument REPLACES the existing tag set rather than adding to it, so prior pipeline state can be lost. Other supplied fields likewise overwrite the stored values.
+
+### `list_employees`
+
+- **Read Only: True** Reads the business's team roster. No writes.
+- **Open World: False** Reads one internal roster table. No invitation, notification or third-party call is involved.
+- **Destructive: False** No team member is added, changed or removed.
+
+### `create_employee`
+
+- **Read Only: False** It inserts a new team member onto the roster.
+- **Open World: False** The write stays in our own database. This call sends no invitation and contacts no external service.
+- **Destructive: False** Additive only: it creates a new record and overwrites nothing.
+
+### `update_employee`
+
+- **Read Only: False** It edits an existing roster member.
+- **Open World: False** The change is confined to our own database; nothing is sent anywhere by this call.
+- **Destructive: True** Destructive because supplied fields overwrite the stored values, an empty email clears the address, and deactivating someone or turning off lead rotation immediately redirects live leads away from them.
+
+### `list_flows`
+
+- **Read Only: True** Lists the business's automations with their names, triggers and enabled state. SELECT only.
+- **Open World: False** Reads automation definitions from our own database. Listing them does not run any of them.
+- **Destructive: False** No automation is created, edited, enabled or deleted.
+
+### `get_flow`
+
+- **Read Only: True** Reads one automation's full definition. No writes, and reading it does not run it.
+- **Open World: False** Reads one automation definition from our own database. Reading a flow does not execute it.
+- **Destructive: False** The automation is returned unchanged.
+
+### `get_flow_schema`
+
+- **Read Only: True** Returns the static schema describing the step types an automation can use. It reads no tenant data and writes nothing.
+- **Open World: False** Served from code in our own application. No external call.
+- **Destructive: False** Purely informational; nothing is modified.
+
+### `create_flow`
+
+- **Read Only: False** It inserts a new automation definition.
+- **Open World: False** The new automation is stored in our database. Creating it does not run it and contacts nobody.
+- **Destructive: False** Additive only: a new automation is created and no existing one is overwritten or removed.
+
+### `update_flow`
+
+- **Read Only: False** It edits an existing automation definition.
+- **Open World: False** The change is stored in our database. Saving an automation does not run it.
+- **Destructive: True** Destructive because the supplied step list replaces the stored one, so steps that are not resubmitted are lost.
+
+### `set_flow_enabled`
+
+- **Read Only: False** It changes an automation's enabled flag.
+- **Open World: False** A flag write in our own database, with no external call.
+- **Destructive: True** Marked destructive because disabling a flow silently stops work the business depends on. That is a loss of behavior even though no row is deleted.
+
+### `trigger_flow`
+
+- **Read Only: False** It queues real automation runs.
+- **Open World: True** The matching automations execute and can text or email customers, so the effect reaches people outside our system.
+- **Destructive: True** The flow body decides what happens, and an update_contact step inside a flow can carry removeTags, which deletes CRM state. We annotate to the worst case an owner-authored flow can reach, not to this handler's own writes.
+
+### `run_flow`
+
+- **Read Only: False** It starts an automation run immediately.
+- **Open World: True** Same as trigger_flow: the run can send messages to customers through external providers.
+- **Destructive: True** The automation body can remove tags and overwrite contact fields, so a run is not guaranteed additive. Annotated to what the run can do, not only to what this handler writes.
+
+### `list_agents`
+
+- **Read Only: True** Lists the business's AI agent configurations. SELECT only.
+- **Open World: False** Reads agent configuration rows from our own database. No external model or service is called.
+- **Destructive: False** No agent is created, changed or deleted.
+
+### `create_agent`
+
+- **Read Only: False** It inserts a new agent configuration.
+- **Open World: False** Stored in our own database. Creating an agent does not by itself put it on a phone line or into a conversation.
+- **Destructive: False** Additive only: nothing existing is overwritten or removed.
+
+### `update_agent`
+
+- **Read Only: False** It edits an existing agent configuration.
+- **Open World: False** The write stays in our own database.
+- **Destructive: True** Destructive because supplied fields, including the agent's instructions, overwrite the stored values.
+
+### `delete_agent`
+
+- **Read Only: False** It removes an agent configuration.
+- **Open World: False** The deletion is confined to our own database.
+- **Destructive: True** It permanently deletes the agent record and its past run history is removed with it. This is the clearest destructive case in the tool set.
+
+### `update_notification_preferences`
+
+- **Read Only: False** It changes which alerts the owner receives.
+- **Open World: False** A settings write in our own database. No message is sent by this call.
+- **Destructive: True** Destructive because each supplied toggle overwrites the stored value, and turning one off stops alerts the owner was relying on.
+
+### `get_notification_preferences`
+
+- **Read Only: True** Reads the owner's current alert toggles. No writes.
+- **Open World: False** Reads one settings row from our own database. No external service is contacted.
+- **Destructive: False** Nothing is created, changed or removed. It reports the current settings only.
