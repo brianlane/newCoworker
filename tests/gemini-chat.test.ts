@@ -171,3 +171,72 @@ describe("buildFunctionResponseContent", () => {
     });
   });
 });
+
+describe("geminiChatStep thinking-level rejection retry", () => {
+  // The live Google body observed 2026-08-14 on gemini-3.7-flash.
+  const REJECTION = JSON.stringify({
+    error: {
+      code: 400,
+      message:
+        "Thinking level MINIMAL is not supported for this model. Please retry with other thinking level.",
+      status: "INVALID_ARGUMENT"
+    }
+  });
+
+  it("retries once at low when the model rejects thinkingLevel minimal", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(REJECTION, { status: 400, headers: { "content-type": "application/json" } })
+    );
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ candidates: [{ content: { parts: [{ text: "recovered" }] } }] })
+    );
+    const res = await geminiChatStep({
+      ...BASE,
+      model: "gemini-3.7-flash",
+      thinkingLevel: "minimal"
+    });
+    expect(res.text).toBe("recovered");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    const second = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(first.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
+    expect(second.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+  });
+
+  it("does not retry a 400 unrelated to thinking config", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 })
+    );
+    await expect(
+      geminiChatStep({ ...BASE, model: "gemini-3.7-flash", thinkingLevel: "minimal" })
+    ).rejects.toThrow(/^gemini_http_400:.*API key not valid/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry error statuses when no thinkingLevel was requested", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(REJECTION, { status: 400 }));
+    await expect(geminiChatStep(BASE)).rejects.toThrow(/^gemini_http_400:/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the retry's own failure without looping", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(REJECTION, { status: 400 }));
+    fetchMock.mockResolvedValueOnce(new Response("overloaded", { status: 503 }));
+    await expect(
+      geminiChatStep({ ...BASE, model: "gemini-3.7-flash", thinkingLevel: "minimal" })
+    ).rejects.toThrow(/^gemini_http_503:overloaded$/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses an empty suffix when the retry response body is unreadable", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(REJECTION, { status: 400 }));
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      text: () => Promise.reject(new Error("broken stream"))
+    } as unknown as Response);
+    await expect(
+      geminiChatStep({ ...BASE, model: "gemini-3.7-flash", thinkingLevel: "minimal" })
+    ).rejects.toThrow(/^gemini_http_502:$/);
+  });
+});
