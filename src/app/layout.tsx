@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
@@ -115,6 +116,7 @@ export default async function RootLayout({
           <JsonLd data={WEBSITE_JSON_LD} />
           {children}
         </NextIntlClientProvider>
+        <Analytics />
         <SpeedInsights />
       </body>
     </html>

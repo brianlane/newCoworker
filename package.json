@@ -52,6 +52,7 @@
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.2",
     "@tailwindcss/postcss": "^4.3.3",
+    "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
     "docx": "^9.7.1",
     "dompurify": "^3.4.13",
