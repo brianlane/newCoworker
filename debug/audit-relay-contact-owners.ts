@@ -158,12 +158,19 @@ async function main(): Promise<void> {
 
   findings.sort((a, b) => b.distinctLeads - a.distinctLeads);
 
+  // Set BEFORE the output branches. A standing check that reports a finding
+  // and still exits 0 reads as "all clear" to whatever runs it, so the exit
+  // code cannot depend on which reporter the caller asked for.
+  const owned = findings.filter((f) => f.ownerName !== null);
+  if (owned.length > 0) process.exitCode = 1;
+
   if (asJson) {
-    console.log(JSON.stringify({ minDistinctLeads: MIN_DISTINCT_LEADS, findings }, null, 2));
+    console.log(
+      JSON.stringify({ minDistinctLeads: MIN_DISTINCT_LEADS, owned: owned.length, findings }, null, 2)
+    );
     return;
   }
 
-  const owned = findings.filter((f) => f.ownerName !== null);
   if (owned.length === 0) {
     console.log(
       `No partner alert line carries a contact owner (threshold: ${MIN_DISTINCT_LEADS}+ distinct leads).`
@@ -183,7 +190,6 @@ async function main(): Promise<void> {
         `those lines skips the team race. Clear each with:\n` +
         `  tsx debug/clear-contact-owner.ts --business <uuid> --phone <e164> --apply`
     );
-    process.exitCode = 1;
   }
 }
 
