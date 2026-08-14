@@ -4,14 +4,14 @@
  * Pins src/lib/memory/kg-sources.ts three ways:
  *   1. Every LIVE source (extracted/deterministic) must have a real ingest
  *      call site in the repo, marked `kg-source: <name>` next to the
- *      applyGraphExtraction/provenance wiring — a registry that claims a
+ *      applyGraphExtraction/provenance wiring: a registry that claims a
  *      hook that doesn't exist fails here.
  *   2. Every entry must be well-formed (trust for live/planned, reason for
  *      exempt, plannedIn for planned).
  *   3. The platform's content-surface INVENTORY below must be fully mapped
  *      by the registry. Adding a new content surface (a new channel, a new
  *      content table) requires adding it BOTH here and in the registry with
- *      a decision — the same reviewer-visible pinning the agent-tool parity
+ *      a decision, the same reviewer-visible pinning the agent-tool parity
  *      contract uses. Do not weaken this list to make a PR pass; add the
  *      registry decision instead.
  */
@@ -24,7 +24,7 @@ import { KG_SOURCES, kgSourceTrust, liveKgSources, type KgSourceEntry } from "@/
 const REPO_ROOT = resolve(__dirname, "..");
 
 /**
- * The content surfaces of the platform, by hand — this list IS the
+ * The content surfaces of the platform, by hand: this list IS the
  * completeness claim. Each maps to the registry key(s) covering it.
  */
 const CONTENT_SURFACE_INVENTORY: Record<string, (keyof typeof KG_SOURCES)[]> = {
@@ -51,15 +51,35 @@ const CONTENT_SURFACE_INVENTORY: Record<string, (keyof typeof KG_SOURCES)[]> = {
   "platform blog": ["platform_blog"]
 };
 
+/**
+ * Repo-wide marker search. grep's exit code is three-valued: 0 = matches,
+ * 1 = no matches, anything else = a real error. And execFileSync can throw
+ * WITHOUT an exit code at all when the spawn itself fails (EAGAIN under
+ * full-suite coverage load; observed twice on 2026-08-14). A bare
+ * `catch { return "" }` collapsed all of those into "no marker found", so a
+ * crashed grep masqueraded as a missing kg-source marker and this suite
+ * flaked under load. Only exit 1 may read as empty; spawn failures get a
+ * couple of retries (load is transient) and everything else propagates as
+ * the infrastructure failure it is.
+ */
 function grepRepo(pattern: string): string {
-  try {
-    return execFileSync(
-      "grep",
-      ["-r", "-l", pattern, "src", "debug", "--include=*.ts", "--include=*.tsx"],
-      { cwd: REPO_ROOT, encoding: "utf8" }
-    );
-  } catch {
-    return "";
+  const args = ["-r", "-l", pattern, "src", "debug", "--include=*.ts", "--include=*.tsx"];
+  const SPAWN_RETRIES = 2;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return execFileSync("grep", args, { cwd: REPO_ROOT, encoding: "utf8" });
+    } catch (err) {
+      const status = (err as { status?: number | null }).status;
+      if (status === 1) return "";
+      const spawnFailure = status === null || status === undefined;
+      if (spawnFailure && attempt < SPAWN_RETRIES) {
+        // Synchronous back-off; this suite is sync end to end and the
+        // contention we are waiting out is other test workers forking.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
   }
 }
 
@@ -82,7 +102,7 @@ describe("kg-sources registry", () => {
       const hits = grepRepo(`kg-source: ${source}`);
       expect(
         hits.trim().length,
-        `live source '${source}' has no 'kg-source: ${source}' marked call site — ` +
+        `live source '${source}' has no 'kg-source: ${source}' marked call site: ` +
           "wire the hook or change the registry status"
       ).toBeGreaterThan(0);
     }
