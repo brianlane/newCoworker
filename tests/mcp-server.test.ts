@@ -154,11 +154,18 @@ describe("createMcpRouteHandlers", () => {
     expect(verifySupabaseAccessToken).toHaveBeenCalledWith(JWT_SHAPED);
   });
 
-  it("admits a verified caller and stamps the connector that made the request", async () => {
+  /**
+   * The bearer check knows the user and the client but NOT the business, and
+   * a status row without one is exactly what painted an admin's own connector
+   * onto every tenant's dashboard tile. The stamp moved to
+   * mcpBusinessRoleOutcome, where the business is resolved and the call is
+   * authorized; this asserts it did not stay here as well.
+   */
+  it("admits a verified caller without stamping any connector status", async () => {
     const { POST } = createMcpRouteHandlers({ client: "chatgpt" });
     const res = await POST(post(INITIALIZE, JWT_SHAPED));
     expect(res.status).toBe(200);
-    expect(recordMcpConnectorSeen).toHaveBeenCalledWith(CALLER.userId, "chatgpt");
+    expect(recordMcpConnectorSeen).not.toHaveBeenCalled();
   });
 
   it("passes server instructions through to initialize", async () => {

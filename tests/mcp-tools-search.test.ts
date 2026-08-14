@@ -4,6 +4,12 @@ vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() }
 }));
 vi.mock("@/lib/db/business-members", () => ({ getBusinessRoleForEmail: vi.fn() }));
+// The permission check stamps connector status for a business the caller CAN
+// read. Inert here: this file is about what search returns and what it logs,
+// and a real stamp would try to reach the database.
+vi.mock("@/lib/mcp/connector-status", () => ({
+  recordMcpConnectorSeen: vi.fn(async () => undefined)
+}));
 vi.mock("@/lib/dashboard/active-business", () => ({ listAccessibleBusinesses: vi.fn() }));
 vi.mock("@/lib/customer-memory/db", () => ({
   listCustomerMemories: vi.fn(),

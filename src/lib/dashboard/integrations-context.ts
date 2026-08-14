@@ -32,7 +32,8 @@ import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
 import {
-  getMcpConnectorStatus,
+  getMcpConnectorStatusForBusiness,
+  isMcpConnectorStale,
   type McpConnectorStatus
 } from "@/lib/mcp/connector-status";
 import { groupByWorkspaceFamily } from "@/lib/integrations/workspace-families";
@@ -62,9 +63,13 @@ export type IntegrationsContext = {
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
   /**
-   * The SIGNED-IN USER's Claude connector status (user-scoped, not business-
-   * scoped: the MCP bearer belongs to the login). Null = never connected,
-   * or the best-effort read failed.
+   * THIS BUSINESS's connector status per assistant, from whichever login used
+   * it last. Null = no assistant has ever acted on this business, or the
+   * best-effort read failed.
+   *
+   * Business-scoped on purpose. Keying it on the signed-in login meant an
+   * admin using view-as saw their own connector painted onto every tenant's
+   * tile, and a teammate's real connection showed for nobody but them.
    */
   mcpConnectorStatuses: Record<"claude" | "chatgpt", McpConnectorStatus | null>;
 };
@@ -128,13 +133,16 @@ export async function loadIntegrationsContext(
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
     activeHooks: businessId ? await listWebhookSubscriptions(businessId) : [],
-    // Best-effort: a status-read failure must not take the page down, the
-    // card just falls back to the instructions-only state.
-    // One read per client. Best-effort: a status-read failure must not take
-    // the page down, the card just falls back to the instructions-only state.
+    // One read per client, for the ACTIVE BUSINESS. Best-effort: a status-read
+    // failure must not take the page down, the card just falls back to the
+    // instructions-only state.
     mcpConnectorStatuses: {
-      claude: await getMcpConnectorStatus(user.userId, "claude").catch(() => null),
-      chatgpt: await getMcpConnectorStatus(user.userId, "chatgpt").catch(() => null)
+      claude: businessId
+        ? await getMcpConnectorStatusForBusiness(businessId, "claude").catch(() => null)
+        : null,
+      chatgpt: businessId
+        ? await getMcpConnectorStatusForBusiness(businessId, "chatgpt").catch(() => null)
+        : null
     }
   };
 }
@@ -186,6 +194,18 @@ export function computeIntegrationStatuses(
       ? disconnected
       : { state: "connected", label: n === 1 ? "Connected" : `${n} connected` };
 
+  // Removing a connector inside Claude or ChatGPT tells us nothing, so a long
+  // silence is the only signal we get that one is gone. "Gone quiet" rather
+  // than "Needs reconnect": a tenant who simply has not asked their coworker
+  // for anything this month does not need to reconnect anything.
+  const mcpStatus = (status: McpConnectorStatus | null): IntegrationStatus => {
+    if (!status) return { state: "disconnected", label: "Available" };
+    if (isMcpConnectorStale(status.lastSeenAt)) {
+      return { state: "attention", label: "Gone quiet" };
+    }
+    return connected;
+  };
+
   return {
     google: countStatus(families.google.length),
     microsoft: countStatus(families.microsoft.length),
@@ -215,13 +235,10 @@ export function computeIntegrationStatuses(
       keyCount > 0
         ? { state: "connected", label: keyCount === 1 ? "1 key" : `${keyCount} keys` }
         : { state: "disconnected", label: "No keys" },
-    // User-scoped (the MCP bearer belongs to the login): connected once the
-    // signed-in user's Claude has made an authenticated request.
-    claude: ctx.mcpConnectorStatuses.claude
-      ? connected
-      : { state: "disconnected", label: "Available" },
-    chatgpt: ctx.mcpConnectorStatuses.chatgpt
-      ? connected
-      : { state: "disconnected", label: "Available" }
+    // Business-scoped, like every other tile here: connected once an
+    // assistant has made an authorized call on THIS business, from any login
+    // on the team.
+    claude: mcpStatus(ctx.mcpConnectorStatuses.claude),
+    chatgpt: mcpStatus(ctx.mcpConnectorStatuses.chatgpt)
   };
 }

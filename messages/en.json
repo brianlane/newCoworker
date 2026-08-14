@@ -1863,10 +1863,19 @@
     },
     "integrationsMcp": {
       "connectedBadge": "Connected",
+      "quietBadge": "Gone quiet",
       "firstConnected": "first connected",
+      "connectedBy": "connected by {email}",
       "copy": "Copy",
       "copied": "Copied",
+      "notYetHint": "This card turns on after your assistant's first real request for this business, not when you finish connecting. Adding a connector is not proof it works, so we wait for one that does.",
+      "quietHint": "No request from this assistant in the last 30 days. If you removed it on the assistant's side, disconnect here too so the card matches.",
+      "disconnect": "Disconnect",
+      "disconnectFailed": "Could not disconnect. Try again.",
+      "disconnectedRevoked": "Disconnected. {assistant} lost access for your login, and this card is cleared.",
+      "disconnectedClearedOnly": "Cleared this card. Your login had no {assistant} access to revoke, so if a teammate connected it, ask them to remove it in {assistant} as well.",
       "claude": {
+        "name": "Claude",
         "title": "Claude connector",
         "blurb": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and build AiFlows, signed in as you and limited to your role.",
         "lastUsed": "Claude last used this connector",
@@ -1876,6 +1885,7 @@
         "footer": "Disconnect anytime from Claude's connector settings. Access follows your team role, so a staff login cannot manage automations through Claude either."
       },
       "chatgpt": {
+        "name": "ChatGPT",
         "title": "ChatGPT app",
         "blurb": "Let ChatGPT work with your coworker: look up contacts, read texts and call summaries, send messages, and book appointments, signed in as you and limited to your role.",
         "lastUsed": "ChatGPT last used this app",
