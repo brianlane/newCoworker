@@ -162,9 +162,9 @@ const KNOWLEDGE_TOOL: GeminiFunctionDeclaration = {
 /** Bound on model↔tool round-trips per turn. */
 const MAX_TOOL_STEPS = 4;
 
-// gemini-3.6-flash (GA Jul 21 2026): beats 3.5-flash on agentic/tool-loop
-// work with $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
-const DEFAULT_INLINE_MODEL = "gemini-3.6-flash";
+// gemini-3.7-flash (GA Aug 13 2026): successor to 3.6-flash on agentic/
+// tool-loop work at the same post-intro list price ($1.50/$7.50 per 1M).
+const DEFAULT_INLINE_MODEL = "gemini-3.7-flash";
 /**
  * Same 404 safety net as knowledge-tools/handlers.ts: a configured (or
  * newly defaulted) model id that Google has retired/renamed must degrade to

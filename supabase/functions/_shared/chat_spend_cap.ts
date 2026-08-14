@@ -22,9 +22,9 @@
 import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
 
 // Per-model Google list prices (USD per 1M tokens, standard tier). Unknown
-// models fall back to the priciest tier we deploy so the fuse never
+// models fall back to the priciest text rate in the table so the fuse never
 // undercounts. Mirrors src/lib/billing/ai-spend-meter.ts on the Next side.
-// gemini-3.1-flash is the voice `voice_task` text model, now metered into the
+// The voice `voice_task` text model (gemini-3.7-flash) is metered into the
 // SAME shared AI budget as chat/SMS. This TEXT-rate table is used by the SMS/
 // AiFlow cap read + the AiFlow worker's own cost calc; the audio-native Live
 // model (gemini-3.1-flash-live-preview) is priced modality-aware in
@@ -48,12 +48,17 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   // GA Jul 21 2026 — the tenant chat + mid-tier default after the 3.6
   // migration (same list price as gemini-2.5-flash).
   "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
-  // GA Jul 21 2026 — replaces 3.5-flash as the flagship default (cheaper
+  // GA Jul 21 2026: replaces 3.5-flash as the flagship default (cheaper
   // output AND ~17% fewer output tokens).
-  "gemini-3.6-flash": { in: 1.5, out: 7.5 }
+  "gemini-3.6-flash": { in: 1.5, out: 7.5 },
+  // GA Aug 13 2026: replaces 3.6-flash as the flagship default. Post-intro
+  // list rate on purpose (intro is $0.75/$3.75 through Dec 31 2026): never
+  // undercount the fuse when the promo lapses.
+  "gemini-3.7-flash": { in: 1.5, out: 7.5 }
 };
-// Unknown model → the priciest tier we deploy (gemini-3.5-flash), so the
-// fuse never undercounts. Must stay in lockstep with
+// Unknown model → the priciest text rate in the table (the gemini-3.5-flash
+// row, at or above every tier we deploy), so the fuse never undercounts.
+// Must stay in lockstep with
 // src/lib/billing/ai-spend-meter.ts's DEFAULT_GEMINI_PRICE_PER_1M.
 export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 1.5, out: 9.0 };
 

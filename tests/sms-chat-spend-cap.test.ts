@@ -33,9 +33,10 @@ describe("geminiCostMicrosFromTokens", () => {
     expect(geminiCostMicrosFromTokens("gemini-99-ultra", 1000, 100)).toBe(
       Math.ceil(1000 * DEFAULT_GEMINI_PRICE_PER_1M.in + 100 * DEFAULT_GEMINI_PRICE_PER_1M.out)
     );
-    // The default IS the priciest deployed tier (gemini-3.5-flash) — lockstep
-    // with src/lib/billing/ai-spend-meter.ts. It was $0.5/$3.0 until Jul 2026,
-    // a 3x undercount for any unknown/unlisted model.
+    // The default IS the priciest text rate in the table (the
+    // gemini-3.5-flash row), lockstep with src/lib/billing/ai-spend-meter.ts.
+    // It was $0.5/$3.0 until Jul 2026, a 3x undercount for any
+    // unknown/unlisted model.
     expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
   });
 

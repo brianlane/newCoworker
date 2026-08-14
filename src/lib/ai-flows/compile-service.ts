@@ -108,18 +108,18 @@ export function invalidEditMessage(issues: string[]): string {
 }
 
 /**
- * gemini-3.6-flash (GA Jul 21 2026): the strongest available model for
- * structured JSON authoring and agentic edits — beats 3.5-flash on every
- * agentic/coding benchmark while pricing output at $7.50/1M (vs $9.00) with
- * ~17% fewer output tokens. Pinned at maximum reasoning (thinkingLevel
- * "high" on every call below) — the Flash tier's DEFAULT thinking level is
- * medium, and flow authoring/editing is exactly the task class that
- * deserves the full budget. JSON mode + a generous output cap keep large
- * definitions from truncating into unparseable JSON; billing is by actual
- * tokens used (thinking included), not the cap.
+ * gemini-3.7-flash (GA Aug 13 2026): direct successor to 3.6-flash and the
+ * strongest available model for structured JSON authoring and agentic
+ * edits, at the same post-intro list price ($1.50/$7.50 per 1M in/out;
+ * intro $0.75/$3.75 through Dec 31 2026). Pinned at maximum reasoning
+ * (thinkingLevel "high" on every call below): the Flash tier's DEFAULT
+ * thinking level is medium, and flow authoring/editing is exactly the task
+ * class that deserves the full budget. JSON mode + a generous output cap
+ * keep large definitions from truncating into unparseable JSON; billing is
+ * by actual tokens used (thinking included), not the cap.
  */
 export function flowCompileModel(): string {
-  return process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.6-flash";
+  return process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.7-flash";
 }
 
 /** Reasoning budget for every flow authoring/edit call. */

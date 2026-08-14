@@ -32,7 +32,7 @@
 #                               voice picker). Blank keeps the model default.
 #   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
-#                               gemini-3.6-flash.
+#                               gemini-3.7-flash.
 #   OWNER_CHAT_MODEL         — optional; model for the OwnerCoworker (owner
 #                               dashboard chat) agent. Defaults to
 #                               gemini-3.5-flash-lite; degrades to OLLAMA_MODEL
@@ -287,12 +287,14 @@ fi
 # container serve both the SMS dispatcher agent (Ollama) and the voice_task
 # agent (Gemini).
 LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
-# gemini-3.6-flash (GA 2026-07-21): replaces 3.5-flash — better agentic/tool
-# work, $7.50/1M output (vs 9.00), ~17% fewer output tokens. Verify any new
-# id live on BOTH :generateContent and the OpenAI-compat route the llm-router
-# uses before changing this default — the old "gemini-3.1-flash" default did
-# NOT exist on the API (404 on both) and broke voice turns fleet-wide.
-GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.6-flash"
+# gemini-3.7-flash (GA 2026-08-13): replaces 3.6-flash, its direct successor
+# for agentic/tool work at the same post-intro list price ($1.50/$7.50 per
+# 1M; intro $0.75/$3.75 through Dec 31 2026). Verify any new id live on BOTH
+# :generateContent and the OpenAI-compat route the llm-router uses before
+# changing this default: the old "gemini-3.1-flash" default did NOT exist on
+# the API (404 on both) and broke voice turns fleet-wide. gemini-3.7-flash
+# verified live on both routes + the on-box Rowboat router path 2026-08-14.
+GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.7-flash"
 
 # Owner-dashboard chat model (OwnerCoworker agent only — SMS's Coworker agent
 # stays on the local Ollama model for $0 marginal cost). The owner surface
@@ -364,7 +366,7 @@ esac
 # tokens bill as output, so per-turn cost can drift above 2.5-flash despite
 # the identical list price — watch /admin/gemini after rollout and prefer a
 # lower thinking level over reverting the model. Override
-# SMS_CHAT_MODEL=gemini-3.6-flash per tenant when a flagship-quality trade
+# SMS_CHAT_MODEL=gemini-3.7-flash per tenant when a flagship-quality trade
 # is worth it. Same keyless safety fallback as OWNER_CHAT_MODEL: a gemini-*
 # tag needs GOOGLE_API_KEY (the llm-router 503s gemini-* without one), so
 # degrade to the local tag on a keyless host. Override SMS_CHAT_MODEL to a

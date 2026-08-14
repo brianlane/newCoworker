@@ -51,9 +51,10 @@ import { recordGeminiUsage } from "./usage-log";
  * does with the production prompts and tools.
  */
 
-/** The inline engine's production default (DASHBOARD_CHAT_MODEL —
- * gemini-3.6-flash since the PR #809 fleet migration). */
-const OPERATOR_MODEL = "gemini-3.6-flash";
+/** The inline engine's production default (DASHBOARD_CHAT_MODEL:
+ * gemini-3.6-flash since the PR #809 fleet migration, gemini-3.7-flash
+ * since the Aug 2026 flagship bump). */
+const OPERATOR_MODEL = "gemini-3.7-flash";
 
 const JAMES_E164 = "+15145188192";
 const UDAY_E164 = "+17326190286";

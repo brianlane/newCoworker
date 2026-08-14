@@ -237,7 +237,7 @@ email / SMS / CRM / knowledge lookups.
 | Variable                 | Lives on                         | Notes                                                                      |
 | ------------------------ | -------------------------------- | --------------------------------------------------------------------------- |
 | `APP_BASE_URL`           | Next.js + Rowboat VPS `.env`     | Public origin of the app; used by bridge + Rowboat for tool calls           |
-| `GEMINI_ROWBOAT_MODEL`   | Rowboat VPS `.env` (optional)    | Model used by the `voice_task` agent. Defaults to `gemini-3.1-flash`.       |
+| `GEMINI_ROWBOAT_MODEL`   | Rowboat VPS `.env` (optional)    | Model used by the `voice_task` agent. Defaults to `gemini-3.7-flash`.       |
 | `GOOGLE_API_KEY`         | App + VPS (already existed)      | Used by bridge (Live), Rowboat (router), and the knowledge adapter         |
 | `ROWBOAT_GATEWAY_TOKEN`  | App + Rowboat + voice-bridge     | Single bearer token shared across all three; any mismatch breaks tools.     |
 

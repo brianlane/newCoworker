@@ -51,9 +51,9 @@ export const AGENT_PDF_MIME_TYPE = "application/pdf";
 /** Word documents are decoded locally too (no native Gemini DOCX support). */
 export const AGENT_DOCX_MIME_TYPE = DOCX_MIME_TYPE;
 
-// gemini-3.6-flash (GA Jul 21 2026): better document/knowledge work than
-// 3.5-flash at a lower output price ($7.50/1M vs 9.00).
-const DEFAULT_AGENT_MODEL = "gemini-3.6-flash";
+// gemini-3.7-flash (GA Aug 13 2026): successor to 3.6-flash, stronger
+// document/knowledge work at the same post-intro list price ($1.50/$7.50).
+const DEFAULT_AGENT_MODEL = "gemini-3.7-flash";
 
 function resolveModel(): string {
   const configured = (process.env.AGENT_RUN_MODEL ?? "").trim();
