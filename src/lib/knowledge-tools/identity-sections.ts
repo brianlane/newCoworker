@@ -15,7 +15,8 @@
  * made from chat can never diverge from one made in the dashboard editor.
  */
 
-import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { patchBusinessConfig } from "@/lib/db/configs";
 import { BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
 import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
@@ -82,6 +83,27 @@ function describeSections(sections: IdentitySection[]): string {
 }
 
 /**
+ * The prefix of a section up to and including its heading line. A
+ * whitespace-only document leader gets folded INTO the first heading
+ * section by the splitter, so the heading line is not necessarily the
+ * section's first line — taking lines[0] blindly discarded the "## X" line
+ * whenever a leader was folded (Bugbot Medium on PR #1379).
+ */
+function sectionHeadingPrefix(section: IdentitySection): string[] {
+  const lines = section.content.split("\n");
+  const headingIdx = lines.findIndex((line) => HEADING_RE.test(line));
+  return lines.slice(0, headingIdx + 1);
+}
+
+/** A section's text WITHOUT its heading line (the whole text for an intro). */
+export function sectionBody(section: IdentitySection): string {
+  if (section.heading === null) return section.content;
+  const lines = section.content.split("\n");
+  const headingIdx = lines.findIndex((line) => HEADING_RE.test(line));
+  return lines.slice(headingIdx + 1).join("\n");
+}
+
+/**
  * Replace one section's body (its heading line is preserved), addressed by
  * heading text (case-insensitive) or by index. Ambiguity and misses refuse
  * with the available sections listed, so the model can self-correct.
@@ -123,10 +145,27 @@ export function replaceIdentitySection(
     return { ok: false, message: "Pass section_heading or section_index to say which section to replace." };
   }
 
+  // The documented flow reads sections (whose bodies the get tool returns)
+  // and writes a body back — but a model that re-includes the section's own
+  // heading line must not produce "## X" twice (Bugbot Medium on PR #1379).
+  // Strip exactly one leading duplicate of THIS section's heading.
+  let body = content;
+  if (section.heading !== null) {
+    const firstLine = body.split("\n", 1)[0];
+    const dup = HEADING_RE.exec(firstLine);
+    if (dup && dup[1].trim().toLowerCase() === section.heading.trim().toLowerCase()) {
+      body = body.slice(firstLine.length).replace(/^\n/, "");
+      if (body.trim() === "") {
+        return {
+          ok: false,
+          message: "The new content is empty once its duplicate heading line is removed; a splice can't blank a section."
+        };
+      }
+    }
+  }
+
   const replacement =
-    section.heading === null
-      ? content
-      : `${section.content.split("\n", 1)[0]}\n${content}`;
+    section.heading === null ? body : [...sectionHeadingPrefix(section), body].join("\n");
   const next = sections
     .map((s) => (s.index === section.index ? replacement : s.content))
     .join("\n");
@@ -183,8 +222,31 @@ export type BusinessKnowledgeRead = {
   total_chars: number;
 };
 
+export type IdentityReadResult = { exists: boolean; identityMd: string };
+
+/**
+ * Strict identity read: THROWS on a failed query; `exists: false` only on a
+ * confirmed missing row. Deliberately not getBusinessConfig, which collapses
+ * read errors and no-row into one null — this module must never mistake a
+ * transient failure for an empty document, because an append against that
+ * misread would overwrite the whole identity with a single section (Bugbot
+ * High on PR #1379).
+ */
+async function readIdentityStrict(businessId: string): Promise<IdentityReadResult> {
+  const db = await createSupabaseServiceClient();
+  const { data, error } = await db
+    .from("business_configs")
+    .select("identity_md")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`readIdentityStrict: ${error.message}`);
+  if (!data) return { exists: false, identityMd: "" };
+  const identityMd = (data as { identity_md?: unknown }).identity_md;
+  return { exists: true, identityMd: typeof identityMd === "string" ? identityMd : "" };
+}
+
 export type KnowledgeCoreDeps = {
-  getConfig?: typeof getBusinessConfig;
+  readIdentity?: (businessId: string) => Promise<IdentityReadResult>;
   patchConfig?: typeof patchBusinessConfig;
   scheduleGraphExtract?: typeof scheduleLongFormGraphExtract;
   scheduleVault?: typeof scheduleVaultSync;
@@ -192,21 +254,29 @@ export type KnowledgeCoreDeps = {
 
 function resolveDeps(deps: KnowledgeCoreDeps) {
   return {
-    getConfig: deps.getConfig ?? getBusinessConfig,
+    readIdentity: deps.readIdentity ?? readIdentityStrict,
     patchConfig: deps.patchConfig ?? patchBusinessConfig,
     scheduleGraphExtract: deps.scheduleGraphExtract ?? scheduleLongFormGraphExtract,
     scheduleVault: deps.scheduleVault ?? scheduleVaultSync
   };
 }
 
+/**
+ * Sections for the model to read: heading in its own field, `content` is
+ * the BODY only. The get tool's payload is what a model pastes back into a
+ * replace, so returning the heading inside `content` invited duplicate
+ * headings on the round trip (Bugbot Medium on PR #1379).
+ */
 export async function readBusinessKnowledge(
   businessId: string,
   deps: KnowledgeCoreDeps = {}
 ): Promise<BusinessKnowledgeRead> {
-  const { getConfig } = resolveDeps(deps);
-  const config = await getConfig(businessId);
-  const identityMd = config?.identity_md ?? "";
-  return { sections: splitIdentitySections(identityMd), total_chars: identityMd.length };
+  const { readIdentity } = resolveDeps(deps);
+  const { identityMd } = await readIdentity(businessId);
+  return {
+    sections: splitIdentitySections(identityMd).map((s) => ({ ...s, content: sectionBody(s) })),
+    total_chars: identityMd.length
+  };
 }
 
 export type KnowledgeUpdateArgs = {
@@ -229,9 +299,11 @@ export async function updateBusinessKnowledgeCore(
   args: KnowledgeUpdateArgs,
   deps: KnowledgeCoreDeps = {}
 ): Promise<KnowledgeUpdateResult> {
-  const { getConfig, patchConfig, scheduleGraphExtract, scheduleVault } = resolveDeps(deps);
-  const config = await getConfig(businessId);
-  const identityMd = config?.identity_md ?? "";
+  const { readIdentity, patchConfig, scheduleGraphExtract, scheduleVault } = resolveDeps(deps);
+  // Throws on a failed read (surfaced as a generic tool error). exists:false
+  // is a CONFIRMED empty state: replace refuses naturally ("the document is
+  // empty"), append legitimately starts a brand-new document.
+  const { identityMd } = await readIdentity(businessId);
 
   const spliced =
     args.mode === "append_section"
@@ -256,7 +328,10 @@ export async function updateBusinessKnowledgeCore(
 
   return {
     ok: true,
-    sections: splitIdentitySections(spliced.next),
+    sections: splitIdentitySections(spliced.next).map((s) => ({
+      ...s,
+      content: sectionBody(s)
+    })),
     total_chars: spliced.next.length
   };
 }

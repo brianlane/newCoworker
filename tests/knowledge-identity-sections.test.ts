@@ -8,12 +8,28 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const supabaseStub = vi.hoisted(() => {
+  const stub = {
+    result: { data: { identity_md: "## Only\nbody" } as unknown, error: null as { message: string } | null },
+    from: (_table: string) => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => stub.result
+        })
+      })
+    })
+  };
+  return stub;
+});
+
 // Mocked at module level so the PRODUCTION default deps (no injection) are a
 // real, covered path: the identity editor pipeline modules never run for real
 // in unit tests (patchBusinessConfig hits Supabase; the schedulers use
 // next/server after()).
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => supabaseStub)
+}));
 vi.mock("@/lib/db/configs", () => ({
-  getBusinessConfig: vi.fn(async () => ({ identity_md: "## Only\nbody" })),
   patchBusinessConfig: vi.fn(async () => undefined)
 }));
 vi.mock("@/lib/memory/schedule-longform-extract", () => ({
@@ -21,7 +37,7 @@ vi.mock("@/lib/memory/schedule-longform-extract", () => ({
 }));
 vi.mock("@/lib/vps/schedule-vault-sync", () => ({ scheduleVaultSync: vi.fn() }));
 
-import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
+import { patchBusinessConfig } from "@/lib/db/configs";
 import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import {
@@ -175,6 +191,41 @@ describe("replaceIdentitySection", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("keeps the heading when a whitespace leader was folded into the first section", () => {
+    // Bugbot Medium (PR #1379): the folded leader made lines[0] a blank
+    // line, so "preserve the heading line" preserved the blank and DROPPED
+    // the "## Hours" heading, leaving the body unaddressable by heading.
+    const doc = "\n\n## Hours\nMon-Fri 9-5";
+    const result = replaceIdentitySection(doc, { heading: "Hours" }, "Tue-Sat 10-4");
+    expect(result).toEqual({ ok: true, next: "\n\n## Hours\nTue-Sat 10-4" });
+  });
+
+  it("strips one leading duplicate of the section's own heading from the new content", () => {
+    // Bugbot Medium (PR #1379): the get payload is what a model pastes back
+    // in, so a content starting with the section's own heading must not
+    // produce "## Pricing" twice.
+    const result = replaceIdentitySection(
+      DOC,
+      { heading: "Pricing" },
+      "## Pricing\nConsults are $150."
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.next.match(/^## Pricing$/gm)).toHaveLength(1);
+      expect(result.next).toContain("## Pricing\nConsults are $150.");
+    }
+    // A DIFFERENT heading in the content is kept: only the duplicate goes.
+    const kept = replaceIdentitySection(DOC, { heading: "Pricing" }, "## Fees\nSee site.");
+    expect(kept.ok).toBe(true);
+    if (kept.ok) expect(kept.next).toContain("## Pricing\n## Fees\nSee site.");
+    // Content that is ONLY the duplicate heading refuses instead of blanking.
+    const blank = replaceIdentitySection(DOC, { heading: "Pricing" }, "## Pricing");
+    expect(blank).toEqual({
+      ok: false,
+      message: expect.stringContaining("duplicate heading")
+    });
+  });
+
   it("refuses a replace against an empty document, saying the document is empty", () => {
     const result = replaceIdentitySection("", { heading: "Pricing" }, "x");
     expect(result).toEqual({
@@ -227,26 +278,53 @@ describe("appendIdentitySection", () => {
 });
 
 describe("readBusinessKnowledge / updateBusinessKnowledgeCore", () => {
-  const getConfig = vi.fn();
+  const readIdentity = vi.fn();
   const patchConfig = vi.fn();
   const scheduleGraphExtract = vi.fn();
   const scheduleVault = vi.fn();
-  const deps = { getConfig, patchConfig, scheduleGraphExtract, scheduleVault } as never;
+  const deps = { readIdentity, patchConfig, scheduleGraphExtract, scheduleVault } as never;
   const BIZ = "11111111-1111-4111-8111-111111111111";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getConfig.mockResolvedValue({ identity_md: DOC });
+    readIdentity.mockResolvedValue({ exists: true, identityMd: DOC });
     patchConfig.mockResolvedValue(undefined);
+    supabaseStub.result = { data: { identity_md: "## Only\nbody" }, error: null };
   });
 
-  it("reads the sections and total size; a missing config row reads as empty", async () => {
-    expect(await readBusinessKnowledge(BIZ, deps)).toEqual({
-      sections: splitIdentitySections(DOC),
-      total_chars: DOC.length
+  it("reads sections with BODY-only content (the heading lives in its own field)", async () => {
+    const read = await readBusinessKnowledge(BIZ, deps);
+    expect(read.total_chars).toBe(DOC.length);
+    const pricing = read.sections.find((s) => s.heading === "Pricing");
+    // The body must NOT re-include the heading line: the get payload is what
+    // a model pastes back into a replace (Bugbot Medium on PR #1379).
+    expect(pricing?.content).toBe("Consults are free.\n");
+    expect(read.sections[0]).toEqual({
+      index: 0,
+      heading: null,
+      content: "Intro line about the business.\n"
     });
-    getConfig.mockResolvedValue(null);
+  });
+
+  it("a confirmed-missing config row reads as empty", async () => {
+    readIdentity.mockResolvedValue({ exists: false, identityMd: "" });
     expect(await readBusinessKnowledge(BIZ, deps)).toEqual({ sections: [], total_chars: 0 });
+  });
+
+  it("a FAILED identity read throws instead of masquerading as an empty document", async () => {
+    // getBusinessConfig collapses errors into null; the strict reader must
+    // not, or an append after a blip would overwrite the whole identity
+    // (Bugbot High on PR #1379).
+    readIdentity.mockRejectedValue(new Error("readIdentityStrict: boom"));
+    await expect(readBusinessKnowledge(BIZ, deps)).rejects.toThrow(/readIdentityStrict/);
+    await expect(
+      updateBusinessKnowledgeCore(
+        BIZ,
+        { mode: "append_section", content: "## X\ny" },
+        deps
+      )
+    ).rejects.toThrow(/readIdentityStrict/);
+    expect(patchConfig).not.toHaveBeenCalled();
   });
 
   it("writes a replace through the identity editor's exact pipeline", async () => {
@@ -271,12 +349,13 @@ describe("readBusinessKnowledge / updateBusinessKnowledgeCore", () => {
     expect(scheduleVault).toHaveBeenCalledWith(BIZ);
     if (result.ok) {
       expect(result.total_chars).toBe(next.length);
-      expect(result.sections.some((s) => s.heading === "Pricing")).toBe(true);
+      const pricing = result.sections.find((s) => s.heading === "Pricing");
+      expect(pricing?.content).toBe("Consults are $150.");
     }
   });
 
-  it("appends through the same pipeline, addressing a missing config row as an empty doc", async () => {
-    getConfig.mockResolvedValue(null);
+  it("appends through the same pipeline, addressing a confirmed-missing row as an empty doc", async () => {
+    readIdentity.mockResolvedValue({ exists: false, identityMd: "" });
     const result = await updateBusinessKnowledgeCore(
       BIZ,
       { mode: "append_section", content: "## Hours\nMon-Fri 9-5" },
@@ -312,8 +391,8 @@ describe("readBusinessKnowledge / updateBusinessKnowledgeCore", () => {
 
   it("uses the production pipeline modules when no deps are injected", async () => {
     const read = await readBusinessKnowledge(BIZ);
-    expect(vi.mocked(getBusinessConfig)).toHaveBeenCalledWith(BIZ);
     expect(read.sections[0].heading).toBe("Only");
+    expect(read.sections[0].content).toBe("body");
 
     const result = await updateBusinessKnowledgeCore(BIZ, {
       mode: "replace",
@@ -331,6 +410,16 @@ describe("readBusinessKnowledge / updateBusinessKnowledgeCore", () => {
     });
     expect(vi.mocked(scheduleVaultSync)).toHaveBeenCalledWith(BIZ);
     // The injected-deps tests must not have leaked into the defaults.
-    expect(getConfig).not.toHaveBeenCalled();
+    expect(readIdentity).not.toHaveBeenCalled();
+  });
+
+  it("the strict default read throws on a query error and treats no-row as missing", async () => {
+    supabaseStub.result = { data: null, error: { message: "boom" } };
+    await expect(readBusinessKnowledge(BIZ)).rejects.toThrow(/readIdentityStrict: boom/);
+    supabaseStub.result = { data: null, error: null };
+    expect(await readBusinessKnowledge(BIZ)).toEqual({ sections: [], total_chars: 0 });
+    // A malformed identity_md value degrades to an empty string, not a crash.
+    supabaseStub.result = { data: { identity_md: 42 }, error: null };
+    expect(await readBusinessKnowledge(BIZ)).toEqual({ sections: [], total_chars: 0 });
   });
 });
