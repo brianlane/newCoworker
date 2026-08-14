@@ -5676,6 +5676,7 @@ function StepFields({
       multiply: "Multiply (left × right)",
       divide: "Divide (left ÷ right)",
       round: "Round (left to the nearest whole number)",
+      less_than: 'Less than ("yes" when left < right, else "no")',
       date_add_minutes: "Date + minutes (left date, right minutes)",
       date_diff_days: "Days between dates (left → right)"
     };

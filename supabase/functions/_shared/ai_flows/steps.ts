@@ -156,6 +156,7 @@ export function computeMath(
     | "multiply"
     | "divide"
     | "round"
+    | "less_than"
     | "date_add_minutes"
     | "date_diff_days",
   left: string,
@@ -165,6 +166,18 @@ export function computeMath(
     case "round": {
       const l = parseLooseNumber(left);
       return l === null ? MATH_NOT_A_NUMBER : formatNumber(Math.round(l));
+    }
+    // A deterministic threshold gate ("yes" / "no" / the not_a_number
+    // sentinel), built for price bands: asking a model to extract a price AND
+    // separately judge "is it a million or more" produced price "$613K" with
+    // band "over_1m" in one call. Consumers pick which way the sentinel
+    // fails: a gate written `notEquals "no"` treats an unparseable price as
+    // under the threshold, `equals "no"` demands a proven over.
+    case "less_than": {
+      const l = parseLooseNumber(left);
+      const r = parseLooseNumber(right);
+      if (l === null || r === null) return MATH_NOT_A_NUMBER;
+      return l < r ? "yes" : "no";
     }
     case "add":
     case "subtract":

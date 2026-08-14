@@ -47,8 +47,17 @@ function cleverFixture(): Definition {
           { name: "lead_phone" },
           { name: "price" },
           { name: "price_band" },
-          { name: "price_gate" }
+          { name: "price_gate" },
+          { name: "price_digits" }
         ]
+      },
+      {
+        id: "clever_price_lt_1m",
+        type: "math",
+        operation: "less_than",
+        left: "{{vars.price_digits}}",
+        right: "1000000",
+        saveAs: "price_under_1m"
       },
       {
         id: "ai_call_1",
@@ -80,8 +89,17 @@ function reFixture(): Definition {
           { name: "lead_phone" },
           { name: "route_lead_type" },
           { name: "price_band" },
-          { name: "price_gate" }
+          { name: "price_gate" },
+          { name: "price_digits" }
         ]
+      },
+      {
+        id: "re_price_lt_1m",
+        type: "math",
+        operation: "less_than",
+        left: "{{vars.price_digits}}",
+        right: "1000000",
+        saveAs: "price_under_1m"
       },
       routeStep("route_seller", {
         agentNames: ["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"],
@@ -107,8 +125,17 @@ function realtorFixture(): Definition {
           { name: "lead_name" },
           { name: "lead_phone" },
           { name: "price_band" },
-          { name: "price_gate" }
+          { name: "price_gate" },
+          { name: "price_digits" }
         ]
+      },
+      {
+        id: "rt_price_lt_1m",
+        type: "math",
+        operation: "less_than",
+        left: "{{vars.price_digits}}",
+        right: "1000000",
+        saveAs: "price_under_1m"
       },
       routeStep("s4", {
         agentNames: ["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"],
@@ -131,8 +158,17 @@ function nliFixture(): Definition {
           { name: "lead_phone" },
           { name: "price_band" },
           { name: "price_gate" },
-          { name: "route_variant" }
+          { name: "route_variant" },
+          { name: "price_digits" }
         ]
+      },
+      {
+        id: "nli_price_lt_1m",
+        type: "math",
+        operation: "less_than",
+        left: "{{vars.price_digits}}",
+        right: "1000000",
+        saveAs: "price_under_1m"
       },
       routeStep("route_seller", {
         agentNames: ["Gabrielle Mota", "Amy Laidlaw", "Dave Lane"],
@@ -179,8 +215,10 @@ describe("the takeover branch shape", () => {
    * the sleep, so a run the rule does not cover ends instantly.
    */
   it("puts every filter BEFORE the sleep: band, lead type, and a claimed skip on the sleep itself", () => {
-    // Band is the outer arm condition: $1M+ never enters.
-    expect(withType.branches[0].condition).toEqual({ var: "price_band", equals: "under_1m" });
+    // The COMPUTED band is the outer arm condition: only a PROVEN $1M+ is
+    // excluded (a $613K lead was once extracted with band "over_1m" in the
+    // same call that read its price correctly).
+    expect(withType.branches[0].condition).toEqual({ var: "price_under_1m", notEquals: "no" });
     // Lead type wraps the sleep: a buyer skips the whole block.
     const typeWrap = withType.branches[0].steps[0] as {
       branches: Array<{ condition: unknown; steps: Step[] }>;

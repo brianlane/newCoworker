@@ -102,7 +102,7 @@ export const REALTOR_LEAD_TYPE_FIELD = {
 export const FALLBACK_TAKEOVER_LINE =
   "\nThe AI keeps working it: a follow-up every 3 days, and a claim offer the moment they are ready.";
 
-function tag(id: string, withAutoNote: boolean, when?: Step["when"]): Step {
+export function takeoverTag(id: string, withAutoNote: boolean, when?: Step["when"]): Step {
   return {
     id,
     type: "update_contact",
@@ -121,8 +121,12 @@ function tag(id: string, withAutoNote: boolean, when?: Step["when"]): Step {
 export type TakeoverVariant = {
   /** Suffix for step ids, e.g. "_s" / "_b"; "" for a seller-only flow. */
   suffix: string;
-  /** Lead-type condition; omitted on a seller-only flow (Clever). */
-  condition?: { var: string; equals: string };
+  /**
+   * Lead-type condition; omitted on a seller-only flow (Clever). notEquals
+   * fits a flow whose seller route is itself a notEquals (Follow Up
+   * Requested routes everything non-buyer through its seller route).
+   */
+  condition?: { var: string; equals?: string; notEquals?: string };
   /** What runs once the lead is confirmed unclaimed past the offer's course. */
   tagSteps: Step[];
   /** Label for the wrapper arm, when a condition is present. */
@@ -177,17 +181,38 @@ function variantSteps(prefix: string, v: TakeoverVariant): Step[] {
  * branch (1), the per-variant type wrapper (2), and the re-check (3); on
  * Clever, which needs no type wrapper, it is one level shallower.
  */
-export function teamUnclaimedBranch(prefix: string, variants: TakeoverVariant[]): Step {
+export function teamUnclaimedBranch(
+  prefix: string,
+  variants: TakeoverVariant[],
+  opts: {
+    /**
+     * The four arrival flows gate the branch on `price_gate != "ai"` so the
+     * AI-owned path (which tags itself) is never double-tagged. A flow with
+     * no gated arrival path (Follow Up Requested) has no `price_gate`
+     * producer at all, and the validator rightly rejects a when on a var
+     * nothing produces, so it opts out.
+     */
+    gateOnPriceGate?: boolean;
+  } = {}
+): Step {
   return {
     id: `${prefix}_team_unclaimed`,
     type: "branch",
     question: "Team-offered seller: did anyone claim it, or does the AI take over?",
-    when: { var: PRICE_GATE_VAR, notEquals: "ai" },
+    ...(opts.gateOnPriceGate === false
+      ? {}
+      : { when: { var: PRICE_GATE_VAR, notEquals: "ai" } }),
     branches: [
       {
         id: `${prefix}_tu_open`,
         label: "Under $1M: the takeover can apply ($1M+ was never offered, it is Amy's own)",
-        condition: { var: "price_band", equals: "under_1m" },
+        // The COMPUTED band (math less_than on price_digits), not the
+        // extracted price_band: a $613K lead was extracted with band
+        // "over_1m" in the same call that read its price correctly, and this
+        // arm was one of the three gates that misread silenced. notEquals
+        // "no" so an unknown or unparseable price stays covered; only a
+        // PROVEN $1M+ is excluded.
+        condition: { var: "price_under_1m", notEquals: "no" },
         steps: variants.flatMap((v) => variantSteps(prefix, v))
       }
     ],
@@ -232,7 +257,7 @@ export function patchClever(def: Definition): PatchResult {
   // Seller-only flow, so no lead-type wrapper. Every under-$1M Clever lead
   // was called (ai_call_1 gates on under_1m), so the cadence starts at the
   // 3-day wait.
-  const variants = [{ suffix: "", tagSteps: [tag("clever_tu_tag", true)] }];
+  const variants = [{ suffix: "", tagSteps: [takeoverTag("clever_tu_tag", true)] }];
   let changed = appendBranch(def, teamUnclaimedBranch("clever", variants), notes);
   if (appendFallbackLine(def, ["route"], notes)) changed = true;
   return { changed, notes };
@@ -249,13 +274,13 @@ export function patchReferralExchange(def: Definition): PatchResult {
       suffix: "_s",
       condition: { var: "route_lead_type", equals: "seller" },
       label: "Seller",
-      tagSteps: [tag("re_tu_tag_s", true)]
+      tagSteps: [takeoverTag("re_tu_tag_s", true)]
     },
     {
       suffix: "_b",
       condition: { var: "route_lead_type", equals: "both" },
       label: "Buying and selling",
-      tagSteps: [tag("re_tu_tag_b", true)]
+      tagSteps: [takeoverTag("re_tu_tag_b", true)]
     }
   ];
   let changed = appendBranch(def, teamUnclaimedBranch("re", variants), notes);
@@ -287,7 +312,7 @@ export function patchRealtor(def: Definition): PatchResult {
       suffix: "_s",
       condition: { var: "lead_type", equals: "seller" },
       label: "Clearly a seller",
-      tagSteps: [tag("rt_tu_tag", false)]
+      tagSteps: [takeoverTag("rt_tu_tag", false)]
     }
   ];
   if (appendBranch(def, teamUnclaimedBranch("rt", variants), notes)) changed = true;
@@ -307,13 +332,13 @@ export function patchNewLeadIntake(def: Definition): PatchResult {
       suffix: "_s",
       condition: { var: "route_variant", equals: "seller" },
       label: "Seller",
-      tagSteps: [tag("nli_tu_tag_s", false)]
+      tagSteps: [takeoverTag("nli_tu_tag_s", false)]
     },
     {
       suffix: "_b",
       condition: { var: "route_variant", equals: "both" },
       label: "Buying and selling",
-      tagSteps: [tag("nli_tu_tag_b", false)]
+      tagSteps: [takeoverTag("nli_tu_tag_b", false)]
     }
   ];
   let changed = appendBranch(def, teamUnclaimedBranch("nli", variants), notes);

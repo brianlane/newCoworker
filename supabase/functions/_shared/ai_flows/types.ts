@@ -1278,6 +1278,10 @@ export type FlowStep =
         | "multiply"
         | "divide"
         | "round"
+        // "yes" when left < right, "no" otherwise — a deterministic threshold
+        // gate (price bands), so the comparison is arithmetic rather than a
+        // second LLM judgment that can contradict the extracted number.
+        | "less_than"
         // left = ISO datetime, right = minutes → ISO datetime.
         | "date_add_minutes"
         // Whole days from left (ISO) to right (ISO); negative when right is earlier.

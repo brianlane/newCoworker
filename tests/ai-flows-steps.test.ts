@@ -450,6 +450,21 @@ describe("computeMath", () => {
     expect(computeMath("round", "9".repeat(400), "")).toBe(MATH_NOT_A_NUMBER);
   });
 
+  /**
+   * The deterministic threshold gate. Born from a $613K lead extracted as
+   * price "$613K" AND price_band "over_1m" in the same LLM call: the number
+   * was right, the judgment about the number was wrong, and three gates keyed
+   * on the judgment. Arithmetic cannot contradict its own operand.
+   */
+  it("less_than: yes/no on the comparison, loose parsing, sentinel on junk", () => {
+    expect(computeMath("less_than", "613000", "1000000")).toBe("yes");
+    expect(computeMath("less_than", "$1,200,000", "1000000")).toBe("no");
+    expect(computeMath("less_than", "1000000", "1000000")).toBe("no");
+    expect(computeMath("less_than", "0", "1000000")).toBe("yes");
+    expect(computeMath("less_than", "none", "1000000")).toBe(MATH_NOT_A_NUMBER);
+    expect(computeMath("less_than", "613000", "")).toBe(MATH_NOT_A_NUMBER);
+  });
+
   it("date ops: add minutes and whole-day diffs (negative when right is earlier)", () => {
     expect(computeMath("date_add_minutes", "2026-07-10T12:00:00Z", "90")).toBe(
       "2026-07-10T13:30:00.000Z"
