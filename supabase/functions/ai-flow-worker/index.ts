@@ -4569,7 +4569,17 @@ async function geminiJsonForPrompt(
   // a run AFTER an irreversible earlier step (e.g. a lead already accepted on
   // Clever) — orphaning it. Riding out a brief overload here avoids that. A 4xx
   // (other than 429) is permanent, so it fails fast without retrying.
-  const res = await fetchWithTransientRetry(url, {
+  //
+  // Structured extraction/classify needs no chain-of-thought, and Gemini 3
+  // thinking tokens BILL as output: "minimal" keeps the spend on the answer
+  // (same posture as knowledge lookups). Gated on the family: Gemini 2.5
+  // rejects thinkingLevel. Which values a model accepts ALSO varies within
+  // the family (live-verified 2026-08-14: gemini-3.7-flash 400s on "minimal"
+  // while 3.5-flash-lite accepts it), so a thinking-level 400 retries once
+  // at "low" instead of failing the run. Lockstep with
+  // isThinkingLevelRejection in src/lib/gemini-generate-content.ts.
+  const wantsThinking = /^gemini-3/i.test(GEMINI_MODEL);
+  const requestInit = (thinkingLevel: "minimal" | "low" | null): RequestInit => ({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4577,16 +4587,17 @@ async function geminiJsonForPrompt(
       generationConfig: {
         temperature: 0,
         responseMimeType: "application/json",
-        // Structured extraction/classify needs no chain-of-thought, and
-        // Gemini 3 thinking tokens BILL as output — "minimal" keeps the
-        // spend on the answer (same posture as knowledge lookups). Gated on
-        // the family: Gemini 2.5 rejects thinkingLevel.
-        ...(/^gemini-3/i.test(GEMINI_MODEL)
-          ? { thinkingConfig: { thinkingLevel: "minimal" } }
-          : {})
+        ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {})
       }
     })
   });
+  let res = await fetchWithTransientRetry(url, requestInit(wantsThinking ? "minimal" : null));
+  if (!res.ok && wantsThinking && res.status === 400) {
+    const errText = await res.text().catch(() => "");
+    if (/thinking[\s_-]?(level|config)/i.test(errText)) {
+      res = await fetchWithTransientRetry(url, requestInit("low"));
+    }
+  }
   if (!res.ok) throw new Error(`gemini ${res.status}`);
   const body = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;

@@ -118,9 +118,41 @@ function extractGeminiCandidateText(json: unknown): string | null {
 }
 
 /**
+ * True when a non-OK response is Google rejecting the REQUESTED
+ * `thinkingConfig.thinkingLevel`, not the prompt itself. Which values a model
+ * accepts varies BY MODEL: live-verified 2026-08-14, gemini-3.7-flash 400s on
+ * "minimal" ("Thinking level MINIMAL is not supported for this model") while
+ * 3.5-flash-lite accepts it, and 2.5-era models reject the field outright
+ * (Unknown name "thinkingLevel"). Matched loosely (level or config, any
+ * separator) so both rejection shapes qualify. Callers pick models via env
+ * (GEMINI_ROWBOAT_MODEL, GEMINI_SUMMARY_MODEL, ...), so a config-shaped 400
+ * must degrade instead of killing the surface: the 404 fallbacks in
+ * knowledge-tools/website-ingest never see 400s. Mirrored in
+ * supabase/functions/ai-flow-worker/index.ts; keep in lockstep.
+ */
+export function isThinkingLevelRejection(status: number, body: string): boolean {
+  return status === 400 && /thinking[\s_-]?(level|config)/i.test(body);
+}
+
+/**
+ * Fallback for the single bounded retry after a thinking-level rejection:
+ * "minimal" (the only value some models reject today) steps down to "low";
+ * any other rejected value drops the config entirely so the model default
+ * applies. A failed retry surfaces the retry's own gemini_http_* error, so
+ * this never loops.
+ */
+export function thinkingLevelFallback(
+  level: NonNullable<GeminiGenerateTextParams["thinkingLevel"]>
+): GeminiGenerateTextParams["thinkingLevel"] {
+  return level === "minimal" ? "low" : undefined;
+}
+
+/**
  * One-shot text generation via `models/{model}:generateContent`, returning
  * the candidate text AND the billed token usage so callers can meter spend
- * exactly instead of estimating from characters.
+ * exactly instead of estimating from characters. A 400 that rejects the
+ * requested thinkingLevel is retried once at {@link thinkingLevelFallback}
+ * (same model, same abort signal, so caller deadlines still bound it).
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_empty` when the response parses but has no candidate text
  */
@@ -132,40 +164,48 @@ export async function geminiGenerateTextDetailed(
   const temperature = params.temperature ?? 0.2;
   const maxOutputTokens = params.maxOutputTokens ?? 1500;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-goog-api-key": params.apiKey
-    },
-    signal: params.signal,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: params.systemInstruction }] },
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: params.userText },
-            ...(params.inlineParts ?? []).map((p) => ({
-              inlineData: { mimeType: p.mimeType, data: p.dataBase64 }
-            }))
-          ]
+  const requestOnce = (thinkingLevel: GeminiGenerateTextParams["thinkingLevel"]) =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": params.apiKey
+      },
+      signal: params.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: params.systemInstruction }] },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: params.userText },
+              ...(params.inlineParts ?? []).map((p) => ({
+                inlineData: { mimeType: p.mimeType, data: p.dataBase64 }
+              }))
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature,
+          maxOutputTokens,
+          ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
+          ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {})
         }
-      ],
-      generationConfig: {
-        temperature,
-        maxOutputTokens,
-        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
-        ...(params.thinkingLevel
-          ? { thinkingConfig: { thinkingLevel: params.thinkingLevel } }
-          : {})
-      }
-    })
-  });
+      })
+    });
 
+  let response = await requestOnce(params.thinkingLevel);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
+    if (params.thinkingLevel && isThinkingLevelRejection(response.status, text)) {
+      response = await requestOnce(thinkingLevelFallback(params.thinkingLevel));
+    } else {
+      throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
+    }
+    if (!response.ok) {
+      const retryText = await response.text().catch(() => "");
+      throw new Error(`gemini_http_${response.status}:${retryText.slice(0, 200)}`);
+    }
   }
 
   let json: unknown;

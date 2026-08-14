@@ -12,7 +12,12 @@
  * @see https://ai.google.dev/gemini-api/docs/function-calling
  */
 
-import { extractGeminiUsage, type GeminiUsage } from "@/lib/gemini-generate-content";
+import {
+  extractGeminiUsage,
+  isThinkingLevelRejection,
+  thinkingLevelFallback,
+  type GeminiUsage
+} from "@/lib/gemini-generate-content";
 
 /** JSON-schema-shaped tool declaration (same shape the Rowboat seed uses). */
 export type GeminiFunctionDeclaration = {
@@ -93,7 +98,10 @@ function extractCandidateContent(json: unknown): GeminiChatContent | null {
 }
 
 /**
- * One generateContent step with tools attached.
+ * One generateContent step with tools attached. A 400 rejecting the requested
+ * thinkingLevel retries once at the shared fallback (same model, same signal),
+ * mirroring geminiGenerateTextDetailed: thinking-level support varies by
+ * model and the model id is operator-configurable on every chat surface.
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_http_parse` on an unparseable body
  */
@@ -101,32 +109,40 @@ export async function geminiChatStep(params: GeminiChatStepParams): Promise<Gemi
   const model = encodeURIComponent(params.model.trim());
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-goog-api-key": params.apiKey
-    },
-    signal: params.signal,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: params.systemInstruction }] },
-      contents: params.contents,
-      ...(params.tools.length > 0
-        ? { tools: [{ functionDeclarations: params.tools }] }
-        : {}),
-      generationConfig: {
-        temperature: params.temperature ?? 0.2,
-        maxOutputTokens: params.maxOutputTokens ?? 1500,
-        ...(params.thinkingLevel
-          ? { thinkingConfig: { thinkingLevel: params.thinkingLevel } }
-          : {})
-      }
-    })
-  });
+  const requestOnce = (thinkingLevel: GeminiChatStepParams["thinkingLevel"]) =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": params.apiKey
+      },
+      signal: params.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: params.systemInstruction }] },
+        contents: params.contents,
+        ...(params.tools.length > 0
+          ? { tools: [{ functionDeclarations: params.tools }] }
+          : {}),
+        generationConfig: {
+          temperature: params.temperature ?? 0.2,
+          maxOutputTokens: params.maxOutputTokens ?? 1500,
+          ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {})
+        }
+      })
+    });
 
+  let response = await requestOnce(params.thinkingLevel);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
+    if (params.thinkingLevel && isThinkingLevelRejection(response.status, text)) {
+      response = await requestOnce(thinkingLevelFallback(params.thinkingLevel));
+    } else {
+      throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
+    }
+    if (!response.ok) {
+      const retryText = await response.text().catch(() => "");
+      throw new Error(`gemini_http_${response.status}:${retryText.slice(0, 200)}`);
+    }
   }
 
   let json: unknown;

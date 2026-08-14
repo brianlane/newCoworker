@@ -504,3 +504,183 @@ describe("geminiGenerateText", () => {
     expect(out).toBe("x");
   });
 });
+
+describe("thinking-level rejection retry", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // The live Google body observed 2026-08-14 on gemini-3.7-flash.
+  const REJECTION = JSON.stringify({
+    error: {
+      code: 400,
+      message:
+        "Thinking level MINIMAL is not supported for this model. Please retry with other thinking level.",
+      status: "INVALID_ARGUMENT"
+    }
+  });
+
+  function errorResponse(status: number, body: string): Response {
+    return new Response(body, { status, headers: { "content-type": "application/json" } });
+  }
+
+  function okText(text: string): Response {
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }
+
+  it("retries once at low when the model rejects thinkingLevel minimal", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(400, REJECTION))
+      .mockResolvedValueOnce(okText("recovered"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const out = await geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3.7-flash",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "minimal"
+    });
+    expect(out).toBe("recovered");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(String((fetchStub.mock.calls[0] as [string, RequestInit])[1].body));
+    const second = JSON.parse(String((fetchStub.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(first.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
+    expect(second.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+  });
+
+  it("drops thinkingConfig on retry when a non-minimal level is rejected", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(
+        errorResponse(
+          400,
+          JSON.stringify({ error: { message: "Thinking level LOW is not supported." } })
+        )
+      )
+      .mockResolvedValueOnce(okText("plain"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const out = await geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-x",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "low"
+    });
+    expect(out).toBe("plain");
+    const second = JSON.parse(String((fetchStub.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(second.generationConfig).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("also matches the 2.5-era field rejection shape (thinking_config)", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(
+        errorResponse(
+          400,
+          JSON.stringify({
+            error: {
+              message:
+                'Invalid JSON payload received. Unknown name "thinking_config" at generation_config.'
+            }
+          })
+        )
+      )
+      .mockResolvedValueOnce(okText("ok"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const out = await geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-2.5-flash",
+      systemInstruction: "s",
+      userText: "u",
+      thinkingLevel: "low"
+    });
+    expect(out).toBe("ok");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a 400 unrelated to thinking config", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(
+        errorResponse(400, JSON.stringify({ error: { message: "API key not valid" } }))
+      );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "gemini-3.7-flash",
+        systemInstruction: "s",
+        userText: "u",
+        thinkingLevel: "minimal"
+      })
+    ).rejects.toThrow(/^gemini_http_400:.*API key not valid/);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry non-400 statuses even when the body mentions thinking level", async () => {
+    const fetchStub = vi.fn().mockResolvedValueOnce(errorResponse(500, REJECTION));
+    vi.stubGlobal("fetch", fetchStub);
+
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "gemini-3.7-flash",
+        systemInstruction: "s",
+        userText: "u",
+        thinkingLevel: "minimal"
+      })
+    ).rejects.toThrow(/^gemini_http_500:/);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the retry's own failure without looping", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(400, REJECTION))
+      .mockResolvedValueOnce(errorResponse(503, "overloaded"));
+    vi.stubGlobal("fetch", fetchStub);
+
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "gemini-3.7-flash",
+        systemInstruction: "s",
+        userText: "u",
+        thinkingLevel: "minimal"
+      })
+    ).rejects.toThrow(/^gemini_http_503:overloaded$/);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses an empty suffix when the retry response body is unreadable", async () => {
+    const brokenRetry: Partial<Response> = {
+      ok: false,
+      status: 502,
+      text: () => Promise.reject(new Error("broken stream"))
+    };
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(400, REJECTION))
+      .mockResolvedValueOnce(brokenRetry as Response);
+    vi.stubGlobal("fetch", fetchStub);
+
+    await expect(
+      geminiGenerateText({
+        apiKey: "k",
+        model: "gemini-3.7-flash",
+        systemInstruction: "s",
+        userText: "u",
+        thinkingLevel: "minimal"
+      })
+    ).rejects.toThrow(/^gemini_http_502:$/);
+  });
+});
