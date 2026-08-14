@@ -850,6 +850,25 @@ path rather than IP. Full detail, the Supabase OAuth findings, the rollout
 order, and the submission checklist live in
 [docs/CHATGPT-APP.md](docs/CHATGPT-APP.md).
 
+## Ask AI companion (dashboard)
+
+Every /dashboard page carries a floating "Ask AI" launcher
+([src/components/dashboard/companion/CompanionLauncher.tsx](src/components/dashboard/companion/CompanionLauncher.tsx),
+mounted once in the dashboard layout, hidden on /dashboard/chat itself). It
+opens a slide-over panel that is the SAME conversation as /dashboard/chat:
+same POST/GET/threads endpoints, same active thread (one `is_active` per
+business by partial unique index), and the same transport state machine via
+the shared `useDashboardChatTransport` hook, so the page and the panel stay
+in sync like two tabs would. The panel is deliberately leaner than the page:
+Chat + History tabs, route-aware suggested prompts
+([src/lib/dashboard-chat/companion-prompts.ts](src/lib/dashboard-chat/companion-prompts.ts)),
+a text-only composer (attachments live on the full page, linked from the
+panel), and draft cards using the same sessionStorage hand-off as the page.
+Under admin view-as the panel shows a read-only notice instead of a
+composer. All copy lives under `dashboard.companion.*` in BOTH message
+catalogs; the client subset registers `dashboard.companion` in
+`src/i18n/client-messages.ts`.
+
 ## Google Workspace OAuth: one client, three consumers
 
 Gmail and Calendar are first-party as of Aug 2026: we hold the tokens, and
