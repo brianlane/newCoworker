@@ -176,6 +176,20 @@ describe("customer persona", () => {
       expect(text).toContain("Never read out lead details");
     });
 
+    it("carves out interpreting, so it cannot fight translator mode", () => {
+      // translatorModeCue tells the AI to relay each party "in the FIRST
+      // PERSON as whoever you are interpreting". A blanket, persistent "never
+      // speak the caller's side" in the system instruction outranks a
+      // mid-call coordinator message and would stall or de-voice interpreting
+      // on a bridged call both humans can hear (Bugbot, PR #1377).
+      //
+      // The carve-out keeps the part that actually matters: relaying real
+      // words is allowed, inventing them never is.
+      const text = build();
+      expect(text).toContain("interpreter");
+      expect(text).toContain("never invent words nobody said");
+    });
+
     it("gives these rules to staff callers too", () => {
       // The HomeLight transfer line answers as an internal-assistant persona,
       // so a customer-only rule would have missed this exact call.

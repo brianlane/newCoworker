@@ -13,6 +13,7 @@
  */
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
+import { ONE_VOICE_LINE, RECORDED_SYSTEM_LINE } from "./call-integrity-lines.js";
 import {
   customerLanguageLine,
   type VoiceCustomerLanguage
@@ -130,28 +131,6 @@ export function systemInstructionForBusiness(
     "Punctuation: never use an em dash in anything you write. Use a comma, " +
     "a period, or a colon instead.";
 
-  // Aug 14 2026, HomeLight transfer (call 28f9c228). The transfer dropped the
-  // AI into the seller's voicemail. Nobody replied, and the model filled the
-  // silence by speaking the caller's turns ITSELF: one turn it played down the
-  // line ran "...that's 975 568. Is that correct?user / Correct. I want to
-  // sell my house ASAP.Got it, ASAP. And what's the property address...". It
-  // emitted the literal role token, invented the seller's answer, then
-  // answered its own question. The digits it "caught" came off the voicemail
-  // system's menu, not a person.
-  //
-  // Both halves are stated because both failed independently, and a model that
-  // hallucinates the other party is dangerous well beyond voicemail: on a live
-  // call it would be putting words in a real seller's mouth.
-  const oneVoiceLine =
-    "You speak ONLY as yourself, one turn at a time. Never speak the caller's side of the conversation, never write out a role label such as \"user\" or \"assistant\", and never continue past your own turn to supply their answer. If the line is silent, wait or ask a short question, and say nothing else: silence is never permission to imagine a reply. Only ever react to words the caller actually said on this call, and if you did not hear something clearly, ask them to repeat it rather than deciding what it must have been.";
-
-  // Same call: the AI ran its whole intake script at a recording, then left a
-  // voicemail assembled out of half-filled context ("This lead was for a
-  // property at roughly when you want to sell ASAP"), which is what the seller
-  // heard as their first contact from the business.
-  const recordedSystemLine =
-    "Recordings are not people. If what you hear is a recorded system rather than a person (a menu offering keypad options like \"press one\", hold music, a ringback, an automated greeting, or a voicemail greeting inviting you to leave a message), do not carry on a conversation with it, do not answer its prompts as if a person asked them, and never treat digits or words it reads out as something the caller told you. Say nothing until either a person speaks or you are clearly at the beep. At the beep, leave ONE short message: who you are, which business you are calling from, why you called in one sentence, and how to reach you, then stop. Never read out lead details, prices, addresses, timelines, or anything from your briefing into a voicemail, and never leave a message that repeats a template or trails off unfinished.";
-
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
   const isStaff = callerIdentity != null && callerIdentity.kind !== "customer";
@@ -170,8 +149,8 @@ export function systemInstructionForBusiness(
       "Act as their internal assistant: answer questions about the business from your briefing below, help look things up, take a message for someone on the team, or help them schedule. Keep replies concise, natural, and spoken (not bulleted).",
       identityLine,
       groundedActionsLine,
-      oneVoiceLine,
-      recordedSystemLine,
+      ONE_VOICE_LINE,
+      RECORDED_SYSTEM_LINE,
       noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
@@ -204,8 +183,8 @@ export function systemInstructionForBusiness(
       // conversationQualityLine — keep in sync): reuse what is known, vary
       // the phrasing, respond to what the caller actually said.
       "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared) — reuse it, including when booking an appointment. Address the caller by their FIRST name only, and use it sparingly — most replies need no name at all; never say their full name in normal conversation. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
-      oneVoiceLine,
-      recordedSystemLine,
+      ONE_VOICE_LINE,
+      RECORDED_SYSTEM_LINE,
       noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );

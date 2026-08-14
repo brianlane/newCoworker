@@ -4,6 +4,7 @@
  * without pulling the @google/genai-coupled bridge module.
  */
 import { currentDateTimeLine } from "./datetime-line.js";
+import { ONE_VOICE_LINE, RECORDED_SYSTEM_LINE } from "./call-integrity-lines.js";
 import {
   customerLanguageLine,
   type VoiceCustomerLanguage
@@ -184,6 +185,12 @@ export function intakeSystemInstruction(
       "Whatever language you speak, always write the values you pass to `capture_lead` in ENGLISH: the business owner reads them in a text message. Translate what the person told you rather than passing their words through, and keep names, addresses, and phone numbers exactly as they gave them."
     );
   }
+  // Every branch above gets these: this persona runs the live-transfer and
+  // outbound paths, which is where the AI ran its whole intake script at a
+  // voicemail system and then supplied the seller's replies itself
+  // (call 28f9c228, 2026-08-14). Shared with the receptionist and staff
+  // personas via call-integrity-lines.ts so the two builders cannot drift.
+  lines.push(ONE_VOICE_LINE, RECORDED_SYSTEM_LINE);
   lines.push(currentDateTimeLine(new Date(), businessTimezone));
   return lines.join(" ");
 }

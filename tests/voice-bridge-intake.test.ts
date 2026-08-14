@@ -306,3 +306,48 @@ describe("composeIntakeLeadSms", () => {
     expect(text).toBe(`${STAR_ROW}\n\n${STAR_ROW}`);
   });
 });
+
+/**
+ * Aug 14 2026, HomeLight transfer, call 28f9c228. This is the persona that
+ * ran on that call: the AI-takeover path builds its instruction here, not in
+ * systemInstructionForBusiness, so rules added only there would have missed
+ * the incident they were written for (caught by Bugbot on PR #1377).
+ *
+ * The transfer dropped the AI into the seller's voicemail. It ran this
+ * script at the recording: the "read it back to confirm it" rule below is
+ * what turned menu digits into "that's 975 568. Is that correct?", and with
+ * nobody replying the model supplied the seller's answer itself, role token
+ * and all, then answered its own question.
+ */
+describe("intakeSystemInstruction: call-integrity rules", () => {
+  const variants: Array<[string, string]> = [
+    ["inbound seller takeover", intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [])],
+    [
+      "outbound call",
+      intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], false, undefined, true)
+    ],
+    [
+      "transfer mode",
+      intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], false, {
+        agentName: "Dave"
+      })
+    ]
+  ];
+
+  for (const [label, instr] of variants) {
+    it(`forbids voicing the caller's side in ${label}`, () => {
+      expect(instr).toContain("Never speak the caller's side of the conversation");
+      expect(instr).toContain("never write out a role label");
+      expect(instr).toContain("Only ever react to words the caller actually said");
+    });
+
+    it(`teaches recordings are not people in ${label}`, () => {
+      expect(instr).toContain("recorded system rather than a person");
+      expect(instr).toContain("do not carry on a conversation with it");
+      // The precise trap on the incident call: digits read out by a menu are
+      // not a number the caller gave, and this persona is told to collect a
+      // callback number and read it back.
+      expect(instr).toContain("never treat digits or words it reads out as something the caller told you");
+    });
+  }
+});
