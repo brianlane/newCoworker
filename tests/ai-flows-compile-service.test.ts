@@ -816,6 +816,7 @@ describe("mailbox bindings (fromConnectionId)", () => {
     metadata: {},
     transport: "nango" as const,
     is_active: true,
+    oauth_scope: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z"
   };
@@ -913,6 +914,7 @@ describe("mailbox bindings (fromConnectionId)", () => {
         metadata: { provider_account_email: "sam@example.com" },
         transport: "nango" as const,
         is_active: true,
+        oauth_scope: null,
         created_at: "2026-07-01T00:00:00Z",
         updated_at: "2026-07-01T00:00:00Z"
       },
@@ -924,6 +926,7 @@ describe("mailbox bindings (fromConnectionId)", () => {
         metadata: {},
         transport: "nango" as const,
         is_active: true,
+        oauth_scope: null,
         created_at: "2026-07-02T00:00:00Z",
         updated_at: "2026-07-02T00:00:00Z"
       },
@@ -935,6 +938,7 @@ describe("mailbox bindings (fromConnectionId)", () => {
         metadata: {},
         transport: "nango" as const,
         is_active: true,
+        oauth_scope: null,
         created_at: "2026-07-03T00:00:00Z",
         updated_at: "2026-07-03T00:00:00Z"
       }

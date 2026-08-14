@@ -30,6 +30,7 @@ function conn(over: Partial<{ id: string; provider_config_key: string; metadata:
     metadata: over.metadata ?? {},
     transport: "nango" as const,
     is_active: true,
+    oauth_scope: null,
     created_at: "",
     updated_at: ""
   };
