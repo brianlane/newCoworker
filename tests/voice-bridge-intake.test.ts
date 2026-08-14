@@ -406,21 +406,31 @@ describe("intakeSystemInstruction: voicemail deference", () => {
 });
 
 /**
- * The keypad exception has to be spent once used. The IVR cue stays in the
- * session after the accept, so an open-ended "press when a recording asks"
- * would follow the call into whatever recording comes next.
+ * The keypad exception is scoped per ANNOUNCEMENT, not per press, and both
+ * halves of that are load-bearing.
  *
- * This is not hypothetical: on the incident call (28f9c228) the seller's
- * voicemail menu said "Replay your message. Press one. To continue
- * recording, press two." Pressing into that is the same DTMF the partner
- * gate wanted, aimed at a stranger's mailbox (Bugbot, PR #1377).
+ * Re-pressing the SAME announcement is designed behavior: a Telnyx OK is not
+ * proof the partner accepted, so an early blind fallback can land before the
+ * menu is listening while the partner keeps looping "press 1". ivr-gate-press
+ * allows up to IVR_MAX_ACCEPT_PRESSES with a cooldown, and sendPostAcceptCue
+ * explicitly tells the model to press again if the recording is still asking.
+ * A "spent once you have pressed" rule would outrank that cue and cost the
+ * referral on an early first tone.
+ *
+ * Pressing into a DIFFERENT, later recording is the failure. On the incident
+ * call (28f9c228) the seller's mailbox offered "Replay your message. Press
+ * one. To continue recording, press two." That is the partner gate's DTMF
+ * aimed at a stranger's voicemail. Both directions caught by Bugbot on #1377.
  */
-describe("intakeSystemInstruction: the keypad exception is spent once used", () => {
+describe("intakeSystemInstruction: the keypad exception is scoped per announcement", () => {
   const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
 
   it("scopes the press to the announcement it was told about", () => {
-    expect(instr).toContain("only the announcement you were told about");
-    expect(instr).toContain("spent once you have pressed");
+    expect(instr).toContain("only the announcement the coordinator named");
+  });
+
+  it("still allows re-pressing that same announcement while it loops", () => {
+    expect(instr).toContain("if that same announcement is still asking, press again");
   });
 
   it("names the later-recording case it must not press into", () => {
