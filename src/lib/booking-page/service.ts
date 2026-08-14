@@ -67,7 +67,8 @@ import {
 import {
   bookCalendarAppointment,
   formatBookingStartLocal,
-  getWorkspaceBusyBlocks
+  getWorkspaceBusyBlocks,
+  type WorkspaceBusyRead
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { getBusiness } from "@/lib/db/businesses";
@@ -136,6 +137,23 @@ export const BOOKING_PAGE_SOURCE_TAG = "Booking Page";
 export const PUBLIC_SLOT_CLAIM_KEY = "slot:public-booking-page";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `booking_pages.max_advance_days` default, for a business with no page row yet. */
+const DEFAULT_MAX_ADVANCE_DAYS = 14;
+
+/**
+ * The far edge of the window the public page reads free/busy for.
+ *
+ * Shared by the visitor-facing slot walk and the owner-facing health probe on
+ * purpose. The probe exists to tell the owner what visitors are experiencing,
+ * so reading a different window is how it ends up reporting healthy on a
+ * calendar the page cannot fully read. That is exactly what it did while this
+ * was a hardcoded one day: paging only runs out over a long horizon, so the
+ * one signal built for it could never fire.
+ */
+function bookableWindowEnd(now: Date, maxAdvanceDays: number): Date {
+  return new Date(now.getTime() + (maxAdvanceDays + 2) * DAY_MS);
+}
 
 /**
  * Platform-mode busy padding: the ledger stores booking STARTS only, so
@@ -236,17 +254,24 @@ export async function getBookingPageContext(
   };
 }
 
-/** Provider busy blocks for the page's whole bookable window. */
+/**
+ * Provider busy blocks for the page's whole bookable window.
+ *
+ * `complete: false` means the provider answered with a REAL but partial list
+ * (Graph paging cut short). Kept distinct from null all the way to the caller,
+ * because partial is worth using here and must never be cached.
+ */
 async function fetchBusyBlocks(
   businessId: string,
   provider: "google" | "microsoft" | "caldav",
   conn: { provider: string; connectionId: string; providerConfigKey: string },
   windowStart: Date,
   windowEnd: Date
-): Promise<BusyBlock[] | null> {
+): Promise<WorkspaceBusyRead | null> {
   if (provider === "caldav") {
     const res = await getCaldavBusyBlocks(businessId, windowStart, windowEnd);
-    return res.ok ? res.busy : null;
+    // CalDAV reports the window in one response; there is no paging to cut off.
+    return res.ok ? { busy: res.busy, complete: true } : null;
   }
   return getWorkspaceBusyBlocks(businessId, conn, windowStart, windowEnd);
 }
@@ -268,15 +293,22 @@ export async function probeCalendarAvailability(
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) return "platform";
     if (!bookingPageSupportsProvider(conn)) return "unsupported";
+    // Same horizon the public page reads, via bookableWindowEnd: a partial
+    // read only happens over a long window, so probing a short one would
+    // always report healthy no matter how unreadable the real window is.
+    const page = await getBookingPageForBusiness(businessId);
     const now = new Date();
     const busy = await fetchBusyBlocks(
       businessId,
       conn.provider,
       conn,
       now,
-      new Date(now.getTime() + DAY_MS)
+      bookableWindowEnd(now, page?.max_advance_days ?? DEFAULT_MAX_ADVANCE_DAYS)
     );
-    return busy === null ? "unreadable" : "ok";
+    // Incomplete counts as unreadable for the OWNER's health probe: the
+    // dashboard warning is how they learn availability is not fully readable,
+    // even though the public page still serves the partial list.
+    return busy === null || !busy.complete ? "unreadable" : "ok";
   } catch {
     return "unreadable";
   }
@@ -381,7 +413,7 @@ async function listSlotsForContext(
 
   try {
     const now = nowOverride ?? new Date();
-    const windowEnd = new Date(now.getTime() + (page.max_advance_days + 2) * DAY_MS);
+    const windowEnd = bookableWindowEnd(now, page.max_advance_days);
 
     // Ledger starts serve the daily cap in both modes, the busy blocks in
     // platform mode, and the DEGRADED busy baseline in provider mode, so
@@ -423,7 +455,7 @@ async function listSlotsForContext(
       // sees the "cannot read availability" warning on the Bookings
       // dashboard either way; only events created DURING the outage can
       // be double-booked.
-      let fetched: BusyBlock[] | null = null;
+      let fetched: WorkspaceBusyRead | null = null;
       try {
         fetched = await fetchBusyBlocks(context.businessId, conn.provider, conn, now, windowEnd);
       } catch (err) {
@@ -441,11 +473,28 @@ async function listSlotsForContext(
         // The ledger union covers bookings the outage kept off the
         // snapshot; overlapping spans are harmless to the slot walk.
         busy = cached ? [...ledgerBusy, ...cached] : ledgerBusy;
+      } else if (!fetched.complete) {
+        // A partial read is USED, not discarded. Every block in it is really
+        // busy, so it blocks strictly more than the degraded baseline would;
+        // throwing it away to fall back on ledger-plus-cache would offer MORE
+        // taken slots, not fewer. The ledger is unioned in for the same reason
+        // it is during an outage.
+        //
+        // It is deliberately NOT written through. The cache is last-known-GOOD
+        // and serves future outages, so persisting an under-report would let
+        // one oversized window poison availability long after the read that
+        // produced it. A window that never fits the budget would otherwise
+        // never refresh the snapshot at all.
+        logger.warn("booking-page: provider busy incomplete; using partial read uncached", {
+          businessId: context.businessId,
+          blocks: fetched.busy.length
+        });
+        busy = [...ledgerBusy, ...fetched.busy];
       } else {
-        busy = fetched;
+        busy = fetched.busy;
         // Write-through (best-effort inside): the snapshot future outages
         // will serve.
-        await saveBusyCache(context.businessId, now, windowEnd, fetched);
+        await saveBusyCache(context.businessId, now, windowEnd, fetched.busy);
       }
     }
 

@@ -207,7 +207,10 @@ export async function verifyFreedSlotOpen(
       windowEnd
     );
     if (busy === null) return false;
-    return busy.every((b) => b.end.getTime() <= startMs || b.start.getTime() >= endMs);
+    // Same rule as the null case: an incomplete read cannot prove a slot is
+    // free, and this path only ever offers a slot it believes is free.
+    if (!busy.complete) return false;
+    return busy.busy.every((b) => b.end.getTime() <= startMs || b.start.getTime() >= endMs);
   } catch (err) {
     logger.warn("waitlist-fill: slot verification failed (treating as taken)", {
       businessId,

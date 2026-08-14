@@ -234,11 +234,70 @@ failure. The admin-consent leg returns to the same callback with
 `admin_consent=True` and **no code**, which the callback treats as success and
 sends the owner back through the normal authorize leg.
 
-**Known gap: `getSchedule` is work/school only.** On a personal Outlook account
-`POST /me/calendar/getSchedule` fails, and the free/busy handler does not catch
-a throw. This predates the migration (it behaved the same through Nango) but
-becomes more visible now that personal accounts can connect. Fix is a fallback
-to `calendarView`; tracked separately.
+**`getSchedule` is work/school only, and now falls back.** A personal Outlook
+account rejects `POST /me/calendar/getSchedule` outright.
+
+Nothing ever crashed: all four callers (the `calendar_find_slots` tool, the
+booking page probe, booking availability, and waitlist fill) catch. The cost was
+quieter and worse. A personal-Outlook tenant lost availability entirely and
+invisibly: the coworker could not offer times, the booking page read as
+unreadable, and waitlist fill treated every slot as taken forever.
+
+`getWorkspaceBusyBlocks` now falls back to `GET /v1.0/me/calendarView`, which
+personal accounts do support. Three details that matter:
+
+- It falls back only on a PROVIDER rejection (a real HTTP status). A transport
+  failure means we never reached Microsoft, which says nothing about the
+  mailbox, and retrying a second endpoint would turn one timeout into two.
+- calendarView returns EVENTS, not availability, so `showAs` is honored:
+  `free` and `workingElsewhere` events, and cancelled ones, do not block a slot.
+  Skipping that would invent busy time getSchedule would never have reported and
+  quietly delete real availability.
+- **It pages, and it says when it could not finish.** Graph defaults
+  calendarView to TEN items and hides the rest behind `@odata.nextLink`. Every
+  error here runs one way: an event we never read looks FREE, so a
+  first-page-only read books on top of real meetings. The read asks for
+  `$top=250` and follows nextLink up to 4 pages.
+
+  This one was a live bug, not a hypothetical: the shared-calendar read had been
+  unpaginated since PR #149 (Jun 2026), so any tenant with more than ten events
+  in a booking window was already at risk. Bugbot caught it on #1364 when the
+  same helper started carrying the primary availability path too.
+
+**`getWorkspaceBusyBlocks` returns `{ busy, complete }`, and `complete` is
+load-bearing.** A read that runs out of page budget comes back with
+`complete: false`: the blocks are real, there are just more unread. That has to
+survive the return, because the callers need opposite things and neither answer
+is safe for both.
+
+| Caller | On `complete: false` | Why |
+| --- | --- | --- |
+| `calendar_find_slots` | refuse (`calendar_lookup_failed`) | no other availability source; a partial list offers times that are free only because their event went unread |
+| waitlist fill | treat the slot as taken | it texts a customer an offer, so "free" must mean proven free |
+| public booking page | USE it, unioned with the ledger, and do NOT cache it | provider busy is additive there; discarding it degrades to ledger-plus-cache, which blocks LESS |
+
+The booking-page row is the counter-intuitive one and the reason `null` was not
+good enough. That page treats an unreadable provider as a degrade, not an
+outage: it falls back to a last-known-good snapshot plus the booking ledger. So
+returning `null` for a partial read would have handed out MORE taken slots, not
+fewer. Worse, `saveBusyCache` only runs on the complete path, so a mailbox that
+never fits the budget would never write a snapshot and would degrade to
+ledger-only forever.
+
+The budget is reachable by a real tenant: the window runs to
+`max_advance_days + 2`, `max_advance_days` caps at 60, and a clinic or salon at
+20 to 40 appointments a day clears 1000 events inside one window. Raising the
+budget instead would put twenty-odd sequential Graph round trips in front of a
+public page load, which is why the fix is to report incompleteness rather than
+to page harder. The owner still finds out: `probeCalendarAvailability` reports
+an incomplete read as `unreadable` on the Bookings dashboard.
+
+That probe reads the SAME window as the public page (`bookableWindowEnd`, which
+both call), and that sharing is the point rather than tidiness. It used to probe
+a hardcoded one day, which cannot overflow a budget sized for 62, so the one
+owner-facing signal for a partial read could never fire on the tenants it was
+built for. A probe that reads a different window than the page it reports on
+does not report on that page.
 
 **Polling is unchanged.** Connected-mailbox watching is still the roughly
 1/minute cron poll. No Graph push subscriptions were added.

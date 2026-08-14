@@ -246,7 +246,7 @@ beforeEach(() => {
   mockConn.mockResolvedValue(GOOGLE);
   mockBusiness.mockResolvedValue(BUSINESS);
   mockZoom.mockResolvedValue("zoom-1");
-  mockBusy.mockResolvedValue([]);
+  mockBusy.mockResolvedValue({ busy: [], complete: true });
   mockClientFactory.mockResolvedValue(ledgerDb({ data: [], error: null }));
   mockCapture.mockResolvedValue({ created: true });
   mockSlotClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" });
@@ -370,6 +370,26 @@ describe("probeCalendarAvailability", () => {
     // A thrown proxy error (Google 403) also reads as unreadable.
     mockBusy.mockRejectedValueOnce(new Error("Request failed with status code 403"));
     expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // An INCOMPLETE read is unreadable for the owner even though the public
+    // page still serves the partial list: this dashboard warning is the only
+    // place they find out their availability is not being read in full.
+    mockBusy.mockResolvedValueOnce({
+      busy: [{ start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") }],
+      complete: false
+    });
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // ...and it must probe the window the PUBLIC PAGE reads, not a token one.
+    // Paging only runs out over a long horizon, so a short probe window would
+    // report healthy on exactly the calendars this signal exists to catch.
+    mockPageByBusiness.mockResolvedValueOnce({ ...PAGE, max_advance_days: 60 } as never);
+    mockBusy.mockClear();
+    mockBusy.mockResolvedValueOnce({ busy: [], complete: true });
+    await probeCalendarAvailability(BIZ);
+    const [, , probeStart, probeEnd] = mockBusy.mock.calls[0];
+    const probedDays = (probeEnd.getTime() - probeStart.getTime()) / (24 * 60 * 60 * 1000);
+    expect(probedDays).toBe(62);
 
     // CalDAV rides the same probe.
     mockConn.mockResolvedValueOnce({
@@ -569,7 +589,7 @@ describe("listPublicSlots", () => {
 
   it("writes the snapshot through on every successful provider fetch", async () => {
     const span = { start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") };
-    mockBusy.mockResolvedValueOnce([span]);
+    mockBusy.mockResolvedValueOnce({ busy: [span], complete: true });
     const out = await listPublicSlots(TOKEN, 30);
     expect(out.ok).toBe(true);
     expect(mockCacheSave).toHaveBeenCalledTimes(1);
@@ -578,6 +598,47 @@ describe("listPublicSlots", () => {
     expect(winStart.getTime()).toBeLessThan(winEnd.getTime());
     expect(spans).toEqual([span]);
     expect(mockCacheRead).not.toHaveBeenCalled();
+  });
+
+  it("uses an incomplete provider read instead of degrading past it", async () => {
+    // Graph paging cut short. Every block returned is really busy, so serving
+    // them blocks strictly MORE than the degraded ledger-plus-cache baseline
+    // would. Discarding a partial read to "fail safe" would offer more taken
+    // slots, not fewer, which is the opposite of safe.
+    const span = { start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") };
+    mockBusy.mockResolvedValueOnce({ busy: [span], complete: false });
+    mockListStarts.mockResolvedValueOnce([new Date("2026-01-05T16:00:00Z")]);
+
+    const out = await listPublicSlots(TOKEN, 30);
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    const starts = out.slots.map((s) => s.startIso);
+    expect(starts).not.toContain("2026-01-05T17:00:00.000Z"); // the partial read
+    expect(starts).not.toContain("2026-01-05T16:00:00.000Z"); // ledger, still unioned
+    expect(starts).toContain("2026-01-05T18:00:00.000Z");
+    // It must not consult the cache: it has live data, just not all of it.
+    expect(mockCacheRead).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy incomplete; using partial read uncached",
+      expect.objectContaining({ businessId: BIZ, blocks: 1 })
+    );
+  });
+
+  it("never persists an incomplete read as the last-known-good snapshot", async () => {
+    // The cache serves FUTURE outages. Writing an under-report into it would
+    // let one oversized window keep reopening booked time long after the read
+    // that produced it, and a window that never fits the page budget would
+    // never refresh the snapshot at all.
+    mockBusy.mockResolvedValueOnce({
+      busy: [{ start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") }],
+      complete: false
+    });
+
+    const out = await listPublicSlots(TOKEN, 30);
+
+    expect(out.ok).toBe(true);
+    expect(mockCacheSave).not.toHaveBeenCalled();
   });
 
   it("degrades on a thrown provider busy fetch too (non-Error shapes included)", async () => {
