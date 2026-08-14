@@ -54,7 +54,7 @@ import { recordGeminiUsage } from "./usage-log";
  */
 
 /** The inline engine's production default (DASHBOARD_CHAT_MODEL). */
-const OPERATOR_MODEL = "gemini-3.6-flash";
+const OPERATOR_MODEL = "gemini-3.7-flash";
 
 const OWNER_E164 = "+16026886672";
 const BETH_EMAIL = "beth@lizdev.example.com";

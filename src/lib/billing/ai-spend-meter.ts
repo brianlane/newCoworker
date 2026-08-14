@@ -59,11 +59,20 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   // far stronger model. Thinking tokens bill as output here too.
   "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
   // Gemini 3.6 Flash (GA Jul 21 2026): replaces 3.5-flash as the flagship
-  // default — $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
-  "gemini-3.6-flash": { in: 1.5, out: 7.5 }
+  // default: $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
+  "gemini-3.6-flash": { in: 1.5, out: 7.5 },
+  // Gemini 3.7 Flash (GA Aug 13 2026): replaces 3.6-flash as the flagship
+  // default. Priced at the post-intro list rate ($1.50/$7.50, identical to
+  // 3.6-flash), not the launch promo ($0.75/$3.75 through Dec 31 2026): a
+  // promo-rate row would undercount the fuse the day the promo lapses, and
+  // date-conditional pricing is a time bomb. Thinking tokens bill as output.
+  "gemini-3.7-flash": { in: 1.5, out: 7.5 }
 };
 
-/** Unknown model → assume the priciest tier we deploy (never undercount a fuse). */
+/**
+ * Unknown model → the priciest text rate in the table (the gemini-3.5-flash
+ * row, at or above every tier we deploy), so the fuse never undercounts.
+ */
 export const DEFAULT_GEMINI_PRICE_PER_1M: GeminiPricePer1M = { in: 1.5, out: 9.0 };
 
 export function geminiPriceFor(model: string): GeminiPricePer1M {

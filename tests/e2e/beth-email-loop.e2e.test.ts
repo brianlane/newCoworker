@@ -39,7 +39,7 @@ import { recordGeminiUsage } from "./usage-log";
  */
 
 /** The inline engine's production default (DASHBOARD_CHAT_MODEL). */
-const EMAIL_MODEL = "gemini-3.6-flash";
+const EMAIL_MODEL = "gemini-3.7-flash";
 
 const BETH = "beth@lizdev.example.com";
 const LIZ = "liz@lizdev.example.com";

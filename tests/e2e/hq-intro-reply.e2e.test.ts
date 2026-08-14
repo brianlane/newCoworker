@@ -37,7 +37,7 @@ import { recordGeminiUsage } from "./usage-log";
  */
 
 /** src/lib/agents/run.ts DEFAULT_AGENT_MODEL. */
-const AGENT_MODEL = "gemini-3.6-flash";
+const AGENT_MODEL = "gemini-3.7-flash";
 
 /**
  * What /api/aiflows/run-agent hands executeAgentRun for a TEXT input: a

@@ -174,13 +174,13 @@ describe("runInlineChatTurn, plain turns", () => {
     expect(res).toMatchObject({ ok: true, content: "Still fine" });
   });
 
-  it("defaults to a model that exists on the Gemini API (gemini-3.6-flash)", async () => {
+  it("defaults to a model that exists on the Gemini API (gemini-3.7-flash)", async () => {
     // Regression pin: the launch default was gemini-3.1-flash, an id that
     // does not exist on the API, every inline turn 404'd, silently
     // demoting text turns to the worker and hard-failing attachment turns.
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(baseArgs(), { chatStep });
-    expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.6-flash");
+    expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.7-flash");
     // Gemini 3: thinking constrained to "low" so dynamic reasoning can't
     // eat the 4000-token cap on tool-loop turns.
     expect(chatStep.mock.calls[0][0].thinkingLevel).toBe("low");
