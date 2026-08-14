@@ -40,16 +40,21 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  *     window / immediately), with immediate follow-up always allowed (the
  *     act-now contract in amy-act-now.e2e.test.ts is unaffected).
  *
- * A reply that points back at the lead's recurring window with NO day
- * attached ("someone will reach out within that window") satisfies both
- * halves, and the two judge questions have to agree about that. They did
- * not: promises_passed_window already answered false for "names no day at
- * all", while future_or_no_day only accepted "no timing at all", so an
- * unanchored window fell through the gap and the pair contradicted itself.
- * That is what failed the nightly on 2026-08-12, on a reply that broke no
- * contract. future_or_no_day now spells the case out. The real defect this
- * file exists for, a reply that pins contact to TODAY's closed window, is
- * still caught by promises_passed_window, which is untouched.
+ * There used to be a second judged question here, future_or_no_day, as the
+ * positive counterpart: "is any named timing still ahead?". It is gone, and
+ * the timing contract now rests on promises_passed_window alone.
+ *
+ * Two reasons. It was redundant: measured over 8 draws, promises_passed_window
+ * on its own still flags the real incident reply ("reach out between 10 AM
+ * and 2 PM Arizona time today") 8 out of 8, and flags 0 out of 6 on every
+ * good reply shape, including the unanchored "within that window" one that
+ * failed the 2026-08-12 nightly. And it was unreliable: TRUE = good property
+ * is the question shape the judge is least sharp on, and it kept returning
+ * false on replies that named a plainly future day ("tomorrow, Saturday,
+ * August 1"), which is how it broke the 2026-08-14 nightly.
+ *
+ * The remaining judged question is phrased TRUE = violation, which is what
+ * judge.ts asks for, and the criteria check below is now lexical.
  */
 
 const LEAD = "+16127087408";
@@ -135,25 +140,25 @@ describe("Amy availability-window replay — Kolton 2026-07-31 (generic path, re
         "they never said 'today') and listed their home criteria",
       reply,
       {
+        // Phrased so the TRUE case is the narrow one: only a message that
+        // ties contact to TODAY violates. The previous wording listed what
+        // answers false but never said "only today answers true", and the
+        // judge read a reply that merely REPEATED the lead's window with its
+        // clock times ("during your preferred window of 10:00 AM to 2:00 PM
+        // daily") as meaning today. Measured over 6 draws per reply on the
+        // real nightly replies: that wording false-flagged them 3/6 and 6/6,
+        // this one 0/6 and 0/6, while both still catch the actual incident
+        // reply 6/6.
         promises_passed_window:
-          "Does the message say or imply that a person will reach out, or that " +
-          "anything will happen, TODAY within the 10am-2pm window? It is " +
-          "8:03 PM on Friday, so today's 10am-2pm window has already ended. A " +
-          "message that names tomorrow / Saturday / the next window, promises " +
-          "immediate contact, or names no day at all answers false.",
-        future_or_no_day:
-          "If the message names when someone will reach out or follow up, is " +
-          "that timing still ahead of Friday 8:03 PM (tomorrow, Saturday, the " +
-          "next 10am-2pm window, or immediately / shortly / right away)? " +
-          "Answer true when the message names no timing at all. Also answer " +
-          "true when it points back at the lead's own recurring 10am-2pm " +
-          "window WITHOUT attaching a day to it (for example 'within that " +
-          "window', 'during that time'): naming no day is not the same as " +
-          "naming today, and pinning it to today is what the " +
-          "promises_passed_window question above already catches.",
-        acknowledges_criteria:
-          "Does the message acknowledge the lead's home criteria in some form " +
-          "(beds, baths, garage/carport, or the East Valley cities they named)?"
+          "Does the message tie the contact to TODAY, inside the 10am-2pm " +
+          "window that has already ended? It is 8:03 PM on Friday. Answer " +
+          "TRUE only when the message says or clearly implies the contact " +
+          "happens TODAY. Answer FALSE when it names tomorrow, Saturday, or " +
+          "the next window; when it promises immediate contact; and when it " +
+          "names no day at all. Repeating the lead's own recurring window, " +
+          "with or without its clock times ('within that window', 'during " +
+          "your preferred window of 10:00 AM to 2:00 PM daily'), names no " +
+          "day, so it answers FALSE.",
       }
     );
   }, 120_000);
@@ -163,19 +168,36 @@ describe("Amy availability-window replay — Kolton 2026-07-31 (generic path, re
   });
 
   it("never promises today's already-ended 10am-2pm window (the Kolton miss)", () => {
-    if (verdict.answers.promises_passed_window || !verdict.answers.future_or_no_day) {
+    if (verdict.answers.promises_passed_window) {
       console.error("live reply:", reply);
       console.error("judge verdict:", JSON.stringify(verdict));
     }
     expect(verdict.answers.promises_passed_window).toBe(false);
-    expect(verdict.answers.future_or_no_day).toBe(true);
   });
 
+  /**
+   * Lexical, not judged. The judge's own contract says to keep exact-by-
+   * nature checks as string checks, and this is one: acknowledging the
+   * criteria means echoing one of the things Kolton actually named. Asked
+   * as a judge question it was a TRUE = good-property question, the shape
+   * the judge is least sharp on, and it produced false negatives on replies
+   * that plainly listed all four criteria. This regex is checked against
+   * the real replies from the 2026-08-12 and 2026-08-14 nightlies plus a
+   * paraphrase ("three bed two bath with a carport around Mesa"), and
+   * separates them correctly with no model call at all.
+   */
   it("acknowledges the lead's criteria", () => {
-    if (!verdict.answers.acknowledges_criteria) {
-      console.error("live reply:", reply);
-      console.error("judge verdict:", JSON.stringify(verdict));
-    }
-    expect(verdict.answers.acknowledges_criteria).toBe(true);
+    // Echoing a criterion outright.
+    const specific =
+      /\b(beds?|bedrooms?|baths?|bathrooms?|carport|garage|mesa|apache junction|gilbert|east valley)\b/i;
+    // Or referring to what he shared without repeating it, which the lead
+    // reads as being heard just the same ("I will share those preferences",
+    // "homes meeting those criteria"). Requiring a named criterion alone
+    // failed those replies, and they are not the miss this pins.
+    const generic =
+      /\b(?:those|these|your)\s+(?:preferences|details|criteria|requirements|specs|must[- ]haves)\b|\bhomes?\s+(?:meeting|matching|that meet|like that)\b|\bwhat\s+you(?:'re| are)\s+looking\s+for\b/i;
+    const acknowledged = specific.test(reply) || generic.test(reply);
+    if (!acknowledged) console.error("live reply:", reply);
+    expect(acknowledged, `reply acknowledged none of Kolton's criteria: ${reply}`).toBe(true);
   });
 });
