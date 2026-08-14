@@ -133,6 +133,58 @@ describe("customer persona", () => {
     });
   });
 
+  describe("Aug 14 2026: the AI voiced both sides of the call", () => {
+    /**
+     * HomeLight transfer, call 28f9c228. The transfer dropped the AI into the
+     * seller's voicemail. With no human replying, the model filled the silence
+     * by SPEAKING the caller's turns itself. One assistant turn, transcribed
+     * from the audio it actually played down the line, reads:
+     *
+     *   "...that's 975 568. Is that correct?user
+     *    Correct. I want to sell my house ASAP.Got it, ASAP. And what's the
+     *    property address you're thinking of selling?"
+     *
+     * It emitted the literal role token "user", invented the seller's answer,
+     * then answered itself. The 975568 it "caught" was digits off the
+     * voicemail system, not anything a person said. It closed by leaving
+     * "This lead was for a property at roughly when you want to sell ASAP."
+     *
+     * Two rules, because two things failed: it did not recognise a recording,
+     * and it manufactured the other half of a conversation.
+     */
+    it("forbids speaking or inventing the caller's side of the call", () => {
+      const text = build();
+      expect(text).toContain("Never speak the caller's side of the conversation");
+      expect(text).toContain("never write out a role label");
+      // The specific failure: treating its own invention as something heard.
+      expect(text).toContain("Only ever react to words the caller actually said");
+    });
+
+    it("teaches the AI to recognise a recording and stop talking to it", () => {
+      const text = build();
+      expect(text).toContain("recorded system rather than a person");
+      // The exact shapes on that call: a connect prompt, then a record menu.
+      expect(text).toContain("press one");
+      expect(text).toContain("voicemail greeting");
+      // Silence is the safe default: never interview a machine.
+      expect(text).toContain("do not carry on a conversation with it");
+    });
+
+    it("keeps a voicemail message short and never invents lead facts", () => {
+      const text = build();
+      expect(text).toContain("who you are, which business");
+      expect(text).toContain("Never read out lead details");
+    });
+
+    it("gives these rules to staff callers too", () => {
+      // The HomeLight transfer line answers as an internal-assistant persona,
+      // so a customer-only rule would have missed this exact call.
+      const text = build({ callerIdentity: { kind: "owner", name: "Amy Laidlaw" } });
+      expect(text).toContain("Never speak the caller's side of the conversation");
+      expect(text).toContain("recorded system rather than a person");
+    });
+  });
+
   it("teaches the customer tool suite only when tools are wired", () => {
     const withTools = build({ hasVoiceTools: true });
     expect(withTools).toContain("capture_caller_details");
