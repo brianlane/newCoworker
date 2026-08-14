@@ -101,7 +101,7 @@ describe("gemini env resolution", () => {
   });
 
   it("honors the text-model override and its default", () => {
-    expect(digestTextModel()).toBe("gemini-3.5-flash");
+    expect(digestTextModel()).toBe("gemini-3.7-flash");
     vi.stubEnv("BLOG_DIGEST_TEXT_MODEL", "gemini-test");
     expect(digestTextModel()).toBe("gemini-test");
   });
