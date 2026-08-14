@@ -225,8 +225,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </main>
       {/* Ask AI companion: the same conversation as /dashboard/chat, on
           every page. Hidden on the chat page itself (inside the launcher),
-          and read-only-noticed under admin view-as. */}
-      {businessId && <CompanionLauncher businessId={businessId} viewAsActive={!!viewAs} />}
+          read-only-noticed under admin view-as, and NOT mounted while the
+          terms clickwrap is due — the panel shares z-50 with the gate and
+          must never paint over it (Bugbot Medium on PR #1383). */}
+      {businessId && !requireAcceptance && (
+        <CompanionLauncher businessId={businessId} viewAsActive={!!viewAs} />
+      )}
     </div>
     </SectionMessages>
   );
