@@ -1978,6 +1978,16 @@ describe("getWorkspaceBusyBlocks: personal Outlook has no getSchedule", () => {
     expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows a non-object throw instead of reading it as a provider rejection", async () => {
+    // A thrown string carries no status, so it is not evidence the mailbox
+    // lacks getSchedule. Same reasoning as the transport case above: only a
+    // real HTTP status earns a second request.
+    vi.mocked(workspaceProxyForBusiness).mockRejectedValueOnce("boom" as never);
+
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).rejects.toBe("boom");
+    expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null when the fallback also finds no connection", async () => {
     vi.mocked(workspaceProxyForBusiness)
       .mockRejectedValueOnce(providerRejection(403))
@@ -2099,6 +2109,46 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
 
     // One getSchedule attempt plus the bounded page budget, and no more.
     expect(workspaceProxyForBusiness).toHaveBeenCalledTimes(1 + 4);
+  });
+
+  it("reads a bodyless or empty calendarView page as no events, not as a failure", async () => {
+    // Graph can answer with no body at all (a 204 on the direct transport) or
+    // with an object carrying no `value`. Neither is an error, and neither is
+    // evidence of busy time: the window is simply empty. Distinct from the
+    // page-budget case above, which IS a refusal.
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce({ status: 200 } as never);
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([]);
+
+    vi.clearAllMocks();
+    vi.mocked(getSharedCalendar).mockResolvedValue(null as never);
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce({ status: 200, data: {} } as never);
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([]);
+  });
+
+  it("skips an event missing either endpoint rather than minting an Invalid Date", async () => {
+    vi.mocked(workspaceProxyForBusiness)
+      .mockRejectedValueOnce(providerRejection(403))
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          value: [
+            { start: { dateTime: "2026-08-20T10:00:00" } },
+            { end: { dateTime: "2026-08-20T13:00:00" } },
+            {
+              start: { dateTime: "2026-08-20T14:00:00" },
+              end: { dateTime: "2026-08-20T15:00:00" }
+            }
+          ]
+        }
+      } as never);
+
+    await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toEqual([
+      { start: new Date("2026-08-20T14:00:00Z"), end: new Date("2026-08-20T15:00:00Z") }
+    ]);
   });
 
   it("fails the whole lookup when the shared calendar cannot be read", async () => {
