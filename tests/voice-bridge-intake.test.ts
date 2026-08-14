@@ -306,3 +306,135 @@ describe("composeIntakeLeadSms", () => {
     expect(text).toBe(`${STAR_ROW}\n\n${STAR_ROW}`);
   });
 });
+
+/**
+ * Aug 14 2026, HomeLight transfer, call 28f9c228. This is the persona that
+ * ran on that call: the AI-takeover path builds its instruction here, not in
+ * systemInstructionForBusiness, so rules added only there would have missed
+ * the incident they were written for (caught by Bugbot on PR #1377).
+ *
+ * The transfer dropped the AI into the seller's voicemail. It ran this
+ * script at the recording: the "read it back to confirm it" rule below is
+ * what turned menu digits into "that's 975 568. Is that correct?", and with
+ * nobody replying the model supplied the seller's answer itself, role token
+ * and all, then answered its own question.
+ */
+describe("intakeSystemInstruction: call-integrity rules", () => {
+  const variants: Array<[string, string]> = [
+    ["inbound seller takeover", intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [])],
+    [
+      "outbound call",
+      intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], false, undefined, true)
+    ],
+    [
+      "transfer mode",
+      intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], false, {
+        agentName: "Dave"
+      })
+    ]
+  ];
+
+  for (const [label, instr] of variants) {
+    it(`forbids voicing the caller's side in ${label}`, () => {
+      expect(instr).toContain("Never speak the caller's side of the conversation");
+      expect(instr).toContain("never write out a role label");
+      expect(instr).toContain("Only ever react to words the caller actually said");
+    });
+
+    it(`teaches recordings are not people in ${label}`, () => {
+      expect(instr).toContain("recorded system rather than a person");
+      expect(instr).toContain("do not carry on a conversation with it");
+      // The precise trap on the incident call: digits read out by a menu are
+      // not a number the caller gave, and this persona is told to collect a
+      // callback number and read it back.
+      expect(instr).toContain("never treat digits or words it reads out as something the caller told you");
+    });
+  }
+});
+
+/**
+ * The accept keypress is the whole HomeLight mechanic: the call is answered
+ * into a partner announcement and the referral is won by pressing a digit on
+ * a timer (docs/tenants/homelight-flow.md, "the accept is a DTMF keypress").
+ * The bridge arms that with an ivrGate, a `press_digits` tool, and a
+ * coordinator cue telling the model to stay silent and press the key.
+ *
+ * RECORDED_SYSTEM_LINE rides every intake session, gated ones included, and
+ * a persistent system-instruction rule outranks a mid-call cue. Written
+ * without a carve-out it forbade answering a recording's prompts at all,
+ * which would have made the model sit through the announcement and lose the
+ * referral: a worse failure than the voicemail incident it was written for
+ * (Bugbot, PR #1377).
+ */
+describe("intakeSystemInstruction: the recording rule leaves the accept press alone", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("permits pressing a key when a coordinator message asks for it", () => {
+    expect(instr).toContain("press a key");
+    expect(instr).toContain("Pressing a key is not talking to it");
+  });
+
+  it("still bans conversing with the recording and mining it for caller facts", () => {
+    // The carve-out must not swallow the rule it is carved out of.
+    expect(instr).toContain("do not carry on a conversation with it");
+    expect(instr).toContain("never treat digits or words it reads out as something the caller told you");
+  });
+});
+
+/**
+ * The platform already owns voicemail policy for outbound calls: a
+ * `place_ai_call` step leaves a message ONLY when the author set
+ * `voicemailTemplate`, and without one the AI hangs up rather than talk to a
+ * recording (the outcome reason is `voicemail_no_message`, and the compile
+ * docs say plainly that talking to a recording wastes minutes).
+ *
+ * An unconditional "at the beep, leave one short message" in the persistent
+ * instruction would override that: every unscripted call would start
+ * improvising voicemails at customers, in copy nobody approved.
+ */
+describe("intakeSystemInstruction: voicemail deference", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("leaves a message only when it was given one to leave", () => {
+    expect(instr).toContain("your instructions include a message to leave");
+    expect(instr).toContain("do not improvise one");
+  });
+
+  it("still bans reading the briefing into a voicemail", () => {
+    expect(instr).toContain("Never read out lead details");
+  });
+});
+
+/**
+ * The keypad exception is scoped per ANNOUNCEMENT, not per press, and both
+ * halves of that are load-bearing.
+ *
+ * Re-pressing the SAME announcement is designed behavior: a Telnyx OK is not
+ * proof the partner accepted, so an early blind fallback can land before the
+ * menu is listening while the partner keeps looping "press 1". ivr-gate-press
+ * allows up to IVR_MAX_ACCEPT_PRESSES with a cooldown, and sendPostAcceptCue
+ * explicitly tells the model to press again if the recording is still asking.
+ * A "spent once you have pressed" rule would outrank that cue and cost the
+ * referral on an early first tone.
+ *
+ * Pressing into a DIFFERENT, later recording is the failure. On the incident
+ * call (28f9c228) the seller's mailbox offered "Replay your message. Press
+ * one. To continue recording, press two." That is the partner gate's DTMF
+ * aimed at a stranger's voicemail. Both directions caught by Bugbot on #1377.
+ */
+describe("intakeSystemInstruction: the keypad exception is scoped per announcement", () => {
+  const instr = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", []);
+
+  it("scopes the press to the announcement it was told about", () => {
+    expect(instr).toContain("only the announcement the coordinator named");
+  });
+
+  it("still allows re-pressing that same announcement while it loops", () => {
+    expect(instr).toContain("if that same announcement is still asking, press again");
+  });
+
+  it("names the later-recording case it must not press into", () => {
+    expect(instr).toContain("a voicemail menu offering to replay");
+    expect(instr).toContain("do not press anything");
+  });
+});
