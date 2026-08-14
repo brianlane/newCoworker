@@ -218,7 +218,11 @@ beforeAll(async () => {
   SYSTEM = [
     OWNER_PREAMBLE,
     "[Dashboard] chat with the verified business OWNER, James Lee.",
-    mcpBridgeToolsPreamble({ creationToolsDeclared: true }),
+    // The harness declares action + bridge tools only (the creation tools
+    // are module-private to inline-turn), so the ladder must not
+    // advertise create_aiflow here, the exact mismatch the preamble
+    // function exists to prevent.
+    mcpBridgeToolsPreamble({ creationToolsDeclared: false }),
     currentDateTimeLine(new Date(), "America/Toronto"),
     contextBlock ?? ""
   ]
@@ -536,11 +540,13 @@ describe("scenario 6 — A: cadence edits go through edit_aiflow", () => {
           `round2 calls: ${JSON.stringify(round2.calls)}\nreply: ${round2.finalText}`
         ).toBeDefined();
       }
-      const instruction = String(
-        (edit!.args as Record<string, unknown>).instruction ??
-          (edit!.args as Record<string, unknown>).change ??
-          JSON.stringify(edit!.args)
-      ).toLowerCase();
+      // The declaration's required field is `instructions`, assert on the
+      // field the model actually fills, not a stringified fallback that
+      // would pass by accident.
+      const instructions = (edit!.args as Record<string, unknown>).instructions;
+      expect(typeof instructions, `edit args: ${JSON.stringify(edit!.args)}`).toBe("string");
+      const instruction = String(instructions).toLowerCase();
+      expect(instruction.length).toBeGreaterThan(20);
       expect(instruction).toMatch(/2 day|two day|every 2|48/);
       expect(instruction).toMatch(/3|third/);
     }
