@@ -872,7 +872,7 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
   });
 
-  it("declares the MCP-bridge tools per role and never for admins", async () => {
+  it("declares the MCP-bridge tools per role, view-as included", async () => {
     gateStates(true);
 
     // Owner: full bridge, ladder preamble appended, step headroom raised.
@@ -916,17 +916,42 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(staffNames).not.toContain("list_employees");
     expect(staffNames).not.toContain("get_notification_preferences");
 
-    // Admin (view-as is read-only by policy): no bridge, no preamble.
+    // Admin viewing their OWN business (self-owned view-as, which
+    // isViewAsActive treats as changes-enabled): their email resolves the
+    // genuine owner role, so the full bridge declares. This is Brian on the
+    // HQ tenant.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getAuthUser).mockResolvedValueOnce({
+      userId: "admin-1",
+      email: "owner@example.com",
+      isAdmin: true
+    } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const selfOwnedArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(
+      (selfOwnedArgs.extraTools?.declarations ?? []).map((d) => d.name)
+    ).toContain("update_business_knowledge");
+    expect(selfOwnedArgs.systemInstruction).toContain("DIRECT BUSINESS TOOLS");
+
+    // Admin impersonating a FOREIGN tenant: their email holds no role there,
+    // so no bridge, no ladder, and the role-composed settings tools stay
+    // off — the read-only view-as policy expressed at declaration time.
     vi.mocked(runInlineChatTurn).mockClear();
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       userId: "admin-1",
       email: "admin@newcoworker.com",
       isAdmin: true
     } as never);
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce(null as never);
     await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
-    const adminArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
-    expect(adminArgs.extraTools).toBeNull();
-    expect(adminArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+    const foreignArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(foreignArgs.extraTools).toBeNull();
+    expect(foreignArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+    expect(foreignArgs.actionToolGates).toMatchObject({
+      update_notification_preferences: false,
+      flag_contact_spam: false,
+      manage_employee: false
+    });
   });
 
   it("declares no bridge tools when every bridge toggle is off", async () => {

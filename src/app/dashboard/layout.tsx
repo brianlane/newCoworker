@@ -225,11 +225,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </main>
       {/* Ask AI companion: the same conversation as /dashboard/chat, on
           every page. Hidden on the chat page itself (inside the launcher),
-          read-only-noticed under admin view-as, and NOT mounted while the
-          terms clickwrap is due — the panel shares z-50 with the gate and
-          must never paint over it (Bugbot Medium on PR #1383). */}
+          and NOT mounted while the terms clickwrap is due — the panel
+          shares z-50 with the gate and must never paint over it (Bugbot
+          Medium on PR #1383). The read-only notice keys off the SAME
+          definition isViewAsActive uses: a self-owned view-as (the admin
+          viewing their own business, "changes are enabled") chats with the
+          full toolset via their genuine owner role; only a foreign-tenant
+          impersonation is read-only. */}
       {businessId && !requireAcceptance && (
-        <CompanionLauncher businessId={businessId} viewAsActive={!!viewAs} />
+        <CompanionLauncher
+          businessId={businessId}
+          viewAsActive={!!viewAs && !viewAs.selfOwned}
+        />
       )}
     </div>
     </SectionMessages>
