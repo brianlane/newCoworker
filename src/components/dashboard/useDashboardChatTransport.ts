@@ -239,13 +239,26 @@ export function useDashboardChatTransport(businessId: string) {
   // new business would otherwise keep it forever (its hydrate deliberately
   // leaves the view alone).
   useEffect(() => {
+    // Tear down any in-flight work from the previous business FIRST: a late
+    // reply or poll must never write the old tenant's messages back over
+    // the cleared view.
+    abortRef.current?.abort();
+    abortRef.current = null;
     const next = readFreshStart(businessId);
     freshStartRef.current = next;
     setFreshStart(next);
     setMessages([]);
     setViewingThreadId(null);
+    // The previous business's active thread must not be a send target even
+    // for one frame; hydrate re-learns the new business's own.
+    setActiveThreadId(null);
     setDrafts([]);
     setError(null);
+    setSending(false);
+    // The composer reads as busy until THIS business's hydrate lands
+    // (hydrate flips it off in its finally); send() also refuses while
+    // loading, returning the text to the composer.
+    setLoading(true);
   }, [businessId]);
 
   const fetchThreads = useCallback(async () => {
@@ -793,6 +806,10 @@ export function useDashboardChatTransport(businessId: string) {
   async function send(text: string, options: SendOptions = {}): Promise<SendOutcome> {
     const trimmed = text.trim();
     if (!trimmed || sending || isPaused) return { ok: false, restoreInput: false };
+    // Mid-hydrate (first load or a business switch): no thread may be
+    // targeted yet. Hand the text back so the shells restore the composer;
+    // their disabled states make this a rare race, not a normal path.
+    if (loading) return { ok: false, restoreInput: true };
 
     // Optimistic user bubble. Stays even on error because we treat
     // the user's typed message as committed the moment they hit Send;
