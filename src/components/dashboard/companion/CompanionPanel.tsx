@@ -45,11 +45,10 @@ function formatThreadDate(ts: string): string {
 
 type PanelProps = {
   businessId: string;
-  viewAsActive: boolean;
   onClose: () => void;
 };
 
-export function CompanionPanel({ businessId, viewAsActive, onClose }: PanelProps) {
+export function CompanionPanel({ businessId, onClose }: PanelProps) {
   const t = useTranslations("dashboard.companion");
   return (
     <>
@@ -91,13 +90,7 @@ export function CompanionPanel({ businessId, viewAsActive, onClose }: PanelProps
             </button>
           </div>
         </div>
-        {viewAsActive ? (
-          <div className="flex flex-1 items-center justify-center px-6 text-center">
-            <p className="text-sm text-parchment/50">{t("panel.viewAsNotice")}</p>
-          </div>
-        ) : (
-          <CompanionChatBody businessId={businessId} onClose={onClose} />
-        )}
+        <CompanionChatBody businessId={businessId} onClose={onClose} />
       </div>
     </>
   );

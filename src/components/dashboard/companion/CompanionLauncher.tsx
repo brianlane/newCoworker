@@ -17,10 +17,9 @@ import { CompanionPanel } from "@/components/dashboard/companion/CompanionPanel"
 
 type Props = {
   businessId: string;
-  viewAsActive: boolean;
 };
 
-export function CompanionLauncher({ businessId, viewAsActive }: Props) {
+export function CompanionLauncher({ businessId }: Props) {
   const t = useTranslations("dashboard.companion");
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -49,11 +48,7 @@ export function CompanionLauncher({ businessId, viewAsActive }: Props) {
       )}
       {everOpened && (
         <div className={open ? "" : "hidden"}>
-          <CompanionPanel
-            businessId={businessId}
-            viewAsActive={viewAsActive}
-            onClose={() => setOpen(false)}
-          />
+          <CompanionPanel businessId={businessId} onClose={() => setOpen(false)} />
         </div>
       )}
     </>
