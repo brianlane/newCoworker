@@ -44,6 +44,7 @@ const JOB_ROW: ProvisioningJobRow = {
   tier: "standard",
   vps_size: "kvm2",
   billing_period: "monthly",
+  hostinger_term: null,
   suppress_owner_notify: false,
   skip_pool_adopt: false,
   purpose: "signup",
@@ -209,7 +210,7 @@ describe("getLastTermRenewalEnqueuedAt", () => {
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "boom" } }));
     await expect(getLastTermRenewalEnqueuedAt(BIZ)).rejects.toThrow(
-      "getLastTermRenewalEnqueuedAt: boom"
+      "getLastEnqueuedAtForPurpose: boom"
     );
   });
 });
@@ -270,7 +271,8 @@ describe("runProvisioningJob", () => {
       businessId: BIZ,
       tier: "standard",
       vpsSize: "kvm2",
-      billingPeriod: "monthly"
+      billingPeriod: "monthly",
+      hostingerTerm: null
     });
     expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
@@ -285,7 +287,8 @@ describe("runProvisioningJob", () => {
       businessId: BIZ,
       tier: "standard",
       vpsSize: null,
-      billingPeriod: null
+      billingPeriod: null,
+      hostingerTerm: null
     });
 
     await runProvisioningJob(
@@ -296,8 +299,38 @@ describe("runProvisioningJob", () => {
       businessId: BIZ,
       tier: "enterprise",
       vpsSize: "kvm8",
-      billingPeriod: "biennial"
+      billingPeriod: "biennial",
+      hostingerTerm: null
     });
+  });
+
+  // The term is COMPUTED by a sweep and persisted on the row precisely so a
+  // later run buys what the sweep decided. Each value Hostinger sells has to
+  // survive the round trip; anything else falls back to deriving from
+  // billing_period rather than failing the job.
+  it("passes each Hostinger term through, and narrows anything else to null", async () => {
+    const orchestrate = vi.fn(async () => okResult);
+    const markers = {
+      markRunning: vi.fn(async () => undefined),
+      markOutcome: vi.fn(async () => undefined)
+    };
+
+    for (const term of ["1m", "1y", "2y"] as const) {
+      await runProvisioningJob({ ...JOB_ROW, hostinger_term: term }, { orchestrate, ...markers });
+      expect(orchestrate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ hostingerTerm: term })
+      );
+    }
+
+    for (const bogus of ["3y", "", "monthly"]) {
+      await runProvisioningJob(
+        { ...JOB_ROW, hostinger_term: bogus },
+        { orchestrate, ...markers }
+      );
+      expect(orchestrate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ hostingerTerm: null })
+      );
+    }
   });
 
   it("falls back to the real outcome marker when deps omit it", async () => {

@@ -31,7 +31,18 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type ProvisioningJobStatus = "queued" | "running" | "succeeded" | "failed";
 
-export type ProvisioningJobPurpose = "signup" | "migrate_size" | "term_renewal";
+export type ProvisioningJobPurpose =
+  | "signup"
+  | "migrate_size"
+  | "term_renewal"
+  /**
+   * Move a contract tenant off short-runway hardware onto a box whose
+   * Hostinger term covers the rest of their contract. Distinct from
+   * `term_renewal` (which replaces a box that is about to renew at full
+   * price) because the two are triggered by different sweeps and the
+   * purchase cooldown must not confuse one for the other.
+   */
+  | "contract_upgrade";
 
 export type ProvisioningJobRow = {
   business_id: string;
@@ -41,6 +52,14 @@ export type ProvisioningJobRow = {
   tier: string | null;
   vps_size: string | null;
   billing_period: string | null;
+  /**
+   * Explicit Hostinger purchase term for this job (`1m` / `1y` / `2y`).
+   * Null falls back to deriving it from `billing_period`. Carried on the
+   * ROW because the enqueue and the run are separate steps: a migration
+   * that computed "buy 1y to cover the remaining contract" must not have
+   * that decision silently re-derived as 2y when the watchdog re-runs it.
+   */
+  hostinger_term: string | null;
   suppress_owner_notify: boolean;
   skip_pool_adopt: boolean;
   purpose: ProvisioningJobPurpose;
@@ -65,6 +84,7 @@ export type EnqueueProvisioningJobInput = {
   tier: string | null;
   vpsSize: string | null;
   billingPeriod: string | null;
+  hostingerTerm?: string | null;
   suppressOwnerNotify?: boolean;
   skipPoolAdopt?: boolean;
   purpose?: ProvisioningJobPurpose;
@@ -89,6 +109,7 @@ export async function enqueueProvisioningJob(
       tier: input.tier,
       vps_size: input.vpsSize,
       billing_period: input.billingPeriod,
+      hostinger_term: input.hostingerTerm ?? null,
       suppress_owner_notify: input.suppressOwnerNotify === true,
       skip_pool_adopt: input.skipPoolAdopt === true,
       purpose: input.purpose ?? "signup",
@@ -145,15 +166,32 @@ export async function getLastTermRenewalEnqueuedAt(
   businessId: string,
   client?: SupabaseClient
 ): Promise<Date | null> {
+  return getLastEnqueuedAtForPurpose(businessId, "term_renewal", client);
+}
+
+/**
+ * Same lookup, for any migration purpose.
+ *
+ * The two box-replacing sweeps must each cool down on THEIR OWN purchases
+ * and not on each other's: a contract upgrade that bought a 2y box last
+ * night is not evidence that the renewal sweep's purchase failed, and
+ * treating it as such would park a tenant whose box is genuinely about to
+ * lapse. Matching on `purpose` is what keeps the two independent.
+ */
+export async function getLastEnqueuedAtForPurpose(
+  businessId: string,
+  purpose: ProvisioningJobPurpose,
+  client?: SupabaseClient
+): Promise<Date | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("provisioning_jobs")
     .select("purpose, enqueued_at")
     .eq("business_id", businessId)
     .maybeSingle();
-  if (error) throw new Error(`getLastTermRenewalEnqueuedAt: ${error.message}`);
+  if (error) throw new Error(`getLastEnqueuedAtForPurpose: ${error.message}`);
   const row = data as { purpose?: string | null; enqueued_at?: string | null } | null;
-  if (!row || row.purpose !== "term_renewal" || !row.enqueued_at) return null;
+  if (!row || row.purpose !== purpose || !row.enqueued_at) return null;
   const at = new Date(row.enqueued_at);
   return Number.isNaN(at.getTime()) ? null : at;
 }
@@ -252,6 +290,7 @@ export type OrchestrateFn = (input: {
   tier: "starter" | "standard" | "enterprise";
   vpsSize: string | null;
   billingPeriod: "monthly" | "annual" | "biennial" | null;
+  hostingerTerm?: "1m" | "1y" | "2y" | null;
   suppressOwnerNotify?: boolean;
   skipPoolAdopt?: boolean;
 }) => Promise<{
@@ -279,7 +318,18 @@ function narrowBillingPeriod(raw: string | null): "monthly" | "annual" | "bienni
 }
 
 function narrowPurpose(raw: string | null | undefined): ProvisioningJobPurpose {
-  return raw === "migrate_size" || raw === "term_renewal" ? raw : "signup";
+  return raw === "migrate_size" || raw === "term_renewal" || raw === "contract_upgrade"
+    ? raw
+    : "signup";
+}
+
+/**
+ * Narrow a stored term to the three Hostinger sells. Anything else (null, a
+ * typo, a term Hostinger retired) reads as "no explicit term", which falls
+ * back to the `billing_period` derivation rather than failing the job.
+ */
+function narrowHostingerTerm(raw: string | null | undefined): "1m" | "1y" | "2y" | null {
+  return raw === "1m" || raw === "1y" || raw === "2y" ? raw : null;
 }
 
 /**
@@ -292,7 +342,10 @@ function narrowPurpose(raw: string | null | undefined): ProvisioningJobPurpose {
 export async function runProvisioningJob(
   job: Pick<ProvisioningJobRow, "business_id" | "tier" | "vps_size" | "billing_period"> &
     Partial<
-      Pick<ProvisioningJobRow, "suppress_owner_notify" | "skip_pool_adopt" | "purpose">
+      Pick<
+        ProvisioningJobRow,
+        "suppress_owner_notify" | "skip_pool_adopt" | "purpose" | "hostinger_term"
+      >
     >,
   deps: RunProvisioningJobDeps,
   opts: { alreadyClaimed?: boolean } = {}
@@ -320,6 +373,7 @@ export async function runProvisioningJob(
       tier: narrowTier(job.tier),
       vpsSize: job.vps_size,
       billingPeriod: narrowBillingPeriod(job.billing_period),
+      hostingerTerm: narrowHostingerTerm(job.hostinger_term),
       suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
       skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
     });

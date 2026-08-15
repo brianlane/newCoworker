@@ -60,6 +60,7 @@ import { recordSubscriptionRefund } from "@/lib/db/subscription-refunds";
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
+import { resolvePaidThroughForBillingSub } from "@/lib/hostinger/paid-through";
 import type { VpsSize } from "@/lib/vps/size";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOwnerEmail } from "@/lib/email/client";
@@ -159,7 +160,7 @@ export async function executeLifecyclePlan(
     await runTelnyxOp(op, deps.telnyxNumbers);
   }
   for (const op of plan.dbUpdates) {
-    await runDbOp(op, extra, result);
+    await runDbOp(op, extra, result, paidThroughResolverFor(deps, extra.businessId));
   }
   // Emails last and tolerant — don't block the user's cancel path on SMTP.
   for (const op of plan.emailsToSend) {
@@ -216,7 +217,10 @@ export async function executeLifecyclePlanFastPhase(
     // concurrent signup claim + recreate a VM whose tenant data hasn't
     // been backed up yet.
     if (op.type === "return_vps_to_pool") continue;
-    await runDbOp(op, extra, result);
+    // The `continue` above means no fast-phase op actually resolves a
+    // paid-through today. Pass the real resolver anyway rather than a stub,
+    // so this stays correct if a future db op wants one.
+    await runDbOp(op, extra, result, paidThroughResolverFor(deps, extra.businessId));
   }
   return result;
 }
@@ -284,7 +288,9 @@ export async function executeLifecyclePlanSlowPhase(
   // adopt path recreates (wipes) the VM. The fast phase skipped these ops.
   for (const op of plan.dbUpdates) {
     if (op.type !== "return_vps_to_pool") continue;
-    await runPoolReturnOp(op);
+    await runPoolReturnOp(op, (id) =>
+      resolvePaidThroughForBillingSub(hostinger, id, { virtualMachineId: op.virtualMachineId })
+    );
   }
   for (const op of plan.emailsToSend) {
     try {
@@ -594,10 +600,30 @@ async function safeHostinger<T>(
   }
 }
 
+/**
+ * Resolves a Hostinger box's paid-through so the pool row records real
+ * runway. Passed as a closure rather than a client so the FAST phase (which
+ * skips pool returns entirely) never has to construct a Hostinger client
+ * just to satisfy a parameter it will not use.
+ */
+type PaidThroughResolver = (billingSubscriptionId: string | null) => Promise<string | null>;
+
+/** The production resolver, built from whichever Hostinger client is in play. */
+function paidThroughResolverFor(deps: ExecutorDeps, businessId: string): PaidThroughResolver {
+  return (id) =>
+    resolvePaidThroughForBillingSub(
+      /* v8 ignore next -- production dependency default; tests inject deps.hostinger */
+      deps.hostinger ?? defaultHostingerClient(),
+      id,
+      { businessId }
+    );
+}
+
 async function runDbOp(
   op: DbUpdateOp,
   _extra: ExecutorExtra,
-  result: ExecutorResult
+  result: ExecutorResult,
+  resolvePaidThrough: PaidThroughResolver
 ): Promise<void> {
   switch (op.type) {
     case "update_subscription":
@@ -678,7 +704,7 @@ async function runDbOp(
       }
       return;
     case "return_vps_to_pool":
-      await runPoolReturnOp(op);
+      await runPoolReturnOp(op, resolvePaidThrough);
       return;
   }
 }
@@ -760,13 +786,24 @@ async function runTelnyxOp(
  * available.
  */
 async function runPoolReturnOp(
-  op: Extract<DbUpdateOp, { type: "return_vps_to_pool" }>
+  op: Extract<DbUpdateOp, { type: "return_vps_to_pool" }>,
+  resolvePaidThrough: PaidThroughResolver
 ): Promise<void> {
   try {
+    // Stamp the box's real paid-through as it enters the pool. This is the
+    // moment that matters most for a churned TERM box: it can carry many
+    // months of prepaid runway, and `claimAvailableVps` ranks unknown expiry
+    // LAST, so without this the most valuable box in the pool loses the
+    // adopt-first ranking until the daily posture cron fills the column in.
+    const expiresAt = await resolvePaidThrough(op.hostingerBillingSubscriptionId);
     await releaseVpsToPool({
       vmId: op.virtualMachineId,
       plan: op.plan as VpsSize,
       hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
+      // Omit rather than forward a null: releaseVpsToPool preserves the
+      // stored expiry when the field is absent, and a Hostinger blip must
+      // not erase a paid-through we already knew.
+      ...(expiresAt !== null ? { expiresAt } : {}),
       notes: op.notes
     });
     logger.info("VPS returned to reuse pool", {

@@ -59,6 +59,7 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "platform-cost-sync": { maxGapMinutes: 1500, schedule: "10 11 * * *" },
   "subscription-grace-sweep": { maxGapMinutes: 1500, schedule: "15 0 * * *" },
   "vps-billing-posture": { maxGapMinutes: 1500, schedule: "0 13 * * *" },
+  "vps-contract-upgrade-sweep": { maxGapMinutes: 1500, schedule: "30 10 * * *" },
   "vps-orphan-sweep": { maxGapMinutes: 1500, schedule: "0 12 * * *" },
   "vps-term-renewal-sweep": { maxGapMinutes: 1500, schedule: "0 11 * * *" },
   // Weekly (Mondays).

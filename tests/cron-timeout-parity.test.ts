@@ -202,8 +202,16 @@ const KNOWN_ABOVE_EDGE_CEILING = [
   // and provisioning retries, reachable only in exactly the scenario a
   // quiet-week measurement cannot exhibit. Converting these to bounded
   // batches or fire-and-forget bridges is the step-3 design work.
+  //
+  // vps-contract-upgrade-sweep is the same shape as vps-term-renewal-sweep
+  // and shares its migration path (backup, purchase, deploy, restore,
+  // cutover), so it inherits the same budget and the same step-3 work. It
+  // has no ledger history yet, being new here; clipping it to 150s on the
+  // strength of a measurement it has not had would truncate a migration
+  // mid-cutover, which is the one failure this whole path is built to avoid.
   "provisioning-retry",
-  "vps-term-renewal-sweep"
+  "vps-term-renewal-sweep",
+  "vps-contract-upgrade-sweep"
 ];
 
 /**
