@@ -864,8 +864,11 @@ Chat + History tabs, route-aware suggested prompts
 ([src/lib/dashboard-chat/companion-prompts.ts](src/lib/dashboard-chat/companion-prompts.ts)),
 a text-only composer (attachments live on the full page, linked from the
 panel), and draft cards using the same sessionStorage hand-off as the page.
-Under admin view-as the panel shows a read-only notice instead of a
-composer. All copy lives under `dashboard.companion.*` in BOTH message
+The companion is NOT gated on admin view-as: the full /dashboard/chat page
+already works while impersonating, and the panel mirrors the page. The chat
+API stays the authority on what an impersonating admin can do (the caller's
+email resolves no role on a foreign tenant, so role-gated bridge tools never
+declare there). All copy lives under `dashboard.companion.*` in BOTH message
 catalogs; the client subset registers `dashboard.companion` in
 `src/i18n/client-messages.ts`.
 
