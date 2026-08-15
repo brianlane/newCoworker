@@ -203,6 +203,12 @@ verify_jwt = false
 [functions.vps-term-renewal-sweep]
 verify_jwt = false
 
+# Daily fleet VPS contract-upgrade sweep. Invoked by pg_cron with the
+# plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
+# JWT check must stay OFF: same rationale as the cron workers above.
+[functions.vps-contract-upgrade-sweep]
+verify_jwt = false
+
 # Signup-provisioning watchdog bridge (pg_cron every 5 min). Auth is the
 # plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
 # JWT check must stay OFF — same rationale as the cron workers above.

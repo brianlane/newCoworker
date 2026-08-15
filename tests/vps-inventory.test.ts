@@ -389,6 +389,48 @@ describe("vps_inventory DB layer", () => {
       expect(payload.notes).toBe("purchased for biz-2");
     });
 
+    it("stamps expires_at when the caller resolved a paid-through", async () => {
+      const chain = makeChain();
+      chain.upsert.mockResolvedValue({ error: null });
+      const db = makeDb(chain);
+      await recordVpsAssigned(
+        {
+          vmId: 42,
+          plan: "kvm2",
+          businessId: "biz-2",
+          expiresAt: "2028-07-01T00:00:00Z"
+        },
+        db as never
+      );
+      expect(chain.upsert.mock.calls[0][0].expires_at).toBe("2028-07-01T00:00:00Z");
+    });
+
+    // The purchase path resolves paid-through best-effort. Omitting the key
+    // (rather than sending null) is what stops a failed lookup on a RETRY
+    // from erasing the runway an earlier successful run already recorded.
+    it("omits expires_at entirely when the caller did not resolve one", async () => {
+      const chain = makeChain();
+      chain.upsert.mockResolvedValue({ error: null });
+      const db = makeDb(chain);
+      await recordVpsAssigned({ vmId: 42, plan: "kvm2", businessId: "biz-2" }, db as never);
+      expect(chain.upsert.mock.calls[0][0]).not.toHaveProperty("expires_at");
+    });
+
+    // An EXPLICIT null is a caller saying "this box has no known expiry",
+    // which must still be written; only `undefined` means "leave it alone".
+    it("writes an explicit null expires_at through", async () => {
+      const chain = makeChain();
+      chain.upsert.mockResolvedValue({ error: null });
+      const db = makeDb(chain);
+      await recordVpsAssigned(
+        { vmId: 42, plan: "kvm2", businessId: "biz-2", expiresAt: null },
+        db as never
+      );
+      const payload = chain.upsert.mock.calls[0][0];
+      expect(payload).toHaveProperty("expires_at");
+      expect(payload.expires_at).toBeNull();
+    });
+
     it("throws on Supabase error", async () => {
       const chain = makeChain();
       chain.upsert.mockResolvedValue({ error: { message: "upsert boom" } });

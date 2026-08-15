@@ -18,7 +18,8 @@ import { retireVpsSshKeysForVps, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys
 import type { BillingSubscription, CatalogItem, HostingerClient, VirtualMachine } from "@/lib/hostinger/client";
 import {
   hostingerTermForBillingPeriod,
-  vpsPriceItemId
+  vpsPriceItemId,
+  type HostingerBillingTerm
 } from "@/lib/hostinger/provision";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
@@ -31,6 +32,7 @@ import {
   markProvisioningJobOutcome,
   runProvisioningJob,
   type EnqueueProvisioningJobInput,
+  type ProvisioningJobPurpose,
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
@@ -38,7 +40,7 @@ import { getLastAcquiredAtForBusiness, paidThroughFromBillingSub } from "@/lib/d
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
-const DEFAULT_SAVINGS_THRESHOLD = 0.1;
+export const DEFAULT_SAVINGS_THRESHOLD = 0.1;
 /**
  * How close a Hostinger renewal has to be before migrating is worth it.
  *
@@ -65,7 +67,7 @@ const DEFAULT_SAVINGS_THRESHOLD = 0.1;
  * ~24 hours early. A freshly bought box renews ~30 days out, so it still
  * cannot re-qualify.
  */
-const DEFAULT_RENEWAL_WINDOW_HOURS = 36;
+export const DEFAULT_RENEWAL_WINDOW_HOURS = 36;
 /**
  * How long after buying a term box the same tenant is ineligible for another.
  *
@@ -83,7 +85,7 @@ const DEFAULT_RENEWAL_WINDOW_HOURS = 36;
  * T-24h run buys, and the T-0h run is cooled down (it had no usable runway
  * anyway).
  */
-const DEFAULT_PURCHASE_COOLDOWN_HOURS = 168;
+export const DEFAULT_PURCHASE_COOLDOWN_HOURS = 168;
 const SWEEP_REQUESTED_BY = "term-renewal-sweep";
 
 export type TermRenewalSweepFinding = {
@@ -163,6 +165,7 @@ export type TermRenewalSweepDeps = {
     tier: "starter" | "standard" | "enterprise";
     vpsSize: VpsSize;
     billingPeriod?: SubscriptionRow["billing_period"];
+    hostingerTerm?: HostingerBillingTerm | null;
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
     /** Date.now() when the caller's route budget began. */
@@ -239,7 +242,7 @@ async function defaultGetLastTermPurchaseAt(businessId: string): Promise<Date | 
 }
 /* c8 ignore stop */
 
-async function markTermRenewalJobFailed(
+async function markMigrationJobFailed(
   deps: Pick<TermRenewalSweepDeps, "markProvisioningJobOutcome">,
   businessId: string,
   message: string
@@ -254,7 +257,7 @@ async function markTermRenewalJobFailed(
   });
 }
 
-function tenantVmId(business: BusinessRow): number | null {
+export function tenantVmId(business: BusinessRow): number | null {
   if (!providerUsesHostingerLifecycle(resolveVpsProvider(business.vps_provider))) return null;
   const vmId = Number.parseInt(business.hostinger_vps_id ?? "", 10);
   return Number.isFinite(vmId) && vmId > 0 ? vmId: null;
@@ -321,7 +324,7 @@ export function isWithinPurchaseCooldown(
   return sincePurchaseMs <= cooldownHours * 60 * 60 * 1000;
 }
 
-function resolveBillingSub(
+export function resolveBillingSub(
   subscription: SubscriptionRow,
   vm: VirtualMachine,
   subsById: Map<string, BillingSubscription>
@@ -348,7 +351,7 @@ export function isPartialTermCutover(
   return Boolean(rowId && vmId && rowId !== vmId);
 }
 
-function nextBillingTimestamp(sub: BillingSubscription): string | null {
+export function nextBillingTimestamp(sub: BillingSubscription): string | null {
   return sub.next_billing_at ?? sub.expires_at ?? null;
 }
 
@@ -567,14 +570,19 @@ export async function runTermRenewalSweep(
     }
 
     try {
-      const outcome = await migrateTenantTermRenewal(
+      const outcome = await migrateTenantToFreshBox(
         {
           businessId: business.id,
           vpsSize,
-          savingsRatio,
-          nextBillingAt,
-          renewalCents,
-          firstPeriodCents,
+          economicsDetail:
+            `Renewal $${(renewalCents / 100).toFixed(2)} vs fresh first-period ` +
+            `$${(firstPeriodCents / 100).toFixed(2)} (${(savingsRatio * 100).toFixed(1)}% savings). ` +
+            `Next billing: ${nextBillingAt}.`,
+          purpose: "term_renewal",
+          requestedBy: SWEEP_REQUESTED_BY,
+          // Renewal replacement re-buys the tenant's OWN contract term, so
+          // the legacy billing-period derivation is still right here.
+          hostingerTerm: null,
           paidThroughAt: paidThroughFromBillingSub(billingSub),
           budgetStartedAtMs: sweepStartedAtMs
         },
@@ -623,7 +631,7 @@ export async function runTermRenewalSweep(
   };
 }
 
-function guardCandidate(business: BusinessRow): string | null {
+export function guardCandidate(business: BusinessRow): string | null {
   const vpsProvider = resolveVpsProvider(business.vps_provider);
   if (!providerUsesHostingerLifecycle(vpsProvider)) {
     return `vps_provider=${vpsProvider}: term-renewal sweep is Hostinger-only`;
@@ -641,14 +649,31 @@ function guardCandidate(business: BusinessRow): string | null {
 
 type MigrateOutcome = { ok: true; detail: string } | { ok: false; detail: string };
 
-async function migrateTenantTermRenewal(
+export async function migrateTenantToFreshBox(
   input: {
     businessId: string;
     vpsSize: VpsSize;
-    savingsRatio: number;
-    nextBillingAt: string;
-    renewalCents: number;
-    firstPeriodCents: number;
+    /**
+     * Human-readable "why we are doing this" line for the ops emails. The
+     * two sweeps that share this migration justify it differently (renewal
+     * price vs contract coverage), so the reasoning is the caller's to
+     * write and this function only relays it.
+     */
+    economicsDetail: string;
+    /**
+     * Ledger purpose for the provisioning job. Distinct per sweep so each
+     * one's purchase cooldown sees only its OWN purchases.
+     */
+    purpose: ProvisioningJobPurpose;
+    /** Who claimed the migration lease; shown in the ops email. */
+    requestedBy: string;
+    /**
+     * Explicit Hostinger term to buy. The contract-upgrade sweep computes
+     * this from the tenant's REMAINING contract, which is not always the
+     * term their billing period implies. Null keeps the legacy behavior of
+     * deriving it from the subscription's billing period.
+     */
+    hostingerTerm: HostingerBillingTerm | null;
     /**
      * Hostinger paid-through for the OLD box, recorded on the pooled row.
      * Deliberately not nextBillingAt: that helper prefers next_billing_at,
@@ -663,7 +688,7 @@ async function migrateTenantTermRenewal(
   },
   deps: TermRenewalSweepDeps
 ): Promise<MigrateOutcome> {
-  const { businessId, vpsSize } = input;
+  const { businessId, vpsSize, requestedBy } = input;
   // The route budget started when the SWEEP did, not when this tenant's
   // migration did: the fleet scan and per-candidate VM lookups above already
   // spent some of it under the same maxDuration.
@@ -680,7 +705,7 @@ async function migrateTenantTermRenewal(
       phase: "failed",
       businessId,
       businessName: biz.name,
-      requestedBy: SWEEP_REQUESTED_BY,
+      requestedBy,
       fromSize: vpsSize,
       toSize: vpsSize,
       detail: guard
@@ -722,17 +747,14 @@ async function migrateTenantTermRenewal(
     }
   }
 
-  const economicsDetail =
-    `Renewal $${(input.renewalCents / 100).toFixed(2)} vs fresh first-period ` +
-    `$${(input.firstPeriodCents / 100).toFixed(2)} (${(input.savingsRatio * 100).toFixed(1)}% savings). ` +
-    `Next billing: ${input.nextBillingAt}.`;
+  const economicsDetail = input.economicsDetail;
 
   const notify = async (phase: OpsHardwareMigrationInput["phase"], detail: string): Promise<void> => {
     await deps.sendOpsEmail({
       phase,
       businessId,
       businessName: biz.name,
-      requestedBy: SWEEP_REQUESTED_BY,
+      requestedBy,
       fromSize: vpsSize,
       toSize: vpsSize,
       detail
@@ -792,9 +814,10 @@ async function migrateTenantTermRenewal(
       tier,
       vpsSize,
       billingPeriod: activeSub?.billing_period ?? null,
+      hostingerTerm: input.hostingerTerm,
       suppressOwnerNotify: true,
       skipPoolAdopt: true,
-      purpose: "term_renewal"
+      purpose: input.purpose
     });
     const jobOut = await runJob(
       {
@@ -802,9 +825,10 @@ async function migrateTenantTermRenewal(
         tier,
         vps_size: vpsSize,
         billing_period: activeSub?.billing_period ?? null,
+        hostinger_term: input.hostingerTerm,
         suppress_owner_notify: true,
         skip_pool_adopt: true,
-        purpose: "term_renewal"
+        purpose: input.purpose
       },
       {
         orchestrate: async (input) => {
@@ -813,6 +837,7 @@ async function migrateTenantTermRenewal(
             tier: input.tier,
             vpsSize,
             billingPeriod: input.billingPeriod,
+            hostingerTerm: input.hostingerTerm,
             skipPoolAdopt: true,
             suppressOwnerNotify: true,
             deployBudgetStartedAtMs: budgetStartedAtMs
@@ -838,7 +863,7 @@ async function migrateTenantTermRenewal(
         `deploy failed on new box ${jobOut.vpsId}: old box left running + renewing; ` +
         "new box left for the stuck-alert path";
       await notify("failed", detail);
-      await markTermRenewalJobFailed(deps, businessId, detail);
+      await markMigrationJobFailed(deps, businessId, detail);
       return { ok: false, detail };
     }
     newProv = {
@@ -876,7 +901,7 @@ async function migrateTenantTermRenewal(
     } else {
       const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
       await notify("failed", detail);
-      await markTermRenewalJobFailed(deps, businessId, detail);
+      await markMigrationJobFailed(deps, businessId, detail);
       return { ok: false, detail };
     }
   }
@@ -894,7 +919,7 @@ async function migrateTenantTermRenewal(
       `cannot resolve new VM ${newVmId} IP: restore manually (tarball: ${backupPath}); ` +
       "old box left running + renewing";
     await notify("failed", detail);
-    await markTermRenewalJobFailed(deps, businessId, detail);
+    await markMigrationJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -905,7 +930,7 @@ async function migrateTenantTermRenewal(
       `restore failed: ${errMsg(err)}: tarball safe at ${backupPath}; ` +
       "old box left running + renewing (it still has the live data)";
     await notify("failed", detail);
-    await markTermRenewalJobFailed(deps, businessId, detail);
+    await markMigrationJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -945,7 +970,7 @@ async function migrateTenantTermRenewal(
       `cutover done (new srv${newVmId} serving) but billing repoint failed: ` +
       "old box left RUNNING + RENEWING. Fix subscriptions.hostinger_billing_subscription_id manually.";
     await notify("failed", detail);
-    await markTermRenewalJobFailed(deps, businessId, detail);
+    await markMigrationJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -984,10 +1009,16 @@ async function migrateTenantTermRenewal(
   const retireKeys = deps.retireVpsSshKeysForVps ?? retireVpsSshKeysForVps;
   try {
     const retired = await retireKeys(String(oldVmId));
-    logger.info("term-renewal sweep: retired old box key rows", { businessId, oldVmId, retired });
-  } catch (err) {
-    logger.warn("term-renewal sweep: old key-row retire failed (stale row left active)", {
+    logger.info("hardware migration: retired old box key rows", {
       businessId,
+      requestedBy,
+      oldVmId,
+      retired
+    });
+  } catch (err) {
+    logger.warn("hardware migration: old key-row retire failed (stale row left active)", {
+      businessId,
+      requestedBy,
       oldVmId,
       error: errMsg(err)
     });
@@ -1017,7 +1048,7 @@ async function migrateTenantTermRenewal(
       // expiry as "unknown runway" and will hand the box to a new signup, so
       // a box pooled and claimed the same day would skip the 72h runway floor.
       expiresAt: input.paidThroughAt,
-      notes: `term-renewal sweep of business ${businessId}; auto-renew off, never_renew`
+      notes: `${requestedBy} of business ${businessId}; auto-renew off, never_renew`
     });
     pooled = true;
   } catch (err) {
@@ -1046,7 +1077,7 @@ async function migrateTenantTermRenewal(
       `pooled=${pooled}, never_renew=${neverRenewMarked}. ` +
       `Mark vps_inventory.never_renew=true for srv${oldVmId} manually before the next adopt.`;
     await notify("failed", detail);
-    await markTermRenewalJobFailed(deps, businessId, detail);
+    await markMigrationJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -1079,12 +1110,14 @@ async function migrateTenantTermRenewal(
     });
   });
 
-  logger.info("term-renewal sweep: migration complete", {
+  logger.info("hardware migration complete", {
     businessId,
+    purpose: input.purpose,
+    requestedBy,
     vpsSize,
     oldVmId,
     newVmId,
-    savingsRatio: input.savingsRatio,
+    hostingerTerm: input.hostingerTerm,
     oldBillingHandling,
     oldVmStopped,
     neverRenewMarked

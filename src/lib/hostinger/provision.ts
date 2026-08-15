@@ -236,6 +236,16 @@ export type ProvisionVpsForBusinessInput = {
    * per-month cost matches what the customer committed to.
    */
   billingPeriod?: BillingPeriod | null;
+  /**
+   * Explicit Hostinger purchase term, overriding the `billingPeriod`
+   * derivation. This is the axis the fleet strategy turns on: a signup buys
+   * `1m` regardless of the customer's contract (so no non-refundable term
+   * hardware sits behind an open money-back window), and the
+   * contract-upgrade sweep later buys exactly the term that covers the
+   * tenant's REMAINING contract, which is not always the term their
+   * `billingPeriod` implies. Omitted keeps the legacy derivation.
+   */
+  hostingerTerm?: HostingerBillingTerm | null;
   /** Override the price-item id (bypasses the size/term derivation). */
   itemId?: string;
   /** Override the template (default: Ubuntu 24.04 with Docker). */
@@ -355,7 +365,10 @@ export async function provisionVpsForBusiness(
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
   const itemId =
     input.itemId ??
-    vpsPriceItemId(vpsSize, hostingerTermForBillingPeriod(input.billingPeriod ?? "monthly"));
+    vpsPriceItemId(
+      vpsSize,
+      input.hostingerTerm ?? hostingerTermForBillingPeriod(input.billingPeriod ?? "monthly")
+    );
   const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID;
   const dataCenterId = input.dataCenterId ?? DEFAULT_US_DATA_CENTER_ID;
   // FQDN required: Hostinger's purchase-embedded setup historically accepted

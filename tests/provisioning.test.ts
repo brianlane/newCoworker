@@ -325,7 +325,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-uuid-1",
       tier: "starter",
       vpsSize: "kvm1",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
   });
 
@@ -526,7 +527,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-kvm1",
       tier: "starter",
       vpsSize: "kvm1",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
   });
 
@@ -567,7 +569,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-std-default",
       tier: "standard",
       vpsSize: "kvm2",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
   });
 
@@ -582,7 +585,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-std-kvm8",
       tier: "standard",
       vpsSize: "kvm8",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
     // Bootstrap (call 0) carries the pinned hardware profile: the slim
     // loader is base64-embedded, so decode it before asserting.
@@ -607,7 +611,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-corrupt",
       tier: "starter",
       vpsSize: "kvm1",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
   });
 
@@ -1661,7 +1666,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-enterprise",
       tier: "standard",
       vpsSize: "kvm8",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
     const bootstrapCall = remoteExec.mock.calls[0][0] as { command: string };
     const b64 = /printf '%s' '([^']+)'/.exec(bootstrapCall.command)?.[1] ?? "";
@@ -1683,7 +1689,8 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-enterprise-2",
       tier: "standard",
       vpsSize: "kvm2",
-      billingPeriod: null
+      billingPeriod: null,
+   hostingerTerm: null
     });
   });
 
@@ -3241,7 +3248,8 @@ describe("provisioning/orchestrate", () => {
         businessId: "biz-pool-2",
         tier: "standard",
         vpsSize: "kvm2",
-        billingPeriod: null
+        billingPeriod: null,
+   hostingerTerm: null
       });
       expect(pool.record).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3253,6 +3261,75 @@ describe("provisioning/orchestrate", () => {
           notes: "purchased for biz-pool-2 (1m term)"
         })
       );
+    });
+
+    // Runway is what adopt-first ranks on, and unknown expiry sorts LAST, so
+    // a box we just bought has to record its paid-through immediately rather
+    // than waiting for the daily billing-posture cron to fill the column.
+    it("stamps the purchased box's paid-through onto the inventory row", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockResolvedValue({
+        ...makeVpsStub("124"),
+        hostingerBillingSubscriptionId: "hbs-new"
+      });
+      const resolvePaidThrough = vi.fn().mockResolvedValue("2026-09-14T11:01:08Z");
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-exp", tier: "standard" },
+        {
+          vpsProvisioner,
+          vpsAdopter: vi.fn(),
+          vpsPool: pool,
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          resolvePaidThrough
+        }
+      );
+
+      expect(resolvePaidThrough).toHaveBeenCalledWith("hbs-new");
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 124, expiresAt: "2026-09-14T11:01:08Z" })
+      );
+    });
+
+    it("omits expiresAt when the paid-through cannot be resolved", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockResolvedValue({
+        ...makeVpsStub("125"),
+        hostingerBillingSubscriptionId: "hbs-new"
+      });
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-exp-2", tier: "standard" },
+        {
+          vpsProvisioner,
+          vpsAdopter: vi.fn(),
+          vpsPool: pool,
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          resolvePaidThrough: vi.fn().mockResolvedValue(null)
+        }
+      );
+
+      expect(pool.record.mock.calls[0][0]).not.toHaveProperty("expiresAt");
+    });
+
+    // Adopting does not change a box's paid-through, and the pool row
+    // already carries it. Omitting the key is what stops the adopt-time
+    // bookkeeping write from blanking the runway of the box it just claimed.
+    it("adopt bookkeeping never touches expires_at", async () => {
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-1", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn(),
+          vpsAdopter: vi.fn().mockResolvedValue({
+            ...makeVpsStub("1800985"),
+            hostingerBillingSubscriptionId: "hsub-adopted"
+          }),
+          vpsPool: pool,
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      );
+      expect(pool.record.mock.calls[0][0]).not.toHaveProperty("expiresAt");
     });
 
     it("skipPoolAdopt forces a term purchase past an available pooled box (change-plan term alignment)", async () => {
@@ -3276,7 +3353,8 @@ describe("provisioning/orchestrate", () => {
         businessId: "biz-pool-skip",
         tier: "starter",
         vpsSize: "kvm1",
-        billingPeriod: "biennial"
+        billingPeriod: "biennial",
+   hostingerTerm: null
       });
       // The new box is still recorded as assigned inventory, tagged with
       // the 2-year term it was bought at.

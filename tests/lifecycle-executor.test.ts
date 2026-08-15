@@ -68,7 +68,12 @@ vi.mock("@/lib/nango/cleanup", () => ({
   revokeNangoConnectionsForBusiness: revokeNangoConnectionsForBusinessMock
 }));
 
-vi.mock("@/lib/db/vps-inventory", () => ({
+// Keep the module's PURE selectors real and only stub the DB write: the
+// pool-return op resolves a paid-through through `paidThroughFromBillingSub`,
+// and a factory that dropped it silently turned every resolve into null (the
+// helper catches the resulting TypeError and reports "unknown expiry").
+vi.mock("@/lib/db/vps-inventory", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/db/vps-inventory")>()),
   releaseVpsToPool: releaseVpsToPoolMock
 }));
 
@@ -1918,6 +1923,43 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
         hostingerBillingSubscriptionId: "hbs-1",
         notes: "returned by user_refund cancel of business biz_1"
       });
+    });
+
+    // The churned-box runway fix: a canceled TERM box can carry many months
+    // of prepaid time, and claimAvailableVps ranks unknown expiry LAST, so
+    // the pool row has to learn its paid-through as it enters the pool
+    // rather than a day later when the billing-posture cron catches up.
+    it("stamps the box's Hostinger paid-through onto the pool row", async () => {
+      releaseVpsToPoolMock.mockResolvedValueOnce(undefined);
+      const hostinger = {
+        listBillingSubscriptions: vi.fn(async () => [
+          { id: "hbs-1", expires_at: "2028-07-01T00:00:00Z" }
+        ])
+      };
+      await executeLifecyclePlanSlowPhase(poolPlan(), {}, {
+        hostinger: hostinger as never,
+        sendEmail: vi.fn()
+      });
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1800985, expiresAt: "2028-07-01T00:00:00Z" })
+      );
+    });
+
+    // Forwarding a null would ERASE a paid-through already on the row (the
+    // grace-expired wipe re-emits this op after the cancel already pooled
+    // the box), so an unresolvable expiry must omit the key entirely.
+    it("omits expiresAt when Hostinger cannot resolve the paid-through", async () => {
+      releaseVpsToPoolMock.mockResolvedValueOnce(undefined);
+      const hostinger = {
+        listBillingSubscriptions: vi.fn(async () => {
+          throw new Error("hostinger 503");
+        })
+      };
+      await executeLifecyclePlanSlowPhase(poolPlan(), {}, {
+        hostinger: hostinger as never,
+        sendEmail: vi.fn()
+      });
+      expect(releaseVpsToPoolMock.mock.calls[0][0]).not.toHaveProperty("expiresAt");
     });
 
     it("swallows a pool write failure — inventory is an optimization, never a cancel blocker", async () => {

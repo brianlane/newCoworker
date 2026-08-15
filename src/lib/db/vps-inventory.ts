@@ -215,6 +215,17 @@ export async function recordVpsAssigned(
     businessId: string;
     hostname?: string | null;
     hostingerBillingSubscriptionId?: string | null;
+    /**
+     * Hostinger paid-through for the box we just bought. Stamping it HERE is
+     * what closes the window in which a freshly-purchased box carries a null
+     * expiry: `claimAvailableVps` sorts unknown expiry last, so a box with
+     * real runway used to lose the adopt-first ranking to a box with a known
+     * but shorter one until the daily billing-posture cron filled the column
+     * in. Omit (not null) to leave an existing value untouched — PostgREST
+     * upserts only the keys present in the payload, and a caller that could
+     * not resolve the date must not erase one we already knew.
+     */
+    expiresAt?: string | null;
     notes?: string | null;
   },
   client?: SupabaseClient
@@ -229,6 +240,7 @@ export async function recordVpsAssigned(
       assigned_at: new Date().toISOString(),
       hostname: input.hostname ?? `srv${input.vmId}.hstgr.cloud`,
       hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
+      ...(input.expiresAt !== undefined ? { expires_at: input.expiresAt } : {}),
       notes: input.notes ?? null,
       updated_at: new Date().toISOString()
     },

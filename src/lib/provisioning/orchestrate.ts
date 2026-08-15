@@ -5,6 +5,7 @@ import {
   type ProvisionVpsForBusinessResult
 } from "@/lib/hostinger/provision";
 import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
+import { resolvePaidThroughForBillingSub } from "@/lib/hostinger/paid-through";
 import {
   claimAvailableVps,
   claimSpecificAvailableVps,
@@ -92,7 +93,10 @@ import {
   resolveVpsProvider,
   type VpsProvider
 } from "@/lib/vps/provider";
-import { hostingerTermForBillingPeriod } from "@/lib/hostinger/provision";
+import {
+  hostingerTermForBillingPeriod,
+  type HostingerBillingTerm
+} from "@/lib/hostinger/provision";
 import type { BillingPeriod } from "@/lib/plans/tier";
 
 type ProvisioningInput = {
@@ -113,6 +117,12 @@ type ProvisioningInput = {
    * null buys monthly. Pool adoption ignores this (the box is already owned).
    */
   billingPeriod?: BillingPeriod | null;
+  /**
+   * Explicit Hostinger purchase term. Overrides the `billingPeriod`
+   * derivation so a signup can buy monthly hardware for a contract customer
+   * and the contract-upgrade sweep can buy exactly the shortfall term.
+   */
+  hostingerTerm?: HostingerBillingTerm | null;
   /**
    * Skip the adopt-first pool claim and force a purchase. Used by the
    * change-plan term-alignment migration, whose entire point is landing on
@@ -415,6 +425,12 @@ export type VpsProvisioner = (input: {
   tier: "starter" | "standard";
   vpsSize: VpsSize;
   billingPeriod?: BillingPeriod | null;
+  /**
+   * Explicit Hostinger purchase term. Overrides the `billingPeriod`
+   * derivation so a signup can buy monthly hardware for a contract customer
+   * and the contract-upgrade sweep can buy exactly the shortfall term.
+   */
+  hostingerTerm?: HostingerBillingTerm | null;
 }) => Promise<ProvisionVpsForBusinessResult>;
 
 /**
@@ -466,13 +482,14 @@ function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
 
 /* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
 function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
-  return ({ businessId, tier, vpsSize, billingPeriod }) =>
+  return ({ businessId, tier, vpsSize, billingPeriod, hostingerTerm }) =>
     provisionVpsForBusiness(
       {
         businessId,
         tier,
         vpsSize,
         billingPeriod: billingPeriod ?? null,
+        hostingerTerm: hostingerTerm ?? null,
         // Attempt to attach the bootstrap as Hostinger's first-boot
         // post-install script. provisionVpsForBusiness gracefully degrades
         // on the 403 chicken-and-egg ("account doesn't yet own a VPS") so
@@ -892,6 +909,13 @@ export async function orchestrateProvisioning(
      * `null` to disable (tests, break-glass).
      */
     orphanReconciler?: (() => Promise<ReconciledOrphan[]>) | null;
+    /**
+     * Hostinger paid-through lookup used to stamp `vps_inventory.expires_at`
+     * on a freshly purchased box. Defaults to the real Hostinger list call;
+     * tests inject. Never throws by contract — see
+     * `resolvePaidThroughForBillingSub`.
+     */
+    resolvePaidThrough?: (billingSubscriptionId: string | null) => Promise<string | null>;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier, billingPeriod, suppressOwnerNotify } = input;
@@ -1427,18 +1451,27 @@ async function acquireVps(args: {
    */
   vpsProvider: VpsProvider;
   billingPeriod: BillingPeriod | null;
+  /** Explicit purchase term; null falls back to the billingPeriod derivation. */
+  hostingerTerm: HostingerBillingTerm | null;
   skipPoolAdopt: boolean;
   vpsPool: VpsPool | null;
   vpsAdopter: VpsAdopter;
   vpsProvisioner: VpsProvisioner;
   /** Orphan reconciler for fail-but-charge purchases. Null disables. */
   reconcileOrphans: (() => Promise<ReconciledOrphan[]>) | null;
+  /**
+   * Hostinger paid-through lookup for the box we just bought, stamped onto
+   * the inventory row so adopt-first ranking knows its runway immediately
+   * instead of waiting a day for the billing-posture cron. Best-effort:
+   * resolves to null on any failure and the row keeps an unknown expiry.
+   */
+  resolvePaidThrough: (billingSubscriptionId: string | null) => Promise<string | null>;
   /** Injectable sleep for the orphan-scan retry loop (tests inject a no-op). */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the orphan-scan deadline (tests). */
   now?: () => number;
 }): Promise<ProvisionVpsForBusinessResult> {
-  const { businessId, tier, vpsSize, vpsProvider, billingPeriod, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
+  const { businessId, tier, vpsSize, vpsProvider, billingPeriod, hostingerTerm, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
     args;
   const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
   /* c8 ignore next -- production default; tests inject sleep */
@@ -1459,7 +1492,7 @@ async function acquireVps(args: {
 
   let purchased: ProvisionVpsForBusinessResult;
   try {
-    purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod });
+    purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod, hostingerTerm });
   } catch (err) {
     // Purchase failed. If this was the Hostinger purchase endpoint, the VM
     // may exist anyway (fail-but-charge) — reconcile orphans into the pool
@@ -1556,6 +1589,13 @@ async function acquireVps(args: {
   }
   if (vpsPool && hostingerManaged) {
     try {
+      // Resolve the box's paid-through BEFORE the row is written so the
+      // inventory row is never briefly published with an unknown expiry.
+      // Best-effort by contract: a null here just defers the column to the
+      // billing-posture cron, exactly as before this lookup existed.
+      const expiresAt = await args.resolvePaidThrough(
+        purchased.hostingerBillingSubscriptionId
+      );
       await vpsPool.record({
         // Hostinger provisioners always return the numeric VM id; the
         // string ids (byos-*/OVH service names) never reach this branch
@@ -1564,9 +1604,13 @@ async function acquireVps(args: {
         plan: vpsSize,
         businessId,
         hostingerBillingSubscriptionId: purchased.hostingerBillingSubscriptionId,
+        // Only stamp what we actually resolved. Forwarding a null would
+        // erase a paid-through already on the row (this is an upsert, and a
+        // re-run after a retry can hit an existing row).
+        ...(expiresAt !== null ? { expiresAt } : {}),
         // Record the purchased Hostinger term so pool triage can tell a
         // prepaid 2-year box (valuable, adopt eagerly) from a monthly one.
-        notes: `purchased for ${businessId} (${hostingerTermForBillingPeriod(billingPeriod ?? "monthly")} term)`
+        notes: `purchased for ${businessId} (${hostingerTerm ?? hostingerTermForBillingPeriod(billingPeriod ?? "monthly")} term)`
       });
     } catch (err) {
       logger.warn("vps pool bookkeeping failed after purchase (continuing)", {
@@ -1681,11 +1725,17 @@ async function runOrchestrator(
     vpsSize,
     vpsProvider,
     billingPeriod: input.billingPeriod ?? null,
+    hostingerTerm: input.hostingerTerm ?? null,
     skipPoolAdopt: input.skipPoolAdopt ?? false,
     vpsPool,
     vpsAdopter,
     vpsProvisioner,
     reconcileOrphans: orphanReconciler,
+    /* c8 ignore next 4 -- production default closure; tests inject resolvePaidThrough */
+    resolvePaidThrough:
+      deps?.resolvePaidThrough ??
+      ((billingSubscriptionId) =>
+        resolvePaidThroughForBillingSub(hostinger, billingSubscriptionId, { businessId })),
     sleep: deps?.sleep,
     now: deps?.now
   });
