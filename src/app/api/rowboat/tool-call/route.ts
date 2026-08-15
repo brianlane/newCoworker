@@ -235,7 +235,15 @@ const notifyTeamArgsSchema = z.object({
   /** Customer's name if known, so the owner knows who to get back to. */
   customerName: z.string().max(200).optional(),
   /** Customer's phone if the model knows it (the webhook has no caller context). */
-  customerPhone: z.string().max(32).optional()
+  customerPhone: z.string().max(32).optional(),
+  /**
+   * Whether this is a seller or a buyer, when the conversation makes it
+   * clear. Used only to narrow WHO hears about a lead nobody owns yet: the
+   * teammates who cover that lead type are alerted before the business owner.
+   * Unset, or a value no teammate covers, alerts every eligible teammate, so
+   * a wrong guess costs noise rather than a missed lead.
+   */
+  leadType: z.enum(["seller", "buyer"]).optional()
 });
 
 type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
@@ -604,8 +612,12 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         const { results } = await dispatchUrgentNotification({
           businessId,
           // This alert is ABOUT this texter, so it goes to whichever
-          // teammate owns them, falling back to the business owner.
+          // teammate owns them. When NOBODY owns them it goes to the
+          // teammates who cover this lead type, and only then to the business
+          // owner: a lead asking for a human is exactly the case where
+          // reaching one person and stopping is the wrong answer.
           contactE164: customerPhone,
+          leadTag: parsed.data.leadType ?? null,
           summary: truncateAtWord(`Texter follow-up needed: ${parsed.data.message}`, 200),
           kind: "sms_team_notify",
           payload: { logId, ...logPayload },

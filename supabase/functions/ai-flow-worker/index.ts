@@ -37,6 +37,11 @@ import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
 import {
+  broadcastTagMatched,
+  selectBroadcastTeam,
+  type BroadcastMemberRow
+} from "../_shared/team_broadcast.ts";
+import {
   sendOwnerNotifyFallback,
   type OwnerNotifyFallbackReason,
   type OwnerNotifyFallbackResult
@@ -7170,27 +7175,12 @@ async function alertBroadcastTeam(
     console.error("notify_lead_owner team alert roster read", error);
     return null;
   }
-  const rows = (data ?? []) as Array<{
-    id: string;
-    name?: string | null;
-    phone_e164?: string | null;
-    team_broadcast_enabled?: boolean | null;
-    tags?: string[] | null;
-  }>;
-  // Only an explicit false excludes, matching how the roster's other
-  // availability flags are read: an unset column means available.
-  const eligible = rows.filter(
-    (r) => r.team_broadcast_enabled !== false && (r.phone_e164 ?? "").trim()
-  );
-  if (eligible.length === 0) return null;
-
-  const tag = (action.teamTag ?? "").trim().toLowerCase();
-  const tagged = tag
-    ? eligible.filter((r) =>
-        (r.tags ?? []).some((t) => String(t).trim().toLowerCase() === tag)
-      )
-    : eligible;
-  const targets = tagged.length > 0 ? tagged : eligible;
+  // Eligibility and the fail-safe tag filter live in `_shared`, so this path
+  // and the urgent-alert dispatcher cannot drift apart on who counts as the
+  // team for an unowned lead.
+  const rosterRows = (data ?? []) as BroadcastMemberRow[];
+  const targets = selectBroadcastTeam(rosterRows, action.teamTag);
+  if (targets.length === 0) return null;
 
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) {
@@ -7205,7 +7195,7 @@ async function alertBroadcastTeam(
   }
   const notified: string[] = [];
   for (const t of targets) {
-    const phone = (t.phone_e164 ?? "").trim();
+    const phone = t.phone;
     const shortened = await shortenSmsBodyUrls(supabase, {
       businessId: run.business_id,
       text: action.message,
@@ -7253,14 +7243,16 @@ async function alertBroadcastTeam(
   if (notified.length === 0) return null;
   appendActionTaken(
     scope,
-    `alerted the team (${targets.map((t) => t.name || t.phone_e164).join(", ")}), nobody owns this lead`
+    `alerted the team (${targets.map((t) => t.name || t.phone).join(", ")}), nobody owns this lead`
   );
   return {
     kind: "ok",
     result: {
       target: "team_broadcast",
       notified,
-      ...(tag ? { tag, tag_matched: tagged.length > 0 } : {})
+      ...(action.teamTag
+        ? { tag: action.teamTag, tag_matched: broadcastTagMatched(rosterRows, action.teamTag) }
+        : {})
     }
   };
 }

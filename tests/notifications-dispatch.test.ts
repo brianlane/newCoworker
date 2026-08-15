@@ -118,6 +118,22 @@ const TO_BUSINESS_OWNER = {
   matchedBy: null,
   reason: "contact_unowned"
 };
+const GABBY_PHONE = "+14807202013";
+/** Nobody owns this lead, so the seller-tagged pair is alerted instead. */
+const TO_TEAM = {
+  target: "team_broadcast",
+  emailTarget: "business_owner",
+  memberId: null,
+  memberName: null,
+  phone: null,
+  email: null,
+  matchedBy: null,
+  reason: "contact_unowned",
+  team: [
+    { id: "m1", name: "Dave Lane", phone: DAVE_PHONE },
+    { id: "m2", name: "Gabrielle Mota", phone: GABBY_PHONE }
+  ]
+};
 const TO_DAVE = {
   target: "contact_owner",
   emailTarget: "business_owner",
@@ -1498,6 +1514,96 @@ describe("notifications/dispatch", () => {
       expect(outboundLogInsert).toHaveBeenCalledWith(
         expect.objectContaining({ to_e164: DAVE_PHONE, source: "owner_alert" })
       );
+    });
+
+    /**
+     * Amy's rule, 2026-08-15: an unowned lead asking for a human goes to
+     * every teammate covering that lead type BEFORE the business owner. The
+     * lead that forced it waited two days while both alerts went to Amy.
+     */
+    it("texts every teammate on an unowned-lead broadcast", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE,
+        leadTag: "seller"
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls.map((c) => c[1])).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
+      // One sent row per teammate, each naming its own recipient.
+      expect(rowsFor("sms").map((r) => (r.payload as { recipient: string }).recipient)).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
+    });
+
+    it("passes the lead type through to the resolver", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE,
+        leadTag: "seller"
+      });
+      expect(resolveContactOwnerTarget.mock.calls[0][3]).toBe("seller");
+    });
+
+    it("keeps the broadcast email with the business owner", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("owner@example.com");
+    });
+
+    it("one teammate's failed send does not suppress the rest of the team", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      vi.mocked(sendTelnyxSms).mockRejectedValueOnce(new Error("carrier down"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls.map((c) => c[1])).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
+      expect(rowsFor("sms").map((r) => r.status)).toEqual(["failed", "sent"]);
+    });
+
+    it("never lets WhatsApp stand in for a whole-team broadcast", async () => {
+      // The reroute preference belongs to the OWNER's number, and this leg is
+      // single recipient: delivering it would reach an arbitrary one of the
+      // teammates instead of all of them.
+      vi.mocked(getPublicWhatsAppConnection).mockResolvedValue({ is_active: true } as never);
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_urgent: true,
+        whatsapp_replaces_sms: true
+      } as never);
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls.map((c) => c[1])).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
+      expect(vi.mocked(deliverWhatsApp)).not.toHaveBeenCalled();
+      // No whatsapp row either: a broadcast is not a WhatsApp-shaped event.
+      expect(rowsFor("whatsapp")).toEqual([]);
     });
 
     it("falls back to the business owner for an unowned contact", async () => {
