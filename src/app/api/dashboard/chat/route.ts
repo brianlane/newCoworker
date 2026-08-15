@@ -785,13 +785,19 @@ export async function POST(request: Request) {
     // operate_messages, which staff hold, a staff teammate must never be
     // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
     // The role is read ONCE and composed into the per-bar booleans below.
-    const callerRole = user.isAdmin
-      ? ("owner" as const)
-      : await (async () => {
-          if (!user.email) return null;
-          const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
-          return await getBusinessRoleForEmail(body.businessId, user.email);
-        })().catch(() => null);
+    //
+    // Deliberately NO isAdmin shortcut: the caller's EMAIL is the single
+    // source of role truth. An admin viewing their own business (self-owned
+    // view-as, which isViewAsActive treats as changes-enabled) resolves
+    // their genuine owner role and gets the full toolset; an admin
+    // impersonating a FOREIGN tenant resolves no role, so the role-gated
+    // tools are simply not declared, matching the view-as read-only policy
+    // instead of handing an impersonator settings mutations.
+    const callerRole = await (async () => {
+      if (!user.email) return null;
+      const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
+      return await getBusinessRoleForEmail(body.businessId, user.email);
+    })().catch(() => null);
     const { can } = await import("@/lib/authz/policy");
     const canManageSettings = callerRole != null && can(callerRole, "manage_settings");
     const actionToolGates = {
@@ -831,29 +837,27 @@ export async function POST(request: Request) {
     // MCP-bridge tools (connector parity): the Settings toggles gate the
     // groups, and the bridge itself prunes any tool whose handler bar the
     // caller's role cannot pass (per-tool, mirroring the handlers) — so a
-    // staff turn is never handed a get_flow that can only refuse. Admins
-    // get NO bridge: view-as is read-only by policy, and an impersonating
-    // admin's email holds no business role, so every bridged handler would
-    // refuse anyway — not declaring the tools keeps that silent-clean
-    // instead of error-noisy. Every bridged handler ALSO re-runs
-    // requireMcpBusinessRole per call, so this composition narrows, never
-    // widens.
-    const bridgeExtraTools = user.isAdmin
-      ? null
-      : buildMcpBridgeExtraTools(
-          body.businessId,
-          { userId: user.userId, email: user.email ?? "" },
-          {
-            read_business_data: toolStates.read_business_data,
-            manage_contacts: toolStates.manage_contacts,
-            manage_flows: toolStates.manage_flows,
-            manage_agents: toolStates.manage_agents,
-            update_business_profile: toolStates.update_business_profile,
-            update_business_knowledge: toolStates.update_business_knowledge,
-            manage_coworker_tools: toolStates.manage_coworker_tools
-          },
-          callerRole
-        );
+    // staff turn is never handed a get_flow that can only refuse. The same
+    // role gate covers view-as: an admin on their OWN business resolves
+    // owner and gets the full bridge; an impersonating admin on a foreign
+    // tenant resolves no role, buildMcpBridgeExtraTools returns null, and
+    // nothing is declared — silent-clean instead of error-noisy. Every
+    // bridged handler ALSO re-runs requireMcpBusinessRole per call, so this
+    // composition narrows, never widens.
+    const bridgeExtraTools = buildMcpBridgeExtraTools(
+      body.businessId,
+      { userId: user.userId, email: user.email ?? "" },
+      {
+        read_business_data: toolStates.read_business_data,
+        manage_contacts: toolStates.manage_contacts,
+        manage_flows: toolStates.manage_flows,
+        manage_agents: toolStates.manage_agents,
+        update_business_profile: toolStates.update_business_profile,
+        update_business_knowledge: toolStates.update_business_knowledge,
+        manage_coworker_tools: toolStates.manage_coworker_tools
+      },
+      callerRole
+    );
 
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
