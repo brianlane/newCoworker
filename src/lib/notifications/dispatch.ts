@@ -115,6 +115,15 @@ export type DispatchInput = {
    * plan, system health), which stays owner-addressed.
    */
   contactE164?: string | null;
+  /**
+   * Lead type ("seller" / "buyer") for an alert about a lead NOBODY owns.
+   *
+   * An unowned lead is alerted to the teammates who cover that type before it
+   * falls to the business owner. Omitting this, or passing a tag no teammate
+   * carries, alerts every broadcast-eligible teammate: the filter degrades to
+   * noise, never to silence.
+   */
+  leadTag?: string | null;
 };
 
 export type DispatchChannelResult = {
@@ -132,7 +141,13 @@ export type ResolvedTargets = {
   email: string | null;
   /** The business owner's login email — the address `ui_locale` is keyed to. */
   ownerEmail: string | null;
+  /** The first of {@link phones}, kept so single-recipient callers are unchanged. */
   phone: string | null;
+  /**
+   * Every phone the SMS leg should reach. One entry in the ordinary case; the
+   * whole lead-type-tagged roster when the alert is about a lead NOBODY owns.
+   */
+  phones: string[];
   smsUrgentEnabled: boolean;
   /** WhatsApp channel toggle (delivery still requires a connected integration). */
   whatsappUrgentEnabled: boolean;
@@ -199,7 +214,9 @@ export type ResolvedTargets = {
  */
 export async function resolveNotificationTargets(
   businessId: string,
-  contactE164?: string | null
+  contactE164?: string | null,
+  /** Lead type used to narrow an unowned-lead broadcast. See DispatchInput. */
+  leadTag?: string | null
 ): Promise<ResolvedTargets> {
   const fallbackEmail = process.env.ADMIN_EMAIL?.trim() || null;
   const fallbackPhone = coerceOwnerPhoneToE164(process.env.TELNYX_OWNER_PHONE);
@@ -313,7 +330,7 @@ export async function resolveNotificationTargets(
   if (contactE164) {
     try {
       const db = await createSupabaseServiceClient();
-      routing = await resolveContactOwnerTarget(db, businessId, contactE164);
+      routing = await resolveContactOwnerTarget(db, businessId, contactE164, leadTag);
     } catch (err) {
       logger.warn("resolveNotificationTargets: contact-owner lookup failed", {
         businessId,
@@ -322,15 +339,27 @@ export async function resolveNotificationTargets(
     }
   }
   const redirected = routing?.target === "contact_owner";
+  const primaryPhone = redirected ? routing!.phone : ownerAlertPhone;
+  // Every phone the SMS leg should reach. One entry for the ordinary owner or
+  // contact-owner case; the whole tagged roster when nobody owns the lead.
+  // `phone` stays the FIRST of these so the per-channel skip rows, the
+  // WhatsApp leg, and every existing caller keep reading one recipient.
+  const phones =
+    routing?.target === "team_broadcast"
+      ? routing.team.map((m) => m.phone)
+      : primaryPhone
+        ? [primaryPhone]
+        : [];
 
   return {
+    phones,
     // Email redirects only when the roster row actually has an address;
     // otherwise it stays with the owner so a redirected alert keeps a second
     // delivery path (see contact_owner_target's emailTarget).
     email:
       routing?.emailTarget === "contact_owner" ? routing.email : ownerAlertEmail,
     ownerEmail,
-    phone: redirected ? routing!.phone : ownerAlertPhone,
+    phone: phones[0] ?? null,
     routing,
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
@@ -393,7 +422,11 @@ export const URGENT_ALERT_COOLDOWN_MAX = 2;
 export async function dispatchUrgentNotification(
   input: DispatchInput
 ): Promise<DispatchResult> {
-  const targets = await resolveNotificationTargets(input.businessId, input.contactE164);
+  const targets = await resolveNotificationTargets(
+    input.businessId,
+    input.contactE164,
+    input.leadTag
+  );
   // Strip trailing slash for parity with the Edge-function helpers and to
   // avoid `https://example.com//dashboard` / `//api/...` if the env var was
   // set with a stray slash.
@@ -633,7 +666,11 @@ export async function dispatchUrgentNotification(
     targets.whatsappReplacesSms &&
     targets.whatsappDeliverable &&
     targets.whatsappUrgentEnabled &&
-    targets.routing?.target !== "contact_owner"
+    targets.routing?.target !== "contact_owner" &&
+    // Never lets a single WhatsApp message stand in for a whole-team
+    // broadcast: the preference belongs to the owner's number, and the
+    // audience here is every teammate who covers this lead type.
+    targets.routing?.target !== "team_broadcast"
   ) {
     // The owner opted to receive this on WhatsApp INSTEAD of SMS. Gated on
     // whatsappDeliverable, NOT whatsappConnected: the latter is true for a
@@ -657,91 +694,98 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
-    // An international owner phone with the alpha profile configured rides
-    // the platform's one-way NEWCOWORKER sender (long codes cannot
-    // originate international SMS: Telnyx ticket #557577), no-reply line
-    // appended since that sender has no inbound path. Env unset = null =
-    // today's behavior. Owner alerts only, mirroring the notifications
-    // Edge function.
-    const alphaProfile = alphaOwnerAlertProfile(smsDestinationCountry(targets.phone));
-    // The summary usually ends with "." and the template appends its own;
-    // trim trailing periods so the alert never reads "dashboard.. Details:".
-    const alertLine =
-      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
-    const text = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
-    try {
-      const tenantConfig = await getTelnyxMessagingForBusiness(input.businessId);
-      // On the alpha profile the sender IS the profile's alpha identity:
-      // swap the profile in and drop the tenant from-number.
-      const config = alphaProfile
-        ? // rcsAgentId nulled explicitly: the branded RCS agent must never
-          // be the sender identity for an alpha-routed alert.
-          { ...tenantConfig, messagingProfileId: alphaProfile, fromE164: undefined, rcsAgentId: null }
-        : tenantConfig;
-      // Owner alerts are METERED like everything else (nothing is exempt —
-      // Jul 14 2026 policy) but never REFUSED: "operational" mode counts
-      // the send (plan/bonus/overage) without the hard stop, so the cap
-      // alert itself can outrun the cap it reports.
-      const { id: telnyxMessageId, channel: sentChannel } = await sendTelnyxSms(
-        config,
-        targets.phone,
-        text,
-        {
-          meterBusinessId: input.businessId,
-          meterMode: "operational"
-        }
-      );
-      // Best-effort durable log so the alert renders in the owner's dashboard
-      // Messages thread (merged from sms_outbound_log — see
-      // src/lib/db/sms-history.ts). Mirrors the notifications Edge function.
-      // A failed insert must not fail the dispatch — the SMS already went out.
+    // One send per recipient. `phones` holds exactly one entry unless the
+    // alert is about a lead nobody owns, in which case it is the lead-type
+    // tagged roster and each teammate gets their own send, their own
+    // outbound log row, and their own sent/failed notification row. One
+    // teammate's failed send must never suppress the rest of the team.
+    for (const recipientPhone of targets.phones) {
+      // An international owner phone with the alpha profile configured rides
+      // the platform's one-way NEWCOWORKER sender (long codes cannot
+      // originate international SMS: Telnyx ticket #557577), no-reply line
+      // appended since that sender has no inbound path. Env unset = null =
+      // today's behavior. Owner alerts only, mirroring the notifications
+      // Edge function.
+      const alphaProfile = alphaOwnerAlertProfile(smsDestinationCountry(recipientPhone));
+      // The summary usually ends with "." and the template appends its own;
+      // trim trailing periods so the alert never reads "dashboard.. Details:".
+      const alertLine =
+        input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+      const text = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
       try {
-        const db = await createSupabaseServiceClient();
-        const { error: logErr } = await db.from("sms_outbound_log").insert({
-          business_id: input.businessId,
-          to_e164: targets.phone,
-          from_e164: config.fromE164 ?? null,
-          body: text,
-          source: "owner_alert",
-          run_id: null,
-          flow_id: null,
-          telnyx_message_id: telnyxMessageId,
-          channel: sentChannel
-        });
-        if (logErr) {
-          logger.warn("notifications.dispatch: owner_alert outbound log insert failed", {
+        const tenantConfig = await getTelnyxMessagingForBusiness(input.businessId);
+        // On the alpha profile the sender IS the profile's alpha identity:
+        // swap the profile in and drop the tenant from-number.
+        const config = alphaProfile
+          ? // rcsAgentId nulled explicitly: the branded RCS agent must never
+            // be the sender identity for an alpha-routed alert.
+            { ...tenantConfig, messagingProfileId: alphaProfile, fromE164: undefined, rcsAgentId: null }
+          : tenantConfig;
+        // Owner alerts are METERED like everything else (nothing is exempt,
+        // Jul 14 2026 policy) but never REFUSED: "operational" mode counts
+        // the send (plan/bonus/overage) without the hard stop, so the cap
+        // alert itself can outrun the cap it reports.
+        const { id: telnyxMessageId, channel: sentChannel } = await sendTelnyxSms(
+          config,
+          recipientPhone,
+          text,
+          {
+            meterBusinessId: input.businessId,
+            meterMode: "operational"
+          }
+        );
+        // Best-effort durable log so the alert renders in the owner's dashboard
+        // Messages thread (merged from sms_outbound_log, see
+        // src/lib/db/sms-history.ts). Mirrors the notifications Edge function.
+        // A failed insert must not fail the dispatch: the SMS already went out.
+        try {
+          const db = await createSupabaseServiceClient();
+          const { error: logErr } = await db.from("sms_outbound_log").insert({
+            business_id: input.businessId,
+            to_e164: recipientPhone,
+            from_e164: config.fromE164 ?? null,
+            body: text,
+            source: "owner_alert",
+            run_id: null,
+            flow_id: null,
+            telnyx_message_id: telnyxMessageId,
+            channel: sentChannel
+          });
+          if (logErr) {
+            logger.warn("notifications.dispatch: owner_alert outbound log insert failed", {
+              businessId: input.businessId,
+              error: logErr.message
+            });
+          }
+        } catch (logCatchErr) {
+          logger.warn("notifications.dispatch: owner_alert outbound log insert threw", {
             businessId: input.businessId,
-            error: logErr.message
+            error: logCatchErr instanceof Error ? logCatchErr.message : String(logCatchErr)
           });
         }
-      } catch (logCatchErr) {
-        logger.warn("notifications.dispatch: owner_alert outbound log insert threw", {
+        results.push(
+          await recordRow(input.businessId, "sms", "sent", summary, kind, {
+            ...payload,
+            recipient: recipientPhone
+          })
+        );
+      } catch (err) {
+        logger.warn("notifications.dispatch: sms send failed", {
           businessId: input.businessId,
-          error: logCatchErr instanceof Error ? logCatchErr.message : String(logCatchErr)
+          error: err instanceof Error ? err.message : String(err)
         });
+        results.push(
+          await recordRow(
+            input.businessId,
+            "sms",
+            "failed",
+            summary,
+            kind,
+            { ...payload, recipient: recipientPhone },
+            err instanceof Error ? err.message : "send_failed"
+          )
+        );
       }
-      results.push(
-        await recordRow(input.businessId, "sms", "sent", summary, kind, {
-          ...payload,
-          recipient: targets.phone
-        })
-      );
-    } catch (err) {
-      logger.warn("notifications.dispatch: sms send failed", {
-        businessId: input.businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      results.push(
-        await recordRow(
-          input.businessId,
-          "sms",
-          "failed",
-          summary,
-          kind,
-          { ...payload, recipient: targets.phone },
-          err instanceof Error ? err.message : "send_failed"
-        )
-      );
     }
   }
 
@@ -760,6 +804,13 @@ export async function dispatchUrgentNotification(
   // same noise, arriving through a different door.
   if (!targets.whatsappConnected) {
     // Not applicable to this business: no row, no delivery attempt.
+  } else if (targets.routing?.target === "team_broadcast") {
+    // An unowned-lead broadcast is many recipients; this leg is single
+    // recipient and owner-shaped (it reads the OWNER's language preference
+    // and rides the owner-alert template). WhatsApping only the first
+    // teammate would deliver to an arbitrary subset of the audience, so the
+    // whole team takes the SMS above and this channel sits out. No row, same
+    // reasoning as the never-connected case: not a WhatsApp-shaped event.
   } else if (!targets.phone) {
     results.push(
       await recordRow(input.businessId, "whatsapp", "skipped", summary, kind, payload, "no_phone")

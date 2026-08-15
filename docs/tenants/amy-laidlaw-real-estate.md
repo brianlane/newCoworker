@@ -244,6 +244,31 @@ These are mistakes already made on this account. Do not remake them.
   300-character cap on a field description: the first attempt at the new
   wording was rejected by the validator before anything was written.
 
+- **An unowned lead used to reach Amy and stop there (fixed Aug 15 2026).**
+  The urgent-alert ladder in `contact_owner_target.ts` had two rungs, contact
+  owner and business owner, so a contact with a null `owner_employee_id`
+  resolved straight to Amy. A Clever seller texted "I'm available now" on Aug
+  14 and "I have not heard anything from anyone" on Aug 15; the AI's
+  `notify_team` tool fired correctly both times and both alerts went to Amy
+  alone. Dave and Gabby, who cover sellers, were never told. There is now a
+  team rung between the two: an unowned contact alerts every teammate carrying
+  the lead-type tag, and only an EMPTY eligible set falls to the owner. The
+  `notify_team` tool takes an optional `leadType` ("seller"/"buyer") to narrow
+  it. A contact that cannot be found at all still goes owner-direct, on
+  purpose: without a contact row there is no lead, and broadcasting on a
+  lookup miss is noise rather than rescue.
+
+- **Under-$500K gating and the cadence tag are load-bearing TOGETHER.** The
+  same lead exposed the other half. The under-500K gate correctly skipped the
+  claim offer (`price_gate: "ai"` at $425K), which hands the lead to the Needs
+  Follow Up cadence via an `update_contact` tag step. That step is keyed on
+  `lead_phone`, and the Clever referral page yielded an empty one, so the run
+  logged `skipped a contact-tag update (no usable phone)` and the lead joined
+  no cadence either. No team offer by design, no cadence by accident, and the
+  only signal was an owner email reading `Clever lead: () none`. Still open:
+  a gated lead that cannot be enrolled should say so loudly rather than
+  finishing the run clean.
+
 ## One-shots
 
 Which of these actually ran, and when, is in the ledger, not here:
@@ -265,6 +290,16 @@ accept step, see Sharp edges),
 `clever-spoke-check-unclaimed-patch.ts` +
 `patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
 second trigger, see Sharp edges).
+
+Unowned-lead recovery (Aug 15 2026): `amy-unowned-lead-team-alert.ts` texts
+the lead-type-tagged team about ONE unowned lead by hand, using the same
+selection rule as the dispatcher fix that shipped alongside it (active,
+`team_broadcast_enabled` not false, has a phone, tag match, and a tag matching
+nobody widens to everyone). It exists for leads already stranded by the old
+owner-direct behavior; carries no customer PII (every lead detail is an
+argument) and skips a recipient who was already alerted about that lead, so a
+re-run converges. Applied once, Aug 15 2026, for a Clever seller whose two
+`notify_team` alerts had both gone to Amy alone. See Sharp edges.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`,
@@ -420,13 +455,16 @@ Four things worth knowing before touching it:
   "no_reply", so the guard PASSES. A `claimed` jump during the very first call
   would have sent the owner a "they came back to us" notice quoting nothing,
   for a lead who never said a word.
-- **The unclaimed half of Amy's notify rule is not yet faithful.**
+- **The unclaimed half of Amy's notify rule is faithful now, on both paths.**
   `notify_lead_owner` resolves the owner at RUN TIME (so a lead claimed
   mid-cadence reaches the right person, which a var read at step 0 could not
-  do), but with no owner it falls back to the business owner rather than
-  broadcasting to the team. There is no informational team-broadcast
-  primitive: `route_to_team` broadcasts as a claim OFFER with a deadline and a
-  fallback, which is a different thing from an alert.
+  do). With no owner it broadcasts to the tagged team via
+  `unownedFallback: "team"` + `teamTagTemplate`, and the URGENT-ALERT
+  dispatcher does the same as of Aug 15 2026 (see the sharp edge on the
+  unowned alert ladder). Both call one selector,
+  `supabase/functions/_shared/team_broadcast.ts`, so they cannot drift.
+  This is still an ALERT, not an offer: `route_to_team` broadcasts a claim
+  offer with a deadline and a fallback, which remains a different thing.
 
 ReferralExchange on the AI worker (Aug 11 2026):
 `referralexchange-ai-first-contact.ts` (applier, `--revert` restores the exact

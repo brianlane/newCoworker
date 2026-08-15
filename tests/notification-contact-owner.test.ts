@@ -20,6 +20,17 @@ import {
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const LEAD = "+16026160662";
 const DAVE = "+16025245719";
+const JASON = "+14807039575";
+
+/** A roster row as the broadcast lookup selects it. */
+const roster = (over: Record<string, unknown> = {}) => ({
+  id: "m1",
+  name: "Dave Lane",
+  phone_e164: DAVE,
+  team_broadcast_enabled: null,
+  tags: ["seller", "buyer"],
+  ...over
+});
 
 const owned: OwnerContactRow = { id: "c1", owner_employee_id: "m1" };
 const dave = (over: Partial<OwnerMemberRow> = {}): OwnerMemberRow => ({
@@ -150,11 +161,72 @@ describe("resolveContactOwnerTarget", () => {
     }
   });
 
-  it("skips the roster query for an unowned contact", async () => {
-    const { db, tables } = makeDb([{ data: { id: "c1", owner_employee_id: null } }]);
+  /**
+   * This test used to assert the OPPOSITE: that an unowned contact skipped
+   * the roster query, because the answer was the business owner either way.
+   * Amy's rule (2026-08-15) makes the roster the whole point of an unowned
+   * lead: "unowned/unclaimed should go to all employees respective to seller
+   * vs buyer employees before Amy broadcasted". The lead that forced it sat
+   * two days while both of its alerts went to Amy alone.
+   */
+  it("reads the roster for an unowned contact and broadcasts to the team", async () => {
+    const { db, tables } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { data: [roster()] }
+    ]);
     const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("team_broadcast");
     expect(out.reason).toBe("contact_unowned");
-    expect(tables).toEqual(["contacts"]);
+    expect(out.team.map((m) => m.phone)).toEqual([DAVE]);
+    expect(tables).toEqual(["contacts", "ai_flow_team_members"]);
+  });
+
+  it("narrows the broadcast to the teammates covering that lead type", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { data: [roster(), roster({ id: "m2", name: "Jason Lane", phone_e164: JASON, tags: ["buyer"] })] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD, "seller");
+    expect(out.team.map((m) => m.name)).toEqual(["Dave Lane"]);
+  });
+
+  it("keeps the EMAIL with the business owner on a team broadcast", async () => {
+    // Roster rows carry no address on Amy's account, so redirecting the email
+    // would mean no email at all for a lead nobody has claimed.
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { data: [roster()] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.emailTarget).toBe("business_owner");
+    expect(out.phone).toBeNull();
+  });
+
+  it("falls to the business owner when nobody is broadcast-eligible", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { data: [roster({ team_broadcast_enabled: false })] }
+    ]);
+    const out = await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(out.target).toBe("business_owner");
+    expect(out.reason).toBe("contact_unowned");
+    expect(out.team).toEqual([]);
+  });
+
+  it("falls to the business owner when the roster read fails", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { error: { message: "roster down" } }
+    ]);
+    expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("business_owner");
+  });
+
+  it("falls to the business owner when the roster read throws", async () => {
+    const { db } = makeDb([
+      { data: { id: "c1", owner_employee_id: null } },
+      { throws: true }
+    ]);
+    expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("business_owner");
   });
 
   it("skips the roster query when there is no contact row", async () => {

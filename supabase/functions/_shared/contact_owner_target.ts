@@ -33,6 +33,11 @@
  */
 import { normalizeE164 } from "./normalize_e164.ts";
 import { telemetryRecord } from "./telemetry.ts";
+import {
+  selectBroadcastTeam,
+  type BroadcastMember,
+  type BroadcastMemberRow
+} from "./team_broadcast.ts";
 
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -67,8 +72,14 @@ export type OwnerRedirectReason =
   | "employee_no_email";
 
 export type ContactOwnerTarget = {
-  /** Who gets the SMS / WhatsApp page. */
-  target: "contact_owner" | "business_owner";
+  /**
+   * Who gets the SMS / WhatsApp page.
+   *
+   * `team_broadcast` means nobody owns the lead and the lead-type-tagged
+   * roster is alerted instead of the owner. It is an ALERT, not a claim
+   * offer: nobody is asked to reply and nothing waits on a response.
+   */
+  target: "contact_owner" | "team_broadcast" | "business_owner";
   /**
    * Who gets the email. Falls back to the business owner independently,
    * because roster rows very often have no email address, and dropping the
@@ -83,6 +94,12 @@ export type ContactOwnerTarget = {
   email: string | null;
   matchedBy: "phone" | null;
   reason: OwnerRedirectReason | null;
+  /**
+   * The tagged roster to alert. Populated only on `team_broadcast`; every
+   * other verdict carries an empty array so callers never branch on
+   * null-vs-empty.
+   */
+  team: BroadcastMember[];
 };
 
 const TO_OWNER = (reason: OwnerRedirectReason): ContactOwnerTarget => ({
@@ -93,7 +110,28 @@ const TO_OWNER = (reason: OwnerRedirectReason): ContactOwnerTarget => ({
   phone: null,
   email: null,
   matchedBy: null,
-  reason
+  reason,
+  team: []
+});
+
+/**
+ * Nobody owns this lead, so the lead-type-tagged team hears about it instead.
+ *
+ * The EMAIL deliberately stays with the business owner: roster rows very
+ * often have no address (all four of Amy's are null), so redirecting it would
+ * usually mean no email at all, and the owner still wants the paper trail for
+ * a lead nobody has claimed.
+ */
+const TO_TEAM = (team: BroadcastMember[]): ContactOwnerTarget => ({
+  target: "team_broadcast",
+  emailTarget: "business_owner",
+  memberId: null,
+  memberName: null,
+  phone: null,
+  email: null,
+  matchedBy: null,
+  reason: "contact_unowned",
+  team
 });
 
 export type OwnerContactRow = {
@@ -135,7 +173,8 @@ export function decideOwnerRedirect(
     matchedBy: "phone",
     // A redirected page whose EMAIL still went to the owner says so, so the
     // dashboard row is not silently confusing.
-    reason: email ? null : "employee_no_email"
+    reason: email ? null : "employee_no_email",
+    team: []
   };
 }
 
@@ -158,7 +197,8 @@ async function recordRoutingTelemetry(
       target: verdict.target,
       email_target: verdict.emailTarget,
       matched_by: verdict.matchedBy,
-      reason: verdict.reason
+      reason: verdict.reason,
+      team_size: verdict.team.length
     });
   } catch (e) {
     console.error("contact_owner_target: telemetry", e);
@@ -173,7 +213,13 @@ async function recordRoutingTelemetry(
 export async function resolveContactOwnerTarget(
   supabase: AnyClient,
   businessId: string,
-  contactE164: string | null | undefined
+  contactE164: string | null | undefined,
+  /**
+   * Lead type ("seller" / "buyer") used to narrow the unowned-lead broadcast
+   * to the teammates who cover it. Omitted, or a tag nobody carries, alerts
+   * every eligible member: the filter degrades to noise, never to silence.
+   */
+  leadTag?: string | null
 ): Promise<ContactOwnerTarget> {
   const phone = normalizeE164((contactE164 ?? "").trim() || undefined);
   // No telemetry here on purpose: this path touches no database at all (the
@@ -181,16 +227,46 @@ export async function resolveContactOwnerTarget(
   // the whole call makes.
   if (!phone) return TO_OWNER("no_contact_phone");
 
-  const verdict = await resolveVerdict(supabase, businessId, phone);
+  const verdict = await resolveVerdict(supabase, businessId, phone, leadTag);
   await recordRoutingTelemetry(supabase, businessId, verdict);
   return verdict;
 }
 
-/** The two lookups and the decision, without the telemetry wrapper. */
+/**
+ * The ACTIVE roster eligible for an unowned-lead alert, narrowed by lead type.
+ *
+ * Never throws: a roster read that fails returns an empty list, which the
+ * caller reads as "fall back to the owner". Losing the broadcast is
+ * acceptable; losing the alert is not.
+ */
+async function readBroadcastTeam(
+  supabase: AnyClient,
+  businessId: string,
+  leadTag: string | null | undefined
+): Promise<BroadcastMember[]> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_team_members")
+      .select("id, name, phone_e164, team_broadcast_enabled, tags")
+      .eq("business_id", businessId)
+      .eq("active", true);
+    if (error) {
+      console.error("contact_owner_target: roster lookup", error);
+      return [];
+    }
+    return selectBroadcastTeam((data ?? []) as BroadcastMemberRow[], leadTag);
+  } catch (e) {
+    console.error("contact_owner_target: roster lookup threw", e);
+    return [];
+  }
+}
+
+/** The lookups and the decision, without the telemetry wrapper. */
 async function resolveVerdict(
   supabase: AnyClient,
   businessId: string,
-  phone: string
+  phone: string,
+  leadTag: string | null | undefined
 ): Promise<ContactOwnerTarget> {
   try {
     const { data: contactData, error: contactErr } = await supabase
@@ -204,7 +280,16 @@ async function resolveVerdict(
       return TO_OWNER("lookup_failed");
     }
     const contact = (contactData as OwnerContactRow | null) ?? null;
-    if (!contact?.owner_employee_id) return decideOwnerRedirect(contact, null);
+    if (!contact?.owner_employee_id) {
+      const verdict = decideOwnerRedirect(contact, null);
+      // An UNOWNED contact goes to the tagged team before the owner. A
+      // contact we could not find at all keeps the old owner-direct
+      // behavior: without a contact row there is no lead to speak of, and
+      // broadcasting to the whole team on a lookup miss is noise, not rescue.
+      if (verdict.reason !== "contact_unowned") return verdict;
+      const team = await readBroadcastTeam(supabase, businessId, leadTag);
+      return team.length > 0 ? TO_TEAM(team) : verdict;
+    }
 
     const { data: memberData, error: memberErr } = await supabase
       .from("ai_flow_team_members")
