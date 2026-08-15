@@ -214,6 +214,87 @@ export function instagramProspectTemplate(): AiFlowTemplate {
   };
 }
 
+/**
+ * Source label the direct Meta connection sends for an Instagram comment
+ * (src/lib/meta/webhook.ts INSTAGRAM_COMMENT_FLOW_SOURCE). Duplicated here
+ * rather than imported because this module is pulled into client bundles and
+ * the webhook module is server-only; `tests/ai-flows-templates.test.ts` pins
+ * the two to the same string so they can never drift apart.
+ */
+export const INSTAGRAM_COMMENT_SOURCE = "instagram_comment";
+
+/**
+ * "Instagram comment follow-up": the starter for the IG comment webhook.
+ * Someone comments on the business's own Instagram post, and the owner gets a
+ * brief with the handle, the comment, and what it's actually asking for, so a
+ * buying question doesn't sit unseen under a photo for two days.
+ *
+ * Deliberately NO reply / send_sms / upsert_customer step:
+ *   - a comment carries a username, never a phone, and the CRM is phone-keyed,
+ *     so "file them as a contact" would file nothing;
+ *   - a commenter has not consented to texts or marketing email, the same rule
+ *     the Instagram prospect starter follows;
+ *   - we do not implement comment replies (POST /{comment_id}/replies), so the
+ *     brief tells the owner to reply on Instagram instead of implying the
+ *     coworker already did.
+ *
+ * Installed DISABLED like the other starters, so the owner reads the brief
+ * wording before anything reaches them.
+ */
+export function instagramCommentTemplate(): LibraryStarterTemplate {
+  return {
+    key: "instagram_comment_follow_up",
+    name: "Instagram comment follow-up",
+    summary:
+      "When someone comments on your Instagram post, your coworker reads it and " +
+      "briefs you, flagging the ones actually asking to buy or book.",
+    definition: {
+      version: 1,
+      trigger: {
+        channel: "webhook",
+        conditions: [{ type: "from_matches", value: INSTAGRAM_COMMENT_SOURCE }]
+      },
+      steps: [
+        {
+          id: "s_extract",
+          type: "extract_text",
+          fields: [
+            {
+              name: "commenter_handle",
+              description:
+                "The Instagram username of the person who commented, without the @. " +
+                "'none' if the payload does not name one."
+            },
+            {
+              name: "comment_text",
+              description:
+                "The comment, verbatim. Do not summarize, translate, or clean it up."
+            },
+            {
+              name: "comment_intent",
+              description:
+                "What the comment is actually after, in a few words: 'asking the price', " +
+                "'wants to book', 'asking a product question', 'complaint', 'just praise', " +
+                "or 'spam'. Judge only from the comment text, never invent detail."
+            }
+          ]
+        },
+        {
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            // Whitespace-only separators between vars, same reason as the Meta
+            // and Instagram-prospect starters: a missing var must not leave a
+            // dangling comma in the owner's alert.
+            "New Instagram comment from @{{vars.commenter_handle}}: " +
+            "\"{{vars.comment_text}}\" Looks like: {{vars.comment_intent}}. " +
+            "Reply on Instagram when you get a minute; I can't reply to comments for you."
+        }
+      ]
+    }
+  };
+}
+
 /** Review links ride inside an SMS body (1600-char cap); keep them sane. */
 export const REVIEW_LINK_MAX_LENGTH = 300;
 
@@ -742,7 +823,8 @@ export function libraryStarterTemplates(): LibraryStarterTemplate[] {
   return [
     reviewRequestTemplate(REVIEW_LINK_PLACEHOLDER),
     documentReceiptTemplate(),
-    newLeadIntakeTemplate()
+    newLeadIntakeTemplate(),
+    instagramCommentTemplate()
   ];
 }
 
