@@ -255,7 +255,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                       setTab("chat");
                       void selectThread(thread.id);
                     }}
-                    disabled={sending || loadingThread}
+                    disabled={sending || loading || loadingThread}
                     className={[
                       "w-full border-b border-parchment/5 px-4 py-2.5 text-left hover:bg-parchment/5 disabled:opacity-60",
                       thread.id === viewingThreadId ? "bg-signal-teal/10" : ""
@@ -280,7 +280,7 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                     type="button"
                     aria-label={t("panel.deleteConfirm")}
                     onClick={() => armOrDeleteThread(thread.id)}
-                    disabled={sending || loadingThread}
+                    disabled={sending || loading || loadingThread}
                     className={
                       confirmingDeleteId === thread.id
                         ? "absolute right-2 top-1.5 inline-flex rounded border border-spark-orange/60 bg-spark-orange/15 px-1.5 py-0.5 text-[10px] font-semibold text-spark-orange disabled:opacity-50"

@@ -301,7 +301,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                       <button
                         type="button"
                         onClick={() => selectThread(t.id)}
-                        disabled={sending || loadingThread}
+                        disabled={sending || loading || loadingThread}
                         className={[
                           "w-full text-left px-3 py-2 border-b border-parchment/5 hover:bg-parchment/5 disabled:cursor-not-allowed disabled:opacity-60",
                           selected ? "bg-signal-teal/10" : ""
@@ -327,7 +327,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                         aria-label="Delete conversation"
                         data-testid="thread-delete"
                         onClick={() => armOrDeleteThread(t.id)}
-                        disabled={sending || loadingThread}
+                        disabled={sending || loading || loadingThread}
                         className={
                           confirmingDeleteId === t.id
                             ? "absolute right-1.5 top-1.5 inline-flex items-center justify-center rounded border border-spark-orange/60 bg-spark-orange/15 px-1.5 py-0.5 text-[10px] font-semibold text-spark-orange disabled:opacity-50 cursor-pointer"

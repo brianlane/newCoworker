@@ -215,6 +215,9 @@ export function useDashboardChatTransport(businessId: string) {
   // "New conversation", switching threads mid-send, or a fresh send. The
   // poll loop checks signal.aborted each tick so it can exit cleanly.
   const abortRef = useRef<AbortController | null>(null);
+  // The CURRENT business, for stale-closure guards: async work captured
+  // under a previous business compares against this before writing state.
+  const businessIdRef = useRef(businessId);
   // Fresh-session view (see freshSessionKey above). A ref mirrors the state
   // so the hydrate effect and send() read the CURRENT value without being
   // re-run/recreated when engagement flips it.
@@ -239,6 +242,7 @@ export function useDashboardChatTransport(businessId: string) {
   // new business would otherwise keep it forever (its hydrate deliberately
   // leaves the view alone).
   useEffect(() => {
+    businessIdRef.current = businessId;
     // Tear down any in-flight work from the previous business FIRST: a late
     // reply or poll must never write the old tenant's messages back over
     // the cleared view.
@@ -248,6 +252,9 @@ export function useDashboardChatTransport(businessId: string) {
     freshStartRef.current = next;
     setFreshStart(next);
     setMessages([]);
+    // The old tenant's sidebar must not stay clickable (or deletable)
+    // while the new business hydrates; its own fetchThreads repopulates.
+    setThreads([]);
     setViewingThreadId(null);
     // The previous business's active thread must not be a send target even
     // for one frame; hydrate re-learns the new business's own.
@@ -268,7 +275,9 @@ export function useDashboardChatTransport(businessId: string) {
         { cache: "no-store" }
       );
       const env = await parseEnvelope<ThreadsListResponse>(res);
-      if (env.ok) setThreads(env.data.threads);
+      // A response captured under a previous business must not overwrite
+      // the current one's sidebar, however late it lands.
+      if (env.ok && businessIdRef.current === businessId) setThreads(env.data.threads);
     } catch {
       /* sidebar is best-effort; the main thread view is still functional */
     }
@@ -636,6 +645,14 @@ export function useDashboardChatTransport(businessId: string) {
       }
     }
 
+    if (controller.signal.aborted) {
+      // Aborted during the refresh (unmount or a business switch): the
+      // trailing sidebar refresh below runs in a closure that may target
+      // the PREVIOUS business, so it must not fire late.
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
     setSending(false);
     void fetchThreads();
     if (abortRef.current === controller) abortRef.current = null;
@@ -727,7 +744,7 @@ export function useDashboardChatTransport(businessId: string) {
 
   const selectThread = useCallback(
     async (threadId: string) => {
-      if (sending || loadingThread) return;
+      if (sending || loading || loadingThread) return;
       // Clicking the thread we're already on is a cheap no-op. Avoids
       // a pointless fetch and the accompanying flash of "Loading…".
       if (threadId === viewingThreadId) return;
@@ -800,7 +817,7 @@ export function useDashboardChatTransport(businessId: string) {
     // setters only); omitting it keeps this callback from changing
     // identity every render. Same rationale as the hydrate effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeThreadId, businessId, engage, loadingThread, sending, viewingThreadId]
+    [activeThreadId, businessId, engage, loading, loadingThread, sending, viewingThreadId]
   );
 
   async function send(text: string, options: SendOptions = {}): Promise<SendOutcome> {
@@ -936,7 +953,7 @@ export function useDashboardChatTransport(businessId: string) {
   // Delete one conversation. Confirmation is the SHELL's job (the page
   // uses window.confirm, the companion an i18n'd confirm).
   async function deleteThread(threadId: string) {
-    if (sending) return;
+    if (sending || loading) return;
     setError(null);
     try {
       const res = await fetch(
