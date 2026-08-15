@@ -71,6 +71,7 @@ function makeDeps(overrides: Partial<MigrateVpsSizeDeps> = {}): MigrateVpsSizeDe
     updateSubscription: vi.fn(async () => ({})),
     updateBusinessVpsSize: vi.fn(async () => undefined),
     getActiveVpsSshKey: vi.fn(async () => sshKeyRow()),
+    retireVpsSshKeysForVps: vi.fn(async () => 1),
     hostinger: {
       getVirtualMachine: vi.fn(async (id: number) => {
         const vm = vms.get(id);
@@ -198,6 +199,46 @@ describe("migrateBusinessVpsSize — guards", () => {
     expect(deps.orchestrateProvisioning).toHaveBeenCalledWith(
       expect.objectContaining({ tier: "enterprise", vpsSize: "kvm4" })
     );
+  });
+
+  it("retires the OLD box's key row at teardown, not the new one", async () => {
+    // The root cause of the stale-row pile-up: nothing rotated the old row
+    // when a tenant moved to different hardware, so every fleet sweep kept
+    // SSHing into dead boxes ("4/9 succeeded", 2026-08-14).
+    const deps = makeDeps();
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(deps.retireVpsSshKeysForVps).toHaveBeenCalledWith("1800985");
+    expect(deps.retireVpsSshKeysForVps).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires the old key row only after the backup read it", async () => {
+    // Ordering is load-bearing: the backup SSHes into the old box with the
+    // key this call retires, so retiring first would break the migration.
+    const order: string[] = [];
+    const deps = makeDeps();
+    (deps.backupBusinessData as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("backup");
+      return { storagePath: "p", sizeBytes: 1, sha256: "s" };
+    });
+    (deps.retireVpsSshKeysForVps as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("retire");
+      return 1;
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(order).toEqual(["backup", "retire"]);
+  });
+
+  it("still completes the migration when retiring the old key row fails", async () => {
+    // A stale bookkeeping row must never fail an otherwise-good cutover.
+    const deps = makeDeps({
+      retireVpsSshKeysForVps: vi.fn(async () => {
+        throw new Error("postgrest down");
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
   });
 
   it("refuses a no-op migration to the current effective size", async () => {

@@ -121,6 +121,7 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
         ssh_username: "root"
       }) as never
     ),
+    retireVpsSshKeysForVps: vi.fn(async () => 1),
     hostinger: {
       getVirtualMachine: vi.fn(async (id: number) => ({
         id,
@@ -570,6 +571,10 @@ describe("runTermRenewalSweep", () => {
       })
     );
     expect(deps.markVpsNeverRenew).toHaveBeenCalledWith(1800985);
+    // The old box's key row is retired at cutover, so fleet sweeps stop
+    // SSHing into it and the pooled box carries no active key for its
+    // previous tenant. This sweep is what stranded Scar Fairy's rows.
+    expect(deps.retireVpsSshKeysForVps).toHaveBeenCalledWith("1800985");
     expect(deps.sendOpsEmail).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "started", fromSize: "kvm2", toSize: "kvm2" })
     );
@@ -904,6 +909,38 @@ describe("runTermRenewalSweep", () => {
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
+  });
+
+  it("completes the migration when retiring the old key row fails", async () => {
+    // Deliberately asymmetric with the pool/never_renew failures below: those
+    // leave the old box renewing untracked (real money), while a stale key
+    // row is bookkeeping noise that the one-shot can mop up later.
+    const deps = makeDeps({
+      retireVpsSshKeysForVps: vi.fn(async () => {
+        throw new Error("postgrest down");
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(result.findings[0]?.kind).toBe("migrated");
+    expect(deps.releaseVpsToPool).toHaveBeenCalled();
+  });
+
+  it("retires the old key row before the box is returned to the pool", async () => {
+    // A pooled box must not carry an active key belonging to its previous
+    // tenant: adoptVpsForBusiness reuses whatever active row it finds.
+    const order: string[] = [];
+    const deps = makeDeps();
+    (deps.retireVpsSshKeysForVps as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("retire");
+      return 1;
+    });
+    (deps.releaseVpsToPool as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("pool");
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(order).toEqual(["retire", "pool"]);
   });
 
   it("fails the migration when pool return or never_renew marking fails", async () => {

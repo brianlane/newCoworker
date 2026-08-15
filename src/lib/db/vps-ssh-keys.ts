@@ -55,12 +55,12 @@ export type VpsSshKeyRow = {
   region: string;
   /**
    * Public IP/hostname for byos/ovh boxes (no live provider IP lookup).
-   * Null for hostinger rows — their IP is resolved live from the API.
+   * Null for hostinger rows: their IP is resolved live from the API.
    */
   host: string | null;
   /**
    * `SHA256:…` fingerprint of the box's SSH host key, captured on first
-   * connect and verified strictly afterwards (G7 pinning — see
+   * connect and verified strictly afterwards (G7 pinning, see
    * src/lib/hostinger/ssh-pinned.ts). Null = not yet captured.
    */
   host_key_fingerprint?: string | null;
@@ -74,7 +74,7 @@ export type VpsSshKeyRow = {
  * Why on every read (vs. a one-shot table migration):
  *   * `vps_ssh_keys` rows persisted before the OpenSSH-format export
  *     switch are unencrypted PKCS#8 ed25519 PEMs, which `node:crypto`
- *     and `ssh -i` can both parse — but `ssh2` 1.17 (the library
+ *     and `ssh -i` can both parse, but `ssh2` 1.17 (the library
  *     backing `sshExec`) cannot, returning
  *     `Cannot parse privateKey: Unsupported key format`.
  *   * Any production read path that hands `private_key_pem` to
@@ -83,7 +83,7 @@ export type VpsSshKeyRow = {
  *     and admin re-bootstraps.
  *   * The conversion is idempotent (`convertPkcs8Ed25519PemToOpenssh`
  *     short-circuits when given an already-OpenSSH PEM), so applying
- *     it on every read is safe — fresh rows pay zero cost.
+ *     it on every read is safe: fresh rows pay zero cost.
  *   * Re-encoding is identity-preserving (only the wire format
  *     changes; the underlying ed25519 keypair is unchanged), so the
  *     matching public key on the VPS's `~/.ssh/authorized_keys`
@@ -96,7 +96,7 @@ function migrateRow(row: VpsSshKeyRow | null): VpsSshKeyRow | null {
   }
   // App-layer decryption FIRST (security review G5): rows written after the
   // SECRETS_ENCRYPTION_KEY rollout store AES-256-GCM ciphertext; legacy
-  // plaintext rows pass through. Deliberately OUTSIDE the try below — an
+  // plaintext rows pass through. Deliberately OUTSIDE the try below: an
   // encrypted row that cannot be decrypted (missing/wrong key) must fail
   // closed with the typed SecretEncryptionError, never fall through to
   // sshExec with ciphertext as a "PEM".
@@ -170,8 +170,8 @@ export async function insertVpsSshKey(
  *
  * Used by the VPS-adoption path (fleet economics Phase B): when a pooled VM
  * is adopted for a new tenant, its active `vps_ssh_keys` row (minted for the
- * PREVIOUS tenant or an earlier partial adopt) is reused as-is — the keypair
- * still authenticates — but the row must follow the box to the new business,
+ * PREVIOUS tenant or an earlier partial adopt) is reused as-is (the keypair
+ * still authenticates), but the row must follow the box to the new business,
  * or every business-scoped lookup (`getActiveVpsSshKeyForBusiness`: backups,
  * restores, admin console) would miss it or hit the old tenant.
  */
@@ -194,7 +194,7 @@ export async function reassignVpsSshKeyBusiness(
 
 /**
  * Update the persisted placement (host + region) of a key row. Only
- * meaningful for byos/ovh rows, whose host has no live provider lookup —
+ * meaningful for byos/ovh rows, whose host has no live provider lookup,
  * used by the BYOS re-prepare path when the operator corrects the address
  * or the region. Both fields are written together so the row can never
  * describe a Canadian tenant on a key still labeled 'us' (or vice versa).
@@ -251,8 +251,52 @@ export async function rotateVpsSshKey(id: string, client?: SupabaseClient): Prom
 }
 
 /**
+ * Retire every active key row for a BOX a tenant has moved off, at cutover.
+ *
+ * {@link rotateVpsSshKey} covers the other rotation case: replacing a row for
+ * a box we are keeping. Nothing covered the case where the tenant moves to
+ * DIFFERENT hardware, because the one-active-row index is per-VPS, so a new
+ * box is a new key, the insert never collides, and the old row stayed
+ * `rotated_at IS NULL` forever. `listActiveVpsSshKeys` then kept handing dead
+ * boxes to fleet tooling: a chat-worker rollout on 2026-08-14 reported
+ * "4/9 succeeded", the five failures all being superseded boxes, and PR #1060
+ * deployed a voice-bridge change against a retired box and reported success.
+ * {@link newestKeyPerBusiness} exists to paper over the same symptom.
+ *
+ * Called by every path that moves a tenant to different hardware:
+ * `migrate-size` (admin hardware change), `term-renewal-sweep` (the nightly
+ * cron), `change-plan-orchestrator` (paid plan change), and the
+ * `debug/migrate-vps-size.ts` operator script.
+ *
+ * Call this at teardown, never earlier: the migration paths back the old box
+ * up over SSH first, and that lookup (`getActiveVpsSshKey(oldVmId)`) needs
+ * the row still active. Callers treat a failure as non-fatal, since a stale
+ * row is bookkeeping noise and must not fail an otherwise-good cutover.
+ *
+ * Returns the number of rows retired (0 when the box already had none, which
+ * is the idempotent re-run case).
+ */
+export async function retireVpsSshKeysForVps(
+  hostingerVpsId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  // `.select()` the write back: a PostgREST update matching zero rows is not
+  // an error, so without it a no-op is indistinguishable from a retirement.
+  const { data, error } = await db
+    .from("vps_ssh_keys")
+    .update({ rotated_at: new Date().toISOString() })
+    .eq("hostinger_vps_id", hostingerVpsId)
+    .is("rotated_at", null)
+    .select("id");
+
+  if (error) throw new Error(`retireVpsSshKeysForVps: ${error.message}`);
+  return ((data as Array<{ id: string }> | null) ?? []).length;
+}
+
+/**
  * Load the currently-active (unrotated) keypair for a VPS. Returns null when
- * no key exists — callers must branch because we never want to return a stale
+ * no key exists, callers must branch because we never want to return a stale
  * (rotated) key as "active".
  *
  * The migration enforces at-most-one active row per VPS via a partial unique
@@ -300,7 +344,7 @@ export async function getActiveVpsSshKeyForBusiness(
 }
 
 /**
- * Load every currently-active (unrotated) VPS keypair — one per provisioned
+ * Load every currently-active (unrotated) VPS keypair, one per provisioned
  * tenant box. Used by fleet-wide operational tooling (e.g.
  * `debug/update-all-vps.ts`) that needs to SSH to all running VPS instances
  * to roll out a worker update. Ordered newest-first for stable, predictable
@@ -310,7 +354,7 @@ export async function getActiveVpsSshKeyForBusiness(
  * through {@link migrateRow} so the `private_key_pem` is in ssh2-loadable
  * OpenSSH format, exactly like the single-row getters above.
  *
- * NOTE: every row carries a PLAINTEXT private key — same trust model as the
+ * NOTE: every row carries a PLAINTEXT private key, same trust model as the
  * rest of this module. Service-role only; never expose to a client.
  */
 export async function listActiveVpsSshKeys(
@@ -337,8 +381,13 @@ export async function listActiveVpsSshKeys(
  * resolves for that business.
  *
  * Why this exists. `listActiveVpsSshKeys` returns one row per provisioned
- * BOX, and a tenant that has been re-provisioned or migrated carries several
- * unrotated rows (nine rows across four tenants at the time of writing). The
+ * BOX, and a tenant that has been re-provisioned or migrated used to carry
+ * several unrotated rows (nine rows across four tenants when this was
+ * written). {@link retireVpsSshKeysForVps} now retires the old row at
+ * cutover, so the duplicates should no longer accumulate, but keep this
+ * collapse: it is the correct selection rule for a per-tenant rollout
+ * regardless, and it stays right for rows predating that fix or left behind
+ * by a cutover that failed before teardown. The
  * chat-worker rollout wants every box, so it iterates that list directly. The
  * per-tenant sidecar rollouts (voice-bridge, aiflow-render) instead deploy to
  * the tenant's CURRENT box, so a fleet sweep for them has to pick the same

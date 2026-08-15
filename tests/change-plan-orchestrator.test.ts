@@ -179,6 +179,14 @@ vi.mock("@/lib/db/vps-inventory", () => ({
   releaseVpsToPool: releaseVpsToPoolMock
 }));
 
+const { retireVpsSshKeysForVpsMock } = vi.hoisted(() => ({
+  retireVpsSshKeysForVpsMock: vi.fn().mockResolvedValue(1)
+}));
+
+vi.mock("@/lib/db/vps-ssh-keys", () => ({
+  retireVpsSshKeysForVps: retireVpsSshKeysForVpsMock
+}));
+
 import {
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
@@ -376,6 +384,11 @@ describe("runChangePlanFromCheckout", () => {
       })
     );
 
+    // A plan-change cutover is a hardware move like any other: the old box's
+    // key row is retired so fleet sweeps stop SSHing into it, and so the
+    // pooled box carries no active key for its previous tenant.
+    expect(retireVpsSshKeysForVpsMock).toHaveBeenCalledWith("1001");
+
     expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "cs_test_123" }),
       "evt_1"
@@ -504,6 +517,15 @@ describe("runChangePlanFromCheckout", () => {
         "sub-row-old",
         expect.objectContaining({ status: "canceled", cancel_reason: "upgrade_switch" })
       );
+    });
+
+    it("continues the plan change, and still pools the box, when the key retire fails", async () => {
+      // The customer has already paid for this change: a stale bookkeeping
+      // row must not derail it, and must not skip the pool return either.
+      retireVpsSshKeysForVpsMock.mockRejectedValueOnce(new Error("postgrest down"));
+      await runChangePlanFromCheckout(makeSession(), "evt_pool_5");
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(expect.objectContaining({ vmId: 1001 }));
+      expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalled();
     });
   });
 
