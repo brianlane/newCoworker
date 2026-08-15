@@ -14,7 +14,11 @@ import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { processBlogPublishSweep } from "@/lib/blog/publish";
 
-export const maxDuration = 300;
+// 150 matches the chain's reachable budget: Supabase 504s the Edge bridge
+// at 150s, and this sweep's worst run in the ledger's first full week was
+// 3.4s (cron_sweep_runs, 2026-08-15). Declaring more only granted unused
+// background time after the 504.
+export const maxDuration = 150;
 export const runtime = "nodejs";
 
 async function runSweep(request: Request): Promise<Response> {

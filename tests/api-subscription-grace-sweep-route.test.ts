@@ -173,14 +173,16 @@ describe("api/internal/subscription-grace-sweep route", () => {
   });
 
   it("exports maxDuration so Vercel keeps the function alive long enough to drain the backlog", async () => {
-    // Mirrors the `/api/billing/cancel` + `/api/admin/delete-client` +
-    // `/api/admin/force-refund` pattern. Without this, the platform
-    // default (10s on Hobby, ~15s on most Pro configs) would tear the
+    // The invariant is that maxDuration EXISTS and is far above the platform
+    // default (10s on Hobby, ~15s on most Pro configs), which would tear the
     // function down mid-sweep and leave Stripe-canceled-but-VPS-alive
-    // tenants until the next cron tick — exactly what the sweep is
-    // supposed to backstop.
+    // tenants until the next cron tick, exactly what the sweep is supposed
+    // to backstop. The value is 150, the chain's reachable budget under the
+    // 150s Edge ceiling: the sweep's worst run in the ledger's first full
+    // week was 0.2s, and the route documents that anything longer is
+    // re-driven on the next tick because each row is idempotent.
     const routeModule = await import("@/app/api/internal/subscription-grace-sweep/route");
-    expect(routeModule.maxDuration).toBe(300);
+    expect(routeModule.maxDuration).toBe(150);
   });
 
   it("captures per-row failures without aborting the run", async () => {

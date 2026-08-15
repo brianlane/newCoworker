@@ -3036,11 +3036,17 @@ Consequences worth knowing before you touch any of them:
 - **A route may legitimately declare more than 150s.** When the bridge 504s,
   Vercel keeps running the route to completion in the background, so the work
   still finishes. What is lost is the *result*: pg_cron records a 504 instead
-  of the route's own outcome. Eighteen routes are in this position today and
-  are recorded in `KNOWN_ABOVE_EDGE_CEILING` in
-  `tests/cron-timeout-parity.test.ts`. Lowering them to 150 would truncate work
-  that completes today, and for a daily sweep the remainder would wait 24
-  hours, so they are documented rather than clipped.
+  of the route's own outcome. Six routes are in this position today, recorded
+  with their reasons in `KNOWN_ABOVE_EDGE_CEILING` in
+  `tests/cron-timeout-parity.test.ts`: two batch workers whose webhooks also
+  call them directly (on that path maxDuration genuinely governs), two
+  vendor-latency sweeps sized for slow days, and the two 1800s backlog-wave
+  budgets from PR #1014. Thirteen more sweeps used to sit here at 300s; the
+  first full week of `cron_sweep_runs` showed their worst run was 17s, so
+  they were clipped to 150 with the measured number cited at each route's
+  `maxDuration`. The bar for clipping is a measured worst case with a wide
+  margin over a full cycle of real load, never a quiet-day sample against a
+  budget that encodes a designed-for backlog.
 - **The rule pg_cron must actually satisfy** is therefore
   `timeout_milliseconds >= min(maxDuration * 1000, REQUEST_TIMEOUT_MS, 150_000)`.
   Below that, a healthy run is written into `cron.job_run_details` as a
