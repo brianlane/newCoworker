@@ -55,6 +55,7 @@ vi.mock("@/lib/ai-flows/webhook-events", () => ({
 }));
 
 import {
+  INSTAGRAM_COMMENT_FLOW_SOURCE,
   MESSENGER_ATTACHMENT_PLACEHOLDER,
   parseMetaWebhookBody,
   processMetaCommentEvent,
@@ -63,6 +64,17 @@ import {
   processMetaWebhookEvents,
   type MetaMessageEvent
 } from "@/lib/meta/webhook";
+import { INSTAGRAM_COMMENT_SOURCE } from "@/lib/ai-flows/templates";
+
+describe("instagram_comment source parity", () => {
+  it("the starter template's trigger matches the source this webhook emits", () => {
+    // templates.ts duplicates the string rather than importing it (that module
+    // reaches client bundles; this one is server-only). Drift here would mean
+    // comments arrive and the starter silently never matches — the exact
+    // failure mode of shipping webhook plumbing with no consumer.
+    expect(INSTAGRAM_COMMENT_SOURCE).toBe(INSTAGRAM_COMMENT_FLOW_SOURCE);
+  });
+});
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   cleanReviewLink,
   documentReceiptTemplate,
+  instagramCommentTemplate,
+  INSTAGRAM_COMMENT_SOURCE,
   instagramProspectTemplate,
   INSTAGRAM_PROSPECT_TAG,
   INSTAGRAM_SCRAPER_SOURCE,
@@ -342,12 +344,59 @@ describe("documentReceiptTemplate", () => {
   });
 });
 
+describe("instagramCommentTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = instagramCommentTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("webhook");
+    expect(tpl.key).toBe("instagram_comment_follow_up");
+    expect(tpl.summary.length).toBeGreaterThan(20);
+  });
+
+  it("fires for instagram_comment and NOT for the other Meta webhook sources", () => {
+    const def = instagramCommentTemplate().definition;
+    const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
+    expect(evaluateTriggerConditions(conditions, "any text", INSTAGRAM_COMMENT_SOURCE)).toBe(true);
+    // A lead and a scraped prospect must not reach a flow written for comments.
+    expect(evaluateTriggerConditions(conditions, "any text", META_LEAD_ADS_SOURCE)).toBe(false);
+    expect(evaluateTriggerConditions(conditions, "any text", INSTAGRAM_SCRAPER_SOURCE)).toBe(false);
+  });
+
+  it("never contacts the commenter: no send/file step, and the brief says so", () => {
+    // A commenter gave no consent and a comment carries no phone, so anything
+    // that texts, emails, or files them would be both broken and unlawful.
+    const def = instagramCommentTemplate().definition;
+    const types = def.steps.map((s) => s.type);
+    expect(types).toEqual(["extract_text", "notify_owner"]);
+    for (const banned of ["send_sms", "send_email", "send_whatsapp", "upsert_customer"]) {
+      expect(types).not.toContain(banned);
+    }
+    const brief = JSON.stringify(def.steps);
+    // We do not implement comment replies, so the brief must not imply we did.
+    expect(brief).toContain("Reply on Instagram");
+    expect(brief).toContain("can't reply to comments for you");
+  });
+
+  it("leaves no dangling punctuation when a var renders empty", () => {
+    // Same rule the Meta starter learned the hard way (the "Bobby, /." alert):
+    // vars are separated by whitespace, never by ", " or " / ".
+    const notify = instagramCommentTemplate().definition.steps.find(
+      (s) => s.type === "notify_owner"
+    );
+    const message = (notify as { message: string }).message;
+    for (const dangling of [", {{", " / {{", "({{vars.commenter_handle}})"]) {
+      expect(message).not.toContain(dangling);
+    }
+  });
+});
+
 describe("libraryStarterTemplates", () => {
-  it("publishes the three curated starters, review link as a placeholder", () => {
+  it("publishes the four curated starters, review link as a placeholder", () => {
     expect(libraryStarterTemplates().map((t) => t.key)).toEqual([
       "review_request_after_appointment",
       "document_receipt_confirmation",
-      "new_lead_intake"
+      "new_lead_intake",
+      "instagram_comment_follow_up"
     ]);
     expect(LIBRARY_STARTER_CATEGORY).toBe("Starters");
     const review = libraryStarterTemplates()[0];
