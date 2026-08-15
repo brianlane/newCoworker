@@ -22,7 +22,9 @@
  *   2. `provider = 'hostinger'` (the only provider this script can verify;
  *      ovh/byos rows are reported and left alone),
  *   3. the box is NOT the tenant's current box in `businesses.hostinger_vps_id`,
- *   4. the box is NOT `running` per the live Hostinger API.
+ *   4. the live Hostinger API reports the box `stopped` or `suspended` (an
+ *      allow-list, see DEAD_STATES: a box mid-provision is `initial` or
+ *      `installing`, and retiring its key would strand the tenant).
  *
  * Plus one invariant that overrides all of the above: **never rotate a
  * business's last active row.** `getActiveVpsSshKeyForBusiness` returns null
@@ -55,6 +57,26 @@ if (!url || !key) {
   process.exit(1);
 }
 const db = createClient(url, key, { auth: { persistSession: false } });
+
+/**
+ * States that mean the box is genuinely not running our worker. Deliberately
+ * an ALLOW-list: `VirtualMachineState` also carries `initial`, `installing`
+ * and `error`, and a deny-list of just `running` would retire a box that is
+ * mid-provision.
+ *
+ * That window is real, not theoretical. On the adopt path
+ * (src/lib/hostinger/adopt.ts) the key row is inserted BEFORE the destructive
+ * recreate, so the VM passes through `initial`/`installing` while its row is
+ * already active and `businesses.hostinger_vps_id` still points at the old
+ * box. Both of this script's other guards are satisfied in that window, so a
+ * deny-list would stamp `rotated_at` on the key for the box being brought up
+ * and strand the tenant after cutover. (The fresh-purchase path is safe
+ * either way: it inserts the key only after `waitForVpsReady` sees `running`.)
+ *
+ * Anything outside this list, including a state Hostinger adds later, is held
+ * back for a human rather than retired.
+ */
+const DEAD_STATES = new Set(["stopped", "suspended"]);
 
 type KeyRow = {
   id: string;
@@ -125,8 +147,8 @@ for (const row of rows) {
     held.push({ row, why: "absent from the Hostinger account; verify by hand" });
     continue;
   }
-  if (state === "running") {
-    held.push({ row, why: `Hostinger reports state='${state}'; not obviously dead` });
+  if (!DEAD_STATES.has(state)) {
+    held.push({ row, why: `Hostinger reports state='${state}'; only ${[...DEAD_STATES].join("/")} retire` });
     continue;
   }
   if ((activeCountByBusiness.get(row.business_id) ?? 0) <= 1) {
