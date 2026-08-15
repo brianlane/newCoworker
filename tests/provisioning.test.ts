@@ -3335,14 +3335,23 @@ describe("provisioning/orchestrate", () => {
     it("skipPoolAdopt forces a term purchase past an available pooled box (change-plan term alignment)", async () => {
       // A pooled same-size box IS available, but the caller (the change-plan
       // term-alignment migration) must land on a term-priced PURCHASE — a
-      // pooled monthly lapser would defeat the point of the move.
+      // pooled monthly lapser would defeat the point of the move. The term
+      // is now named EXPLICITLY by that caller: since Aug 2026 the purchase
+      // default is monthly, so relying on billingPeriod alone would have
+      // silently stopped aligning.
       const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
       const vpsAdopter = vi.fn();
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("777"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
 
       const result = await orchestrateProvisioning(
-        { businessId: "biz-pool-skip", tier: "starter", billingPeriod: "biennial", skipPoolAdopt: true },
+        {
+          businessId: "biz-pool-skip",
+          tier: "starter",
+          billingPeriod: "biennial",
+          hostingerTerm: "2y",
+          skipPoolAdopt: true
+        },
         { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
       );
 
@@ -3354,7 +3363,7 @@ describe("provisioning/orchestrate", () => {
         tier: "starter",
         vpsSize: "kvm1",
         billingPeriod: "biennial",
-   hostingerTerm: null
+        hostingerTerm: "2y"
       });
       // The new box is still recorded as assigned inventory, tagged with
       // the 2-year term it was bought at.
@@ -3364,6 +3373,30 @@ describe("provisioning/orchestrate", () => {
           businessId: "biz-pool-skip",
           notes: "purchased for biz-pool-skip (2y term)"
         })
+      );
+    });
+
+    // The signup default: a contract customer's box is bought MONTHLY, and
+    // the inventory note records that rather than the contract they signed.
+    it("tags a contract customer's purchased box as a monthly term", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("778"));
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-monthly", tier: "starter", billingPeriod: "biennial" },
+        {
+          vpsProvisioner,
+          vpsAdopter: vi.fn(),
+          vpsPool: pool,
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      );
+
+      expect(vpsProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({ billingPeriod: "biennial", hostingerTerm: null })
+      );
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({ notes: "purchased for biz-pool-monthly (1m term)" })
       );
     });
 

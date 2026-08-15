@@ -580,9 +580,11 @@ export async function runTermRenewalSweep(
             `Next billing: ${nextBillingAt}.`,
           purpose: "term_renewal",
           requestedBy: SWEEP_REQUESTED_BY,
-          // Renewal replacement re-buys the tenant's OWN contract term, so
-          // the legacy billing-period derivation is still right here.
-          hostingerTerm: null,
+          // Re-buy the term the tenant's box already runs on. Explicit
+          // because the purchase DEFAULT is now monthly: inheriting it would
+          // silently downgrade every renewal replacement to a monthly box.
+          // Non-null: the candidate scan skips a subscription without one.
+          hostingerTerm: hostingerTermForBillingPeriod(subscription.billing_period!),
           paidThroughAt: paidThroughFromBillingSub(billingSub),
           budgetStartedAtMs: sweepStartedAtMs
         },
