@@ -114,6 +114,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   appendMessage,
+  deactivateActiveThread,
   getOrCreateActiveThread,
   getThreadById,
   listMessages,
@@ -870,6 +871,35 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
     const disabledArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
     expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
+  });
+
+  it("newThread archives the active thread first, and only on the threadId-less path", async () => {
+    // Fresh-session first send: the companion opens as a new conversation
+    // and its first POST carries newThread, so the server archives the old
+    // active thread (kept in History) BEFORE minting the new one.
+    await POST(jsonRequest({ businessId: BIZ, message: "hi", newThread: true }));
+    expect(vi.mocked(deactivateActiveThread)).toHaveBeenCalledWith(BIZ);
+    const archived = vi.mocked(deactivateActiveThread).mock.invocationCallOrder[0];
+    const minted = vi.mocked(getOrCreateActiveThread).mock.invocationCallOrder[0];
+    expect(archived).toBeLessThan(minted);
+
+    // A plain send never archives.
+    vi.mocked(deactivateActiveThread).mockClear();
+    await POST(jsonRequest({ businessId: BIZ, message: "hi again" }));
+    expect(deactivateActiveThread).not.toHaveBeenCalled();
+
+    // Targeting a specific thread wins over newThread: continuing a
+    // conversation must never archive a different one as a side effect.
+    vi.mocked(getThreadById).mockResolvedValueOnce(ACTIVE_THREAD as never);
+    await POST(
+      jsonRequest({
+        businessId: BIZ,
+        message: "continue",
+        threadId: ACTIVE_THREAD.id,
+        newThread: true
+      })
+    );
+    expect(deactivateActiveThread).not.toHaveBeenCalled();
   });
 
   it("declares the MCP-bridge tools per role, view-as included", async () => {

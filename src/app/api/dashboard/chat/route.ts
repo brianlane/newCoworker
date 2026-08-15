@@ -216,6 +216,11 @@ const postBodySchema = z.object({
   // resolved row's business_id (NOT this body's businessId) so a
   // stolen threadId can't be reactivated under a different tenant.
   threadId: z.string().uuid().optional(),
+  // Optional: with NO threadId, archive the current active thread first so
+  // this message mints a genuinely fresh conversation (the old one stays
+  // continuable from History). The fresh-session opener uses this: without
+  // it, a threadId-less POST lands in the existing active thread.
+  newThread: z.boolean().optional(),
   message: z
     .string()
     .trim()
@@ -542,7 +547,8 @@ export async function POST(request: Request) {
         businessId: form.get("businessId"),
         message: form.get("message"),
         ...(form.get("threadId") ? { threadId: form.get("threadId") } : {}),
-        ...(form.get("documentId") ? { documentId: form.get("documentId") } : {})
+        ...(form.get("documentId") ? { documentId: form.get("documentId") } : {}),
+        ...(form.get("newThread") === "true" ? { newThread: true } : {})
       });
       const file = form.get("file");
       if (file instanceof File) {
@@ -677,6 +683,13 @@ export async function POST(request: Request) {
         thread = target;
       }
     } else {
+      // A fresh-conversation send: archive the active thread (it stays in
+      // History, continuable) so getOrCreateActiveThread mints a new one.
+      // Done lazily at first SEND, not at panel-open, so merely opening the
+      // companion never mutates which thread the chat page shows.
+      if (body.newThread) {
+        await deactivateActiveThread(body.businessId);
+      }
       const title = body.message.slice(0, 140);
       thread = await getOrCreateActiveThread(body.businessId, title);
     }

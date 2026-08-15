@@ -126,6 +126,17 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
 
   const [tab, setTab] = useState<"chat" | "history">("chat");
   const [input, setInput] = useState("");
+  // Two-tap delete: the first click arms THIS row's confirm (the button
+  // turns into a labeled "Delete?"), the second click deletes. In-app
+  // instead of window.confirm, whose native browser dialog reads like a
+  // system alert.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+    };
+  }, []);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -168,17 +179,28 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
     }
   }
 
+  // No confirmation: starting over is non-destructive (the previous
+  // conversation stays in History, continuable), and the native
+  // window.confirm dialog read like a system alert.
   async function handleNewConversation() {
     if (sending) return;
-    if (!window.confirm(t("panel.newConfirm"))) return;
     setTab("chat");
     await startNewConversation();
   }
 
-  async function handleDeleteThread(threadId: string) {
+  function armOrDeleteThread(threadId: string) {
     if (sending) return;
-    if (!window.confirm(t("panel.deleteConfirm"))) return;
-    await deleteThread(threadId);
+    if (confirmingDeleteId === threadId) {
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+      setConfirmingDeleteId(null);
+      void deleteThread(threadId);
+      return;
+    }
+    setConfirmingDeleteId(threadId);
+    if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+    // Disarm on its own so a stray first click can't leave a live Delete
+    // button waiting minutes later.
+    confirmResetRef.current = setTimeout(() => setConfirmingDeleteId(null), 4000);
   }
 
   const promptKeys = companionPromptKeys(companionPromptGroupForPath(pathname ?? "/dashboard"));
@@ -257,11 +279,15 @@ function CompanionChatBody({ businessId, onClose }: { businessId: string; onClos
                   <button
                     type="button"
                     aria-label={t("panel.deleteConfirm")}
-                    onClick={() => void handleDeleteThread(thread.id)}
+                    onClick={() => armOrDeleteThread(thread.id)}
                     disabled={sending || loadingThread}
-                    className="absolute right-2 top-1.5 hidden rounded px-1 text-sm leading-none text-parchment/40 hover:text-spark-orange group-hover:inline-flex disabled:opacity-50"
+                    className={
+                      confirmingDeleteId === thread.id
+                        ? "absolute right-2 top-1.5 inline-flex rounded border border-spark-orange/60 bg-spark-orange/15 px-1.5 py-0.5 text-[10px] font-semibold text-spark-orange disabled:opacity-50"
+                        : "absolute right-2 top-1.5 hidden rounded px-1 text-sm leading-none text-parchment/40 hover:text-spark-orange group-hover:inline-flex disabled:opacity-50"
+                    }
                   >
-                    ×
+                    {confirmingDeleteId === thread.id ? t("panel.confirmDelete") : "×"}
                   </button>
                 </li>
               ))}

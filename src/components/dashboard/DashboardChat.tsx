@@ -102,6 +102,16 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [attachedFileName, setAttachedFileName] = useState<string | null>(null);
   const [attachedDocumentId, setAttachedDocumentId] = useState("");
   const [documents, setDocuments] = useState<DocumentOption[]>([]);
+  // Two-tap delete (same pattern as the companion panel): first click arms
+  // this row's confirm, second click deletes. In-app instead of the native
+  // window.confirm dialog.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+    };
+  }, []);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -214,21 +224,24 @@ export function DashboardChat({ businessId, businessName }: Props) {
     }
   }
 
-  async function handleDeleteThread(threadId: string) {
+  function armOrDeleteThread(threadId: string) {
     if (sending) return;
-    if (!window.confirm("Delete this conversation? It disappears from your history.")) return;
-    await deleteThread(threadId);
-  }
-
-  async function handleNewConversation() {
-    if (sending) return;
-    if (
-      !window.confirm(
-        "Start a new conversation? You can still revisit past conversations from the sidebar."
-      )
-    ) {
+    if (confirmingDeleteId === threadId) {
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+      setConfirmingDeleteId(null);
+      void deleteThread(threadId);
       return;
     }
+    setConfirmingDeleteId(threadId);
+    if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+    confirmResetRef.current = setTimeout(() => setConfirmingDeleteId(null), 4000);
+  }
+
+  // No confirmation: starting over is non-destructive (the previous
+  // conversation stays in the sidebar, continuable), and the native
+  // window.confirm dialog read like a system alert.
+  async function handleNewConversation() {
+    if (sending) return;
     await startNewConversation();
   }
 
@@ -313,11 +326,15 @@ export function DashboardChat({ businessId, businessName }: Props) {
                         type="button"
                         aria-label="Delete conversation"
                         data-testid="thread-delete"
-                        onClick={() => void handleDeleteThread(t.id)}
+                        onClick={() => armOrDeleteThread(t.id)}
                         disabled={sending || loadingThread}
-                        className="absolute right-1.5 top-1.5 hidden group-hover:inline-flex items-center justify-center rounded px-1 text-parchment/40 hover:text-spark-orange text-sm leading-none disabled:opacity-50 cursor-pointer"
+                        className={
+                          confirmingDeleteId === t.id
+                            ? "absolute right-1.5 top-1.5 inline-flex items-center justify-center rounded border border-spark-orange/60 bg-spark-orange/15 px-1.5 py-0.5 text-[10px] font-semibold text-spark-orange disabled:opacity-50 cursor-pointer"
+                            : "absolute right-1.5 top-1.5 hidden group-hover:inline-flex items-center justify-center rounded px-1 text-parchment/40 hover:text-spark-orange text-sm leading-none disabled:opacity-50 cursor-pointer"
+                        }
                       >
-                        ×
+                        {confirmingDeleteId === t.id ? "Delete?" : "×"}
                       </button>
                     </li>
                   );
