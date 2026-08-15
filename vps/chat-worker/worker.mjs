@@ -3,7 +3,7 @@
 // Pulls 'queued' jobs from dashboard_chat_jobs, calls the local Rowboat in
 // non-streaming mode (~5–30s typical), inserts the assistant message into
 // dashboard_chat_messages, and marks the job 'done'. The browser sees the
-// reply by subscribing to dashboard_chat_messages Realtime — the Vercel
+// reply by subscribing to dashboard_chat_messages Realtime: the Vercel
 // function returned 200 the moment it enqueued the job (in <2s) and is
 // long gone by the time the worker finishes.
 //
@@ -26,7 +26,7 @@
 //      allowed attempt failing, end the job as 'error'.
 //
 // Reliability contract ("messages do not drop"):
-//   1. claim_chat_job() is FOR UPDATE SKIP LOCKED — concurrent workers
+//   1. claim_chat_job() is FOR UPDATE SKIP LOCKED: concurrent workers
 //      claim disjoint jobs.
 //   2. If the worker crashes between claim and write, the row stays
 //      'processing' with a stale claimed_at; reclaim_stale_chat_jobs()
@@ -34,7 +34,7 @@
 //      re-picks it up. Bound on recovery time = WORKER_SWEEP_INTERVAL_MS.
 //   3. The assistant-message INSERT happens BEFORE the job UPDATE to
 //      'done', so a crash between them just leaves the job 'processing'
-//      (caught by #2) — never loses the message.
+//      (caught by #2), never loses the message.
 //   4. Realtime is best-effort. The periodic sweep + drain loop also
 //      covers any queued jobs the websocket missed.
 //   5. claim_chat_job() increments `attempts` on every claim; the worker
@@ -64,14 +64,14 @@
 //                                  one worker container per business)
 //   WORKER_STALE_CLAIM_MS         (default 300000 = 5min)
 //   WORKER_SWEEP_INTERVAL_MS      (default 30000 = 30s)
-//   WORKER_ROWBOAT_TIMEOUT_MS     (default 240000 = 4min — must be < the
+//   WORKER_ROWBOAT_TIMEOUT_MS     (default 240000 = 4min, must be < the
 //                                  cron sweep + claim age, otherwise we'd
 //                                  reclaim our own in-flight job)
-//   WORKER_MAX_ATTEMPTS           (default 3 — hard cap on retries before
+//   WORKER_MAX_ATTEMPTS           (default 3, hard cap on retries before
 //                                  marking a job permanently errored)
-//   WORKER_REQUEUE_BACKOFF_MS     (default 10000 — pause before a retryable
+//   WORKER_REQUEUE_BACKOFF_MS     (default 10000, pause before a retryable
 //                                  failure is re-queued, × the claim number)
-//   WORKER_VERCEL_BASE_URL        (e.g. https://newcoworker.com — when set
+//   WORKER_VERCEL_BASE_URL        (e.g. https://newcoworker.com, when set
 //                                  AND WORKER_VERCEL_BEARER is set, the
 //                                  worker fires a fire-and-forget POST to
 //                                  /api/internal/dashboard-chat-summarize
@@ -112,7 +112,7 @@ const ROWBOAT_TIMEOUT_MS = intEnv("WORKER_ROWBOAT_TIMEOUT_MS", 4 * 60 * 1000);
 const MAX_ATTEMPTS = intEnv("WORKER_MAX_ATTEMPTS", 3);
 // Backoff before a failed-but-retryable job is re-queued, multiplied by the
 // claim number. Observed live (July 2026, business 690f85c0): Rowboat 500'd
-// for a ~30s window — the in-turn retry (a few seconds apart) failed too, but
+// for a ~30s window: the in-turn retry (a few seconds apart) failed too, but
 // the owner's manual resend ~45s later succeeded. Spacing re-claims out gives
 // a blipping Rowboat room to recover instead of burning the whole attempts
 // budget inside the same bad window.
@@ -123,7 +123,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // this tenant's seeded workflow. deploy-client.sh seeds "OwnerCoworker"
 // (= Coworker's tool surface plus owner_append_business_memory), so that's
 // the default. Set CHAT_WORKER_OWNER_START_AGENT="" to omit startAgent
-// entirely — Rowboat then enters its workflow-default startAgent
+// entirely: Rowboat then enters its workflow-default startAgent
 // ("Coworker"). That escape hatch matters for tenants still on an older
 // seed that predates OwnerCoworker: sending a non-existent agent name made
 // Rowboat silently fall back with no signal (observed on business
@@ -136,7 +136,7 @@ const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
 
 // Website chat widget agents (webchat_jobs queue). WebchatCoworker is the
 // capability-restricted anonymous-visitor agent seeded by deploy-client.sh
-// (info + lead gen tools ONLY — no SMS/email/call/image); its Local twin is
+// (info + lead gen tools ONLY, no SMS/email/call/image); its Local twin is
 // the spend-cap fallback. Same empty-string escape hatch as the owner pair:
 // deploy-client.sh writes CHAT_WORKER_WEBCHAT_LOCAL_AGENT="" on kvm1 (no
 // local model), which makes the worker REFUSE over-cap webchat turns with an
@@ -148,7 +148,7 @@ const WEBCHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_WEBCHAT_LOCAL_AGENT ?? "Web
 // The Gemini-backed OwnerCoworker agent bills per token. We meter estimated
 // per-turn cost into owner_chat_model_spend (period-keyed) and the enqueue
 // route flips jobs to the local Qwen agent once the period cap is hit. This
-// is the ROUTING half — it READS live period spend to decide Gemini vs local.
+// is the ROUTING half: it READS live period spend to decide Gemini vs local.
 // It no longer WRITES spend: exact billed tokens are now metered by the
 // llm-router sidecar (the only component that sees Gemini's real `usage`),
 // which POSTs them to /api/internal/meter-gemini-spend. Metering a chars/4
@@ -179,7 +179,7 @@ const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
 const MEMORY_CAPTURE_ENABLED =
   (process.env.MEMORY_CAPTURE_ENABLED ?? "true").trim().toLowerCase() !== "false";
 // Ollama is bound to 0.0.0.0:11434 on the host (see bootstrap.sh); the worker
-// container reaches it the same way the llm-router does — via the
+// container reaches it the same way the llm-router does, via the
 // host.docker.internal=host-gateway extra_host wired in docker-compose.yml.
 // Only used when MEMORY_CAPTURE_MODEL is a LOCAL (non-gemini) tag.
 const OLLAMA_BASE_URL = (
@@ -188,7 +188,7 @@ const OLLAMA_BASE_URL = (
 // Google's OpenAI-compatible endpoint + key for a gemini-* MEMORY_CAPTURE_MODEL.
 // Extraction calls Google DIRECTLY (not via the per-tenant llm-router sidecar):
 // the worker reaches Google in <1s, but POSTing to the llm-router from the
-// worker container hangs (different docker network — small GETs like /health
+// worker container hangs (different docker network, small GETs like /health
 // pass, POST bodies black-hole). The owner-chat path is unaffected (it goes
 // worker → Rowboat → router, and Rowboat is co-located with the router).
 const MEMORY_CAPTURE_GEMINI_BASE_URL = (
@@ -197,7 +197,7 @@ const MEMORY_CAPTURE_GEMINI_BASE_URL = (
 ).replace(/\/+$/, "");
 const GOOGLE_API_KEY = (process.env.GOOGLE_API_KEY || "").trim();
 // Extraction model. Defaults to Gemini (gemini-3.5-flash-lite, GA
-// 2026-07-21 — captured rules become durable memory, so the quality tier
+// 2026-07-21: captured rules become durable memory, so the quality tier
 // matters) called directly: a functional, fast classification that uses ZERO
 // local CPU, so it can't starve the latency-sensitive Gemini chat turns. The
 // CPU-bound local qwen path it replaces always timed out (~30s) AND inflated
@@ -214,8 +214,8 @@ const OWNER_APPEND_URL = VERCEL_BASE_URL
 // connected mailbox. Same auth as OWNER_APPEND_URL (gateway token). The
 // adapter authoritatively re-checks the owner's Settings → Coworker tools
 // toggle before any mail leaves, so this worker never needs its own
-// settings read. Empty when the worker is deployed without Vercel plumbing
-// — EMAIL_SEND blocks then resolve to an honest "not configured" line.
+// settings read. Empty when the worker is deployed without Vercel plumbing,
+// so EMAIL_SEND blocks then resolve to an honest "not configured" line.
 const EMAIL_TOOL_URL = VERCEL_BASE_URL
   ? `${VERCEL_BASE_URL}/api/voice/tools/dashboard-email`
   : "";
@@ -223,7 +223,7 @@ const EMAIL_TOOL_TIMEOUT_MS = intEnv("EMAIL_TOOL_TIMEOUT_MS", 15_000);
 const MEMORY_CAPTURE_CALLBACK_TIMEOUT_MS = 10_000;
 // Cap how long we'll let the summarizer callback hold an open
 // connection. We don't await the response, but we DO want bounded
-// resource usage if Vercel hangs — node's default fetch keeps the
+// resource usage if Vercel hangs: node's default fetch keeps the
 // socket open until the server closes it. 10s is well above the
 // route's typical 200-500ms shouldSummarize miss case and the 3-15s
 // summarizer hit case.
@@ -231,7 +231,7 @@ const SUMMARIZE_CALLBACK_TIMEOUT_MS = 10_000;
 
 // Sanity check: if a worker takes longer to call Rowboat than the stale-claim
 // window allows, two workers (or this one twice) could reclaim the same job
-// and produce duplicate assistant messages. Refuse to start in that mode —
+// and produce duplicate assistant messages. Refuse to start in that mode,
 // far better to fail fast than to corrupt chat history.
 if (ROWBOAT_TIMEOUT_MS >= STALE_CLAIM_MS) {
   console.error(
@@ -279,7 +279,7 @@ function log(level, event, data = {}) {
 
 // undici buries the actionable failure reason (ETIMEDOUT, ENOTFOUND,
 // ECONNRESET, ...) inside error.cause and reports only "TypeError: fetch
-// failed" — and supabase-js then flattens the thrown error into a message
+// failed", and supabase-js then flattens the thrown error into a message
 // STRING, dropping the cause entirely. Wrap fetch so the cause codes are
 // appended to the message before supabase-js flattens it; every supabase
 // error downstream becomes diagnosable ("fetch failed (ETIMEDOUT)").
@@ -324,7 +324,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 // Rowboat/Ollama/Gemini failures without SSH-ing into the VPS. Fire-and-forget:
 // a logging insert must never block or fail the job path, and console output
 // (docker logs) remains the complete source of truth if Supabase is down.
-// "fatal" maps onto error — the table's level enum is debug|info|warn|error.
+// "fatal" maps onto error: the table's level enum is debug|info|warn|error.
 function shipSystemLog(level, event, data = {}) {
   const dbLevel =
     level === "fatal" ? "error" : ["debug", "info", "warn", "error"].includes(level) ? level : "info";
@@ -341,7 +341,7 @@ function shipSystemLog(level, event, data = {}) {
     })
     .then(({ error }) => {
       if (error) {
-        // console only — recursing into log() would loop on persistent failure.
+        // console only: recursing into log() would loop on persistent failure.
         console.error(
           JSON.stringify({ level: "warn", event: "system_log_ship_failed", error: error.message })
         );
@@ -428,7 +428,7 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
       });
     } catch (e) {
       // AbortError (timeout) and connection-reset/refused all get the same
-      // 'rowboat_network' classification — same retry treatment.
+      // 'rowboat_network' classification, same retry treatment.
       const reason = ctl.signal.aborted ? "timeout" : (e?.message || "fetch failed");
       throw new Error(`rowboat_network:${reason}`);
     }
@@ -453,7 +453,7 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
     // Rowboat may omit `state` entirely on turns that didn't run a
     // tool / change agent state. We distinguish "key absent"
     // (preserve whatever we had) from "key present and null"
-    // (clear it) the same way src/lib/rowboat/chat.ts does — by
+    // (clear it) the same way src/lib/rowboat/chat.ts does, by
     // checking own-property presence on the parsed object.
     const stateKey =
       parsed !== null &&
@@ -474,7 +474,7 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
 // Monthly quota windows within a (possibly multi-month) Stripe billing period.
 // 12/24-month plans are charged in full at checkout, so the Stripe period can
 // span the whole prepaid term while included usage still resets MONTHLY.
-// INLINE COPY of supabase/functions/_shared/billing_period_window.ts — keep in
+// INLINE COPY of supabase/functions/_shared/billing_period_window.ts, keep in
 // lockstep (this worker builds/deploys from its own directory).
 // ---------------------------------------------------------------------------
 function addUtcMonthsClamped(base, months) {
@@ -594,7 +594,7 @@ async function readActiveChatCreditMicros() {
 }
 
 // Resolve the spend-cap decision for the turn about to run: the billing-period
-// key + whether the tenant is already at/over the cap. Never throws — on any
+// key + whether the tenant is already at/over the cap. Never throws: on any
 // read failure it returns overCap=false (fail open to the Gemini agent), and
 // returns the period it resolved so the post-turn metering can reuse it.
 // The cap compared against is `base + active purchased credit`, so a Gemini
@@ -624,12 +624,12 @@ async function resolveOwnerChatCap() {
 // persists an assistant message. The endpoint runs shouldSummarize +
 // summarizeThread internally; we don't care about its return value.
 // Bounded by SUMMARIZE_CALLBACK_TIMEOUT_MS so a hung Vercel can't
-// keep a socket open. Errors are logged at warn (not failure) — the
+// keep a socket open. Errors are logged at warn (not failure): the
 // next turn's callback re-evaluates shouldSummarize, so a missed
 // callback self-heals.
 async function notifyVercelSummarize(businessId, threadId) {
   if (!VERCEL_BASE_URL || !VERCEL_BEARER) {
-    // Worker is deployed without summarizer plumbing — nothing to do.
+    // Worker is deployed without summarizer plumbing: nothing to do.
     return;
   }
   const url = `${VERCEL_BASE_URL}/api/internal/dashboard-chat-summarize`;
@@ -664,7 +664,7 @@ async function notifyVercelSummarize(businessId, threadId) {
 // Extraction is READ-ONLY (just a local Ollama classification of the owner's
 // latest message) so it's safe to kick off concurrently with the Rowboat
 // reply. The actual PERSISTENCE (persistOwnerRule) is deliberately split out
-// and only invoked on the SUCCESS path — see processJob — so a turn that
+// and only invoked on the SUCCESS path (see processJob), so a turn that
 // later errors (Rowboat failure, empty assistant, message-insert failure)
 // never writes to memory_md without a corresponding reply + confirmation, and
 // a reclaimed/retried job doesn't double-write the same rule. NEVER throws.
@@ -678,7 +678,7 @@ async function startOwnerRuleExtraction(job, assistantReply, existingBullets) {
   return extractOwnerRule({
     ownerMessage,
     // The dashboard reply both signals intent ("…applied to your memory") and
-    // restates values cleanly — feed it in so the extractor catches durable
+    // restates values cleanly: feed it in so the extractor catches durable
     // facts the owner stated and recovers exact numbers/names.
     assistantReply,
     // Already-saved bullets so the model only emits NEW items (the adapter
@@ -729,7 +729,7 @@ async function persistOwnerRule(job, bullets) {
   if (fitted.length === 0) return null;
 
   // Adapter envelope mirrors voiceToolEnvelopeSchema: { businessId, args }
-  // with NO callerE164 — the adapter rejects any envelope carrying a caller as
+  // with NO callerE164: the adapter rejects any envelope carrying a caller as
   // a non-owner attempt. bullets are joined one-per-line, which is what
   // owner-append-business-memory parses into memory_md.
   const ctl = new AbortController();
@@ -801,7 +801,7 @@ async function persistOwnerRule(job, bullets) {
 // thrash the single local Ollama.
 //
 // Capture is silent and best-effort: it persists durable rules to business
-// memory in the background and edits nothing the owner sees — no reply is
+// memory in the background and edits nothing the owner sees: no reply is
 // updated, no confirmation is appended. A task that fails/throws is logged and
 // dropped (the job is already 'done' and the spend already metered); tasks
 // still queued when the worker is told to shut down are abandoned, which is an
@@ -903,7 +903,7 @@ function isRetryableErrorCode(code) {
   const m = /^rowboat_http_(\d{3})$/.exec(code);
   if (!m) return false;
   const status = Number(m[1]);
-  // 401/403 (auth) deliberately excluded — those will fail identically
+  // 401/403 (auth) deliberately excluded: those will fail identically
   // on retry; we'd just be doubling the 4xx rate against Rowboat.
   if (status === 400 || status === 404 || status === 408 || status === 409 || status === 422) {
     return true;
@@ -941,7 +941,7 @@ async function processJob(job) {
     // input_messages is non-null for every job inserted by the
     // post-PR-#79 route (which always pre-builds the full Rowboat
     // input). A null here means a regression in the route or a row
-    // hand-injected for testing — fail fast rather than silently
+    // hand-injected for testing: fail fast rather than silently
     // dropping the user's prompt onto a blank thread, and avoid
     // the prior loadHistoryFallback() path that re-read raw rows
     // from dashboard_chat_messages and forwarded role:"assistant"
@@ -954,7 +954,7 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
-    // === Owner-turn agent routing — ALWAYS forced, ALWAYS stateless ===
+    // === Owner-turn agent routing: ALWAYS forced, ALWAYS stateless ===
     //
     // Spend-cap routing is decided HERE, authoritatively, from LIVE period
     // spend at claim time (not at enqueue): a burst of jobs queued before the
@@ -969,7 +969,7 @@ async function processJob(job) {
     // (unbounded spend), so REFUSE the turn with an honest reply. The reply
     // is stored like any assistant message and the job completes normally;
     // the owner can buy a Gemini credit pack (billing page) or wait for the
-    // period reset — both paths un-trip the fuse automatically.
+    // period reset: both paths un-trip the fuse automatically.
     if (overCap && !OWNER_CHAT_LOCAL_AGENT) {
       log("warn", "owner_turn_refused_over_cap", { jobId: job.id });
       const refusal =
@@ -1013,14 +1013,14 @@ async function processJob(job) {
     // Why every owner turn runs stateless with an EXPLICIT startAgent and NEVER
     // resumes a stored conversationId:
     //
-    //   Rowboat IGNORES startAgent whenever a conversationId is supplied — it
+    //   Rowboat IGNORES startAgent whenever a conversationId is supplied: it
     //   resumes the agent the conversation was first BOUND to. Owner threads
     //   created via the SMS/workflow default (or before OwnerCoworker existed)
     //   are bound to the local-qwen `Coworker` agent. Resuming them ran EVERY
     //   owner turn on the CPU-only model (~100s+ prefill) and never reached
     //   Gemini, while the meter still billed the turn as Gemini. (Observed
     //   live, June 2026: a continued owner thread answered via agentName
-    //   "Coworker" in ~103s — exactly the latency this Gemini migration was
+    //   "Coworker" in ~103s, exactly the latency this Gemini migration was
     //   meant to eliminate.)
     //
     // So we never resume. Each owner turn is a fresh Rowboat call with an
@@ -1035,12 +1035,12 @@ async function processJob(job) {
       result = await callRowboat(turnMessages, null, null, jobStartAgentOpts);
     } catch (err) {
       const code = String(err?.message || "").split(":")[0];
-      // Non-retryable (auth, malformed input, etc.) — surface it so the outer
+      // Non-retryable (auth, malformed input, etc.), surface it so the outer
       // catch marks the job 'error'.
       if (!isRetryableErrorCode(code)) throw err;
       // Transient Rowboat 5xx / I/O blip. Both attempts are identical stateless
       // calls (there is no conversationId to vary), so a single retry simply
-      // re-issues the request — enough to ride out a transient failure without
+      // re-issues the request, enough to ride out a transient failure without
       // failing the owner's turn.
       log("warn", "owner_turn_retry", {
         jobId: job.id,
@@ -1060,7 +1060,7 @@ async function processJob(job) {
     // email. Extract any blocks from the reply, send them via the platform
     // adapter (which re-checks the toggle authoritatively), strip the raw
     // blocks, and append HONEST per-email delivery results. Runs BEFORE the
-    // reply insert so the stored message is the cleaned reply + outcomes —
+    // reply insert so the stored message is the cleaned reply + outcomes,
     // the owner never sees raw protocol JSON or an unconfirmed "sent" claim.
     // fulfillEmailSends never throws; a reply without blocks passes through
     // untouched.
@@ -1092,8 +1092,8 @@ async function processJob(job) {
     // exactly by the llm-router sidecar → /api/internal/meter-gemini-spend, not
     // here (a chars/4 estimate on top of that would double-count the turn).
 
-    // Persist whatever Rowboat returned this turn. We never RESUME this id —
-    // every owner turn is stateless-forced above — so it is NOT used to
+    // Persist whatever Rowboat returned this turn. We never RESUME this id
+    // (every owner turn is stateless-forced above), so it is NOT used to
     // continue a Rowboat conversation. It functions only as the enqueue route's
     // "this thread has prior Rowboat history" marker, which makes the route
     // replay the FULL history tail (stateless_input_messages) on later turns
@@ -1118,8 +1118,8 @@ async function processJob(job) {
       .eq("id", job.thread_id);
     if (tErr) log("warn", "thread_update_failed", { error: tErr.message });
 
-    // Mark the job DONE now — as soon as the reply is durably stored, metered,
-    // and the thread updated — and BEFORE owner-rule extraction below.
+    // Mark the job DONE now (as soon as the reply is durably stored, metered,
+    // and the thread updated) and BEFORE owner-rule extraction below.
     // Extraction is a second, CPU-bound local-Ollama (qwen) classification that
     // can take tens of seconds (and hits its own timeout). It used to run
     // before this status flip, so the dashboard "thinking…" indicator (which
@@ -1141,7 +1141,7 @@ async function processJob(job) {
       // enqueued below, and we deliberately fall through rather than skip it.
       // The job row stays 'processing', so the reclaimer re-runs the turn and
       // capture is retried (and deduped against existing bullets) even if this
-      // pass is cut short — a failed status flip never silently drops rule
+      // pass is cut short: a failed status flip never silently drops rule
       // capture (Bugbot finding on PR #106). The success-only bookkeeping below
       // (keep-warm touch, summary trigger, done log) is skipped on this path.
       log("error", "job_update_failed", { jobId: job.id, error: jobErr.message });
@@ -1156,7 +1156,7 @@ async function processJob(job) {
       //
       // Upsert: if no row exists yet (first ever turn for this
       // tenant), insert it; otherwise overwrite the timestamps.
-      // Errors here are non-fatal — keep-warm is an optimization,
+      // Errors here are non-fatal: keep-warm is an optimization,
       // not a correctness requirement.
       const nowIso = new Date().toISOString();
       const { error: aErr } = await sb
@@ -1179,7 +1179,7 @@ async function processJob(job) {
       // Fire-and-forget rolling-summary trigger. The route used to do
       // this synchronously after streaming, but in the Option B
       // pipeline the route returns BEFORE the assistant turn is
-      // persisted — firing from the worker is the only place that
+      // persisted: firing from the worker is the only place that
       // sees both turns. We DON'T await: the job is already 'done'
       // from the user's perspective, and the next turn's callback
       // self-heals if this one is dropped.
@@ -1195,14 +1195,14 @@ async function processJob(job) {
       });
     }
 
-    // === Owner-rule extraction — fully DECOUPLED background work ===
+    // === Owner-rule extraction: fully DECOUPLED background work ===
     //
     // Hand capture off to the background queue and return immediately. This is
     // intentionally NOT awaited: processLoop() claims the next job the moment
     // processJob() returns, so a back-to-back owner message is never stuck
     // behind the prior turn's CPU-bound (~tens of seconds) extraction. Capture
-    // runs invisibly — no message is edited, the owner never waits for it and
-    // never sees it — it just silently persists durable rules to business
+    // runs invisibly (no message is edited, the owner never waits for it and
+    // never sees it): it just silently persists durable rules to business
     // memory in the background (see runOwnerRuleExtraction / the queue).
     // Uses the CLEANED reply so raw EMAIL_SEND protocol JSON never feeds the
     // rule extractor.
@@ -1226,7 +1226,7 @@ async function processJob(job) {
         code,
         durationMs: Date.now() - t0
       });
-      // The backoff deliberately blocks this worker's drain pass — one tenant
+      // The backoff deliberately blocks this worker's drain pass: one tenant
       // per box, and a Rowboat that just 500'd twice needs breathing room
       // more than the queue needs throughput.
       await sleep(REQUEUE_BACKOFF_MS * job.attempts);
@@ -1241,7 +1241,7 @@ async function processJob(job) {
         })
         .eq("id", job.id);
       if (!requeueErr) return;
-      // Fall through to the terminal write — better an honest error than a
+      // Fall through to the terminal write, better an honest error than a
       // job stuck 'processing' until the stale-claim sweep.
       log("error", "requeue_failed", { jobId: job.id, error: requeueErr.message });
     }
@@ -1271,22 +1271,22 @@ async function processLoop() {
 }
 
 // ===========================================================================
-// Website chat widget queue (webchat_jobs) — the ANONYMOUS-VISITOR surface.
+// Website chat widget queue (webchat_jobs), the ANONYMOUS-VISITOR surface.
 //
 // Mirrors the owner-dashboard pipeline above (same claim/reclaim RPCs
 // pattern, same always-stateless forced-startAgent turn, same retry
 // taxonomy) with the surface-specific differences kept deliberately small:
 //
 //   * startAgent is WebchatCoworker (restricted tool surface: knowledge
-//     lookup, lead capture, calendar only) — over-cap turns downgrade to
+//     lookup, lead capture, calendar only): over-cap turns downgrade to
 //     WebchatCoworkerLocal, exactly like the owner pair.
 //   * NO owner-side fulfilment runs here: no fulfillEmailSends (the email
 //     adapter must never be reachable from an anonymous surface), and no
-//     owner-rule memory capture (visitor messages are untrusted input —
+//     owner-rule memory capture (visitor messages are untrusted input:
 //     capturing them as business rules would let any visitor write to the
 //     tenant's memory). Any EMAIL_SEND-style sentinel block a confused or
 //     prompt-injected model emits is STRIPPED before the reply persists.
-//   * The over-cap refusal is visitor-facing copy — a website visitor has
+//   * The over-cap refusal is visitor-facing copy: a website visitor has
 //     no business seeing the tenant's billing details.
 // ===========================================================================
 
@@ -1368,7 +1368,7 @@ async function finishWebchatJob(job, content, conversationId, nextState) {
   }
 
   // Sticky continuation marker (same semantics as the owner path): we never
-  // RESUME this id — every webchat turn is stateless-forced — it only tells
+  // RESUME this id (every webchat turn is stateless-forced): it only tells
   // the enqueue route "this session has prior Rowboat history", flipping it
   // to the full-tail input variant. Only refresh when Rowboat returned one.
   const sessionUpdate = { last_seen_at: new Date().toISOString() };
@@ -1391,7 +1391,7 @@ async function finishWebchatJob(job, content, conversationId, nextState) {
   if (jobErr) {
     // Reply already persisted (the visitor's poll will render it); the job
     // row stays 'processing' and the reclaimer retries the status flip via
-    // a re-run — same acceptance as the owner path's job_update_failed.
+    // a re-run, same acceptance as the owner path's job_update_failed.
     log("error", "webchat_job_update_failed", { jobId: job.id, error: jobErr.message });
   }
   return msg.id;
@@ -1426,7 +1426,7 @@ async function processWebchatJob(job) {
     // Webchat shares the SAME period spend fuse as owner chat + SMS (all
     // Gemini turns meter into owner_chat_model_spend via the llm-router), so
     // the cap read is identical. Anonymous traffic degrading to the free
-    // local model — not billing unbounded Gemini — is the entire point.
+    // local model, not billing unbounded Gemini, is the entire point.
     const { overCap } = await resolveOwnerChatCap();
 
     if (overCap && !WEBCHAT_LOCAL_AGENT) {
@@ -1440,7 +1440,7 @@ async function processWebchatJob(job) {
     const startAgentOpts = startAgent ? { startAgent } : {};
 
     // Always stateless with an explicit startAgent, never resuming a stored
-    // conversationId — same reasoning as the owner path: Rowboat ignores
+    // conversationId, same reasoning as the owner path: Rowboat ignores
     // startAgent when a conversationId is supplied, so resuming would pin
     // the conversation to whatever agent the first turn bound (breaking the
     // over-cap downgrade mid-conversation). The enqueue route replays the
@@ -1462,7 +1462,7 @@ async function processWebchatJob(job) {
     const { content, conversationId, state: nextState } = result;
 
     // The widget surface has NO sentinel tools. Strip any EMAIL_SEND-style
-    // block a confused/prompt-injected model emits — nothing is sent, the
+    // block a confused/prompt-injected model emits: nothing is sent, the
     // raw protocol JSON never reaches the visitor, and an all-block reply
     // degrades to an honest canned line.
     const { cleanedContent, requests, invalidCount } = extractEmailSendRequests(content);
@@ -1485,7 +1485,7 @@ async function processWebchatJob(job) {
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];
-    // Same re-queue-on-transient-failure semantics as processJob above —
+    // Same re-queue-on-transient-failure semantics as processJob above,
     // claim_webchat_job bumps `attempts`, the top of this function enforces
     // MAX_ATTEMPTS, and nothing persists before a successful response.
     if (isRetryableErrorCode(code) && job.attempts < MAX_ATTEMPTS) {
@@ -1606,7 +1606,7 @@ async function main() {
 
   // CRITICAL: drain any pending work BEFORE subscribing to Realtime. If
   // the order is reversed, a job inserted during the websocket handshake
-  // would arrive at the subscription handler — but the handler is a no-op
+  // would arrive at the subscription handler, but the handler is a no-op
   // until `processing` is unblocked, which won't happen until drain
   // returns. Net effect: same. We do it in this order anyway because it
   // makes the boot-up sequence easier to reason about: first heal,
@@ -1637,7 +1637,7 @@ async function main() {
         filter: `business_id=eq.${BUSINESS_ID}`
       },
       () => {
-        // Same shared drain — it processes both queues.
+        // Same shared drain: it processes both queues.
         drain();
       }
     )
