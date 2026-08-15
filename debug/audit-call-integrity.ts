@@ -114,6 +114,7 @@ async function turnsFor(db: SupabaseClient, transcriptId: string): Promise<Turn[
         .select("role, content, turn_index")
         .eq("transcript_id", transcriptId)
         .order("turn_index", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     { label: `turns for ${transcriptId}` }
   );
@@ -143,7 +144,14 @@ async function main(): Promise<void> {
         .from("voice_call_transcripts")
         .select("id, business_id, caller_e164, started_at")
         .gte("started_at", since)
+        // `id` is the tiebreaker, and it is required, not tidiness. Range
+        // paging re-runs the query per page and Postgres does not guarantee
+        // an order among rows sharing a timestamp, so ordering on
+        // `started_at` alone lets a page boundary skip or duplicate a call.
+        // A skipped one is a silent miss, which is this detector's worst
+        // failure. Partner referrals really do land in the same second.
         .order("started_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to);
       if (businessFilter) q = q.eq("business_id", businessFilter);
       return q;
