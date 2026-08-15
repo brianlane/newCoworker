@@ -230,6 +230,15 @@ export function useDashboardChatTransport(businessId: string) {
       // mount, which is annoying but harmless.
     }
   }, [businessId]);
+  // The initializer runs once for the mount-time business; the switcher can
+  // change businessId with the hook still mounted, so re-read THAT
+  // business's engagement before the hydrate effect below re-runs for it
+  // (declared first: same-commit ordering keeps the ref correct).
+  useEffect(() => {
+    const next = readFreshStart(businessId);
+    freshStartRef.current = next;
+    setFreshStart(next);
+  }, [businessId]);
 
   const fetchThreads = useCallback(async () => {
     try {
