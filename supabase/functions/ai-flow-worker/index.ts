@@ -36,7 +36,11 @@ import {
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
-import { selectBroadcastTeam, type BroadcastMemberRow } from "../_shared/team_broadcast.ts";
+import {
+  broadcastTagMatched,
+  selectBroadcastTeam,
+  type BroadcastMemberRow
+} from "../_shared/team_broadcast.ts";
 import {
   sendOwnerNotifyFallback,
   type OwnerNotifyFallbackReason,
@@ -7174,7 +7178,8 @@ async function alertBroadcastTeam(
   // Eligibility and the fail-safe tag filter live in `_shared`, so this path
   // and the urgent-alert dispatcher cannot drift apart on who counts as the
   // team for an unowned lead.
-  const targets = selectBroadcastTeam((data ?? []) as BroadcastMemberRow[], action.teamTag);
+  const rosterRows = (data ?? []) as BroadcastMemberRow[];
+  const targets = selectBroadcastTeam(rosterRows, action.teamTag);
   if (targets.length === 0) return null;
 
   const cfg = await messagingConfig(supabase, run.business_id);
@@ -7245,7 +7250,9 @@ async function alertBroadcastTeam(
     result: {
       target: "team_broadcast",
       notified,
-      ...(tag ? { tag, tag_matched: tagged.length > 0 } : {})
+      ...(action.teamTag
+        ? { tag: action.teamTag, tag_matched: broadcastTagMatched(rosterRows, action.teamTag) }
+        : {})
     }
   };
 }

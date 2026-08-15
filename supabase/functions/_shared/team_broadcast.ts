@@ -84,8 +84,38 @@ export function selectBroadcastTeam(
     name: m.name,
     phone: m.phone
   });
-  const want = (tag ?? "").trim().toLowerCase();
+  const want = normalizeTag(tag);
   if (!want) return eligible.map(strip);
   const tagged = eligible.filter((m) => m.normalizedTags.includes(want));
   return (tagged.length > 0 ? tagged : eligible).map(strip);
+}
+
+/** One normalization, so a filter and its diagnostic cannot disagree. */
+function normalizeTag(tag?: string | null): string {
+  return (tag ?? "").trim().toLowerCase();
+}
+
+/**
+ * Did the tag narrow the audience, or did the fail-safe widen it back out?
+ *
+ * Reported alongside a broadcast so "the whole team got a seller alert" is
+ * distinguishable from "the seller tag matched nobody, so everyone did". The
+ * two look identical in the send log and mean very different things: the
+ * second one says the roster's tags need fixing.
+ */
+export function broadcastTagMatched(
+  rows: readonly BroadcastMemberRow[],
+  tag?: string | null
+): boolean {
+  const want = normalizeTag(tag);
+  if (!want) return false;
+  // Asked of the ELIGIBLE rows only, and asked directly rather than by
+  // comparing audience sizes: a tag every teammate carries narrows nothing
+  // and still matched, which a size comparison would report as a miss.
+  return rows.some(
+    (r) =>
+      r.team_broadcast_enabled !== false &&
+      (r.phone_e164 ?? "").trim().length > 0 &&
+      (r.tags ?? []).some((t) => normalizeTag(String(t)) === want)
+  );
 }

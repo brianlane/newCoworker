@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  broadcastTagMatched,
   selectBroadcastTeam,
   type BroadcastMemberRow
 } from "../supabase/functions/_shared/team_broadcast";
@@ -123,5 +124,44 @@ describe("selectBroadcastTeam: the lead-type filter", () => {
     // Fails safe rather than empty: nobody matches, so everyone is alerted.
     const out = selectBroadcastTeam([row({ tags: null })], "seller");
     expect(out).toHaveLength(1);
+  });
+});
+
+/**
+ * "Everyone got the alert" and "the tag matched nobody so everyone got the
+ * alert" produce an identical send log and mean very different things. The
+ * second says the roster's tags need fixing.
+ */
+describe("broadcastTagMatched", () => {
+  it("reports a genuine match", () => {
+    expect(broadcastTagMatched([row(), jason], "seller")).toBe(true);
+  });
+
+  it("reports the fail-safe widening as a MISS", () => {
+    expect(broadcastTagMatched([row(), jason], "sellr")).toBe(false);
+  });
+
+  it("is true when EVERY eligible member carries the tag", () => {
+    // The audience size is unchanged here, so a size comparison would call
+    // this a miss. It is not one: the tag matched, it just narrowed nothing.
+    expect(broadcastTagMatched([row(), gabby], "seller")).toBe(true);
+  });
+
+  it("ignores rows that are not broadcast-eligible", () => {
+    const tagged = row({ id: "m9", team_broadcast_enabled: false, tags: ["seller"] });
+    expect(broadcastTagMatched([tagged, jason], "seller")).toBe(false);
+    const noPhone = row({ id: "m8", phone_e164: "  ", tags: ["seller"] });
+    expect(broadcastTagMatched([noPhone, jason], "seller")).toBe(false);
+  });
+
+  it("is false without a tag to match", () => {
+    for (const tag of [undefined, null, "", "   "]) {
+      expect(broadcastTagMatched([row()], tag)).toBe(false);
+    }
+  });
+
+  it("matches case- and whitespace-insensitively, and skips a null tags column", () => {
+    expect(broadcastTagMatched([row({ tags: [" SeLLer "] })], "SELLER")).toBe(true);
+    expect(broadcastTagMatched([row({ tags: null })], "seller")).toBe(false);
   });
 });
