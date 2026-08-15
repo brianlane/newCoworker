@@ -116,54 +116,56 @@ a model reaches for the wrong tool.
 
 ## Release notes
 
-Paste-ready copy for the submission's release-notes field. It describes what
-this version does and points a reviewer at the test plan. Credentials are NOT
-here and never belong in the repo: they go in the submission form only, and
-they must be the dedicated sandbox account described above.
+The **Submit** step has a required Release Notes field, and the form says these
+notes "may be publicly displayed on the plugin details page". So this is
+customer-facing copy, not reviewer-facing: no tool names, no sandbox details,
+no test-plan pointers, and never credentials. Reviewer-only material belongs in
+the test cases above and in the reviewer test plan page.
+
+**Two traps in the Submit step, both found the hard way.**
+
+1. The Submit step does NOT autosave and does NOT save on navigation. Every
+   other step persists when you click Continue or switch sections; this one
+   keeps the release notes only in browser state until the submission actually
+   goes through. Leaving the page loses them, so paste this in during the same
+   sitting you submit.
+2. The policy checkboxes below the field are legal attestations about the
+   business (terms, industry compliance, no money transfers, no ads, content
+   rights, not aimed at under-13s). They are for the account owner to tick
+   personally.
 
 ### v1.0, first release
 
-New Coworker is an AI coworker for small businesses. This version connects the
-business's own New Coworker account to ChatGPT so the owner can work with their
-customers, conversations and calendar without leaving the chat.
+```text
+First release.
 
-What it does:
+New Coworker is an AI coworker for small businesses. Connect your New Coworker
+account and work with your customers, conversations and calendar without
+leaving the chat.
 
-- **Find people and history.** `search` and `fetch` cover contacts, text
-  conversations and call transcripts, so "what do I know about Maria" and
-  "what did that call cover" are answerable in one turn.
-- **Read the day.** Recent activity, open tasks, team roster, automations and
-  notification settings.
-- **Act, with the owner confirming first.** Send a text or a WhatsApp message,
-  book onto the connected calendar, add or update a contact, and run one of the
-  business's own automations.
-- **Three inline components.** Open appointment times, a contact card, and a
-  text conversation, each rendered in the chat rather than as raw JSON.
+What you can do:
 
-How access works:
+Look someone up. Ask about a customer and get their profile, their text history
+and what recent calls were about, pulled from your own account.
 
-- OAuth 2.1 with PKCE and dynamic client registration. There is no API key to
-  paste and no shared secret.
-- Every call acts as the signed-in owner and is limited by their team role,
-  re-checked server-side on each request rather than trusted from the session.
-- The connector only reaches businesses the signed-in account already has a
-  role on.
+Catch up. Recent activity, your open tasks, your team roster, your automations
+and your notification settings.
 
-What a reviewer should know:
+Get things done, with a confirmation first. Send a text or a WhatsApp message,
+book onto your connected calendar, add or update a contact, and run one of your
+own automations. Anything that reaches a customer is confirmed with you before
+it happens.
 
-- Anything that reaches a customer (a text, a booking, an automation run) is
-  annotated as consequential, and the server instructions tell the model to
-  confirm before doing it. The five test cases exercise this, and case 5 is the
-  send path specifically.
-- The sandbox account's outbound number is one we control, so a reviewer
-  running the send test does not contact a real person.
-- The reviewer test plan is linked from the listing and includes a staff-role
-  login, which is where role enforcement is demonstrated rather than asserted.
-- Times in generated messages always carry a named timezone rather than a bare
-  clock time.
+See it, not raw data. Open appointment times, contact cards and text
+conversations render right in the chat.
 
-Availability: United States and Canada. Interface language is English and
-Spanish.
+Signing in uses OAuth, so there is no API key to paste. Every action runs as you
+and stays inside your team role and the businesses you already have access to.
+Times in generated messages always name a timezone rather than a bare clock
+time.
+
+Available in the United States and Canada, in English and Spanish.
+```
 
 ---
 
