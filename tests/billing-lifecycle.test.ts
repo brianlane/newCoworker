@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   planLifecycleAction,
-  termRefundCarveOutCents,
   GRACE_WINDOW_MS,
   type LifecycleContext
 } from "@/lib/billing/lifecycle";
@@ -73,38 +72,21 @@ function makeCtx(overrides: Partial<LifecycleContext> = {}): LifecycleContext {
   };
 }
 
-describe("termRefundCarveOutCents", () => {
-  it("returns 0 for monthly and unknown billing periods", () => {
-    expect(termRefundCarveOutCents("starter", "monthly")).toBe(0);
-    expect(termRefundCarveOutCents("standard", "monthly")).toBe(0);
-    expect(termRefundCarveOutCents("standard", null)).toBe(0);
-  });
-
-  it("returns one month at the tier's monthly-intro rate for term plans", () => {
-    expect(termRefundCarveOutCents("starter", "annual")).toBe(1599);
-    expect(termRefundCarveOutCents("starter", "biennial")).toBe(1599);
-    expect(termRefundCarveOutCents("standard", "annual")).toBe(19500);
-    expect(termRefundCarveOutCents("standard", "biennial")).toBe(19500);
-  });
-
-  it("returns 0 for enterprise (deal-based pricing; refunds stay operator judgment)", () => {
-    expect(termRefundCarveOutCents("enterprise", "biennial")).toBe(0);
-  });
-});
-
 describe("planLifecycleAction: cancelWithRefund", () => {
-  it("stamps the term carve-out on the refund op for full-upfront term plans", () => {
+  /**
+   * The term deduction was removed in Aug 2026. It existed because a term
+   * customer's Hostinger box was bought for the whole term at signup and is
+   * non-refundable to us; signups buy MONTHLY boxes now, so there is no such
+   * box to recover and a term refund takes the same carve-outs as a monthly
+   * one. Asserted as an absence so the field cannot quietly come back.
+   */
+  it("takes no term deduction on a full-upfront term plan", () => {
     const ctx = makeCtx({
       subscription: makeSub({ tier: "standard", billing_period: "biennial" })
     });
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
     if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
-    expect(res.plan.stripeOps[0]).toEqual(
-      expect.objectContaining({
-        type: "refund_latest_charge",
-        termCarveOutCents: 19500
-      })
-    );
+    expect(res.plan.stripeOps[0]).not.toHaveProperty("termCarveOutCents");
   });
 
   it("threads the route-computed billable-usage carve-out onto the refund op", () => {
@@ -139,7 +121,6 @@ describe("planLifecycleAction: cancelWithRefund", () => {
         type: "refund_latest_charge",
         stripeSubscriptionId: "sub_stripe_1",
         reason: "thirty_day_money_back",
-        termCarveOutCents: 0,
         usageCarveOutCents: 0
       },
       { type: "cancel_subscription", stripeSubscriptionId: "sub_stripe_1", releaseSchedule: true }

@@ -142,8 +142,7 @@ export default function TermsPage() {
           minutes, and AI usage), which third-party carriers and AI providers bill to us and do not refund.
           Usage pack add-ons are non-refundable: pack charges are excluded from any money-back refund,
           the associated pack credits are revoked when the refund is issued, and usage already covered
-          by a pack is not deducted again. On 12- and 24-month plans, the refund also deducts one month
-          of service at the monthly rate. Except as
+          by a pack is not deducted again. Except as
           required by law or expressly stated in writing, fees are otherwise non-refundable.
         </p>
         <p>

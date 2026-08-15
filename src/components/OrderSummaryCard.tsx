@@ -290,9 +290,9 @@ export function OrderSummaryCard({
               name, so a signup that was never charged the fee has nothing
               to deduct. Saying otherwise would promise a smaller refund
               than they actually get. */}
-          {t(mexicanFee ? "guaranteeNoteNoCarrierFee" : "guaranteeNote", {
-            monthlyPrice: formatPriceCents(getPeriodPricing(tier, "monthly").monthlyCents)
-          })}
+          {/* No monthly-rate interpolation any more: the term deduction was
+              removed in Aug 2026 along with the term box it recovered. */}
+          {t(mexicanFee ? "guaranteeNoteNoCarrierFee" : "guaranteeNote")}
         </p>
       )}
     </div>

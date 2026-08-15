@@ -34,7 +34,6 @@ import { isWithinLifetimeRefundWindow } from "@/lib/db/customer-profiles";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import { isVpsSize } from "@/lib/vps/size";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
-import { getPeriodPricing, type BillingPeriod, type PlanTier } from "@/lib/plans/tier";
 
 /** 30-day grace window after any cancellation. Centralised so callers stay in sync. */
 export const GRACE_WINDOW_DAYS = 30;
@@ -69,17 +68,19 @@ export type StripeOp =
        * registration fee), so there is no op field for them. The matching
        * grants are voided by the executor either way.
        */
-      /**
-       * Term-plan refund policy (Jul 2026): annual/biennial customers pay the
-       * full term upfront, and the Hostinger box bought for that term is
-       * non-refundable to us — so a 30-day money-back on a term plan refunds
-       * the term amount MINUS one month at the tier's monthly-intro rate (the
-       * service they actually used, priced as if uncommitted). Monthly plans
-       * carve out nothing extra (their latest invoice IS one month). Computed
-       * at plan time via {@link termRefundCarveOutCents} so the executor
-       * stays a dumb subtractor.
+      /*
+       * Term-plan refund policy, REMOVED Aug 2026. Annual and biennial
+       * refunds used to withhold one month at the tier's monthly rate,
+       * because the Hostinger box bought for that term was non-refundable
+       * to us and a day-2 cancel left the platform holding it.
+       *
+       * Signups now buy a MONTHLY box whatever the customer committed to
+       * (see DEFAULT_PURCHASE_TERM), and term hardware is only bought once
+       * the refund window has closed. During the window the platform's
+       * sunk cost is at most one month of a monthly box, so the deduction
+       * no longer has anything to recover and a term refund is now the full
+       * term payment less the same carve-outs a monthly refund takes.
        */
-      termCarveOutCents: number;
       /**
        * Billable-usage refund policy (Jul 2026): the tenant's third-party
        * usage charges — SMS, voice minutes, Gemini spend — are non-refundable
@@ -933,14 +934,6 @@ function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string
  * pricing is deal-based (`monthlyCents: 0`), so this returns 0 there too;
  * enterprise refunds remain operator judgment via admin force-refund.
  */
-export function termRefundCarveOutCents(
-  tier: PlanTier,
-  billingPeriod: BillingPeriod | null
-): number {
-  if (!billingPeriod || billingPeriod === "monthly") return 0;
-  return getPeriodPricing(tier, "monthly").monthlyCents;
-}
-
 // Shared cancel builder: cancel & refund + auto-cancel share this skeleton.
 // Differences are (a) whether to emit a refund op, (b) the cancel_reason,
 // (c) the grace window (admin force collapses it to zero).
@@ -994,7 +987,6 @@ function buildCancelPlan(args: {
       type: "refund_latest_charge",
       stripeSubscriptionId: sub.stripe_subscription_id,
       reason: "thirty_day_money_back",
-      termCarveOutCents: termRefundCarveOutCents(sub.tier, sub.billing_period),
       usageCarveOutCents: ctx.billableUsageCents ?? 0
     });
   }

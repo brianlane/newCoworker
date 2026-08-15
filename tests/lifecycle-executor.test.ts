@@ -108,18 +108,13 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-function refundPlan(
-  amountCents = 2500,
-  termCarveOutCents = 0,
-  usageCarveOutCents = 0
-): LifecyclePlan {
+function refundPlan(amountCents = 2500, usageCarveOutCents = 0): LifecyclePlan {
   return {
     stripeOps: [
       {
         type: "refund_latest_charge",
         stripeSubscriptionId: "sub_123",
         reason: "thirty_day_money_back",
-        termCarveOutCents,
         usageCarveOutCents
       }
     ],
@@ -285,7 +280,6 @@ describe("executeLifecyclePlan refund handling", () => {
       type: "refund_latest_charge",
       stripeSubscriptionId: "sub_123",
       reason: "admin_force",
-      termCarveOutCents: 0,
       usageCarveOutCents: 0
     };
 
@@ -417,7 +411,7 @@ describe("executeLifecyclePlan refund handling", () => {
     });
 
     await executeLifecyclePlan(
-      refundPlan(2500, 2500, 0),
+      refundPlan(2500, 2500),
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
@@ -769,7 +763,7 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
-  it("stacks the pack carve-out with carrier fee, term, and usage carve-outs", async () => {
+  it("stacks the pack carve-out with the carrier fee and usage carve-outs", async () => {
     const stripe = {
       subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_stack" }) },
       invoices: {
@@ -793,14 +787,14 @@ describe("executeLifecyclePlan refund handling", () => {
     };
 
     await executeLifecyclePlan(
-      refundPlan(40000, 9900, 250),
+      refundPlan(40000, 250),
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
 
-    // 40000 − 1950 fee − 5700 packs − 9900 term − 250 usage = 22200.
+    // 40000 − 1950 fee − 5700 packs − 250 usage = 32100.
     expect(stripe.refunds.create).toHaveBeenCalledWith(
-      expect.objectContaining({ charge: "ch_stack", amount: 22200 })
+      expect.objectContaining({ charge: "ch_stack", amount: 32100 })
     );
   });
 
@@ -876,7 +870,6 @@ describe("executeLifecyclePlan refund handling", () => {
       type: "refund_latest_charge",
       stripeSubscriptionId: "sub_123",
       reason: "admin_force",
-      termCarveOutCents: 0,
       usageCarveOutCents: 0
     };
 
@@ -895,9 +888,15 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
-  it("withholds the term carve-out (one month at the monthly rate) on term-plan refunds", async () => {
+  /**
+   * The term deduction was removed in Aug 2026 along with the term box it
+   * existed to recover: signups buy MONTHLY hardware now, so a day-2 cancel
+   * on a 24-month plan strands at most one month of a monthly box rather
+   * than a whole prepaid term.
+   */
+  it("refunds a term plan in full, less only the carve-outs a monthly refund takes", async () => {
     // Standard biennial: 24 × $99 = $2376 plan + $19.50 fee = $2395.50 paid.
-    // Refund = 239550 − 1950 (fee) − 19500 (one month at monthly rate) = 218100.
+    // Refund = 239550 − 1950 (non-refundable carrier fee) = 237600.
     const stripe = {
       subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_term" }) },
       invoices: {
@@ -920,16 +919,16 @@ describe("executeLifecyclePlan refund handling", () => {
     };
 
     await executeLifecyclePlan(
-      refundPlan(239550, 19500),
+      refundPlan(239550),
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
 
     expect(stripe.refunds.create).toHaveBeenCalledWith(
-      expect.objectContaining({ charge: "ch_term", amount: 218100 })
+      expect.objectContaining({ charge: "ch_term", amount: 237600 })
     );
     expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
-      expect.objectContaining({ amountCents: 218100 })
+      expect.objectContaining({ amountCents: 237600 })
     );
   });
 
@@ -957,16 +956,16 @@ describe("executeLifecyclePlan refund handling", () => {
     };
 
     await executeLifecyclePlan(
-      refundPlan(239550, 19500, 1234),
+      refundPlan(239550, 1234),
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
 
     expect(stripe.refunds.create).toHaveBeenCalledWith(
-      expect.objectContaining({ charge: "ch_usage", amount: 239550 - 1950 - 19500 - 1234 })
+      expect.objectContaining({ charge: "ch_usage", amount: 239550 - 1950 - 1234 })
     );
     expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
-      expect.objectContaining({ amountCents: 216866 })
+      expect.objectContaining({ amountCents: 236366 })
     );
   });
 
@@ -988,7 +987,7 @@ describe("executeLifecyclePlan refund handling", () => {
     };
 
     await executeLifecyclePlan(
-      refundPlan(1599, 0, 2000),
+      refundPlan(1599, 2000),
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
@@ -1704,7 +1703,6 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
           type: "refund_latest_charge",
           stripeSubscriptionId: "sub_fastslow",
           reason: "thirty_day_money_back",
-          termCarveOutCents: 0,
           usageCarveOutCents: 0
         },
         {

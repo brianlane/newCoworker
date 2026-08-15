@@ -51,16 +51,37 @@ import type { BillingPeriod } from "@/lib/plans/tier";
  * Hostinger billing-cycle suffix baked into every VPS price-item id
  * (`hostingercom-vps-<size>-usd-<term>`). Longer terms are dramatically
  * cheaper per month (live catalog, Jul 2026: kvm1 $19.49/mo on 1m renewal vs
- * $6.49/mo first 2y period; kvm2 $24.49 vs $8.99) — so purchases match the
- * customer's committed contract term instead of always buying monthly.
+ * $6.49/mo first 2y period; kvm2 $24.49 vs $8.99), which is why we move
+ * tenants onto them, but only once it is safe to, see
+ * {@link DEFAULT_PURCHASE_TERM}.
  */
 export type HostingerBillingTerm = "1m" | "1y" | "2y";
 
 /**
- * Customer contract → Hostinger purchase term. A customer committed for 24
- * months funds a 24-month box; month-to-month customers stay on monthly
- * Hostinger billing so a quick cancel doesn't strand prepaid term time
- * (churned term boxes return to the `vps_inventory` pool for reuse).
+ * What a purchase buys when the caller names no term.
+ *
+ * MONTHLY, always, whatever the customer committed to. Buying a box whose
+ * term matched the contract meant a 24-month customer immediately funded a
+ * 24-month box, and Hostinger will not refund us (30 days per box AND 180
+ * days since the account's last VPS refund), so that hardware sat behind the
+ * customer's own 30-day money-back window entirely at our risk.
+ *
+ * Term hardware is bought later instead, by the contract-upgrade sweep, once
+ * the tenant's refund exposure has closed and their box is about to renew.
+ * See src/lib/vps/contract-upgrade-sweep.ts. Callers that have already
+ * established it is safe (that sweep, and change-plan's term alignment) pass
+ * an explicit `hostingerTerm` and bypass this default.
+ */
+export const DEFAULT_PURCHASE_TERM: HostingerBillingTerm = "1m";
+
+/**
+ * Customer contract → the Hostinger term that MATCHES it.
+ *
+ * No longer the signup default (see {@link DEFAULT_PURCHASE_TERM}). Still
+ * the right answer for callers replacing a box that already runs on the
+ * customer's contract term, i.e. the term-renewal sweep re-buying at a
+ * promotional first-period price, and change-plan aligning a box to a
+ * commitment the customer has already had time to reconsider.
  */
 export function hostingerTermForBillingPeriod(period: BillingPeriod): HostingerBillingTerm {
   if (period === "biennial") return "2y";
@@ -363,12 +384,10 @@ export async function provisionVpsForBusiness(
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
 
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
-  const itemId =
-    input.itemId ??
-    vpsPriceItemId(
-      vpsSize,
-      input.hostingerTerm ?? hostingerTermForBillingPeriod(input.billingPeriod ?? "monthly")
-    );
+  // Monthly unless the caller explicitly asked for a term: see
+  // DEFAULT_PURCHASE_TERM for why the customer's billingPeriod deliberately
+  // does NOT drive this any more.
+  const itemId = input.itemId ?? vpsPriceItemId(vpsSize, input.hostingerTerm ?? DEFAULT_PURCHASE_TERM);
   const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID;
   const dataCenterId = input.dataCenterId ?? DEFAULT_US_DATA_CENTER_ID;
   // FQDN required: Hostinger's purchase-embedded setup historically accepted

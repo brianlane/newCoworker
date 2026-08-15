@@ -430,38 +430,29 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           );
           return sum + Math.max((line.amount ?? 0) - discounted, 0);
         }, 0);
-      // Term-plan policy (Jul 2026): the planner additionally withholds one
-      // month at the tier's monthly-intro rate on annual/biennial refunds —
-      // see `termRefundCarveOutCents` in lifecycle.ts. Zero for monthly.
-      const termCarveOutCents = op.termCarveOutCents;
       // Billable-usage policy (Jul 2026): the tenant's third-party usage
       // charges (SMS, voice, Gemini spend) are withheld at platform cost —
       // computed by the refund route via src/lib/billing/usage-charges.ts
       // and threaded through the op. Zero when the plan never loaded it.
       const usageCarveOutCents = op.usageCarveOutCents;
+      // NOTE (Aug 2026): a term-plan carve-out used to sit here, withholding
+      // one month on annual/biennial refunds against the non-refundable term
+      // box bought at signup. Signups buy monthly boxes now, so there is no
+      // such box to recover and term refunds take the same carve-outs as
+      // monthly ones.
       const refundCents = Math.min(
         Math.max(
-          amountPaidCents -
-            carrierFeeCents -
-            packCarveOutCents -
-            termCarveOutCents -
-            usageCarveOutCents,
+          amountPaidCents - carrierFeeCents - packCarveOutCents - usageCarveOutCents,
           0
         ),
         amountPaidCents
       );
-      if (
-        carrierFeeCents > 0 ||
-        packCarveOutCents > 0 ||
-        termCarveOutCents > 0 ||
-        usageCarveOutCents > 0
-      ) {
+      if (carrierFeeCents > 0 || packCarveOutCents > 0 || usageCarveOutCents > 0) {
         logger.info("refund_latest_charge: carving out non-refundable amounts", {
           stripeSubscriptionId: op.stripeSubscriptionId,
           invoiceId: latestInvoiceId,
           carrierFeeCents,
           packCarveOutCents,
-          termCarveOutCents,
           usageCarveOutCents,
           refundCents
         });

@@ -92,9 +92,11 @@ import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { getCommitmentMonths, renewalDateAfterMonths, type BillingPeriod } from "@/lib/plans/tier";
 import {
   decrementLifetimeSubscriptionCount,
+  getCustomerProfileById,
   incrementLifetimeSubscriptionCount,
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
+import { isRefundExposureOpen } from "@/lib/vps/contract-coverage";
 import { logger } from "@/lib/logger";
 import {
   sendOpsVpsDeletionEmail,
@@ -452,7 +454,29 @@ export async function runChangePlanFromCheckout(
   let termAlignment = false;
   let termAlignmentSkipReason: string | null = null;
   if (sameTier && targetTermMonths > 1) {
-    if (oldVmId === null || !oldSub.hostinger_billing_subscription_id) {
+    // Refund gate (Aug 2026): a customer inside their 30-day money-back
+    // window can still take their money back, and Hostinger will not refund
+    // us the term box, so aligning now would put the platform on the hook
+    // for the whole term. This is the same exposure the monthly-signup
+    // strategy removes, and a customer who upgrades their commitment on day
+    // 5 would otherwise walk straight back into it.
+    //
+    // Nothing is lost by waiting: the contract-upgrade sweep performs
+    // exactly this migration once the window closes and their box reaches
+    // its renewal, so the discount arrives a few weeks later instead of
+    // never.
+    // A lookup failure reads as "cannot verify", which `isRefundExposureOpen`
+    // treats as exposure OPEN: fail toward not buying hardware we might
+    // have to eat.
+    const alignmentProfile = customerProfileId
+      ? await getCustomerProfileById(customerProfileId).catch(() => null)
+      : null;
+    if (isRefundExposureOpen(alignmentProfile, new Date())) {
+      termAlignmentSkipReason =
+        "the customer's 30-day money-back window is still open, so buying a non-refundable " +
+        "term box now would leave the platform holding it if they cancel, and the " +
+        "contract-upgrade sweep will align this box once the window closes";
+    } else if (oldVmId === null || !oldSub.hostinger_billing_subscription_id) {
       termAlignmentSkipReason =
         "no VM / Hostinger billing subscription recorded for the old plan — verify the box's billing cycle in hPanel";
     } else {
@@ -569,12 +593,18 @@ export async function runChangePlanFromCheckout(
         // Hardware pin survives tier changes: an operator-set vps_size keeps
         // the business on that box size; null keeps the tier default.
         vpsSize: business.vps_size ?? null,
-        // Buy the new box at the customer's committed Hostinger term
-        // (biennial → 2-year SKU, annual → 1-year) — for a term-alignment
-        // migration this discount is the entire point of the move, so that
-        // path also skips the adopt-first pool claim (a pooled box is
-        // typically a monthly-cycle lapser and would defeat the purpose).
         billingPeriod,
+        // Buy at the customer's committed Hostinger term (biennial → 2-year
+        // SKU, annual → 1-year) ONLY on a term-alignment migration, where
+        // that discount is the entire point of the move and the refund gate
+        // below has already established it is safe to hold non-refundable
+        // hardware. Every other path takes the monthly default, same as a
+        // signup. Explicit either way: the purchase default is monthly now,
+        // so relying on `billingPeriod` alone would silently stop aligning.
+        hostingerTerm: termAlignment ? hostingerTermForBillingPeriod(billingPeriod) : null,
+        // A term-alignment migration also skips the adopt-first pool claim:
+        // a pooled box is typically a monthly-cycle lapser and would defeat
+        // the purpose.
         skipPoolAdopt: termAlignment,
         ownerEmail: business.owner_email
       });

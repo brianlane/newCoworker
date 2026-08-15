@@ -34,10 +34,12 @@ const {
 
 const {
   upsertCustomerProfileMock,
+  getCustomerProfileByIdMock,
   incrementLifetimeSubscriptionCountMock,
   decrementLifetimeSubscriptionCountMock
 } = vi.hoisted(() => ({
   upsertCustomerProfileMock: vi.fn(),
+  getCustomerProfileByIdMock: vi.fn(),
   incrementLifetimeSubscriptionCountMock: vi.fn(),
   decrementLifetimeSubscriptionCountMock: vi.fn()
 }));
@@ -119,8 +121,14 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/db/customer-profiles", () => ({
+// Keep the module's PURE helpers real: the term-alignment refund gate calls
+// isWithinLifetimeRefundWindow through contract-coverage, and a factory that
+// dropped it would fail the whole change-plan path rather than the one rule
+// it means to stub.
+vi.mock("@/lib/db/customer-profiles", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/db/customer-profiles")>()),
   upsertCustomerProfile: upsertCustomerProfileMock,
+  getCustomerProfileById: getCustomerProfileByIdMock,
   incrementLifetimeSubscriptionCount: incrementLifetimeSubscriptionCountMock,
   decrementLifetimeSubscriptionCount: decrementLifetimeSubscriptionCountMock
 }));
@@ -238,6 +246,14 @@ beforeEach(() => {
   // suite. Tests covering re-delivery override this explicitly.
   getSubscriptionByStripeSubscriptionIdMock.mockResolvedValue(null);
   upsertCustomerProfileMock.mockResolvedValue("prof-1");
+  // Term alignment is gated on the customer's 30-day money-back window being
+  // CLOSED, so the default fixture is a long-standing customer. Tests that
+  // care about the gate override this.
+  getCustomerProfileByIdMock.mockResolvedValue({
+    id: "prof-1",
+    first_paid_at: "2020-01-01T00:00:00.000Z",
+    refund_used_at: null
+  });
   createSubscriptionMock.mockResolvedValue({});
   updateSubscriptionMock.mockResolvedValue({});
   // Default: the conditional resurrect-write succeeds (i.e. no
@@ -774,6 +790,102 @@ describe("runChangePlanFromCheckout", () => {
       });
     }
 
+    /**
+     * Refund gate (Aug 2026). Term alignment buys a non-refundable Hostinger
+     * term box, so it must not run while the customer can still take their
+     * money back. A customer who upgrades their commitment on day 5 would
+     * otherwise walk straight back into the exposure the monthly-signup
+     * strategy exists to remove.
+     */
+    it("refuses to align while the customer's money-back window is still open", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof-1",
+        first_paid_at: new Date().toISOString(),
+        refund_used_at: null
+      });
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_gate");
+
+      // Stays on the period-only fast path: no purchase, no teardown.
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(backupBusinessDataMock).not.toHaveBeenCalled();
+      expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
+    // A pre-lifecycle subscription with no profile attached cannot have its
+    // refund right verified at all, so it takes the same "do not buy" path.
+    it("refuses to align when there is no customer profile to check", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: "1001",
+        customer_profile_id: null,
+        status: "online"
+      });
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: "billing_old",
+        customer_profile_id: null,
+        tier: "starter",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+      upsertCustomerProfileMock.mockResolvedValue(null);
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_noprofile");
+
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(getCustomerProfileByIdMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
+    it("aligns once the lifetime refund has been used, even inside 30 days", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof-1",
+        first_paid_at: new Date().toISOString(),
+        refund_used_at: new Date().toISOString()
+      });
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_used");
+
+      expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostingerTerm: "2y", skipPoolAdopt: true })
+      );
+    });
+
+    // Fail toward NOT buying hardware we might have to eat.
+    it("refuses to align when the profile cannot be read", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+      getCustomerProfileByIdMock.mockRejectedValue(new Error("profiles db down"));
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_unreadable");
+
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
     it("migrates a monthly-cycle box onto a term-bought purchase when the customer commits to biennial", async () => {
       hostingerListBillingSubscriptionsMock.mockResolvedValue([
         { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
@@ -789,6 +901,7 @@ describe("runChangePlanFromCheckout", () => {
           businessId: "biz-1",
           tier: "starter",
           billingPeriod: "biennial",
+          hostingerTerm: "2y",
           skipPoolAdopt: true
         })
       );

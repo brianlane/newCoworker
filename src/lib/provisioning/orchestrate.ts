@@ -94,7 +94,7 @@ import {
   type VpsProvider
 } from "@/lib/vps/provider";
 import {
-  hostingerTermForBillingPeriod,
+  DEFAULT_PURCHASE_TERM,
   type HostingerBillingTerm
 } from "@/lib/hostinger/provision";
 import type { BillingPeriod } from "@/lib/plans/tier";
@@ -964,6 +964,10 @@ export async function orchestrateProvisioning(
         tier: narrowTier,
         vpsSize,
         billingPeriod,
+        // Explicit purchase term, when the caller named one. This object is
+        // rebuilt field by field rather than spread, so a new input that is
+        // not listed here is silently dropped.
+        hostingerTerm: input.hostingerTerm,
         skipPoolAdopt: input.skipPoolAdopt,
         suppressOwnerNotify,
         notifyOpsNewSignup: input.notifyOpsNewSignup
@@ -1610,7 +1614,7 @@ async function acquireVps(args: {
         ...(expiresAt !== null ? { expiresAt } : {}),
         // Record the purchased Hostinger term so pool triage can tell a
         // prepaid 2-year box (valuable, adopt eagerly) from a monthly one.
-        notes: `purchased for ${businessId} (${hostingerTerm ?? hostingerTermForBillingPeriod(billingPeriod ?? "monthly")} term)`
+        notes: `purchased for ${businessId} (${hostingerTerm ?? DEFAULT_PURCHASE_TERM} term)`
       });
     } catch (err) {
       logger.warn("vps pool bookkeeping failed after purchase (continuing)", {

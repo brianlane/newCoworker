@@ -416,29 +416,58 @@ describe("provisionVpsForBusiness", () => {
     expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm2);
   });
 
-  it("buys the term SKU matching the customer's contract (biennial → -2y, annual → -1y)", async () => {
-    const runPurchase = async (billingPeriod: "annual" | "biennial") => {
-      const client = makeClientStub({
-        getVirtualMachine: vi.fn().mockResolvedValue({
-          id: 42,
-          state: "running",
-          ipv4: [{ id: 1, address: "1.2.3.4" }]
-        })
-      });
-      await provisionVpsForBusiness(
-        { businessId: "biz-term", tier: "starter", billingPeriod, pollIntervalMs: 1 },
-        {
-          client: client as unknown as HostingerClient,
-          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
-          sleep: vi.fn().mockResolvedValue(undefined),
-          db: { insertVpsSshKey: vi.fn().mockResolvedValue({ id: "row", business_id: "biz-term" }) }
-        }
-      );
-      return client.purchaseVirtualMachine.mock.calls[0][0].item_id as string;
-    };
+  /**
+   * Fleet strategy (Aug 2026): the customer's contract no longer picks the
+   * SKU. A 24-month customer used to fund a 24-month box on day one, and
+   * Hostinger will not refund us, so that hardware sat behind their own
+   * 30-day money-back window at our risk. Term hardware is bought later, by
+   * the contract-upgrade sweep, once that exposure has closed.
+   */
+  const runPurchase = async (
+    input: { billingPeriod?: "annual" | "biennial" | "monthly" | null; hostingerTerm?: "1m" | "1y" | "2y" | null }
+  ) => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValue({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    await provisionVpsForBusiness(
+      { businessId: "biz-term", tier: "starter", pollIntervalMs: 1, ...input },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn().mockResolvedValue(undefined),
+        db: { insertVpsSshKey: vi.fn().mockResolvedValue({ id: "row", business_id: "biz-term" }) }
+      }
+    );
+    return client.purchaseVirtualMachine.mock.calls[0][0].item_id as string;
+  };
 
-    expect(await runPurchase("biennial")).toBe("hostingercom-vps-kvm1-usd-2y");
-    expect(await runPurchase("annual")).toBe("hostingercom-vps-kvm1-usd-1y");
+  it("buys MONTHLY for a contract customer, so no term box sits inside their refund window", async () => {
+    expect(await runPurchase({ billingPeriod: "biennial" })).toBe("hostingercom-vps-kvm1-usd-1m");
+    expect(await runPurchase({ billingPeriod: "annual" })).toBe("hostingercom-vps-kvm1-usd-1m");
+  });
+
+  it("buys the term a caller names explicitly (the contract-upgrade sweep's path)", async () => {
+    expect(await runPurchase({ billingPeriod: "biennial", hostingerTerm: "2y" })).toBe(
+      "hostingercom-vps-kvm1-usd-2y"
+    );
+    expect(await runPurchase({ billingPeriod: "biennial", hostingerTerm: "1y" })).toBe(
+      "hostingercom-vps-kvm1-usd-1y"
+    );
+    // An explicit term wins even when it disagrees with the contract: the
+    // sweep buys the REMAINING shortfall, not the whole contract term.
+    expect(await runPurchase({ billingPeriod: "annual", hostingerTerm: "1m" })).toBe(
+      "hostingercom-vps-kvm1-usd-1m"
+    );
+  });
+
+  it("falls back to monthly when a caller passes a null term", async () => {
+    expect(await runPurchase({ billingPeriod: "biennial", hostingerTerm: null })).toBe(
+      "hostingercom-vps-kvm1-usd-1m"
+    );
   });
 
   it("an explicit monthly contract (and a null one) buys the monthly SKU", async () => {

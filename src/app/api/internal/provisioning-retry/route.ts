@@ -53,6 +53,13 @@ async function runSweep(request: Request): Promise<Response> {
           tier: input.tier,
           vpsSize: input.vpsSize,
           billingPeriod: input.billingPeriod,
+          // The term the sweep COMPUTED and stored on the job row. Must be
+          // forwarded: the purchase default is monthly now, so a stalled
+          // term_renewal or contract_upgrade job that falls through to a full
+          // re-provision would otherwise buy a monthly box and quietly defeat
+          // the sweep that enqueued it. This object is rebuilt field by field
+          // rather than spread, so anything not listed here is dropped.
+          hostingerTerm: input.hostingerTerm,
           suppressOwnerNotify: input.suppressOwnerNotify,
           skipPoolAdopt: input.skipPoolAdopt,
           notifyOpsNewSignup: input.suppressOwnerNotify !== true
