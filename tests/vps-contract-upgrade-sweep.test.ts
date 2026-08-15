@@ -356,6 +356,47 @@ describe("runContractUpgradeSweep — the happy path", () => {
     expect(deps.retireVpsSshKeysForVps).toHaveBeenCalledWith("1800985");
   });
 
+  // Mirrors the ordering assertion #1390 added on the term-renewal side. A
+  // pooled box must not carry an active key belonging to its previous
+  // tenant: with the row already retired, adoptVpsForBusiness finds none and
+  // mints a fresh keypair instead of reusing the departed tenant's.
+  it("retires the old key row BEFORE returning the box to the pool", async () => {
+    const order: string[] = [];
+    const deps = makeDeps();
+    (deps.retireVpsSshKeysForVps as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("retire");
+      return 1;
+    });
+    (deps.releaseVpsToPool as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("pool");
+    });
+    const result = await run(deps);
+    expect(result.migrated).toBe(1);
+    expect(order).toEqual(["retire", "pool"]);
+  });
+
+  // The retire reads nothing, but the BACKUP before it SSHes into the old box
+  // with the very key being retired, so the stamp must land after the data is
+  // safely on the new box.
+  it("retires only after the backup and restore have used that key", async () => {
+    const order: string[] = [];
+    const deps = makeDeps();
+    (deps.backupBusinessData as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("backup");
+      return { storagePath: "backups/biz.tgz", sizeBytes: 100, sha256: "abc" };
+    });
+    (deps.restoreBusinessData as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("restore");
+      return {};
+    });
+    (deps.retireVpsSshKeysForVps as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("retire");
+      return 1;
+    });
+    await run(deps);
+    expect(order).toEqual(["backup", "restore", "retire"]);
+  });
+
   it("does not fail a good cutover when the key retire fails", async () => {
     const deps = makeDeps({
       retireVpsSshKeysForVps: vi.fn(async () => {
