@@ -170,6 +170,32 @@ type SendOutcome = {
   restoreInput: boolean;
 };
 
+/**
+ * One flag per (tab session, business): has the user ENGAGED with chat this
+ * session (sent a message, opened a past conversation, or explicitly
+ * started a new one)? Until they have, the chat view opens FRESH — an empty
+ * conversation with the suggestions showing, ChatGPT-style — while History
+ * keeps every past thread reachable. sessionStorage scopes it to the tab
+ * session, so a new login/tab starts clean and a mid-session reload keeps
+ * continuity. Server state is untouched until the first send (the POST
+ * carries newThread: true then), so merely opening the panel never changes
+ * which thread the chat page considers active.
+ */
+function freshSessionKey(businessId: string): string {
+  return `ncw_chat_engaged_${businessId}`;
+}
+
+function readFreshStart(businessId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(freshSessionKey(businessId)) === null;
+  } catch {
+    // Storage blocked: continuity beats a fresh view that would reset on
+    // every open.
+    return false;
+  }
+}
+
 export function useDashboardChatTransport(businessId: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
@@ -189,6 +215,59 @@ export function useDashboardChatTransport(businessId: string) {
   // "New conversation", switching threads mid-send, or a fresh send. The
   // poll loop checks signal.aborted each tick so it can exit cleanly.
   const abortRef = useRef<AbortController | null>(null);
+  // The CURRENT business, for stale-closure guards: async work captured
+  // under a previous business compares against this before writing state.
+  const businessIdRef = useRef(businessId);
+  // Fresh-session view (see freshSessionKey above). A ref mirrors the state
+  // so the hydrate effect and send() read the CURRENT value without being
+  // re-run/recreated when engagement flips it.
+  const [freshStart, setFreshStart] = useState<boolean>(() => readFreshStart(businessId));
+  const freshStartRef = useRef(freshStart);
+  const engage = useCallback(() => {
+    freshStartRef.current = false;
+    setFreshStart(false);
+    try {
+      window.sessionStorage.setItem(freshSessionKey(businessId), "1");
+    } catch {
+      // Best-effort: without storage the fresh view simply returns next
+      // mount, which is annoying but harmless.
+    }
+  }, [businessId]);
+  // The initializer runs once for the mount-time business; the switcher can
+  // change businessId with the hook still mounted, so re-read THAT
+  // business's engagement before the hydrate effect below re-runs for it
+  // (declared first: same-commit ordering keeps the ref correct). The view
+  // resets in the same breath: the previous tenant's conversation must
+  // never linger on screen while the new business hydrates, and a FRESH
+  // new business would otherwise keep it forever (its hydrate deliberately
+  // leaves the view alone).
+  useEffect(() => {
+    businessIdRef.current = businessId;
+    // Tear down any in-flight work from the previous business FIRST: a late
+    // reply or poll must never write the old tenant's messages back over
+    // the cleared view.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    const next = readFreshStart(businessId);
+    freshStartRef.current = next;
+    setFreshStart(next);
+    setMessages([]);
+    // The old tenant's sidebar must not stay clickable (or deletable)
+    // while the new business hydrates; its own fetchThreads repopulates.
+    setThreads([]);
+    setViewingThreadId(null);
+    // The previous business's active thread must not be a send target even
+    // for one frame; hydrate re-learns the new business's own.
+    setActiveThreadId(null);
+    setDrafts([]);
+    setError(null);
+    setSending(false);
+    setLoadingThread(false);
+    // The composer reads as busy until THIS business's hydrate lands
+    // (hydrate flips it off in its finally); send() also refuses while
+    // loading, returning the text to the composer.
+    setLoading(true);
+  }, [businessId]);
 
   const fetchThreads = useCallback(async () => {
     try {
@@ -197,7 +276,9 @@ export function useDashboardChatTransport(businessId: string) {
         { cache: "no-store" }
       );
       const env = await parseEnvelope<ThreadsListResponse>(res);
-      if (env.ok) setThreads(env.data.threads);
+      // A response captured under a previous business must not overwrite
+      // the current one's sidebar, however late it lands.
+      if (env.ok && businessIdRef.current === businessId) setThreads(env.data.threads);
     } catch {
       /* sidebar is best-effort; the main thread view is still functional */
     }
@@ -565,6 +646,14 @@ export function useDashboardChatTransport(businessId: string) {
       }
     }
 
+    if (controller.signal.aborted) {
+      // Aborted during the refresh (unmount or a business switch): the
+      // trailing sidebar refresh below runs in a closure that may target
+      // the PREVIOUS business, so it must not fire late.
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
     setSending(false);
     void fetchThreads();
     if (abortRef.current === controller) abortRef.current = null;
@@ -592,16 +681,23 @@ export function useDashboardChatTransport(businessId: string) {
         const env = await parseEnvelope<ChatGetResponse>(activeRes);
         if (cancelled) return;
         if (env.ok) {
-          setMessages(env.data.messages);
+          // Fresh session: the view stays an EMPTY new conversation (the
+          // suggestions render); the active thread is still tracked for
+          // History and flags, just not displayed or targeted.
+          if (!freshStartRef.current) {
+            setMessages(env.data.messages);
+            setViewingThreadId(env.data.threadId);
+          }
           setActiveThreadId(env.data.threadId);
-          setViewingThreadId(env.data.threadId);
           setIsPaused(env.data.isPaused);
           setSafeMode(!env.data.customerChannelsEnabled);
           // The worker may still be generating a reply for this thread
           // (the owner refreshed / came back mid-turn). Re-attach the
           // Realtime+poll watcher so "thinking…" reappears and the
           // reply lands when ready, instead of vanishing on reload.
-          if (env.data.pendingJob) {
+          // Skipped in a fresh session: we are not viewing that thread,
+          // and its reply still lands server-side for History.
+          if (env.data.pendingJob && !freshStartRef.current) {
             const controller = new AbortController();
             localController = controller;
             abortRef.current = controller;
@@ -649,10 +745,20 @@ export function useDashboardChatTransport(businessId: string) {
 
   const selectThread = useCallback(
     async (threadId: string) => {
-      if (sending || loadingThread) return;
+      if (sending || loading || loadingThread) return;
       // Clicking the thread we're already on is a cheap no-op. Avoids
       // a pointless fetch and the accompanying flash of "Loading…".
       if (threadId === viewingThreadId) return;
+      // Opening a past conversation is engagement: the fresh view is over
+      // for this session.
+      engage();
+
+      // Everything below may resolve AFTER a business switch tore this
+      // view down; a stale closure must neither write the old tenant's
+      // messages onto the new view nor attach its watcher (the switch
+      // effect already reset loadingThread for us in that case).
+      const forBusiness = businessId;
+      const stale = () => businessIdRef.current !== forBusiness;
 
       // Two endpoints, one purpose. The active-thread route returns
       // exactly the same message shape PLUS the live flag state
@@ -672,6 +778,7 @@ export function useDashboardChatTransport(businessId: string) {
             { cache: "no-store" }
           );
           const env = await parseEnvelope<ChatGetResponse>(res);
+          if (stale()) return;
           if (env.ok) {
             setMessages(env.data.messages);
             // Re-sync activeThreadId in case another tab archived this
@@ -702,6 +809,7 @@ export function useDashboardChatTransport(businessId: string) {
             { cache: "no-store" }
           );
           const env = await parseEnvelope<ThreadMessagesResponse>(res);
+          if (stale()) return;
           if (env.ok) {
             setMessages(env.data.messages);
             setViewingThreadId(threadId);
@@ -710,21 +818,25 @@ export function useDashboardChatTransport(businessId: string) {
           }
         }
       } catch {
-        setError("Network error.");
+        if (!stale()) setError("Network error.");
       } finally {
-        setLoadingThread(false);
+        if (!stale()) setLoadingThread(false);
       }
     },
     // watchJobUntilSettled is a stable-behavior inner function (refs +
     // setters only); omitting it keeps this callback from changing
     // identity every render. Same rationale as the hydrate effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeThreadId, businessId, loadingThread, sending, viewingThreadId]
+    [activeThreadId, businessId, engage, loading, loadingThread, sending, viewingThreadId]
   );
 
   async function send(text: string, options: SendOptions = {}): Promise<SendOutcome> {
     const trimmed = text.trim();
     if (!trimmed || sending || isPaused) return { ok: false, restoreInput: false };
+    // Mid-hydrate (first load or a business switch): no thread may be
+    // targeted yet. Hand the text back so the shells restore the composer;
+    // their disabled states make this a rare race, not a normal path.
+    if (loading) return { ok: false, restoreInput: true };
 
     // Optimistic user bubble. Stays even on error because we treat
     // the user's typed message as committed the moment they hit Send;
@@ -749,8 +861,11 @@ export function useDashboardChatTransport(businessId: string) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // ChatGPT/Claude/Gemini-style: every thread is continuable.
-    const targetThreadId = viewingThreadId ?? activeThreadId;
+    // ChatGPT/Claude/Gemini-style: every thread is continuable. A fresh-
+    // session first send targets NO thread and asks the server to mint a
+    // new one (newThread), leaving the old active thread in History.
+    const isFreshSend = freshStartRef.current;
+    const targetThreadId = isFreshSend ? null : (viewingThreadId ?? activeThreadId);
 
     // Attachment turns: a fresh file goes as multipart; a picked document
     // goes as documentId in the JSON body.
@@ -765,6 +880,7 @@ export function useDashboardChatTransport(businessId: string) {
         form.set("businessId", businessId);
         form.set("message", trimmed);
         if (targetThreadId) form.set("threadId", targetThreadId);
+        if (isFreshSend) form.set("newThread", "true");
         form.set("file", attachedFile);
         res = await fetch("/api/dashboard/chat", {
           method: "POST",
@@ -779,6 +895,7 @@ export function useDashboardChatTransport(businessId: string) {
             businessId,
             message: trimmed,
             ...(targetThreadId ? { threadId: targetThreadId } : {}),
+            ...(isFreshSend ? { newThread: true } : {}),
             ...(attachedDoc ? { documentId: attachedDoc } : {})
           }),
           signal: controller.signal
@@ -813,9 +930,11 @@ export function useDashboardChatTransport(businessId: string) {
     }
 
     // Server has persisted the user message and minted (or reactivated)
-    // the thread. Replace our optimistic bubble with the canonical
-    // server copy so timestamps + ids match a refresh, and remember
-    // the active thread so the next send targets it.
+    // the thread. The turn is committed: the session is engaged now.
+    engage();
+    // Replace our optimistic bubble with the canonical server copy so
+    // timestamps + ids match a refresh, and remember the active thread so
+    // the next send targets it.
     setMessages(post.messages);
     setActiveThreadId(post.activeThreadId);
     setViewingThreadId(post.threadId);
@@ -844,7 +963,9 @@ export function useDashboardChatTransport(businessId: string) {
   // Delete one conversation. Confirmation is the SHELL's job (the page
   // uses window.confirm, the companion an i18n'd confirm).
   async function deleteThread(threadId: string) {
-    if (sending) return;
+    if (sending || loading) return;
+    const forBusiness = businessId;
+    const stale = () => businessIdRef.current !== forBusiness;
     setError(null);
     try {
       const res = await fetch(
@@ -852,6 +973,7 @@ export function useDashboardChatTransport(businessId: string) {
         { method: "DELETE" }
       );
       const env = await parseEnvelope<{ ok: boolean }>(res);
+      if (stale()) return;
       if (!env.ok) {
         setError(env.error.message);
         return;
@@ -865,7 +987,7 @@ export function useDashboardChatTransport(businessId: string) {
       }
       setThreads((prev) => prev.filter((t) => t.id !== threadId));
     } catch {
-      setError("Network error.");
+      if (!stale()) setError("Network error.");
     }
   }
 
@@ -873,6 +995,11 @@ export function useDashboardChatTransport(businessId: string) {
   // is the shell's job, same as deleteThread.
   async function startNewConversation() {
     if (sending) return;
+    const forBusiness = businessId;
+    const stale = () => businessIdRef.current !== forBusiness;
+    // Explicitly starting over is engagement: later opens this session
+    // resume normally instead of re-showing the fresh view.
+    engage();
     abortRef.current?.abort();
     setSending(true);
     setError(null);
@@ -882,6 +1009,7 @@ export function useDashboardChatTransport(businessId: string) {
         { method: "DELETE" }
       );
       const env = await parseEnvelope<{ ok: boolean }>(res);
+      if (stale()) return;
       if (env.ok) {
         setMessages([]);
         setDrafts([]);
@@ -897,9 +1025,9 @@ export function useDashboardChatTransport(businessId: string) {
         setError(env.error.message);
       }
     } catch {
-      setError("Network error.");
+      if (!stale()) setError("Network error.");
     } finally {
-      setSending(false);
+      if (!stale()) setSending(false);
     }
   }
 
