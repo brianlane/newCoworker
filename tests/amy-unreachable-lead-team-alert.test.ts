@@ -39,7 +39,7 @@ const DECLARED: Record<string, string[]> = {
     "lead_email",
     "location",
     "price",
-    "route_lead_type"
+    "lead_type"
   ],
   "Realtor.com Lead": [
     "lead_name",
@@ -103,7 +103,9 @@ describe("the no-phone guard", () => {
     // no lead-type var, so it carries the literal instead of a template.
     const byFlow = Object.fromEntries(PLANS.map((p) => [p.flow, p.teamTag]));
     expect(byFlow["Clever Lead - Accept"]).toBe("seller");
-    expect(byFlow["ReferralExchange Lead"]).toBe("{{vars.route_lead_type}}");
+    // NOT route_lead_type: that var answers "none" exactly when this guard
+    // fires (no phone option), so it would match nobody every time.
+    expect(byFlow["ReferralExchange Lead"]).toBe("{{vars.lead_type}}");
     expect(byFlow["Realtor.com Lead"]).toBe("{{vars.lead_type}}");
     expect(byFlow["New Lead Intake"]).toBe("{{vars.lead_type}}");
   });
@@ -155,6 +157,33 @@ describe("patchFlow", () => {
     const second = patchFlow(def, { ...PLANS[3], after: "parse" });
     expect(second.changed).toBe(false);
     expect(def).toEqual(once);
+  });
+
+  it("never tags on a var that is blank exactly when the guard fires", () => {
+    // ReferralExchange's `route_lead_type` is a REACHABILITY gate: its field
+    // description answers "none" when the lead has no phone option, which is
+    // precisely and only when this guard runs. Tagging on it would match
+    // nobody every time and the fail-safe would silently widen every alert to
+    // the whole roster. Caught by Bugbot on PR #1398.
+    for (const plan of PLANS) {
+      expect(plan.teamTag, plan.flow).not.toContain("route_lead_type");
+      expect(plan.teamTag, plan.flow).not.toContain("sms_lead_type");
+      expect(plan.teamTag, plan.flow).not.toContain("email_intro_type");
+    }
+  });
+
+  it("converges an already-installed guard whose tag went stale", () => {
+    // A re-run must FIX a wrong tag in place. Reverting a live flow just to
+    // reinstall the guard is the alternative, and it is a worse one.
+    const def = baseDef("browse", DECLARED["ReferralExchange Lead"]);
+    patchFlow(def, { ...PLANS[1], teamTag: "{{vars.route_lead_type}}" });
+    const res = patchFlow(def, PLANS[1]);
+    expect(res.changed).toBe(true);
+    expect(res.notes.join(" ")).toContain("team tag");
+    const guard = def.steps!.find(
+      (s) => (s as { id: string }).id === "re_no_phone_guard"
+    ) as unknown as Guard;
+    expect(guard.else[0].teamTagTemplate).toBe("{{vars.lead_type}}");
   });
 
   it("refuses to guess when the anchor step is gone", () => {

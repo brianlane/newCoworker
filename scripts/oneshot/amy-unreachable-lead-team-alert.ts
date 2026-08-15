@@ -107,7 +107,14 @@ export const PLANS: FlowPlan[] = [
     flow: "ReferralExchange Lead",
     prefix: "re",
     after: "browse",
-    teamTag: "{{vars.route_lead_type}}",
+    // `lead_type`, NOT `route_lead_type`. The latter is a REACHABILITY gate:
+    // its own field description says to answer "none" when the lead has no
+    // phone option at all, which is exactly and only when this guard fires.
+    // Using it would make the tag match nobody every single time, and the
+    // fail-safe would widen the alert to the whole roster, quietly defeating
+    // the seller/buyer narrowing this exists to provide. `lead_type` is the
+    // plain question with no phone conditionality. (Bugbot, PR #1398.)
+    teamTag: "{{vars.lead_type}}",
     source: "ReferralExchange",
     details: [
       "Name: {{vars.lead_name}}",
@@ -188,8 +195,27 @@ export type PatchResult = { changed: boolean; notes: string[] };
 
 export function patchFlow(def: Definition, plan: FlowPlan): PatchResult {
   const notes: string[] = [];
-  if (findStepDeep(def.steps, `${plan.prefix}_no_phone_guard`)) {
-    return { changed: false, notes };
+  const existing = findStepDeep(def.steps, `${plan.prefix}_no_phone_guard`) as
+    | { else?: Array<{ id?: string; teamTagTemplate?: string; message?: string }> }
+    | undefined;
+  if (existing) {
+    // Converge an already-installed guard onto the current plan instead of
+    // declaring victory on the id alone. A guard whose tag or copy is stale
+    // is exactly what a re-run should fix, and correcting it in place beats
+    // reverting a live flow to reinstall it.
+    const alert = (existing.else ?? []).find((s) => s.id === `${plan.prefix}_no_phone_team`);
+    if (alert && alert.teamTagTemplate !== plan.teamTag) {
+      notes.push(
+        `${plan.prefix}_no_phone_team: team tag ${alert.teamTagTemplate} -> ${plan.teamTag}`
+      );
+      alert.teamTagTemplate = plan.teamTag;
+    }
+    const want = alertMessage(plan);
+    if (alert && alert.message !== want) {
+      notes.push(`${plan.prefix}_no_phone_team: alert copy refreshed`);
+      alert.message = want;
+    }
+    return { changed: notes.length > 0, notes };
   }
   const steps = def.steps ?? [];
   const at = steps.findIndex((s) => (s as { id?: string }).id === plan.after);
