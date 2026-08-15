@@ -39,6 +39,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
+import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
 
 loadEnv();
 
@@ -88,10 +89,13 @@ const MACHINE_PHRASES = [
 /** Assistant turns before "it held a conversation with the machine". */
 const CONVERSATION_TURNS = 3;
 
-/** PostgREST caps an unbounded select at 1000 rows, so page explicitly. */
-const PAGE = 1000;
-
 type Turn = { role: string | null; content: string | null; turn_index: number | null };
+type CallRow = {
+  id: string;
+  business_id: string;
+  caller_e164: string | null;
+  started_at: string | null;
+};
 type Finding = {
   transcriptId: string;
   businessId: string;
@@ -103,20 +107,17 @@ type Finding = {
 };
 
 async function turnsFor(db: SupabaseClient, transcriptId: string): Promise<Turn[]> {
-  const out: Turn[] = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await db
-      .from("voice_call_transcript_turns")
-      .select("role, content, turn_index")
-      .eq("transcript_id", transcriptId)
-      .order("turn_index", { ascending: true })
-      .range(offset, offset + PAGE - 1);
-    if (error) throw new Error(`turns for ${transcriptId}: ${error.message}`);
-    const rows = (data ?? []) as Turn[];
-    out.push(...rows);
-    if (rows.length < PAGE) break;
-  }
-  return out;
+  const { rows } = await fetchAllPaged<Turn>(
+    (from, to) =>
+      db
+        .from("voice_call_transcript_turns")
+        .select("role, content, turn_index")
+        .eq("transcript_id", transcriptId)
+        .order("turn_index", { ascending: true })
+        .range(from, to),
+    { label: `turns for ${transcriptId}` }
+  );
+  return rows;
 }
 
 function looksMachine(text: string): boolean {
@@ -132,25 +133,41 @@ async function main(): Promise<void> {
   if (bizErr) throw new Error(`businesses: ${bizErr.message}`);
   const bizName = new Map((bizRows ?? []).map((b) => [b.id as string, (b.name as string) ?? ""]));
 
-  let q = db
-    .from("voice_call_transcripts")
-    .select("id, business_id, caller_e164, started_at")
-    .gte("started_at", since)
-    .order("started_at", { ascending: true });
-  if (businessFilter) q = q.eq("business_id", businessFilter);
-  const { data: calls, error } = await q.limit(5000);
-  if (error) throw new Error(`transcripts: ${error.message}`);
+  // Paged, not `.limit(N)`. PostgREST caps a response at 1000 rows and says
+  // nothing about it, so a bare limit on an ascending window would drop the
+  // NEWEST calls first and still exit clean: this detector would go quiet
+  // exactly when there is most to find (Bugbot, PR #1388).
+  const { rows: calls, truncated } = await fetchAllPaged<CallRow>(
+    (from, to) => {
+      let q = db
+        .from("voice_call_transcripts")
+        .select("id, business_id, caller_e164, started_at")
+        .gte("started_at", since)
+        .order("started_at", { ascending: true })
+        .range(from, to);
+      if (businessFilter) q = q.eq("business_id", businessFilter);
+      return q;
+    },
+    { label: "voice_call_transcripts" }
+  );
+  if (truncated) {
+    console.error(
+      `WARNING: more than the paging ceiling of calls matched. This result is PARTIAL; ` +
+        `narrow it with --days or --business.`
+    );
+    process.exitCode = 1;
+  }
 
   const findings: Finding[] = [];
-  for (const call of calls ?? []) {
-    const turns = await turnsFor(db, call.id as string);
+  for (const call of calls) {
+    const turns = await turnsFor(db, call.id);
     if (turns.length === 0) continue;
     const base = {
-      transcriptId: call.id as string,
-      businessId: call.business_id as string,
-      business: bizName.get(call.business_id as string) ?? "",
-      caller: (call.caller_e164 as string) ?? null,
-      startedAt: (call.started_at as string) ?? null
+      transcriptId: call.id,
+      businessId: call.business_id,
+      business: bizName.get(call.business_id) ?? "",
+      caller: call.caller_e164,
+      startedAt: call.started_at
     };
 
     for (const t of turns) {
