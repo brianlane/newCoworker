@@ -262,6 +262,7 @@ export function useDashboardChatTransport(businessId: string) {
     setDrafts([]);
     setError(null);
     setSending(false);
+    setLoadingThread(false);
     // The composer reads as busy until THIS business's hydrate lands
     // (hydrate flips it off in its finally); send() also refuses while
     // loading, returning the text to the composer.
@@ -752,6 +753,13 @@ export function useDashboardChatTransport(businessId: string) {
       // for this session.
       engage();
 
+      // Everything below may resolve AFTER a business switch tore this
+      // view down; a stale closure must neither write the old tenant's
+      // messages onto the new view nor attach its watcher (the switch
+      // effect already reset loadingThread for us in that case).
+      const forBusiness = businessId;
+      const stale = () => businessIdRef.current !== forBusiness;
+
       // Two endpoints, one purpose. The active-thread route returns
       // exactly the same message shape PLUS the live flag state
       // (paused / safe mode), so we use it whenever we're loading the
@@ -770,6 +778,7 @@ export function useDashboardChatTransport(businessId: string) {
             { cache: "no-store" }
           );
           const env = await parseEnvelope<ChatGetResponse>(res);
+          if (stale()) return;
           if (env.ok) {
             setMessages(env.data.messages);
             // Re-sync activeThreadId in case another tab archived this
@@ -800,6 +809,7 @@ export function useDashboardChatTransport(businessId: string) {
             { cache: "no-store" }
           );
           const env = await parseEnvelope<ThreadMessagesResponse>(res);
+          if (stale()) return;
           if (env.ok) {
             setMessages(env.data.messages);
             setViewingThreadId(threadId);
@@ -808,9 +818,9 @@ export function useDashboardChatTransport(businessId: string) {
           }
         }
       } catch {
-        setError("Network error.");
+        if (!stale()) setError("Network error.");
       } finally {
-        setLoadingThread(false);
+        if (!stale()) setLoadingThread(false);
       }
     },
     // watchJobUntilSettled is a stable-behavior inner function (refs +
@@ -954,6 +964,8 @@ export function useDashboardChatTransport(businessId: string) {
   // uses window.confirm, the companion an i18n'd confirm).
   async function deleteThread(threadId: string) {
     if (sending || loading) return;
+    const forBusiness = businessId;
+    const stale = () => businessIdRef.current !== forBusiness;
     setError(null);
     try {
       const res = await fetch(
@@ -961,6 +973,7 @@ export function useDashboardChatTransport(businessId: string) {
         { method: "DELETE" }
       );
       const env = await parseEnvelope<{ ok: boolean }>(res);
+      if (stale()) return;
       if (!env.ok) {
         setError(env.error.message);
         return;
@@ -974,7 +987,7 @@ export function useDashboardChatTransport(businessId: string) {
       }
       setThreads((prev) => prev.filter((t) => t.id !== threadId));
     } catch {
-      setError("Network error.");
+      if (!stale()) setError("Network error.");
     }
   }
 
@@ -982,6 +995,8 @@ export function useDashboardChatTransport(businessId: string) {
   // is the shell's job, same as deleteThread.
   async function startNewConversation() {
     if (sending) return;
+    const forBusiness = businessId;
+    const stale = () => businessIdRef.current !== forBusiness;
     // Explicitly starting over is engagement: later opens this session
     // resume normally instead of re-showing the fresh view.
     engage();
@@ -994,6 +1009,7 @@ export function useDashboardChatTransport(businessId: string) {
         { method: "DELETE" }
       );
       const env = await parseEnvelope<{ ok: boolean }>(res);
+      if (stale()) return;
       if (env.ok) {
         setMessages([]);
         setDrafts([]);
@@ -1009,9 +1025,9 @@ export function useDashboardChatTransport(businessId: string) {
         setError(env.error.message);
       }
     } catch {
-      setError("Network error.");
+      if (!stale()) setError("Network error.");
     } finally {
-      setSending(false);
+      if (!stale()) setSending(false);
     }
   }
 
