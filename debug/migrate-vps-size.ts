@@ -1,22 +1,22 @@
 /**
- * migrate-vps-size.ts — move an existing business to a different VPS hardware
+ * migrate-vps-size.ts: move an existing business to a different VPS hardware
  * size (kvm1 ↔ kvm2 ↔ kvm8) with no entitlement change.
  *
  * This is the operational half of the tier/hardware decoupling
  * (businesses.vps_size, src/lib/vps/size.ts): the tenant keeps their `tier`
  * (minutes, SMS caps, concurrency, AI budget, aiflow-render) and only the box
- * underneath changes. Flow — the same primitives the change-plan orchestrator
+ * underneath changes. Flow: the same primitives the change-plan orchestrator
  * uses, sequenced for an elective migration instead of a paid plan change:
  *
  *   1. Snapshot the old VM (best-effort safety net; Hostinger keeps ONE
- *      snapshot per VM and it dies with the VM — the durable artefact is
+ *      snapshot per VM and it dies with the VM: the durable artefact is
  *      step 2's tarball).
  *   2. SSH-tarball backup of /opt/rowboat/{vault,memory} to Supabase Storage
  *      (backupBusinessData). FAIL-CLOSED: an elective migration aborts if the
  *      backup fails, unlike change-plan which continues (a paid upgrade must
  *      not be blocked by a dead old box; an elective move can wait).
  *   3. Pin businesses.vps_size to the target size.
- *   4. orchestrateProvisioning with the pinned size — buys the new box
+ *   4. orchestrateProvisioning with the pinned size, buys the new box
  *      (kvm1/kvm2/kvm8 SKU), bootstraps (ZRAM/Ollama profile keyed on VPS_SIZE,
  *      render gate keyed on TIER), deploys the tenant, re-registers the
  *      per-tenant Cloudflare tunnel (DNS swings when the new cloudflared
@@ -24,7 +24,7 @@
  *   5. Restore the tarball onto the new box (restoreBusinessData).
  *   6. Old box teardown: stop the VM + DISABLE AUTO-RENEWAL on its Hostinger
  *      billing subscription. (Hostinger removed the immediate-cancel
- *      endpoint `DELETE /api/billing/v1/subscriptions/{id}` on 2026-01-12 —
+ *      endpoint `DELETE /api/billing/v1/subscriptions/{id}` on 2026-01-12:
  *      auto-renew-off + lapse at period end is the only teardown.)
  *   7. Repoint subscriptions.hostinger_billing_subscription_id at the NEW
  *      box's billing subscription so the lifecycle engine tears down the
@@ -109,7 +109,7 @@ if (biz.tier !== "starter" && biz.tier !== "standard" && biz.tier !== "enterpris
 }
 // Non-hostinger tenants FAIL CLOSED (same policy as src/lib/vps/migrate-size.ts):
 // this script purchases/adopts a Hostinger replacement and tears the old box
-// down via the Hostinger API — neither applies to a customer-owned BYOS box
+// down via the Hostinger API: neither applies to a customer-owned BYOS box
 // or an OVH Canada box. Resize provider-side, then re-provision.
 if ((biz.vps_provider ?? "hostinger") !== "hostinger") {
   console.error(
@@ -166,7 +166,7 @@ if (oldVmId !== null) {
   try {
     const vm = await hostinger.getVirtualMachine(oldVmId);
     oldVmIp = vm.ipv4?.[0]?.address ?? null;
-    // The VM detail's subscription_id is the reliable billing mapping — the
+    // The VM detail's subscription_id is the reliable billing mapping: the
     // subscriptions LIST stopped returning resource_id (verified Jul 2026).
     if (!oldBillingId && typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
       oldBillingId = vm.subscription_id;
@@ -180,7 +180,7 @@ if (oldVmId !== null) {
       const subs = await hostinger.listBillingSubscriptions();
       oldBillingId = subs.find((s) => s.resource_id === String(oldVmId))?.id ?? null;
     } catch {
-      /* keep null — teardown will warn */
+      /* keep null, teardown will warn */
     }
   }
 }
@@ -204,18 +204,18 @@ try {
 
 console.log(`== VPS size migration ==`);
 console.log(`business        : ${biz.name} (${biz.id})`);
-console.log(`tier            : ${biz.tier} (entitlements — unchanged by this migration)`);
+console.log(`tier            : ${biz.tier} (entitlements, unchanged by this migration)`);
 console.log(`size            : ${currentSize} (pin=${biz.vps_size ?? "null/tier-default"}) → ${TARGET_SIZE}`);
 console.log(
   ADOPT_VM_ID !== null
     ? `new box         : ADOPT paid VM ${ADOPT_VM_ID} (no purchase)`
     : `target SKU      : ${targetItem}  →  ${priceStr}`
 );
-console.log(`old billing sub : ${oldBillingId ?? "UNKNOWN — teardown will need a manual lookup"}`);
+console.log(`old billing sub : ${oldBillingId ?? "UNKNOWN, teardown will need a manual lookup"}`);
 
 if (ADOPT_VM_ID !== null) {
   if (ADOPT_VM_ID === oldVmId) {
-    console.error(`--adopt-vm ${ADOPT_VM_ID} is the business's CURRENT box — pick the new one.`);
+    console.error(`--adopt-vm ${ADOPT_VM_ID} is the business's CURRENT box: pick the new one.`);
     process.exit(1);
   }
   try {
@@ -231,7 +231,7 @@ console.log(`old box         : ${KEEP_OLD ? "KEPT (renewing!)" : "stop + auto-re
 
 if (currentSize === TARGET_SIZE) {
   console.log(`\nNOTE: effective size is already ${TARGET_SIZE}. Proceeding anyway would still`);
-  console.log(`buy a fresh ${TARGET_SIZE} box and migrate onto it (box refresh). Aborting —`);
+  console.log(`buy a fresh ${TARGET_SIZE} box and migrate onto it (box refresh). Aborting.`);
   console.log(`if that's what you want, flip the pin first or edit this guard.`);
   process.exit(1);
 }
@@ -255,7 +255,7 @@ if (oldVmId !== null) {
     await hostinger.createSnapshot(oldVmId);
     console.log(`\n[snapshot] requested on old VM ${oldVmId}`);
   } catch (err) {
-    console.log(`\n[snapshot] failed (continuing — tarball is the durable artefact): ${err instanceof Error ? err.message : String(err)}`);
+    console.log(`\n[snapshot] failed (continuing: tarball is the durable artefact): ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -263,7 +263,7 @@ if (oldVmId !== null) {
 const { backupBusinessData, restoreBusinessData } = await import("../src/lib/hostinger/data-migration.ts");
 const { getActiveVpsSshKey } = await import("../src/lib/db/vps-ssh-keys.ts");
 if (!oldVmIp) {
-  console.error(`[backup] ABORT: old VM has no resolvable IP — cannot take the durable backup.`);
+  console.error(`[backup] ABORT: old VM has no resolvable IP: cannot take the durable backup.`);
   console.error(`         If the old box is truly gone and you accept template state, backup/restore`);
   console.error(`         must be skipped manually (edit this script's guard).`);
   process.exit(1);
@@ -306,18 +306,18 @@ async function makeAdoptProvisioner(vmId: number): Promise<
   return async (input) => {
     // A prior partial adopt run may have already minted + persisted a keypair
     // for this VM (vps_ssh_keys enforces one active row per VPS, so a second
-    // insert would violate the unique index). Reuse it — its public half is
+    // insert would violate the unique index). Reuse it: its public half is
     // already uploaded to Hostinger under hostinger_public_key_id.
     const existingKey = await getKeyForVm(String(vmId));
     let sshKeyRow: NonNullable<typeof existingKey> | null = null;
     let publicKeyId: number;
     let privateKeyPem: string;
     // True only when the active key row was minted by a PRIOR ADOPT ATTEMPT
-    // FOR THIS SAME BUSINESS — the one case where a running box with our key
+    // FOR THIS SAME BUSINESS, the one case where a running box with our key
     // attached is known to be a freshly recreated image (safe to skip the
     // destructive recreate below). A key row inherited from a previous tenant
     // must never unlock that fast path: the disk still holds their data
-    // (Scar Fairy cutover Jul 2026 hit this — Truly's key authenticated and
+    // (Scar Fairy cutover Jul 2026 hit this: Truly's key authenticated and
     // recreate was skipped until deploy/restore overwrote the app stack).
     let sameBusinessRetry = false;
     if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
@@ -357,7 +357,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     }
     // Embed the public key in the PIS: Hostinger's setup/recreate/attach
     // endpoints silently drop public_key_ids on some VMs (VM 1798267, KVM2
-    // experiment; VM 1806097, KVM1 Phase E smoke) — the PIS-embedded
+    // experiment; VM 1806097, KVM1 Phase E smoke), the PIS-embedded
     // authorized_keys write is the only deterministic attach.
     const script = await hostinger.createPostInstallScript(
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
@@ -414,7 +414,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
         const vm = await hostinger.getVirtualMachine(vmId);
         if (vm.state !== preRecreateState) break;
         if (Date.now() > leaveDeadline) {
-          console.log(`  [adopt] vm never left state=${preRecreateState} after recreate — assuming the transition was missed`);
+          console.log(`  [adopt] vm never left state=${preRecreateState} after recreate: assuming the transition was missed`);
           break;
         }
         await new Promise((r) => setTimeout(r, 5_000));
@@ -423,8 +423,8 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     };
 
     // Verify the key actually landed. Empirically (VM 1800980, July 2026) a
-    // recreate issued right after setup finishes does NOT attach the key —
-    // sshd comes up but rejects the keypair — while a second recreate from
+    // recreate issued right after setup finishes does NOT attach the key
+    // (sshd comes up but rejects the keypair), while a second recreate from
     // the settled running state does. Auth failures are not connect errors,
     // so runWithSshConnectRetry won't retry them; probe explicitly and re-run
     // the recreate once before giving up.
@@ -449,7 +449,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     };
 
     // On a recreate Hostinger runs the post-install script through its own
-    // runner, NOT cloud-init runcmd — so the orchestrator's `cloud-init
+    // runner, NOT cloud-init runcmd, so the orchestrator's `cloud-init
     // status --wait` prefix reports done while the PIS bootstrap is still
     // mid-apt. Wait for that in-flight bootstrap to finish (its slim loader
     // holds a `tee -a /post_install.log` for its whole lifetime) before
@@ -465,16 +465,16 @@ async function makeAdoptProvisioner(vmId: number): Promise<
             command:
               // The [e] class stops pgrep -f from matching this probe's own
               // command line (which contains the literal pattern). Bare
-              // `apt` is matched too — Hostinger's own maintenance runs it.
+              // `apt` is matched too: Hostinger's own maintenance runs it.
               "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
           });
           if ((res.stdout ?? "").includes("idle")) return;
           console.log(`  [adopt] waiting for the box's own post-install to finish…`);
         } catch {
-          /* transient ssh blip — retry below */
+          /* transient ssh blip, retry below */
         }
         if (Date.now() > deadline) {
-          console.log(`  [adopt] post-install quiescence wait timed out — proceeding anyway`);
+          console.log(`  [adopt] post-install quiescence wait timed out, proceeding anyway`);
           return;
         }
         await new Promise((r) => setTimeout(r, 15_000));
@@ -482,19 +482,19 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     };
 
     // If a previous adopt attempt FOR THIS SAME BUSINESS already attached
-    // our key, skip the destructive recreate — the box is a freshly
+    // our key, skip the destructive recreate: the box is a freshly
     // recreated image; the orchestrator's idempotent SSH bootstrap follows.
     // A key inherited from a previous tenant authenticating is NOT enough.
     const preState = await hostinger.getVirtualMachine(vmId);
     const preIp = preState.ipv4?.[0]?.address ?? null;
     let publicIp: string;
     if (sameBusinessRetry && preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
-      console.log(`  [adopt] key from this business's prior attempt already attached — skipping recreate`);
+      console.log(`  [adopt] key from this business's prior attempt already attached: skipping recreate`);
       publicIp = preIp;
     } else {
       publicIp = await recreateOnce();
       if (!(await sshAuthOk(publicIp))) {
-        console.log(`  [adopt] key did not attach on first recreate — retrying recreate once`);
+        console.log(`  [adopt] key did not attach on first recreate: retrying recreate once`);
         publicIp = await recreateOnce();
         if (!(await sshAuthOk(publicIp))) {
           throw new Error(`VM ${vmId}: SSH key still not attached after recreate retry`);
@@ -512,7 +512,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
 
     let billingId: string | null = null;
     try {
-      // VM detail subscription_id first — the subscriptions LIST stopped
+      // VM detail subscription_id first: the subscriptions LIST stopped
       // returning resource_id (verified Jul 2026), so the find() below only
       // helps on older API surfaces.
       const vm = await hostinger.getVirtualMachine(vmId);
@@ -544,7 +544,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
 }
 
 // ---------------------------------------------------------------- 3. provision
-// The target size is passed EXPLICITLY to the orchestrator — the
+// The target size is passed EXPLICITLY to the orchestrator: the
 // businesses.vps_size pin is deliberately NOT written yet. Pinning before the
 // cutover would make any fleet redeploy during the ~10-20 min provisioning
 // window resolve VPS_SIZE=${TARGET_SIZE} while hostinger_vps_id still points
@@ -581,7 +581,7 @@ try {
 } catch (err) {
   console.error(`[provision] FAILED: ${err instanceof Error ? err.message : String(err)}`);
   console.error(`[provision] The old box is untouched and still serving, and businesses.vps_size`);
-  console.error(`[provision] was never repinned — redeploys keep targeting the old hardware`);
+  console.error(`[provision] was never repinned, redeploys keep targeting the old hardware`);
   console.error(`[provision] profile. Re-run once the cause is fixed.`);
   process.exit(1);
 }
@@ -590,8 +590,8 @@ console.log(`[provision] new VM ${newProv.vpsId}, tunnel ${newProv.tunnelUrl}`);
 // ---------------------------------------------------------------- 4. pin size
 // hostinger_vps_id now points at the new VM (the orchestrator repointed it
 // via updateBusinessStatus), so the pin and the registered box agree from
-// here on. The residual mismatch window — between the orchestrator's mid-run
-// repoint and this pin — has a redeploy hitting the NEW (not-yet-serving) box
+// here on. The residual mismatch window, between the orchestrator's mid-run
+// repoint and this pin, has a redeploy hitting the NEW (not-yet-serving) box
 // with the old profile, which is recoverable, unlike the old ordering where a
 // redeploy pushed the target profile onto the LIVE old box.
 const { updateBusinessVpsSize } = await import("../src/lib/db/businesses.ts");
@@ -611,10 +611,10 @@ if (!newVmIp) {
   // Same fail-closed semantics as a restore failure below: the new box is on
   // TEMPLATE state, so billing must NOT be repointed and the old box (which
   // still has the live data) must NOT be stopped or set to lapse.
-  console.error(`[restore] ABORT: cannot resolve the new VM's IP — restore manually:`);
+  console.error(`[restore] ABORT: cannot resolve the new VM's IP, restore manually:`);
   console.error(`          restoreBusinessData({ businessId: '${BUSINESS_ID}', vpsHost: <ip> })`);
   console.error(`[restore] The tarball is safe at ${backup.storagePath}. The old box is left`);
-  console.error(`[restore] running and renewing — re-run the teardown/billing steps after the`);
+  console.error(`[restore] running and renewing, re-run the teardown/billing steps after the`);
   console.error(`[restore] manual restore succeeds.`);
   process.exit(1);
 }
@@ -624,7 +624,7 @@ try {
 } catch (err) {
   console.error(`[restore] FAILED: ${err instanceof Error ? err.message : String(err)}`);
   console.error(`[restore] The new box is serving TEMPLATE state. The tarball is safe at`);
-  console.error(`[restore] ${backup.storagePath} — retry restoreBusinessData before tearing`);
+  console.error(`[restore] ${backup.storagePath}, retry restoreBusinessData before tearing`);
   console.error(`[restore] down the old box (it still has the live data).`);
   process.exit(1);
 }
@@ -695,7 +695,7 @@ if (activeSub) {
       console.log(`[billing] subscriptions.hostinger_billing_subscription_id → ${newBillingId}`);
     }
   } else {
-    console.error(`[billing] new box's billing subscription id unknown — look it up`);
+    console.error(`[billing] new box's billing subscription id unknown, look it up`);
     console.error(`[billing] (listBillingSubscriptions, resource_id=${newVmId}) and update the sub row.`);
   }
 }
@@ -707,17 +707,17 @@ if (!KEEP_OLD && !billingRepointed) {
   console.error(`[old-box] at a lapsing subscription while the new box renews untracked).`);
   console.error(`[old-box] Fix subscriptions.hostinger_billing_subscription_id for sub ${activeSub?.id},`);
   console.error(`[old-box] then finish teardown manually: stop VM ${oldVmId} and disable auto-renew`);
-  console.error(`[old-box] on billing subscription ${oldBillingId ?? "<unknown — find it in hPanel>"}.`);
+  console.error(`[old-box] on billing subscription ${oldBillingId ?? "<unknown, find it in hPanel>"}.`);
   process.exit(1);
 }
 
-// What actually happened to the old subscription — the audit file must not
+// What actually happened to the old subscription, the audit file must not
 // claim "auto-renew-disabled" when the disable call failed or was impossible,
 // or the operator reads it as safe while the old box keeps renewing.
 let oldBillingHandling: string;
 if (KEEP_OLD) {
   oldBillingHandling = "kept";
-  console.log(`[old-box] kept per --keep-old — REMEMBER it keeps billing until you tear it down.`);
+  console.log(`[old-box] kept per --keep-old, REMEMBER it keeps billing until you tear it down.`);
 } else {
   if (oldVmId !== null) {
     try {
@@ -740,10 +740,27 @@ if (KEEP_OLD) {
     }
   } else if (oldVmId !== null) {
     oldBillingHandling = "billing-id-unknown-still-renewing";
-    console.log(`[old-box] WARNING: no billing subscription id for the old box — disable its`);
+    console.log(`[old-box] WARNING: no billing subscription id for the old box, disable its`);
     console.log(`[old-box] auto-renewal manually or you keep paying for it.`);
   } else {
     oldBillingHandling = "no-old-vm";
+  }
+  // Retire the old box's key row so fleet sweeps (debug/update-all-vps.ts and
+  // friends) stop trying to SSH into hardware this tenant has left. Mirrors
+  // the server-side port in src/lib/vps/migrate-size.ts, and stays inside the
+  // teardown branch on purpose: --keep-old leaves the box reachable for a
+  // rollback, and that needs the key row to stay active.
+  if (oldVmId !== null) {
+    const { retireVpsSshKeysForVps } = await import("../src/lib/db/vps-ssh-keys.ts");
+    try {
+      const retired = await retireVpsSshKeysForVps(String(oldVmId));
+      console.log(`[old-box] retired ${retired} ssh key row(s) for VM ${oldVmId}`);
+    } catch (err) {
+      console.log(
+        `[old-box] key-row retire FAILED (stale row left active, harmless but noisy in fleet ` +
+          `sweeps): ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 }
 
@@ -752,7 +769,7 @@ writeAuditState(oldBillingHandling);
 
 if (oldBillingHandling === "auto-renew-disable-FAILED" || oldBillingHandling === "billing-id-unknown-still-renewing") {
   console.log(`\nMigration complete WITH FOLLOW-UP: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}),`);
-  console.log(`but the OLD subscription is still renewing — disable it in hPanel (see [old-box] above).`);
+  console.log(`but the OLD subscription is still renewing, disable it in hPanel (see [old-box] above).`);
 } else {
   console.log(`\nMigration complete: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}).`);
 }

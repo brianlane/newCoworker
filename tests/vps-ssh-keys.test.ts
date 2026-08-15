@@ -14,6 +14,7 @@ import {
   listActiveVpsSshKeys,
   newestKeyPerBusiness,
   reassignVpsSshKeyBusiness,
+  retireVpsSshKeysForVps,
   rotateVpsSshKey,
   updateVpsSshKeyPlacement,
   updateVpsSshKeyHostKeyFingerprint
@@ -364,6 +365,49 @@ describe("vps_ssh_keys DB layer", () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await updateVpsSshKeyHostKeyFingerprint("row-uuid", "SHA256:abc");
       expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("retireVpsSshKeysForVps", () => {
+    it("stamps rotated_at on every ACTIVE row for the box and returns the count", async () => {
+      const chain = makeChain();
+      chain.select.mockResolvedValueOnce({ data: [{ id: "a" }, { id: "b" }], error: null });
+      const db = makeDb(chain);
+      const n = await retireVpsSshKeysForVps("1800985", db as never);
+      expect(n).toBe(2);
+      expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
+      expect(typeof chain.update.mock.calls[0][0].rotated_at).toBe("string");
+      expect(chain.eq).toHaveBeenCalledWith("hostinger_vps_id", "1800985");
+      // The `is` guard keeps this idempotent and stops it re-stamping a row
+      // that a previous cutover already retired.
+      expect(chain.is).toHaveBeenCalledWith("rotated_at", null);
+    });
+
+    it("returns 0 when the box has no active rows (idempotent re-run)", async () => {
+      const chain = makeChain();
+      chain.select.mockResolvedValueOnce({ data: [], error: null });
+      expect(await retireVpsSshKeysForVps("1800985", makeDb(chain) as never)).toBe(0);
+    });
+
+    it("returns 0 when PostgREST returns a null body", async () => {
+      const chain = makeChain();
+      chain.select.mockResolvedValueOnce({ data: null, error: null });
+      expect(await retireVpsSshKeysForVps("1800985", makeDb(chain) as never)).toBe(0);
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.select.mockResolvedValueOnce({ error: { message: "retire boom" } });
+      await expect(retireVpsSshKeysForVps("1800985", makeDb(chain) as never)).rejects.toThrow(
+        /retireVpsSshKeysForVps: retire boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.select.mockResolvedValueOnce({ data: [{ id: "a" }], error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      expect(await retireVpsSshKeysForVps("1800985")).toBe(1);
     });
   });
 

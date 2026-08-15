@@ -14,7 +14,7 @@
 import { logger } from "@/lib/logger";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
-import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
+import { retireVpsSshKeysForVps, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import type { BillingSubscription, CatalogItem, HostingerClient, VirtualMachine } from "@/lib/hostinger/client";
 import {
   hostingerTermForBillingPeriod,
@@ -139,6 +139,12 @@ export type TermRenewalSweepDeps = {
     update: { hostinger_billing_subscription_id: string }
   ) => Promise<unknown>;
   getActiveVpsSshKey: (vpsId: string) => Promise<VpsSshKeyRow | null>;
+  /**
+   * Retires the old box's key row at teardown so fleet sweeps stop SSHing
+   * into it, and so a pooled box carries no active key for its previous
+   * tenant. Injected so unit tests can assert the call without a database.
+   */
+  retireVpsSshKeysForVps?: (vpsId: string) => Promise<number>;
   hostinger: Pick<
     HostingerClient,
     | "getVirtualMachine"
@@ -964,6 +970,27 @@ async function migrateTenantTermRenewal(
         error: errMsg(err)
       });
     }
+  }
+
+  // The tenant is off this box now, so its key row must stop counting as
+  // active: fleet sweeps iterate every unrotated row and would keep SSHing
+  // into it. Deliberately after the backup + restore above, which read the OLD
+  // box's key, and before the pool release below, so a pooled box never
+  // carries an active key belonging to its previous tenant (adoptVpsForBusiness
+  // mints a fresh keypair when it finds none, which is the same path a
+  // never-adopted pooled box takes). Non-fatal: a stale row is bookkeeping
+  // noise, not a reason to fail a good cutover.
+  /* c8 ignore next -- production default; tests inject */
+  const retireKeys = deps.retireVpsSshKeysForVps ?? retireVpsSshKeysForVps;
+  try {
+    const retired = await retireKeys(String(oldVmId));
+    logger.info("term-renewal sweep: retired old box key rows", { businessId, oldVmId, retired });
+  } catch (err) {
+    logger.warn("term-renewal sweep: old key-row retire failed (stale row left active)", {
+      businessId,
+      oldVmId,
+      error: errMsg(err)
+    });
   }
 
   let releasedPlan: VpsSize = vpsSize;

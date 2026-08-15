@@ -39,7 +39,7 @@ import { sharedHardwareFor } from "@/lib/vps/shared-hardware";
 import type { HostingerClient } from "@/lib/hostinger/client";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
-import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
+import { retireVpsSshKeysForVps, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import {
   enqueueProvisioningJob,
   markProvisioningJobOutcome,
@@ -94,6 +94,11 @@ export type MigrateVpsSizeDeps = {
   ) => Promise<unknown>;
   updateBusinessVpsSize: (id: string, size: VpsSize) => Promise<void>;
   getActiveVpsSshKey: (vpsId: string) => Promise<VpsSshKeyRow | null>;
+  /**
+   * Retires the old box's key row at teardown so fleet sweeps stop SSHing
+   * into it. Injected so unit tests can assert the call without a database.
+   */
+  retireVpsSshKeysForVps?: (vpsId: string) => Promise<number>;
   hostinger: Pick<
     HostingerClient,
     | "getVirtualMachine"
@@ -537,6 +542,23 @@ export async function migrateBusinessVpsSize(
     }
   } else {
     oldBillingHandling = "billing-id-unknown-still-renewing";
+  }
+
+  // The tenant is off this box now, so its key row must stop counting as
+  // active or every fleet sweep will keep trying to SSH into it. Deliberately
+  // after the backup + restore above, which read the OLD box's key. Non-fatal:
+  // a stale row is bookkeeping noise, not a reason to fail a good cutover.
+  /* c8 ignore next -- production default; tests inject */
+  const retireKeys = deps.retireVpsSshKeysForVps ?? retireVpsSshKeysForVps;
+  try {
+    const retired = await retireKeys(String(oldVmId));
+    logger.info("migrate-size: retired old box key rows", { businessId, oldVmId, retired });
+  } catch (err) {
+    logger.warn("migrate-size: old key-row retire failed (stale row left active)", {
+      businessId,
+      oldVmId,
+      error: errMsg(err)
+    });
   }
 
   const followUp =

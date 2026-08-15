@@ -4,12 +4,18 @@
  * we no longer run, so the fleet sweeps stop trying to SSH into dead hardware.
  *
  * Why: a row is retired by stamping `rotated_at` (see `rotateVpsSshKey` in
- * src/lib/db/vps-ssh-keys.ts), and the only caller today is the VPS-adoption
+ * src/lib/db/vps-ssh-keys.ts), and its only caller was the VPS-adoption
  * path, which rotates a row it is about to REPLACE for the same box. Nothing
- * rotates a row when a tenant simply moves to different hardware: the old
- * row keeps `rotated_at IS NULL` forever, because the partial unique index
+ * rotated a row when a tenant simply moved to different hardware: the old
+ * row kept `rotated_at IS NULL` forever, because the partial unique index
  * is per-VPS (`vps_ssh_keys_one_active_per_vps`) and a new box is a new key,
- * so the insert never collides and never triggers a rotation.
+ * so the insert never collides and never triggered a rotation.
+ *
+ * The cutover paths now call `retireVpsSshKeysForVps` at old-box teardown
+ * (src/lib/vps/migrate-size.ts, src/lib/vps/term-renewal-sweep.ts, and the
+ * debug/migrate-vps-size.ts operator script), so new stale rows should not
+ * appear. This script remains the mop-up for rows that predate that fix, and
+ * for a cutover that dies after repointing the tenant but before teardown.
  *
  * The visible symptom is that every fleet sweep tries the dead boxes and
  * reports failures that are not failures. On 2026-08-14 a chat-worker rollout
