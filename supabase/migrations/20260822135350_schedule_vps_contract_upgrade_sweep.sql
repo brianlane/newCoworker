@@ -49,10 +49,18 @@ select cron.schedule(
       'Authorization', 'Bearer ' || public._cron_vault_read('internal_cron_secret')
     ),
     body := '{}'::jsonb,
-    -- Matches the route's 1800s maxDuration and the Edge bridge's
-    -- REQUEST_TIMEOUT_MS, so a long migration is never cut off by the
-    -- outermost layer. Same value as the term-renewal sweep it mirrors.
-    timeout_milliseconds := 800000
+    -- 1800s, matching the route's maxDuration and the Edge bridge's
+    -- REQUEST_TIMEOUT_MS. All three layers have to agree: pg_net hanging up
+    -- first does not stop the Next function, so every healthy run would be
+    -- recorded as a timeout in cron.job_run_details and a genuine timeout
+    -- would be impossible to spot.
+    --
+    -- The sibling sweep shipped at 800000 and needed
+    -- 20260822013908_raise_term_renewal_sweep_cron_timeout.sql to correct
+    -- exactly this, so this one starts at the right value. Note the
+    -- cron-timeout parity test only guards the route and the Edge bridge;
+    -- this third layer is not covered, which is why it drifts unnoticed.
+    timeout_milliseconds := 1800000
   );
   $$
 );
