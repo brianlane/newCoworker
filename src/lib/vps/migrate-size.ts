@@ -37,6 +37,7 @@ import { resolveDeployedVpsSize, type VpsSize } from "@/lib/vps/size";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 import { sharedHardwareFor } from "@/lib/vps/shared-hardware";
 import type { HostingerClient } from "@/lib/hostinger/client";
+import type { HostingerBillingTerm } from "@/lib/hostinger/provision";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import { retireVpsSshKeysForVps, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
@@ -116,8 +117,13 @@ export type MigrateVpsSizeDeps = {
     businessId: string;
     tier: "starter" | "standard" | "enterprise";
     vpsSize: VpsSize;
-    /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
+    /**
+     * Explicit Hostinger purchase term. The purchase default is monthly, so
+     * a job carrying a computed term has to forward it or the replacement
+     * box silently comes back monthly.
+     */
+    hostingerTerm?: HostingerBillingTerm | null;
     suppressOwnerNotify?: boolean;
     /** Date.now() when the caller's route budget began. */
     deployBudgetStartedAtMs?: number;
@@ -369,6 +375,12 @@ export async function migrateBusinessVpsSize(
             tier: input.tier,
             vpsSize: targetSize,
             billingPeriod: input.billingPeriod,
+            // Forwarded for the same reason as the retry route: this object
+            // is rebuilt field by field, and the purchase default is monthly.
+            // migrate_size jobs carry no stored term today, so this is null
+            // in practice, but the next purpose that does would silently get
+            // a monthly box without it.
+            hostingerTerm: input.hostingerTerm,
             suppressOwnerNotify: true,
             deployBudgetStartedAtMs: migrationStartedAt
           });
