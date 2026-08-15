@@ -123,6 +123,8 @@ function monthlyBillingSub(overrides: Record<string, unknown> = {}) {
     id: "hbs-old",
     status: "active",
     renewal_price: 2449,
+    billing_period: 1,
+    billing_period_unit: "month",
     created_at: "2026-06-21T12:00:00.000Z",
     next_billing_at: NEXT_BILLING_AT,
     ...overrides
@@ -236,70 +238,65 @@ beforeEach(() => {
 
 describe("billingSubCycleMonths", () => {
   it("reads a monthly Hostinger cycle as 1", () => {
+    expect(billingSubCycleMonths({ billing_period: 1, billing_period_unit: "month" })).toBe(1);
+  });
+
+  it("reads a two-year cycle as 24 and a one-year cycle as 12", () => {
+    expect(billingSubCycleMonths({ billing_period: 2, billing_period_unit: "year" })).toBe(24);
+    expect(billingSubCycleMonths({ billing_period: 1, billing_period_unit: "year" })).toBe(12);
+  });
+
+  /**
+   * Regression, found by Bugbot on #1391. An earlier version inferred the
+   * cycle from `created_at` to `expires_at`. `created_at` is the original
+   * PURCHASE date, not the current cycle start, so a monthly box bought
+   * seven months ago measured as a seven-month cycle, its single-month
+   * renewal price divided by seven, and cents-per-month came out 7x too
+   * low — failing the savings gate for exactly the long-standing monthly
+   * tenants this sweep exists to move onto term hardware.
+   */
+  it("reads an OLD monthly box as a 1-month cycle, not the span since purchase", () => {
     expect(
       billingSubCycleMonths({
-        created_at: "2026-06-21T12:00:00.000Z",
-        next_billing_at: "2026-07-21T12:00:00.000Z",
-        expires_at: null
+        billing_period: 1,
+        billing_period_unit: "month",
+        // Seven months of history on a box that still bills monthly.
+        created_at: "2026-01-01T00:00:00.000Z",
+        next_billing_at: "2026-08-01T00:00:00.000Z"
+      } as never)
+    ).toBe(1);
+  });
+
+  // Live API (Jul 2026) returns billing_period/billing_period_unit; the
+  // legacy pair is the documented fallback for older response shapes.
+  it("falls back to the legacy period fields", () => {
+    expect(billingSubCycleMonths({ period: 2, period_unit: "year" })).toBe(24);
+  });
+
+  it("prefers the modern fields over the legacy ones", () => {
+    expect(
+      billingSubCycleMonths({
+        billing_period: 1,
+        billing_period_unit: "month",
+        period: 2,
+        period_unit: "year"
       })
     ).toBe(1);
   });
 
-  it("reads a two-year cycle as 24", () => {
-    expect(
-      billingSubCycleMonths({
-        created_at: "2026-06-21T12:00:00.000Z",
-        next_billing_at: null,
-        expires_at: "2028-06-21T12:00:00.000Z"
-      })
-    ).toBe(24);
+  it("returns null when Hostinger reports no cycle at all", () => {
+    expect(billingSubCycleMonths({})).toBeNull();
   });
 
-  it("prefers expires_at over next_billing_at", () => {
-    expect(
-      billingSubCycleMonths({
-        created_at: "2026-06-21T12:00:00.000Z",
-        next_billing_at: "2026-07-21T12:00:00.000Z",
-        expires_at: "2027-06-21T12:00:00.000Z"
-      })
-    ).toBe(12);
+  // A period with no unit is not a cycle we can read. Treated as unknown
+  // rather than assumed to be months, which would mis-price a purchase.
+  it("returns null when the period has no unit", () => {
+    expect(billingSubCycleMonths({ billing_period: 2 })).toBeNull();
   });
 
-  it("returns null when the span cannot be read", () => {
-    expect(
-      billingSubCycleMonths({
-        created_at: undefined,
-        next_billing_at: "2026-07-21T12:00:00.000Z",
-        expires_at: null
-      })
-    ).toBeNull();
-    expect(
-      billingSubCycleMonths({ created_at: "2026-06-21T12:00:00.000Z", next_billing_at: null, expires_at: null })
-    ).toBeNull();
-    expect(
-      billingSubCycleMonths({ created_at: "nope", next_billing_at: "2026-07-21T12:00:00.000Z", expires_at: null })
-    ).toBeNull();
-  });
-
-  it("returns null when the cycle ends before it starts", () => {
-    expect(
-      billingSubCycleMonths({
-        created_at: "2026-07-21T12:00:00.000Z",
-        next_billing_at: "2026-06-21T12:00:00.000Z",
-        expires_at: null
-      })
-    ).toBeNull();
-  });
-
-  // A sub-month span rounds to 0, which is not a usable divisor.
-  it("returns null for a span shorter than a month", () => {
-    expect(
-      billingSubCycleMonths({
-        created_at: "2026-07-20T12:00:00.000Z",
-        next_billing_at: "2026-07-21T12:00:00.000Z",
-        expires_at: null
-      })
-    ).toBeNull();
+  // Guessing an unrecognised unit would mis-price a real purchase.
+  it("returns null for an unrecognised unit", () => {
+    expect(billingSubCycleMonths({ billing_period: 1, billing_period_unit: "week" })).toBeNull();
   });
 });
 
@@ -441,6 +438,8 @@ describe("runContractUpgradeSweep — gate 2: contract coverage", () => {
         async () =>
           [
             monthlyBillingSub({
+              billing_period: 2,
+              billing_period_unit: "year",
               expires_at: "2028-07-01T00:00:00.000Z",
               next_billing_at: "2028-07-01T00:00:00.000Z"
             })
@@ -518,6 +517,8 @@ describe("runContractUpgradeSweep — gate 3: the renewal window", () => {
         async () =>
           [
             monthlyBillingSub({
+              billing_period: 1,
+              billing_period_unit: "year",
               created_at: "2026-07-01T00:00:00.000Z",
               next_billing_at: "2027-07-01T00:00:00.000Z",
               expires_at: "2027-07-01T00:00:00.000Z",
@@ -548,6 +549,8 @@ describe("runContractUpgradeSweep — gate 3: the renewal window", () => {
         async () =>
           [
             monthlyBillingSub({
+              billing_period: 1,
+              billing_period_unit: "year",
               created_at: "2026-07-01T00:00:00.000Z",
               next_billing_at: "2027-07-01T00:00:00.000Z",
               expires_at: "2027-07-01T00:00:00.000Z",
@@ -584,7 +587,14 @@ describe("runContractUpgradeSweep — gate 3: the renewal window", () => {
       listBillingSubscriptions: vi.fn(
         async () =>
           [
-            { id: "hbs-old", status: "active", renewal_price: 2449, created_at: "2026-06-21T12:00:00.000Z" }
+            {
+              id: "hbs-old",
+              status: "active",
+              renewal_price: 2449,
+              billing_period: 1,
+              billing_period_unit: "month",
+              created_at: "2026-06-21T12:00:00.000Z"
+            }
           ] as never
       )
     });

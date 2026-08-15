@@ -41,6 +41,7 @@ import type { CustomerProfileRow } from "@/lib/db/customer-profiles";
 import type { BillingSubscription, CatalogItem, VirtualMachine } from "@/lib/hostinger/client";
 import { hostingerTermMonths, type HostingerBillingTerm } from "@/lib/hostinger/provision";
 import { paidThroughFromBillingSub } from "@/lib/db/vps-inventory";
+import { billingCycleMonths } from "@/lib/admin/cost-sync";
 import { resolveDeployedVpsSize, type VpsSize } from "@/lib/vps/size";
 import {
   billingSubCentsPerMonth,
@@ -144,22 +145,34 @@ function errMsg(err: unknown): string {
 
 /**
  * Months in the box's current Hostinger cycle, used to spread its renewal
- * price into a comparable per-month figure. Derived from the catalog row
- * that matches the box's own plan when we can find it, falling back to the
- * gap between the subscription's own dates.
+ * price into a comparable per-month figure.
+ *
+ * Read from the subscription's OWN `billing_period` / `billing_period_unit`,
+ * which is what Hostinger reports the cycle to be. An earlier version
+ * inferred it from `created_at` to `expires_at`, which is wrong for any box
+ * past its first cycle: `created_at` is the original PURCHASE date, not the
+ * current cycle start, so a monthly box bought seven months ago measured as
+ * a seven-month cycle. Its single-month `renewal_price` then divided by
+ * seven, understating cents-per-month by 7x and failing the savings gate for
+ * exactly the long-standing monthly tenants this sweep exists to move.
+ *
+ * `billing_period`/`billing_period_unit` are the live API's (Jul 2026)
+ * fields; the legacy `period`/`period_unit` pair is kept as a fallback, the
+ * same precedence `currentHostingerCycleMonths` uses in the change-plan
+ * orchestrator. Unit resolution itself is the shared
+ * {@link billingCycleMonths}, so there is one definition of what a Hostinger
+ * cycle unit means.
  */
 export function billingSubCycleMonths(
-  sub: Pick<BillingSubscription, "created_at" | "next_billing_at" | "expires_at">
+  sub: Pick<
+    BillingSubscription,
+    "billing_period" | "billing_period_unit" | "period" | "period_unit"
+  >
 ): number | null {
-  const end = sub.expires_at ?? sub.next_billing_at ?? null;
-  if (!end || !sub.created_at) return null;
-  const startMs = new Date(sub.created_at).getTime();
-  const endMs = new Date(end).getTime();
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-  // Round to the nearest whole month: Hostinger cycles are 1, 12 or 24
-  // months, and the raw span drifts by a day or two either way.
-  const months = Math.round((endMs - startMs) / (30.44 * 24 * 60 * 60 * 1000));
-  return months >= 1 ? months : null;
+  const period = sub.billing_period ?? sub.period;
+  const unit = sub.billing_period_unit ?? sub.period_unit;
+  if (typeof period !== "number") return null;
+  return billingCycleMonths(period, unit ?? null);
 }
 
 export async function runContractUpgradeSweep(
