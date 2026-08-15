@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  coerceEmailsFiltersForMailbox,
   coerceEmailsViewFilter,
   emailListFiltersFromView,
   parseEmailsViewFilter,
   withLinkedEmailRow
 } from "@/lib/dashboard/email-filters";
+import {
+  AI_MAILBOX_KEY,
+  AI_MAILBOX_SOURCES,
+  CONNECTED_MAILBOX_SOURCES
+} from "@/lib/dashboard/email-mailbox";
 
 describe("email-filters", () => {
   it("parses known views and defaults unknown values", () => {
@@ -94,6 +100,74 @@ describe("email-filters", () => {
       direction: "inbound",
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
+  });
+
+  it("narrows the fetch to the selected mailbox", () => {
+    expect(emailListFiltersFromView({ view: "all", mailbox: AI_MAILBOX_KEY })).toEqual({
+      limit: 100,
+      sources: AI_MAILBOX_SOURCES
+    });
+    expect(emailListFiltersFromView({ view: "sent", mailbox: "conn-1" })).toEqual({
+      limit: 100,
+      direction: "outbound",
+      sources: CONNECTED_MAILBOX_SOURCES
+    });
+  });
+
+  it("intersects the mailbox sources with a view that pins its own", () => {
+    // Inbox is already AI-mailbox-only; the AI chip must not widen it.
+    expect(emailListFiltersFromView({ view: "inbox", mailbox: AI_MAILBOX_KEY })).toEqual({
+      limit: 100,
+      inbox: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
+    });
+  });
+
+  it("never widens to every source when the two filters cannot overlap", () => {
+    // A hand-typed ?view=inbox&mailbox=<connection> has no possible rows. The
+    // empty intersection must not read as "no source filter", which would show
+    // the other mailbox's mail under a connected-mailbox chip.
+    expect(emailListFiltersFromView({ view: "inbox", mailbox: "conn-1" })).toEqual({
+      limit: 100,
+      inbox: true,
+      sources: CONNECTED_MAILBOX_SOURCES
+    });
+    expect(
+      emailListFiltersFromView({ view: "all", folder: "Sales", mailbox: "conn-1" })
+    ).toEqual({
+      limit: 100,
+      folder: "Sales",
+      sources: CONNECTED_MAILBOX_SOURCES
+    });
+  });
+});
+
+describe("coerceEmailsFiltersForMailbox", () => {
+  it("leaves everything alone for All and the AI mailbox", () => {
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "inbox", folder: "Sales", mailbox: "" })
+    ).toEqual({ view: "inbox", folder: "Sales" });
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "unread", folder: "", mailbox: AI_MAILBOX_KEY })
+    ).toEqual({ view: "unread", folder: "" });
+  });
+
+  it("widens AI-only views when a connected mailbox is picked", () => {
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "inbox", folder: "Sales", mailbox: "conn-1" })
+    ).toEqual({ view: "received", folder: "" });
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "archived", folder: "", mailbox: "conn-1" })
+    ).toEqual({ view: "all", folder: "" });
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "unread", folder: "", mailbox: "conn-1" })
+    ).toEqual({ view: "all", folder: "" });
+  });
+
+  it("keeps direction views and only drops the folder", () => {
+    expect(
+      coerceEmailsFiltersForMailbox({ view: "sent", folder: "Sales", mailbox: "conn-1" })
+    ).toEqual({ view: "sent", folder: "" });
   });
 });
 

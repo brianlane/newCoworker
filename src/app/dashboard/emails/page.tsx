@@ -16,11 +16,16 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { getEmailLogRow, listEmailLog } from "@/lib/db/email-log";
 import {
+  coerceEmailsFiltersForMailbox,
   coerceEmailsViewFilter,
   emailListFiltersFromView,
   parseEmailsViewFilter,
   withLinkedEmailRow
 } from "@/lib/dashboard/email-filters";
+import {
+  mailboxOptionsFromSendFrom,
+  parseMailboxFilter
+} from "@/lib/dashboard/email-mailbox";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
 import { listAiFlows } from "@/lib/ai-flows/db";
@@ -32,7 +37,13 @@ export const dynamic = "force-dynamic";
 export default async function DashboardEmailsPage({
   searchParams
 }: {
-  searchParams: Promise<{ view?: string; folder?: string; label?: string; id?: string }>;
+  searchParams: Promise<{
+    view?: string;
+    folder?: string;
+    label?: string;
+    id?: string;
+    mailbox?: string;
+  }>;
 }) {
   const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
@@ -47,26 +58,26 @@ export default async function DashboardEmailsPage({
     redirect(`/login?redirectTo=${encodeURIComponent(back)}`);
   }
 
-  const folderFilter = typeof sp.folder === "string" ? sp.folder.trim() : "";
   const labelFilter = typeof sp.label === "string" ? sp.label.trim() : "";
-  const viewFilter = coerceEmailsViewFilter(parseEmailsViewFilter(sp.view), folderFilter);
-  const listFilters = emailListFiltersFromView({
-    view: viewFilter,
-    folder: folderFilter,
-    label: labelFilter,
-    limit: 100
-  });
 
   // Admin view-as swaps in the impersonated tenant's owner email.
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
   const activeBusinessId = await resolveActiveBusinessId(user);
-  const { data: businesses } = await db
-    .from("businesses")
-    .select("id, name")
-    .in("id", activeBusinessId ? [activeBusinessId] : [])
-    .order("created_at", { ascending: false });
+  // The sender list is fetched BEFORE the mail query, not alongside it: it is
+  // what the mailbox chips are built from, and the chosen chip narrows the
+  // query itself. Best-effort on failure, which just hides the chips.
+  const [{ data: businesses }, fromOptions] = await Promise.all([
+    db
+      .from("businesses")
+      .select("id, name")
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
+      .order("created_at", { ascending: false }),
+    activeBusinessId
+      ? listSendFromOptions(activeBusinessId).catch(() => [])
+      : Promise.resolve([])
+  ]);
 
   const business = businesses?.[0] ?? null;
 
@@ -92,10 +103,30 @@ export default async function DashboardEmailsPage({
     );
   }
 
-  const [listRows, fromOptions, flows, linkedRow] = await Promise.all([
+  const mailboxOptions = mailboxOptionsFromSendFrom(fromOptions);
+  const mailboxFilter = parseMailboxFilter(sp.mailbox, mailboxOptions);
+  const requestedFolder = typeof sp.folder === "string" ? sp.folder.trim() : "";
+  const requestedView = coerceEmailsViewFilter(
+    parseEmailsViewFilter(sp.view),
+    requestedFolder
+  );
+  // A connected mailbox carries no folders/archive/unread state, so those
+  // chips widen rather than render an empty page.
+  const { view: viewFilter, folder: folderFilter } = coerceEmailsFiltersForMailbox({
+    view: requestedView,
+    folder: requestedFolder,
+    mailbox: mailboxFilter
+  });
+  const listFilters = emailListFiltersFromView({
+    view: viewFilter,
+    folder: folderFilter,
+    label: labelFilter,
+    mailbox: mailboxFilter,
+    limit: 100
+  });
+
+  const [listRows, flows, linkedRow] = await Promise.all([
     listEmailLog(business.id, listFilters),
-    // Best-effort: on any failure the composer falls back to coworker-only send.
-    listSendFromOptions(business.id).catch(() => []),
     // Replay targets ("Replay through flow" on unmatched inbox mail): enabled
     // flows that read the AI mailbox. Best-effort — no flows just hides the
     // action.
@@ -148,9 +179,11 @@ export default async function DashboardEmailsPage({
         fromOptions={fromOptions}
         emailContacts={emailContacts}
         replayFlows={replayFlows}
+        mailboxOptions={mailboxOptions}
         initialView={viewFilter}
         initialFolder={folderFilter}
         initialLabel={labelFilter}
+        initialMailbox={mailboxFilter}
         initialSelectedId={selectedId}
       />
     </div>

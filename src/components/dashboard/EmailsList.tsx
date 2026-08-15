@@ -15,6 +15,12 @@ import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
+import {
+  AI_MAILBOX_KEY,
+  rowMatchesMailbox,
+  type MailboxOption
+} from "@/lib/dashboard/email-mailbox";
+import { coerceEmailsFiltersForMailbox } from "@/lib/dashboard/email-filters";
 
 const EMAIL_SORT_OPTIONS: SortOption[] = [
   { key: "created_at", label: "Date" },
@@ -39,6 +45,9 @@ function emailSortValue(row: EmailLogRow, field: string): string | number | null
  * The reading pane shows the full body (`body_full`), falling back to the stored
  * 500-char preview for older rows that predate full-body capture.
  */
+
+/** Views built on AI-mailbox-only state (folder / archived_at / is_read). */
+const AI_ONLY_VIEWS: string[] = ["inbox", "archived", "unread"];
 
 type SourceMeta = { label: string; tagClass: string };
 
@@ -784,17 +793,24 @@ export function EmailsList({
   rows,
   businessId,
   fromOptions = [],
+  mailboxOptions = [],
   emailContacts = {},
   replayFlows = [],
   initialView = "all",
   initialFolder = "",
   initialLabel = "",
+  initialMailbox = "",
   initialSelectedId = ""
 }: {
   rows: EmailLogRow[];
   businessId: string;
   /** Sender options for the composer's "From" picker (coworker mailbox first). */
   fromOptions?: FromOption[];
+  /**
+   * Mailboxes to offer as filter chips (AI mailbox + each connected account).
+   * Empty when nothing is connected: one mailbox has nothing to filter between.
+   */
+  mailboxOptions?: MailboxOption[];
   /** Lowercase address → contact profile link (built server-side). */
   emailContacts?: EmailContacts;
   /** Enabled tenant_email flows offered as replay targets (built server-side). */
@@ -809,6 +825,8 @@ export function EmailsList({
     | "unread";
   initialFolder?: string;
   initialLabel?: string;
+  /** Server-applied mailbox chip: "" (all), "ai", or a connection id. */
+  initialMailbox?: string;
   /**
    * Row to open on load, from `/dashboard/emails?id=…`. This is what the SMS
    * alert links to: the owner taps it on a phone and lands on the message
@@ -839,20 +857,25 @@ export function EmailsList({
   const viewFilter = initialView;
   const folderFilter = initialFolder;
   const labelFilter = initialLabel;
+  const mailboxFilter = initialMailbox;
+  const isConnectedMailbox = Boolean(mailboxFilter) && mailboxFilter !== AI_MAILBOX_KEY;
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
   function navigateFilters(next: {
     view?: ViewFilter;
     folder?: string;
     label?: string;
+    mailbox?: string;
   }) {
     const view = next.view ?? viewFilter;
     const folder = next.folder ?? folderFilter;
     const label = next.label ?? labelFilter;
+    const mailbox = next.mailbox ?? mailboxFilter;
     const params = new URLSearchParams();
     if (view !== "all") params.set("view", view);
     if (folder) params.set("folder", folder);
     if (label) params.set("label", label);
+    if (mailbox) params.set("mailbox", mailbox);
     const qs = params.toString();
     router.push(qs ? `/dashboard/emails?${qs}` : "/dashboard/emails");
     router.refresh();
@@ -900,6 +923,7 @@ export function EmailsList({
       ) {
         return false;
       }
+      if (!rowMatchesMailbox(r, mailboxFilter, mailboxOptions)) return false;
       if (folderFilter && (r.folder ?? "") !== folderFilter) return false;
       if (labelFilter && !(r.labels ?? []).some((l) => l.toLowerCase() === labelFilter.toLowerCase())) {
         return false;
@@ -1004,6 +1028,44 @@ export function EmailsList({
                 idPrefix="emails-sort"
               />
             </div>
+            {mailboxOptions.length > 0 && (
+              <div
+                className="flex flex-wrap items-center gap-1.5"
+                role="toolbar"
+                aria-label="Mailbox filters"
+              >
+                <span className="text-[11px] uppercase tracking-wide text-parchment/40">
+                  Mailbox
+                </span>
+                {[{ id: "", label: "All", email: null }, ...mailboxOptions].map((m) => (
+                  <button
+                    key={m.id || "all"}
+                    type="button"
+                    onClick={() =>
+                      navigateFilters({
+                        mailbox: m.id,
+                        // Folders/Archived/Unread are AI-mailbox state; picking
+                        // a connected mailbox widens them instead of asking for
+                        // rows that cannot exist (mirrors the server).
+                        ...coerceEmailsFiltersForMailbox({
+                          view: viewFilter,
+                          folder: folderFilter,
+                          mailbox: m.id
+                        })
+                      })
+                    }
+                    className={[
+                      "rounded-md px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors",
+                      mailboxFilter === m.id
+                        ? "bg-signal-teal/20 text-signal-teal"
+                        : "bg-parchment/5 text-parchment/55 hover:bg-parchment/10 hover:text-parchment/80"
+                    ].join(" ")}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Email filters">
               {(
                 [
@@ -1022,7 +1084,13 @@ export function EmailsList({
                     navigateFilters({
                       view: key,
                       // Inbox is folder-null; clear any folder query.
-                      folder: key === "inbox" ? "" : folderFilter
+                      folder: key === "inbox" ? "" : folderFilter,
+                      // Inbox/Archived/Unread only ever hold AI-mailbox rows,
+                      // so asking for one from a connected mailbox moves the
+                      // mailbox chip rather than returning nothing.
+                      mailbox: AI_ONLY_VIEWS.includes(key) && isConnectedMailbox
+                        ? AI_MAILBOX_KEY
+                        : mailboxFilter
                     })
                   }
                   className={[

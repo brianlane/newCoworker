@@ -1,4 +1,5 @@
-import type { ListEmailLogFilters } from "@/lib/db/email-log";
+import type { EmailLogSource, ListEmailLogFilters } from "@/lib/db/email-log";
+import { AI_MAILBOX_KEY, mailboxSources } from "@/lib/dashboard/email-mailbox";
 
 export type EmailsViewFilter =
   | "all"
@@ -37,6 +38,30 @@ export function coerceEmailsViewFilter(
 }
 
 /**
+ * Reconcile the view/folder chips with the selected mailbox.
+ *
+ * Inbox, Archived, Unread and folders are organize state the AI mailbox alone
+ * carries (nothing writes `folder`/`archived_at`/`is_read` for a connected
+ * Gmail row), so holding one of them while picking a connected mailbox would
+ * ask for rows that cannot exist and render an empty page. Widen the view to
+ * the nearest thing that still means something instead: Inbox keeps "inbound
+ * only", Archived and Unread have no counterpart and fall back to All.
+ */
+export function coerceEmailsFiltersForMailbox(input: {
+  view: EmailsViewFilter;
+  folder: string;
+  mailbox: string;
+}): { view: EmailsViewFilter; folder: string } {
+  const connected = Boolean(input.mailbox) && input.mailbox !== AI_MAILBOX_KEY;
+  if (!connected) return { view: input.view, folder: input.folder };
+  if (input.view === "inbox") return { view: "received", folder: "" };
+  if (input.view === "archived" || input.view === "unread") {
+    return { view: "all", folder: "" };
+  }
+  return { view: input.view, folder: "" };
+}
+
+/**
  * Map Dashboard → Emails filter chips / query params onto listEmailLog options
  * so the server page loads the matching slice (not just client-side filtering
  * of the newest 100 rows).
@@ -46,6 +71,8 @@ export function emailListFiltersFromView(input: {
   folder?: string;
   label?: string;
   limit?: number;
+  /** "" = every mailbox; AI_MAILBOX_KEY or a connection id narrows the fetch. */
+  mailbox?: string;
 }): ListEmailLogFilters {
   const folder = (input.folder ?? "").trim();
   const label = (input.label ?? "").trim();
@@ -54,7 +81,21 @@ export function emailListFiltersFromView(input: {
   };
   if (label) filters.label = label;
 
-  const aiMailboxSources: ListEmailLogFilters["sources"] = [
+  // The mailbox chip is its own source set; where a view also pins sources,
+  // keep only what both allow so the two filters compose instead of one
+  // silently winning.
+  const mailboxOnly = mailboxSources((input.mailbox ?? "").trim());
+  // An empty intersection would read as "no source filter" downstream (the
+  // query only applies a non-empty array), which would WIDEN the fetch to
+  // every mailbox. Fall back to the mailbox's own set instead: still strictly
+  // narrower than no filter, and the view's other predicates do the rest.
+  const narrow = (base: EmailLogSource[]): EmailLogSource[] => {
+    if (!mailboxOnly) return base;
+    const both = base.filter((s) => mailboxOnly.includes(s));
+    return both.length > 0 ? both : mailboxOnly;
+  };
+
+  const aiMailboxSources: EmailLogSource[] = [
     "tenant_mailbox_inbound",
     "tenant_mailbox_outbound"
   ];
@@ -62,7 +103,7 @@ export function emailListFiltersFromView(input: {
   if (folder) {
     // Folders only exist on the AI mailbox; keep the fetch aligned.
     filters.folder = folder;
-    filters.sources = aiMailboxSources;
+    filters.sources = narrow(aiMailboxSources);
     if (input.view === "sent") filters.direction = "outbound";
     else if (input.view === "received" || input.view === "inbox") {
       filters.direction = "inbound";
@@ -84,20 +125,22 @@ export function emailListFiltersFromView(input: {
     case "inbox":
       // Inbox organize view is AI-mailbox-only (same as Unread).
       filters.inbox = true;
-      filters.sources = aiMailboxSources;
+      filters.sources = narrow(aiMailboxSources);
       break;
     case "archived":
       filters.inbox = false;
-      filters.sources = aiMailboxSources;
+      filters.sources = narrow(aiMailboxSources);
       break;
     case "unread":
       // Unread styling/actions are AI-mailbox-only; keep the fetch aligned.
       filters.unreadOnly = true;
-      filters.sources = aiMailboxSources;
+      filters.sources = narrow(aiMailboxSources);
       break;
     default:
       break;
   }
+  // Views that pin no sources of their own still honour the mailbox chip.
+  if (mailboxOnly && !filters.sources) filters.sources = mailboxOnly;
   return filters;
 }
 
