@@ -187,24 +187,22 @@ describe("edge cron timeouts cover the budget their chain can actually use", () 
  * removed. Shrinking this list is the goal.
  */
 const KNOWN_ABOVE_EDGE_CEILING = [
-  "analytics-snapshot-sweep",
-  "blog-publish-sweep",
-  "blog-weekly-digest",
-  "contract-term-nudge-sweep",
-  "data-retention-sweep",
-  "document-expiration-sweep",
-  "email-campaign-sweep",
+  // Batch workers with DIRECT callers: the Meta and Slack webhooks kick
+  // these fire-and-forget, and on that path maxDuration genuinely governs.
+  // Their budgets are per-turn design (8 turns x 30s Gemini / 8 x 60s inline
+  // engine), which a quiet week's p95 of ~170ms cannot refute.
   "messenger-worker",
-  "monthly-intro-nudge-sweep",
-  "outreach-sweep",
-  "platform-cost-sync",
-  "provisioning-retry",
   "slack-worker",
-  "social-post-sweep",
-  "subscription-grace-sweep",
-  "usage-pack-auto-reload-sweep",
+  // Vendor-latency sweeps whose own comments size the budget for slow days
+  // (Telnyx MDR paging over a 90-day backfill; ~10 worst-case tenants at 30s
+  // each). Background completion past the bridge's 504 is load-bearing here.
+  "platform-cost-sync",
   "vps-billing-posture",
-  "vps-orphan-sweep",
+  // Backlog-wave budgets from #1014 (1800s): sized for bulk term migrations
+  // and provisioning retries, reachable only in exactly the scenario a
+  // quiet-week measurement cannot exhibit. Converting these to bounded
+  // batches or fire-and-forget bridges is the step-3 design work.
+  "provisioning-retry",
   "vps-term-renewal-sweep"
 ];
 
@@ -230,7 +228,7 @@ describe("the shape of the cron fleet is what the contract above assumes", () =>
       .filter((c) => (c.routeMs ?? 0) > EDGE_REQUEST_CEILING_MS)
       .map((c) => c.route)
       .sort();
-    expect([...new Set(above)]).toEqual(KNOWN_ABOVE_EDGE_CEILING);
+    expect([...new Set(above)]).toEqual([...KNOWN_ABOVE_EDGE_CEILING].sort());
   });
 
   it("only the recorded jobs dispatch per row instead of forwarding once", () => {

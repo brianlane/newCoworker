@@ -50,7 +50,11 @@ const PER_INVOCATION_ROW_CEILING = Number.MAX_SAFE_INTEGER;
 // pin the ceiling to 300s as a safety net — anything over that gets
 // re-driven on the next cron tick because each row is idempotent. Mirrors
 // the `/api/billing/cancel` + admin-route pattern.
-export const maxDuration = 300;
+// 150 matches the chain's reachable budget: Supabase 504s the Edge bridge
+// at 150s, and this sweep's worst run in the ledger's first full week was
+// 0.2s (cron_sweep_runs, 2026-08-15). Declaring more only granted unused
+// background time after the 504.
+export const maxDuration = 150;
 
 export const runtime = "nodejs";
 
