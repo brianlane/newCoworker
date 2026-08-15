@@ -11,8 +11,9 @@
  * is per-VPS (`vps_ssh_keys_one_active_per_vps`) and a new box is a new key,
  * so the insert never collides and never triggered a rotation.
  *
- * The cutover paths now call `retireVpsSshKeysForVps` at old-box teardown
- * (src/lib/vps/migrate-size.ts, src/lib/vps/term-renewal-sweep.ts, and the
+ * All four cutover paths now call `retireVpsSshKeysForVps` at old-box
+ * teardown (src/lib/vps/migrate-size.ts, src/lib/vps/term-renewal-sweep.ts,
+ * src/lib/billing/change-plan-orchestrator.ts, and the
  * debug/migrate-vps-size.ts operator script), so new stale rows should not
  * appear. This script remains the mop-up for rows that predate that fix, and
  * for a cutover that dies after repointing the tenant but before teardown.

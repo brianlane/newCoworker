@@ -102,6 +102,7 @@ import {
   sendOpsTermAlignmentEmail
 } from "@/lib/email/ops-notify";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
+import { retireVpsSshKeysForVps } from "@/lib/db/vps-ssh-keys";
 import {
   hostingerTermForBillingPeriod,
   hostingerTermMonths
@@ -755,6 +756,22 @@ export async function runChangePlanFromCheckout(
         releasedPlan = vpsSizeFromHostingerPlan(oldVm.plan) ?? releasedPlan;
       } catch (err) {
         logger.warn("changePlan: released-box plan lookup failed (using tier default)", {
+          businessId,
+          oldVmId,
+          error: errorMessage(err)
+        });
+      }
+      // The tenant is off this box now, so its key row must stop counting as
+      // active: fleet sweeps iterate every unrotated row and would keep SSHing
+      // into it. Before the pool release below, so a pooled box never carries
+      // an active key belonging to its previous tenant. Best-effort, like the
+      // rest of this teardown: a stale row is bookkeeping noise and must not
+      // fail a plan change the customer has already paid for.
+      try {
+        const retired = await retireVpsSshKeysForVps(String(oldVmId));
+        logger.info("changePlan: retired old box key rows", { businessId, oldVmId, retired });
+      } catch (err) {
+        logger.warn("changePlan: old key-row retire failed (stale row left active)", {
           businessId,
           oldVmId,
           error: errorMessage(err)

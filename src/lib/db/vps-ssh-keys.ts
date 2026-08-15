@@ -263,6 +263,11 @@ export async function rotateVpsSshKey(id: string, client?: SupabaseClient): Prom
  * deployed a voice-bridge change against a retired box and reported success.
  * {@link newestKeyPerBusiness} exists to paper over the same symptom.
  *
+ * Called by every path that moves a tenant to different hardware:
+ * `migrate-size` (admin hardware change), `term-renewal-sweep` (the nightly
+ * cron), `change-plan-orchestrator` (paid plan change), and the
+ * `debug/migrate-vps-size.ts` operator script.
+ *
  * Call this at teardown, never earlier: the migration paths back the old box
  * up over SSH first, and that lookup (`getActiveVpsSshKey(oldVmId)`) needs
  * the row still active. Callers treat a failure as non-fatal, since a stale
