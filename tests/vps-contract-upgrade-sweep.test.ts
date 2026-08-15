@@ -223,6 +223,7 @@ function makeDeps(
     tryRecoverDeployCompleteNewBox: vi.fn(async () => null),
     releaseVpsToPool: vi.fn(async () => undefined),
     markVpsNeverRenew: vi.fn(async () => undefined),
+    retireVpsSshKeysForVps: vi.fn(async () => 1),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides
   } as ContractUpgradeSweepDeps;
@@ -340,6 +341,29 @@ describe("runContractUpgradeSweep — the happy path", () => {
       })
     );
     expect(deps.markVpsNeverRenew).toHaveBeenCalledWith(1800985);
+  });
+
+  /**
+   * #1390 added the old-box key retire to the shared migration, which this
+   * sweep also drives. Asserted here rather than assumed: the fix was
+   * written for term renewals, and a contract upgrade moves a tenant to
+   * different hardware exactly the same way, so leaving the old row active
+   * would put dead boxes back in front of every fleet sweep.
+   */
+  it("retires the old box's ssh key row, so fleet sweeps stop SSHing into it", async () => {
+    const deps = makeDeps();
+    await run(deps);
+    expect(deps.retireVpsSshKeysForVps).toHaveBeenCalledWith("1800985");
+  });
+
+  it("does not fail a good cutover when the key retire fails", async () => {
+    const deps = makeDeps({
+      retireVpsSshKeysForVps: vi.fn(async () => {
+        throw new Error("keys db down");
+      })
+    });
+    const result = await run(deps);
+    expect(result.migrated).toBe(1);
   });
 
   it("releases the migration lease when the migration finishes", async () => {

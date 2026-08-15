@@ -1009,10 +1009,16 @@ export async function migrateTenantToFreshBox(
   const retireKeys = deps.retireVpsSshKeysForVps ?? retireVpsSshKeysForVps;
   try {
     const retired = await retireKeys(String(oldVmId));
-    logger.info("term-renewal sweep: retired old box key rows", { businessId, oldVmId, retired });
-  } catch (err) {
-    logger.warn("term-renewal sweep: old key-row retire failed (stale row left active)", {
+    logger.info("hardware migration: retired old box key rows", {
       businessId,
+      requestedBy,
+      oldVmId,
+      retired
+    });
+  } catch (err) {
+    logger.warn("hardware migration: old key-row retire failed (stale row left active)", {
+      businessId,
+      requestedBy,
       oldVmId,
       error: errMsg(err)
     });
