@@ -233,11 +233,19 @@ export function useDashboardChatTransport(businessId: string) {
   // The initializer runs once for the mount-time business; the switcher can
   // change businessId with the hook still mounted, so re-read THAT
   // business's engagement before the hydrate effect below re-runs for it
-  // (declared first: same-commit ordering keeps the ref correct).
+  // (declared first: same-commit ordering keeps the ref correct). The view
+  // resets in the same breath: the previous tenant's conversation must
+  // never linger on screen while the new business hydrates, and a FRESH
+  // new business would otherwise keep it forever (its hydrate deliberately
+  // leaves the view alone).
   useEffect(() => {
     const next = readFreshStart(businessId);
     freshStartRef.current = next;
     setFreshStart(next);
+    setMessages([]);
+    setViewingThreadId(null);
+    setDrafts([]);
+    setError(null);
   }, [businessId]);
 
   const fetchThreads = useCallback(async () => {
