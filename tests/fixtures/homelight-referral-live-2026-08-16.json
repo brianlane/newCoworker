@@ -1,0 +1,1222 @@
+{
+ "steps": [
+  {
+   "id": "url",
+   "type": "extract_url",
+   "saveAs": "leadUrl"
+  },
+  {
+   "id": "alert",
+   "type": "extract_text",
+   "fields": [
+    {
+     "name": "lead_first_name",
+     "description": "The lead's first name from the alert"
+    },
+    {
+     "name": "price",
+     "description": "The listing/asking price from the alert, e.g. $429K"
+    },
+    {
+     "name": "price_digits",
+     "description": "The price's leading digits ONLY, no $, commas, K or M. For $429K answer 429; for $264,000 answer 264. Used to match this lead against the portal alert email, which writes the price in full (e.g. $429,000), so the bare leading digits are the token that reliably appears in BOTH."
+    },
+    {
+     "name": "city",
+     "description": "The city/area from the alert, e.g. Mesa, AZ"
+    },
+    {
+     "name": "lead_type",
+     "description": "Is the lead a buyer or a seller? Answer exactly one lowercase word: buyer or seller."
+    },
+    {
+     "name": "price_band",
+     "description": "Answer exactly one lowercase token: over_1m or under_1m. Is the price/home value ONE MILLION DOLLARS or more? $1M, $1,000,000, $1.2M and above are over_1m; $999,999 and below are under_1m. If no price is shown, answer under_1m. Based on the listing/asking price in the alert."
+    }
+   ]
+  },
+  {
+   "id": "open",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_extract",
+   "fields": [
+    {
+     "name": "already_claimed",
+     "description": "One lowercase word. Answer no when this referral is unclaimed, or when the page shows it claimed by Amy Laidlaw or her team: that is OUR claim and the lead is ours to work. Answer yes ONLY when a different brokerage or an agent outside this team holds it, or it is no longer available to claim."
+    },
+    {
+     "name": "lead_address",
+     "description": "The property address shown on the referral page: full street, city, state, and ZIP. HomeLight often publishes only the city and ZIP before a referral is claimed; return exactly what the page shows and never an empty string."
+    },
+    {
+     "name": "claim_mode",
+     "description": "How is this referral claimed? Answer exactly one lowercase word. text if the page says the client prefers texting or offers a Send message button. none if another agent already claimed it or it is no longer available. call otherwise, including when you cannot tell."
+    }
+   ],
+   "urlVar": "leadUrl",
+   "screenshot": true
+  },
+  {
+   "id": "claim_click",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_action",
+   "when": {
+    "var": "claim_mode",
+    "equals": "call"
+   },
+   "urlVar": "leadUrl",
+   "actions": [
+    {
+     "kind": "click_text",
+     "target": "Call me to claim referral"
+    }
+   ],
+   "continueWhenText": "Decline referral"
+  },
+  {
+   "id": "claim_text",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_action",
+   "when": {
+    "var": "claim_mode",
+    "equals": "text"
+   },
+   "urlVar": "leadUrl",
+   "actions": [
+    {
+     "kind": "click_text_while_present",
+     "target": "Continue"
+    },
+    {
+     "kind": "click_selector",
+     "target": "[data-test=\"submit-claim-referral\"]"
+    }
+   ],
+   "continueWhenText": "Decline referral"
+  },
+  {
+   "id": "route",
+   "type": "route_to_team",
+   "agentNames": [
+    "Gabrielle Mota",
+    "Dave Lane",
+    "Amy Laidlaw"
+   ],
+   "offerWindow": {
+    "quietEnd": "08:30",
+    "timezone": "America/Phoenix",
+    "quietStart": "21:00",
+    "graceMinutes": 10
+   },
+   "offerTemplate": "New HomeLight referral: {{vars.lead_first_name}}, {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\nAddress: {{vars.lead_address}}\nOur AI coworker is claiming it with HomeLight now.\nPortal: {{vars.leadUrl}}\nReply 1 to take the follow-up or 2 to pass by {{offer.deadline}}.\nYou can also reply \"1, <ETA>\" to claim and tell us when you'll reach out (e.g. \"1, 20 min\").\nPassing? You can reply \"2, <reason>\" to tell us why (e.g. \"2, out of town\").\nFirst to reply 1 gets it.",
+   "ownerDirectWhen": {
+    "var": "price_band",
+    "equals": "over_1m"
+   },
+   "responseMinutes": 5,
+   "attachScreenshot": true,
+   "ownerDirectNudges": true,
+   "claimedNotifyEmail": "owner@example.com",
+   "unclaimedReminders": {
+    "rounds": 3,
+    "detailsTemplate": "Address: {{vars.lead_address}}\nPrice: {{vars.price}}",
+    "intervalMinutes": 20
+   },
+   "ownerDirectTemplate": "****************\nHIGH-VALUE HomeLight referral ($1M+) kept for you, not offered to the team.\n{{vars.lead_first_name}}, {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\nTap to claim: {{vars.leadUrl}}\n****************",
+   "shareContactHistory": true,
+   "claimedNotifyTemplate": "{{agent.name}} claimed the HomeLight referral {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}).\nPrice: {{vars.price}}\nAddress: {{vars.lead_address}}",
+   "ownerFallbackTemplate": "No one claimed the HomeLight referral {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time, it's back to you.\nAddress: {{vars.lead_address}}\nPortal: {{vars.leadUrl}}"
+  },
+  {
+   "id": "card",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_extract",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "fields": [
+    {
+     "name": "lead_name",
+     "description": "The lead's (client's) full name from the portal contact card. NEVER the agent's own name shown in the page header, account menu, or a 'New Referral for <agent>' banner. If the page shows no lead contact card (e.g. it's a claim landing page or a referral list), answer 'none'."
+    },
+    {
+     "name": "lead_phone",
+     "description": "The lead's mobile phone from the portal contact card, in E.164 if possible. NEVER the agent's own phone number and NEVER a HomeLight claim/support number. If the page shows no lead contact card with a phone, answer 'none'."
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email from the portal contact card. NEVER the agent's own email. If the page shows no lead contact card with an email, answer 'none'."
+    },
+    {
+     "name": "lead_address",
+     "description": "The property address from the portal contact card, the FULL address including street, city, state, and ZIP code. If the page shows no lead contact card, answer 'none'."
+    },
+    {
+     "name": "already_claimed",
+     "description": "One lowercase word. Answer no when this referral is unclaimed, or when the page shows it claimed by Amy Laidlaw or her team: that is OUR claim and the lead is ours to work. Answer yes ONLY when a different brokerage or an agent outside this team holds it, or it is no longer available to claim."
+    },
+    {
+     "name": "lead_notes",
+     "description": "The client notes / motivation shown on the referral (e.g. 'Looking for cash offer'), plus the home type and timeframe if the page shows them. Answer 'none' if the page shows no client notes."
+    }
+   ],
+   "urlVar": "leadUrl",
+   "screenshot": true
+  },
+  {
+   "id": "brief_call",
+   "type": "voice_brief",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "fromE164": "+14159851909",
+   "noteTemplate": "Client notes from the HomeLight portal: {{vars.lead_notes}}. Property address: {{vars.lead_address}}. Their name on file: {{vars.lead_name}}.",
+   "withinMinutes": 30
+  },
+  {
+   "id": "recheck1_wait",
+   "type": "sleep",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "minutes": 2
+  },
+  {
+   "id": "recheck1",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_extract",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "fields": [
+    {
+     "name": "lead_name",
+     "description": "The lead's (client's) full name from the portal contact card. NEVER the agent's own name shown in the page header, account menu, or a 'New Referral for <agent>' banner. If the page shows no lead contact card (e.g. it's a claim landing page or a referral list), answer 'none'."
+    },
+    {
+     "name": "lead_phone",
+     "description": "The lead's mobile phone from the portal contact card, in E.164 if possible. NEVER the agent's own phone number and NEVER a HomeLight claim/support number. If the page shows no lead contact card with a phone, answer 'none'."
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email from the portal contact card. NEVER the agent's own email. If the page shows no lead contact card with an email, answer 'none'."
+    },
+    {
+     "name": "lead_address",
+     "description": "The property address from the portal contact card, the FULL address including street, city, state, and ZIP code. If the page shows no lead contact card, answer 'none'."
+    },
+    {
+     "name": "contact_release",
+     "description": "Answer exactly one lowercase word: released if this page now shows the CLIENT's own phone number or email, withheld if it does not. Never count the agent's own contact details or a HomeLight support number."
+    }
+   ],
+   "urlVar": "leadUrl",
+   "fillOnlyEmpty": true
+  },
+  {
+   "id": "brief_release",
+   "type": "voice_brief",
+   "when": {
+    "var": "contact_release",
+    "equals": "released"
+   },
+   "fromE164": "+14159851909",
+   "noteTemplate": "HomeLight just released the client's contact details: {{vars.lead_phone}} {{vars.lead_email}}. Property address: {{vars.lead_address}}.",
+   "withinMinutes": 30
+  },
+  {
+   "id": "recheck2_wait",
+   "type": "sleep",
+   "when": {
+    "var": "contact_release",
+    "notEquals": "released"
+   },
+   "minutes": 3
+  },
+  {
+   "id": "recheck2",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_extract",
+   "when": {
+    "var": "contact_release",
+    "notEquals": "released"
+   },
+   "fields": [
+    {
+     "name": "lead_name",
+     "description": "The lead's (client's) full name from the portal contact card. NEVER the agent's own name shown in the page header, account menu, or a 'New Referral for <agent>' banner. If the page shows no lead contact card (e.g. it's a claim landing page or a referral list), answer 'none'."
+    },
+    {
+     "name": "lead_phone",
+     "description": "The lead's mobile phone from the portal contact card, in E.164 if possible. NEVER the agent's own phone number and NEVER a HomeLight claim/support number. If the page shows no lead contact card with a phone, answer 'none'."
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email from the portal contact card. NEVER the agent's own email. If the page shows no lead contact card with an email, answer 'none'."
+    },
+    {
+     "name": "lead_address",
+     "description": "The property address from the portal contact card, the FULL address including street, city, state, and ZIP code. If the page shows no lead contact card, answer 'none'."
+    },
+    {
+     "name": "contact_release2",
+     "description": "Answer exactly one lowercase word: released if this page now shows the CLIENT's own phone number or email, withheld if it does not. Never count the agent's own contact details or a HomeLight support number."
+    }
+   ],
+   "urlVar": "leadUrl",
+   "fillOnlyEmpty": true
+  },
+  {
+   "id": "brief_release2",
+   "type": "voice_brief",
+   "when": {
+    "var": "contact_release2",
+    "equals": "released"
+   },
+   "fromE164": "+14159851909",
+   "noteTemplate": "HomeLight just released the client's contact details: {{vars.lead_phone}} {{vars.lead_email}}. Property address: {{vars.lead_address}}.",
+   "withinMinutes": 30
+  },
+  {
+   "id": "wait_hl_call",
+   "type": "wait_for_call",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "saveAs": "hl_call_outcome",
+   "backfill": [
+    {
+     "to": "lead_phone",
+     "from": "phone"
+    },
+    {
+     "to": "lead_email",
+     "from": "email"
+    },
+    {
+     "to": "lead_address",
+     "from": "address"
+    },
+    {
+     "to": "lead_name",
+     "from": "name"
+    }
+   ],
+   "fromE164": "+14159851909",
+   "capturePrefix": "call_",
+   "withinMinutes": 30,
+   "timeoutMinutes": 45,
+   "awaitStartMinutes": 6
+  },
+  {
+   "id": "final_read",
+   "auth": {
+    "integrationLabel": "Home Light"
+   },
+   "type": "browse_extract",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "fields": [
+    {
+     "name": "lead_name",
+     "description": "The lead's (client's) full name from the portal contact card. NEVER the agent's own name shown in the page header, account menu, or a 'New Referral for <agent>' banner. If the page shows no lead contact card (e.g. it's a claim landing page or a referral list), answer 'none'."
+    },
+    {
+     "name": "lead_phone",
+     "description": "The lead's mobile phone from the portal contact card, in E.164 if possible. NEVER the agent's own phone number and NEVER a HomeLight claim/support number. If the page shows no lead contact card with a phone, answer 'none'."
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email from the portal contact card. NEVER the agent's own email. If the page shows no lead contact card with an email, answer 'none'."
+    },
+    {
+     "name": "lead_address",
+     "description": "The property address from the portal contact card, the FULL address including street, city, state, and ZIP code. If the page shows no lead contact card, answer 'none'."
+    },
+    {
+     "name": "contact_release3",
+     "description": "Answer exactly one lowercase word: released if this page now shows the CLIENT's own phone number or email, withheld if it does not. Never count the agent's own contact details or a HomeLight support number."
+    }
+   ],
+   "urlVar": "leadUrl",
+   "screenshot": true,
+   "fillOnlyEmpty": true
+  },
+  {
+   "id": "email_card",
+   "type": "email_extract",
+   "when": {
+    "var": "claimed_agent",
+    "notEquals": "none"
+   },
+   "fields": [
+    {
+     "name": "lead_phone",
+     "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+    },
+    {
+     "name": "lead_address",
+     "description": "The property street address, labeled 'Address' in the HomeLight email, the FULL address including street, city, state, and ZIP code"
+    },
+    {
+     "name": "contact_status",
+     "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+    },
+    {
+     "name": "email_price",
+     "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+    },
+    {
+     "name": "email_timeframe",
+     "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+    },
+    {
+     "name": "email_summary",
+     "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+    }
+   ],
+   "connectionId": "00000000-0000-4000-8000-000000000001",
+   "fromContains": "homelight.com",
+   "fillOnlyEmpty": true,
+   "matchTemplates": [
+    "{{vars.lead_first_name}}"
+   ],
+   "lookbackMinutes": 60
+  },
+  {
+   "id": "unclaimed_email_read",
+   "type": "email_extract",
+   "when": {
+    "var": "claimed_agent",
+    "equals": "none"
+   },
+   "fields": [
+    {
+     "name": "lead_phone",
+     "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+    },
+    {
+     "name": "lead_email",
+     "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+    },
+    {
+     "name": "lead_address",
+     "description": "The property street address labeled 'Address' in the HomeLight email"
+    },
+    {
+     "name": "email_price",
+     "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+    },
+    {
+     "name": "email_timeframe",
+     "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+    },
+    {
+     "name": "email_summary",
+     "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+    },
+    {
+     "name": "u1_status",
+     "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+    }
+   ],
+   "connectionId": "00000000-0000-4000-8000-000000000001",
+   "fromContains": "homelight.com",
+   "fillOnlyEmpty": true,
+   "matchTemplates": [
+    "{{vars.lead_first_name}}"
+   ],
+   "lookbackMinutes": 60
+  },
+  {
+   "id": "lost_branch",
+   "else": [
+    {
+     "id": "lost_to_agent",
+     "to": "{{vars.claimed_agent_phone}}",
+     "body": "Heads up: HomeLight had already given the {{vars.lead_first_name}} referral ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) to another agent, so there is nothing to work. No contact details and nothing sent to them.\nPortal: {{vars.leadUrl}}",
+     "type": "send_sms",
+     "when": {
+      "var": "claimed_agent",
+      "notEquals": "none"
+     }
+    },
+    {
+     "id": "lost_notify",
+     "type": "notify_owner",
+     "when": {
+      "var": "claimed_agent",
+      "notEquals": "none"
+     },
+     "message": "HomeLight referral {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) was already claimed by another agent by the time {{vars.claimed_agent}} took it. No contact details and no outreach.\nPortal: {{vars.leadUrl}}"
+    }
+   ],
+   "type": "branch",
+   "branches": [
+    {
+     "id": "still_ours",
+     "label": "Still ours",
+     "steps": [
+      {
+       "id": "save_contact",
+       "type": "upsert_customer",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       },
+       "nameVar": "lead_name",
+       "emailVar": "lead_email",
+       "phoneVar": "lead_phone"
+      },
+      {
+       "id": "to_agent",
+       "to": "{{vars.claimed_agent_phone}}",
+       "body": "HomeLight lead assigned to you: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nHomeLight claim call: {{vars.hl_call_outcome_label}}.\nPortal: {{vars.leadUrl}}\nSeller said on the call: {{vars.call_phone}}\n({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}})\nWhen can you call? Reply 1 if you're calling now, or \"1, 20 min\" to tell us when.\nIf the number is bad, just say so.\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}",
+       "type": "send_sms",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       }
+      },
+      {
+       "id": "qt_email",
+       "to": "owner@example.com",
+       "body": "HomeLight referral assigned to {{vars.claimed_agent}}.\nHomeLight claim call: {{vars.hl_call_outcome_label}}.\nLead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nSeller said on the call: {{vars.call_phone}} {{vars.call_email}}\n{{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}\nLead source: HomeLight\n\nOriginal alert:\n{{trigger.windowText}}\n\nQT attached.\n\nWhat HomeLight revealed in the email:\n{{vars.email_summary}}\nExact price: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}",
+       "type": "send_email",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       },
+       "subject": "{{vars.lead_name}} QT HL CC DAVE",
+       "attachScreenshot": true
+      },
+      {
+       "id": "lead_sms",
+       "to": "{{vars.lead_phone}}",
+       "body": "Hi {{vars.lead_first_name}}, this is Amy Laidlaw (HomeSmart) re: your HomeLight inquiry to sell your home. I'm a top AZ agent (licensed since 1989) and create bidding wars that push offers thousands over list. Call me for your FREE listing appraisal: 602-695-1142. When's a good time to talk?",
+       "type": "send_sms",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       },
+       "quietHours": {
+        "resumeAt": "08:00",
+        "timezone": "America/Phoenix",
+        "noSendAfter": "21:00",
+        "emailSubject": "Regarding your recent Inquiry to Sell your Home on HomeLight",
+        "emailFallbackVar": "lead_email"
+       }
+      },
+      {
+       "id": "lead_email",
+       "to": "{{vars.lead_email}}",
+       "body": "Hi {{vars.lead_first_name}},\n\nRe: Your recent inquiry online & the value of your home with HomeLight.com.\n\nI'm an excellent negotiator and have it down to an Art Form on how I negotiate offers and create bidding wars in this market for your home. Call me today to claim your FREE listing appraisal! 602-695-1142. I'd love to help you.\n\nI'm licensed since 1989. One of the top agents in Arizona. I have systems in place to get your home listed and sold in one weekend with a bidding war getting the price to escalate rapidly thousands above list price with the offer being as is and waving the appraisal contingency most of the time. In addition I have an appraiser as part of my team to help price your listing with precision from the start as well as keeping buyers from lowballing you. I have a low flexible commission. My goal is to make sure you are happy with your bottom line. I have your bottom line 1st in mind!\n\nWhen is a good time to discuss next steps for your free appraisal & to get your home listed & sold?\n\nAmy Laidlaw\nowner@example.com\nHomeSmart\n602-695-1142",
+       "type": "send_email",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       },
+       "subject": "Regarding your recent Inquiry to Sell your Home on HomeLight"
+      },
+      {
+       "id": "notify",
+       "type": "notify_owner",
+       "when": {
+        "var": "claimed_agent",
+        "notEquals": "none"
+       },
+       "message": "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\nLead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nOutcome: {{vars.actions_taken}}."
+      }
+     ],
+     "condition": {
+      "var": "already_claimed",
+      "notEquals": "yes"
+     }
+    }
+   ],
+   "question": "Is this referral still ours?"
+  },
+  {
+   "id": "notify_unclaimed",
+   "type": "notify_owner",
+   "when": {
+    "var": "claimed_agent",
+    "equals": "none"
+   },
+   "message": "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\nAddress: {{vars.lead_address}}\nNot claimed, full details in the portal: {{vars.leadUrl}}\nOutcome: {{vars.actions_taken}}."
+  },
+  {
+   "id": "late",
+   "else": [],
+   "type": "branch",
+   "branches": [
+    {
+     "id": "late_still_ours",
+     "label": "Still ours",
+     "steps": [
+      {
+       "id": "late_missing",
+       "else": [],
+       "type": "branch",
+       "branches": [
+        {
+         "id": "late_missing_hit",
+         "label": "Contact details still missing",
+         "steps": [
+          {
+           "id": "late_wait",
+           "type": "sleep",
+           "minutes": 10
+          },
+          {
+           "id": "late_read",
+           "type": "email_extract",
+           "fields": [
+            {
+             "name": "lead_phone",
+             "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+            },
+            {
+             "name": "lead_email",
+             "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+            },
+            {
+             "name": "lead_address",
+             "description": "The property street address, labeled 'Address' in the HomeLight email, the FULL address including street, city, state, and ZIP code"
+            },
+            {
+             "name": "late_contact_status",
+             "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+            },
+            {
+             "name": "email_price",
+             "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+            },
+            {
+             "name": "email_timeframe",
+             "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+            },
+            {
+             "name": "email_summary",
+             "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+            }
+           ],
+           "connectionId": "00000000-0000-4000-8000-000000000001",
+           "fromContains": "homelight.com",
+           "fillOnlyEmpty": true,
+           "matchTemplates": [
+            "{{vars.lead_first_name}}"
+           ],
+           "lookbackMinutes": 90
+          },
+          {
+           "id": "late_unresolved",
+           "left": "1",
+           "type": "math",
+           "when": {
+            "var": "late_contact_status",
+            "notEquals": "found"
+           },
+           "right": "0",
+           "saveAs": "late_unresolved",
+           "operation": "add"
+          },
+          {
+           "id": "late_save",
+           "type": "upsert_customer",
+           "when": {
+            "var": "late_contact_status",
+            "equals": "found"
+           },
+           "nameVar": "lead_name",
+           "emailVar": "lead_email",
+           "phoneVar": "lead_phone"
+          },
+          {
+           "id": "late_to_agent",
+           "to": "{{vars.claimed_agent_phone}}",
+           "body": "HomeLight just sent {{vars.lead_first_name}}'s contact info: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}})\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}",
+           "type": "send_sms",
+           "when": {
+            "var": "late_contact_status",
+            "equals": "found"
+           }
+          },
+          {
+           "id": "late_notify",
+           "type": "notify_owner",
+           "when": {
+            "var": "late_contact_status",
+            "equals": "found"
+           },
+           "message": "HomeLight sent {{vars.lead_first_name}}'s contact info after the claim and it went to {{vars.claimed_agent}}.\nPrice: {{vars.price}}\nLead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\nAddress: {{vars.lead_address}}"
+          },
+          {
+           "id": "late_lead_sms",
+           "to": "{{vars.lead_phone}}",
+           "body": "Hi {{vars.lead_first_name}}, this is Amy Laidlaw (HomeSmart) re: your HomeLight inquiry to sell your home. I'm a top AZ agent (licensed since 1989) and create bidding wars that push offers thousands over list. Call me for your FREE listing appraisal: 602-695-1142. When's a good time to talk?",
+           "type": "send_sms",
+           "when": {
+            "var": "late_contact_status",
+            "equals": "found"
+           },
+           "quietHours": {
+            "resumeAt": "08:00",
+            "timezone": "America/Phoenix",
+            "noSendAfter": "21:00",
+            "emailSubject": "Regarding your recent Inquiry to Sell your Home on HomeLight",
+            "emailFallbackVar": "lead_email"
+           }
+          },
+          {
+           "id": "late_lead_email",
+           "to": "{{vars.lead_email}}",
+           "body": "Hi {{vars.lead_first_name}},\n\nRe: Your recent inquiry online & the value of your home with HomeLight.com.\n\nI'm an excellent negotiator and have it down to an Art Form on how I negotiate offers and create bidding wars in this market for your home. Call me today to claim your FREE listing appraisal! 602-695-1142. I'd love to help you.\n\nI'm licensed since 1989. One of the top agents in Arizona. I have systems in place to get your home listed and sold in one weekend with a bidding war getting the price to escalate rapidly thousands above list price with the offer being as is and waving the appraisal contingency most of the time. In addition I have an appraiser as part of my team to help price your listing with precision from the start as well as keeping buyers from lowballing you. I have a low flexible commission. My goal is to make sure you are happy with your bottom line. I have your bottom line 1st in mind!\n\nWhen is a good time to discuss next steps for your free appraisal & to get your home listed & sold?\n\nAmy Laidlaw\nowner@example.com\nHomeSmart\n602-695-1142",
+           "type": "send_email",
+           "when": {
+            "var": "late_contact_status",
+            "equals": "found"
+           },
+           "subject": "Regarding your recent Inquiry to Sell your Home on HomeLight"
+          }
+         ],
+         "condition": {
+          "var": "contact_status",
+          "equals": "missing"
+         }
+        }
+       ],
+       "question": "Did HomeLight send the client contact details yet?"
+      }
+     ],
+     "condition": {
+      "var": "already_claimed",
+      "notEquals": "yes"
+     }
+    }
+   ],
+   "question": "Is this referral still ours?"
+  },
+  {
+   "id": "bp_wait_minutes",
+   "left": "{{vars.claimed_agent_eta_minutes}}",
+   "type": "math",
+   "right": "60",
+   "saveAs": "report_wait_minutes",
+   "operation": "add"
+  },
+  {
+   "id": "bp_wait",
+   "type": "wait_for_reply",
+   "saveAs": "agent_report",
+   "phoneVar": "claimed_agent_phone",
+   "timeoutMinutes": 60,
+   "timeoutMinutesTemplate": "{{vars.report_wait_minutes}}"
+  },
+  {
+   "id": "bp_classify",
+   "type": "classify",
+   "when": {
+    "var": "agent_report",
+    "notEquals": "no_reply"
+   },
+   "saveAs": "agent_report_class",
+   "textVar": "agent_report",
+   "question": "A team member claimed this lead and tried to call them. This is the team member's follow-up text message about that lead.",
+   "categories": [
+    {
+     "value": "bad_phone_number",
+     "description": "says the lead's phone number is bad - wrong number, disconnected, out of service, fake, dead line, no longer in service, or otherwise describes the lead's phone negatively"
+    },
+    {
+     "value": "calling_at",
+     "description": "says WHEN they will call the lead, or confirms they are calling now - a bare \"1\", \"1, 20 min\", \"calling now\", \"in an hour\", \"after 5\", or any other stated timing"
+    },
+    {
+     "value": "other_update",
+     "description": "any other update about the lead - left a voicemail, no answer, will try again later, spoke with them, or anything not about a bad phone number"
+    }
+   ]
+  },
+  {
+   "id": "bp_branch",
+   "else": [
+    {
+     "id": "bp_forward",
+     "type": "notify_owner",
+     "when": {
+      "var": "agent_report",
+      "notEquals": "no_reply"
+     },
+     "message": "HomeLight Referral update from {{vars.claimed_agent}} about {{vars.lead_name}} ({{vars.lead_phone}}): {{vars.agent_report}}\nPrice: {{vars.price}}"
+    }
+   ],
+   "type": "branch",
+   "branches": [
+    {
+     "id": "bp_bad_phone",
+     "label": "Bad phone number reported",
+     "steps": [
+      {
+       "id": "bp_email_branch",
+       "else": [
+        {
+         "id": "bp_email_amy_no_email",
+         "to": "owner@example.com",
+         "body": "{{vars.claimed_agent}} tried calling the HomeLight Referral lead and reported the phone number we have is bad.\nTheir exact words: \"{{vars.agent_report}}\"\n\nLead info:\nName: {{vars.lead_name}} ({{vars.lead_first_name}})\nPhone on file (bad): {{vars.lead_phone}}\nEmail: {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n{{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}\nPortal: {{vars.leadUrl}}\nLead source: HomeLight\n\nThis lead has NO email on file, so NO follow-up email was sent asking for a better number, this report is the only outreach. If the seller reaches out another way, please ask them for their best phone number.",
+         "type": "send_email",
+         "subject": "BAD PHONE NUMBER, NO EMAIL, {{vars.lead_name}} ({{vars.lead_phone}}), HomeLight Referral"
+        }
+       ],
+       "type": "branch",
+       "branches": [
+        {
+         "id": "bp_has_email",
+         "label": "Lead has an email",
+         "steps": [
+          {
+           "id": "bp_email_lead",
+           "to": "{{vars.lead_email}}",
+           "body": "Hi {{vars.lead_first_name}},\n\nRe: Your recent inquiry online & the value of your home with HomeLight.com.\n\nWe tried to give you a call, but the phone number we have on file doesn't seem to be working. Could you reply with your best phone number so we can connect?\n\nI'm an excellent negotiator and have it down to an Art Form on how I negotiate offers and create bidding wars in this market for your home. I'd love to help you.\n\nI'm licensed since 1989. One of the top agents in Arizona. I have systems in place to get your home listed and sold in one weekend with a bidding war getting the price to escalate rapidly thousands above list price. In addition I have an appraiser as part of my team to help price your listing with precision from the start as well as keeping buyers from lowballing you. I have a low flexible commission. My goal is to make sure you are happy with your bottom line. I have your bottom line 1st in mind!\n\nReply with your best phone number and we'll set up your free appraisal & next steps to get your home listed & sold.\n\nAmy Laidlaw\nowner@example.com\nHomeSmart\n602-695-1142",
+           "type": "send_email",
+           "subject": "Regarding your recent Inquiry to Sell your Home on HomeLight",
+           "fromConnectionId": "00000000-0000-4000-8000-000000000001"
+          },
+          {
+           "id": "bp_email_amy",
+           "to": "owner@example.com",
+           "body": "{{vars.claimed_agent}} tried calling the HomeLight Referral lead and reported the phone number we have is bad.\nTheir exact words: \"{{vars.agent_report}}\"\n\nLead info:\nName: {{vars.lead_name}} ({{vars.lead_first_name}})\nPhone on file (bad): {{vars.lead_phone}}\nEmail: {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n{{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}\nPortal: {{vars.leadUrl}}\nLead source: HomeLight\n\nThe lead has an email on file, so a follow-up asking for their best phone number was attempted from owner@example.com. The outcome line below shows exactly what went out: \"emailed ...\" means it was SENT; \"skipped email ...\" (or no \"emailed\" line at all) means NOTHING was sent, the address was unusable, so please get their best number if they reach out another way.\n\nI'm also watching for a bounce: if a delivery-failure notice comes back for this follow-up, you'll get a separate EMAIL BOUNCED alert within about half an hour. No alert = no bounce seen.\n\nEverything this flow did: {{vars.actions_taken}}",
+           "type": "send_email",
+           "subject": "BAD PHONE NUMBER, {{vars.lead_name}} ({{vars.lead_phone}}), HomeLight Referral"
+          },
+          {
+           "id": "bp_bounce_wait",
+           "type": "sleep",
+           "minutes": 20
+          },
+          {
+           "id": "bp_bounce_check",
+           "type": "email_extract",
+           "fields": [
+            {
+             "name": "lead_email_bounced",
+             "description": "Answer exactly one lowercase word: bounced - if this email is a delivery failure / undeliverable / returned-mail notice (e.g. from a postmaster or mail delivery subsystem: address not found, mailbox unavailable or full, message could not be delivered); otherwise: none"
+            }
+           ],
+           "connectionId": "00000000-0000-4000-8000-000000000001",
+           "matchTemplates": [
+            "{{vars.lead_email}}",
+            "Regarding your recent Inquiry to Sell your Home on HomeLight"
+           ],
+           "lookbackMinutes": 240
+          },
+          {
+           "id": "bp_email_amy_bounced",
+           "to": "owner@example.com",
+           "body": "{{vars.claimed_agent}} tried calling the HomeLight Referral lead and reported the phone number we have is bad.\nTheir exact words: \"{{vars.agent_report}}\"\n\nLead info:\nName: {{vars.lead_name}} ({{vars.lead_first_name}})\nPhone on file (bad): {{vars.lead_phone}}\nEmail: {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n{{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}\nPortal: {{vars.leadUrl}}\nLead source: HomeLight\n\nUPDATE to the bad-phone report you just received: the follow-up email asking for their best phone number BOUNCED, a delivery-failure notice for {{vars.lead_email}} came back to owner@example.com, so the EMAIL on file is bad too. There is currently no working way to reach this lead; if they resurface through any channel, please capture their best phone number and email.\n\nEverything this flow did: {{vars.actions_taken}}",
+           "type": "send_email",
+           "when": {
+            "var": "lead_email_bounced",
+            "equals": "bounced"
+           },
+           "subject": "EMAIL BOUNCED TOO, {{vars.lead_name}} ({{vars.lead_phone}}), HomeLight Referral"
+          }
+         ],
+         "condition": {
+          "var": "lead_email",
+          "contains": "@"
+         }
+        }
+       ],
+       "question": "Does this lead have an email on file?"
+      }
+     ],
+     "condition": {
+      "var": "agent_report_class",
+      "equals": "bad_phone_number"
+     }
+    },
+    {
+     "id": "bp_calling_at",
+     "label": "Said when they'll call",
+     "steps": [
+      {
+       "id": "bp_eta_notify",
+       "type": "notify_owner",
+       "message": "{{vars.claimed_agent}} says when they'll call {{vars.lead_name}} ({{vars.lead_phone}}): \"{{vars.agent_report}}\"\nPrice: {{vars.price}}"
+      }
+     ],
+     "condition": {
+      "var": "agent_report_class",
+      "equals": "calling_at"
+     }
+    }
+   ],
+   "question": "Did the team member report a bad or invalid phone number for this lead?"
+  },
+  {
+   "id": "late2",
+   "else": [],
+   "type": "branch",
+   "branches": [
+    {
+     "id": "late2_still_ours",
+     "label": "Still ours",
+     "steps": [
+      {
+       "id": "late2_missing",
+       "else": [],
+       "type": "branch",
+       "branches": [
+        {
+         "id": "late2_missing_hit",
+         "label": "Still missing after the first retry",
+         "steps": [
+          {
+           "id": "late2_wait",
+           "type": "sleep",
+           "minutes": 60
+          },
+          {
+           "id": "late2_read",
+           "type": "email_extract",
+           "fields": [
+            {
+             "name": "lead_phone",
+             "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+            },
+            {
+             "name": "lead_email",
+             "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+            },
+            {
+             "name": "lead_address",
+             "description": "The property street address, labeled 'Address' in the HomeLight email, the FULL address including street, city, state, and ZIP code"
+            },
+            {
+             "name": "late2_contact_status",
+             "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+            },
+            {
+             "name": "email_price",
+             "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+            },
+            {
+             "name": "email_timeframe",
+             "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+            },
+            {
+             "name": "email_summary",
+             "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+            }
+           ],
+           "connectionId": "00000000-0000-4000-8000-000000000001",
+           "fromContains": "homelight.com",
+           "fillOnlyEmpty": true,
+           "matchTemplates": [
+            "{{vars.lead_first_name}}"
+           ],
+           "lookbackMinutes": 240
+          },
+          {
+           "id": "late2_save",
+           "type": "upsert_customer",
+           "when": {
+            "var": "late2_contact_status",
+            "equals": "found"
+           },
+           "nameVar": "lead_name",
+           "emailVar": "lead_email",
+           "phoneVar": "lead_phone"
+          },
+          {
+           "id": "late2_to_agent",
+           "to": "{{vars.claimed_agent_phone}}",
+           "body": "HomeLight just sent {{vars.lead_first_name}}'s contact info: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}})\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}",
+           "type": "send_sms",
+           "when": {
+            "var": "late2_contact_status",
+            "equals": "found"
+           }
+          },
+          {
+           "id": "late2_notify",
+           "type": "notify_owner",
+           "when": {
+            "var": "late2_contact_status",
+            "equals": "found"
+           },
+           "message": "HomeLight sent {{vars.lead_first_name}}'s contact info after the claim and it went to {{vars.claimed_agent}}.\nPrice: {{vars.price}}\nLead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\nAddress: {{vars.lead_address}}"
+          },
+          {
+           "id": "late2_lead_sms",
+           "to": "{{vars.lead_phone}}",
+           "body": "Hi {{vars.lead_first_name}}, this is Amy Laidlaw (HomeSmart) re: your HomeLight inquiry to sell your home. I'm a top AZ agent (licensed since 1989) and create bidding wars that push offers thousands over list. Call me for your FREE listing appraisal: 602-695-1142. When's a good time to talk?",
+           "type": "send_sms",
+           "when": {
+            "var": "late2_contact_status",
+            "equals": "found"
+           },
+           "quietHours": {
+            "resumeAt": "08:00",
+            "timezone": "America/Phoenix",
+            "noSendAfter": "21:00",
+            "emailSubject": "Regarding your recent Inquiry to Sell your Home on HomeLight",
+            "emailFallbackVar": "lead_email"
+           }
+          },
+          {
+           "id": "late2_lead_email",
+           "to": "{{vars.lead_email}}",
+           "body": "Hi {{vars.lead_first_name}},\n\nRe: Your recent inquiry online & the value of your home with HomeLight.com.\n\nI'm an excellent negotiator and have it down to an Art Form on how I negotiate offers and create bidding wars in this market for your home. Call me today to claim your FREE listing appraisal! 602-695-1142. I'd love to help you.\n\nI'm licensed since 1989. One of the top agents in Arizona. I have systems in place to get your home listed and sold in one weekend with a bidding war getting the price to escalate rapidly thousands above list price with the offer being as is and waving the appraisal contingency most of the time. In addition I have an appraiser as part of my team to help price your listing with precision from the start as well as keeping buyers from lowballing you. I have a low flexible commission. My goal is to make sure you are happy with your bottom line. I have your bottom line 1st in mind!\n\nWhen is a good time to discuss next steps for your free appraisal & to get your home listed & sold?\n\nAmy Laidlaw\nowner@example.com\nHomeSmart\n602-695-1142",
+           "type": "send_email",
+           "when": {
+            "var": "late2_contact_status",
+            "equals": "found"
+           },
+           "subject": "Regarding your recent Inquiry to Sell your Home on HomeLight"
+          },
+          {
+           "id": "late2_never_agent",
+           "to": "{{vars.claimed_agent_phone}}",
+           "body": "HomeLight still has not sent {{vars.lead_first_name}}'s contact info ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}). Nothing to call yet.\nCheck the portal: {{vars.leadUrl}}\nHomeLight only releases contact details after a successful live transfer or a connected call, so if the seller hung up before connecting, none are coming.",
+           "type": "send_sms",
+           "when": {
+            "var": "late2_contact_status",
+            "notEquals": "found"
+           }
+          },
+          {
+           "id": "late2_never_notify",
+           "type": "notify_owner",
+           "when": {
+            "var": "late2_contact_status",
+            "notEquals": "found"
+           },
+           "message": "HomeLight never sent {{vars.lead_first_name}}'s contact info ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}), claimed by {{vars.claimed_agent}}. No phone, email, or address arrived by email, so no outreach went out.\nPortal: {{vars.leadUrl}}"
+          }
+         ],
+         "condition": {
+          "var": "late_unresolved",
+          "equals": "1"
+         }
+        }
+       ],
+       "question": "Did the client contact details ever arrive?"
+      }
+     ],
+     "condition": {
+      "var": "already_claimed",
+      "notEquals": "yes"
+     }
+    }
+   ],
+   "question": "Is this referral still ours?"
+  },
+  {
+   "id": "late_unclaimed",
+   "else": [],
+   "type": "branch",
+   "branches": [
+    {
+     "id": "late_unclaimed_go",
+     "label": "Still unclaimed, deliver the details as soon as they land",
+     "steps": [
+      {
+       "id": "late_unclaimed_alert",
+       "type": "notify_lead_owner",
+       "when": {
+        "var": "u1_status",
+        "equals": "found"
+       },
+       "message": "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\nNobody has claimed this one yet.",
+       "nameVar": "lead_name",
+       "phoneVar": "lead_phone",
+       "unownedFallback": "team"
+      },
+      {
+       "id": "unclaimed_wait_2",
+       "type": "sleep",
+       "when": {
+        "var": "u1_status",
+        "equals": "missing"
+       },
+       "minutes": 15
+      },
+      {
+       "id": "unclaimed_email_read_2",
+       "type": "email_extract",
+       "when": {
+        "var": "u1_status",
+        "equals": "missing"
+       },
+       "fields": [
+        {
+         "name": "lead_phone",
+         "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+        },
+        {
+         "name": "lead_email",
+         "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+        },
+        {
+         "name": "lead_address",
+         "description": "The property street address labeled 'Address' in the HomeLight email"
+        },
+        {
+         "name": "email_price",
+         "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+        },
+        {
+         "name": "email_timeframe",
+         "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+        },
+        {
+         "name": "email_summary",
+         "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+        },
+        {
+         "name": "u2_status",
+         "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+        }
+       ],
+       "connectionId": "00000000-0000-4000-8000-000000000001",
+       "fromContains": "homelight.com",
+       "fillOnlyEmpty": true,
+       "matchTemplates": [
+        "{{vars.lead_first_name}}"
+       ],
+       "lookbackMinutes": 120
+      },
+      {
+       "id": "late_unclaimed_alert_2",
+       "type": "notify_lead_owner",
+       "when": {
+        "var": "u2_status",
+        "equals": "found"
+       },
+       "message": "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\nNobody has claimed this one yet.",
+       "nameVar": "lead_name",
+       "phoneVar": "lead_phone",
+       "unownedFallback": "team"
+      },
+      {
+       "id": "unclaimed_wait_3",
+       "type": "sleep",
+       "when": {
+        "var": "u2_status",
+        "equals": "missing"
+       },
+       "minutes": 60
+      },
+      {
+       "id": "unclaimed_email_read_3",
+       "type": "email_extract",
+       "when": {
+        "var": "u2_status",
+        "equals": "missing"
+       },
+       "fields": [
+        {
+         "name": "lead_phone",
+         "description": "The lead's phone number, labeled 'Phone' in the HomeLight email"
+        },
+        {
+         "name": "lead_email",
+         "description": "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+        },
+        {
+         "name": "lead_address",
+         "description": "The property street address labeled 'Address' in the HomeLight email"
+        },
+        {
+         "name": "email_price",
+         "description": "The exact asking price from this email (e.g. $560,000), not the rounded figure from the text alert. If the email shows no price, answer exactly: none"
+        },
+        {
+         "name": "email_timeframe",
+         "description": "The seller's timeframe from this email (e.g. Unsure, 1-3 months). If it is not shown, answer exactly: none"
+        },
+        {
+         "name": "email_summary",
+         "description": "The client-details section of this email as plain text: side, phone, email, address, price, timeframe, property type, claimed by, and the request notes. Copy what is there, never invent. If there are none, answer exactly: none"
+        },
+        {
+         "name": "u3_status",
+         "description": "Answer exactly one lowercase word: found if this email lists the CLIENT's own phone number, missing if it does not. Never count the agent's own number or a HomeLight support number."
+        }
+       ],
+       "connectionId": "00000000-0000-4000-8000-000000000001",
+       "fromContains": "homelight.com",
+       "fillOnlyEmpty": true,
+       "matchTemplates": [
+        "{{vars.lead_first_name}}"
+       ],
+       "lookbackMinutes": 240
+      },
+      {
+       "id": "late_unclaimed_alert_3",
+       "type": "notify_lead_owner",
+       "when": {
+        "var": "u3_status",
+        "equals": "found"
+       },
+       "message": "HomeLight just revealed {{vars.lead_first_name}}'s details: {{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\nAddress: {{vars.lead_address}}\nPrice: {{vars.email_price}}\nTimeframe: {{vars.email_timeframe}}\nNobody has claimed this one yet.",
+       "nameVar": "lead_name",
+       "phoneVar": "lead_phone",
+       "unownedFallback": "team"
+      }
+     ],
+     "condition": {
+      "var": "claimed_agent",
+      "equals": "none"
+     }
+    }
+   ],
+   "question": "Nobody claimed it: watch for HomeLight's reveal?"
+  }
+ ],
+ "options": {
+  "startImmediately": true,
+  "suppressDefaultReply": true,
+  "captureStepScreenshots": false
+ },
+ "trigger": {
+  "channel": "sms",
+  "conditions": [
+   {
+    "type": "has_url"
+   },
+   {
+    "type": "regex",
+    "value": "New HomeLight (Referral|Warm Transfer)",
+    "caseInsensitive": true
+   }
+  ],
+  "correlationWindowMinutes": 15
+ },
+ "version": 1
+}
