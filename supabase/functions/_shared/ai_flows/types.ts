@@ -950,6 +950,13 @@ export type FlowStep =
        * exclusive with agentName/agentRef/agentNames.
        */
       broadcastAll?: boolean;
+      /**
+       * Narrow a broadcastAll offer to members carrying this tag, rendered as
+       * a template so it can come from the lead ("{{vars.lead_type}}"). Same
+       * selector and fail-safe as the notify_lead_owner team alert. Rejected
+       * by the schema unless broadcastAll is set.
+       */
+      teamTagTemplate?: string;
       /** After-hours claim-deadline extension; see RouteOfferWindow. */
       offerWindow?: RouteOfferWindow;
       /**

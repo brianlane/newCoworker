@@ -1582,6 +1582,22 @@ const nonBranchStepMembers = [
     // with agentName/agentRef/agentNames (validateDefinitionSemantics).
     // Only the literal `true` is accepted: absence IS the off state.
     broadcastAll: z.literal(true).optional(),
+    /**
+     * Narrow a broadcastAll offer to members carrying this tag
+     * (ai_flow_team_members.tags), rendered as a template so it can come from
+     * the lead itself: "{{vars.lead_type}}" offers a seller lead only to the
+     * teammates who cover sellers.
+     *
+     * Same selector and same FAIL-SAFE as the `notify_lead_owner` team alert
+     * (`_shared/team_broadcast.ts`): matching is case-insensitive, and a tag
+     * that matches NOBODY offers the whole available roster rather than
+     * nobody. Tags are free text with nothing validating them, so a typo must
+     * cost noise rather than a lead that is offered to no one.
+     *
+     * broadcastAll only: narrowing an explicitly NAMED recipient list would
+     * be a contradiction, and validateDefinitionSemantics rejects it.
+     */
+    teamTagTemplate: z.string().min(1).max(200).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
     // Offer reply digits are universal, not per-flow options: "1" claims (live
@@ -3134,6 +3150,15 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.broadcastAll && (step.agentName || step.agentRef || step.agentNames)) {
         issues.push(
           `Step "${step.id}" sets broadcastAll alongside agentName/agentRef/agentNames; broadcastAll offers the whole active roster and is mutually exclusive with pinned recipients.`
+        );
+      }
+      // The tag filter narrows a whole-roster fan-out. Against an explicitly
+      // NAMED list it is a contradiction: the author already said exactly who
+      // to offer, and silently dropping some of those names by tag is the
+      // kind of surprise a fail-safe cannot rescue.
+      if (step.teamTagTemplate && !step.broadcastAll) {
+        issues.push(
+          `Step "${step.id}" sets teamTagTemplate without broadcastAll; the tag filter narrows a whole-roster broadcast and cannot be combined with pinned recipients.`
         );
       }
       // The dynamic pin decides pinned-vs-not at execution time from the
