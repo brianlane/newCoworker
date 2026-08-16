@@ -265,9 +265,26 @@ These are mistakes already made on this account. Do not remake them.
   `lead_phone`, and the Clever referral page yielded an empty one, so the run
   logged `skipped a contact-tag update (no usable phone)` and the lead joined
   no cadence either. No team offer by design, no cadence by accident, and the
-  only signal was an owner email reading `Clever lead: () none`. Still open:
-  a gated lead that cannot be enrolled should say so loudly rather than
-  finishing the run clean.
+  only signal was an owner email reading `Clever lead: () none`. Closed the
+  same day by `amy-unreachable-lead-team-alert.ts`: all four arrival flows now
+  carry a `<prefix>_no_phone_guard` right after the step that extracts the
+  lead, and a lead with no usable number alerts the lead-type-tagged team
+  instead of vanishing.
+
+- **There is no way to ask a flow "is this var blank".** `whenSchema` requires
+  a non-empty needle on `equals`/`contains`/`notEquals`, so an emptiness test
+  is unexpressible. The no-phone guards test `lead_phone contains "+"` instead:
+  every number these flows can act on is E.164. A malformed non-E.164 value
+  also trips the guard, which errs toward telling a human, the safe direction.
+  If you ever need a real emptiness test, note that `evaluateStepCondition`
+  already falls back to a presence check when none of the three is set; the
+  schema is what forbids that shape.
+
+- **Inserting a step into a live flow is safe; renaming one is not.** A parked
+  run stores `__resume_step_id`, not the flat index, and `resolveResumeIndex`
+  maps the id back. The four no-phone guards were inserted mid-flow with no
+  runs disturbed (none were parked at the time, and any that had been would
+  resume by id).
 
 ## One-shots
 
@@ -300,6 +317,18 @@ owner-direct behavior; carries no customer PII (every lead detail is an
 argument) and skips a recipient who was already alerted about that lead, so a
 re-run converges. Applied once, Aug 15 2026, for a Clever seller whose two
 `notify_team` alerts had both gone to Amy alone. See Sharp edges.
+
+Unreachable-lead guard (Aug 15 2026): `amy-unreachable-lead-team-alert.ts`
+inserts a `<prefix>_no_phone_guard` branch into all four ARRIVAL flows (Clever
+Lead - Accept, ReferralExchange Lead, Realtor.com Lead, New Lead Intake), right
+after the step that extracts the lead. When `lead_phone` carries no "+", the
+lead-type-tagged team is alerted via `notify_lead_owner` +
+`unownedFallback: "team"`. Purely additive: ReferralExchange and New Lead
+Intake keep their existing owner-addressed `notify_no_phone` steps, so Amy
+loses no notice she gets today. Pinned by
+`tests/amy-unreachable-lead-team-alert.test.ts`, which asserts the copy only
+uses vars each flow really produces. Applied to all four, Aug 15 2026.
+`--revert --apply` restores the exact previous definitions from the ledger.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`,
