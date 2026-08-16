@@ -18,7 +18,18 @@ import type { Definition } from "../scripts/oneshot/amy-under-500k-ai-owned";
  */
 
 const DECLARED: Record<string, string[]> = {
-  "Clever Lead - Accept": ["lead_name", "lead_phone", "lead_email", "lead_address", "price", "lead_url"],
+  // price_gate is declared here because the offer's own `when` reads it; the
+  // validator rejects a condition on a var no earlier step produces, which is
+  // what proves the live flows really do extract it.
+  "Clever Lead - Accept": [
+    "lead_name",
+    "lead_phone",
+    "lead_email",
+    "lead_address",
+    "price",
+    "lead_url",
+    "price_gate"
+  ],
   "ReferralExchange Lead": ["lead_name", "lead_phone", "lead_email", "location", "price", "lead_type"],
   "Realtor.com Lead": [
     "lead_name",
@@ -27,7 +38,8 @@ const DECLARED: Record<string, string[]> = {
     "lead_address",
     "lead_price_details",
     "lead_url",
-    "lead_type"
+    "lead_type",
+    "price_gate"
   ],
   "New Lead Intake": [
     "lead_name",
@@ -204,5 +216,39 @@ describe("sameShape", () => {
     const want = claimOffer(PLANS[0]);
     const roundTripped = Object.fromEntries(Object.entries(want).reverse());
     expect(sameShape(roundTripped, want)).toBe(true);
+  });
+});
+
+/**
+ * A parked offer is not a fire-and-forget alert: two live claim windows on one
+ * lead means two deadlines, two races, and teammates getting contradictory
+ * texts. Clever's `route` and Realtor.com's `s4`/`s4_buyer` gate only on
+ * price_gate, so a $500K+ no-phone lead would have been offered twice.
+ * ReferralExchange and New Lead Intake route on vars that read "none" without
+ * a phone, so their trunk routes already skip. (Bugbot, PR #1399.)
+ */
+describe("no double claim windows", () => {
+  const byFlow = Object.fromEntries(PLANS.map((p) => [p.flow, claimOffer(p)]));
+
+  it("gates the offer on the exact complement of the trunk route", () => {
+    // route fires on price_gate != "ai"; this fires on price_gate == "ai".
+    // Mutually exclusive by construction, not by luck.
+    for (const flow of ["Clever Lead - Accept", "Realtor.com Lead"]) {
+      expect(byFlow[flow].when, flow).toEqual({ var: "price_gate", equals: "ai" });
+    }
+  });
+
+  it("leaves the reachability-gated flows ungated", () => {
+    // Their trunk routes already skip without a phone, so a gate here would
+    // suppress the only offer these leads get.
+    for (const flow of ["ReferralExchange Lead", "New Lead Intake"]) {
+      expect(byFlow[flow], flow).not.toHaveProperty("when");
+    }
+  });
+
+  it("covers the AI-owned lead, which is the gap this guard exists for", () => {
+    // The lead that started all of this was $425K: price_gate "ai", so the
+    // trunk route was correctly skipped and nothing else offered it.
+    expect(byFlow["Clever Lead - Accept"].when).toEqual({ var: "price_gate", equals: "ai" });
   });
 });

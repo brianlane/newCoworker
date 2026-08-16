@@ -272,6 +272,19 @@ These are mistakes already made on this account. Do not remake them.
   instead of vanishing. `amy-unreachable-lead-claim-offer.ts` then made that a
   real claim offer, so "1" takes it.
 
+- **Turning an alert into an OFFER can double-offer a lead.** An alert is
+  fire-and-forget, so an extra one is noise; a parked `route_to_team` is not,
+  and two live claim windows on one lead means two deadlines, two races, and
+  teammates getting contradictory texts. The no-phone guards hit this on
+  exactly two flows: Clever's `route` and Realtor.com's `s4` / `s4_buyer` gate
+  ONLY on `price_gate notEquals "ai"`, with no phone condition, so a $500K+
+  lead with no number would have been offered twice. The no-phone offers there
+  now carry the exact complement, `price_gate equals "ai"`, so the two are
+  mutually exclusive by construction. ReferralExchange (`route_lead_type`) and
+  New Lead Intake (`route_variant`) needed no gate: both vars answer "none"
+  without a phone, so their trunk routes already skip, and adding a gate would
+  have suppressed the only offer those leads get.
+
 - **An informational team text still gets replied "1".** Gabrielle Mota did it
   57 seconds after the first unclaimed-lead alert landed, and she was not
   confused: every other team text on this account ends in "Reply 1 to claim",

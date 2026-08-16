@@ -72,6 +72,35 @@ const OFFER_WINDOW = {
 type Plan = (typeof PLANS)[number];
 
 /**
+ * Flows whose LATER trunk route is not phone-gated, and the condition that
+ * keeps this offer from doubling up with it.
+ *
+ * An alert was fire-and-forget, so an extra one was noise. A parked offer is
+ * not: two live claim windows on one lead means two deadlines, two races, and
+ * teammates getting contradictory texts about who has it. (Bugbot, PR #1399.)
+ *
+ * Verified against the live definitions, 2026-08-15:
+ *
+ *  - Clever `route` and Realtor.com `s4` / `s4_buyer` gate ONLY on
+ *    `price_gate notEquals "ai"`, so a $500K+ lead with no phone would be
+ *    offered twice. Gating this offer on the exact complement,
+ *    `price_gate equals "ai"`, makes the two mutually exclusive by
+ *    construction: the AI-owned lead (which the trunk route skips, and which
+ *    is the gap this whole guard exists for) gets THIS offer, and everything
+ *    else gets the normal one.
+ *  - ReferralExchange routes on `route_lead_type` and New Lead Intake on
+ *    `route_variant`. Both answer "none" when the lead has no phone, so their
+ *    trunk routes already skip and no gate is needed here. Adding one would
+ *    suppress the only offer those leads get.
+ */
+const OFFER_WHEN: Record<string, { var: string; equals: string } | undefined> = {
+  "Clever Lead - Accept": { var: "price_gate", equals: "ai" },
+  "Realtor.com Lead": { var: "price_gate", equals: "ai" },
+  "ReferralExchange Lead": undefined,
+  "New Lead Intake": undefined
+};
+
+/**
  * The offer copy.
  *
  * It leads with the fact that there is no phone, because that is the whole
@@ -108,9 +137,11 @@ export function ownerFallbackTemplate(plan: Plan): string {
 
 /** The offer that replaces the alert inside the guard's else arm. */
 export function claimOffer(plan: Plan): Record<string, unknown> {
+  const when = OFFER_WHEN[plan.flow];
   return {
     id: `${plan.prefix}_no_phone_offer`,
     type: "route_to_team",
+    ...(when ? { when } : {}),
     broadcastAll: true,
     teamTagTemplate: plan.teamTag,
     offerTemplate: offerTemplate(plan),
