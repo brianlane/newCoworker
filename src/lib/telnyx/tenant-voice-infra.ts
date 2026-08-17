@@ -263,11 +263,21 @@ export function tenantInfraMarker(businessId: string): string {
   return `[nc:${businessId}]`;
 }
 
-/** Portal-readable object name: trimmed tenant name plus the marker. */
+/** Telnyx rejects app/profile names over 64 chars (error 10015). */
+export const TELNYX_NAME_MAX_CHARS = 64;
+
+/**
+ * Portal-readable object name: trimmed tenant name plus the marker, with the
+ * TOTAL clamped to Telnyx's 64-char limit. The marker is the part adoption
+ * searches by, so the display name is what gets truncated ("Amy Laidlaw Real
+ * Estate" plus a uuid marker is 65 chars, which 422'd the first live apply).
+ */
 export function tenantInfraName(businessName: string, businessId: string): string {
+  const marker = tenantInfraMarker(businessId);
   const clean = businessName.trim().replace(/\s+/g, " ");
-  const base = clean.length > 0 ? clean.slice(0, 80) : "Tenant";
-  return `${base} ${tenantInfraMarker(businessId)}`;
+  const maxBase = Math.max(1, TELNYX_NAME_MAX_CHARS - marker.length - 1);
+  const base = (clean.length > 0 ? clean : "Tenant").slice(0, maxBase).trimEnd();
+  return `${base} ${marker}`;
 }
 
 /** The one webhook URL every app points at; dispatch routes by dialed number. */

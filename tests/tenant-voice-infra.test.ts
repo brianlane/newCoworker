@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  TELNYX_NAME_MAX_CHARS,
   TENANT_PROFILE_DAILY_SPEND_LIMIT_USD,
   TelnyxVoiceInfraClient,
   ensureTenantVoiceInfra,
@@ -231,16 +232,29 @@ describe("TelnyxVoiceInfraClient", () => {
 describe("naming + webhook helpers", () => {
   it("builds a deterministic marker and a readable name", () => {
     expect(tenantInfraMarker(BIZ)).toBe(`[nc:${BIZ}]`);
-    expect(tenantInfraName("  Amy   Laidlaw  Real Estate ", BIZ)).toBe(
-      `Amy Laidlaw Real Estate [nc:${BIZ}]`
+    // A short name survives whole (whitespace collapsed); a long one is
+    // clamped by the 64-char total below.
+    expect(tenantInfraName("  KYP   Ads ", BIZ)).toBe(`KYP Ads [nc:${BIZ}]`);
+    expect(tenantInfraName("Amy Laidlaw Real Estate", BIZ)).toBe(
+      `Amy Laidlaw Real Estat [nc:${BIZ}]`
     );
   });
 
   it("falls back to Tenant for an empty name and truncates very long ones", () => {
     expect(tenantInfraName("   ", BIZ)).toBe(`Tenant [nc:${BIZ}]`);
     const long = "x".repeat(200);
-    expect(tenantInfraName(long, BIZ).length).toBeLessThan(200);
+    expect(tenantInfraName(long, BIZ).length).toBeLessThanOrEqual(TELNYX_NAME_MAX_CHARS);
     expect(tenantInfraName(long, BIZ)).toContain(`[nc:${BIZ}]`);
+  });
+
+  // Regression: Telnyx rejects names over 64 chars with error 10015. Amy's
+  // real name plus the uuid marker is 65, which 422'd the first live apply
+  // (2026-08-16). The marker must survive whole; the display name shrinks.
+  it("keeps the TOTAL within Telnyx's 64-char limit, marker intact", () => {
+    const name = tenantInfraName("Amy Laidlaw Real Estate", BIZ);
+    expect(name.length).toBeLessThanOrEqual(TELNYX_NAME_MAX_CHARS);
+    expect(name.endsWith(`[nc:${BIZ}]`)).toBe(true);
+    expect(name.startsWith("Amy Laidlaw")).toBe(true);
   });
 
   it("derives the dispatch webhook URL, trimming a trailing slash", () => {
@@ -379,7 +393,7 @@ const INPUT = {
 function adoptableProfile(overrides: Partial<OutboundVoiceProfile> = {}): OutboundVoiceProfile {
   return {
     id: "prof-old",
-    name: `Amy Laidlaw Real Estate ${tenantInfraMarker(BIZ)}`,
+    name: tenantInfraName("Amy Laidlaw Real Estate", BIZ),
     concurrent_call_limit: 10,
     daily_spend_limit: TENANT_PROFILE_DAILY_SPEND_LIMIT_USD,
     daily_spend_limit_enabled: true,
@@ -391,7 +405,7 @@ function adoptableProfile(overrides: Partial<OutboundVoiceProfile> = {}): Outbou
 function adoptableApp(overrides: Partial<CallControlApp> = {}): CallControlApp {
   return {
     id: "app-old",
-    application_name: `Amy Laidlaw Real Estate ${tenantInfraMarker(BIZ)}`,
+    application_name: tenantInfraName("Amy Laidlaw Real Estate", BIZ),
     webhook_event_url: WEBHOOK,
     outbound: { channel_limit: 10, outbound_voice_profile_id: "prof-old" },
     ...overrides
@@ -415,7 +429,7 @@ describe("ensureTenantVoiceInfra", () => {
     expect(infra.calls.findProfiles).toEqual([tenantInfraMarker(BIZ)]);
     expect(infra.calls.findApps).toEqual([tenantInfraMarker(BIZ)]);
     expect(infra.calls.createProfile![0]).toMatchObject({
-      name: `Amy Laidlaw Real Estate ${tenantInfraMarker(BIZ)}`,
+      name: tenantInfraName("Amy Laidlaw Real Estate", BIZ),
       concurrentCallLimit: 10,
       dailySpendLimitUsd: TENANT_PROFILE_DAILY_SPEND_LIMIT_USD,
       whitelistedDestinations: ["CA", "MX", "US"]
