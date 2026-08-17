@@ -185,8 +185,6 @@ export default async function DashboardPage() {
               bridgeHeartbeatAt={telnyxSettings?.bridge_last_heartbeat_at ?? null}
               forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
               transferEnabled={telnyxSettings?.transfer_enabled ?? true}
-              businessId={business.id}
-              voiceOutboundDialHeadroom={telnyxSettings?.voice_outbound_dial_headroom ?? null}
               translatorModeEnabled={
                 translatorAllowedForTier(business.tier as PlanTier) &&
                 (telnyxSettings?.translator_mode_enabled ?? true)
