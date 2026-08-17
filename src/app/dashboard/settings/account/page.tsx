@@ -11,6 +11,7 @@ import { AccountCredentialsForms } from "@/components/dashboard/AccountCredentia
 import { PasskeysCard } from "@/components/dashboard/PasskeysCard";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
+import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
 export const dynamic = "force-dynamic";
@@ -35,11 +36,7 @@ export default async function AccountSettingsPage() {
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">{t("languageTitle")}</h2>
         <p className="text-xs text-parchment/40 mb-4">{t("languageBlurb")}</p>
-        {impersonating && (
-          <p className="mb-3 rounded-lg border border-spark-orange/30 bg-spark-orange/10 px-3 py-2 text-xs text-parchment/80">
-            {t("viewAsLanguageNotice")}
-          </p>
-        )}
+        <OwnLoginNotice show={impersonating}>{t("viewAsLanguageNotice")}</OwnLoginNotice>
         <LanguageSwitcher persist />
       </Card>
 
@@ -124,7 +121,10 @@ export default async function AccountSettingsPage() {
         ownLoginNotice={t("viewAsOwnLoginNotice")}
       />
 
-      <PasskeysCard />
+      {/* Session-scoped, so it stays the OPERATOR's passkeys under view-as and
+          says so. There is no API to enroll a passkey on someone else's
+          device. */}
+      <PasskeysCard ownLoginNotice={impersonating ? t("viewAsOwnPasskeysNotice") : undefined} />
     </SettingsPageShell>
   );
 }

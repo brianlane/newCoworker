@@ -807,13 +807,25 @@ operator edits a tenant while reading their own address.
 `owner_email` under view-as), and `/dashboard/settings/account` renders that
 rather than `user.email`.
 
-One card on that page is deliberately NOT retargeted, and says so: the password
-form runs in the browser against the caller's own Supabase session
-(`changeAccountPassword` re-authenticates with `signInWithPassword`), so it
-changes the OPERATOR's password. It keeps a visible notice and takes the
-caller's email through a separate `callerEmail` prop. Setting a tenant's
-password is not wired up; do not "fix" this by passing the tenant's address
-into the re-auth, which would just break every password change under view-as.
+Three cards deliberately do NOT retarget, because they act on the caller's live
+browser session rather than through an API we control, and no session-scoped
+API can act on someone else's browser. Each carries a visible
+`OwnLoginNotice` under view-as
+([src/components/dashboard/OwnLoginNotice.tsx](src/components/dashboard/OwnLoginNotice.tsx)),
+which is the shared home for that warning:
+
+| Card | Why it cannot follow the tenant |
+| --- | --- |
+| Password | `changeAccountPassword` re-authenticates the session with `signInWithPassword`. It takes the caller's address through a separate `callerEmail` prop; passing the tenant's would break every password change under view-as. |
+| Passkeys | `supabase.auth.passkey.*` enrolls the device holding the session. |
+| Sign out everywhere | `/api/auth/signout` revokes the caller's cookies (and clears the view-as cookie). |
+
+Setting a tenant's password or enrolling a passkey for them is not wired up.
+Do not "fix" a labeled card by feeding it the tenant's identity: the label is
+the fix, and the alternative is a form that silently fails or edits the wrong
+account. The language card is labeled for the mirror-image reason: the save
+targets the TENANT's stored locale while the buttons show the operator's own UI
+language, which stays put.
 
 Three deliberate carve-outs:
 

@@ -14,6 +14,7 @@ import {
   type PasskeyAuthenticatorPreference
 } from "@/lib/auth/passkey-registration";
 import { browserSupportsPasskeys, getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
 
 type SupabaseAuth = ReturnType<typeof getSupabaseBrowserClient>["auth"];
 
@@ -75,8 +76,13 @@ type Passkey = {
  * with a passkey" button is dead weight without it. Registration runs against
  * the Supabase relying party (`newcoworker.com`), which means it only works on
  * the real domain, never on localhost.
+ *
+ * SESSION-scoped, so it cannot follow admin view-as: `supabase.auth.passkey.*`
+ * enrolls the device holding the caller's session, and there is no API to
+ * enroll someone else's. `ownLoginNotice` labels it instead (see
+ * OwnLoginNotice), the same treatment the password card gets.
  */
-export function PasskeysCard() {
+export function PasskeysCard({ ownLoginNotice }: { ownLoginNotice?: string } = {}) {
   const [supported, setSupported] = useState<boolean | null>(null);
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +188,7 @@ export function PasskeysCard() {
   return (
     <Card>
       <h2 className="text-sm font-semibold text-parchment mb-1">Passkeys</h2>
+      <OwnLoginNotice show={Boolean(ownLoginNotice)}>{ownLoginNotice ?? ""}</OwnLoginNotice>
       <p className="text-xs text-parchment/40 mb-4">
         Sign in with your fingerprint, face, or device PIN instead of a password. Add one per
         device you use.

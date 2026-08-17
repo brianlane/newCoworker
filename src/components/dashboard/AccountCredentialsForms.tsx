@@ -8,6 +8,7 @@ import { PASSWORD_RULES, PASSWORD_MIN_LENGTH, getPasswordValidationError } from 
 import { changeAccountPassword } from "@/lib/account/password-change";
 import { terminateOtherSessions } from "@/lib/auth/terminate-other-sessions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
 
@@ -169,11 +170,9 @@ export function AccountCredentialsForms({
     <>
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">Account email</h2>
-        {impersonating && impersonationNotice && (
-          <p className="mb-3 rounded-lg border border-spark-orange/30 bg-spark-orange/10 px-3 py-2 text-xs text-parchment/80">
-            {impersonationNotice}
-          </p>
-        )}
+        <OwnLoginNotice show={impersonating && Boolean(impersonationNotice)}>
+          {impersonationNotice ?? ""}
+        </OwnLoginNotice>
         <p className="text-xs text-parchment/40 mb-4">
           Current: <span className="text-parchment/70">{email}</span>.{" "}
           {impersonating
@@ -200,11 +199,9 @@ export function AccountCredentialsForms({
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">Password</h2>
-        {impersonating && ownLoginNotice && (
-          <p className="mb-3 rounded-lg border border-spark-orange/30 bg-spark-orange/10 px-3 py-2 text-xs text-parchment/80">
-            {ownLoginNotice}
-          </p>
-        )}
+        <OwnLoginNotice show={impersonating && Boolean(ownLoginNotice)}>
+          {ownLoginNotice ?? ""}
+        </OwnLoginNotice>
         <p className="text-xs text-parchment/40 mb-4">
           Enter your current password to set a new one.
         </p>
