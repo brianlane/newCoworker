@@ -109,6 +109,24 @@ export function iosScreeningLine(businessName: string): string {
   );
 }
 
+/**
+ * How a call WE placed reports reaching a recording.
+ *
+ * The generic recordings rule already says not to converse with a machine, and
+ * it is not enough on its own: on 2026-08-17 the assistant delivered a full
+ * listing pitch into Jennifer Kline's mailbox and then narrated a transfer it
+ * never made. What was missing was somewhere to PUT the observation. The
+ * `voicemail_reached` tool is that place, and calling it is what makes the run
+ * resolve as no-answer instead of "spoke with them".
+ *
+ * Named signatures rather than the abstraction, for the same reason the
+ * inbound line spells them out: recognition has to fire on the first sentence,
+ * not after a pitch. "Please record your message" and "when you have finished
+ * recording you may hang up" are verbatim from the two calls that went wrong.
+ */
+export const OUTBOUND_VOICEMAIL_TOOL_LINE =
+  "IF YOU REACH A RECORDING, REPORT IT BEFORE YOU SAY ANYTHING ELSE. A recorded greeting in the person's own voice, an automated one, an invitation to \"please record your message\", \"leave a message after the tone\", \"when you have finished recording you may hang up\", or any mailbox menu offering to replay, re-record, or send your message all mean you reached a machine, not the person. The moment you notice, call the `voicemail_reached` tool and wait for its answer: never deliver your opening line, your pitch, or any question to a recording, and never narrate an action you are about to take. If it returns a `script`, read that text aloud word for word, exactly as written, then call `end_call`. If it returns no script, say nothing at all and call `end_call` immediately. The one exception: if it says a message is already being left, stay completely silent and do NOT end the call, because hanging up would cut that message off part way through.";
+
 export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
@@ -121,7 +139,9 @@ export function intakeSystemInstruction(
   languagePrefs?: {
     established?: VoiceCustomerLanguage | null;
     defaultLang?: VoiceCustomerLanguage;
-  }
+  },
+  /** True when the host registered `voicemail_reached` (calls WE placed). */
+  hasVoicemailTool = false
 ): string {
   const opener = intakeOpener(
     businessName,
@@ -217,6 +237,11 @@ export function intakeSystemInstruction(
   // gets the call through; running the whole opener at it reads as spam.
   if (outboundCall || transfer) {
     lines.push(iosScreeningLine(businessName));
+  }
+  // Reporting the recording is what makes the flow outcome honest, so the rule
+  // only ships when the tool that carries it actually exists.
+  if (hasVoicemailTool) {
+    lines.push(OUTBOUND_VOICEMAIL_TOOL_LINE);
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
   // must never ask for something the flow already extracted — "why are you

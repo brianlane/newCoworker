@@ -3,6 +3,7 @@ import {
   AMD_DETECTION_EVENTS,
   AMD_GREETING_EVENTS,
   AMD_SCREENING_EVENTS,
+  classifyGreetingEvent,
   classifyAmdResult,
   greetingImpliesMachine,
   isAmdEvent
@@ -114,10 +115,15 @@ describe("greetingImpliesMachine", () => {
     expect(greetingImpliesMachine("  BEEP_DETECTED ")).toBe(true);
   });
 
-  // prompt_ended belongs to iOS call screening, where a live PERSON is
-  // deciding whether to take the call. Treating it as a machine would hang up
-  // on them.
-  it("never infers a machine from an iOS screening prompt", () => {
+  // prompt_ended is AMBIGUOUS on its own: it fires both when an iOS screening
+  // prompt ends (a live person is deciding) and when an ordinary voicemail
+  // greeting ends without a beep. On its own it must therefore prove nothing;
+  // classifyGreetingEvent resolves it using whether screening actually
+  // announced itself. An earlier version of this file asserted the wrong
+  // reason here ("prompt_ended belongs to iOS call screening"), and the
+  // handler built on that belief cancelled a correct machine verdict on a
+  // live call (Jennifer Kline, 2026-08-17).
+  it("never infers a machine from a bare prompt end", () => {
     expect(greetingImpliesMachine("prompt_ended")).toBe(false);
   });
 
@@ -132,5 +138,57 @@ describe("greetingImpliesMachine", () => {
     expect(greetingImpliesMachine(undefined)).toBe(false);
     expect(greetingImpliesMachine(null)).toBe(false);
     expect(greetingImpliesMachine(7)).toBe(false);
+  });
+});
+
+/**
+ * classifyGreetingEvent: the iOS mode's one genuinely subtle rule.
+ *
+ * THE INCIDENT (Jennifer Kline, 2026-08-17 16:08Z). Premium AMD correctly
+ * returned `machine`. The greeting then ended without a beep, which Telnyx
+ * reports as `prompt_ended`, and the handler read that as "Apple call
+ * screening, a live person is deciding": it cancelled the correct verdict and
+ * returned without hanging up. The assistant pitched into her voicemail for
+ * two minutes, and the flow recorded "spoke with them" for a lead who never
+ * heard a word.
+ *
+ * `prompt_ended` means "the prompt finished". WHICH prompt is only knowable
+ * from whether call screening ever announced itself.
+ */
+describe("classifyGreetingEvent", () => {
+  const machineOnly = { machineStamped: true, screeningDetected: false };
+  const screened = { machineStamped: true, screeningDetected: true };
+  const nothingKnown = { machineStamped: false, screeningDetected: false };
+
+  it("prompt_ended after REAL screening means a person is deciding", () => {
+    expect(classifyGreetingEvent("prompt_ended", screened)).toBe("screening_person");
+  });
+
+  it("prompt_ended with no screening is a voicemail greeting ending: resolve it", () => {
+    // The exact Jennifer case. Before the fix this returned the screening
+    // verdict, cancelled the machine stamp, and left the call running.
+    expect(classifyGreetingEvent("prompt_ended", machineOnly)).toBe("machine_resolved");
+  });
+
+  it("a beep resolves even on a screened call, which rolled to voicemail", () => {
+    expect(classifyGreetingEvent("beep_detected", screened)).toBe("machine_resolved");
+    expect(classifyGreetingEvent("beep_detected", nothingKnown)).toBe("machine_resolved");
+  });
+
+  it("a stamped machine resolves on any greeting result", () => {
+    for (const r of ["no_beep_detected", "ended", "not_sure", "something_new", ""]) {
+      expect(classifyGreetingEvent(r, machineOnly), r).toBe("machine_resolved");
+    }
+  });
+
+  it("proves nothing when nothing is known, so a live person is never cut off", () => {
+    for (const r of ["prompt_ended", "no_beep_detected", "ended", "", null, undefined, 7]) {
+      expect(classifyGreetingEvent(r, nothingKnown), String(r)).toBe("noted");
+    }
+  });
+
+  it("tolerates casing and whitespace like the rest of the vocabulary", () => {
+    expect(classifyGreetingEvent("  PROMPT_ENDED ", screened)).toBe("screening_person");
+    expect(classifyGreetingEvent("  PROMPT_ENDED ", nothingKnown)).toBe("noted");
   });
 });

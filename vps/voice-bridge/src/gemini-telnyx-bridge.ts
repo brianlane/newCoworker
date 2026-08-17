@@ -195,6 +195,53 @@ export type HangupCapability = {
 };
 
 /**
+ * "I reached a recording, not a person."
+ *
+ * Carrier AMD is the primary voicemail detector and it is NOT reliable: it
+ * classified Jim Inderberg's mailbox as `human_residence` on 2026-08-17
+ * (a personal greeting is one human voice talking, which is precisely what a
+ * human-residence greeting sounds like). When it misses, nothing downstream
+ * ever learns the truth: the flow records "spoke with them", the follow-up
+ * text that only sends on no-answer is skipped, and the lead quietly dies in
+ * a cadence that thinks it succeeded.
+ *
+ * The assistant is the one participant that actually HEARD the mailbox, so it
+ * gets a way to say so. Invoking this is the model's machine verdict: the host
+ * records it on the call (so the outcome resolves to no-answer and the call
+ * page shows a voicemail) and, when the step configured a message, claims the
+ * right to leave it and hands the script back to be read aloud.
+ *
+ * The claim is shared with the edge's own voicemail drop, so the two paths can
+ * never both leave a message on one recording.
+ */
+export type VoicemailCapability = {
+  execute: () => Promise<{
+    /** False only when the record could not be written; the model still ends the call. */
+    ok: boolean;
+    /** The message to read aloud, present only when this side won the claim. */
+    script?: string;
+    /**
+     * True when the OTHER path (the edge's own drop) holds the claim and is
+     * speaking right now. Distinct from "no message configured" even though
+     * both hand back no script, because the two need opposite endings: with a
+     * message already playing into the recording, hanging up would cut it off
+     * mid-sentence, so this case waits and lets the edge end the call.
+     */
+    alreadyBeingLeft?: boolean;
+    detail?: string;
+  }>;
+  /**
+   * Record that the message was actually delivered. Called the instant the
+   * model asks to end the call after being handed a script, which is the only
+   * moment that is both AFTER it read the message and BEFORE the line goes
+   * quiet: a mailbox hangs up on silence, so anything scheduled behind the
+   * end_call playout grace loses the race to the mailbox's own hangup and the
+   * message reads as never left.
+   */
+  confirmSpoken?: () => Promise<void>;
+};
+
+/**
  * Lets the assistant press keypad digits on the live leg. Registered as the
  * `press_digits` tool, and used by the IVR gate below so a partner announcement
  * ("press 1 to accept this referral") is answered when it is actually HEARD.
@@ -331,6 +378,13 @@ export type GeminiBridgeOptions = {
   transfer?: TransferCapability;
   /** When set, registers an `end_call` tool so the assistant can hang up when done. */
   hangup?: HangupCapability;
+  /**
+   * When set, registers a `voicemail_reached` tool so the assistant can report
+   * that it is talking to a recording. Wired for calls WE placed, where a
+   * missed voicemail silently poisons the flow outcome (see
+   * VoicemailCapability).
+   */
+  voicemail?: VoicemailCapability;
   /**
    * When set, registers a `press_digits` tool so the assistant can work a
    * partner IVR. Provided by index.ts whenever a Telnyx API key exists; the
@@ -659,6 +713,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
   let endCallRequested = false;
+  // Set once `voicemail_reached` handed the model a message to read, so the
+  // end_call handler knows to confirm the delivery (see confirmSpoken).
+  let voicemailScriptGiven = false;
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
@@ -1362,6 +1419,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     });
   }
+  // `voicemail_reached` is the assistant's own machine verdict, for the calls
+  // where carrier AMD guessing wrong is expensive (see VoicemailCapability).
+  const hasVoicemailTool = Boolean(opts.voicemail);
+  if (hasVoicemailTool) {
+    declarations.push({
+      name: "voicemail_reached",
+      description:
+        "Report that this call reached a RECORDING (a voicemail greeting, an answering machine, or a mailbox menu) rather than a live person. Call this as soon as you are confident, BEFORE saying anything else. It returns `script` when there is a message to leave: read that text aloud word for word, then call end_call. When it returns no script, say nothing at all and call end_call immediately.",
+      parameters: { type: Type.OBJECT, properties: {}, required: [] }
+    });
+  }
   const toolsForSession =
     declarations.length > 0
       ? [{ functionDeclarations: declarations as never }]
@@ -1423,7 +1491,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
             opts.direction === "outbound",
             intake.contextNote,
-            opts.languagePrefs
+            opts.languagePrefs,
+            hasVoicemailTool
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1988,12 +2057,62 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         continue;
       }
 
+      if (name === "voicemail_reached" && opts.voicemail) {
+        // Answered on its own task so the model's turn completes promptly: it
+        // is waiting on this response to know whether to read a message, and
+        // the mailbox is recording silence while it waits.
+        void (async () => {
+          let result: { ok: boolean; script?: string; detail?: string };
+          try {
+            result = await opts.voicemail!.execute();
+          } catch (err) {
+            console.error("gemini-bridge: voicemail_reached execute threw", err);
+            result = { ok: false, detail: "voicemail record failed" };
+          }
+          const script = (result.script ?? "").trim();
+          // Three endings, not two. A lost claim means a message is ALREADY
+          // playing into this recording from the other path, so telling the
+          // model to hang up would cut it off mid-sentence; that case waits
+          // and lets the side holding the claim end the call.
+          const detail = script
+            ? "read this message aloud word for word, then end the call"
+            : result.alreadyBeingLeft
+              ? "a message is already being left on this recording: say nothing, and do NOT end the call"
+              : "leave no message: say nothing and end the call now";
+          if (script) voicemailScriptGiven = true;
+          sendToolResponse(call.id, name, {
+            ok: result.ok,
+            ...(script ? { script } : {}),
+            ...(result.alreadyBeingLeft ? { alreadyBeingLeft: true } : {}),
+            detail
+          });
+          emitDiag("voice_bridge_voicemail_reached", {
+            ok: result.ok,
+            has_script: Boolean(script),
+            already_being_left: result.alreadyBeingLeft === true,
+            detail: result.detail ?? null
+          });
+        })();
+        continue;
+      }
+
       if (name === "end_call" && opts.hangup) {
         const reason =
           typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
         // Acknowledge immediately so the model's turn completes cleanly, then
         // hang up after a short grace so the spoken goodbye finishes playing.
         sendToolResponse(call.id, name, { ok: true, detail: "ending call" });
+        // Confirm a delivered voicemail NOW, not behind the playout grace
+        // below: the script has been read, so the line is about to go quiet,
+        // and a mailbox hangs up on silence. Its own hangup would otherwise
+        // reach the call-end webhook first and record a message that really
+        // did go out as never left.
+        if (voicemailScriptGiven && opts.voicemail?.confirmSpoken) {
+          voicemailScriptGiven = false;
+          void opts.voicemail.confirmSpoken().catch((err) => {
+            console.error("gemini-bridge: voicemail confirmSpoken threw", err);
+          });
+        }
         if (!endCallRequested) {
           endCallRequested = true;
           const graceMs = opts.hangup.graceMs ?? 3000;

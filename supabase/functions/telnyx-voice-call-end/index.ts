@@ -35,6 +35,7 @@ import {
   AMD_DETECTION_EVENTS,
   AMD_SCREENING_EVENTS,
   classifyAmdResult,
+  classifyGreetingEvent,
   greetingImpliesMachine,
   isAmdEvent
 } from "../_shared/voice_amd.ts";
@@ -631,12 +632,22 @@ async function handleMachineDetection(
     // survive this, or a screened call the human then answers would settle as
     // no_answer and its follow-up ladder would redial someone who picked up.
     // Never speak a voicemail script here and never hang up.
-    if (String(payload["result"] ?? "").trim().toLowerCase() === "prompt_ended") {
+    // classifyGreetingEvent owns the subtlety (see its docstring): the same
+    // `prompt_ended` result means "a person is screening" only when screening
+    // actually announced itself, and otherwise means an ordinary voicemail
+    // greeting just finished. Reading it as screening unconditionally
+    // cancelled a correct machine verdict on a live call (Jennifer Kline,
+    // 2026-08-17), so the decision now lives in one tested place.
+    const already = await machineAlreadyStamped(supabase, callControlId);
+    const greeting = classifyGreetingEvent(payload["result"], {
+      machineStamped: already,
+      screeningDetected: await iosScreeningDetected(supabase, callControlId)
+    });
+    if (greeting === "screening_person") {
       await clearProvisionalMachine(supabase, callControlId, {});
       return jsonOk("amd_screening_prompt_ended");
     }
-    const already = await machineAlreadyStamped(supabase, callControlId);
-    if (!already && !greetingImpliesMachine(payload["result"])) {
+    if (greeting === "noted") {
       return jsonOk("amd_greeting_noted");
     }
     const script = await voicemailScriptFor(supabase, callControlId);
@@ -1007,6 +1018,27 @@ async function clearProvisionalMachine(
     .eq("call_control_id", callControlId)
     .eq("answering_machine_result", "machine");
   if (badgeErr) console.error("amd: transcript badge clear failed", badgeErr);
+}
+
+/**
+ * Did Apple call screening actually announce itself on this leg?
+ *
+ * Only `call.machine.premium.call_screening.detected` sets this. It is the one
+ * signal that separates "a person is screening the call" from "a voicemail
+ * greeting just ended", which `prompt_ended` alone does NOT distinguish.
+ */
+async function iosScreeningDetected(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  return ctx.ios_screening === true;
 }
 
 /** Has a machine verdict already been recorded for this leg? */

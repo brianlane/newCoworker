@@ -212,6 +212,19 @@ a key to accept it. Everything downstream follows from that:
   found (and whether it was enabled), and the worker copies that detail into the
   run's error. Before Aug 17 2026 it returned a bare code, which is what made
   the Clever login failure that day take a day of reading portal markup by hand.
+- **`prompt_ended` does NOT mean Apple call screening.** Flow-placed dials run
+  `premium_ios_call_screening_detection`, whose documented sequence fires
+  `detection.ended` with `machine` FIRST and only then listens for the
+  screening prompt, so the machine verdict is provisional and its ACTIONS wait
+  for the resolving greeting event. The trap is what that resolving event
+  carries: Telnyx reports `prompt_ended` whenever the prompt following a
+  machine verdict ends without a beep, and an ordinary voicemail greeting does
+  exactly that. Reading it as "a live person is screening" cancelled a CORRECT
+  machine verdict on Jennifer Kline's call (2026-08-17 16:08Z): nothing hung
+  up, the assistant pitched into her voicemail for two minutes, and the flow
+  recorded "spoke with them". The only proof a person is deciding is an actual
+  `call_screening.detected` event; `classifyGreetingEvent`
+  (`_shared/voice_amd.ts`) now owns that rule and is where to change it.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
