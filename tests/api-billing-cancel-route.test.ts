@@ -10,7 +10,8 @@ const {
   executeLifecyclePlanFastPhaseMock,
   executeLifecyclePlanSlowPhaseMock,
   loadBillableUsageCarveOutCentsMock,
-  resolveUsageCarveOutWindowMock
+  resolveUsageCarveOutWindowMock,
+  resolveViewAsTargetUserMock
 } = vi.hoisted(() => ({
   getAuthUserMock: vi.fn(),
   supabaseFromMock: vi.fn(),
@@ -20,7 +21,8 @@ const {
   executeLifecyclePlanFastPhaseMock: vi.fn(),
   executeLifecyclePlanSlowPhaseMock: vi.fn(),
   loadBillableUsageCarveOutCentsMock: vi.fn(),
-  resolveUsageCarveOutWindowMock: vi.fn()
+  resolveUsageCarveOutWindowMock: vi.fn(),
+  resolveViewAsTargetUserMock: vi.fn()
 }));
 
 // `after()` from `next/server` requires the Next.js work-units context
@@ -58,6 +60,12 @@ vi.mock("next/server", async () => {
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: getAuthUserMock
+}));
+
+// Payer identity under admin view-as. Default is "not impersonating", so the
+// existing fixtures keep describing an owner cancelling their own plan.
+vi.mock("@/lib/admin/view-as", () => ({
+  resolveViewAsTargetUser: resolveViewAsTargetUserMock
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -154,6 +162,11 @@ describe("/api/billing/cancel", () => {
       email: "owner@example.com",
       isAdmin: false
     });
+    resolveViewAsTargetUserMock.mockResolvedValue({
+      userId: "user_1",
+      email: "owner@example.com",
+      impersonating: false
+    });
     supabaseFromMock.mockReturnValue({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -216,6 +229,53 @@ describe("/api/billing/cancel", () => {
     loadLifecycleContextMock.mockResolvedValueOnce({ ok: false, reason: "subscription_not_found" });
     const res = await POST(req({ mode: "refund" }));
     expect(res.status).toBe(404);
+  });
+
+  it("hands the lifecycle planner the TENANT's login under view-as, not the operator's", async () => {
+    // The worst version of the caller-identity bug this route could carry.
+    // `ownerAuthUserId` is what the planner turns into a `delete_auth_user`
+    // op, so an operator cancelling a customer's plan with their own id here
+    // would queue deletion of the OPERATOR's account (Bugbot High on
+    // PR #1420). The business already resolves through the view-as pin; the
+    // login has to follow it.
+    getAuthUserMock.mockResolvedValue({
+      userId: "admin-1",
+      email: "admin@newcoworker.com",
+      isAdmin: true
+    });
+    resolveViewAsTargetUserMock.mockResolvedValue({
+      userId: "tenant-user-1",
+      email: "tenant@example.com",
+      impersonating: true
+    });
+
+    await POST(req({ mode: "period_end" }));
+    expect(loadLifecycleContextMock).toHaveBeenCalledWith(
+      "biz_1",
+      expect.objectContaining({ ownerAuthUserId: "tenant-user-1" })
+    );
+  });
+
+  it("passes no ownerAuthUserId when the impersonated tenant has no login", async () => {
+    // A pending/placeholder owner_email. undefined makes the planner SKIP the
+    // auth-user op entirely, which is the safe outcome: falling back to the
+    // caller would delete the operator's login instead.
+    getAuthUserMock.mockResolvedValue({
+      userId: "admin-1",
+      email: "admin@newcoworker.com",
+      isAdmin: true
+    });
+    resolveViewAsTargetUserMock.mockResolvedValue({
+      userId: null,
+      email: "pending-x@example.com",
+      impersonating: true
+    });
+
+    await POST(req({ mode: "period_end" }));
+    expect(loadLifecycleContextMock).toHaveBeenCalledWith(
+      "biz_1",
+      expect.objectContaining({ ownerAuthUserId: undefined })
+    );
   });
 
   it("refund mode is refused for Canadian/BYOS placements (Terms §9 exclusion)", async () => {

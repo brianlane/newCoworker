@@ -12,6 +12,12 @@ vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
 
+// Payer identity under admin view-as. Default is "not impersonating", so the
+// existing fixtures keep describing an ordinary owner checking out.
+vi.mock("@/lib/admin/view-as", () => ({
+  resolveViewAsTargetUser: vi.fn()
+}));
+
 vi.mock("@/lib/stripe/client", () => ({
   createChatCreditCheckoutSession: vi.fn()
 }));
@@ -26,6 +32,7 @@ vi.mock("@/lib/db/subscriptions", () => ({
 
 import { POST } from "@/app/api/billing/chat-credit/checkout/route";
 import { getAuthUser } from "@/lib/auth";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { createChatCreditCheckoutSession } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -68,6 +75,11 @@ describe("api/billing/chat-credit/checkout route", () => {
       email: "owner@example.com",
       isAdmin: false
     } as never);
+    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
+      userId: UID,
+      email: "owner@example.com",
+      impersonating: false
+    });
     mockBusinessesQuery([{ id: BID }]);
     vi.mocked(getSubscription).mockResolvedValue({
       status: "active",
@@ -104,6 +116,36 @@ describe("api/billing/chat-credit/checkout route", () => {
       customerId: "cus_123",
       userId: UID
     });
+  });
+
+  it("opens Checkout under the TENANT's email when an admin is impersonating", async () => {
+    // Payer identity has to follow the business, not the caller. Before this
+    // split, removing the view-as refusal left an operator's own address on a
+    // customer's Checkout Session (Bugbot High on PR #1420).
+    //
+    // `userId` deliberately stays the CALLER: its only reader stores it as
+    // `consent_user_id` (who authorized the charge), so naming the tenant
+    // there would fabricate a consent record.
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "admin-1",
+      email: "admin@newcoworker.com",
+      isAdmin: true
+    } as never);
+    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
+      userId: "tenant-user-1",
+      email: "tenant@example.com",
+      impersonating: true
+    });
+
+    const res = await POST(buildRequest({ packId: "usd_5" }));
+    expect(res.status).toBe(200);
+    expect(createChatCreditCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BID,
+        customerEmail: "tenant@example.com",
+        userId: "admin-1"
+      })
+    );
   });
 
   it("falls back to customer_email when there is no Stripe customer", async () => {

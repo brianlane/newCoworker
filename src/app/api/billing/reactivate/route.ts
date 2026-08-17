@@ -13,6 +13,7 @@
 
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -66,8 +67,23 @@ export async function POST(request: Request) {
     const business = businesses?.[0];
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
+    // Payer identity, NOT caller identity: under view-as the business is the
+    // tenant's, so the auth user the lifecycle planner may tear down
+    // (`delete_auth_user`) and the Stripe customer email must be the TENANT's.
+    // Passing the operator's here would plan deletion of the OPERATOR's own
+    // login while cancelling a customer (Bugbot High on PR #1420). The
+    // `userId` in Stripe metadata stays the caller: its only reader stores it
+    // as `consent_user_id`, so the actor is the honest answer there.
+    const payer = await resolveViewAsTargetUser(user);
+    if (!payer.email) {
+      // Only reachable for a tenant row with no owner_email at all. Refuse
+      // rather than fall back to the caller's address, which is what would
+      // put the operator on a customer's billing record.
+      return errorResponse("NOT_FOUND", "This business has no owner email on file", 404);
+    }
+
     const ctxRes = await loadLifecycleContextForBusiness(business.id, {
-      ownerAuthUserId: user.userId
+      ownerAuthUserId: payer.userId ?? undefined
     });
     if (!ctxRes.ok) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
@@ -137,7 +153,7 @@ export async function POST(request: Request) {
     if (!resubscribeProfileId || resubscribeLifetimeCount === null) {
       try {
         resubscribeProfileId = await upsertCustomerProfile({
-          email: user.email,
+          email: payer.email,
           signupIp: null
         });
       } catch (err) {
@@ -197,7 +213,7 @@ export async function POST(request: Request) {
       priceId,
       successUrl: `${appUrl}/dashboard/billing?reactivated=1`,
       cancelUrl: `${appUrl}/dashboard/billing`,
-      customerEmail: user.email,
+      customerEmail: payer.email ?? undefined,
       metadata: {
         businessId: business.id,
         tier,

@@ -779,6 +779,42 @@ admin can perform any action for any tenant. Two mechanisms do the work:
   owner). **Callers must refuse on that null** rather than fall back to the
   signed-in user, which would apply the change to the operator's own account.
 
+### Payer identity vs actor identity
+
+Removing the refusal from a route is not the whole job: the route's own
+caller-identity fields have to be classified too. Bugbot caught this on the
+billing routes, and the split is the rule to follow:
+
+- **Payer / account identity is the TENANT.** The Stripe `customerEmail`, the
+  `upsertCustomerProfile` email, and `ownerAuthUserId` (which the lifecycle
+  planner turns into a `delete_auth_user` op) all resolve through
+  `resolveViewAsTargetUser`. Left on the caller, a plan change would attach the
+  OPERATOR's customer profile to a customer's subscription, open Checkout under
+  the operator's address, and, worst of all, queue deletion of the operator's
+  own login when cancelling someone else's plan.
+- **Actor / consent identity is the CALLER.** The `userId` handed to Stripe
+  metadata is read back as `consent_user_id` ("who authorized this charge"), so
+  naming the tenant there would fabricate a consent record. Same reasoning as
+  the clickwrap ledger below. The auto-reload card routes keep the caller for
+  exactly this reason.
+
+### The UI has to name the account it is editing
+
+The user-scoped APIs retarget server-side, so any surface that renders "your"
+identity next to a form those APIs serve must retarget with them, or an
+operator edits a tenant while reading their own address.
+`loadSettingsContext` therefore returns `accountEmail` (the tenant's
+`owner_email` under view-as), and `/dashboard/settings/account` renders that
+rather than `user.email`.
+
+One card on that page is deliberately NOT retargeted, and says so: the password
+form runs in the browser against the caller's own Supabase session
+(`changeAccountPassword` re-authenticates with `signInWithPassword`), so it
+changes the OPERATOR's password. It keeps a visible notice and takes the
+caller's email through a separate `callerEmail` prop. Setting a tenant's
+password is not wired up; do not "fix" this by passing the tenant's address
+into the re-auth, which would just break every password change under view-as.
+
 Three deliberate carve-outs:
 
 - `/api/account/email` under view-as applies the change IMMEDIATELY

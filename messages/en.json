@@ -2364,7 +2364,10 @@
       "numberBlurbBasic": "Bring your existing business number",
       "numberBlurbWizard": "Bring the business number your customers already know. It transfers to your AI coworker in about a week",
       "numberNoCoworker": "No coworker provisioned yet.",
-      "numberGetStarted": "Get Started →"
+      "numberGetStarted": "Get Started →",
+      "viewAsAccountNotice": "You are viewing this tenant as an admin. This is the tenant's account, and saving a new email changes their login immediately (there is no confirmation link for you to click).",
+      "viewAsOwnLoginNotice": "This card acts on YOUR OWN login, not the tenant's. Changing a password here changes the password you signed in with.",
+      "viewAsLanguageNotice": "Saving sets the TENANT's dashboard language. The buttons below show your own, which does not change."
     },
     "contacts": {
       "languageLabel": "Language",

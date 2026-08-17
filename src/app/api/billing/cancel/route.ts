@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { after } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -70,8 +71,17 @@ export async function POST(request: Request) {
     const business = businesses?.[0];
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
+    // Payer identity, NOT caller identity: under view-as the business is the
+    // tenant's, so the auth user the lifecycle planner may tear down
+    // (`delete_auth_user`) and the Stripe customer email must be the TENANT's.
+    // Passing the operator's here would plan deletion of the OPERATOR's own
+    // login while cancelling a customer (Bugbot High on PR #1420). The
+    // `userId` in Stripe metadata stays the caller: its only reader stores it
+    // as `consent_user_id`, so the actor is the honest answer there.
+    const payer = await resolveViewAsTargetUser(user);
+
     const ctxRes = await loadLifecycleContextForBusiness(business.id, {
-      ownerAuthUserId: user.userId
+      ownerAuthUserId: payer.userId ?? undefined
     });
     if (!ctxRes.ok) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);

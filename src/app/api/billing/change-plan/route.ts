@@ -14,6 +14,7 @@
 
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -70,8 +71,28 @@ export async function POST(request: Request) {
     const business = businesses?.[0];
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
+    // Payer identity, NOT caller identity. The business resolves through the
+    // view-as pin, so an admin impersonating a tenant acts on the tenant's
+    // subscription, and every field that names WHOSE ACCOUNT this is has to
+    // follow: the Stripe customer email, the customer profile, and the auth
+    // user the lifecycle planner may tear down. Leaving those on `user` would
+    // attach the OPERATOR's profile to a customer's subscription and open
+    // Checkout under the operator's address (Bugbot High on PR #1420).
+    //
+    // The `userId` handed to Stripe metadata is deliberately NOT retargeted:
+    // its only reader stores it as `consent_user_id` (who authorized the
+    // charge), so the caller is the honest answer there, same rule as the
+    // clickwrap ledger.
+    const payer = await resolveViewAsTargetUser(user);
+    if (!payer.email) {
+      // Only reachable for a tenant row with no owner_email at all. Refuse
+      // rather than fall back to the caller's address, which is what would
+      // put the operator on a customer's billing record.
+      return errorResponse("NOT_FOUND", "This business has no owner email on file", 404);
+    }
+
     const ctxRes = await loadLifecycleContextForBusiness(business.id, {
-      ownerAuthUserId: user.userId
+      ownerAuthUserId: payer.userId ?? undefined
     });
     if (!ctxRes.ok) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
@@ -108,7 +129,7 @@ export async function POST(request: Request) {
       const staleProfileId = subscription.customer_profile_id ?? null;
       try {
         changePlanProfileId = await upsertCustomerProfile({
-          email: user.email,
+          email: payer.email,
           signupIp: null
         });
       } catch (err) {
@@ -232,7 +253,7 @@ export async function POST(request: Request) {
       priceId,
       successUrl: `${appUrl}/dashboard/billing?planChanged=1`,
       cancelUrl: `${appUrl}/dashboard/billing`,
-      customerEmail: user.email ?? undefined,
+      customerEmail: payer.email ?? undefined,
       ...(carryCanadaFee
         ? {
             canadaFee: {

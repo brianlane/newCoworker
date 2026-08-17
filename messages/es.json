@@ -2364,7 +2364,10 @@
       "numberBlurbBasic": "Trae tu número de negocio existente",
       "numberBlurbWizard": "Trae el número de negocio que tus clientes ya conocen. Se transfiere a tu coworker de IA en aproximadamente una semana",
       "numberNoCoworker": "Aún no hay un coworker aprovisionado.",
-      "numberGetStarted": "Comenzar →"
+      "numberGetStarted": "Comenzar →",
+      "viewAsAccountNotice": "Estas viendo este cliente como administrador. Esta es la cuenta del cliente, y guardar un correo nuevo cambia su acceso de inmediato (no hay enlace de confirmacion para que tu hagas clic).",
+      "viewAsOwnLoginNotice": "Esta tarjeta actua sobre TU PROPIO acceso, no el del cliente. Cambiar una contrasena aqui cambia la contrasena con la que iniciaste sesion.",
+      "viewAsLanguageNotice": "Guardar establece el idioma del panel del CLIENTE. Los botones de abajo muestran el tuyo, que no cambia."
     },
     "contacts": {
       "languageLabel": "Idioma",
