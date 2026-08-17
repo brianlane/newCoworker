@@ -128,6 +128,28 @@ export async function POST(request: Request) {
       );
     }
 
+    // A Page routes webhooks to exactly ONE tenant (uq_meta_connections_page).
+    // Without this check the activation below hits that unique index and the
+    // owner is told "An unexpected error occurred", with no hint that the
+    // Page is simply spoken for. Checked BEFORE the subscribe so a refused
+    // pick never leaves a Meta-side subscription behind either.
+    const existingClaim = await getMetaPageClaim(page.id);
+    if (existingClaim && existingClaim.business_id !== body.businessId) {
+      // Deliberately NAMELESS. uq_meta_connections_page is global, so the
+      // holder can be an unrelated customer who merely shares a Facebook Page
+      // admin with this caller; naming them would disclose another tenant's
+      // business name, and that they use the product, to anyone holding Page
+      // admin (Bugbot ddcefed0). We do not reveal one business to another,
+      // and that rule does not bend for the case where the caller happens to
+      // own both: the API cannot tell those apart cheaply enough to be worth
+      // the risk. An operator who needs to know can see it in the admin
+      // tools, or by looking at the Page in Facebook.
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `"${page.name}" is already connected to another business. A Facebook Page can send its leads to one business at a time — disconnect it there first, then pick it here.`
+      );
+    }
+
     // Subscribe FIRST: if Meta refuses, the connection stays pending and
     // the owner can retry — we never store an unsubscribed "active" row.
     await subscribePageToLeadgen(page.id, page.accessToken);
