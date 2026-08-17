@@ -747,6 +747,60 @@ which the migration role can't `ALTER` — kept re-granting `anon`/`authenticate
 EXECUTE on freshly created functions. Policy: public functions are **service_role-only**;
 callable surfaces go through service-role clients, never `anon`/`authenticated` RPC.
 
+## Admin "view as": full access, and what keeps it on the right row
+
+The platform admin can drive the owner dashboard as any tenant. An httpOnly
+cookie carries the target business id (set by `POST /api/admin/view-as`,
+honored only when the signed-in user is the admin, 4h cap, entry audited as
+`view_as` in the admin audit trail).
+
+**It is not read-only.** It used to be: roughly 50 tenant-facing routes
+carried an `isViewAsActive` 403 ("View-as is read-only; exit view-as to make
+changes"). That guard existed because those routes resolved "the" business
+from the SIGNED-IN user's email, so an impersonating admin's save would have
+landed on the ADMIN's own business while the page showed a customer's. Since
+Aug 2026 the resolution itself is view-as aware, so the guard is gone and the
+admin can perform any action for any tenant. Two mechanisms do the work:
+
+- **Business-scoped writes** either take an explicit `businessId` (role-checked
+  with `requireBusinessRole`, which admins pass) or resolve it through
+  `resolveActiveBusinessContext`
+  ([src/lib/dashboard/active-business.ts](src/lib/dashboard/active-business.ts)),
+  which returns the view-as pin with role `owner`. Either way the write lands
+  on the tenant being viewed. **If you add a tenant-facing mutation, resolve
+  the business one of those two ways.** Re-deriving it from `user.email`
+  reintroduces exactly the wrong-tenant bug the old 403 was papering over.
+- **User-scoped writes** (login email, UI locale, the auth-user teardown
+  inside account deletion, the clickwrap ledger) are keyed on an auth user,
+  not a business, so they go through `resolveViewAsTargetUser`
+  ([src/lib/admin/view-as.ts](src/lib/admin/view-as.ts)): under view-as it
+  resolves the impersonated OWNER's auth user, and returns `userId: null` when
+  the tenant's `owner_email` has no login behind it (pending/placeholder
+  owner). **Callers must refuse on that null** rather than fall back to the
+  signed-in user, which would apply the change to the operator's own account.
+
+Three deliberate carve-outs:
+
+- `/api/account/email` under view-as applies the change IMMEDIATELY
+  (`auth.admin.updateUserById` + `moveBusinessesToNewOwnerEmail`) instead of
+  the owner's confirm-by-link flow: the admin cannot click a link sent to the
+  tenant's mailbox, so there is nothing to reconcile later.
+- `/api/account/delete` still re-verifies the CALLER's own password. That
+  check proves the session is not hijacked; the admin does not know the
+  tenant's password, and should not.
+- `/api/legal/accept` records the acceptance for the tenant but stamps
+  `source: 'admin_view_as'` rather than `'gate'`, so "did this tenant
+  personally agree?" stays answerable (filter `source in ('signup','gate')`).
+  An operator click must never be indistinguishable from the tenant's own in a
+  table whose purpose is evidence.
+
+One platform limit, not a policy gate: the connector Disconnect
+([src/app/api/integrations/mcp/route.ts](src/app/api/integrations/mcp/route.ts))
+still skips the OAuth revoke unless the caller's own login is the connected
+one, because Supabase's `auth.oauth` API only ever acts on the caller's
+grants. An unconditional revoke there would destroy the admin's own Claude
+access while leaving the tenant's connector alive.
+
 ## Production checklist (high level)
 
 - Set **`INTERNAL_CRON_SECRET`** for scheduled invocations of Edge functions that use `assertCronAuth` (e.g. `sms-inbound-worker`, **`voice-settlement-sweep`** — runs **`voice_run_maintenance_sweeps`** for stale settlements, zombie **`voice_active_sessions`**, ended-and-settled **`voice_active_sessions`** (the `ended_sessions_reaped` counter: rows whose call finished normally, which nothing deleted before migration `20260822071559`), stale **`voice_reservations`**, stuck **`sms_inbound_jobs`**, and expired **`stream_url_nonces`** — **`voice-low-balance-alerts`**, **`telnyx-voice-failover`**). Do **not** set **`CRON_ALLOW_SERVICE_ROLE_BEARER`** in production — that flag exists only so local dev can reuse the service role as the bearer when no dedicated cron secret is configured.
@@ -866,9 +920,12 @@ a text-only composer (attachments live on the full page, linked from the
 panel), and draft cards using the same sessionStorage hand-off as the page.
 The companion is NOT gated on admin view-as: the full /dashboard/chat page
 already works while impersonating, and the panel mirrors the page. The chat
-API stays the authority on what an impersonating admin can do (the caller's
-email resolves no role on a foreign tenant, so role-gated bridge tools never
-declare there). All copy lives under `dashboard.companion.*` in BOTH message
+API stays the authority on what an impersonating admin can do, and since
+Aug 2026 the answer is "everything the owner can": the caller's email holds
+no role on a foreign tenant, so the route falls back to the view-as cookie's
+pinned business and resolves owner for exactly that business, handing the
+pinned id to the bridge caller so the per-call `requireMcpBusinessRole`
+agrees. All copy lives under `dashboard.companion.*` in BOTH message
 catalogs; the client subset registers `dashboard.companion` in
 `src/i18n/client-messages.ts`.
 

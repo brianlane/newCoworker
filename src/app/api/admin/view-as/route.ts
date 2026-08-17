@@ -38,9 +38,10 @@ export async function POST(request: Request) {
       path: "/",
       // Persistent cookie with a hard 4h cap (NOT session-scoped — a
       // persistent maxAge survives browser close, which is fine: the cookie
-      // is only ever honored for the admin, view-as is read-only for
-      // account/billing mutations, and it expires on its own). Exit via the
-      // banner clears it immediately.
+      // is only ever honored for the admin, and it expires on its own).
+      // Exit via the banner clears it immediately. The cap matters more now
+      // that impersonation can mutate: a forgotten session ages out rather
+      // than leaving the next tenant-surface save pointed at a customer.
       maxAge: 4 * 60 * 60
     });
 

@@ -20,9 +20,10 @@ export default async function DangerZoneSettingsPage() {
         </SignOutButton>
       </Card>
 
-      {/* Shown during admin view-as too — admins see everything the owner
-          sees. Impersonation stays read-only at the API layer: the DELETE
-          route refuses view-as, so the card is preview-only for admins. */}
+      {/* Shown during admin view-as too, and live there: the DELETE route
+          deletes the impersonated tenant's business and the TENANT owner's
+          login (never the operator's own account). Still password-gated on
+          the caller's own credentials plus the typed confirm phrase. */}
       {isOwner && <DeleteAccountCard />}
     </SettingsPageShell>
   );

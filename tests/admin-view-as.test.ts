@@ -25,12 +25,21 @@ vi.mock("@/lib/supabase/server", () => ({
   }))
 }));
 
+// The auth-directory lookup behind resolveViewAsTargetUser. Mocked rather
+// than stubbed through Supabase because it has its own RPC-plus-fallback
+// contract (tested in the auth suite) and this file only cares WHICH email it
+// is asked about.
+vi.mock("@/lib/auth", () => ({
+  findAuthUserIdByEmail: vi.fn()
+}));
+
 import {
   getViewAsBusinessId,
   resolveViewAsContext,
   resolveDashboardOwnerEmail,
-  isViewAsActive
+  resolveViewAsTargetUser
 } from "@/lib/admin/view-as";
+import { findAuthUserIdByEmail } from "@/lib/auth";
 import type { AuthUser } from "@/lib/auth";
 
 const BIZ_ID = "0395f00c-8023-4cf5-bde9-db07fc5f0027";
@@ -43,6 +52,7 @@ beforeEach(() => {
   maybeSingle.mockReset();
   cookiesImpl.mockReset();
   cookiesImpl.mockImplementation(async () => ({ get: cookieGet }));
+  vi.mocked(findAuthUserIdByEmail).mockReset();
 });
 
 describe("getViewAsBusinessId", () => {
@@ -148,8 +158,9 @@ describe("resolveViewAsContext", () => {
   it("marks self-impersonation (admin-owned business) selfOwned, keeping the context", async () => {
     // The internal HQ tenant is owned by the admin email itself. The context
     // stays non-null (the dashboard layout keys the admin→/admin redirect
-    // and the banner off its presence) but is flagged selfOwned so the
-    // read-only write guard does not fire. Email match is case-insensitive.
+    // and the banner off its presence) but is flagged selfOwned so the banner
+    // says so and the user-scoped routes skip their owner lookup. Email match
+    // is case-insensitive.
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({
       data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "Admin@X.com" }
@@ -161,35 +172,85 @@ describe("resolveViewAsContext", () => {
   });
 });
 
-describe("isViewAsActive", () => {
-  it("is true only for an admin whose cookie resolves to a live business", async () => {
-    cookieGet.mockReturnValue({ value: BIZ_ID });
-    maybeSingle.mockResolvedValue({
-      data: { id: BIZ_ID, name: "B", tier: "starter", owner_email: "b@x.com" }
-    });
-    expect(await isViewAsActive(admin)).toBe(true);
-    expect(await isViewAsActive(owner)).toBe(false);
-    expect(await isViewAsActive(null)).toBe(false);
+describe("resolveViewAsTargetUser", () => {
+  it("is the caller themselves when no view-as is active", async () => {
+    // The common path for every real owner and teammate: identity
+    // pass-through, and no auth-directory lookup at all.
     cookieGet.mockReturnValue(undefined);
-    expect(await isViewAsActive(admin)).toBe(false);
+    expect(await resolveViewAsTargetUser(owner)).toEqual({
+      userId: "u-own",
+      email: "owner@x.com",
+      impersonating: false
+    });
+    expect(findAuthUserIdByEmail).not.toHaveBeenCalled();
   });
 
-  it("goes inactive when the cookie points at a deleted business (no 403 lock-out)", async () => {
-    // The dashboard already fell back to the admin's own identity and hides
-    // the exit banner in this state — blocking writes would strand the admin.
+  it("resolves the impersonated owner's auth user, not the admin's", async () => {
+    // The whole point: a USER-scoped write (login email, UI locale, the
+    // auth-user teardown in account delete) must land on the tenant's login.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "Amy's Plumbing", tier: "starter", owner_email: "amy@x.com" }
+    });
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue("u-amy");
+    expect(await resolveViewAsTargetUser(admin)).toEqual({
+      userId: "u-amy",
+      email: "amy@x.com",
+      impersonating: true
+    });
+    expect(findAuthUserIdByEmail).toHaveBeenCalledWith("amy@x.com");
+  });
+
+  it("reports userId null when the tenant's owner_email has no login", async () => {
+    // A pending/placeholder owner_email, or a login already deleted. Callers
+    // MUST refuse on this rather than fall back to the signed-in admin:
+    // that fallback is exactly the wrong-row bug this resolver prevents.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "Pending", tier: "starter", owner_email: "pending-x@x.com" }
+    });
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+    expect(await resolveViewAsTargetUser(admin)).toEqual({
+      userId: null,
+      email: "pending-x@x.com",
+      impersonating: true
+    });
+  });
+
+  it("does not impersonate on self-owned view-as (the HQ tenant)", async () => {
+    // The impersonated owner already IS the signed-in user, so there is
+    // nothing to retarget and no reason to pay for the directory lookup.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "Admin@X.com" }
+    });
+    expect(await resolveViewAsTargetUser(admin)).toEqual({
+      userId: "u-admin",
+      email: "admin@x.com",
+      impersonating: false
+    });
+    expect(findAuthUserIdByEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not impersonate when the cookie points at a deleted business", async () => {
+    // resolveViewAsContext already fell back to the admin's own identity, so
+    // an orphan cookie must not make a user-scoped route refuse.
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({ data: null });
-    expect(await isViewAsActive(admin)).toBe(false);
+    expect(await resolveViewAsTargetUser(admin)).toEqual({
+      userId: "u-admin",
+      email: "admin@x.com",
+      impersonating: false
+    });
   });
 
-  it("stays inactive when the admin views their own business (HQ tenant)", async () => {
-    // Writes stay allowed: email-resolved mutations target the exact
-    // business being viewed, so the wrong-tenant hazard cannot occur.
+  it("is inert for a non-admin with a forged cookie", async () => {
     cookieGet.mockReturnValue({ value: BIZ_ID });
-    maybeSingle.mockResolvedValue({
-      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "admin@x.com" }
+    expect(await resolveViewAsTargetUser(owner)).toEqual({
+      userId: "u-own",
+      email: "owner@x.com",
+      impersonating: false
     });
-    expect(await isViewAsActive(admin)).toBe(false);
   });
 });
 

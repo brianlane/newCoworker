@@ -220,7 +220,17 @@ export function mcpBridgeToolsPreamble(opts: { creationToolsDeclared: boolean })
 - OUT OF SCOPE, never attempt with any tool; direct the owner to Settings or support instead: changing any phone number (business line, owner phone), plan or billing changes, buying/porting numbers, connecting or disconnecting integrations, bulk deletions, refunds.`;
 }
 
-export type McpBridgeCaller = { userId: string; email: string };
+/**
+ * Who is running this turn. `adminViewAsBusinessId` is set only for the
+ * platform admin under view-as, and only to the business their cookie pins:
+ * it reaches `requireMcpBusinessRole` inside each handler so the operator's
+ * bridged tools actually work instead of refusing (see McpAuthUser).
+ */
+export type McpBridgeCaller = {
+  userId: string;
+  email: string;
+  adminViewAsBusinessId?: string;
+};
 
 export type McpBridgeDeps = {
   /** Injectable tool defs (tests). */
@@ -372,7 +382,11 @@ export async function executeMcpBridgeTool(
         };
       }
     }
-    const data = await def.handler(args, { userId: caller.userId, email: caller.email });
+    const data = await def.handler(args, {
+      userId: caller.userId,
+      email: caller.email,
+      adminViewAsBusinessId: caller.adminViewAsBusinessId
+    });
     return { ok: true, data };
   } catch (err) {
     if (err instanceof McpToolError) {

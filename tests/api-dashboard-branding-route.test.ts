@@ -5,9 +5,6 @@ vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
 
-vi.mock("@/lib/admin/view-as", () => ({
-  isViewAsActive: vi.fn()
-}));
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
@@ -16,7 +13,6 @@ vi.mock("@/lib/db/businesses", () => ({
 
 import { GET, POST } from "@/app/api/dashboard/branding/route";
 import { requireBusinessRole, getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { getBusiness, updateBusinessBranding } from "@/lib/db/businesses";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -44,7 +40,6 @@ describe("api/dashboard/branding route", () => {
       email: "owner@example.com",
       isAdmin: false
     } as never);
-    vi.mocked(isViewAsActive).mockResolvedValue(false);
     vi.mocked(getBusiness).mockResolvedValue({
       id: BIZ,
       tier: "enterprise",
@@ -100,12 +95,7 @@ describe("api/dashboard/branding route", () => {
     expect(updateBusinessBranding).toHaveBeenCalledWith(BIZ, null);
   });
 
-  it("POST refuses view-as writes and validates payloads", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
-    const viewAs = await post({ businessId: BIZ, branding: null });
-    expect(viewAs.status).toBe(403);
-
-    vi.mocked(isViewAsActive).mockResolvedValue(false);
+  it("POST validates payloads", async () => {
     const badLogo = await post({
       businessId: BIZ,
       branding: { logoUrl: "http://insecure.example.com/logo.png" }

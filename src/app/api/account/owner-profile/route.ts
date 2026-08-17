@@ -22,7 +22,6 @@
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessProfileFields } from "@/lib/db/businesses";
@@ -49,10 +48,6 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only (see /api/account/business-name for rationale).
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const body = schema.parse(await request.json());

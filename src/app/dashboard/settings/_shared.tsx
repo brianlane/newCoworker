@@ -34,7 +34,7 @@ export type SettingsBusinessRow = {
 
 export type SettingsContext = {
   user: AuthUser;
-  /** Non-null while an admin is impersonating a tenant (read-only). */
+  /** Non-null while an admin is impersonating a tenant (full access). */
   viewAs: Awaited<ReturnType<typeof resolveViewAsContext>>["viewAs"];
   db: Awaited<ReturnType<typeof createSupabaseServiceClient>>;
   business: SettingsBusinessRow | null;

@@ -6,25 +6,16 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/db/notification-preferences", () => ({
-  defaultNotificationPreferencesRow: vi.fn(),
-  getNotificationPreferences: vi.fn(),
   getOrCreateNotificationPreferences: vi.fn(),
   updateNotificationPreferences: vi.fn()
 }));
 
-vi.mock("@/lib/admin/view-as", () => ({
-  isViewAsActive: vi.fn()
-}));
-
 import { GET, POST } from "@/app/api/notifications/preferences/route";
 import {
-  defaultNotificationPreferencesRow,
-  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 
 const OWNER = {
   userId: "user-1",
@@ -52,7 +43,6 @@ describe("api/notifications/preferences route", () => {
     vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS as never);
     vi.mocked(updateNotificationPreferences).mockResolvedValue(PREFS as never);
-    vi.mocked(isViewAsActive).mockResolvedValue(false);
   });
 
   it("gets preferences", async () => {
@@ -68,34 +58,24 @@ describe("api/notifications/preferences route", () => {
     expect(requireBusinessRole).toHaveBeenCalledWith(PREFS.business_id, "manage_settings");
   });
 
-  it("GET during view-as never inserts: read-only lookup, defaults when no row", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
-    vi.mocked(getNotificationPreferences).mockResolvedValue(PREFS as never);
-
-    let response = await GET(
+  it("GET mints the row on first read, for an impersonating admin too", async () => {
+    // The row is business-scoped and the businessId is explicit, so there is
+    // no wrong-tenant hazard to suppress: an admin in view-as gets the same
+    // create-if-missing behavior as the owner's first visit, and lands on a
+    // working page instead of a preview built from in-memory defaults.
+    const response = await GET(
       new Request(
         `http://localhost/api/notifications/preferences?businessId=${PREFS.business_id}`
       )
     );
     expect(response.status).toBe(200);
-    expect(getOrCreateNotificationPreferences).not.toHaveBeenCalled();
-    expect(defaultNotificationPreferencesRow).not.toHaveBeenCalled();
-
-    // Tenant never opened the page (no row): serve in-memory defaults.
-    vi.mocked(getNotificationPreferences).mockResolvedValue(null as never);
-    vi.mocked(defaultNotificationPreferencesRow).mockReturnValue(PREFS as never);
-    response = await GET(
-      new Request(
-        `http://localhost/api/notifications/preferences?businessId=${PREFS.business_id}`
-      )
-    );
-    expect(response.status).toBe(200);
-    expect(defaultNotificationPreferencesRow).toHaveBeenCalledWith(PREFS.business_id);
-    expect(getOrCreateNotificationPreferences).not.toHaveBeenCalled();
+    expect(getOrCreateNotificationPreferences).toHaveBeenCalledWith(PREFS.business_id);
   });
 
-  it("POST during view-as is refused (403) and never mutates tenant prefs", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
+  it("POST saves against the businessId in the body, not the caller", async () => {
+    // What keeps view-as writes on the right tenant: the patch target is the
+    // request's businessId (role-checked through requireBusinessRole, which
+    // admins pass), never a business re-derived from the signed-in user.
     const response = await POST(
       new Request("http://localhost/api/notifications/preferences", {
         method: "POST",
@@ -103,11 +83,13 @@ describe("api/notifications/preferences route", () => {
         body: JSON.stringify({ businessId: PREFS.business_id, sms_urgent: false })
       })
     );
-    const body = await response.json();
 
-    expect(response.status).toBe(403);
-    expect(body.error.code).toBe("FORBIDDEN");
-    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(requireBusinessRole).toHaveBeenCalledWith(PREFS.business_id, "manage_settings");
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ sms_urgent: false })
+    );
   });
 
   it("returns 400 for invalid POST payloads", async () => {

@@ -14,7 +14,9 @@
  *    shows; it is validated against the accessible set on every read — a
  *    forged cookie can never reach a business the login has no role on.
  *  - admin view-as keeps its own pinned business id and bypasses both the
- *    cookie and memberships (read-only impersonation, unchanged semantics).
+ *    cookie and memberships. This is also what makes impersonation safe to
+ *    WRITE through: a tenant-facing save resolves the pinned business, not
+ *    whatever the admin's own email owns.
  *
  * Fallback order: view-as pin → valid cookie → newest OWNED business →
  * newest membership business. Null when the login can access nothing.
@@ -138,8 +140,9 @@ async function resolveActiveBusinessContextUncached(
   user: AuthUser,
   client?: SupabaseClient
 ): Promise<ActiveBusinessContext> {
-  // Admin view-as: the pinned business, role owner (read-only is enforced by
-  // the write paths' isViewAsActive refusals, not here).
+  // Admin view-as: the pinned business, role owner. Writes resolve through
+  // here too, which is why an impersonating admin's save lands on the tenant
+  // they are viewing rather than on their own business.
   const viewAsId = await getViewAsBusinessId(user);
   if (viewAsId) {
     return { businessId: viewAsId, role: "owner", accessible: [] };

@@ -12,7 +12,6 @@
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { applyNeedsHumanTeamFirstSetting } from "@/lib/ai-flows/needs-human-flow";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -25,11 +24,6 @@ const bodySchema = z.object({
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only: an impersonating admin must not flip tenant
-    // routing settings (same rule as the other Settings mutations).
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
     const body = bodySchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  moveBusinessesToNewOwnerEmail,
   reconcilePendingEmailChange,
   syncStripeCustomerEmails
 } from "@/lib/account/email-change";
@@ -45,11 +46,17 @@ function makeDb(opts: {
   const del = vi.fn().mockReturnValue({ eq: deleteEq });
 
   // businesses.update().eq().select()
-  const updateSelect = vi
-    .fn()
-    .mockResolvedValue({ data: opts.updatedRows ?? [], error: opts.updateError ?? null });
+  // `=== undefined` (not ??) so a test can deliver an explicit null payload:
+  // PostgREST returns data:null on some shapes, and the callers' `?? []`
+  // fallbacks only get exercised if the mock can actually produce it.
+  const updateSelect = vi.fn().mockResolvedValue({
+    data: opts.updatedRows === undefined ? [] : opts.updatedRows,
+    error: opts.updateError ?? null
+  });
   const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
-  const update = vi.fn().mockReturnValue({ eq: updateEq });
+  // businesses.update().ilike().select(), the immediate-effect admin path.
+  const updateIlike = vi.fn().mockReturnValue({ select: updateSelect });
+  const update = vi.fn().mockReturnValue({ eq: updateEq, ilike: updateIlike });
 
   // businesses.select().eq() is used two ways:
   //   - awaited directly (stripe-sync owner lookup) → must be thenable
@@ -84,7 +91,7 @@ function makeDb(opts: {
     return { update, select: bizSelect };
   });
 
-  return { db: { from }, from, update, updateEq, bizSelect, deleteEq, subsIn };
+  return { db: { from }, from, update, updateEq, updateIlike, bizSelect, deleteEq, subsIn };
 }
 
 function makeStripe(opts: { updateError?: unknown } = {}) {
@@ -304,5 +311,79 @@ describe("syncStripeCustomerEmails", () => {
     expect(logger.warn).toHaveBeenCalledWith("email-change: stripe customer email sync failed", {
       error: "stripe down"
     });
+  });
+});
+
+/**
+ * The immediate-effect variant, for an admin in view-as renaming a tenant's
+ * login. There is no confirmation link to wait on (the admin cannot click the
+ * tenant's), so the auth email and businesses.owner_email move in one request.
+ */
+describe("moveBusinessesToNewOwnerEmail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("moves every business off the old email and reports the count", async () => {
+    // Count matters to the caller's response: an owner can hold several
+    // businesses under one owner_email and all of them must follow the login.
+    const { db, updateIlike, update } = makeDb({
+      updatedRows: [{ id: "biz-1" }, { id: "biz-2" }],
+      ownerBizRows: [{ id: "biz-1" }],
+      stripeSubs: [{ stripe_customer_id: "cus_a" }]
+    });
+    const { stripe, update: stripeUpdate } = makeStripe();
+    const moved = await moveBusinessesToNewOwnerEmail(
+      "old@test.com",
+      "new@test.com",
+      db as never,
+      stripe as never
+    );
+    expect(moved).toBe(2);
+    expect(update).toHaveBeenCalledWith({ owner_email: "new@test.com" });
+    expect(updateIlike).toHaveBeenCalledWith("owner_email", "old@test.com");
+    // Follow-through: receipts and the billing portal stop pointing at the
+    // abandoned address.
+    expect(stripeUpdate).toHaveBeenCalledWith("cus_a", { email: "new@test.com" });
+  });
+
+  it("matches case-insensitively and escapes LIKE metacharacters", async () => {
+    // owner_email keeps signup casing while auth emails are lowercased, hence
+    // ilike. An email like a_b@x.com must not wildcard-match a1b@x.com.
+    const { db, updateIlike } = makeDb({ updatedRows: [{ id: "biz-1" }] });
+    await moveBusinessesToNewOwnerEmail("a_b%c@test.com", "new@test.com", db as never);
+    expect(updateIlike).toHaveBeenCalledWith("owner_email", "a\\_b\\%c@test.com");
+  });
+
+  it("returns 0 when the owner had no business rows", async () => {
+    // Legitimate: a login can exist with no business yet.
+    const { db } = makeDb({ updatedRows: [] });
+    expect(
+      await moveBusinessesToNewOwnerEmail("old@test.com", "new@test.com", db as never)
+    ).toBe(0);
+  });
+
+  it("treats a null payload as zero rows moved", async () => {
+    const { db } = makeDb({ updatedRows: null });
+    expect(
+      await moveBusinessesToNewOwnerEmail("old@test.com", "new@test.com", db as never)
+    ).toBe(0);
+  });
+
+  it("throws when the update fails", async () => {
+    // Deliberately NOT swallowed: the caller has already moved the auth email
+    // by this point, so a failure here means the login and its businesses are
+    // out of step and the operator has to know.
+    const { db } = makeDb({ updateError: { message: "constraint violated" } });
+    await expect(
+      moveBusinessesToNewOwnerEmail("old@test.com", "new@test.com", db as never)
+    ).rejects.toThrow("moveBusinessesToNewOwnerEmail: constraint violated");
+  });
+
+  it("resolves its own service client when none is passed", async () => {
+    const { db } = makeDb({ updatedRows: [{ id: "biz-1" }] });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await moveBusinessesToNewOwnerEmail("old@test.com", "new@test.com")).toBe(1);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });

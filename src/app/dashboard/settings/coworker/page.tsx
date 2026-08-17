@@ -7,7 +7,6 @@ import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 import {
   PERSONALIZE_TIERS,
   ensureTenantMailbox,
-  getTenantMailbox,
   tenantEmailDomain
 } from "@/lib/email/tenant-mailbox";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
@@ -16,18 +15,14 @@ export const dynamic = "force-dynamic";
 
 export default async function CoworkerSettingsPage() {
   const t = await getTranslations("dashboard.settings");
-  const { business, viewAs } = await loadSettingsContext();
+  const { business } = await loadSettingsContext();
 
   const agents = business ? await resolveAgentTools(business.id) : null;
   // Self-heals if provisioning hadn't reserved a mailbox yet (legacy
-  // tenants). View-as stays strictly read-only: it must not provision
-  // mailbox rows for the tenant as a page-load side effect, so it uses the
-  // read-only lookup instead (a missing mailbox just renders no card).
-  const mailbox = business
-    ? viewAs
-      ? await getTenantMailbox(business.id)
-      : await ensureTenantMailbox(business.id)
-    : null;
+  // tenants). Runs under admin view-as as well: an operator opening this page
+  // for a tenant should see (and be able to configure) the same mailbox the
+  // owner's own visit would have reserved, not an empty card.
+  const mailbox = business ? await ensureTenantMailbox(business.id) : null;
 
   return (
     <SettingsPageShell

@@ -6,9 +6,6 @@ vi.mock("@/lib/auth", () => ({
   authUserExistsByEmail: vi.fn()
 }));
 
-vi.mock("@/lib/admin/view-as", () => ({
-  isViewAsActive: vi.fn()
-}));
 
 vi.mock("@/lib/db/business-members", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db/business-members")>();
@@ -53,7 +50,6 @@ vi.mock("@/lib/logger", () => ({
 
 import { GET, POST, PATCH, DELETE } from "@/app/api/dashboard/team/route";
 import { requireBusinessRole, getAuthUser, authUserExistsByEmail } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import {
   listBusinessMembers,
   inviteBusinessMember,
@@ -103,7 +99,6 @@ describe("api/dashboard/team route", () => {
       email: "owner@example.com",
       isAdmin: false
     } as never);
-    vi.mocked(isViewAsActive).mockResolvedValue(false);
     vi.mocked(assertTeamAccessAllowed).mockResolvedValue(undefined);
     vi.mocked(getBusiness).mockResolvedValue({
       id: BIZ,
@@ -217,13 +212,20 @@ describe("api/dashboard/team route", () => {
     expect(res.status).toBe(409);
   });
 
-  it("POST refuses view-as writes", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
+  it("POST invites on the businessId in the body (what makes view-as safe)", async () => {
+    // Admin view-as can manage a tenant's roster. Every write on this route
+    // takes the businessId explicitly and role-checks it through
+    // requireBusinessRole (admins pass), so an impersonating admin's invite
+    // lands on the tenant they are viewing and never on their own team.
+    vi.mocked(inviteBusinessMember).mockResolvedValue(MEMBER as never);
     const res = await POST(
       jsonRequest("POST", { businessId: BIZ, email: "s@example.com", role: "staff" })
     );
-    expect(res.status).toBe(403);
-    expect(inviteBusinessMember).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_team");
+    expect(inviteBusinessMember).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: BIZ, email: "s@example.com" })
+    );
   });
 
   it("POST 404s when the business row is missing", async () => {
@@ -249,7 +251,7 @@ describe("api/dashboard/team route", () => {
     expect(missing.status).toBe(404);
   });
 
-  it("PATCH is enterprise-gated and view-as-refused", async () => {
+  it("PATCH is enterprise-gated", async () => {
     vi.mocked(assertTeamAccessAllowed).mockRejectedValue(
       new TeamAccessValidationError(TEAM_ACCESS_TIER_MESSAGE)
     );
@@ -257,13 +259,6 @@ describe("api/dashboard/team route", () => {
       jsonRequest("PATCH", { businessId: BIZ, memberId: MEMBER_ID, role: "manager" })
     );
     expect(gated.status).toBe(403);
-
-    vi.mocked(assertTeamAccessAllowed).mockResolvedValue(undefined);
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
-    const viewAs = await PATCH(
-      jsonRequest("PATCH", { businessId: BIZ, memberId: MEMBER_ID, role: "manager" })
-    );
-    expect(viewAs.status).toBe(403);
     expect(updateBusinessMemberRole).not.toHaveBeenCalled();
   });
 
@@ -277,13 +272,6 @@ describe("api/dashboard/team route", () => {
     vi.mocked(revokeBusinessMember).mockResolvedValue(false);
     const missing = await DELETE(jsonRequest("DELETE", { businessId: BIZ, memberId: MEMBER_ID }));
     expect(missing.status).toBe(404);
-  });
-
-  it("DELETE refuses view-as writes", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
-    const res = await DELETE(jsonRequest("DELETE", { businessId: BIZ, memberId: MEMBER_ID }));
-    expect(res.status).toBe(403);
-    expect(revokeBusinessMember).not.toHaveBeenCalled();
   });
 
   it("validates bodies (bad role rejected)", async () => {

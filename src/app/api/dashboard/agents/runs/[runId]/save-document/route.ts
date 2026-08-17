@@ -12,7 +12,6 @@
 
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getAgentRun, getBusinessAgent } from "@/lib/agents/db";
 import { saveAgentRunArtifact } from "@/lib/agents/save-artifact";
@@ -30,9 +29,6 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const { runId } = await context.params;
     if (!z.string().uuid().safeParse(runId).success) {
       return errorResponse("VALIDATION_ERROR", "Invalid run id");

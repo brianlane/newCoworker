@@ -11,15 +11,16 @@ export const dynamic = "force-dynamic";
 
 export default async function ChannelsSettingsPage() {
   const t = await getTranslations("dashboard.settings");
-  const { business, viewAs } = await loadSettingsContext();
+  const { business } = await loadSettingsContext();
 
-  // Website chat widget (Standard+). Mint-on-first-read only outside
-  // view-as — view-as stays read-only (same rationale as the mailbox card).
+  // Website chat widget (Standard+). Mint-on-first-read whenever the tier
+  // can actually use it, admin view-as included: the operator gets the same
+  // configurable card the owner's first visit would have created.
   const webchatTierAllowed = webchatAllowedForTier(business?.tier);
   const widgetRow = business
-    ? viewAs || !webchatTierAllowed
-      ? await getWidgetSettingsForBusiness(business.id)
-      : await getOrCreateWidgetSettings(business.id)
+    ? webchatTierAllowed
+      ? await getOrCreateWidgetSettings(business.id)
+      : await getWidgetSettingsForBusiness(business.id)
     : null;
 
   return (

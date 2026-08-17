@@ -71,6 +71,56 @@ export async function syncStripeCustomerEmails(
 }
 
 /**
+ * Move every business keyed to `oldEmail` onto `newEmail`, then point the
+ * Stripe customer(s) at the new address.
+ *
+ * This is the immediate-effect variant of the reconciler below, for the one
+ * caller that has no confirmation link to wait on: an admin in view-as
+ * changing an impersonated tenant's login email. The admin cannot click the
+ * tenant's confirmation link, so `/api/account/email` flips the auth email
+ * through `auth.admin.updateUserById` and calls this to keep
+ * `businesses.owner_email` (the only linkage between a login and its
+ * businesses) in step.
+ *
+ * Matching is case-insensitive because `businesses.owner_email` keeps signup
+ * casing while auth emails are lowercased, and LIKE metacharacters in the old
+ * address are escaped so an email like `a_b@x.com` cannot wildcard-match
+ * another owner's rows.
+ *
+ * Returns how many business rows moved (0 is legitimate: an owner can have a
+ * login and no business yet). Throws only when the update itself fails: the
+ * caller has already changed the auth email at that point, so a failure here
+ * is a real "the login and the business are out of step" condition that must
+ * be surfaced, not swallowed.
+ */
+export async function moveBusinessesToNewOwnerEmail(
+  oldEmail: string,
+  newEmail: string,
+  client?: SupabaseClient,
+  stripe?: StripeCustomersClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pattern = oldEmail
+    .trim()
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
+  const { data: updated, error } = await db
+    .from("businesses")
+    .update({ owner_email: newEmail })
+    .ilike("owner_email", pattern)
+    .select("id");
+  if (error) {
+    throw new Error(`moveBusinessesToNewOwnerEmail: ${error.message}`);
+  }
+  const moved = ((updated ?? []) as Array<{ id: string }>).length;
+  // Best-effort, same contract as the reconciler: a Stripe outage must not
+  // fail a completed login/business move.
+  await syncStripeCustomerEmails(newEmail, db, stripe);
+  return moved;
+}
+
+/**
  * Reconcile `businesses.owner_email` with a confirmed account-email change.
  *
  * Businesses are keyed by `owner_email` (there is no stable owner_user_id), so a

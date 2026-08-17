@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   deleteBusinessService,
@@ -69,10 +68,6 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const user = await getAuthUser();
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const auth = await requireActiveBusinessId();
     if (!auth.ok) return auth.response;
     const body = fieldsSchema.parse(await request.json());
@@ -110,10 +105,6 @@ const patchSchema = fieldsSchema.partial().extend({ id: z.string().uuid() });
 
 export async function PATCH(request: Request) {
   try {
-    const user = await getAuthUser();
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const auth = await requireActiveBusinessId();
     if (!auth.ok) return auth.response;
     const body = patchSchema.parse(await request.json());
@@ -140,10 +131,6 @@ const deleteSchema = z.object({ id: z.string().uuid() });
 
 export async function DELETE(request: Request) {
   try {
-    const user = await getAuthUser();
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const auth = await requireActiveBusinessId();
     if (!auth.ok) return auth.response;
     const body = deleteSchema.parse(await request.json());

@@ -11,7 +11,6 @@
 
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { listDocumentShares, revokeDocumentShare } from "@/lib/documents/db";
 
@@ -50,9 +49,6 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const { documentId } = await context.params;
     if (!z.string().uuid().safeParse(documentId).success) {
       return errorResponse("VALIDATION_ERROR", "Invalid document id");
