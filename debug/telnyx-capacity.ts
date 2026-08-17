@@ -108,8 +108,12 @@ console.log(
   `\nin flight now: ${outboundInFlight ?? 0} outbound, ${inboundInFlight ?? 0} inbound reservation(s)`
 );
 console.log(`sum of effective per-app caps: ${committed} vs account pool ${accountLimit}`);
-if (committed > accountLimit * 2) {
-  console.log("WARN: committed caps exceed 2x the account pool; the weekly monitor will flag this.");
+// Owner policy: the pool stays at least 2x the fleet's committed caps.
+if (committed > 0 && accountLimit < committed * 2) {
+  console.log(
+    `WARN: account pool ${accountLimit} is below 2x committed caps (${committed}); ` +
+      `the weekly monitor will flag this and draft a raise to ${committed * 2}.`
+  );
 }
 console.log(
   "note: the account-level pool is support-ticket-only at Telnyx; if it was raised, update TELNYX_ACCOUNT_CHANNEL_LIMIT so the gate and this report stay truthful."
