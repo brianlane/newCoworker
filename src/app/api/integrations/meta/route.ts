@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { getBusiness } from "@/lib/db/businesses";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   activateMetaConnection,
@@ -125,6 +126,22 @@ export async function POST(request: Request) {
       return errorResponse(
         "VALIDATION_ERROR",
         "That Page is not available on the connected Facebook account"
+      );
+    }
+
+    // A Page routes webhooks to exactly ONE tenant (uq_meta_connections_page).
+    // Without this check the activation below hits that unique index and the
+    // owner is told "An unexpected error occurred", with no hint that the
+    // Page is simply spoken for. Checked BEFORE the subscribe so a refused
+    // pick never leaves a Meta-side subscription behind either.
+    const existingClaim = await getMetaPageClaim(page.id);
+    if (existingClaim && existingClaim.business_id !== body.businessId) {
+      const holder = await getBusiness(existingClaim.business_id).catch(() => null);
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `"${page.name}" is already connected to ${
+          holder?.name ? `another business on this account (${holder.name})` : "another business"
+        }. A Facebook Page can send its leads to one business at a time — disconnect it there first, then pick it here.`
       );
     }
 

@@ -31,12 +31,21 @@ vi.mock("@/lib/meta/client", () => ({
   unsubscribePage: vi.fn()
 }));
 
-import { PATCH } from "@/app/api/integrations/meta/route";
+vi.mock("@/lib/db/businesses", () => ({
+  getBusiness: vi.fn()
+}));
+
+import { PATCH, POST } from "@/app/api/integrations/meta/route";
 import {
+  activateMetaConnection,
+  getMetaConnection,
+  getMetaPageClaim,
   getPublicMetaConnection,
   setMetaConnectionActive,
   setMetaConnectionDataset
 } from "@/lib/db/meta-connections";
+import { listManagedPages, subscribePageToLeadgen } from "@/lib/meta/client";
+import { getBusiness } from "@/lib/db/businesses";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -131,5 +140,87 @@ describe("PATCH /api/integrations/meta", () => {
     vi.mocked(getAuthUser).mockResolvedValue(null as never);
     const res = await patch({ businessId: BIZ, datasetId: "1234567890123456" });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/integrations/meta (page pick)", () => {
+  const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
+  const PAGE = { id: "page-9", name: "New Coworker", accessToken: "page-tok" };
+
+  function post(body: Record<string, unknown>) {
+    return POST(
+      new Request("http://localhost/api/integrations/meta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      })
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
+    vi.mocked(getMetaConnection).mockResolvedValue({
+      business_id: BIZ,
+      status: "pending",
+      page_id: null,
+      dataset_id: null,
+      userToken: "user-tok"
+    } as never);
+    vi.mocked(listManagedPages).mockResolvedValue([PAGE] as never);
+    vi.mocked(getMetaPageClaim).mockResolvedValue(null as never);
+    vi.mocked(activateMetaConnection).mockResolvedValue({
+      business_id: BIZ,
+      status: "active",
+      page_id: PAGE.id
+    } as never);
+  });
+
+  it("names the business already holding the Page instead of a generic failure", async () => {
+    // The Page is unique across tenants (uq_meta_connections_page). Before
+    // this check the activation hit that index and the owner saw only
+    // "An unexpected error occurred" — true, and useless.
+    vi.mocked(getMetaPageClaim).mockResolvedValue({ business_id: OTHER_BIZ } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ id: OTHER_BIZ, name: "Meta Review Sandbox" } as never);
+
+    const res = await post({ businessId: BIZ, pageId: PAGE.id });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toContain("Meta Review Sandbox");
+    expect(json.error.message).toContain("disconnect it there first");
+    // Refused BEFORE the Meta-side subscribe, so a rejected pick leaves no
+    // dangling subscription to clean up.
+    expect(subscribePageToLeadgen).not.toHaveBeenCalled();
+    expect(activateMetaConnection).not.toHaveBeenCalled();
+  });
+
+  it("still refuses when the holder's name cannot be read, without leaking an id", async () => {
+    vi.mocked(getMetaPageClaim).mockResolvedValue({ business_id: OTHER_BIZ } as never);
+    vi.mocked(getBusiness).mockRejectedValue(new Error("db down"));
+
+    const res = await post({ businessId: BIZ, pageId: PAGE.id });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toContain("another business");
+    expect(json.error.message).not.toContain(OTHER_BIZ);
+  });
+
+  it("lets a business re-pick the Page it already holds (reconnect)", async () => {
+    // Reconnecting to grant new scopes re-picks the same Page; the claim is
+    // this business's own, so it must proceed.
+    vi.mocked(getMetaPageClaim).mockResolvedValue({ business_id: BIZ } as never);
+
+    const res = await post({ businessId: BIZ, pageId: PAGE.id });
+    expect(res.status).toBe(200);
+    expect(subscribePageToLeadgen).toHaveBeenCalledWith(PAGE.id, PAGE.accessToken);
+    expect(activateMetaConnection).toHaveBeenCalled();
+  });
+
+  it("proceeds when no business holds the Page yet", async () => {
+    const res = await post({ businessId: BIZ, pageId: PAGE.id });
+    expect(res.status).toBe(200);
+    expect(getBusiness).not.toHaveBeenCalled();
+    expect(activateMetaConnection).toHaveBeenCalled();
   });
 });
