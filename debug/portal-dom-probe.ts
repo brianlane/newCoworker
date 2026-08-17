@@ -46,9 +46,11 @@
  *   --text                also print the page's visible text
  *   --links               print every link href, not just the first 40
  *   --grep <needle>       print visible-text lines containing this needle
- *   --raw <regex>         print raw markup around each match. This is how you
- *                         find a row's href when the row is a div with a click
- *                         handler rather than an <a>, which is most SPA lists.
+ *   --raw <text>          print raw markup around each LITERAL match (case
+ *                         insensitive). This is how you find a row's href when
+ *                         the row is a div with a click handler rather than an
+ *                         <a>, which is most SPA lists.
+ *   --raw-before/-after/-limit  window size and match cap for --raw
  *   --click <text>        click a control by visible text (repeatable, ordered)
  *   --click-selector <css>  click by CSS selector (repeatable, ordered)
  *   --shot <path>         save the post-action screenshot as JPEG and read it
@@ -120,22 +122,51 @@ rm -f /tmp/probe-payload.json
 `;
 }
 
-/** Strip <script>/<style> so their contents never pollute the control digest. */
+/**
+ * Strip <script>/<style> so their contents never pollute the control digest.
+ *
+ * The end-tag pattern allows trailing whitespace (`</script >` is valid HTML and
+ * a single-pass naive `</script>` misses it), and the whole thing repeats until
+ * the string stops changing, because one pass over nested or overlapping markup
+ * can reveal a further opening tag. This is a readability filter for a terminal
+ * digest, not a sanitizer, and nothing downstream renders the result as HTML,
+ * but incomplete stripping is worth avoiding on its own merits.
+ */
 function stripCode(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "");
+  const patterns = [/<script\b[\s\S]*?<\/script\s*>/gi, /<style\b[\s\S]*?<\/style\s*>/gi];
+  let out = html;
+  for (let pass = 0; pass < 5; pass++) {
+    const before = out;
+    for (const re of patterns) out = out.replace(re, " ");
+    if (out === before) break;
+  }
+  return out;
 }
 
+/** The handful of entities these portals actually emit. */
+const HTML_ENTITIES: Record<string, string> = {
+  "&nbsp;": " ",
+  "&amp;": "&",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&#x27;": "'",
+  "&#39;": "'",
+  "&lt;": "<",
+  "&gt;": ">"
+};
+
 function textOf(fragment: string): string {
-  return fragment
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&#x27;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    fragment
+      .replace(/<[^>]+>/g, " ")
+      // ONE pass over all entities. Decoding sequentially (&amp; -> & before
+      // handling the rest) lets an already-decoded "&" combine with following
+      // text into a second entity and be unescaped twice, so "&amp;lt;" would
+      // wrongly become "<" instead of "&lt;".
+      .replace(/&(?:nbsp|amp|quot|apos|lt|gt|#x27|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function uniq(values: string[]): string[] {
@@ -361,22 +392,22 @@ async function main(): Promise<void> {
 
   const raw = flag("raw");
   if (raw) {
-    let re: RegExp;
-    try {
-      re = new RegExp(raw, "gi");
-    } catch (err) {
-      fail(`--raw is not a valid regex: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    // Deliberately a LITERAL substring scan, not a regex built from argv.
+    // Compiling a user-supplied pattern invites catastrophic backtracking, and
+    // these pages run to half a megabyte, so one unlucky pattern hangs the
+    // tool. Every real use of this flag has been a literal anyway: a
+    // `data-test` value, a class name, a fragment of visible text.
     const before = Number(flag("raw-before") ?? 220);
     const after = Number(flag("raw-after") ?? 320);
     const limit = Number(flag("raw-limit") ?? 12);
+    const needle = raw.toLowerCase();
+    const haystack = html.toLowerCase();
     const hits: string[] = [];
-    for (const m of html.matchAll(re)) {
-      const at = m.index ?? 0;
+    for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
       hits.push(html.slice(Math.max(0, at - before), at + after).replace(/\s+/g, " "));
       if (hits.length >= limit) break;
     }
-    section(`Raw markup around /${raw}/`, hits, limit);
+    section(`Raw markup around "${raw}"`, hits, limit);
   }
 
   if (wantText) {
