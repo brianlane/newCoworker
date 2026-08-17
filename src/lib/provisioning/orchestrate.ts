@@ -2129,18 +2129,35 @@ async function runOrchestrator(
                 businessRow?.enterprise_limits ?? null
               )
             });
-            platformDefaults.connectionId = infra.connectionId;
+            // Persist BOTH ids BEFORE adopting the override: if this write
+            // throws, the catch's "riding the shared platform app" claim
+            // below stays true (the override was never applied) and the
+            // settings row can never name a different app than the one the
+            // order used. If the DID order later fails, the cached tenant
+            // ids sit inert (no route row = no calls) and stay correct for
+            // the retry or the migration one-shot.
             await upsertBusinessTelnyxSettings({
               businessId,
+              telnyxConnectionId: infra.connectionId,
               telnyxOutboundVoiceProfileId: infra.outboundVoiceProfileId
             });
-            await recordProvisioningProgress({
-              businessId,
-              phase: "tenant_voice_infra",
-              percent: 36,
-              message: `Dedicated Telnyx voice app + profile ready (${infra.connectionId})`,
-              source: "orchestrator"
-            });
+            platformDefaults.connectionId = infra.connectionId;
+            try {
+              await recordProvisioningProgress({
+                businessId,
+                phase: "tenant_voice_infra",
+                percent: 36,
+                message: `Dedicated Telnyx voice app + profile ready (${infra.connectionId})`,
+                source: "orchestrator"
+              });
+            } catch (progressErr) {
+              // Cosmetic write; the override and the settings already hold,
+              // so this must not fall through to the "shared app" catch.
+              logger.warn("tenant_voice_infra progress write failed", {
+                businessId,
+                error: String(progressErr)
+              });
+            }
           } catch (infraErr) {
             logger.warn(
               "Tenant voice infra creation failed; DID will ride the shared platform app",

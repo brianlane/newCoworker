@@ -2177,9 +2177,11 @@ describe("provisioning/orchestrate", () => {
         businessName: "Amy Laidlaw Real Estate",
         maxConcurrentCalls: 10
       });
-      // The dedicated profile id is cached before the order...
+      // BOTH ids are cached before the order (a half-write can never name a
+      // different app than the one the order used)...
       expect(vi.mocked(upsertBusinessTelnyxSettings)).toHaveBeenCalledWith({
         businessId: "biz-did-infra",
+        telnyxConnectionId: "app-tenant-1",
         telnyxOutboundVoiceProfileId: "prof-tenant-1"
       });
       // ...and the number order lands on the TENANT app, not the platform one.
@@ -2210,6 +2212,80 @@ describe("provisioning/orchestrate", () => {
           platformDefaults: expect.objectContaining({ connectionId: "mock_conn" })
         })
       );
+    });
+
+    it("degrades to the platform app when the settings write fails (override never applied)", async () => {
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      vi.mocked(upsertBusinessTelnyxSettings).mockRejectedValueOnce(new Error("db down"));
+      const tenantVoiceInfra = vi.fn().mockResolvedValue({
+        connectionId: "app-tenant-x",
+        outboundVoiceProfileId: "prof-tenant-x"
+      });
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550005555" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-upsert-fail", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner,
+          tenantVoiceInfra
+        }
+      );
+      // The write failed BEFORE the override, so the catch's claim is true:
+      // the order really did ride the shared platform app.
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platformDefaults: expect.objectContaining({ connectionId: "mock_conn" })
+        })
+      );
+    });
+
+    it("keeps the tenant app when only the cosmetic progress write fails", async () => {
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const tenantVoiceInfra = vi.fn().mockResolvedValue({
+        connectionId: "app-tenant-y",
+        outboundVoiceProfileId: "prof-tenant-y"
+      });
+      // Fail ONLY the tenant_voice_infra progress write: every other phase's
+      // progress call must keep succeeding or the run dies long before the
+      // DID step. Implementation restored in finally (clearAllMocks clears
+      // calls, not implementations, so a leak would poison later tests).
+      const progressMock = vi.mocked(recordProvisioningProgress);
+      progressMock.mockImplementation(async (args: { phase?: string }) => {
+        if (args?.phase === "tenant_voice_infra") throw new Error("progress table busy");
+        return {
+          id: "00000000-0000-4000-8000-000000000099",
+          business_id: "00000000-0000-4000-8000-000000000001",
+          task_type: "provisioning",
+          status: "thinking",
+          log_payload: {}
+        } as never;
+      });
+      try {
+        const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550006666" });
+        await orchestrateProvisioning(
+          { businessId: "biz-did-progress-fail", tier: "starter" },
+          {
+            vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+            remoteExec: vi.fn().mockResolvedValue(okExec()),
+            didProvisioner,
+            tenantVoiceInfra
+          }
+        );
+        expect(didProvisioner).toHaveBeenCalledWith(
+          expect.objectContaining({
+            platformDefaults: expect.objectContaining({ connectionId: "app-tenant-y" })
+          })
+        );
+      } finally {
+        progressMock.mockImplementation(async () => ({
+          id: "00000000-0000-4000-8000-000000000099",
+          business_id: "00000000-0000-4000-8000-000000000001",
+          task_type: "provisioning",
+          status: "thinking",
+          log_payload: {}
+        }) as never);
+      }
     });
 
     it("degrades on a non-Error infra rejection too", async () => {
