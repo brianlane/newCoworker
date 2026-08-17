@@ -104,7 +104,7 @@ describe("formatCapacityMonitorEmail", () => {
     const email = formatCapacityMonitorEmail({
       verdict,
       inputs,
-      suggestedPool: suggestedPoolRaise(verdict.committedCaps)
+      suggestedPool: suggestedPoolRaise(verdict.committedCaps, inputs.accountLimit)
     });
     expect(email.subject).toContain("raise the account pool");
     expect(email.text).toContain("2 carrier channel-limit rejection(s)");
@@ -118,12 +118,25 @@ describe("formatCapacityMonitorEmail", () => {
 });
 
 describe("suggestedPoolRaise", () => {
-  it("asks for 2x the committed caps, floored at 20, and survives garbage", () => {
-    expect(suggestedPoolRaise(50)).toBe(100);
-    expect(suggestedPoolRaise(30)).toBe(60);
-    expect(suggestedPoolRaise(1)).toBe(20);
-    expect(suggestedPoolRaise(0)).toBe(20);
-    expect(suggestedPoolRaise(Number.NaN)).toBe(20);
+  it("restores the invariant when broken (matching the alert reason's number)", () => {
+    expect(suggestedPoolRaise(50, 10)).toBe(100);
+    expect(suggestedPoolRaise(50, 60)).toBe(100);
+    expect(suggestedPoolRaise(30, 10)).toBe(60);
+  });
+
+  // Bugbot High on this PR: a refusal-triggered alert with a HEALTHY
+  // invariant would otherwise "ask" for a pool at or below the current one.
+  // The fleet provably exhausted what it has, so the draft doubles the pool.
+  it("is always a genuine increase when the invariant already holds", () => {
+    expect(suggestedPoolRaise(50, 100)).toBe(200);
+    expect(suggestedPoolRaise(10, 100)).toBe(200);
+    expect(suggestedPoolRaise(50, 100)).toBeGreaterThan(100);
+  });
+
+  it("floors at 20 and survives garbage", () => {
+    expect(suggestedPoolRaise(1, 10)).toBe(20);
+    expect(suggestedPoolRaise(0, 0)).toBe(20);
+    expect(suggestedPoolRaise(Number.NaN, Number.NaN)).toBe(20);
   });
 });
 

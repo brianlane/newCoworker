@@ -131,7 +131,7 @@ serve(async (req: Request) => {
   const email = formatCapacityMonitorEmail({
     verdict,
     inputs,
-    suggestedPool: suggestedPoolRaise(verdict.committedCaps)
+    suggestedPool: suggestedPoolRaise(verdict.committedCaps, inputs.accountLimit)
   });
   const result = await sendVoiceCapacityAlertOnce(
     supabase as unknown as CapacityAlertSupabase,

@@ -109,11 +109,19 @@ export function formatCapacityMonitorEmail(args: {
 }
 
 /**
- * The pool to request: whatever restores the headroom invariant
- * (SAFETY_FACTOR x committed caps), floored at 20 so a tiny fleet still
+ * The pool to request. When the headroom invariant is broken, ask for
+ * exactly what restores it (SAFETY_FACTOR x committed caps, matching the
+ * alert reason's number). When the alert fired from real refusals while
+ * the invariant still holds, that target would be at or below the current
+ * pool, so a "raise" must instead double the pool itself: the fleet
+ * provably exhausted what it has. Floored at 20 so a tiny fleet still
  * asks for a usable pool.
  */
-export function suggestedPoolRaise(committedCaps: number): number {
-  if (!Number.isFinite(committedCaps) || committedCaps < 10) return 20;
-  return committedCaps * CAPACITY_MONITOR_SAFETY_FACTOR;
+export function suggestedPoolRaise(committedCaps: number, accountLimit: number): number {
+  const committed = Number.isFinite(committedCaps) && committedCaps > 0 ? committedCaps : 0;
+  const pool = Number.isFinite(accountLimit) && accountLimit > 0 ? accountLimit : 0;
+  const invariantTarget = committed * CAPACITY_MONITOR_SAFETY_FACTOR;
+  const target =
+    invariantTarget > pool ? invariantTarget : pool * CAPACITY_MONITOR_SAFETY_FACTOR;
+  return Math.max(20, target);
 }
