@@ -22,6 +22,7 @@ import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
 import {
   listHostingerVpsCosts,
   listTelnyxCostDaily,
+  listTenantDids,
   type HostingerVpsCostRow,
   type TelnyxCostDailyRow
 } from "@/lib/db/platform-costs";
@@ -151,6 +152,23 @@ export function syncedHostingContradictsPin(
   return syncedSizes.some((size) => size !== vpsSizePin);
 }
 
+/**
+ * businessId → how many DISTINCT Telnyx numbers it rents. The DID list joins
+ * the messaging from-number and every voice route, so one number routinely
+ * appears twice for the same tenant; counting rows would double its rental.
+ */
+export function didCountByBusiness(
+  dids: Array<{ businessId: string; e164: string }>
+): Map<string, number> {
+  const seen = new Map<string, Set<string>>();
+  for (const did of dids) {
+    const set = seen.get(did.businessId) ?? new Set<string>();
+    set.add(did.e164);
+    seen.set(did.businessId, set);
+  }
+  return new Map([...seen].map(([businessId, set]) => [businessId, set.size]));
+}
+
 /** businessId → this window's summed Telnyx cost (micro-USD); null key rows excluded. */
 export function telnyxMicrosByBusiness(rows: TelnyxCostDailyRow[]): Map<string, number> {
   const map = new Map<string, number>();
@@ -165,8 +183,15 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   const businesses = await listBusinesses();
   const monthStartYmd = monthStartYmdUtc(now);
 
-  const [allSubscriptions, deals, usageByBusiness, aiSpendMicrosByBusiness, hostingerRows, telnyxRows] =
-    await Promise.all([
+  const [
+    allSubscriptions,
+    deals,
+    usageByBusiness,
+    aiSpendMicrosByBusiness,
+    hostingerRows,
+    telnyxRows,
+    tenantDids
+  ] = await Promise.all([
       listAllSubscriptions(),
       listActiveEnterpriseDeals(),
       // Best-effort reads: a transient failure degrades one input to
@@ -194,6 +219,15 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
           message: err instanceof Error ? err.message : String(err)
         });
         return [];
+      }),
+      // null (not []) on failure: an empty list is indistinguishable from
+      // "no tenant rents a number", which would silently zero the fleet's
+      // whole number-rental line. Null falls back to the box heuristic.
+      listTenantDids().catch((err: unknown) => {
+        logger.error("loadFleetMargins: tenant DID read failed", {
+          message: err instanceof Error ? err.message : String(err)
+        });
+        return null;
       })
     ]);
 
@@ -202,6 +236,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   const hostingByBusiness = hostingCentsByBusiness(hostingerRows);
   const hostingSizes = hostingSizesByBusiness(hostingerRows);
   const telnyxByBusiness = telnyxMicrosByBusiness(telnyxRows);
+  const didCounts = tenantDids === null ? null : didCountByBusiness(tenantDids);
   // Any synced row this month means the Telnyx sync is live: businesses
   // without rows genuinely had no Telnyx cost (actual 0), not "unknown".
   const telnyxActuals = telnyxRows.length > 0;
@@ -233,6 +268,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
           ? null
           : (hostingByBusiness.get(business.id) ?? null),
         telnyxMonthCostMicros: telnyxActuals ? (telnyxByBusiness.get(business.id) ?? 0) : null,
+        didCount: didCounts === null ? null : (didCounts.get(business.id) ?? 0),
         monthSmsSent: usage?.smsSent ?? 0,
         monthVoiceMinutes: usage?.voiceMinutes ?? 0,
         aiSpendMicros: aiSpendMicrosByBusiness.get(business.id) ?? 0

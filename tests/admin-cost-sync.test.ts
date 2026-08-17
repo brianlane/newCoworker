@@ -7,6 +7,7 @@ import {
   didSuffix,
   fetchTelnyxDetailRecords,
   parsePlatformCostSyncStatus,
+  senderLabel,
   runPlatformCostSync,
   windowStartDayUtc,
   type PlatformCostSyncDeps,
@@ -350,6 +351,81 @@ describe("aggregateTelnyxRecords", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("names the sender on unattributed rows, and leaves it null on attributed ones", () => {
+    const rows = aggregateTelnyxRecords({
+      records: [
+        // Attributed: business_id already names the owner.
+        {
+          sent_at: "2026-07-10T01:00:00Z",
+          direction: "outbound",
+          cli: "+16025551234",
+          cld: "+14805550000",
+          cost: "0.004"
+        },
+        // The international SMS gateway long code: our number, no tenant.
+        {
+          sent_at: "2026-07-10T02:00:00Z",
+          direction: "outbound",
+          cli: "+16028384497",
+          cld: "+16029226392",
+          cost: "0.004"
+        },
+        // Same sender, second record: one bucket, summed.
+        {
+          sent_at: "2026-07-10T03:00:00Z",
+          direction: "outbound",
+          cli: "+16028384497",
+          cld: "+16026866672",
+          cost: "0.0281"
+        },
+        // Inbound to an RCS agent id: our leg is cld, and it is not digits,
+        // so the DID matcher can never match it.
+        {
+          sent_at: "2026-07-10T04:00:00Z",
+          direction: "inbound",
+          cli: "+16026866672",
+          cld: "new_coworker_jut3q1af_agent",
+          cost: "0.0065"
+        }
+      ],
+      recordType: "messaging",
+      didToBusiness,
+      windowStartDay: "2026-07-05"
+    });
+    const bySender = new Map(rows.map((r) => [r.sender, r]));
+    expect(bySender.get(null)).toMatchObject({ business_id: "biz-1" });
+    expect(bySender.get("+16028384497")).toMatchObject({
+      business_id: null,
+      record_count: 2,
+      cost_micros: 32_100
+    });
+    expect(bySender.get("new_coworker_jut3q1af_agent")).toMatchObject({
+      business_id: null,
+      direction: "inbound",
+      cost_micros: 6_500
+    });
+  });
+
+  it("falls back to the other leg for the sender, and to null when both are blank", () => {
+    const rows = aggregateTelnyxRecords({
+      records: [
+        // Telnyx omits cli on some failed records; the peer still identifies it.
+        {
+          sent_at: "2026-07-10T01:00:00Z",
+          direction: "outbound",
+          cli: "  ",
+          cld: "+16029226392",
+          cost: "0.004"
+        },
+        { sent_at: "2026-07-10T02:00:00Z", direction: "outbound", cost: "0.004" }
+      ],
+      recordType: "messaging",
+      didToBusiness,
+      windowStartDay: "2026-07-05"
+    });
+    expect(rows.map((r) => r.sender)).toEqual(["+16029226392", null]);
+  });
+
   it("falls back through started_at/created_at for voice legs and sums billed seconds", () => {
     const rows = aggregateTelnyxRecords({
       records: [
@@ -683,5 +759,21 @@ describe("runPlatformCostSync", () => {
     const deps = baseDeps({ now: undefined });
     const status = await runPlatformCostSync(deps);
     expect(Date.parse(status.lastSyncAt)).toBeGreaterThan(0);
+  });
+});
+
+describe("senderLabel", () => {
+  it("takes the first non-blank leg and trims it", () => {
+    expect(senderLabel(["  +16028384497 ", "+16029226392"])).toBe("+16028384497");
+    expect(senderLabel(["", "  ", "agent_id"])).toBe("agent_id");
+  });
+
+  it("returns null when every leg is blank", () => {
+    expect(senderLabel([])).toBeNull();
+    expect(senderLabel(["", "   "])).toBeNull();
+  });
+
+  it("caps the label so a malformed sender id can't bloat the column", () => {
+    expect(senderLabel(["x".repeat(200)])).toHaveLength(64);
   });
 });

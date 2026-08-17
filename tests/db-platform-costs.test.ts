@@ -70,7 +70,8 @@ const TELNYX_ROW: TelnyxCostDailyInsert = {
   record_count: 3,
   cost_micros: 31_800,
   carrier_fee_micros: 6_000,
-  billed_seconds: 0
+  billed_seconds: 0,
+  sender: null
 };
 
 const HOSTINGER_ROW: HostingerVpsCostInsert = {

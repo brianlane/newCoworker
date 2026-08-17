@@ -24,6 +24,14 @@ export type TelnyxCostDailyInsert = {
   cost_micros: number;
   carrier_fee_micros: number;
   billed_seconds: number;
+  /**
+   * The Telnyx sender identity behind an UNATTRIBUTED row (our own leg: cli
+   * on outbound, cld on inbound): a phone number, or a non-numeric sender
+   * id like an RCS agent. NULL on attributed rows, where `business_id`
+   * already names the owner, and NULL on rows synced before the column
+   * existed.
+   */
+  sender: string | null;
 };
 
 export type TelnyxCostDailyRow = TelnyxCostDailyInsert & {

@@ -13,6 +13,7 @@ import {
   buildRenewalCalendar,
   buildTelnyxDailySeries,
   buildTelnyxTenantWindowBreakdown,
+  buildUnattributedSenders,
   resolveTelnyxUsageWindowKey,
   sumMarginLinesByKey,
   telnyxDirectionSummary,
@@ -125,6 +126,7 @@ export default async function AdminCostsPage({
     .filter((r) => r.business_id === null)
     .reduce((sum, r) => sum + r.cost_micros, 0);
   const unattributedMonthCents = Math.round(unattributedMonthMicros / 10_000);
+  const unattributedSenders = buildUnattributedSenders(monthTelnyxRows);
   const poolBurn = buildPoolBoxBurn({ inventory, hostingerRows, now });
   const poolBurnMonthlyCents = poolBurn.reduce((sum, b) => sum + (b.monthlyCents ?? 0), 0);
   // Invoice-only voice adjuncts (call control, media streaming, recording)
@@ -347,10 +349,24 @@ export default async function AdminCostsPage({
           })}
         </div>
         {unattributedMonthMicros > 0 && (
-          <p className="text-xs text-spark-orange/80 mt-3">
-            {microsToMoney(unattributedMonthMicros)} of Telnyx spend this month matched no tenant
-            DID — check for leaked numbers or platform traffic.
-          </p>
+          <div className="mt-3 space-y-1">
+            <p className="text-xs text-spark-orange/80">
+              {microsToMoney(unattributedMonthMicros)} of Telnyx spend this month matched no tenant
+              DID. Platform senders (the international SMS gateway long code, an RCS agent id) can
+              never match one; anything else here is a leaked number worth chasing.
+            </p>
+            <ul className="flex flex-wrap gap-x-4 gap-y-0.5">
+              {unattributedSenders.map((entry) => (
+                <li key={entry.sender ?? "unnamed"} className="text-xs text-parchment/50">
+                  <span className="font-mono text-parchment/70">
+                    {entry.sender ?? "sender not recorded"}
+                  </span>{" "}
+                  {microsToMoney(entry.costMicros)} · {entry.recordCount.toLocaleString("en-US")}{" "}
+                  rec
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </Card>
 

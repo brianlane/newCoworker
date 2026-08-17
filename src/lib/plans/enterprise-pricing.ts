@@ -81,8 +81,15 @@ export const TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS = 1000;
  * this much per metered minute; views built on actuals add this top-up so
  * they mirror the invoice. The rate-estimate paths must NOT add it: the
  * 0.9 cents/min voiceTelnyxCentsPerMinute above already includes it.
+ *
+ * Two invoices, denominator = synced billed minutes (both call legs, which
+ * is what the adjuncts also meter):
+ *   Jun 2026  $0.18 over  36.5 min = 0.49 c/min  (the original calibration)
+ *   Jul 2026  $0.39 over 102.2 min = 0.38 c/min
+ * Blended across both, 0.41. Rounded to 0.4: July is the 2.8x larger sample,
+ * and June's single-tenant mix over half an hour of calls was thin.
  */
-export const TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE = 0.5;
+export const TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE = 0.4;
 
 /**
  * Effective Telnyx tax rates, calibrated from the June 2026 invoice
