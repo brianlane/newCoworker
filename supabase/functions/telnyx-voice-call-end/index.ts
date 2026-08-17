@@ -611,11 +611,7 @@ async function handleMachineDetection(
     // the provisional "machine" verdict BEFORE this event — clear it, or a
     // screened call the human answers would settle as no_answer and its
     // follow-up ladder would redial someone who already picked up.
-    const { error: scrErr } = await supabase.rpc("voice_session_context_merge", {
-      p_call_control_id: callControlId,
-      p_patch: { ios_screening: true, machine_detected: false }
-    });
-    if (scrErr) console.error("amd: screening stamp failed", scrErr);
+    await clearProvisionalMachine(supabase, callControlId, { ios_screening: true });
     return jsonOk("amd_screening_noted");
   }
   // Greeting events: the outgoing "leave a message after the tone" has
@@ -636,11 +632,7 @@ async function handleMachineDetection(
     // no_answer and its follow-up ladder would redial someone who picked up.
     // Never speak a voicemail script here and never hang up.
     if (String(payload["result"] ?? "").trim().toLowerCase() === "prompt_ended") {
-      const { error: clearErr } = await supabase.rpc("voice_session_context_merge", {
-        p_call_control_id: callControlId,
-        p_patch: { machine_detected: false }
-      });
-      if (clearErr) console.error("amd: prompt_ended stamp clear failed", clearErr);
+      await clearProvisionalMachine(supabase, callControlId, {});
       return jsonOk("amd_screening_prompt_ended");
     }
     const already = await machineAlreadyStamped(supabase, callControlId);
@@ -955,6 +947,36 @@ async function handleReachLeg(
     status
   });
   return jsonOk(`reach_${status}`);
+}
+
+/**
+ * Un-stamp a PROVISIONAL machine verdict once screening proves a person.
+ *
+ * Two stamps were written at detection.ended and both must be reversed:
+ * `machine_detected` on the session context (drives the flow outcome, so a
+ * screened call a human answers settles as answered, not no_answer) and
+ * `answering_machine_result` on the transcript row (drives the call page's
+ * AnsweringMachineBadge, which would otherwise label a real conversation a
+ * machine). The transcript write is a compare-and-swap on "machine" so a
+ * later legitimate value can never be blanked; zero rows matching is fine.
+ * Best-effort throughout — a failed clear understates, never misroutes.
+ */
+async function clearProvisionalMachine(
+  supabase: SupabaseClient,
+  callControlId: string,
+  extraContext: Record<string, unknown>
+): Promise<void> {
+  const { error: ctxErr } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: callControlId,
+    p_patch: { ...extraContext, machine_detected: false }
+  });
+  if (ctxErr) console.error("amd: provisional machine clear failed", ctxErr);
+  const { error: badgeErr } = await supabase
+    .from("voice_call_transcripts")
+    .update({ answering_machine_result: null })
+    .eq("call_control_id", callControlId)
+    .eq("answering_machine_result", "machine");
+  if (badgeErr) console.error("amd: transcript badge clear failed", badgeErr);
 }
 
 /** Has a machine verdict already been recorded for this leg? */
