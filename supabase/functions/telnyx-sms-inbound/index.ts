@@ -118,6 +118,13 @@ import {
   type UnownedAlertCandidate
 } from "../_shared/unowned_lead_alerts.ts";
 
+/**
+ * Marks an ALERT inside the shared name-matching candidate list. The matcher
+ * treats the id as opaque, so a prefix is all that is needed to route the
+ * winner back to the right claim path.
+ */
+const ALERT_CANDIDATE_PREFIX = "alert:";
+
 const MAX_BODY = 256 * 1024;
 
 /** A matched AiFlow plus the trigger-extracted vars for the enqueued run. */
@@ -2718,11 +2725,29 @@ serve(async (req: Request) => {
         let effectiveTimeframe = claimTf.timeframe;
         if (claimTf.digit === "1") {
           const liveOffers = await findLiveOfferRunsFor(supabase, businessId, from);
-          if (liveOffers.length > 0) {
-            const match = matchOfferByLeadName(
-              liveOffers.map((o) => o.candidate),
-              claimTf.timeframe
-            );
+          // Alerts join the name match too. The ask-back that produced this
+          // reply listed offers AND alerts together, so the answer has to be
+          // able to name either; matching only offers would send "1, Richard"
+          // down the ETA path and stamp the typed name as a timeframe on an
+          // unrelated offer, which is the exact bug PR #1270 removed.
+          // `matchOfferByLeadName` reads nothing but the label and an opaque
+          // id, so a prefixed id is enough to tell the two apart afterwards.
+          const alertCands = await findLiveUnownedAlertsFor(
+            supabase,
+            businessId,
+            from,
+            new Date().toISOString()
+          );
+          const combined: OfferCandidate[] = [
+            ...liveOffers.map((o) => o.candidate),
+            ...alertCands.map((a) => ({
+              runId: `${ALERT_CANDIDATE_PREFIX}${a.alertId}`,
+              leadLabel: a.leadLabel ?? "",
+              leadPhone: a.leadE164
+            }))
+          ];
+          if (combined.length > 0) {
+            const match = matchOfferByLeadName(combined, claimTf.timeframe);
             if (match.kind === "ambiguous") {
               return await consumeAmbiguousOfferReply({
                 supabase,
@@ -2737,6 +2762,26 @@ serve(async (req: Request) => {
                 text: ambiguousClaimText(match.labels)
               });
             }
+            if (match.kind === "one" && match.runId.startsWith(ALERT_CANDIDATE_PREFIX)) {
+              // They named an ALERT. No run to resume, so claim it here
+              // rather than falling through to the offer machinery.
+              const alertId = match.runId.slice(ALERT_CANDIDATE_PREFIX.length);
+              const picked = alertCands.find((a) => a.alertId === alertId);
+              if (picked) {
+                return await consumeAlertClaim({
+                  supabase,
+                  businessId,
+                  from,
+                  ackTo: to,
+                  eventId,
+                  envelope,
+                  telnyxApiKey,
+                  messagingProfileId,
+                  smsFromE164,
+                  candidate: picked
+                });
+              }
+            }
             if (match.kind === "one") {
               const picked = liveOffers.find((o) => o.run.id === match.runId);
               if (picked) {
@@ -2748,7 +2793,7 @@ serve(async (req: Request) => {
                 // Confirm only when there was something to disambiguate. With
                 // a single live offer the sender already knows what they took,
                 // and acking every named claim would add a text per lead.
-                if (liveOffers.length > 1) ackLeadLabel = match.label;
+                if (combined.length > 1) ackLeadLabel = match.label;
               }
             }
           }
