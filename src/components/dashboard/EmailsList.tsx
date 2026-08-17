@@ -24,11 +24,17 @@ import { coerceEmailsFiltersForMailbox } from "@/lib/dashboard/email-filters";
 
 const EMAIL_SORT_OPTIONS: SortOption[] = [
   { key: "created_at", label: "Date" },
-  { key: "subject", label: "Subject" }
+  { key: "subject", label: "Subject" },
+  { key: "importance", label: "Importance" }
 ];
 
 function emailSortValue(row: EmailLogRow, field: string): string | number | null | undefined {
   if (field === "subject") return row.subject;
+  // Unscored rows return null, which sortRows always sinks to the bottom. That
+  // is the point: "no flow ever scored this" is not the same as "scored 1", and
+  // burying unscored mail under a descending sort would read as a verdict the
+  // model never gave.
+  if (field === "importance") return row.importance;
   return row.created_at;
 }
 
@@ -89,6 +95,27 @@ function DirectionBadge({ direction }: { direction: EmailLogRow["direction"] }) 
 
 /** Address → contact-profile link map (lowercase address keys), built server-side. */
 type EmailContacts = Record<string, { customerE164: string; displayName: string | null }>;
+
+/**
+ * The model's 1-10 importance score, shown so the Importance sort is
+ * interpretable: a list that reorders with no visible reason looks broken.
+ *
+ * Muted at every level and never colored red or flagged. This is a rough hint
+ * for scanning, not a verdict, and styling an 8 like an alarm would invite
+ * exactly the reliance the score cannot carry: nothing routes on it, so nothing
+ * about it should look urgent. Renders nothing when unscored.
+ */
+function ImportanceBadge({ value }: { value: number | null }) {
+  if (typeof value !== "number") return null;
+  return (
+    <span
+      className="text-[10px] rounded px-1 py-0.5 bg-parchment/10 text-parchment/45 tabular-nums"
+      title={`Importance ${value} of 10, estimated by your coworker. Sorting only; it never decides whether you are alerted.`}
+    >
+      {value}/10
+    </span>
+  );
+}
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -1205,6 +1232,7 @@ export function EmailsList({
                           {r.folder}
                         </span>
                       )}
+                      <ImportanceBadge value={r.importance} />
                       {(r.labels ?? []).slice(0, 3).map((l) => (
                         <span
                           key={l}

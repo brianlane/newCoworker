@@ -42,7 +42,8 @@ const EMAIL_LOG_COLUMNS = [
   "is_read",
   "archived_at",
   "folder",
-  "labels"
+  "labels",
+  "importance"
 ];
 
 export type EmailLogSource =
@@ -111,6 +112,17 @@ export type EmailLogRow = {
   folder: string | null;
   /** In-app labels (Gmail-like multi-label). */
   labels: string[];
+  /**
+   * Model-assigned 1-10 relative importance, written by an `email_organize`
+   * step. Null when nothing ever scored this message.
+   *
+   * DISPLAY AND SORT ONLY. Never branch alerting, routing, or digest behavior
+   * on it: the value comes from a language model, and models cluster and drift
+   * on unanchored numeric scales, which is good enough to order a list and not
+   * good enough to decide whether to wake someone. Routing lives on the named
+   * `classify` categories, which are prose a human can edit when they misfire.
+   */
+  importance: number | null;
 };
 
 // The list query intentionally omits `body_full`: it loads up to 200 rows and
@@ -118,7 +130,7 @@ export type EmailLogRow = {
 // fetched on demand via getEmailBody when a message is opened in the reading
 // pane — see /api/dashboard/emails/[id].
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels, importance";
 
 /** Join a recipient list into the stored CSV form, or null when empty. */
 function recipientsToCsv(recipients?: string[] | null): string | null {
@@ -152,7 +164,8 @@ function normalizeEmailLogRow(row: EmailLogRow): EmailLogRow {
     is_read: row.is_read === true,
     archived_at: row.archived_at ?? null,
     folder: row.folder ?? null,
-    labels: Array.isArray(row.labels) ? row.labels : []
+    labels: Array.isArray(row.labels) ? row.labels : [],
+    importance: typeof row.importance === "number" ? row.importance : null
   };
 }
 
@@ -819,6 +832,66 @@ export async function organizeTenantEmailLog(
     .eq("id", row.id);
   if (updErr) throw new Error(`organizeTenantEmailLog update: ${updErr.message}`);
   return true;
+}
+
+/** Valid range for {@link setEmailLogImportance}, mirroring the DB check. */
+export const EMAIL_IMPORTANCE_MIN = 1;
+export const EMAIL_IMPORTANCE_MAX = 10;
+
+/**
+ * Coerce a model-produced importance score to a storable 1-10 integer, or null.
+ *
+ * Deliberately lenient about SHAPE and strict about RANGE. The value arrives as
+ * a rendered template string ("6", " 6 ", "6/10", ""), because it comes from a
+ * language model asked for a number, and asking is not the same as receiving.
+ * A leading integer is taken; anything with no leading integer is null, which
+ * reads as "never scored" rather than a wrong score.
+ *
+ * Out-of-range values are CLAMPED, not rejected. A model that answers 0 or 11
+ * has still expressed "least" or "most", and the DB check constraint would
+ * otherwise turn that into a failed step over a display field.
+ */
+export function coerceEmailImportance(raw: unknown): number | null {
+  const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : "";
+  if (!text) return null;
+  const match = /^-?\d+/.exec(text);
+  if (!match) return null;
+  const n = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(EMAIL_IMPORTANCE_MAX, Math.max(EMAIL_IMPORTANCE_MIN, n));
+}
+
+/**
+ * Write the display-only importance score onto one email_log row, found by row
+ * id or provider message id. Returns true when a row was updated.
+ *
+ * Separate from organizeTenantEmailLog because importance is an APP-SIDE
+ * annotation with no provider counterpart: a connected Gmail or Outlook message
+ * gets its labels at the provider and its score here, so this has to run on
+ * every path, not just the AI-mailbox one.
+ */
+export async function setEmailLogImportance(
+  businessId: string,
+  target: { emailLogId?: string | null; providerMessageId?: string | null },
+  importance: number | null,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const emailLogId = target.emailLogId?.trim() || null;
+  const providerMessageId = target.providerMessageId?.trim() || null;
+  if (!emailLogId && !providerMessageId) return false;
+  const db = client ?? (await createSupabaseServiceClient());
+  let q = db
+    .from("email_log")
+    .update({ importance })
+    .eq("business_id", businessId)
+    .is("deleted_at", null);
+  q = emailLogId ? q.eq("id", emailLogId) : q.eq("provider_message_id", providerMessageId!);
+  // .select() so a write matching ZERO rows is visible: PostgREST reports no
+  // error for an update that matched nothing, and a silent miss here would
+  // read as "scored" while the Emails page shows a blank forever.
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`setEmailLogImportance: ${error.message}`);
+  return (data ?? []).length > 0;
 }
 
 /**

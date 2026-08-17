@@ -25,12 +25,14 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: getConn
 }));
 const softDelete = vi.hoisted(() => vi.fn());
+const setImportance = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db/email-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db/email-log")>();
   return {
     ...actual,
     organizeTenantEmailLog: organizeTenant,
-    softDeleteEmailLogEntry: softDelete
+    softDeleteEmailLogEntry: softDelete,
+    setEmailLogImportance: setImportance
   };
 });
 
@@ -1011,5 +1013,119 @@ describe("organizeMessage: trash", () => {
     await expect(
       organizeMessage({ businessId: BIZ, emailLogId: LOG, actions: { trash: true } })
     ).resolves.toEqual({ ok: false, detail: "email_log_not_found" });
+  });
+});
+
+describe("organizeMessage: the display-only importance score", () => {
+  /**
+   * The score has no provider counterpart. Gmail and Outlook have no such
+   * field, so it lands on OUR email_log row on every path, which is what makes
+   * it visible for a connected mailbox at all.
+   */
+  beforeEach(() => {
+    workspaceProxy.mockReset();
+    getConn.mockReset();
+    organizeTenant.mockReset();
+    softDelete.mockReset();
+    setImportance.mockReset();
+    setImportance.mockResolvedValue(true);
+  });
+
+  it("counts as an action on its own, so a score-only step is not rejected", async () => {
+    organizeTenant.mockResolvedValue(true);
+    const res = await organizeMessage({
+      businessId: BIZ,
+      emailLogId: LOG,
+      actions: { importance: 6 }
+    });
+    expect(res.ok).toBe(true);
+    expect(setImportance).toHaveBeenCalledWith(BIZ, { emailLogId: LOG, providerMessageId: undefined }, 6);
+  });
+
+  it("writes on the connected Gmail path too, not just the AI mailbox", async () => {
+    // The whole point: HQ's triage organizes a CONNECTED mailbox, so a score
+    // that only worked on the tenant path would never appear for the mailbox
+    // the feature was built for.
+    getConn.mockResolvedValue(gmailConn());
+    workspaceProxy.mockResolvedValue({ status: 200, data: { labels: [] } });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "gmail-1",
+      emailLogId: LOG,
+      actions: { markRead: true, importance: 4 }
+    });
+    expect(res.ok).toBe(true);
+    expect(setImportance).toHaveBeenCalledWith(
+      BIZ,
+      { emailLogId: LOG, providerMessageId: "gmail-1" },
+      4
+    );
+  });
+
+  it("does not write a score when the provider work failed", async () => {
+    // A failed labelling that still recorded a score would claim the step ran.
+    getConn.mockResolvedValue(null);
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "gmail-1",
+      actions: { markRead: true, importance: 9 }
+    });
+    expect(res).toEqual({ ok: false, detail: "connection_not_found" });
+    expect(setImportance).not.toHaveBeenCalled();
+  });
+
+  it("says so in the detail when there was no row to score, without failing", async () => {
+    // Display-only: failing a real labelling action because a cosmetic field
+    // had nowhere to land is the wrong trade. Silently succeeding is worse.
+    organizeTenant.mockResolvedValue(true);
+    setImportance.mockResolvedValue(false);
+    const res = await organizeMessage({
+      businessId: BIZ,
+      emailLogId: LOG,
+      actions: { addLabels: ["Sales"], importance: 6 }
+    });
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.detail).toBe("importance_row_not_found");
+  });
+
+  it("keeps an existing detail alongside the miss", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    setImportance.mockResolvedValue(false);
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "gmail-1",
+      // No provider-visible action, so Gmail short-circuits with "noop".
+      actions: { importance: 6 }
+    });
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.detail).toBe("noop,importance_row_not_found");
+  });
+
+  it("leaves the score alone when the step never asked for one", async () => {
+    organizeTenant.mockResolvedValue(true);
+    await organizeMessage({
+      businessId: BIZ,
+      emailLogId: LOG,
+      actions: { markRead: true }
+    });
+    expect(setImportance).not.toHaveBeenCalled();
+  });
+
+  it("passes an explicit null through as a clear", async () => {
+    // undefined means "the step said nothing"; null means "unset this".
+    organizeTenant.mockResolvedValue(true);
+    await organizeMessage({
+      businessId: BIZ,
+      emailLogId: LOG,
+      actions: { importance: null }
+    });
+    expect(setImportance).toHaveBeenCalledWith(
+      BIZ,
+      { emailLogId: LOG, providerMessageId: undefined },
+      null
+    );
   });
 });

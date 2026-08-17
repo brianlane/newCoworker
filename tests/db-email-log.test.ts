@@ -87,6 +87,20 @@ beforeEach(() => {
   defaultClientSpy.mockReset();
 });
 
+describe("email_log importance normalization", () => {
+  it("keeps a stored score and nulls anything that is not a number", async () => {
+    // The true branch matters: without it a scored row would read back unscored
+    // and the Emails page sort would silently do nothing.
+    const c = listChain({ data: [{ ...ROW, importance: 7 }], error: null });
+    const [row] = await listEmailLog("biz", {}, makeDb(c) as never);
+    expect(row.importance).toBe(7);
+
+    const c2 = listChain({ data: [{ ...ROW, importance: "7" }], error: null });
+    const [row2] = await listEmailLog("biz", {}, makeDb(c2) as never);
+    expect(row2.importance).toBeNull();
+  });
+});
+
 describe("listEmailLog", () => {
   it("returns rows newest-first with the default limit", async () => {
     const c = listChain({ data: [ROW], error: null });
@@ -97,7 +111,8 @@ describe("listEmailLog", () => {
         is_read: false,
         archived_at: null,
         folder: null,
-        labels: []
+        labels: [],
+        importance: null
       }
     ]);
     expect(c.eq).toHaveBeenCalledWith("business_id", "biz");
@@ -315,7 +330,8 @@ describe("getEmailLogRow", () => {
       is_read: false,
       archived_at: null,
       folder: null,
-      labels: []
+      labels: [],
+      importance: null
     });
     // Scoped by business AND excluding soft-deleted rows: a guessed uuid must
     // never read another tenant's mail.

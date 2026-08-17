@@ -4312,6 +4312,19 @@ function StepFields({
           help="Gmail user label, Outlook folder display name, or AI-mailbox folder (moveToFolder)."
         />
         <Field
+          label="Importance score 1-10 (optional)"
+          value={step.importanceTemplate ?? ""}
+          onChange={(v) =>
+            patchStep(index, { importanceTemplate: v.trim() ? v.trim() : undefined })
+          }
+          help={
+            "Usually a variable from an earlier step, e.g. {{vars.email_importance}} " +
+            "(importanceTemplate). Sorts the Emails page and nothing else: it never " +
+            "decides whether you get alerted, because a model's number is not steady " +
+            "enough to trust with that. Anything that isn't a number scores nothing."
+          }
+        />
+        <Field
           label="Add labels (optional, comma-separated)"
           value={(step.addLabels ?? []).join(", ")}
           onChange={(v) => {

@@ -1082,6 +1082,23 @@ const nonBranchStepMembers = [
       removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
       /** Folder display name (Gmail user label / Outlook folder / AI folder). */
       moveToFolder: z.string().min(1).max(120).optional(),
+      /**
+       * A 1-10 relative importance score for this message, DISPLAY ONLY: it
+       * sorts the dashboard Emails page and nothing else reads it.
+       *
+       * A TEMPLATE string rather than a number, because the value comes from an
+       * earlier step ("{{vars.email_importance}}"), the same shape as
+       * messageIdTemplate above. Rendering can produce anything a model felt
+       * like emitting, so the leading integer is taken and clamped to 1-10, and
+       * text with no leading integer stores null ("never scored") rather than
+       * failing the step.
+       *
+       * Deliberately NOT a routing input. Models cluster and drift on
+       * unanchored numeric scales, which is fine for ordering a list and not
+       * fine for deciding whether to page someone; that decision belongs to a
+       * `classify` step whose categories are prose a human can edit.
+       */
+      importanceTemplate: z.string().min(1).max(300).optional(),
       when: whenSchema.optional()
     })
     .superRefine((step, ctx) => {
@@ -1095,11 +1112,13 @@ const nonBranchStepMembers = [
         step.unarchive === true ||
         (step.addLabels?.length ?? 0) > 0 ||
         (step.removeLabels?.length ?? 0) > 0 ||
-        Boolean(step.moveToFolder);
+        Boolean(step.moveToFolder) ||
+        Boolean(step.importanceTemplate);
       if (!hasAction) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "email_organize needs at least one action (mark read, archive, labels, or move)"
+          message:
+            "email_organize needs at least one action (mark read, archive, labels, move, or importance)"
         });
       }
       if (step.markRead && step.markUnread) {
@@ -2218,7 +2237,17 @@ function templateStringsForStep(step: FlowStep): string[] {
         step.attachDocumentTemplate ?? ""
       ];
     case "email_organize":
-      return [step.messageIdTemplate ?? "", ...(step.addLabels ?? []), ...(step.removeLabels ?? []), step.moveToFolder ?? ""];
+      // importanceTemplate is listed so {{vars.x}} inside it is checked against
+      // the vars earlier steps actually produce. A score referencing a var that
+      // never gets set would otherwise author cleanly and silently store null,
+      // which is the exact failure {{trigger.message_ref}} once shipped.
+      return [
+        step.messageIdTemplate ?? "",
+        ...(step.addLabels ?? []),
+        ...(step.removeLabels ?? []),
+        step.moveToFolder ?? "",
+        step.importanceTemplate ?? ""
+      ];
     // The {{share_url}} placement token is substituted by the worker after
     // rendering (it is not a scope reference), so strip it before the
     // scope check; everything else in the message is a normal template.

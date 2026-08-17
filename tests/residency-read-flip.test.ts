@@ -78,11 +78,15 @@ describe("email-log vps reads", () => {
         is_read: false,
         archived_at: null,
         folder: null,
-        labels: []
+        labels: [],
+        importance: null
       }
     ]);
     expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
       table: "email_log",
+      // importance rides the box projection too. EMAIL_LOG_COLUMNS is a hand
+      // maintained mirror of EMAIL_LOG_SELECT, so a column added to one and
+      // not the other silently blanks the field for residency tenants only.
       columns: expect.arrayContaining([
         "id",
         "body_preview",
@@ -90,7 +94,8 @@ describe("email-log vps reads", () => {
         "is_read",
         "archived_at",
         "folder",
-        "labels"
+        "labels",
+        "importance"
       ]),
       filters: [
         { column: "business_id", op: "eq", value: BIZ },

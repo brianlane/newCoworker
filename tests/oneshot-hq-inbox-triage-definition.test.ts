@@ -51,6 +51,8 @@ type StepJson = {
   /** email_organize: the filing actions taken on the triggering message. */
   markRead?: boolean;
   markUnread?: boolean;
+  /** email_organize: the display-only 1-10 importance score template. */
+  importanceTemplate?: string;
   archive?: boolean;
   star?: boolean;
 };
@@ -168,7 +170,7 @@ describe("HQ inbox triage: one alert per conversation", () => {
     // The cooldown silences notify_owner only. If filing ever became
     // conditional on the alert, a quiet reply would sit unlabeled forever.
     const organize = steps.filter((s) => s.type === "email_organize");
-    expect(organize).toHaveLength(7);
+    expect(organize).toHaveLength(8);
     for (const step of organize) {
       expect(step.cooldown, step.id).toBeUndefined();
       expect(step.addLabels?.[0], step.id).toMatch(/^HQ\//);
@@ -282,6 +284,83 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(step?.trash).toBeUndefined();
     expect(step?.archive).toBeUndefined();
     expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
+  });
+
+  it("gives platform outcomes their own silent tier", () => {
+    /**
+     * The Zoom miss, Aug 17 2026. "New Coworker OAuth has been updated and
+     * published" classified `automated_notice` and was handled identically to
+     * a Slack "Find and join channels" digest, because those were the only two
+     * options: text him, or make it look like wallpaper.
+     *
+     * Silent is the whole point of the rung. A tier that texts is the tier
+     * above it, and this one existing to NOT text is what makes the middle
+     * case expressible at all.
+     */
+    const cat = (steps.find((s) => s.id === "s_classify")?.categories ?? []).find(
+      (c) => c.value === "automated_review"
+    );
+    expect(cat?.description).toMatch(/app review|marketplace publication/i);
+    expect(cat?.description).toMatch(/OAuth|verification/i);
+
+    const step = steps.find((s) => s.id === "s_org_review");
+    expect(step?.when).toEqual({ var: "email_kind", equals: "automated_review" });
+    expect(step?.addLabels).toEqual(["HQ/Automated/Review"]);
+    expect(step?.trash).toBeUndefined();
+    expect(step?.archive).toBeUndefined();
+    // Silent, and its own label rather than a star: every starred message in
+    // this mailbox is a payment receipt and that signal stays single-meaning.
+    expect(notifySteps.some((n) => n.when?.equals === "automated_review")).toBe(false);
+    expect(step?.star).toBeUndefined();
+  });
+
+  it("keeps hosting renewals routine even with the review tier in play", () => {
+    // The review tier is the nearest neighbour to this carve-out and the most
+    // likely thing to swallow it: a renewal notice IS a platform telling us
+    // about a service we run on. It must stay routine, because
+    // src/lib/vps/billing-posture.ts owns fleet renewals and this classifier
+    // cannot tell a box we are losing from one we chose to let lapse.
+    const cat = (v: string) =>
+      (steps.find((s) => s.id === "s_classify")?.categories ?? []).find((c) => c.value === v)
+        ?.description ?? "";
+    expect(cat("automated_notice")).toMatch(/hosting renewals/i);
+    expect(cat("automated_review")).not.toMatch(/renewal/i);
+  });
+
+  it("scores every filed message for the Emails page, and routes on none of it", () => {
+    /**
+     * The display-only 1-10 score. Every email_organize step carries it, so the
+     * sort covers the whole mailbox rather than whichever tiers happened to get
+     * the field.
+     *
+     * The second half is the load-bearing half: nothing may BRANCH on the
+     * score. A model's number on an unanchored scale is steady enough to order
+     * a list and not steady enough to decide whether to page someone, so the
+     * routing stays on classify categories, which are prose a human can edit.
+     */
+    const organize = steps.filter((s) => s.type === "email_organize");
+    expect(organize.length).toBeGreaterThan(0);
+    for (const step of organize) {
+      expect(step.importanceTemplate, step.id).toBe("{{vars.email_importance}}");
+    }
+    // The var it reads is really produced, and produced with anchors: an
+    // unanchored 1-10 is where models cluster and drift.
+    const field = (steps.find((s) => s.id === "s_extract")?.fields ?? []).find(
+      (f) => f.name === "email_importance"
+    );
+    expect(field?.description).toMatch(/1-10/);
+    expect(field?.description).toMatch(/digits only/i);
+
+    // No gate, anywhere, reads the score.
+    for (const step of steps) {
+      expect(step.when?.var, step.id).not.toBe("email_importance");
+    }
+    const branch = definition.steps.find((s) => s.type === "branch") as
+      | { branches?: { condition?: { var?: string } }[] }
+      | undefined;
+    for (const arm of branch?.branches ?? []) {
+      expect(arm.condition?.var).not.toBe("email_importance");
+    }
   });
 
   it("never marks a message read or unread, in any tier", () => {

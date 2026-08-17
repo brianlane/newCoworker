@@ -6144,7 +6144,9 @@ async function emailOrganizeStep(
         ...(action.unstar ? { unstar: true } : {}),
         ...(action.addLabels?.length ? { addLabels: action.addLabels } : {}),
         ...(action.removeLabels?.length ? { removeLabels: action.removeLabels } : {}),
-        ...(action.moveToFolder ? { moveToFolder: action.moveToFolder } : {})
+        ...(action.moveToFolder ? { moveToFolder: action.moveToFolder } : {}),
+        // Raw rendered text; the gateway parses and clamps it to 1-10.
+        ...(action.importanceText ? { importanceText: action.importanceText } : {})
       }
     })
   });

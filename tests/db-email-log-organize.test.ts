@@ -10,7 +10,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)
 }));
 
-import { listEmailLog, organizeTenantEmailLog } from "@/lib/db/email-log";
+import {
+  coerceEmailImportance,
+  listEmailLog,
+  organizeTenantEmailLog,
+  setEmailLogImportance
+} from "@/lib/db/email-log";
 import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 const BIZ = "00000000-0000-4000-8000-000000000001";
@@ -345,6 +350,127 @@ describe("listEmailLog organize filters", () => {
           }
         ])
       })
+    );
+  });
+});
+
+describe("coerceEmailImportance", () => {
+  /**
+   * The value arrives as a rendered template, which means it arrives as
+   * whatever a language model felt like emitting. Asking for a number is not
+   * the same as receiving one, so this is lenient about SHAPE and strict about
+   * RANGE: the display field must never be able to fail a labelling step.
+   */
+  it("takes a clean integer", () => {
+    expect(coerceEmailImportance("6")).toBe(6);
+    expect(coerceEmailImportance(" 6 ")).toBe(6);
+    expect(coerceEmailImportance(6)).toBe(6);
+  });
+
+  it("takes the leading integer out of the shapes models actually return", () => {
+    expect(coerceEmailImportance("6/10")).toBe(6);
+    expect(coerceEmailImportance("7 - needs a reply")).toBe(7);
+  });
+
+  it("clamps instead of rejecting, so an out-of-range answer still sorts", () => {
+    // 0 and 11 are still expressions of "least" and "most". Rejecting them
+    // would trade a usable ordering for a null, and the DB check constraint
+    // would otherwise turn a model's overshoot into a failed write.
+    expect(coerceEmailImportance("0")).toBe(1);
+    expect(coerceEmailImportance("-3")).toBe(1);
+    expect(coerceEmailImportance("11")).toBe(10);
+    expect(coerceEmailImportance("100")).toBe(10);
+  });
+
+  it("scores nothing when there is no leading integer", () => {
+    // Null means "never scored", which the Emails page sinks to the bottom of
+    // an importance sort. That is the honest answer for prose.
+    for (const raw of ["", "   ", "high", "very important", "n/a", null, undefined, {}, []]) {
+      expect(coerceEmailImportance(raw), String(raw)).toBeNull();
+    }
+  });
+
+  it("returns null for a digit string too large to be a finite number", () => {
+    // Reachable, not defensive: Number.parseInt of ~400 nines is Infinity, and
+    // clamping Infinity would write 10, inventing a maximum score out of
+    // gibberish. A model repeating a digit is a real failure mode.
+    expect(coerceEmailImportance("9".repeat(400))).toBeNull();
+  });
+
+  it("ignores a number that only appears later in the text", () => {
+    // "no idea, maybe 8" is not a score, it is a sentence. Reading the 8 out of
+    // it would invent a confidence the model never expressed.
+    expect(coerceEmailImportance("no idea, maybe 8")).toBeNull();
+  });
+});
+
+describe("setEmailLogImportance", () => {
+  beforeEach(() => {
+    defaultClientSpy.mockReset();
+  });
+
+  function makeImportanceChain(rows: unknown[], error: { message: string } | null = null) {
+    const select = vi.fn().mockResolvedValue({ data: rows, error });
+    const eqId = vi.fn(() => ({ select }));
+    const is = vi.fn(() => ({ eq: eqId }));
+    const eqBiz = vi.fn(() => ({ is }));
+    const update = vi.fn(() => ({ eq: eqBiz }));
+    return { update, eqBiz, is, eqId, select };
+  }
+
+  it("returns false without any identity to write against", async () => {
+    await expect(setEmailLogImportance(BIZ, {}, 5)).resolves.toBe(false);
+    await expect(setEmailLogImportance(BIZ, { emailLogId: "  " }, 5)).resolves.toBe(false);
+  });
+
+  it("writes by row id, scoped to the business and to live rows", async () => {
+    const c = makeImportanceChain([{ id: ID }]);
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(setEmailLogImportance(BIZ, { emailLogId: ID }, 6)).resolves.toBe(true);
+    expect(c.update).toHaveBeenCalledWith({ importance: 6 });
+    expect(c.eqBiz).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
+    expect(c.eqId).toHaveBeenCalledWith("id", ID);
+  });
+
+  it("falls back to the provider message id when there is no row id", async () => {
+    const c = makeImportanceChain([{ id: ID }]);
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(
+      setEmailLogImportance(BIZ, { providerMessageId: "gmail-123" }, 3)
+    ).resolves.toBe(true);
+    expect(c.eqId).toHaveBeenCalledWith("provider_message_id", "gmail-123");
+  });
+
+  it("clears the score with an explicit null", async () => {
+    const c = makeImportanceChain([{ id: ID }]);
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(setEmailLogImportance(BIZ, { emailLogId: ID }, null)).resolves.toBe(true);
+    expect(c.update).toHaveBeenCalledWith({ importance: null });
+  });
+
+  it("reports a write that matched no rows", async () => {
+    // PostgREST returns no error for an update matching zero rows, so without
+    // the .select() this would read as a successful score and the Emails page
+    // would show a blank forever.
+    const c = makeImportanceChain([]);
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(setEmailLogImportance(BIZ, { emailLogId: ID }, 6)).resolves.toBe(false);
+  });
+
+  it("treats a null data payload as no rows written", async () => {
+    // PostgREST can answer with data:null rather than an empty array; reading
+    // .length off that would throw inside a display-only write path.
+    const c = makeImportanceChain(null as never);
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(setEmailLogImportance(BIZ, { emailLogId: ID }, 6)).resolves.toBe(false);
+  });
+
+  it("throws on a real write error", async () => {
+    const c = makeImportanceChain([], { message: "boom" });
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => c) });
+    await expect(setEmailLogImportance(BIZ, { emailLogId: ID }, 6)).rejects.toThrow(
+      /setEmailLogImportance: boom/
     );
   });
 });

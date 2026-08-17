@@ -757,6 +757,14 @@ export type FlowStep =
       addLabels?: string[];
       removeLabels?: string[];
       moveToFolder?: string;
+      /**
+       * Template producing a 1-10 relative importance score for this message,
+       * e.g. "{{vars.email_importance}}". DISPLAY ONLY: it sorts the dashboard
+       * Emails page and nothing in the engine, the alerting path, or the digest
+       * may branch on it. Model scores on an unanchored scale are reproducible
+       * enough to order a list and not to decide whether to page an owner.
+       */
+      importanceTemplate?: string;
       when?: StepCondition;
     }
   | {
