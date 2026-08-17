@@ -377,8 +377,38 @@ Intake are still left alone.
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`,
 `homelight-dedupe-and-price-digits.ts` (Aug 11 2026: the duplicate-run and
-`price_digits` fixes, see Sharp edges). HomeLight's others are listed in
+`price_digits` fixes, see Sharp edges),
+`amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
+browse steps from the `Home Light` credential label to `HomeLight` after the
+row was renamed, see below) over the pure builder
+`amy-homelight-integration-label-definition.ts` (pinned by
+`tests/amy-homelight-integration-label.test.ts`). HomeLight's others are listed in
 [homelight-flow.md](homelight-flow.md).
+
+Portal credentials (Aug 17 2026). All four of this account's
+`custom_integrations` rows were exercised end to end through the render sidecar
+with `tsx debug/portal-dom-probe.ts`, a read-only prober added the same day.
+What it found is worth knowing before touching any browse step here:
+
+- **Renaming a credential label breaks every flow that names it.** The lookup
+  is `ilike` on the trimmed label: case-insensitive, NOT space-insensitive. The
+  `Home Light` -> `HomeLight` rename orphaned ten live steps in one edit. See
+  the sharp edge in [homelight-flow.md](homelight-flow.md).
+- **HomeLight's stored secret can never authenticate anything.** Its agent
+  portal has no password form at all (sign-in is passwordless), so
+  `looksLikeLogin` never fires and no login is attempted. Every HomeLight
+  session comes from the one-time `hmlt.co` link in the inbound SMS: navigating
+  to the expanded `agent.homelight.com/referrals/claim?...` URL directly lands
+  on a sign-in page. That is a single point of failure with no fallback, and it
+  is why a stale link cannot simply be re-fetched.
+- **Clever is the same shape, deliberately or not.** Its magic links expire in
+  well under 24 hours, and password login through the sidecar fails (see the
+  render-service login fix, same date). The daily and weekly flows work only
+  because they consume the SMS link promptly.
+- **Referral Exchange and Realtor.com both log in with the stored password.**
+  Realtor.com takes ~46s to render `dashboard.realtor.com/contacts` (a 1.7MB
+  page), which is uncomfortably close to the ~100s Cloudflare edge ceiling the
+  tunnel imposes, so it must never be used for a multi-page `forEachLink` sweep.
 
 Speed-to-lead (Aug 8 2026): `amy-speed-to-lead-definition.ts` (pure
 builders) driven by `amy-speed-to-lead-patch.ts` (same mechanics: dry-run

@@ -191,6 +191,27 @@ a key to accept it. Everything downstream follows from that:
   if anything, gets left. Also note HomeLight treats a voicemail pickup as
   NOT connected: Thomas's portal contact stayed "withheld" at 10:42, so a
   claim whose client leg reached voicemail releases nothing.
+- **The credential label is `HomeLight`, one word, and the lookup forgives case
+  but NOT the space.** `getCustomIntegrationByLabel` matches with `ilike` on the
+  trimmed label, so `homelight` is fine and `Home Light` is a different string.
+  On Aug 17 2026 the `custom_integrations` row was renamed `Home Light` ->
+  `HomeLight` while all ten live browse steps still asked for the old spelling:
+  every one resolved to `integration_not_found`, which the render service
+  reports as `auth_config_error`, which the worker classifies as PERMANENT. The
+  next referral would have died at step 2 (`open`) with no claim, no team
+  routing and no lead, and HomeLight reassigns an unanswered referral within
+  minutes. Caught before any run fired; closed by
+  `amy-homelight-integration-label.ts`, which repoints every step (branch arms
+  included: `claim_verify`, `claim_retry` and `claim_verify2` are nested, so a
+  trunk-only sweep looks successful and leaves the flow broken). Its pre-flight
+  refuses to run unless the target label exists, is active and holds a secret.
+  `seed-homelight-lead-aiflow.ts` was defaulted to the same spelling in the same
+  PR, since otherwise a re-seed recreates the outage.
+- **A `login_failed` from the render service now says why.** It carries
+  `finalUrl`, a page-text excerpt, a screenshot and which submit selector was
+  found (and whether it was enabled), and the worker copies that detail into the
+  run's error. Before Aug 17 2026 it returned a bare code, which is what made
+  the Clever login failure that day take a day of reading portal markup by hand.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
@@ -210,7 +231,10 @@ Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
 `fix-homelight-extraction.ts`, `homelight-text-referral-claim.ts`,
 `homelight-verified-claim.ts` (claim verify/retry, honest claim-status copy,
 reveal-ladder regate, wider mailbox reads; `--revert --apply` restores the
-stored previous definition).
+stored previous definition),
+`amy-homelight-integration-label.ts` (Aug 17 2026: the credential rename, see
+Sharp edges) over the pure builder
+`amy-homelight-integration-label-definition.ts`.
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
