@@ -3830,28 +3830,10 @@ function StepFields({
           />
           Only fill in details that earlier steps left empty (recommended)
         </label>
-        <Field
-          label="When no email matches, set (optional; one per line, name = value)"
-          value={Object.entries(step.noMatchVars ?? {})
-            .map(([k, v]) => `${k} = ${v}`)
-            .join("\n")}
-          onChange={(v) => {
-            const entries = v
-              .split("\n")
-              .map((line) => {
-                const eq = line.indexOf("=");
-                if (eq < 0) return null;
-                const name = line.slice(0, eq).trim();
-                const value = line.slice(eq + 1).trim();
-                return name && value ? ([name, value] as const) : null;
-              })
-              .filter((e): e is readonly [string, string] => e !== null);
-            patchStep(index, {
-              noMatchVars: entries.length > 0 ? Object.fromEntries(entries) : undefined
-            });
-          }}
-          help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
-          textarea
+        <NoMatchVarsField
+          key={step.id}
+          value={step.noMatchVars}
+          onChange={(v) => patchStep(index, { noMatchVars: v })}
         />
         <label className={labelClass}>Fields to extract</label>
         {step.fields.map((f, fi) => (
@@ -7088,6 +7070,52 @@ function TimeWindowFields({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * `email_extract.noMatchVars` editor: "name = value" lines.
+ *
+ * Keeps the RAW text in local state and publishes only the lines that parse.
+ * Deriving the textarea's value from the parsed record looked simpler and was
+ * unusable: a half-typed line has no "=" yet, so the parse dropped it and the
+ * controlled value snapped back on every keystroke — nothing could be typed,
+ * only a finished line pasted (Bugbot, PR #1401). The call site keys this by
+ * step id, so switching steps re-seeds the buffer from that step's record.
+ */
+function NoMatchVarsField({
+  value,
+  onChange
+}: {
+  value: Record<string, string> | undefined;
+  onChange: (v: Record<string, string> | undefined) => void;
+}) {
+  const [text, setText] = useState(() =>
+    Object.entries(value ?? {})
+      .map(([k, v]) => `${k} = ${v}`)
+      .join("\n")
+  );
+  return (
+    <Field
+      label="When no email matches, set (optional; one per line, name = value)"
+      value={text}
+      onChange={(raw) => {
+        setText(raw);
+        const entries = raw
+          .split("\n")
+          .map((line) => {
+            const eq = line.indexOf("=");
+            if (eq < 0) return null;
+            const name = line.slice(0, eq).trim();
+            const val = line.slice(eq + 1).trim();
+            return name && val ? ([name, val] as const) : null;
+          })
+          .filter((e): e is readonly [string, string] => e !== null);
+        onChange(entries.length > 0 ? Object.fromEntries(entries) : undefined);
+      }}
+      help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
+      textarea
+    />
   );
 }
 
