@@ -126,8 +126,18 @@ describe("decideRetag", () => {
     });
 
     it("prefers the ledger proof when both would apply", () => {
-      const decision = decideRetag(untouched({ last_interaction_at: BOOKED_AT }), [booking()]);
-      expect(decision).toMatchObject({ proof: "ledger" });
+      // BOTH timestamps move to the booking instant, so the row is a
+      // single untouched interaction (creation proof qualifies) that also
+      // sits on a booking_page row (ledger proof qualifies). Overriding
+      // only last_interaction_at would leave created_at behind, disqualify
+      // the creation proof, and quietly test nothing about precedence.
+      const both = untouched({ created_at: BOOKED_AT, last_interaction_at: BOOKED_AT });
+      expect(decideRetag(both, [])).toMatchObject({ proof: "untouched-since-creation" });
+      expect(decideRetag(both, [booking()])).toEqual({
+        retag: true,
+        proof: "ledger",
+        bookingAt: BOOKED_AT
+      });
     });
   });
 
