@@ -11,7 +11,6 @@ import {
   EMAIL_READ_IDS,
   FIX_BRANCH_ID,
   patchDefinition,
-  PRICE_MATCH_TEMPLATE,
   RETRY_STEP_ID,
   RETRY_CONTINUE_MARKER,
   STATE_UNCONFIRMED,
@@ -190,14 +189,17 @@ describe("homelight-verified-claim", () => {
     expect(byId(def, "late_unclaimed_alert_3").when).toEqual({ var: "u3_status", equals: "found" });
   });
 
-  it("widens every HomeLight mailbox read to reach the referral's arrival, and tightens its match", () => {
+  it("widens every HomeLight mailbox read to reach the referral's arrival", () => {
     const def = liveDefinition();
     patchDefinition(def);
     for (const id of EMAIL_READ_IDS) {
       const read = byId(def, id);
       expect(read.lookbackMinutes, id).toBe(EMAIL_LOOKBACK_MINUTES);
-      expect(read.matchTemplates, id).toContain("{{vars.lead_first_name}}");
-      expect(read.matchTemplates, id).toContain(PRICE_MATCH_TEMPLATE);
+      // First-name-only matching, on purpose: the alert's price is ROUNDED
+      // ($420K -> price_digits 420) while the details email carries the exact
+      // figure ($419,500), so an AND-ed {{vars.price_digits}} term would
+      // exclude the very email the ladder is looking for (Bugbot, PR #1400).
+      expect(read.matchTemplates, id).toEqual(["{{vars.lead_first_name}}"]);
     }
   });
 

@@ -45,12 +45,16 @@
  *     u1_status, every later rung when_unmet). Re-gate the retry rungs and
  *     the late_missing arm on `notEquals "found"`: an unset status now means
  *     "keep trying", which is the reading the ladder was built for.
- *  5. Wider, tighter mailbox reads. The unclaimed read ran 73+ minutes after
- *     arrival with `lookbackMinutes: 60`, so its window could not even reach
- *     back to the referral email's arrival. All six HomeLight reads go to
- *     240 minutes, and every first-name matcher gains
- *     "{{vars.price_digits}}" (bodyContains terms are AND-ed, and blank
- *     renders are dropped, so this only ever narrows).
+ *  5. Wider mailbox reads. The unclaimed read ran 73+ minutes after arrival
+ *     with `lookbackMinutes: 60`, so its window could not even reach back to
+ *     the referral email's arrival. All six HomeLight reads go to 240
+ *     minutes. Deliberately NOT tightened with a "{{vars.price_digits}}"
+ *     AND-term (Bugbot, PR #1400): the SMS alert's price is ROUNDED
+ *     ($420K -> 420) while the details email carries the exact figure
+ *     ($419,500), so the term would exclude the very email the ladder is
+ *     looking for, and the model has also produced full runs like 507258,
+ *     which never match a comma-formatted $507,258. First-name-only at 240
+ *     minutes is the shipped precedent (`late2_read`, Aug 12).
  *
  * Idempotent, validated through parseAiFlowDefinition before writing, REFUSES
  * when the live copy is not what it was written against, dry-run by default,
@@ -120,8 +124,6 @@ export const RETRY_CONTINUE_MARKER = "HomeLight";
 
 /** Every HomeLight mailbox read widens to reach back to the referral's arrival. */
 export const EMAIL_LOOKBACK_MINUTES = 240;
-/** AND-ed with the first-name term; a blank render is dropped, so it only narrows. */
-export const PRICE_MATCH_TEMPLATE = "{{vars.price_digits}}";
 export const EMAIL_READ_IDS = [
   "email_card",
   "late_read",
@@ -343,21 +345,22 @@ export function patchDefinition(def: Definition): string[] {
     regate(step.when, statusVar, `"${id}".when`, edits);
   }
 
-  // ── 5. Wider, tighter mailbox reads ──────────────────────────────────────
+  // ── 5. Wider mailbox reads ───────────────────────────────────────────────
+  // The first-name matcher is deliberately left ALONE. bodyContains terms are
+  // AND-ed, and the tempting extra term, {{vars.price_digits}}, is extracted
+  // from the SMS alert's ROUNDED price ($420K -> 420) while the details email
+  // carries the exact figure ($419,500): the AND-term would exclude the very
+  // email the ladder is looking for (Bugbot, PR #1400).
   for (const id of EMAIL_READ_IDS) {
     const read = requireStep(def, id, "email_extract");
-    const lookback = typeof read.lookbackMinutes === "number" ? read.lookbackMinutes : 0;
-    if (lookback < EMAIL_LOOKBACK_MINUTES) {
-      read.lookbackMinutes = EMAIL_LOOKBACK_MINUTES;
-      edits.push(`"${id}".lookbackMinutes: ${lookback} -> ${EMAIL_LOOKBACK_MINUTES}`);
-    }
     const match = read.matchTemplates;
     if (!Array.isArray(match) || !match.includes("{{vars.lead_first_name}}")) {
       throw new Error(`"${id}".matchTemplates does not carry the first-name term`);
     }
-    if (!match.includes(PRICE_MATCH_TEMPLATE)) {
-      match.push(PRICE_MATCH_TEMPLATE);
-      edits.push(`"${id}".matchTemplates: add ${PRICE_MATCH_TEMPLATE}`);
+    const lookback = typeof read.lookbackMinutes === "number" ? read.lookbackMinutes : 0;
+    if (lookback < EMAIL_LOOKBACK_MINUTES) {
+      read.lookbackMinutes = EMAIL_LOOKBACK_MINUTES;
+      edits.push(`"${id}".lookbackMinutes: ${lookback} -> ${EMAIL_LOOKBACK_MINUTES}`);
     }
   }
 

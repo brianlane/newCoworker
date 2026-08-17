@@ -111,13 +111,16 @@ a key to accept it. Everything downstream follows from that:
   chain skips silently. Both 2026-08-16 runs show it: step result
   `{"found":false}`, no `u1_status`, every later rung `when_unmet`. The same
   one-shot re-gates those rungs on `notEquals "found"` (an unset status now
-  means "keep trying"; "found" still stops the ladder), widens all six
-  HomeLight reads to `lookbackMinutes: 240` because the unclaimed read runs
+  means "keep trying"; "found" still stops the ladder) and widens all six
+  HomeLight reads to `lookbackMinutes: 240`, because the unclaimed read runs
   ~75+ minutes after arrival, behind the offer ladder, so a 60-minute window
-  could not reach the referral email at all, and adds `{{vars.price_digits}}`
-  beside the first-name matcher (bodyContains terms are AND-ed and a blank
-  render is dropped) so the wider window cannot latch onto an older
-  same-first-name referral.
+  could not reach the referral email at all. The matchers stay
+  FIRST-NAME-ONLY on purpose: bodyContains terms are AND-ed, and the tempting
+  `{{vars.price_digits}}` term comes from the SMS alert's ROUNDED price
+  ($420K gives 420) while the details email carries the exact figure
+  ($419,500), so it would exclude the very email being sought (Bugbot caught
+  this on PR #1400; the model has also produced full runs like 507258, which
+  never match a comma-formatted $507,258).
 - **HomeLight alerts arrive in two wordings, from two different sender lines**,
   and the flow has to match both. They open with either
   `New HomeLight Referral: <name> - $250K seller in ...` or
