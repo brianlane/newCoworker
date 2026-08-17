@@ -152,7 +152,10 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
   // the orchestrator dynamically imports tendlc-attach.ts after a successful
   // DID assign, so we have to provide a stub or every did-assign test path
   // throws "is not a function" inside the success branch.
-  setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined)
+  setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined),
+  // Tenant voice infra persists the dedicated profile id through this
+  // helper right before the DID order.
+  upsertBusinessTelnyxSettings: vi.fn().mockResolvedValue({})
 }));
 
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
@@ -165,7 +168,8 @@ import {
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import {
   getBusinessTelnyxSettings,
-  getTelnyxVoiceRouteForBusiness
+  getTelnyxVoiceRouteForBusiness,
+  upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
@@ -2140,6 +2144,105 @@ describe("provisioning/orchestrate", () => {
         expect.objectContaining({
           businessId: "biz-did",
           search: expect.objectContaining({ countryCode: "US" })
+        })
+      );
+    });
+
+    it("creates tenant voice infra first and orders the DID onto the tenant app", async () => {
+      const biz = {
+        name: "Amy Laidlaw Real Estate",
+        tier: "standard",
+        phone: null,
+        enterprise_limits: null
+      } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const tenantVoiceInfra = vi.fn().mockResolvedValue({
+        connectionId: "app-tenant-1",
+        outboundVoiceProfileId: "prof-tenant-1"
+      });
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550001111" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-infra", tier: "standard" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner,
+          tenantVoiceInfra
+        }
+      );
+      // Tier standard resolves the plan's promise of 10 concurrent calls.
+      expect(tenantVoiceInfra).toHaveBeenCalledWith({
+        businessId: "biz-did-infra",
+        businessName: "Amy Laidlaw Real Estate",
+        maxConcurrentCalls: 10
+      });
+      // The dedicated profile id is cached before the order...
+      expect(vi.mocked(upsertBusinessTelnyxSettings)).toHaveBeenCalledWith({
+        businessId: "biz-did-infra",
+        telnyxOutboundVoiceProfileId: "prof-tenant-1"
+      });
+      // ...and the number order lands on the TENANT app, not the platform one.
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platformDefaults: expect.objectContaining({ connectionId: "app-tenant-1" })
+        })
+      );
+    });
+
+    it("degrades to the shared platform app when tenant infra creation fails", async () => {
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const tenantVoiceInfra = vi.fn().mockRejectedValue(new Error("telnyx 502"));
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550002222" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-degrade", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner,
+          tenantVoiceInfra
+        }
+      );
+      expect(tenantVoiceInfra).toHaveBeenCalled();
+      // Provisioning did NOT abort: the DID went out on the platform default.
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platformDefaults: expect.objectContaining({ connectionId: "mock_conn" })
+        })
+      );
+    });
+
+    it("degrades on a non-Error infra rejection too", async () => {
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const tenantVoiceInfra = vi.fn().mockRejectedValue("telnyx string reject");
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550004444" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-degrade-2", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner,
+          tenantVoiceInfra
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalled();
+    });
+
+    it("skips tenant voice infra when tests force-skip it with null", async () => {
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550003333" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-skip-infra", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner,
+          tenantVoiceInfra: null
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platformDefaults: expect.objectContaining({ connectionId: "mock_conn" })
         })
       );
     });

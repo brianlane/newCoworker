@@ -43,8 +43,15 @@ import {
 } from "@/lib/telnyx/platform-defaults";
 import {
   getBusinessTelnyxSettings,
-  getTelnyxVoiceRouteForBusiness
+  getTelnyxVoiceRouteForBusiness,
+  upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
+import {
+  TelnyxVoiceInfraClient,
+  ensureTenantVoiceInfra,
+  resolveTenantMaxConcurrentCalls,
+  voiceDispatchWebhookUrl
+} from "@/lib/telnyx/tenant-voice-infra";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
@@ -473,6 +480,17 @@ export type DidProvisioner = (input: {
   search: { countryCode?: string; areaCode?: string; administrativeArea?: string };
 }) => Promise<{ toE164: string }>;
 
+/**
+ * Creates (or adopts) the tenant's DEDICATED Telnyx Call Control app +
+ * outbound voice profile so the DID orders directly onto per-tenant carrier
+ * infrastructure. Returns the ids to cache on business_telnyx_settings.
+ */
+export type TenantVoiceInfraProvisioner = (input: {
+  businessId: string;
+  businessName: string;
+  maxConcurrentCalls: number;
+}) => Promise<{ connectionId: string; outboundVoiceProfileId: string }>;
+
 /* c8 ignore start -- production-only default factory; tests inject vpsAdopter */
 function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
   return ({ businessId, tier, vpsSize, virtualMachineId }) =>
@@ -571,6 +589,25 @@ function defaultDidProvisioner(): DidProvisioner {
       { telnyxNumbers }
     );
     return { toE164: result.route.to_e164 };
+  };
+}
+/* c8 ignore stop */
+
+/* c8 ignore start -- production-only default factory; tests inject tenantVoiceInfra */
+function defaultTenantVoiceInfraProvisioner(): TenantVoiceInfraProvisioner {
+  return async (input) => {
+    const apiKey = process.env.TELNYX_API_KEY ?? "";
+    if (!apiKey) throw new Error("TELNYX_API_KEY missing — cannot create tenant voice infra");
+    const supabaseUrl =
+      process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    if (!supabaseUrl) {
+      throw new Error("SUPABASE_URL missing — cannot derive the voice dispatch webhook URL");
+    }
+    const infra = new TelnyxVoiceInfraClient({ apiKey });
+    return ensureTenantVoiceInfra(
+      { infra },
+      { ...input, webhookUrl: voiceDispatchWebhookUrl(supabaseUrl) }
+    );
   };
 }
 /* c8 ignore stop */
@@ -879,6 +916,14 @@ export async function orchestrateProvisioning(
      * admin UI). Pass `null` to force-skip during tests.
      */
     didProvisioner?: DidProvisioner | null;
+    /**
+     * Per-tenant Telnyx voice infra (dedicated Call Control app + outbound
+     * voice profile). Runs only when the DID step runs; a production
+     * default is used when omitted. Pass `null` to force-skip during tests.
+     * Failure never aborts provisioning: the DID degrades to the shared
+     * platform app and the migration one-shot converges stragglers.
+     */
+    tenantVoiceInfra?: TenantVoiceInfraProvisioner | null;
     /**
      * Test-injectable sleep used by the SSH-bootstrap connect-retry loop
      * and the detached deploy-client poll. Production uses `setTimeout`;
@@ -2057,6 +2102,52 @@ async function runOrchestrator(
             logger.warn(
               `${tenantCountry} tenant provisioned WITHOUT ${profileEnvKey}; outbound SMS to ${tenantCountry} will fail until the profile is fixed`,
               { businessId }
+            );
+          }
+        }
+
+        // Dedicated per-tenant Telnyx voice infra: create (or adopt) the
+        // tenant's own Call Control app + outbound voice profile BEFORE the
+        // number order, and point the order's connection at it, so the DID
+        // lands on carrier infrastructure whose channel limits match the
+        // tenant's plan instead of the shared fleet-wide pool. Failure
+        // degrades to the shared platform app (never aborts provisioning);
+        // scripts/oneshot/migrate-tenants-to-dedicated-telnyx-apps.ts
+        // converges stragglers, and re-runs adopt rather than duplicate.
+        const tenantVoiceInfra =
+          deps?.tenantVoiceInfra === null
+            ? null
+            : deps?.tenantVoiceInfra ?? defaultTenantVoiceInfraProvisioner();
+        if (tenantVoiceInfra) {
+          try {
+            const voiceTier = String(businessRow?.tier ?? "starter");
+            const infra = await tenantVoiceInfra({
+              businessId,
+              businessName: String(businessRow?.name ?? "Tenant"),
+              maxConcurrentCalls: resolveTenantMaxConcurrentCalls(
+                voiceTier,
+                businessRow?.enterprise_limits ?? null
+              )
+            });
+            platformDefaults.connectionId = infra.connectionId;
+            await upsertBusinessTelnyxSettings({
+              businessId,
+              telnyxOutboundVoiceProfileId: infra.outboundVoiceProfileId
+            });
+            await recordProvisioningProgress({
+              businessId,
+              phase: "tenant_voice_infra",
+              percent: 36,
+              message: `Dedicated Telnyx voice app + profile ready (${infra.connectionId})`,
+              source: "orchestrator"
+            });
+          } catch (infraErr) {
+            logger.warn(
+              "Tenant voice infra creation failed; DID will ride the shared platform app",
+              {
+                businessId,
+                error: infraErr instanceof Error ? infraErr.message : String(infraErr)
+              }
             );
           }
         }
