@@ -429,3 +429,60 @@ describe("voice_capacity_alerts migration (contract)", () => {
     expect(migration).toMatch(/if p_bucket_minutes is null or p_bucket_minutes < 1 then\s+return null/s);
   });
 });
+
+/**
+ * voice_outbound_platform_gate (the fleet-wide outbound gate): the overload
+ * hazard is the sharp edge. Adding a parameter via `create or replace`
+ * leaves the old 5-arg signature alive as an OVERLOAD, and PostgREST's
+ * named-argument dispatch refuses ambiguous overloads at runtime, killing
+ * every pre-dial probe. The DROP must ship in the same file, first.
+ */
+describe("voice_outbound_platform_gate migration (contract)", () => {
+  const migration = readFileSync(
+    join(repoRoot, "supabase/migrations/20260822142534_voice_outbound_platform_gate.sql"),
+    "utf8"
+  );
+
+  it("drops the old 5-arg signature before recreating with the platform param", () => {
+    const dropAt = migration.indexOf(
+      "drop function if exists public.voice_check_availability(uuid, integer, timestamptz, integer, integer);"
+    );
+    const createAt = migration.indexOf("create or replace function voice_check_availability(");
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(dropAt);
+    expect(migration).toMatch(/p_platform_max_outbound integer default null/);
+  });
+
+  it("checks the FLEET outbound count before any per-business math, and only when set", () => {
+    expect(migration).toMatch(
+      /if p_platform_max_outbound is not null and p_platform_max_outbound > 0 then[\s\S]*?where direction = 'outbound' and state in \('pending_answer', 'active'\)/
+    );
+    const fleetAt = migration.indexOf("'platform_capacity'");
+    const perBizAt = migration.indexOf("'concurrent_limit'");
+    expect(fleetAt).toBeGreaterThan(-1);
+    expect(fleetAt).toBeLessThan(perBizAt);
+    // Deliberately unfiltered by business_id: the Telnyx pool is shared.
+    expect(migration).not.toMatch(
+      /where business_id = p_business_id and direction = 'outbound'/
+    );
+  });
+
+  it("adds the direction column with its check and default, plus the gate index", () => {
+    expect(migration).toMatch(
+      /add column if not exists direction text not null default 'inbound'\s+check \(direction in \('inbound', 'outbound'\)\)/
+    );
+    expect(migration).toMatch(
+      /create index if not exists idx_voice_reservations_direction_state\s+on voice_reservations \(direction, state\)/
+    );
+  });
+
+  it("re-grants execute on the NEW 6-arg signature", () => {
+    expect(migration).toMatch(
+      /grant execute on function voice_check_availability\(uuid, integer, timestamptz, integer, integer, integer\)\s+to service_role/
+    );
+  });
+
+  it("leaves voice_reserve_for_call untouched (pre-dial fail-fast only)", () => {
+    expect(migration).not.toMatch(/voice_reserve_for_call\s*\(/);
+  });
+});

@@ -46,6 +46,7 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.ts";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { platformMaxConcurrentOutbound } from "../_shared/platform_capacity.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -223,7 +224,10 @@ serve(async (req: Request) => {
   // falls through to the dial because the post-dial reserve below — which does
   // the authoritative JIT period refresh — is the real gate, and it hangs the
   // leg up before answer so a slip-through is never billed.
-  const availability = await checkVoiceBudgetAvailable(supabase, { businessId });
+  const availability = await checkVoiceBudgetAvailable(supabase, {
+    businessId,
+    platformMaxOutbound: platformMaxConcurrentOutbound((name) => Deno.env.get(name))
+  });
   if (availability.status === "blocked") {
     await telemetryRecord(supabase, "voice_outbound_blocked", {
       business_id: businessId,
@@ -239,6 +243,18 @@ serve(async (req: Request) => {
       message: `Outbound call not placed (pre-dial): ${availability.reason}`,
       payload: { reason: availability.reason, to: callee, phase: "pre_dial" }
     });
+    if (availability.reason === "platform_capacity") {
+      // The FLEET is at its Telnyx outbound-channel ceiling. Not a budget
+      // problem: route the caller into the same short jittered retry path as
+      // a carrier 403 (error "capacity"), not the 4-hour budget defer.
+      // dialed:false, the callee was never rung.
+      return json(200, {
+        ok: false,
+        error: "capacity",
+        reason: "platform_capacity",
+        dialed: false
+      });
+    }
     // dialed:false — the callee was never rung, so a scheduled caller may safely
     // retry this occurrence later (budget may free up within its window).
     return json(200, { ok: false, error: "budget", reason: availability.reason, dialed: false });
@@ -368,7 +384,10 @@ serve(async (req: Request) => {
   const reserve = await reserveVoiceBudget(supabase, {
     businessId,
     callControlId,
-    stripeSecret: Deno.env.get("STRIPE_SECRET_KEY") ?? ""
+    stripeSecret: Deno.env.get("STRIPE_SECRET_KEY") ?? "",
+    // Stamps voice_reservations.direction so the fleet-wide outbound gate
+    // (the platform_capacity probe above) counts this leg while it rings.
+    direction: "outbound"
   });
   if (!reserve.ok) {
     try {

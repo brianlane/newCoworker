@@ -16,10 +16,13 @@ function makeSupabase(cfg: {
   subUpdateError?: { message: string } | null;
   reserve?: Result<unknown>;
   availability?: Result<unknown>;
+  reservationUpdateError?: { message: string } | null;
+  reservationUpdateThrows?: boolean;
 }) {
   const telemetry: Array<{ p_event_type: string; p_payload: Record<string, unknown> }> = [];
   const reserveArgs: Array<Record<string, unknown>> = [];
   const availabilityArgs: Array<Record<string, unknown>> = [];
+  const reservationUpdates: Array<{ row: Record<string, unknown>; eq: [string, unknown] }> = [];
   const supabase = {
     from(table: string) {
       if (table === "businesses") {
@@ -37,6 +40,17 @@ function makeSupabase(cfg: {
             })
           }),
           update: () => ({ eq: async () => ({ error: cfg.subUpdateError ?? null }) })
+        };
+      }
+      if (table === "voice_reservations") {
+        return {
+          update: (row: Record<string, unknown>) => ({
+            eq: async (col: string, val: unknown) => {
+              if (cfg.reservationUpdateThrows) throw new Error("reservations table offline");
+              reservationUpdates.push({ row, eq: [col, val] });
+              return { error: cfg.reservationUpdateError ?? null };
+            }
+          })
         };
       }
       throw new Error(`unexpected table ${table}`);
@@ -58,7 +72,7 @@ function makeSupabase(cfg: {
     }
   };
   // deno SupabaseClient typing is structural here; tests only use from/rpc.
-  return { supabase: supabase as never, telemetry, reserveArgs, availabilityArgs };
+  return { supabase: supabase as never, telemetry, reserveArgs, availabilityArgs, reservationUpdates };
 }
 
 function stubFetch(impl: () => unknown) {
@@ -588,5 +602,178 @@ describe("checkVoiceBudgetAvailable", () => {
     });
     const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
     expect(r).toEqual({ status: "indeterminate", reason: "check_error" });
+  });
+});
+
+/**
+ * Fleet-gate additions (PR 2 of the Telnyx capacity plan): the direction
+ * stamp that lets the platform count outbound legs, and the
+ * p_platform_max_outbound passthrough + platform_capacity mapping on the
+ * pre-dial probe.
+ */
+describe("reserveVoiceBudget: direction stamp", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const okReserve = { data: { ok: true, grant_seconds: 120, duplicate: false }, error: null };
+
+  it("stamps outbound on the reservation row after a successful reserve", async () => {
+    const { supabase, reservationUpdates } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: okReserve
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-out-1",
+      stripeSecret: "",
+      direction: "outbound"
+    });
+    expect(r.ok).toBe(true);
+    expect(reservationUpdates).toEqual([
+      { row: { direction: "outbound" }, eq: ["call_control_id", "cc-out-1"] }
+    ]);
+  });
+
+  it("stamps on an idempotent duplicate reserve too", async () => {
+    const { supabase, reservationUpdates } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: { data: { ok: true, duplicate: true }, error: null }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-out-2",
+      stripeSecret: "",
+      direction: "outbound"
+    });
+    expect(r).toEqual({ ok: true, grantSeconds: 0, duplicate: true });
+    expect(reservationUpdates).toHaveLength(1);
+  });
+
+  it("never touches reservations when direction is omitted (inbound default)", async () => {
+    const { supabase, reservationUpdates } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: okReserve
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-in-1",
+      stripeSecret: ""
+    });
+    expect(r.ok).toBe(true);
+    expect(reservationUpdates).toEqual([]);
+  });
+
+  it("does not stamp when the reserve was refused", async () => {
+    const { supabase, reservationUpdates } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: { data: { ok: false, reason: "concurrent_limit" }, error: null }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-out-3",
+      stripeSecret: "",
+      direction: "outbound"
+    });
+    expect(r.ok).toBe(false);
+    expect(reservationUpdates).toEqual([]);
+  });
+
+  // The stamp is best-effort: a failed or throwing stamp leaves the default
+  // 'inbound' (the fleet gate under-counts briefly) but must never fail the
+  // reserve, because the leg is already dialed and metering is committed.
+  it("a stamp DB error does not fail the reserve", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: okReserve,
+      reservationUpdateError: { message: "column locked" }
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-out-4",
+      stripeSecret: "",
+      direction: "outbound"
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("a stamp that throws does not fail the reserve", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      reserve: okReserve,
+      reservationUpdateThrows: true
+    });
+    const r = await reserveVoiceBudget(supabase, {
+      businessId: "b1",
+      callControlId: "cc-out-5",
+      stripeSecret: "",
+      direction: "outbound"
+    });
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("checkVoiceBudgetAvailable: platform gate passthrough", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes a floored positive platformMaxOutbound to the RPC", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      availability: { data: { ok: true, remaining_seconds: 100, bonus_seconds_available: 0 }, error: null }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, {
+      businessId: "b1",
+      platformMaxOutbound: 7.9
+    });
+    expect(r.status).toBe("ok");
+    expect(availabilityArgs[0]).toMatchObject({ p_platform_max_outbound: 7 });
+  });
+
+  it("passes null when the gate is omitted or non-positive", async () => {
+    for (const platformMaxOutbound of [undefined, 0, -4, Number.NaN]) {
+      const { supabase, availabilityArgs } = makeSupabase({
+        business: bizStarter,
+        subscription: freshSub(),
+        availability: { data: { ok: true, remaining_seconds: 1, bonus_seconds_available: 0 }, error: null }
+      });
+      await checkVoiceBudgetAvailable(supabase, {
+        businessId: "b1",
+        ...(platformMaxOutbound === undefined ? {} : { platformMaxOutbound })
+      });
+      expect(availabilityArgs[0]).toMatchObject({ p_platform_max_outbound: null });
+    }
+  });
+
+  it("maps a platform_capacity refusal through as its own blocked reason", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      availability: {
+        data: { ok: false, reason: "platform_capacity", outbound_in_flight: 7 },
+        error: null
+      }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, {
+      businessId: "b1",
+      platformMaxOutbound: 7
+    });
+    expect(r).toEqual({ status: "blocked", reason: "platform_capacity" });
   });
 });
