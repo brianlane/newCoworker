@@ -13,7 +13,13 @@ FROM mcr.microsoft.com/playwright:v1.62.1-jammy
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.mjs actions.mjs ./
+# EVERY .mjs the service imports must be listed here. The build context has the
+# whole directory, so a missing name fails at RUNTIME with ERR_MODULE_NOT_FOUND
+# and the container never binds 8080, taking the tenant's browse steps down.
+# That is exactly what happened on 2026-08-17 when login.mjs was split out of
+# server.mjs and this line was not updated: the file rsynced to the box fine and
+# was simply absent from the image.
+COPY server.mjs actions.mjs login.mjs ./
 
 ENV PORT=8080
 EXPOSE 8080
