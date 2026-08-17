@@ -648,9 +648,14 @@ against the portal screenshot she sent.
   reveal is delayed and the claimed path's late rungs gate on `contact_status`,
   which only the claimed read sets, so a single unclaimed read finds nothing
   and nothing looks again. **Every wait and re-read is gated on the previous
-  read still being "missing"**, so it delivers the moment details land: an
-  unconditional sleep made the team wait the full 75 minutes even when the
-  FIRST read already had the number. **Each read has its OWN status var**
+  read NOT having answered "found"**, so it delivers the moment details land:
+  an unconditional sleep made the team wait the full 75 minutes even when the
+  FIRST read already had the number. (As built on Aug 12 the rungs gated on
+  `equals "missing"`, which never fired: `email_extract` writes NO vars when
+  the mailbox has no matching message, so the status was unset, not
+  "missing", and the ladder silently skipped. Both Aug 16 runs hit it.
+  `homelight-verified-claim.ts` re-gated the rungs on `notEquals "found"`;
+  see homelight-flow.md.) **Each read has its OWN status var**
   (`u1_status`, `u2_status`, `u3_status`), mirroring
   contact_status/late_contact_status/late2_contact_status, because the reads
   carry `fillOnlyEmpty` and a shared status written "missing" could never be

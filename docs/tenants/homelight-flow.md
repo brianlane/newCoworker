@@ -82,6 +82,45 @@ a key to accept it. Everything downstream follows from that:
   time exactly like `place_ai_call`; the authoring validator only registered
   them for the dialing step until PR #1371, so templating the phrase used to
   fail to save.
+- **A dispatched claim click is not a registered claim.** On 2026-08-16 both
+  morning referrals' `claim_click` steps resolved HomeLight's real
+  `data-test="submit-claim-referral"` button and reported success
+  (`actionsCompleted: 1`), and Telnyx carrier records show HomeLight never
+  placed the claim callback for either. Amy's by-hand click at 09:40 produced
+  it within seconds; the voice flow answered, pressed 1, and HomeLight said
+  "Connecting you now", so the answering side works. A clean Playwright click
+  on this Next.js portal can be swallowed client-side (handler not attached
+  yet, or a silent request failure). `homelight-verified-claim.ts` therefore
+  re-reads the page after the claim steps (`claim_verify`, a FRESH navigation:
+  the claim-call state is server-side and survives reloads), retries the click
+  once when the state reads NOT CONFIRMED (`claim_fix` branch, call-mode
+  only), and templates the offer's claim line from the verified
+  `claim_state` instead of asserting "Our AI coworker is claiming it with
+  HomeLight now." on faith. When the state stays unconfirmed, the copy IS the
+  rescue instruction ("NOT CONFIRMED, claim by hand now") directly above the
+  portal link, which turns a silent loss into a one-minute human nudge. The
+  retry carries `continueWhenText: "HomeLight"` (present on any portal page)
+  so a retry failure records skipped and the run carries on to the offer,
+  never dead-letters.
+- **`email_extract` writes NO vars on a mailbox no-match, so an
+  `equals "missing"` gate never fires.** The Aug 12 reveal ladders gated
+  their retry rungs on `u1_status equals "missing"` (unclaimed) and
+  `contact_status equals "missing"` (claimed), but those vars exist only when
+  an email WAS found and read; when the mailbox has no matching message yet
+  (`{found: false}`), the status is unset and the whole 15/60-minute retry
+  chain skips silently. Both 2026-08-16 runs show it: step result
+  `{"found":false}`, no `u1_status`, every later rung `when_unmet`. The same
+  one-shot re-gates those rungs on `notEquals "found"` (an unset status now
+  means "keep trying"; "found" still stops the ladder) and widens all six
+  HomeLight reads to `lookbackMinutes: 240`, because the unclaimed read runs
+  ~75+ minutes after arrival, behind the offer ladder, so a 60-minute window
+  could not reach the referral email at all. The matchers stay
+  FIRST-NAME-ONLY on purpose: bodyContains terms are AND-ed, and the tempting
+  `{{vars.price_digits}}` term comes from the SMS alert's ROUNDED price
+  ($420K gives 420) while the details email carries the exact figure
+  ($419,500), so it would exclude the very email being sought (Bugbot caught
+  this on PR #1400; the model has also produced full runs like 507258, which
+  never match a comma-formatted $507,258).
 - **HomeLight alerts arrive in two wordings, from two different sender lines**,
   and the flow has to match both. They open with either
   `New HomeLight Referral: <name> - $250K seller in ...` or
@@ -153,11 +192,15 @@ Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
 `homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
-`fix-homelight-extraction.ts`, `homelight-text-referral-claim.ts`.
+`fix-homelight-extraction.ts`, `homelight-text-referral-claim.ts`,
+`homelight-verified-claim.ts` (claim verify/retry, honest claim-status copy,
+reveal-ladder regate, wider mailbox reads; `--revert --apply` restores the
+stored previous definition).
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
 
 ## History
 
-PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371.
+PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
+#1400.
