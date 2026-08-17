@@ -40,6 +40,7 @@ const sampleSettings = {
   telnyx_messaging_profile_id: null,
   telnyx_sms_from_e164: "+15551234567",
   telnyx_connection_id: null,
+  telnyx_outbound_voice_profile_id: null,
   bridge_media_wss_origin: "wss://x",
   bridge_media_path: "/voice/stream",
   bridge_last_heartbeat_at: null,

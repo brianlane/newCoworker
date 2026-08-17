@@ -123,6 +123,14 @@ and still want Selena's confirmation.
 
 ## One-shots
 
+**Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
+this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
+app + outbound voice profile (both named with the searchable marker
+`[nc:<business id>]`): carrier-enforced concurrent-call cap equal to the plan
+tier, a per-tenant $25/day spend fuse, the full destination whitelist, and the
+DID re-pointed onto the tenant app. Idempotent (re-runs adopt by marker).
+Whether it has run is in the applied_oneshots ledger.
+
 Pure builders, imported by tests, never executed as scripts:
 
 - `scar-fairy-lead-definition.ts`: the canonical lead-follow-up definition.

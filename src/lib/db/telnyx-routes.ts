@@ -33,6 +33,8 @@ export type BusinessTelnyxSettingsRow = {
   telnyx_messaging_profile_id: string | null;
   telnyx_sms_from_e164: string | null;
   telnyx_connection_id: string | null;
+  /** The tenant's DEDICATED outbound voice profile; null = shared platform profile. */
+  telnyx_outbound_voice_profile_id: string | null;
   bridge_media_wss_origin: string | null;
   bridge_media_path: string;
   bridge_last_heartbeat_at: string | null;
@@ -166,6 +168,8 @@ export type UpsertBusinessTelnyxSettingsInput = {
   telnyxMessagingProfileId?: string | null;
   telnyxSmsFromE164?: string | null;
   telnyxConnectionId?: string | null;
+  /** The tenant's dedicated outbound voice profile id (per-tenant carrier caps). */
+  telnyxOutboundVoiceProfileId?: string | null;
   bridgeMediaWssOrigin?: string | null;
   bridgeMediaPath?: string;
   forwardToE164?: string | null;
@@ -202,6 +206,7 @@ export async function upsertBusinessTelnyxSettings(
     ["telnyxMessagingProfileId", "telnyx_messaging_profile_id"],
     ["telnyxSmsFromE164", "telnyx_sms_from_e164"],
     ["telnyxConnectionId", "telnyx_connection_id"],
+    ["telnyxOutboundVoiceProfileId", "telnyx_outbound_voice_profile_id"],
     ["bridgeMediaWssOrigin", "bridge_media_wss_origin"],
     ["bridgeMediaPath", "bridge_media_path"],
     ["forwardToE164", "forward_to_e164"],

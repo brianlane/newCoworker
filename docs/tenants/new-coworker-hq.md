@@ -150,6 +150,14 @@ visitor actually books.
 
 ## One-shots
 
+**Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
+this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
+app + outbound voice profile (both named with the searchable marker
+`[nc:<business id>]`): carrier-enforced concurrent-call cap equal to the plan
+tier, a per-tenant $25/day spend fuse, the full destination whitelist, and the
+DID re-pointed onto the tenant app. Idempotent (re-runs adopt by marker).
+Whether it has run is in the applied_oneshots ledger.
+
 `onboard-hq-tenant.ts`, `configure-hq-dogfood.ts`, `setup-hq-dogfood-flows.ts`,
 `setup-hq-inbox-triage-flow.ts` (its definition lives beside it in
 `hq-inbox-triage-definition.ts`, split out so
