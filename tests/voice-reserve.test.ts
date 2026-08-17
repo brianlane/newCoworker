@@ -777,3 +777,75 @@ describe("checkVoiceBudgetAvailable: platform gate passthrough", () => {
     expect(r).toEqual({ status: "blocked", reason: "platform_capacity" });
   });
 });
+
+/**
+ * Per-tenant dial headroom (owner policy, Aug 16 2026): the pre-dial probe
+ * gates AI FLOW DIALS at (tenant cap - headroom) so warm transfers and
+ * reach legs always find channels inside the tenant's own carrier cap. The
+ * authoritative post-dial reserve keeps the FULL cap on purpose.
+ */
+describe("checkVoiceBudgetAvailable: tenant dial headroom", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const okAvail = {
+    data: { ok: true, remaining_seconds: 100, bonus_seconds_available: 0 },
+    error: null
+  };
+  const bizStandard = { data: { tier: "standard", enterprise_limits: null }, error: null };
+
+  it("reduces the probe's concurrency cap by the headroom", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: bizStandard,
+      subscription: freshSub(),
+      availability: okAvail
+    });
+    await checkVoiceBudgetAvailable(supabase, { businessId: "b1", outboundDialHeadroom: 3 });
+    expect(availabilityArgs[0]).toMatchObject({
+      p_max_concurrent: VOICE_RES_LIMITS.standard.maxConcurrentCalls - 3
+    });
+  });
+
+  it("never reduces below one dial slot (starter cap 1 minus headroom 3)", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: bizStarter,
+      subscription: freshSub(),
+      availability: okAvail
+    });
+    await checkVoiceBudgetAvailable(supabase, { businessId: "b1", outboundDialHeadroom: 3 });
+    expect(availabilityArgs[0]).toMatchObject({ p_max_concurrent: 1 });
+  });
+
+  it("passes the full cap when headroom is omitted, zero, or garbage", async () => {
+    for (const outboundDialHeadroom of [undefined, 0, -2, Number.NaN]) {
+      const { supabase, availabilityArgs } = makeSupabase({
+        business: bizStandard,
+        subscription: freshSub(),
+        availability: okAvail
+      });
+      await checkVoiceBudgetAvailable(supabase, {
+        businessId: "b1",
+        ...(outboundDialHeadroom === undefined ? {} : { outboundDialHeadroom })
+      });
+      expect(availabilityArgs[0]).toMatchObject({
+        p_max_concurrent: VOICE_RES_LIMITS.standard.maxConcurrentCalls
+      });
+    }
+  });
+
+  it("floors a fractional headroom", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: bizStandard,
+      subscription: freshSub(),
+      availability: okAvail
+    });
+    await checkVoiceBudgetAvailable(supabase, { businessId: "b1", outboundDialHeadroom: 2.9 });
+    expect(availabilityArgs[0]).toMatchObject({
+      p_max_concurrent: VOICE_RES_LIMITS.standard.maxConcurrentCalls - 2
+    });
+  });
+});

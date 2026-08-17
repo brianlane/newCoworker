@@ -32,6 +32,17 @@ const DEFAULT_BASE_URL = "https://api.telnyx.com/v2";
 /** Per-tenant runaway fuse, mirroring the old fleet-wide $25/day limit. */
 export const TENANT_PROFILE_DAILY_SPEND_LIMIT_USD = "25.00";
 
+/**
+ * Carrier-side recording of every outbound leg, mirroring the legacy shared
+ * profile's setting (owner: keep it "just in case"). WAV, single channel,
+ * exactly as the shared profile recorded.
+ */
+export const TENANT_PROFILE_CALL_RECORDING = {
+  call_recording_type: "all",
+  call_recording_format: "wav",
+  call_recording_channels: "single"
+} as const;
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export type TelnyxVoiceInfraClientOptions = {
@@ -55,6 +66,8 @@ export type OutboundVoiceProfile = {
   daily_spend_limit: string | null;
   daily_spend_limit_enabled: boolean;
   whitelisted_destinations: string[];
+  /** Telnyx call_recording.call_recording_type ("all" | "none" | ...). */
+  call_recording_type: string | null;
 };
 
 type AppWire = {
@@ -71,6 +84,7 @@ type ProfileWire = {
   daily_spend_limit?: unknown;
   daily_spend_limit_enabled?: unknown;
   whitelisted_destinations?: unknown;
+  call_recording?: { call_recording_type?: unknown } | null;
 };
 
 function readApp(raw: AppWire): CallControlApp {
@@ -100,7 +114,11 @@ function readProfile(raw: ProfileWire): OutboundVoiceProfile {
     daily_spend_limit_enabled: raw.daily_spend_limit_enabled === true,
     whitelisted_destinations: Array.isArray(raw.whitelisted_destinations)
       ? raw.whitelisted_destinations.filter((c): c is string => typeof c === "string")
-      : []
+      : [],
+    call_recording_type:
+      typeof raw.call_recording?.call_recording_type === "string"
+        ? raw.call_recording.call_recording_type
+        : null
   };
 }
 
@@ -213,7 +231,8 @@ export class TelnyxVoiceInfraClient {
       concurrent_call_limit: opts.concurrentCallLimit,
       daily_spend_limit: opts.dailySpendLimitUsd,
       daily_spend_limit_enabled: true,
-      whitelisted_destinations: opts.whitelistedDestinations
+      whitelisted_destinations: opts.whitelistedDestinations,
+      call_recording: TENANT_PROFILE_CALL_RECORDING
     });
     return readProfile(json.data);
   }
@@ -233,7 +252,8 @@ export class TelnyxVoiceInfraClient {
         concurrent_call_limit: opts.concurrentCallLimit,
         daily_spend_limit: opts.dailySpendLimitUsd,
         daily_spend_limit_enabled: true,
-        whitelisted_destinations: opts.whitelistedDestinations
+        whitelisted_destinations: opts.whitelistedDestinations,
+        call_recording: TENANT_PROFILE_CALL_RECORDING
       }
     );
     return readProfile(json.data);
@@ -369,7 +389,8 @@ export async function ensureTenantVoiceInfra(
       profile.concurrent_call_limit !== input.maxConcurrentCalls ||
       profile.daily_spend_limit !== spendLimit ||
       profile.daily_spend_limit_enabled !== true ||
-      mergedWhitelist.length !== profile.whitelisted_destinations.length;
+      mergedWhitelist.length !== profile.whitelisted_destinations.length ||
+      profile.call_recording_type !== TENANT_PROFILE_CALL_RECORDING.call_recording_type;
     if (drift) {
       profile = await deps.infra.patchOutboundVoiceProfile(profile.id, {
         concurrentCallLimit: input.maxConcurrentCalls,
