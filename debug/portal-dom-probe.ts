@@ -133,7 +133,10 @@ rm -f /tmp/probe-payload.json
  * but incomplete stripping is worth avoiding on its own merits.
  */
 function stripCode(html: string): string {
-  const patterns = [/<script\b[\s\S]*?<\/script\s*>/gi, /<style\b[\s\S]*?<\/style\s*>/gi];
+  // The end tag is `</script\b[^>]*>`, not `</script\s*>`: HTML lets a closing
+  // tag carry ignored junk, so `</script\t\n bar>` is valid and a tighter
+  // pattern walks straight past it, leaving the script body in the digest.
+  const patterns = [/<script\b[\s\S]*?<\/script\b[^>]*>/gi, /<style\b[\s\S]*?<\/style\b[^>]*>/gi];
   let out = html;
   for (let pass = 0; pass < 5; pass++) {
     const before = out;
