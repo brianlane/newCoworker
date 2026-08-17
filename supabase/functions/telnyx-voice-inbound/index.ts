@@ -600,6 +600,12 @@ serve(async (req: Request) => {
     const firstRingSecs = first.ring_secs > 0 ? Math.floor(first.ring_secs) : 20;
     const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
       timeoutSecs: firstRingSecs,
+      // A step target whose phone is off goes to carrier voicemail within a
+      // couple of seconds, and a transfer auto-bridges on answer, so the
+      // caller lands in a teammate's voicemail and the chain never advances.
+      // Premium AMD's verdict lets the call-end handler un-stick that (see
+      // handleMachineDetection's handoff branch).
+      answeringMachineDetection: "premium",
       clientState: encodeHandoffClientState(callControlId, 0)
     });
     if (!tf.ok) {

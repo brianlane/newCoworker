@@ -298,7 +298,16 @@ serve(async (req: Request) => {
     // Left OFF for the owner's manual Place-call button and for scheduled
     // outbound flows: a person is already deciding what to do about those, AMD
     // is billed per call, and its verdict is not free of false positives.
-    ...(plan.flowRun ? { answeringMachineDetection: "premium" as const } : {}),
+    //
+    // The iOS variant is premium PLUS Apple call screening awareness: same
+    // verdicts and price tier, and additionally
+    // call.machine.premium.call_screening.detected when an iPhone's screening
+    // answered. Screening is a live person deciding whether to pick up, so the
+    // bridge's outbound persona answers the screening prompt with one
+    // identification sentence instead of being classified away as a machine.
+    ...(plan.flowRun
+      ? { answeringMachineDetection: "premium_ios_call_screening_detection" as const }
+      : {}),
     clientState,
     commandId: sessionId
   });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AMD_DETECTION_EVENTS,
   AMD_GREETING_EVENTS,
+  AMD_SCREENING_EVENTS,
   classifyAmdResult,
   greetingImpliesMachine,
   isAmdEvent
@@ -84,9 +85,21 @@ describe("AMD event vocabulary", () => {
 
   // A recognized event that is not routed is dropped before it can be handled.
   it("routes every AMD event to the call-end function", () => {
-    for (const e of [...AMD_DETECTION_EVENTS, ...AMD_GREETING_EVENTS]) {
+    for (const e of [...AMD_DETECTION_EVENTS, ...AMD_GREETING_EVENTS, ...AMD_SCREENING_EVENTS]) {
       expect(TELNYX_VOICE_ROUTES[e], `${e} must be routed`).toBe("telnyx-voice-call-end");
     }
+  });
+
+  // Apple call screening answered (premium_ios_call_screening_detection). A
+  // live person is deciding whether to pick up, so the event is recognized
+  // for routing and MUST NOT read as a verdict: classifying "screening" as a
+  // machine would hang up on every screened iPhone.
+  it("knows the iOS screening event without treating it as a verdict", () => {
+    expect([...AMD_SCREENING_EVENTS]).toEqual(["call.machine.premium.call_screening.detected"]);
+    expect(isAmdEvent("call.machine.premium.call_screening.detected")).toBe(true);
+    expect(AMD_DETECTION_EVENTS.has("call.machine.premium.call_screening.detected")).toBe(false);
+    expect(classifyAmdResult("screening")).toBe("unknown");
+    expect(greetingImpliesMachine("prompt_ended")).toBe(false);
   });
 });
 

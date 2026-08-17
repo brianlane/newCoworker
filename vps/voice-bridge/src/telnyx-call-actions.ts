@@ -77,6 +77,14 @@ export async function telnyxDialCall(
     to: string;
     from: string;
     timeoutSecs?: number;
+    /**
+     * Answering-machine detection on the dialed leg. A teammate whose phone
+     * is off reaches carrier voicemail within a couple of seconds, which
+     * ANSWERS the leg; without a verdict the reach ladder cannot tell that
+     * answer from a person and bridges the caller into the greeting. Wire
+     * value passes through verbatim ("premium" is what the ladder uses).
+     */
+    answeringMachineDetection?: string;
     clientState?: string;
   },
   fetchImpl: typeof fetch = fetch
@@ -91,6 +99,9 @@ export async function telnyxDialCall(
   };
   if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
     body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.answeringMachineDetection) {
+    body.answering_machine_detection = opts.answeringMachineDetection;
   }
   if (opts.clientState) {
     body.client_state = Buffer.from(opts.clientState, "utf8").toString("base64");

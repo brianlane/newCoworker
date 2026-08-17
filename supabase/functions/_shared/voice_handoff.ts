@@ -192,6 +192,16 @@ export type HandoffContext = {
   steps: HandoffStep[];
   ai_takeover: HandoffAiTakeover | null;
   /**
+   * Steps whose transfer leg AMD proved was answered by a MACHINE, keyed by
+   * step number (JSON object keys are strings). Stamped by the AMD handler
+   * BEFORE it hangs the leg up, because an API hangup on an answered leg
+   * arrives as `normal_clearing`, the exact cause the hangup path reads as
+   * "a human answered and the call completed". The marker diverts that
+   * branch to advance the chain instead, keeping the hangup path the single
+   * writer of advancement.
+   */
+  amd_machine_steps?: Record<string, boolean>;
+  /**
    * The flow's `options.starAlerts`: frame every alert text this chain sends
    * in a row of asterisks so a live transfer stands out. Snapshotted here at
    * chain start, so the call-end webhook and the on-box voice bridge both read

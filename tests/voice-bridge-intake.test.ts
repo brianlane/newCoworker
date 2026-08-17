@@ -5,6 +5,7 @@ import {
   INBOUND_VOICEMAIL_RECOGNITION_LINE,
   inboundVoicemailMessageLine,
   intakeSystemInstruction,
+  iosScreeningLine,
   STAR_ROW
 } from "../vps/voice-bridge/src/intake";
 
@@ -509,5 +510,46 @@ describe("intakeSystemInstruction: inbound carrier-voicemail handling", () => {
     expect(INBOUND_VOICEMAIL_RECOGNITION_LINE).not.toMatch(/—/);
     expect(inboundVoicemailMessageLine("Amy Laidlaw", true)).not.toMatch(/—/);
     expect(INBOUND_VOICEMAIL_RECOGNITION_LINE.toLowerCase()).not.toContain("receptionist");
+  });
+});
+
+/**
+ * Apple call screening on calls WE place (flow dials now run
+ * premium_ios_call_screening_detection). The screening robot transcribes
+ * what the caller says for the person deciding whether to pick up: one clear
+ * identification sentence gets the call through, a full opener read at the
+ * robot looks like spam on their screen, and conversing with it would break
+ * the recordings rule.
+ */
+describe("intakeSystemInstruction: Apple call screening identification", () => {
+  it("outbound and transfer personas carry the one-sentence identification", () => {
+    const outbound = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      true
+    );
+    const transfer = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true, {
+      agentName: "Dave"
+    });
+    for (const instr of [outbound, transfer]) {
+      expect(instr).toContain(
+        '"This is Amy Laidlaw\'s office with a quick follow-up call."'
+      );
+      expect(instr).toContain("say exactly ONE short sentence");
+      expect(instr).toContain("stay quiet until a real person speaks");
+    }
+  });
+
+  it("the inbound live-transfer persona does not (nobody screens a call they placed)", () => {
+    const inbound = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true);
+    expect(inbound).not.toContain("call screening voice answers");
+  });
+
+  it("carries no em dash", () => {
+    expect(iosScreeningLine("Amy Laidlaw")).not.toMatch(/—/);
   });
 });

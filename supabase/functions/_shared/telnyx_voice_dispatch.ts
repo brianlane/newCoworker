@@ -45,6 +45,11 @@ export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.free
   "call.machine.premium.detection.ended": "telnyx-voice-call-end",
   "call.machine.greeting.ended": "telnyx-voice-call-end",
   "call.machine.premium.greeting.ended": "telnyx-voice-call-end",
+  // Apple call screening answered a premium_ios_call_screening_detection leg.
+  // Not a verdict (a live person is deciding whether to pick up), but it must
+  // be routed so the platform can record that screening happened instead of
+  // dropping the event on the floor.
+  "call.machine.premium.call_screening.detected": "telnyx-voice-call-end",
   // The end of a voicemail message we spoke. Routed so the leg can be hung up
   // the moment the message finishes: without it the call sits open until the
   // recording's own limit, billing voice minutes for silence.

@@ -88,6 +88,7 @@ export type ReachTelnyxDeps = {
     to: string;
     from: string;
     timeoutSecs?: number;
+    answeringMachineDetection?: string;
     clientState?: string;
   }) => Promise<{ ok: boolean; status: number; body?: string; callControlId?: string }>;
   bridge: (
@@ -146,8 +147,12 @@ export async function runReachLadder(
      * need no stub; never awaited, never throws into the ladder.
      */
     telemetry?: (eventType: string, payload: Record<string, unknown>) => void;
-    /** Test seam: poll cadence + sleep, forwarded to pollReachOutcome. */
-    poll?: { pollMs?: number; sleep?: (ms: number) => Promise<void> };
+    /**
+     * Test seam: poll cadence + sleep, forwarded to pollReachOutcome AND to
+     * awaitReachAmdClearance (which additionally honors capMs; the outcome
+     * poll ignores it).
+     */
+    poll?: { pollMs?: number; sleep?: (ms: number) => Promise<void>; capMs?: number };
   }
 ): Promise<ReachLadderResult> {
   const { businessId, aLegCallControlId, config } = args;
@@ -163,6 +168,11 @@ export async function runReachLadder(
       // Telnyx enforces the ring window server-side too, so a lost webhook
       // still ends the attempt instead of ringing a phone forever.
       timeoutSecs: config.ringSeconds,
+      // A teammate's voicemail ANSWERS the leg (a phone that is off reaches
+      // it in a couple of seconds, inside any ring window), and an answer
+      // alone would bridge the caller into the greeting. The verdict feeds
+      // the clearance gate below.
+      answeringMachineDetection: "premium",
       clientState: encodeReachClientState(businessId, aLegCallControlId, attempt)
     });
     if (!dialRes.ok || !dialRes.callControlId) {
@@ -199,6 +209,43 @@ export async function runReachLadder(
     );
     if (outcome.status === "answered") {
       const bLeg = outcome.bLeg || dialRes.callControlId;
+      // An answer is not yet a person. A phone that is off reaches carrier
+      // voicemail in a couple of seconds, inside any ring window, and the
+      // voicemail ANSWERS the leg — bridging on the answer alone put the
+      // caller inside a teammate's voicemail greeting. Hold the bridge until
+      // AMD clears the leg: a human verdict bridges as soon as it lands
+      // (typically inside a second or two), a machine verdict skips the rung
+      // silently, and the cap fails open to bridging so a missing or late
+      // verdict can never strand a live teammate holding a silent line.
+      const clearance = await awaitReachAmdClearance(
+        supabase,
+        aLegCallControlId,
+        attempt,
+        args.poll ?? {}
+      );
+      if (clearance === "machine") {
+        log("reach: voicemail answered, next target", { attempt });
+        telemetry("voice_reach_vm_skipped", { attempt, to: target.e164 });
+        // The webhook side usually hung the leg up with the verdict; this is
+        // the belt for a hangup that failed, and a double hangup is a no-op.
+        await telnyx.hangup(bLeg);
+        continue;
+      }
+      // Stamp "this attempt is being bridged" BEFORE issuing the bridge, so a
+      // machine verdict landing AFTER the clearance cap failed open cannot
+      // hang up a leg the caller is now connected to (the webhook checks this
+      // marker before its machine hangup). A cut mid-conversation on a late,
+      // possibly wrong verdict is the worse failure; a fail-open that really
+      // was a voicemail costs the awkward moment the cap already priced in.
+      // Best-effort: a failed stamp narrows nothing but this protection.
+      try {
+        await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: aLegCallControlId,
+          p_patch: { reach_bridged: { attempt } }
+        });
+      } catch {
+        // The bridge proceeds regardless; only the late-verdict shield thins.
+      }
       const bridgeRes = await telnyx.bridge(aLegCallControlId, {
         otherCallControlId: bLeg,
         parkAfterUnbridge: true,
@@ -209,7 +256,18 @@ export async function runReachLadder(
       }
       // The teammate answered but the join failed: release them so they are
       // not left holding a silent line, then keep trying the ladder rather
-      // than reporting a success the caller never experienced.
+      // than reporting a success the caller never experienced. The bridge
+      // shield stamped above must not outlive the failed bridge, or a late
+      // machine verdict for this attempt would skip its hangup on a leg that
+      // was never joined, leaving cleanup to rest on the single hangup below.
+      try {
+        await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: aLegCallControlId,
+          p_patch: { reach_bridged: null }
+        });
+      } catch {
+        // Best-effort: the hangup below still tears the leg down.
+      }
       log("reach: bridge failed after answer", { attempt, status: bridgeRes.status });
       await telnyx.hangup(bLeg);
       continue;
@@ -223,6 +281,66 @@ export async function runReachLadder(
   const detail = anyDialSucceeded ? "nobody_answered" : "dials_refused";
   telemetry("voice_reach_exhausted", { targets: config.targets.length, detail });
   return { ok: false, detail };
+}
+
+/**
+ * How long an ANSWERED reach leg may wait for an AMD verdict before the
+ * ladder bridges anyway.
+ *
+ * Premium AMD classifies a live "Hello?" within a second or two, so a real
+ * teammate is bridged about as fast as the verdict lands and only the rare
+ * no-verdict case pays the full cap. Fail-open on purpose: a bridged
+ * voicemail (the pre-AMD behavior) costs an awkward moment, while refusing
+ * to bridge a person who actually picked up costs the caller a teammate.
+ */
+export const REACH_AMD_CLEAR_MS = Number(process.env.REACH_AMD_CLEAR_MS ?? 3000);
+
+/**
+ * The AMD verdict the webhook stamped for this attempt, or null while none
+ * has landed. Attempt-checked like readReachOutcome, so a stale verdict from
+ * a torn-down earlier leg can never gate the current one.
+ */
+export async function readReachAmd(
+  supabase: SupabaseClient,
+  aLegCallControlId: string,
+  attempt: number
+): Promise<"human" | "machine" | null> {
+  const { data, error } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", aLegCallControlId)
+    .maybeSingle();
+  if (error) return null;
+  const amd = (
+    (data as { context?: { reach_amd?: Record<string, unknown> } } | null)?.context?.reach_amd ??
+    null
+  ) as Record<string, unknown> | null;
+  if (!amd) return null;
+  if (typeof amd.attempt !== "number" || amd.attempt !== attempt) return null;
+  return amd.verdict === "human" ? "human" : amd.verdict === "machine" ? "machine" : null;
+}
+
+/**
+ * Wait briefly for the AMD verdict on an ANSWERED leg. "human" and "timeout"
+ * both mean bridge (fail open); "machine" means skip the rung silently. The
+ * poll runs tighter than the ring poll (250ms vs 1s) because the whole budget
+ * is a few seconds and a person is waiting on both sides of it.
+ */
+export async function awaitReachAmdClearance(
+  supabase: SupabaseClient,
+  aLegCallControlId: string,
+  attempt: number,
+  opts: { pollMs?: number; sleep?: (ms: number) => Promise<void>; capMs?: number } = {}
+): Promise<"human" | "machine" | "timeout"> {
+  const pollMs = opts.pollMs ?? 250;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const deadline = Date.now() + (opts.capMs ?? REACH_AMD_CLEAR_MS);
+  for (;;) {
+    const verdict = await readReachAmd(supabase, aLegCallControlId, attempt);
+    if (verdict) return verdict;
+    if (Date.now() >= deadline) return "timeout";
+    await sleep(pollMs);
+  }
 }
 
 /**
