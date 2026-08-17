@@ -61,6 +61,7 @@ import {
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
 import { PRIORITY_SUPPORT_CHECKOUT_KIND } from "@/lib/plans/priority-support";
+import { isUpgradeSwitchDeletion } from "@/lib/billing/upgrade-switch";
 import {
   applyPrioritySupportInvoicePaid,
   isPrioritySupportSubscription,
@@ -603,34 +604,52 @@ export async function POST(request: Request) {
         const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
         if (existing) {
           const businessId = existing.business_id;
-          // No membership, no auto-reload. The grant RPCs would refuse anyway,
-          // so leaving rules armed would only burn failed charges.
-          try {
-            const { disableAutoReloadForBusiness } = await import("@/lib/db/auto-reload");
-            await disableAutoReloadForBusiness(businessId, "subscription_canceled");
-          } catch (err) {
-            logger.warn("auto_reload: disable on subscription delete failed (non-fatal)", {
-              businessId,
-              eventId: event.id,
-              error: err instanceof Error ? err.message : String(err)
-            });
-          }
-          // No membership, no priority support. This is a SEPARATE Stripe
-          // subscription, so nothing about cancelling the membership stops it:
-          // left alone it keeps charging $400/month to an account with no
-          // service behind it. Best-effort by contract (it swallows its own
-          // errors) so it can never abort the teardown below.
+
+          // Is the tenant actually leaving, or just changing plans? A plan
+          // change cancels the OLD Stripe subscription and builds a new one,
+          // so this same event fires for a tenant who is still very much
+          // active. Everything below that tears down tenant-level state has to
+          // tell the two apart.
           //
-          // EXCEPT on an upgrade switch. A plan change cancels the OLD Stripe
-          // subscription and builds a new one, which delivers this same event
-          // for a tenant who is still very much active, just on a different
-          // plan. Cancelling their priority support there would silently drop
-          // a paid add-on every time somebody upgrades. The orchestrator's
-          // exact signature is the same one the fallback mirror below
-          // short-circuits on.
-          const isUpgradeSwitch =
-            existing.status === "canceled" && existing.cancel_reason === "upgrade_switch";
-          if (!isUpgradeSwitch) {
+          // `cancel_reason` alone cannot: the orchestrator cancels the Stripe
+          // subscription at step 6 and only stamps the row `upgrade_switch` at
+          // step 8, with the slow box teardown in between, so at read time the
+          // row is usually still active with a null reason. The reliable
+          // signal is the REPLACEMENT row, which step 5 already created. See
+          // src/lib/billing/upgrade-switch.ts.
+          const newestRow = await getSubscription(businessId);
+          const upgradeSwitch = isUpgradeSwitchDeletion({
+            deletedStripeSubscriptionId: sub.id,
+            deletedRow: existing,
+            newestRow
+          });
+
+          if (upgradeSwitch) {
+            logger.info("customer.subscription.deleted: plan change, skipping tenant teardown", {
+              businessId,
+              stripeSubscriptionId: sub.id,
+              eventId: event.id
+            });
+          } else {
+            // No membership, no auto-reload. The grant RPCs would refuse
+            // anyway, so leaving rules armed would only burn failed charges.
+            // Guarded because nothing re-enables these rules: firing on a plan
+            // change silently stops a tenant's top-ups and they never find out.
+            try {
+              const { disableAutoReloadForBusiness } = await import("@/lib/db/auto-reload");
+              await disableAutoReloadForBusiness(businessId, "subscription_canceled");
+            } catch (err) {
+              logger.warn("auto_reload: disable on subscription delete failed (non-fatal)", {
+                businessId,
+                eventId: event.id,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+            // No membership, no priority support. That is a SEPARATE Stripe
+            // subscription, so cancelling the membership does not stop it:
+            // left alone it keeps charging $400/month to an account with no
+            // service behind it. Best-effort by contract (it swallows its own
+            // errors) so it can never abort the teardown below.
             await terminatePrioritySupport(businessId);
           }
           const now = new Date();
@@ -719,22 +738,22 @@ export async function POST(request: Request) {
               });
             }
           }
-          // Upgrade-switch old rows are finalized inline by
-          // `runChangePlanFromCheckout` (status=canceled, cancel_reason=
-          // upgrade_switch, periods nulled, cached_at stamped) *before*
-          // the orchestrator calls `stripe.subscriptions.cancel()`.
-          // Stripe then delivers `customer.subscription.deleted` to this
-          // handler, and the fallback DB-mirror below would race with
-          // the orchestrator's own final write, re-stamping
-          // `stripe_subscription_cached_at` and potentially clobbering
-          // state for an already-torn-down sub. Short-circuit on the
-          // orchestrator's exact signature instead.
-          if (
-            existing.status === "canceled" &&
-            existing.cancel_reason === "upgrade_switch"
-          ) {
+          // On a plan change the fallback DB-mirror below would race with
+          // `runChangePlanFromCheckout`'s own final write on the old row,
+          // re-stamping `stripe_subscription_cached_at` and stamping a grace
+          // deadline on a tenant who is not leaving. Short-circuit instead.
+          //
+          // This used to test `status === "canceled" && cancel_reason ===
+          // "upgrade_switch"` on the belief that the orchestrator finalized
+          // the row BEFORE cancelling the Stripe subscription. It does not:
+          // step 6 cancels in Stripe, step 8 stamps the row, and the slow box
+          // teardown runs in between, so the webhook usually arrives while the
+          // row is still active with a null reason and this check missed.
+          // `isUpgradeSwitchDeletion` reads the replacement row instead, which
+          // step 5 creates before any of that.
+          if (upgradeSwitch) {
             logger.info(
-              "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
+              "customer.subscription.deleted: skipping fallback mirror for a plan change",
               {
                 businessId,
                 subscriptionId: existing.id,

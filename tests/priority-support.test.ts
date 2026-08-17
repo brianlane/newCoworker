@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  prioritySupportCardState,
   PRIORITY_SUPPORT_CHECKOUT_KIND,
   PRIORITY_SUPPORT_COVERAGE_GRACE_MS,
   PRIORITY_SUPPORT_LINE_NAME,
@@ -161,5 +162,94 @@ describe("prioritySupportPurchasableForTier", () => {
     expect(prioritySupportPurchasableForTier(null)).toBe(false);
     expect(prioritySupportPurchasableForTier(undefined)).toBe(false);
     expect(prioritySupportPurchasableForTier("platinum")).toBe(false);
+  });
+});
+
+describe("prioritySupportCardState", () => {
+  const covered = untilIn(20);
+  const lapsedWindow = untilIn(-5);
+
+  it("is renewing whenever a live subscription is not winding down", () => {
+    expect(
+      prioritySupportCardState({
+        subscription: { cancel_at_period_end: false },
+        tier: "standard",
+        prioritySupportUntilIso: covered,
+        now: NOW
+      })
+    ).toBe("renewing");
+  });
+
+  it("stays renewing when the coverage stamp is missing or stale", () => {
+    // The trap: a tenant IS being charged $400/month, so Cancel has to be
+    // reachable even if `invoice.paid` never landed or has not landed yet.
+    // Deciding from coverage alone billed them with no way to stop.
+    for (const until of [null, undefined, lapsedWindow]) {
+      expect(
+        prioritySupportCardState({
+          subscription: { cancel_at_period_end: false },
+          tier: "standard",
+          prioritySupportUntilIso: until,
+          now: NOW
+        })
+      ).toBe("renewing");
+    }
+  });
+
+  it("is winding_down when the live subscription is set to stop", () => {
+    expect(
+      prioritySupportCardState({
+        subscription: { cancel_at_period_end: true },
+        tier: "standard",
+        prioritySupportUntilIso: covered,
+        now: NOW
+      })
+    ).toBe("winding_down");
+  });
+
+  it("is winding_down for an open window with NO subscription", () => {
+    // The inverse trap: an admin comp, a white-glove rider, or the period
+    // already paid for after cancelling. Reading these as lapsed told a
+    // covered tenant their support had ended and offered to re-sell it.
+    expect(
+      prioritySupportCardState({
+        subscription: null,
+        tier: "standard",
+        prioritySupportUntilIso: covered,
+        now: NOW
+      })
+    ).toBe("winding_down");
+  });
+
+  it("is lapsed only when the window closed and nothing is live", () => {
+    expect(
+      prioritySupportCardState({
+        subscription: null,
+        tier: "standard",
+        prioritySupportUntilIso: lapsedWindow,
+        now: NOW
+      })
+    ).toBe("lapsed");
+  });
+
+  it("is none when the tenant never had coverage", () => {
+    expect(
+      prioritySupportCardState({
+        subscription: null,
+        tier: "standard",
+        prioritySupportUntilIso: null,
+        now: NOW
+      })
+    ).toBe("none");
+  });
+
+  it("defaults its clock to now when none is injected", () => {
+    expect(
+      prioritySupportCardState({
+        subscription: null,
+        tier: "standard",
+        prioritySupportUntilIso: new Date(Date.now() + 20 * DAY).toISOString()
+      })
+    ).toBe("winding_down");
   });
 });

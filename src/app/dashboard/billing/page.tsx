@@ -69,17 +69,13 @@ import {
   hasPrioritySupportForTier,
   listWhiteGlovePackages
 } from "@/lib/plans/white-glove";
-import {
-  PrioritySupportCard,
-  type PrioritySupportCardState
-} from "@/components/billing/PrioritySupportCard";
+import { PrioritySupportCard } from "@/components/billing/PrioritySupportCard";
 import { getLivePrioritySupportSubscription } from "@/lib/db/priority-support";
 import {
   PRIORITY_SUPPORT_LOW_DAYS_THRESHOLD,
   PRIORITY_SUPPORT_MONTHLY_CENTS,
   prioritySupportDaysLeft,
-  prioritySupportStatus,
-  prioritySupportStatusIsCovered
+  prioritySupportCardState as resolvePrioritySupportCardState
 } from "@/lib/plans/priority-support";
 import { formatPriceCents } from "@/lib/pricing";
 // Same operator channels the enterprise dedicated-support card uses: a paying
@@ -363,23 +359,11 @@ export default async function BillingPage(props: {
     (business as { tier?: string | null } | null)?.tier,
     prioritySupportUntilIso
   );
-  // Coverage decides COVERED vs not; the subscription row only decides whether
-  // it is renewing. Deriving "covered" from the row instead would tell an
-  // admin-comped tenant (open window, no subscription) that their support had
-  // lapsed, and offer to sell it back to them.
-  const prioritySupportCovered = prioritySupportStatusIsCovered(
-    prioritySupportStatus(
-      (business as { tier?: string | null } | null)?.tier,
-      prioritySupportUntilIso
-    )
-  );
-  const prioritySupportCardState: PrioritySupportCardState = prioritySupportCovered
-    ? prioritySupportRow && !prioritySupportRow.cancel_at_period_end
-      ? "renewing"
-      : "winding_down"
-    : prioritySupportUntilIso
-      ? "lapsed"
-      : "none";
+  const prioritySupportCardState = resolvePrioritySupportCardState({
+    subscription: prioritySupportRow,
+    tier: (business as { tier?: string | null } | null)?.tier,
+    prioritySupportUntilIso
+  });
   const prioritySupportCoverageLabel =
     prioritySupportUntilIso && prioritySupportCardState !== "none"
       ? new Date(prioritySupportUntilIso).toLocaleDateString(

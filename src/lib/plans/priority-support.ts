@@ -132,6 +132,45 @@ export function prioritySupportStatus(
   return daysLeft <= PRIORITY_SUPPORT_LOW_DAYS_THRESHOLD ? "expiring_soon" : "active";
 }
 
+/**
+ * What the Dashboard billing card should render.
+ *
+ * The precedence is the whole point, and it has bitten twice:
+ *
+ * - A live subscription row WINS over the coverage window. A tenant whose
+ *   subscription is renewing is being charged $400/month right now, so Cancel
+ *   has to be reachable even if `priority_support_until` is missing or stale
+ *   (a lost `invoice.paid`, or the gap before the first stamp). Deciding from
+ *   coverage alone leaves them billed with no self-serve way to stop.
+ * - With NO row, the coverage window still decides. An admin comp, a
+ *   white-glove rider, or the period already paid for after cancelling are all
+ *   real coverage; reading those as lapsed tells a covered tenant their
+ *   support has ended and offers to sell it back to them.
+ *
+ * Enterprise is not modeled here: the billing page hides the card for them
+ * entirely, since their window is permanent and included.
+ */
+export type PrioritySupportCardState = "none" | "renewing" | "winding_down" | "lapsed";
+
+export function prioritySupportCardState(input: {
+  /** The tenant's live subscription row, if any. */
+  subscription: { cancel_at_period_end: boolean } | null;
+  tier: PlanTier | string | null | undefined;
+  prioritySupportUntilIso: string | null | undefined;
+  now?: Date;
+}): PrioritySupportCardState {
+  if (input.subscription) {
+    return input.subscription.cancel_at_period_end ? "winding_down" : "renewing";
+  }
+  const status = prioritySupportStatus(
+    input.tier,
+    input.prioritySupportUntilIso,
+    input.now ?? new Date()
+  );
+  if (prioritySupportStatusIsCovered(status)) return "winding_down";
+  return input.prioritySupportUntilIso ? "lapsed" : "none";
+}
+
 /** True when the status means the tenant currently HAS priority support. */
 export function prioritySupportStatusIsCovered(status: PrioritySupportStatus): boolean {
   return status === "permanent" || status === "active" || status === "expiring_soon";

@@ -117,6 +117,19 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessOwnerEmailIfPending: vi.fn().mockResolvedValue(true)
 }));
 
+const { mockDisableAutoReloadForBusiness } = vi.hoisted(() => ({
+  mockDisableAutoReloadForBusiness: vi.fn().mockResolvedValue(0)
+}));
+
+// Dynamically imported inside the handler; vi.mock still intercepts it.
+vi.mock("@/lib/db/auto-reload", () => ({
+  disableAutoReloadForBusiness: mockDisableAutoReloadForBusiness,
+  disableAutoReloadForBusinessesByPaymentMethod: vi.fn().mockResolvedValue(0),
+  saveAutoReloadCard: vi.fn().mockResolvedValue(undefined),
+  reenableAutoReloadAfterCardAuthorized: vi.fn().mockResolvedValue(0),
+  clawbackAutoReloadGrantForCharge: vi.fn().mockResolvedValue(false)
+}));
+
 vi.mock("@/lib/db/priority-support", () => ({
   getLivePrioritySupportSubscription: vi.fn().mockResolvedValue(null),
   recordPrioritySupportSubscription: vi.fn(),
@@ -254,6 +267,13 @@ import {
 describe("stripe webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS but keeps implementations, so a
+    // `mockResolvedValue` set by one test leaks into every later one. That
+    // matters for `getSubscription`: the subscription.deleted handler reads it
+    // to tell a plan change from a real cancellation, so a leaked active row
+    // would silently make later tests take the plan-change path. Reset it to a
+    // known state and let each test opt in.
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
     mockVoiceBonusRpc.mockClear();
     mockVoiceBonusRpc.mockImplementation((name: string) => {
       if (name === "apply_voice_bonus_grant_from_checkout") {
@@ -3299,12 +3319,16 @@ describe("stripe webhook route", () => {
   });
 
   it("short-circuits customer.subscription.deleted fallback for already-finalized upgrade_switch rows", async () => {
-    // The change-plan orchestrator finalizes the old subscription row
-    // inline (status=canceled, cancel_reason=upgrade_switch) BEFORE
-    // calling Stripe cancel, which triggers this webhook. The fallback
-    // mirror below would otherwise race the orchestrator's own write
-    // and re-stamp `stripe_subscription_cached_at`. Assert we skip the
-    // mirror entirely in that case.
+    // Late or replayed delivery: the change-plan orchestrator has already
+    // stamped the old row (status=canceled, cancel_reason=upgrade_switch) at
+    // its step 8. The fallback mirror would otherwise race the orchestrator's
+    // own write and re-stamp `stripe_subscription_cached_at`, so we skip it.
+    //
+    // NOTE: this is NOT the common case. The orchestrator cancels in Stripe at
+    // step 6 and stamps the row at step 8, so the webhook usually arrives
+    // while the row still looks active. That case is covered by
+    // "treats a plan change as a switch even before the orchestrator stamps
+    // the row" below, and is why the check also reads the replacement row.
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_change_sub",
       business_id: "biz_change",
@@ -3336,7 +3360,7 @@ describe("stripe webhook route", () => {
     expect(response.status).toBe(200);
     expect(updateSubscription).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
-      "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
+      "customer.subscription.deleted: skipping fallback mirror for a plan change",
       expect.objectContaining({
         businessId: "biz_change",
         subscriptionId: "old_change_sub"
@@ -3985,5 +4009,148 @@ describe("stripe webhook route: priority support add-on", () => {
     await fire();
 
     expect(terminatePrioritySupport).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A plan change cancels the OLD Stripe subscription and builds a new one, so
+ * `customer.subscription.deleted` fires for a tenant who is still active. The
+ * orchestrator cancels in Stripe at step 6 and only stamps the old row
+ * `upgrade_switch` at step 8, with the slow box teardown in between, so the
+ * webhook normally lands while the row still looks active. Anything in that
+ * handler that tears down tenant state has to survive that window.
+ */
+describe("stripe webhook route: plan change vs real cancellation", () => {
+  const DELETED = {
+    id: "evt_old_sub_deleted",
+    type: "customer.subscription.deleted",
+    data: { object: { id: "sub_old", metadata: { businessId: "biz_switch" } } }
+  };
+
+  const OLD_ROW_MID_ORCHESTRATION = {
+    id: "old_row",
+    business_id: "biz_switch",
+    // Step 8 has NOT run yet: the row still looks completely live.
+    status: "active",
+    cancel_reason: null,
+    cancel_at_period_end: false,
+    grace_ends_at: null,
+    wiped_at: null,
+    canceled_at: null
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
+    vi.mocked(verifyWebhook).mockReturnValue(DELETED as never);
+  });
+
+  async function fire() {
+    return POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+  }
+
+  it("does NOT disable auto-reload on a plan change, even before the row is stamped", async () => {
+    // The bug: `disableAutoReloadForBusiness` fired unconditionally, and
+    // nothing ever re-enables those rules, so every upgrade or downgrade
+    // silently stopped the tenant's top-ups.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    // Step 5 already created the replacement, which is the signal that works
+    // regardless of how steps 6 and 8 interleave with webhook delivery.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    const response = await fire();
+
+    expect(response.status).toBe(200);
+    expect(mockDisableAutoReloadForBusiness).not.toHaveBeenCalled();
+    expect(terminatePrioritySupport).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("DOES disable auto-reload on a real cancellation", async () => {
+    // The newest row is the one being deleted, so there is no replacement and
+    // the tenant really is leaving.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      ...OLD_ROW_MID_ORCHESTRATION,
+      status: "canceled",
+      cancel_reason: "customer_request"
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "old_row",
+      business_id: "biz_switch",
+      status: "canceled",
+      stripe_subscription_id: "sub_old"
+    } as never);
+
+    await fire();
+
+    expect(mockDisableAutoReloadForBusiness).toHaveBeenCalledWith(
+      "biz_switch",
+      "subscription_canceled"
+    );
+    expect(terminatePrioritySupport).toHaveBeenCalledWith("biz_switch");
+  });
+
+  it("treats a plan change as a switch even before the orchestrator stamps the row", async () => {
+    // Same window as the auto-reload case, asserted on the fallback mirror:
+    // the old row must not be re-stamped or given a grace deadline.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    await fire();
+
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      "customer.subscription.deleted: plan change, skipping tenant teardown",
+      expect.objectContaining({ businessId: "biz_switch" })
+    );
+  });
+
+  it("still disables auto-reload when the replacement never became active", async () => {
+    // A change-plan that failed before step 5, or a signup row stuck pending:
+    // no live replacement, so this is a real teardown.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "pending",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    await fire();
+
+    expect(mockDisableAutoReloadForBusiness).toHaveBeenCalled();
+  });
+
+  it("keeps the teardown non-fatal when the auto-reload disable throws", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
+    mockDisableAutoReloadForBusiness.mockRejectedValueOnce(new Error("rpc down"));
+
+    expect((await fire()).status).toBe(200);
+    expect(terminatePrioritySupport).toHaveBeenCalled();
   });
 });

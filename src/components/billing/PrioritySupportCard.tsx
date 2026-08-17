@@ -22,7 +22,7 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
-export type PrioritySupportCardState = "none" | "renewing" | "winding_down" | "lapsed";
+import type { PrioritySupportCardState } from "@/lib/plans/priority-support";
 
 type Props = {
   state: PrioritySupportCardState;
