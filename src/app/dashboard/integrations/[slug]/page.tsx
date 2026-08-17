@@ -14,6 +14,7 @@ import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrat
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
 import { WhatsAppIntegrationCard } from "@/components/dashboard/WhatsAppIntegrationCard";
+import { GoogleMeetToggle } from "@/components/dashboard/GoogleMeetToggle";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
@@ -101,6 +102,14 @@ function IntegrationBody({
               cap={workspaceCap(ctx)}
               connectBlocked={blocked}
             />
+            {/* Only with a Google account on file: Meet rides that grant, so
+                the switch has nothing to act on before one exists. */}
+            {rows.length > 0 ? (
+              <GoogleMeetToggle
+                businessId={businessId}
+                initialEnabled={ctx.googleMeetEnabled}
+              />
+            ) : null}
           </div>
         </IntegrationCard>
       );

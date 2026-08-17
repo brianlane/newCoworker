@@ -46,7 +46,12 @@ vi.mock("@/lib/booking-page/busy-cache", () => ({
   saveBusyCache: vi.fn()
 }));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
-vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
+vi.mock("@/lib/db/businesses", () => ({
+  getBusiness: vi.fn(),
+  // Off by default, matching the column default: the videoCall cases below
+  // opt in explicitly.
+  isGoogleMeetEnabled: vi.fn(async () => false)
+}));
 vi.mock("@/lib/db/employees", () => ({
   listTeamMembers: vi.fn(),
   listTimeOff: vi.fn(),
@@ -111,7 +116,7 @@ import {
   getWorkspaceBusyBlocks
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, isGoogleMeetEnabled } from "@/lib/db/businesses";
 import { listTeamMembers, listTimeOff, markMemberOffered } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
@@ -201,6 +206,7 @@ const mockBusy = vi.mocked(getWorkspaceBusyBlocks);
 const mockCaldav = vi.mocked(getCaldavBusyBlocks);
 const mockBusiness = vi.mocked(getBusiness);
 const mockZoom = vi.mocked(getActiveZoomConnectionId);
+const mockMeetEnabled = vi.mocked(isGoogleMeetEnabled);
 const mockBook = vi.mocked(bookCalendarAppointment);
 const mockCapture = vi.mocked(ensureCapturedContact);
 const mockMembers = vi.mocked(listTeamMembers);
@@ -346,6 +352,40 @@ describe("getBookingPageContext", () => {
     expect(fallback).toMatchObject({
       ok: true,
       context: { videoCall: false, timezone: "UTC" }
+    });
+  });
+
+  it("promises a video call on Google Meet alone, with no Zoom connected", async () => {
+    mockZoom.mockResolvedValueOnce(null);
+    mockMeetEnabled.mockResolvedValueOnce(true);
+    mockConn.mockResolvedValueOnce({ provider: "google" } as never);
+    expect(await getBookingPageContext(TOKEN)).toMatchObject({
+      ok: true,
+      context: { videoCall: true, mode: "provider" }
+    });
+  });
+
+  it("promises nothing in platform mode, where no event can carry a Meet link", async () => {
+    // Platform mode is precisely the no-calendar case: the ledger is the
+    // calendar of record and the booking gets a synthetic `platform:<uuid>`
+    // id, so there is no Google event a conference could live on. The flag
+    // must not promise a video call the page cannot produce.
+    mockZoom.mockResolvedValueOnce(null);
+    mockMeetEnabled.mockResolvedValueOnce(true);
+    mockConn.mockResolvedValueOnce(null);
+    expect(await getBookingPageContext(TOKEN)).toMatchObject({
+      ok: true,
+      context: { videoCall: false, mode: "platform" }
+    });
+  });
+
+  it("promises nothing on a Microsoft calendar, which cannot host a Meet conference", async () => {
+    mockZoom.mockResolvedValueOnce(null);
+    mockMeetEnabled.mockResolvedValueOnce(true);
+    mockConn.mockResolvedValueOnce({ provider: "microsoft" } as never);
+    expect(await getBookingPageContext(TOKEN)).toMatchObject({
+      ok: true,
+      context: { videoCall: false }
     });
   });
 });
@@ -775,7 +815,7 @@ describe("submitPublicBooking", () => {
       data: {
         eventId: "evt-1",
         startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-        zoomJoinUrl: "https://zoom.example/j/1"
+        videoJoinUrl: "https://zoom.example/j/1"
       }
     });
   });
@@ -840,7 +880,7 @@ describe("submitPublicBooking", () => {
       startIso: "2026-01-05T16:00:00.000Z",
       endIso: "2026-01-05T16:30:00.000Z",
       startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-      zoomJoinUrl: null,
+      videoJoinUrl: null,
       // A retry must not mint a SECOND manage token: the first
       // confirmation already carried the link to this booking.
       manageLink: null
@@ -1569,7 +1609,7 @@ describe("submitPublicBooking", () => {
       startIso: "2026-01-05T16:00:00.000Z",
       endIso: "2026-01-05T16:30:00.000Z",
       startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-      zoomJoinUrl: "https://zoom.example/j/1",
+      videoJoinUrl: "https://zoom.example/j/1",
       // Self-serve reschedule/cancel for this booking, stamped onto the
       // ledger row the core wrote.
       manageLink: expect.stringMatching(/^\/book\/manage\/ncbm_[0-9a-f]{64}$/)
@@ -1612,7 +1652,7 @@ describe("submitPublicBooking", () => {
   it("omits the note line when empty and nulls missing booking-core extras", async () => {
     mockBook.mockResolvedValueOnce({ ok: true, data: { eventId: "evt-2" } });
     const out = await submitPublicBooking(TOKEN, { ...VALID, note: "  " });
-    expect(out).toMatchObject({ ok: true, startLocal: null, zoomJoinUrl: null });
+    expect(out).toMatchObject({ ok: true, startLocal: null, videoJoinUrl: null });
     const args = mockBook.mock.calls[0][1];
     expect(args.notes).not.toContain("Note:");
   });
@@ -1622,7 +1662,7 @@ describe("submitPublicBooking", () => {
     const { note: _unused, ...noNote } = VALID;
     void _unused;
     const out = await submitPublicBooking(TOKEN, noNote);
-    expect(out).toMatchObject({ ok: true, startLocal: null, zoomJoinUrl: null });
+    expect(out).toMatchObject({ ok: true, startLocal: null, videoJoinUrl: null });
     const args = mockBook.mock.calls[0][1];
     expect(args.notes).not.toContain("Note:");
   });
@@ -1666,7 +1706,7 @@ describe("submitPublicBooking", () => {
         startIso: "2026-01-05T16:00:00.000Z",
         endIso: "2026-01-05T16:30:00.000Z",
         startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-        zoomJoinUrl: "https://zoom.example/j/9",
+        videoJoinUrl: "https://zoom.example/j/9",
         manageLink: expect.stringMatching(/^\/book\/manage\/ncbm_[0-9a-f]{64}$/)
       });
       expect(mockBook).not.toHaveBeenCalled();
@@ -1792,7 +1832,7 @@ describe("submitPublicBooking", () => {
       const { note: _unused, ...noNote } = VALID;
       void _unused;
       const out = await submitPublicBooking(TOKEN, noNote);
-      expect(out).toMatchObject({ ok: true, zoomJoinUrl: null });
+      expect(out).toMatchObject({ ok: true, videoJoinUrl: null });
       expect(mockZoomCreate).toHaveBeenCalledWith(
         BIZ,
         expect.objectContaining({ agenda: undefined })

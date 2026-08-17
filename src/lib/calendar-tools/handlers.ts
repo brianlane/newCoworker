@@ -1,6 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
-import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
-import { getBusinessTimezone } from "@/lib/db/businesses";
+import {
+  workspaceProxyForBusiness,
+  workspaceProxyStatusForBusiness
+} from "@/lib/workspace/proxy";
+import { getBusinessTimezone, isGoogleMeetEnabled } from "@/lib/db/businesses";
+import {
+  buildMeetConferenceRequest,
+  MEET_CONFERENCE_DATA_VERSION,
+  resolveMeetJoinUrl
+} from "@/lib/google/meet";
 import {
   ensureSharedCalendar,
   getSharedCalendar,
@@ -884,7 +893,13 @@ export async function bookCalendarAppointment(
 
   if (claim?.kind === "claimed") {
     const booked = result.data as
-      | { eventId?: unknown; zoomMeetingId?: unknown; provider?: unknown }
+      | {
+          eventId?: unknown;
+          zoomMeetingId?: unknown;
+          provider?: unknown;
+          videoJoinUrl?: unknown;
+          videoProvider?: unknown;
+        }
       | undefined;
     const bookedEventId = booked?.eventId;
     if (result.ok && typeof bookedEventId === "string" && bookedEventId.length > 0) {
@@ -906,12 +921,17 @@ export async function bookCalendarAppointment(
         attendeeEmail: args.attendeeEmail ?? null,
         notes: args.notes ?? null
       });
-      await confirmBookingDedupe(
-        claim.id,
-        bookedEventId,
-        typeof booked?.zoomMeetingId === "string" ? booked.zoomMeetingId : null,
-        mirrorEventId
-      );
+      await confirmBookingDedupe(claim.id, bookedEventId, {
+        zoomMeetingId: typeof booked?.zoomMeetingId === "string" ? booked.zoomMeetingId : null,
+        sharedCalendarEventId: mirrorEventId,
+        // Gated on the provider, not just on the URL being present: this
+        // column is Meet-only by design, and a Zoom URL landing in it would
+        // make reminders quote a link that never gets its live `?pwd=`.
+        meetJoinUrl:
+          booked?.videoProvider === "google_meet" && typeof booked.videoJoinUrl === "string"
+            ? booked.videoJoinUrl
+            : null
+      });
     } else {
       await releaseBookingDedupe(claim.id);
     }
@@ -1036,9 +1056,35 @@ async function bookOnProvider(
     });
     orphanZoomMeetingId = zoomMeeting?.meetingId ?? null;
     const zoomLine = zoomMeeting ? `Video call (Zoom): ${zoomMeeting.joinUrl}` : "";
-    const zoomData = zoomMeeting
-      ? { zoomMeetingId: zoomMeeting.meetingId, zoomJoinUrl: zoomMeeting.joinUrl }
-      : {};
+
+    // Google Meet is the FALLBACK video option, never a second link. It is
+    // considered only when Zoom produced nothing, which is the whole of the
+    // precedence rule: Zoom already ran just above, so "Zoom wins" falls out
+    // of the ordering with no resolver to keep in step.
+    //
+    // Google only, because a Meet link is a property of a Google Calendar
+    // event (see src/lib/google/meet.ts). Microsoft and CalDAV have no event
+    // that could carry one, and reaching them would mean the Meet REST API
+    // and a new sensitive OAuth scope, which src/lib/google/workspace-scopes.ts
+    // documents as a fresh verification event rather than a code change.
+    const wantsMeet =
+      zoomMeeting === null &&
+      conn.provider === "google" &&
+      (await isGoogleMeetEnabled(businessId));
+
+    // Whichever provider ends up supplying the link. Zoom's is known now;
+    // Meet's cannot be, because it does not exist until the Google insert
+    // responds, so the Google branch fills these in.
+    let videoJoinUrl: string | null = zoomMeeting?.joinUrl ?? null;
+    let videoProvider: "zoom" | "google_meet" | null = zoomMeeting ? "zoom" : null;
+    // Read at each return site rather than captured once, for that reason.
+    const videoData = (): Record<string, unknown> => ({
+      // The Zoom lifecycle handle. Never carries a Meet value: a Meet
+      // booking has nothing to move or delete, and every consumer of this
+      // field calls the Zoom API with it.
+      ...(zoomMeeting ? { zoomMeetingId: zoomMeeting.meetingId } : {}),
+      ...(videoJoinUrl && videoProvider ? { videoJoinUrl, videoProvider } : {})
+    });
 
     if (conn.provider === "caldav") {
       // Real booking on the owner's CalDAV calendar (direct, no Nango).
@@ -1074,7 +1120,11 @@ async function bookOnProvider(
           // CalDAV events carry the attendee in the description only — the
           // server emails nobody. Explicit null so the model never promises
           // an invite on this provider.
-          data: { ...(caldavResult.data as Record<string, unknown>), inviteEmail: null, ...zoomData }
+          data: {
+            ...(caldavResult.data as Record<string, unknown>),
+            inviteEmail: null,
+            ...videoData()
+          }
         };
       }
       if (zoomMeeting) {
@@ -1125,23 +1175,71 @@ async function bookOnProvider(
       : "/v1.0/me/events";
 
     if (conn.provider === "google") {
-      const res = await workspaceProxyForBusiness(
-        businessId,
-        { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-        {
+      const googleLink = {
+        connectionId: conn.connectionId,
+        providerConfigKey: conn.providerConfigKey
+      };
+      const googleEvent = {
+        summary: args.summary,
+        description,
+        start: { dateTime: startInstant.toISOString(), timeZone: eventTimezone },
+        end: { dateTime: endInstant.toISOString(), timeZone: eventTimezone },
+        attendees: args.attendeeEmail
+          ? [{ email: args.attendeeEmail, displayName: args.attendeeName }]
+          : undefined
+      };
+
+      let res: Awaited<ReturnType<typeof workspaceProxyForBusiness>>;
+      if (wantsMeet) {
+        // Asking for the conference is NOT a separate best-effort call: it
+        // rides the very request that creates the appointment. Google
+        // answers 400 ("Invalid conference type value") when the target
+        // calendar does not allow hangoutsMeet — and secondary calendars,
+        // which is what ensureSharedCalendar creates, do not reliably
+        // advertise it, least of all on a personal @gmail account. Sent
+        // naively, a tenant whose calendar refuses Meet would lose the
+        // BOOKING, not just the video link.
+        //
+        // So this one goes through the status-returning proxy. ONLY a 4xx is
+        // safe to retry: a client refusal means Google created nothing, so
+        // the insert can be repeated once with no conference at all.
+        //
+        // A 5xx is NOT safe and is deliberately not retried. Google may have
+        // created the event and then failed to say so, and a blind second
+        // insert would book the slot twice. It is treated exactly like a
+        // failure with no status at all (timeout, socket reset, which
+        // `workspaceProxyStatusForBusiness` re-throws on its own): the
+        // booking reports failure rather than risking a duplicate.
+        const meetRes = await workspaceProxyStatusForBusiness(businessId, googleLink, {
           endpoint: googleCalendarPath,
           method: "POST",
-          data: {
-            summary: args.summary,
-            description,
-            start: { dateTime: startInstant.toISOString(), timeZone: eventTimezone },
-            end: { dateTime: endInstant.toISOString(), timeZone: eventTimezone },
-            attendees: args.attendeeEmail
-              ? [{ email: args.attendeeEmail, displayName: args.attendeeName }]
-              : undefined
-          }
+          params: { conferenceDataVersion: MEET_CONFERENCE_DATA_VERSION },
+          data: { ...googleEvent, conferenceData: buildMeetConferenceRequest(randomUUID()) }
+        });
+        if (meetRes && meetRes.status >= 500) {
+          throw new Error(`google event insert failed (${meetRes.status})`);
         }
-      );
+        if (meetRes && meetRes.status >= 400) {
+          logger.warn("google meet conference refused; rebooking without it", {
+            businessId,
+            status: meetRes.status
+          });
+          res = await workspaceProxyForBusiness(businessId, googleLink, {
+            endpoint: googleCalendarPath,
+            method: "POST",
+            data: googleEvent
+          });
+        } else {
+          res = meetRes;
+        }
+      } else {
+        res = await workspaceProxyForBusiness(businessId, googleLink, {
+          endpoint: googleCalendarPath,
+          method: "POST",
+          data: googleEvent
+        });
+      }
+
       if (!res) {
         if (zoomMeeting) {
           await deleteZoomMeetingForBooking(businessId, zoomMeeting.meetingId);
@@ -1152,6 +1250,31 @@ async function bookOnProvider(
       const data = res.data as { id?: string; htmlLink?: string };
       eventId = data?.id ?? null;
       htmlLink = data?.htmlLink ?? null;
+
+      // The conference may still be provisioning, in which case the insert
+      // response carries no link yet. One re-read, never a loop: the
+      // appointment is already booked and the only thing still at stake is
+      // whether the confirmation can quote a link, which is not worth making
+      // a caller (a live phone call, often) wait on a poll.
+      const createdId = eventId;
+      if (wantsMeet && createdId) {
+        videoJoinUrl = await resolveMeetJoinUrl(res.data, async () => {
+          const reread = await workspaceProxyForBusiness(businessId, googleLink, {
+            endpoint: `${googleCalendarPath}/${encodeURIComponent(createdId)}`,
+            method: "GET",
+            params: { conferenceDataVersion: MEET_CONFERENCE_DATA_VERSION }
+          });
+          return reread?.data ?? null;
+        });
+        if (videoJoinUrl) {
+          videoProvider = "google_meet";
+        } else {
+          logger.warn("google meet link unavailable; booking proceeds without", {
+            businessId,
+            eventId: createdId
+          });
+        }
+      }
     } else {
       const res = await workspaceProxyForBusiness(
         businessId,
@@ -1221,7 +1344,7 @@ async function bookOnProvider(
         // emails an invitation ONLY when the event has an attendee. The
         // model must not promise an invite when this is null.
         inviteEmail: eventId ? args.attendeeEmail?.trim() || null : null,
-        ...(eventId ? zoomData : {})
+        ...(eventId ? videoData() : {})
       }
     };
   } catch (err) {

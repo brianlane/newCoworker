@@ -175,7 +175,8 @@ describe("Beth's reply books Liz (live model, real email surface block)", () => 
             ok: true,
             eventId: "e2e-evt-liz",
             inviteEmail: args.attendeeEmail ?? null,
-            zoomJoinUrl: ZOOM_URL,
+            videoJoinUrl: ZOOM_URL,
+            videoProvider: "zoom",
             startLocal: "Monday, July 27, 2026 at 9:00 AM MST"
           };
         }
@@ -346,7 +347,8 @@ describe("Beth's reschedule reply moves the appointment (live model)", () => {
               ok: true,
               eventId: "e2e-evt-liz",
               startLocal: "Wednesday, July 29, 2026 at 9:00 AM MST",
-              zoomJoinUrl: ZOOM_URL
+              videoJoinUrl: ZOOM_URL,
+              videoProvider: "zoom"
             };
           }
           return { ok: false, message: `unexpected tool on the email surface: ${name}` };

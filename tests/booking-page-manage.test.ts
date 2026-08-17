@@ -107,6 +107,7 @@ function row(over: Record<string, unknown> = {}) {
     start_at: FUTURE,
     event_id: "evt-google-1",
     zoom_meeting_id: null,
+    meet_join_url: null,
     duration_minutes: 30,
     ...over
   } as never;
@@ -161,13 +162,21 @@ describe("getManagedBooking", () => {
         timezone: "America/Phoenix",
         startIso: FUTURE,
         durationMinutes: 30,
-        zoomJoinUrl: "https://zoom.us/j/93412345678?pwd=secret",
+        videoJoinUrl: "https://zoom.us/j/93412345678?pwd=secret",
         changeable: true,
         past: false,
         minNoticeMinutes: 120,
         bookingPageUrl: "http://localhost:3000/book/newcoworker"
       }
     });
+  });
+
+  it("serves a stored Meet link as-is, with no provider call", async () => {
+    const meetUrl = "https://meet.google.com/abc-defg-hij";
+    mockRow.mockResolvedValue(row({ meet_join_url: meetUrl }));
+    const out = await getManagedBooking(TOKEN);
+    expect(mockZoomJoinUrl).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ ok: true, view: { videoJoinUrl: meetUrl } });
   });
 
   it("prefers the vanity slug over the raw page token for the rebook URL", async () => {

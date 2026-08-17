@@ -85,6 +85,14 @@ export type BusinessRow = {
   /** Free-form street address shown to customers (Settings → Business profile). */
   address?: string | null;
   /**
+   * Owner opt-in: attach a Google Meet link to appointments booked onto a
+   * connected Google Calendar. Default false, because Google is already
+   * connected for mail and calendar by tenants who never asked for video.
+   * Zoom wins when a zoom_connections row is active, so this only decides
+   * the no-Zoom case. See src/lib/google/meet.ts.
+   */
+  google_meet_enabled?: boolean;
+  /**
    * Per-day open/close windows (Settings → Business profile). Shape is
    * validated app-side — see src/lib/business-profile/profile.ts. Rendered
    * into business_configs.profile_md for prompt composition.
@@ -252,6 +260,42 @@ export async function updateBusinessWebsiteUrl(
     .update({ website_url: websiteUrl })
     .eq("id", id);
   if (error) throw new Error(`updateBusinessWebsiteUrl: ${error.message}`);
+}
+
+/**
+ * Whether this tenant wants a Google Meet link on Google-calendar bookings.
+ *
+ * Fails CLOSED: an unreadable row answers false, so a DB hiccup degrades to
+ * "book without a video link" rather than sending `conferenceData` on a
+ * tenant who never opted in. That is the same direction the whole Meet path
+ * degrades in, and the cheap column read keeps it off the booking hot path's
+ * critical failure surface.
+ */
+export async function isGoogleMeetEnabled(
+  id: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("google_meet_enabled")
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data) return false;
+  return (data as { google_meet_enabled?: unknown }).google_meet_enabled === true;
+}
+
+export async function updateGoogleMeetEnabled(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ google_meet_enabled: enabled })
+    .eq("id", id);
+  if (error) throw new Error(`updateGoogleMeetEnabled: ${error.message}`);
 }
 
 export async function getBusiness(id: string, client?: SupabaseClient): Promise<BusinessRow | null> {

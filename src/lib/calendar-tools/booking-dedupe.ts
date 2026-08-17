@@ -170,12 +170,29 @@ const CONFIRM_RETRY_DELAY_MS = 250;
  * working moments, at which point duplicate suppression is best-effort by
  * the module's fail-open contract.
  */
+export type ConfirmBookingExtras = {
+  /**
+   * Zoom's lifecycle handle, so reschedule/cancel can move and delete the
+   * meeting. Never a Meet value: a Meet conference belongs to the calendar
+   * event and has nothing to call.
+   */
+  zoomMeetingId?: string | null;
+  /** Mirror event on the shared "NewCoworker" calendar. */
+  sharedCalendarEventId?: string | null;
+  /** Google Meet join URL, stored outright because it has no lifecycle. */
+  meetJoinUrl?: string | null;
+};
+
 export async function confirmBookingDedupe(
   claimId: string,
   eventId: string,
-  zoomMeetingId?: string | null,
-  sharedCalendarEventId?: string | null
+  // An options bag rather than more positional arguments: three
+  // interchangeable trailing `string | null`s is a call site nobody can read,
+  // and transposing two of them would write a Zoom id into the mirror column
+  // without a type error.
+  extras: ConfirmBookingExtras = {}
 ): Promise<void> {
+  const { zoomMeetingId, sharedCalendarEventId, meetJoinUrl } = extras;
   for (let attempt = 1; attempt <= CONFIRM_MAX_ATTEMPTS; attempt += 1) {
     try {
       const supabase = await createSupabaseServiceClient();
@@ -191,7 +208,12 @@ export async function confirmBookingDedupe(
           // represents, and the team acts on an event that is not happening.
           ...(sharedCalendarEventId
             ? { shared_calendar_event_id: sharedCalendarEventId }
-            : {})
+            : {}),
+          // The Meet link rides here for a different reason than the two
+          // above: not to be called later, but to be QUOTED later. Reminders
+          // and the manage page need the URL, and unlike Zoom there is no
+          // handle to re-read it from.
+          ...(meetJoinUrl ? { meet_join_url: meetJoinUrl } : {})
         })
         .eq("id", claimId);
       if (!error) return;

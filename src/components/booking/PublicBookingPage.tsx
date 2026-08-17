@@ -50,7 +50,7 @@ export type PublicBookingStrings = {
   bookedBody: string;
   bookedBodyNoInvite: string;
   bookedVideoNote: string;
-  bookedZoomLinkLabel: string;
+  bookedVideoLinkLabel: string;
   bookedManageLinkLabel: string;
   poweredBy: string;
   weekdaysShort: string[];
@@ -82,7 +82,7 @@ type Slot = { startIso: string; endIso: string };
 type BookedState = {
   startLocal: string | null;
   startIso: string;
-  zoomJoinUrl: string | null;
+  videoJoinUrl: string | null;
   /** Self-serve reschedule/cancel path for this booking, when it has one. */
   manageLink: string | null;
 };
@@ -286,7 +286,7 @@ export function PublicBookingPage({
       setBooked({
         startLocal: body.data.startLocal ?? null,
         startIso: body.data.startIso,
-        zoomJoinUrl: body.data.zoomJoinUrl ?? null,
+        videoJoinUrl: body.data.videoJoinUrl ?? null,
         manageLink: body.data.manageLink ?? null
       });
     } catch {
@@ -324,17 +324,17 @@ export function PublicBookingPage({
         <p className="mt-4 rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
           {localLine}
         </p>
-        {booked.zoomJoinUrl ? (
+        {booked.videoJoinUrl ? (
           <div className="mt-3 space-y-2">
             {/* No invite email in platform mode: the join link must live
                 on this screen, so it renders as a real anchor. */}
             <a
-              href={booked.zoomJoinUrl}
+              href={booked.videoJoinUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block rounded-md border border-claw-green/50 px-4 py-2 text-sm text-claw-green hover:bg-claw-green/10"
             >
-              {strings.bookedZoomLinkLabel}
+              {strings.bookedVideoLinkLabel}
             </a>
             {sendsInvite ? (
               <p className="text-sm text-parchment/60">{strings.bookedVideoNote}</p>

@@ -512,7 +512,8 @@ describe("Third-party booking: the attendee is who the meeting is FOR", () => {
               ok: true,
               eventId: "e2e-evt-liz",
               inviteEmail: args.attendeeEmail ?? null,
-              zoomJoinUrl: "https://zoom.example.com/j/93412345678",
+              videoJoinUrl: "https://zoom.example.com/j/93412345678",
+              videoProvider: "zoom",
               startLocal: "Monday, July 27, 2026 at 9:00 AM MST"
             };
           }

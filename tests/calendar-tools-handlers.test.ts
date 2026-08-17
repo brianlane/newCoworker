@@ -6,8 +6,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
-vi.mock("@/lib/workspace/proxy", () => ({ workspaceProxyForBusiness: vi.fn() }));
-vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
+vi.mock("@/lib/workspace/proxy", () => ({
+  workspaceProxyForBusiness: vi.fn(),
+  workspaceProxyStatusForBusiness: vi.fn()
+}));
+// Meet defaults OFF here, matching the column default, so every pre-existing
+// Google booking assertion in this file keeps describing a Meet-free insert.
+// The Meet cases below opt in explicitly.
+vi.mock("@/lib/db/businesses", () => ({
+  getBusinessTimezone: vi.fn(),
+  isGoogleMeetEnabled: vi.fn(async () => false)
+}));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
   mirrorBookingToSharedCalendar: vi.fn(async () => null),
   getSharedCalendar: vi.fn(),
@@ -61,7 +70,11 @@ import {
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
-import { workspaceProxyForBusiness } from "@/lib/workspace/proxy";
+import {
+  workspaceProxyForBusiness,
+  workspaceProxyStatusForBusiness
+} from "@/lib/workspace/proxy";
+import { isGoogleMeetEnabled } from "@/lib/db/businesses";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import {
   ensureSharedCalendar,
@@ -1057,12 +1070,11 @@ describe("bookCalendarAppointment", () => {
       expect.objectContaining({ summary: ARGS.summary, attendeePhone: "+15551230000" })
     );
     // The handle rides the ledger row so reschedule/cancel can keep it in step.
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith(
-      "claim-9",
-      "appt-1",
-      null,
-      "mirror-1"
-    );
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-9", "appt-1", {
+      zoomMeetingId: null,
+      sharedCalendarEventId: "mirror-1",
+      meetJoinUrl: null
+    });
   });
 
   it("mirrors with the model's own attendee phone when it supplied one", async () => {
@@ -1554,7 +1566,11 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
     expect(result.ok).toBe(true);
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", null, null);
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", {
+      zoomMeetingId: null,
+      sharedCalendarEventId: null,
+      meetJoinUrl: null
+    });
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
   });
 
@@ -1624,9 +1640,14 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
     expect(result.data).toMatchObject({
       eventId: "ev-1",
       zoomMeetingId: "zm-1",
-      zoomJoinUrl: "https://zoom.us/j/123"
+      videoJoinUrl: "https://zoom.us/j/123",
+      videoProvider: "zoom"
     });
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", "zm-1", null);
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", {
+      zoomMeetingId: "zm-1",
+      sharedCalendarEventId: null,
+      meetJoinUrl: null
+    });
     expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
   });
 
@@ -1652,7 +1673,7 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
 
     expect(result.ok).toBe(true);
-    expect(result.data).not.toHaveProperty("zoomJoinUrl");
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
     expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
@@ -1701,7 +1722,8 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
     expect(result.data).toMatchObject({
       eventId: "ics-1",
       zoomMeetingId: "zm-1",
-      zoomJoinUrl: "https://zoom.us/j/123"
+      videoJoinUrl: "https://zoom.us/j/123",
+      videoProvider: "zoom"
     });
     expect(vi.mocked(fireGoalEvent)).toHaveBeenCalled();
     expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
@@ -2221,5 +2243,254 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
       .mockResolvedValueOnce(null as never);
 
     await expect(getWorkspaceBusyBlocks("biz", conn, windowStart, windowEnd)).resolves.toBeNull();
+  });
+});
+
+describe("bookCalendarAppointment — Google Meet decorator", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate call",
+    attendeeName: "Joe Plumber",
+    notes: "Kitchen sink"
+  };
+  const MEET_URL = "https://meet.google.com/abc-defg-hij";
+
+  /** Meet on, Zoom absent, a Google calendar: the only shape that asks. */
+  function meetTenant() {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
+    vi.mocked(isGoogleMeetEnabled).mockResolvedValue(true);
+  }
+
+  /** The conference request as it actually left for Google. */
+  function insertPayload() {
+    return vi.mocked(workspaceProxyStatusForBusiness).mock.calls[0][2] as {
+      params?: Record<string, string>;
+      data: { conferenceData?: unknown; description?: string };
+    };
+  }
+
+  it("asks for a conference and threads the link into the result and the ledger", async () => {
+    meetTenant();
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-1" });
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: { id: "ev-1", hangoutLink: MEET_URL }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    const payload = insertPayload();
+    expect(payload.params).toEqual({ conferenceDataVersion: "1" });
+    expect(payload.data.conferenceData).toMatchObject({
+      createRequest: { conferenceSolutionKey: { type: "hangoutsMeet" } }
+    });
+    expect(result.data).toMatchObject({
+      eventId: "ev-1",
+      videoJoinUrl: MEET_URL,
+      videoProvider: "google_meet"
+    });
+    // The Zoom lifecycle handle must stay empty: every reader of it calls the
+    // Zoom API, and a Meet conference has nothing to call.
+    expect(result.data).not.toHaveProperty("zoomMeetingId");
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", {
+      zoomMeetingId: null,
+      sharedCalendarEventId: null,
+      meetJoinUrl: MEET_URL
+    });
+  });
+
+  it("keeps the Meet URL out of the event description", async () => {
+    // Google renders its own join control on the event, and the link does
+    // not exist until the insert responds, so a description line would cost
+    // a second write for nothing.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: { id: "ev-1", hangoutLink: MEET_URL }
+    } as never);
+
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(insertPayload().data.description).not.toContain("meet.google.com");
+  });
+
+  it("lets Zoom win: a Zoom booking never asks for a conference", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(isGoogleMeetEnabled).mockResolvedValue(true);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue({
+      meetingId: "zm-1",
+      joinUrl: "https://zoom.us/j/123"
+    });
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(vi.mocked(workspaceProxyStatusForBusiness)).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({ videoProvider: "zoom" });
+  });
+
+  it("asks for nothing when the owner has not opted in", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
+    vi.mocked(isGoogleMeetEnabled).mockResolvedValue(false);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(vi.mocked(workspaceProxyStatusForBusiness)).not.toHaveBeenCalled();
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
+  });
+
+  it("never asks on Microsoft, whose event cannot carry a Meet conference", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
+    vi.mocked(isGoogleMeetEnabled).mockResolvedValue(true);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(vi.mocked(workspaceProxyStatusForBusiness)).not.toHaveBeenCalled();
+    // The provider check short-circuits before the DB read, so a Microsoft
+    // tenant never pays for the flag either.
+    expect(vi.mocked(isGoogleMeetEnabled)).not.toHaveBeenCalled();
+  });
+
+  it("re-books without the conference when Google refuses it, rather than losing the booking", async () => {
+    // The conference rides the SAME request that creates the appointment, so
+    // a calendar that does not allow hangoutsMeet would otherwise turn a
+    // best-effort video link into a lost booking.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 400,
+      data: { error: { message: "Invalid conference type value" } }
+    } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ eventId: "ev-1" });
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
+    const retry = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
+      params?: unknown;
+      data: { conferenceData?: unknown };
+    };
+    expect(retry.data.conferenceData).toBeUndefined();
+    expect(retry.params).toBeUndefined();
+  });
+
+  it("does NOT retry a 5xx, which may have created the event before failing", async () => {
+    // Only a 4xx proves Google created nothing. A 500 may have written the
+    // event and then failed to report it, so a blind second insert would
+    // book the slot twice. Same treatment as a statusless failure.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 503,
+      data: { error: { message: "Backend Error" } }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT retry a transport failure, which could double-book", async () => {
+    // A timeout may or may not have created the event. Retrying blind is how
+    // one caller ends up with two appointments in the same slot.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockRejectedValue(new Error("socket hang up"));
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("re-reads once for a still-pending conference", async () => {
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: {
+        id: "ev-1",
+        conferenceData: { createRequest: { status: { statusCode: "pending" } } }
+      }
+    } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { id: "ev-1", hangoutLink: MEET_URL }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.data).toMatchObject({ videoJoinUrl: MEET_URL, videoProvider: "google_meet" });
+    const reread = vi.mocked(workspaceProxyForBusiness).mock.calls[0][2] as {
+      endpoint: string;
+      method: string;
+    };
+    expect(reread.method).toBe("GET");
+    expect(reread.endpoint).toContain("/events/ev-1");
+  });
+
+  it("books anyway when the link never materializes", async () => {
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: {
+        id: "ev-1",
+        conferenceData: { createRequest: { status: { statusCode: "pending" } } }
+      }
+    } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ eventId: "ev-1" });
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
+  });
+
+  it("books anyway when the re-read finds no connection at all", async () => {
+    // The grant can be revoked between the insert and the re-read. The
+    // appointment is already on the calendar either way.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: {
+        id: "ev-1",
+        conferenceData: { createRequest: { status: { statusCode: "pending" } } }
+      }
+    } as never);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue(null as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ eventId: "ev-1" });
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
+  });
+
+  it("carries no link when the insert produced no event id", async () => {
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 200,
+      data: { hangoutLink: MEET_URL }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ eventId: null });
+    expect(result.data).not.toHaveProperty("videoJoinUrl");
+  });
+
+  it("reports calendar_not_connected when the Meet insert finds no connection", async () => {
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue(null as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
   });
 });

@@ -43,7 +43,7 @@ type Props = {
   timezone: string;
   startIso: string;
   durationMinutes: number;
-  zoomJoinUrl: string | null;
+  videoJoinUrl: string | null;
   changeable: boolean;
   past: boolean;
   /** Public booking page URL for the rebook link after cancel; null = plain text. */
@@ -58,7 +58,7 @@ export function ManageBookingPage({
   timezone,
   startIso,
   durationMinutes,
-  zoomJoinUrl,
+  videoJoinUrl,
   changeable,
   past,
   bookingPageUrl,
@@ -231,9 +231,9 @@ export function ManageBookingPage({
         <p className="mt-1 text-xs text-parchment/50">
           {durationMinutes} {strings.durationMinutes}
         </p>
-        {zoomJoinUrl ? (
+        {videoJoinUrl ? (
           <a
-            href={zoomJoinUrl}
+            href={videoJoinUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="mt-3 inline-block rounded-lg bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink"

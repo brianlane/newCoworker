@@ -447,7 +447,8 @@ describe("Liz pick + email turn (live model, real seed declarations)", () => {
               inviteEmail:
                 typeof args.attendeeEmail === "string" ? args.attendeeEmail : null,
               zoomMeetingId: "93412345678",
-              zoomJoinUrl: "https://zoom.example.com/j/93412345678",
+              videoJoinUrl: "https://zoom.example.com/j/93412345678",
+              videoProvider: "zoom",
               startLocal: PICKED_START_LOCAL
             }
           })

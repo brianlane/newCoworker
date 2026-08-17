@@ -45,6 +45,7 @@ type UpcomingRow = {
   attendee_key: string;
   start_at: string;
   zoom_meeting_id: string | null;
+  meet_join_url: string | null;
 };
 
 type LoadState = {
@@ -703,9 +704,13 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                 </span>
                 <span className="flex items-center gap-2 whitespace-nowrap text-parchment/60">
                   {new Date(b.start_at).toLocaleString()}
-                  {b.zoom_meeting_id ? (
+                  {/* Which video product, not merely that there is one: the
+                      owner joining the call needs to know which app opens.
+                      Mutually exclusive by construction, since a booking gets
+                      Zoom or Meet, never both. */}
+                  {b.zoom_meeting_id || b.meet_join_url ? (
                     <span className="rounded-full border border-claw-green/40 px-2 py-0.5 text-[10px] uppercase text-claw-green">
-                      {t("zoomBadge")}
+                      {b.zoom_meeting_id ? t("zoomBadge") : t("meetBadge")}
                     </span>
                   ) : null}
                 </span>
