@@ -96,10 +96,19 @@ function conditionLabel(c: TriggerCondition): string {
 }
 
 function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; heading?: string }) {
+  // Our own integrations ride the webhook channel, so a flow pinned to one of
+  // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
+  // this page — the generic label is for the channel PICKER, where the owner
+  // is choosing a channel type, not for a flow whose source we already know.
+  const webhookSource =
+    trigger.channel === "webhook" ? describeWebhookTriggerSource(trigger.conditions) : null;
   return (
     <section className={sectionClass}>
       <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">{heading}</h3>
-      <Row label="Starts when" value={CHANNEL_LABELS[trigger.channel]} />
+      <Row
+        label="Starts when"
+        value={webhookSource?.label ?? CHANNEL_LABELS[trigger.channel]}
+      />
       {trigger.channel === "sms" && (
         <>
           <Row
@@ -139,11 +148,10 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
       )}
       {trigger.channel === "webhook" && (
         <>
-          {/* Our own integrations ride the webhook channel too, so a flow
-              pinned to one of them is NOT fed by the public endpoint and the
-              owner should not be sent looking for an API key. */}
-          {describeWebhookTriggerSource(trigger.conditions) ? (
-            <Row label="Starts from" value={describeWebhookTriggerSource(trigger.conditions)!} />
+          {/* A first-party flow is NOT fed by the public endpoint, so the
+              owner is never sent looking for an API key they do not need. */}
+          {webhookSource ? (
+            <Row label="Starts from" value={webhookSource.detail} />
           ) : (
             <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
           )}

@@ -16,12 +16,34 @@
  * Keyed on the source label a `from_matches` condition pins. Anything not
  * listed here is a genuine bridge/API flow and keeps the endpoint copy.
  */
-export const FIRST_PARTY_WEBHOOK_SOURCES: Record<string, string> = {
-  facebook_lead_ads: "Your connected Facebook Page, when someone submits a lead form",
-  instagram_comment: "Your connected Instagram account, when someone comments on a post",
-  facebook_messenger: "Your connected Facebook Page, when someone starts a Messenger chat",
-  instagram_dm: "Your connected Instagram account, when someone starts a DM",
-  whatsapp: "Your connected WhatsApp number, when someone starts a chat"
+export type WebhookSourceCopy = {
+  /** Replaces the generic "Webhook (Zapier, Make, or API)" channel label. */
+  label: string;
+  /** The "Starts from" line: which connected account, and on what event. */
+  detail: string;
+};
+
+export const FIRST_PARTY_WEBHOOK_SOURCES: Record<string, WebhookSourceCopy> = {
+  facebook_lead_ads: {
+    label: "New lead from your Facebook Page",
+    detail: "Your connected Facebook Page, when someone submits a lead form"
+  },
+  instagram_comment: {
+    label: "New comment on your Instagram post",
+    detail: "Your connected Instagram account, when someone comments on a post"
+  },
+  facebook_messenger: {
+    label: "New Messenger conversation",
+    detail: "Your connected Facebook Page, when someone starts a Messenger chat"
+  },
+  instagram_dm: {
+    label: "New Instagram DM",
+    detail: "Your connected Instagram account, when someone starts a DM"
+  },
+  whatsapp: {
+    label: "New WhatsApp conversation",
+    detail: "Your connected WhatsApp number, when someone starts a chat"
+  }
 };
 
 type FromMatchesLike = { type: string; value?: string | null };
@@ -36,7 +58,7 @@ type FromMatchesLike = { type: string; value?: string | null };
  */
 export function describeWebhookTriggerSource(
   conditions: ReadonlyArray<FromMatchesLike> | null | undefined
-): string | null {
+): WebhookSourceCopy | null {
   for (const condition of conditions ?? []) {
     if (condition.type !== "from_matches") continue;
     const value = condition.value?.trim();

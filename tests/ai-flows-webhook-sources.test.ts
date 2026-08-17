@@ -15,9 +15,14 @@ import {
 } from "@/lib/ai-flows/templates";
 
 describe("describeWebhookTriggerSource", () => {
-  it("names the integration for every first-party source", () => {
+  it("supplies BOTH a channel label and a detail for every first-party source", () => {
     for (const [source, copy] of Object.entries(FIRST_PARTY_WEBHOOK_SOURCES)) {
-      expect(describeWebhookTriggerSource([{ type: "from_matches", value: source }])).toBe(copy);
+      expect(describeWebhookTriggerSource([{ type: "from_matches", value: source }])).toEqual(copy);
+      // The label REPLACES "Webhook (Zapier, Make, or API)" on the flow page,
+      // so it must never reintroduce the wording this exists to remove
+      // (Bugbot 5cf287a6: the first version left that row untouched).
+      expect(copy.label).not.toMatch(/zapier|make|api|webhook/i);
+      expect(copy.detail.length).toBeGreaterThan(20);
     }
   });
 
@@ -25,12 +30,13 @@ describe("describeWebhookTriggerSource", () => {
     // Pinned against the template constants rather than string literals, so
     // renaming a source breaks here instead of silently falling back to the
     // API-key copy on a live tenant's flow.
-    expect(describeWebhookTriggerSource([
-      { type: "from_matches", value: INSTAGRAM_COMMENT_SOURCE }
-    ])).toContain("Instagram");
-    expect(describeWebhookTriggerSource([
-      { type: "from_matches", value: META_LEAD_ADS_SOURCE }
-    ])).toContain("Facebook Page");
+    expect(
+      describeWebhookTriggerSource([{ type: "from_matches", value: INSTAGRAM_COMMENT_SOURCE }])
+        ?.detail
+    ).toContain("Instagram");
+    expect(
+      describeWebhookTriggerSource([{ type: "from_matches", value: META_LEAD_ADS_SOURCE }])?.detail
+    ).toContain("Facebook Page");
   });
 
   it("returns null for a bridge/API flow, which keeps the endpoint copy", () => {
@@ -57,6 +63,6 @@ describe("describeWebhookTriggerSource", () => {
         { type: "body_contains", value: "x" },
         { type: "from_matches", value: INSTAGRAM_COMMENT_SOURCE }
       ])
-    ).toBe(FIRST_PARTY_WEBHOOK_SOURCES[INSTAGRAM_COMMENT_SOURCE]);
+    ).toEqual(FIRST_PARTY_WEBHOOK_SOURCES[INSTAGRAM_COMMENT_SOURCE]);
   });
 });
