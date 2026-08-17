@@ -58,6 +58,7 @@ import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE
 } from "@/lib/plans/enterprise-pricing";
+import { computeDayCurrentMrr } from "@/lib/admin/mrr";
 
 const NOW = new Date("2026-07-12T18:00:00.000Z");
 
@@ -575,5 +576,40 @@ describe("unmodeledStripeFeeCents", () => {
       stripeFeeRow({ id: 1, business_id: "biz-amy", fee_cents: 1280, charge_fee_cents: 1280 })
     ];
     expect(unmodeledStripeFeeCents(rows, "2026-07-01")).toBe(0);
+  });
+});
+
+describe("loadFleetMargins: the revenue base the Dashboard subtracts cost from", () => {
+  /**
+   * The admin Dashboard prints "MRR minus cost equals net", so the MRR it
+   * shows and the revenue the cost side nets against must be the same money.
+   *
+   * They are computed by different functions over different picks: MRR by
+   * computeDayCurrentMrr, cost by the margin engine over
+   * dedupeSubscriptionsPreferringActive. A tenant mid-resubscribe is exactly
+   * where plain newest-row-wins and prefer-active disagree, so the card is
+   * only honest if MRR is fed the SAME picks the margin engine used. This
+   * asserts that invariant at the producer, not at the page.
+   */
+  it("matches computeDayCurrentMrr over its own picks, even mid-resubscribe", async () => {
+    // Newest row is a pending resubscribe; the live active row is older.
+    vi.mocked(listAllSubscriptions).mockResolvedValue([
+      { ...AMY_SUB, id: "sub-pending", status: "pending", stripe_subscription_id: null },
+      AMY_SUB
+    ] as never);
+
+    const data = await loadFleetMargins(NOW);
+    const picks = [...data.subscriptionByBusiness.values()];
+    // The loader kept the live contract, not the pending checkout.
+    expect(data.subscriptionByBusiness.get("biz-amy")?.id).toBe("sub-row");
+
+    const mrr = computeDayCurrentMrr({
+      subscriptions: picks as never,
+      enterpriseDeals: [{ monthly_cents: 250_000 }],
+      now: NOW
+    });
+    expect(mrr.totalCents).toBe(data.totals.revenueCents);
+    // And the tenant is genuinely revenue-bearing, so this is not 0 === 0.
+    expect(data.totals.revenueCents).toBeGreaterThan(250_000);
   });
 });

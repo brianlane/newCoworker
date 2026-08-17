@@ -87,15 +87,28 @@ export default async function AdminDashboardPage() {
   // out revenue still inside an open 30-day money-back window) is best
   // effort: a profile-read failure degrades to "everything committed"
   // instead of erroring the whole dashboard.
-  const mrrSubscriptions = await stampRefundExposureFromDb(subscriptions, businesses).catch(
-    (err: unknown) => {
-      console.error(
-        "admin dashboard: refund-exposure stamping failed",
-        err instanceof Error ? err.message : err
-      );
-      return subscriptions;
-    }
-  );
+  // This card prints "MRR − cost · net", so the MRR and the cost side must
+  // be built from the SAME subscription per tenant, or the subtraction on
+  // screen does not hold. They select differently: this page's own map is
+  // newest-row-wins, while the cost side prefers the newest ACTIVE
+  // Stripe-backed row (dedupeSubscriptionsPreferringActive), so a tenant
+  // mid-resubscribe would be dropped from MRR while still counted in cost.
+  // Take the cost side's own picks when they loaded, which makes the two
+  // agree by construction rather than by coincidence; fall back to the
+  // newest-row map only when the cost side is unavailable, in which case
+  // the net line is hidden anyway.
+  const revenueSubscriptions =
+    fleetCost !== null ? [...fleetCost.margins.subscriptionByBusiness.values()] : subscriptions;
+  const mrrSubscriptions = await stampRefundExposureFromDb(
+    revenueSubscriptions,
+    businesses
+  ).catch((err: unknown) => {
+    console.error(
+      "admin dashboard: refund-exposure stamping failed",
+      err instanceof Error ? err.message : err
+    );
+    return revenueSubscriptions;
+  });
   const mrr = computeDayCurrentMrr({ subscriptions: mrrSubscriptions, enterpriseDeals });
   const breakdown = fleetCost?.breakdown ?? null;
 
