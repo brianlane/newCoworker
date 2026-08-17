@@ -2062,7 +2062,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // is waiting on this response to know whether to read a message, and
         // the mailbox is recording silence while it waits.
         void (async () => {
-          let result: { ok: boolean; script?: string; detail?: string };
+          // Derived from the capability rather than re-declared, so a field
+          // added there (alreadyBeingLeft, and whatever comes next) can never
+          // silently fall out of this handler's view again.
+          let result: Awaited<ReturnType<VoicemailCapability["execute"]>>;
           try {
             result = await opts.voicemail!.execute();
           } catch (err) {
