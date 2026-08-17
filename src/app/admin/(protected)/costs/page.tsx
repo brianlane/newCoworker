@@ -4,7 +4,7 @@ import {
   PLATFORM_COST_SYNC_STATUS_KEY,
   parsePlatformCostSyncStatus
 } from "@/lib/admin/cost-sync";
-import { loadFleetMargins } from "@/lib/admin/margin-data";
+import { loadFleetCostBreakdown, trendWindowStartYmd } from "@/lib/admin/fleet-cost";
 import {
   TELNYX_SERIES_OTHER,
   TELNYX_SERIES_UNATTRIBUTED,
@@ -15,23 +15,13 @@ import {
   buildTelnyxTenantWindowBreakdown,
   buildUnattributedSenders,
   resolveTelnyxUsageWindowKey,
-  sumMarginLinesByKey,
   telnyxDirectionSummary,
   telnyxMonthlyTrend,
   telnyxUsageWindow,
   type TelnyxUsageWindowKey
 } from "@/lib/admin/costs-view";
-import {
-  TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
-  TELNYX_MRC_TAX_RATE,
-  TELNYX_USAGE_TAX_RATE,
-  TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
-} from "@/lib/plans/enterprise-pricing";
-import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
-import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { fetchTelnyxBalance } from "@/lib/telnyx/balance";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
-import { logger } from "@/lib/logger";
 import {
   MARGIN_ALERT_SETTINGS_KEY,
   parseMarginAlertConfig
@@ -53,11 +43,6 @@ function money(cents: number): string {
 
 function microsToMoney(micros: number): string {
   return money(micros / 10_000);
-}
-
-function trendWindowStartYmd(now: Date): string {
-  const d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-  return d.toISOString().slice(0, 10);
 }
 
 const WINDOW_LABELS: Record<TelnyxUsageWindowKey, string> = {
@@ -92,80 +77,46 @@ export default async function AdminCostsPage({
   const { window: windowParam } = await searchParams;
   const windowKey = resolveTelnyxUsageWindowKey(windowParam);
   const usageWindow = telnyxUsageWindow(windowKey, now);
-  const [margins, syncStatusRaw, hostingerRows, telnyxTrendRows, inventory, balance] =
-    await Promise.all([
-      loadFleetMargins(now),
-      getAdminPlatformSetting(PLATFORM_COST_SYNC_STATUS_KEY).catch(() => null),
-      listHostingerVpsCosts().catch((err: unknown) => {
-        logger.error("admin costs: hostinger snapshot read failed", {
-          message: err instanceof Error ? err.message : String(err)
-        });
-        return [];
-      }),
-      // One 90d fetch also covers every selectable per-tenant usage window:
-      // trendWindowStartYmd (instant now minus 90d) always starts at or
-      // before the widest window's UTC-floor(now) minus 89 days.
-      listTelnyxCostDaily(trendWindowStartYmd(new Date())).catch((err: unknown) => {
-        logger.error("admin costs: telnyx trend read failed", {
-          message: err instanceof Error ? err.message : String(err)
-        });
-        return [];
-      }),
-      listVpsInventory().catch(() => []),
-      fetchTelnyxBalance(process.env.TELNYX_API_KEY?.trim() || null)
-    ]);
+  // One shared load: the fleet cost breakdown every admin surface renders,
+  // plus the raw rows this page's per-window views need. Its 90d Telnyx
+  // fetch also covers every selectable per-tenant usage window, since
+  // trendWindowStartYmd (instant now minus 90d) always starts at or before
+  // the widest window's UTC-floor(now) minus 89 days.
+  const [fleetCost, syncStatusRaw, balance] = await Promise.all([
+    loadFleetCostBreakdown(now),
+    getAdminPlatformSetting(PLATFORM_COST_SYNC_STATUS_KEY).catch(() => null),
+    fetchTelnyxBalance(process.env.TELNYX_API_KEY?.trim() || null)
+  ]);
+  const { margins, hostingerRows, telnyxTrendRows, inventory, breakdown } = fleetCost;
 
   const syncStatus = parsePlatformCostSyncStatus(syncStatusRaw);
   const marginAlertConfig = parseMarginAlertConfig(
     await getAdminPlatformSetting(MARGIN_ALERT_SETTINGS_KEY).catch(() => null)
   );
 
-  const lineTotals = sumMarginLinesByKey(margins.economics);
+  // Every figure below comes from the shared model (src/lib/admin/fleet-cost.ts)
+  // so this page, the Dashboard and the Revenue page cannot disagree about
+  // what the fleet costs. Leak spend, idle-pool hosting, the shared 10DLC
+  // campaign fee, the voice adjunct estimate and Telnyx taxes are real
+  // platform cost no tenant's margin can see; the model folds them in so
+  // the KPI reconciles with the vendor invoice.
+  const lineTotals = breakdown.perTenantCents;
   const monthTelnyxRows = telnyxTrendRows.filter((r) => r.day >= margins.monthStartYmd);
+  // Micros for the per-sender display (it reports sub-cent amounts); the
+  // rolled-up leak TOTAL comes from the shared model below, so this page's
+  // KPI cannot drift from the Dashboard's and the Revenue page's.
   const unattributedMonthMicros = monthTelnyxRows
     .filter((r) => r.business_id === null)
     .reduce((sum, r) => sum + r.cost_micros, 0);
-  const unattributedMonthCents = Math.round(unattributedMonthMicros / 10_000);
   const unattributedSenders = buildUnattributedSenders(monthTelnyxRows);
   const poolBurn = buildPoolBoxBurn({ inventory, hostingerRows, now });
-  const poolBurnMonthlyCents = poolBurn.reduce((sum, b) => sum + (b.monthlyCents ?? 0), 0);
-  // Invoice-only voice adjuncts (call control, media streaming, recording)
-  // never reach detail records; estimate them from this month's metered
-  // minutes so the split mirrors the invoice.
-  const monthVoiceMinutes = monthTelnyxRows.reduce((sum, r) => sum + r.billed_seconds, 0) / 60;
-  const voiceAdjunctMonthCents = Math.round(
-    monthVoiceMinutes * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
-  );
-  // Telnyx taxes, calibrated from the June 2026 invoice: the usage rate
-  // covers everything metered (attributed + leak + adjuncts), the MRC
-  // rate covers number rentals and the campaign fee.
-  const telnyxTaxMonthCents = Math.round(
-    (lineTotals.telnyx_usage + unattributedMonthCents + voiceAdjunctMonthCents) *
-      TELNYX_USAGE_TAX_RATE +
-      (lineTotals.did + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS) * TELNYX_MRC_TAX_RATE
-  );
-  // Leak spend, idle-pool hosting, the shared 10DLC campaign fee, the
-  // voice adjunct estimate, and Telnyx taxes are real platform cost the
-  // per-tenant margin sums never see: fold them into the KPI cost + net
-  // figures so they reconcile with the vendor invoice.
-  const totalCostCents =
-    margins.totals.costCents +
-    unattributedMonthCents +
-    poolBurnMonthlyCents +
-    TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS +
-    voiceAdjunctMonthCents +
-    telnyxTaxMonthCents;
-  const netMarginCents =
-    margins.totals.marginCents -
-    unattributedMonthCents -
-    poolBurnMonthlyCents -
-    TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS -
-    voiceAdjunctMonthCents -
-    telnyxTaxMonthCents;
-  const netMarginPct =
-    margins.totals.revenueCents > 0
-      ? Math.round((netMarginCents / margins.totals.revenueCents) * 1000) / 10
-      : null;
+  const unattributedMonthCents = breakdown.unattributedTelnyxCents;
+  const poolBurnMonthlyCents = breakdown.poolHostingCents;
+  const voiceAdjunctMonthCents = breakdown.voiceAdjunctCents;
+  const telnyxTaxMonthCents = breakdown.telnyxTaxCents;
+  const totalCostCents = breakdown.totalCostCents;
+  const netMarginCents = breakdown.netMarginCents;
+  const netMarginPct = breakdown.netMarginPct;
 
   const trend = telnyxMonthlyTrend(telnyxTrendRows);
   const trendMax = Math.max(...trend.map((p) => p.costMicros), 1);
@@ -203,7 +154,7 @@ export default async function AdminCostsPage({
     now
   });
   // Hostinger fleet monthly total: every non-cancelled subscription's
-  // effective monthly price (assigned + pooled — cancelled rows are gone
+  // effective monthly price (assigned + pooled; cancelled rows are gone
   // money, not recurring spend).
   const hostingerMonthlyTotal = hostingerRows
     .filter((r) => r.status !== "cancelled")
@@ -238,12 +189,15 @@ export default async function AdminCostsPage({
                   "OK"
                 ) : (
                   <span className="text-spark-orange">
-                    {syncStatus.telnyxError ?? syncStatus.hostingerError ?? "finished with errors"}
+                    {syncStatus.telnyxError ??
+                      syncStatus.hostingerError ??
+                      syncStatus.stripeError ??
+                      "finished with errors"}
                   </span>
                 )}
               </>
             ) : (
-              "Never synced — run a Sync now + Backfill 90d after first deploy."
+              "Never synced: run a Sync now + Backfill 90d after first deploy."
             )}
           </p>
         </div>
@@ -308,7 +262,7 @@ export default async function AdminCostsPage({
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           This Month&apos;s Cost Split{" "}
-          {margins.telnyxActuals ? "(Telnyx actuals)" : "(estimates — sync has no data yet)"}
+          {margins.telnyxActuals ? "(Telnyx actuals)" : "(estimates: sync has no data yet)"}
         </h2>
         <div className="space-y-2">
           {(
@@ -317,12 +271,18 @@ export default async function AdminCostsPage({
               ["Telnyx usage", lineTotals.telnyx_usage],
               ["Phone number rentals", lineTotals.did],
               ["Gemini (metered, incl. Live voice)", lineTotals.gemini_chat],
-              ["Stripe fees", lineTotals.stripe_fees],
-              ["10DLC campaign fee", TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS],
+              [
+                margins.stripeActuals
+                  ? "Stripe fees (observed rate)"
+                  : "Stripe fees (est. from card region)",
+                lineTotals.stripe_fees
+              ],
+              ["10DLC campaign fee", breakdown.campaignFeeCents],
               ["Voice API adjuncts (est.)", voiceAdjunctMonthCents],
               ["Telnyx taxes (est.)", telnyxTaxMonthCents],
               ["Idle pool hosting", poolBurnMonthlyCents],
-              ["Telnyx unattributed (leak check)", unattributedMonthCents]
+              ["Telnyx unattributed (leak check)", unattributedMonthCents],
+              ["Stripe outside tenant lines (disputes, account level)", breakdown.unmodeledStripeFeeCents]
             ] as const
           ).map(([label, cents]) => {
             const pct = totalCostCents > 0 ? Math.round((cents / totalCostCents) * 100) : 0;
@@ -367,6 +327,7 @@ export default async function AdminCostsPage({
               ))}
             </ul>
           </div>
+
         )}
       </Card>
 
@@ -377,7 +338,7 @@ export default async function AdminCostsPage({
         </h2>
         {trend.length === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">
-            No synced Telnyx records yet — run Backfill 90d.
+            No synced Telnyx records yet: run Backfill 90d.
           </p>
         ) : (
           <div className="flex items-end gap-2 h-32">
@@ -638,7 +599,7 @@ export default async function AdminCostsPage({
         </h2>
         {hostingerRows.length === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">
-            No snapshot yet — run Sync now.
+            No snapshot yet: run Sync now.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -757,7 +718,7 @@ export default async function AdminCostsPage({
           </h2>
           {poolBurn.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">
-              No idle pooled boxes — nothing rents while serving nobody.
+              No idle pooled boxes: nothing rents while serving nobody.
             </p>
           ) : (
             <ul className="divide-y divide-parchment/8">

@@ -6,10 +6,16 @@ import {
   type BusinessMarginInput
 } from "@/lib/admin/margin";
 import { getPeriodPricing } from "@/lib/plans/tier";
+import { monthlyPackAddonCents } from "@/lib/billing/membership-pack-addons";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE
 } from "@/lib/plans/enterprise-pricing";
+import {
+  DOMESTIC_STRIPE_FEE_RATE,
+  INTERNATIONAL_STRIPE_FEE_RATE,
+  deriveStripeFeeRate
+} from "@/lib/plans/stripe-fees";
 
 const NOW = new Date("2026-07-12T18:00:00.000Z");
 
@@ -259,6 +265,159 @@ describe("computeFleetMarginTotals", () => {
     expect(totals.payingBusinesses).toBe(1);
     expect(totals.marginPct).toBe(
       Math.round((totals.marginCents / totals.revenueCents) * 1000) / 10
+    );
+  });
+});
+
+describe("computeBusinessMargin, Stripe fee rate", () => {
+  /**
+   * The default. Before this, EVERY tenant was priced here regardless of
+   * where their card was issued.
+   */
+  it("estimates a US tenant at the domestic rate", () => {
+    const result = computeBusinessMargin(input({ country: "US" }), NOW);
+    const feeLine = line(result, "stripe_fees")!;
+    expect(feeLine.source).toBe("estimate");
+    expect(feeLine.label).toMatch(/card region/);
+    expect(feeLine.cents).toBe(
+      Math.round(stripeMonthlyFeeCents(result.revenueCents, 1, DOMESTIC_STRIPE_FEE_RATE))
+    );
+  });
+
+  it("defaults an unspecified country to the domestic rate", () => {
+    const withCountry = computeBusinessMargin(input({ country: "US" }), NOW);
+    const without = computeBusinessMargin(input(), NOW);
+    expect(line(without, "stripe_fees")?.cents).toBe(line(withCountry, "stripe_fees")?.cents);
+  });
+
+  /**
+   * A non-US tenant's card almost certainly carries Stripe's international
+   * surcharge, so the domestic rate understates their fee by roughly half.
+   */
+  it("estimates a non-US tenant at the international rate, costing strictly more", () => {
+    const us = computeBusinessMargin(input({ country: "US" }), NOW);
+    const mx = computeBusinessMargin(input({ country: "MX" }), NOW);
+    expect(line(mx, "stripe_fees")!.cents).toBeGreaterThan(line(us, "stripe_fees")!.cents);
+    expect(line(mx, "stripe_fees")!.cents).toBe(
+      Math.round(stripeMonthlyFeeCents(mx.revenueCents, 1, INTERNATIONAL_STRIPE_FEE_RATE))
+    );
+    expect(mx.marginCents).toBeLessThan(us.marginCents);
+  });
+
+  /**
+   * Observed fees beat any estimate: this is what makes the line reflect
+   * what Stripe REALLY took, including surcharges we never enumerated.
+   */
+  it("derives the rate from observed fees and marks the line calibrated", () => {
+    const result = computeBusinessMargin(
+      input({
+        country: "US",
+        // 4.5% effective: a US-looking tenant paying on a foreign card.
+        stripeObservedFees: { grossCents: 28_399, feeCents: 1280, chargeCount: 1 }
+      }),
+      NOW
+    );
+    const feeLine = line(result, "stripe_fees")!;
+    expect(feeLine.source).toBe("calibrated");
+    expect(feeLine.label).toMatch(/observed/);
+    // Strictly more than the domestic estimate the country alone would give.
+    expect(feeLine.cents).toBeGreaterThan(
+      Math.round(stripeMonthlyFeeCents(result.revenueCents, 1, DOMESTIC_STRIPE_FEE_RATE))
+    );
+  });
+
+  it("falls back to the country estimate when the observation is unusable", () => {
+    const result = computeBusinessMargin(
+      input({
+        country: "US",
+        // Zero charges: nothing to derive a rate from.
+        stripeObservedFees: { grossCents: 0, feeCents: 0, chargeCount: 0 }
+      }),
+      NOW
+    );
+    const feeLine = line(result, "stripe_fees")!;
+    expect(feeLine.source).toBe("estimate");
+    expect(feeLine.cents).toBe(
+      Math.round(stripeMonthlyFeeCents(result.revenueCents, 1, DOMESTIC_STRIPE_FEE_RATE))
+    );
+  });
+
+  /**
+   * The amount stays AMORTIZED even when the rate is observed. A biennial
+   * tenant is charged once every 24 months; billing that whole fee into its
+   * charge month would make monthly margin lurch, which is the same reason
+   * the estimate spreads the $0.30.
+   */
+  it("keeps the fee amortized across a term plan while using the observed rate", () => {
+    const observed = { grossCents: 28_399, feeCents: 1280, chargeCount: 1 };
+    const biennial = computeBusinessMargin(
+      input({
+        subscription: { ...input().subscription!, billing_period: "biennial" },
+        stripeObservedFees: observed
+      }),
+      NOW
+    );
+    const feeLine = line(biennial, "stripe_fees")!;
+    expect(feeLine.source).toBe("calibrated");
+    const rate = deriveStripeFeeRate(observed)!;
+    expect(feeLine.cents).toBe(
+      Math.round(stripeMonthlyFeeCents(biennial.revenueCents, 24, rate))
+    );
+    // The $0.30 is spread, so the monthly fee sits just under rate × price.
+    expect(feeLine.cents).toBeLessThan(
+      Math.round(biennial.revenueCents * rate.percent + rate.fixedCents)
+    );
+  });
+});
+
+describe("computeBusinessMargin - recurring pack add-ons", () => {
+  const PACK_OPTIONS = [
+    { category: "voice" as const, id: "min_30", label: "30 minutes", listPriceCents: 6000 }
+  ];
+
+  /**
+   * Packs bill every cycle, so they are revenue. Counting only the plan rate
+   * understated a pack-carrying tenant's margin AND made the fleet revenue
+   * base disagree with the MRR card the Dashboard subtracts cost from, so
+   * "MRR minus cost" visibly did not equal the net it printed.
+   */
+  it("counts pack revenue, matching computeDayCurrentMrr's basis", () => {
+    const withPacks = computeBusinessMargin(
+      input({
+        subscription: {
+          ...input().subscription!,
+          membership_pack_addons: { addonVoice: "min_30:1:1800" }
+        },
+        packAddonOptions: PACK_OPTIONS
+      }),
+      NOW
+    );
+    const without = computeBusinessMargin(input({ packAddonOptions: PACK_OPTIONS }), NOW);
+
+    expect(withPacks.revenueCents).toBeGreaterThan(without.revenueCents);
+    expect(withPacks.revenueCents).toBe(
+      without.revenueCents +
+        monthlyPackAddonCents({ addonVoice: "min_30:1:1800" }, "monthly", PACK_OPTIONS)
+    );
+    // Stripe's cut rides the larger charge too.
+    expect(line(withPacks, "stripe_fees")!.cents).toBeGreaterThan(
+      line(without, "stripe_fees")!.cents
+    );
+  });
+
+  it("prices an unknown pack id as zero rather than erroring", () => {
+    const result = computeBusinessMargin(
+      input({
+        subscription: {
+          ...input().subscription!,
+          membership_pack_addons: { addonVoice: "retired_pack:1:1800" }
+        },
+        packAddonOptions: PACK_OPTIONS
+      }),
+      NOW
+    );
+    expect(result.revenueCents).toBe(
+      computeBusinessMargin(input({ packAddonOptions: PACK_OPTIONS }), NOW).revenueCents
     );
   });
 });

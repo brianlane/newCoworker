@@ -294,7 +294,15 @@ export default async function BusinessDetailPage({
               <li key={line.key} className="py-1.5 flex items-center justify-between gap-3">
                 <span className="text-xs text-parchment/70">{line.label}</span>
                 <span className="flex items-center gap-2 shrink-0">
-                  <Badge variant={line.source === "actual" ? "success" : "neutral"}>
+                  <Badge
+                    variant={
+                      line.source === "actual"
+                        ? "success"
+                        : line.source === "calibrated"
+                          ? "info"
+                          : "neutral"
+                    }
+                  >
                     {line.source}
                   </Badge>
                   <span className="text-xs text-parchment font-medium">
