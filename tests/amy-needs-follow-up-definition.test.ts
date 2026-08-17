@@ -236,6 +236,30 @@ describe("copy", () => {
     expect(texted[ROUNDS - 1].toLowerCase()).toContain("last message");
   });
 
+  /**
+   * Amy's floor is "at least three tries". Round 1's call is additionally
+   * gated on the auto-tag marker, so a lead arriving from an automated
+   * first-contact ladder gets rounds 2 and 3 as calls plus round 1's wait,
+   * which is still three touches counting the ladder's own.
+   */
+  it("gives every lead at least the three tries Amy asked for", () => {
+    expect(ROUNDS).toBeGreaterThanOrEqual(3);
+  });
+
+  /**
+   * The sign-off is selected by POSITION (last round), not by index, so
+   * changing ROUNDS can never again end the cadence on a mid-sequence line
+   * that promises more messages. Proven by checking the round before the last
+   * is NOT the sign-off, which is what a plain `list[n - 1]` would have given.
+   */
+  it("keeps the sign-off on the final round only, whatever ROUNDS becomes", () => {
+    // The last round signs off (asserted above) and the one before it must
+    // not, which is what a plain `list[n - 1]` would have produced the moment
+    // ROUNDS stopped matching the length of the copy list.
+    expect(spoken[ROUNDS - 2].toLowerCase()).not.toContain("last call");
+    expect(texted[ROUNDS - 2].toLowerCase()).not.toContain("last message");
+  });
+
   it("references the lead's source site, city and intent as Amy asked", () => {
     expect(spoken[0]).toContain("{{vars.lead_site}}");
     expect(spoken[0]).toContain("{{vars.lead_city}}");
@@ -338,15 +362,31 @@ describe("who hears about a reply", () => {
   });
 
   /**
-   * Booked and claimed are EXTERNAL milestones nothing in this flow observes,
-   * so they stay a goal: either one jumps the run out of a parked wait and
-   * stops the AI calling someone a teammate already took.
+   * Booking is an EXTERNAL milestone nothing in this flow observes, so it
+   * stays a goal: it jumps the run out of a parked wait and stops the AI
+   * calling someone who already has a time in the diary.
    */
-  it("stops the cadence when the lead books or a teammate claims them", () => {
+  it("stops the cadence when the lead books", () => {
     expect(byId("converted")).toMatchObject({
       type: "goal",
-      events: [{ kind: "appointment_booked" }, { kind: "claimed" }]
+      events: [{ kind: "appointment_booked" }]
     });
+  });
+
+  /**
+   * A CLAIM must not stop it (Amy, 2026-08-17): claiming is a teammate saying
+   * they will work the lead, not evidence that anyone reached them, and the
+   * cadence ending on that promise is what left leads with no follow-up at
+   * all. What stops it is the lead replying, which every later round's guard
+   * already covers.
+   *
+   * Asserted on the events LIST, not just the presence of appointment_booked:
+   * the event is business-wide by lead phone, so re-adding it here would let
+   * an unrelated flow's route_to_team end this cadence again.
+   */
+  it("does NOT stop the cadence when a teammate claims the lead", () => {
+    const events = byId("converted").events as Array<{ kind: string }>;
+    expect(events.map((e) => e.kind)).toEqual(["appointment_booked"]);
   });
 
   /**
