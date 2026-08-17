@@ -2381,6 +2381,22 @@ describe("bookCalendarAppointment — Google Meet decorator", () => {
     expect(retry.params).toBeUndefined();
   });
 
+  it("does NOT retry a 5xx, which may have created the event before failing", async () => {
+    // Only a 4xx proves Google created nothing. A 500 may have written the
+    // event and then failed to report it, so a blind second insert would
+    // book the slot twice. Same treatment as a statusless failure.
+    meetTenant();
+    vi.mocked(workspaceProxyStatusForBusiness).mockResolvedValue({
+      status: 503,
+      data: { error: { message: "Backend Error" } }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
   it("does NOT retry a transport failure, which could double-book", async () => {
     // A timeout may or may not have created the event. Retrying blind is how
     // one caller ends up with two appointments in the same slot.

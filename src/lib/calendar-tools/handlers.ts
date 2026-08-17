@@ -1200,18 +1200,25 @@ async function bookOnProvider(
         // naively, a tenant whose calendar refuses Meet would lose the
         // BOOKING, not just the video link.
         //
-        // So this one goes through the status-returning proxy: a 4xx is a
-        // real provider rejection, which means nothing was created, and the
-        // insert is retried once with no conference at all. A failure with
-        // no status (timeout, socket reset) still THROWS out of here to the
-        // catch below, and is deliberately never retried: a timeout that in
-        // fact created the event would book the slot twice.
+        // So this one goes through the status-returning proxy. ONLY a 4xx is
+        // safe to retry: a client refusal means Google created nothing, so
+        // the insert can be repeated once with no conference at all.
+        //
+        // A 5xx is NOT safe and is deliberately not retried. Google may have
+        // created the event and then failed to say so, and a blind second
+        // insert would book the slot twice. It is treated exactly like a
+        // failure with no status at all (timeout, socket reset, which
+        // `workspaceProxyStatusForBusiness` re-throws on its own): the
+        // booking reports failure rather than risking a duplicate.
         const meetRes = await workspaceProxyStatusForBusiness(businessId, googleLink, {
           endpoint: googleCalendarPath,
           method: "POST",
           params: { conferenceDataVersion: MEET_CONFERENCE_DATA_VERSION },
           data: { ...googleEvent, conferenceData: buildMeetConferenceRequest(randomUUID()) }
         });
+        if (meetRes && meetRes.status >= 500) {
+          throw new Error(`google event insert failed (${meetRes.status})`);
+        }
         if (meetRes && meetRes.status >= 400) {
           logger.warn("google meet conference refused; rebooking without it", {
             businessId,
