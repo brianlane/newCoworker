@@ -22,10 +22,14 @@
  * `--click` / `--click-selector` add NAVIGATIONAL clicks, for the case a list
  * row is an SPA anchor with no href (HomeLight's referral rows are exactly
  * that), so no URL reaches the detail view and reading it requires opening it.
- * There is deliberately no fill or submit flag: this tool navigates and reads,
- * it never completes a form. Targets matching DESTRUCTIVE_TARGETS below are
- * refused outright, so a typo cannot decline a live referral or accept one on
- * the tenant's behalf.
+ * `--fill` types into a SEARCH box, and only a search box: SPA lists like
+ * HomeLight's reach a record by searching for it, so reading that record is
+ * impossible without typing a name. It is not a general form filler. The
+ * selector must look search-shaped (SEARCH_FIELD_RE), password fields are
+ * refused outright, and there is still no submit flag: this tool navigates and
+ * reads, it never completes a form. Targets matching DESTRUCTIVE_TARGETS are
+ * refused too, so a typo cannot decline a live referral or accept one on the
+ * tenant's behalf.
  *
  * Credentials are never handled here. The request carries an integration LABEL;
  * the render service resolves it to a secret itself through the platform
@@ -53,6 +57,9 @@
  *   --raw-before/-after/-limit  window size and match cap for --raw
  *   --click <text>        click a control by visible text (repeatable, ordered)
  *   --click-selector <css>  click by CSS selector (repeatable, ordered)
+ *   --fill <css>=<value>  type into a SEARCH-shaped field (repeatable, ordered).
+ *                         Refused on password fields and on anything whose
+ *                         selector does not look like a search box.
  *   --shot <path>         save the post-action screenshot as JPEG and read it
  *
  * Clicks and reads report the page AFTER the actions, so a modal opened by a
@@ -86,6 +93,16 @@ function fail(msg: string): never {
  */
 const DESTRUCTIVE_TARGETS =
   /decline|claim|submit|accept|delete|remove|withdraw|send|pay|confirm|cancel|sign.?out|logout/i;
+
+/**
+ * `--fill` is allowed ONLY into something that looks like a search field.
+ * Typing into an arbitrary input is how a read-only tool quietly becomes one
+ * that edits a live record: the HomeLight detail view has a stage listbox and a
+ * note box sitting inches from the search box.
+ */
+const SEARCH_FIELD_RE = /search|filter|query|typeahead|combobox/i;
+/** Never type into a credential field, whatever the selector claims. */
+const PASSWORD_FIELD_RE = /password|passwd|\bpwd\b/i;
 
 function flags(name: string): string[] {
   const out: string[] = [];
@@ -298,13 +315,34 @@ async function main(): Promise<void> {
 
   // Ordered so `--click X --click-selector Y` runs X then Y, which is how you
   // walk a list row open and then read whatever it revealed.
-  const actions: Array<{ kind: string; target: string }> = [];
+  const actions: Array<{ kind: string; target: string; value?: string }> = [];
   for (let i = 0; i < process.argv.length; i++) {
     const a = process.argv[i];
     if (a === "--click" && process.argv[i + 1])
       actions.push({ kind: "click_text", target: process.argv[++i] });
     else if (a === "--click-selector" && process.argv[i + 1])
       actions.push({ kind: "click_selector", target: process.argv[++i] });
+    else if (a === "--fill" && process.argv[i + 1]) {
+      const raw = process.argv[++i];
+      // LAST "=", not the first: CSS attribute selectors are full of them, so
+      // splitting on the first turns `input[type="password"]=x` into the target
+      // `input[type`, which sails past the credential guard on a technicality.
+      const eq = raw.lastIndexOf("=");
+      if (eq < 1) fail(`--fill expects <css>=<value>, got "${raw}"`);
+      const target = raw.slice(0, eq);
+      const value = raw.slice(eq + 1);
+      if (PASSWORD_FIELD_RE.test(target)) {
+        fail(`refusing to fill "${target}": this tool never types into a credential field.`);
+      }
+      if (!SEARCH_FIELD_RE.test(target)) {
+        fail(
+          `refusing to fill "${target}": --fill is for search boxes only ` +
+            `(selector must mention search/filter/query/typeahead/combobox). ` +
+            `This tool reads records, it does not edit them.`
+        );
+      }
+      actions.push({ kind: "fill_selector", target, value });
+    }
   }
   for (const a of actions) {
     if (DESTRUCTIVE_TARGETS.test(a.target)) {
@@ -332,7 +370,7 @@ async function main(): Promise<void> {
   console.log(`label    : ${label ?? "(none, unauthenticated render)"}`);
   console.log(`url      : ${url}`);
   console.log(
-    `clicks   : ${actions.length === 0 ? "(none, read-only)" : actions.map((a) => `${a.kind}("${a.target}")`).join(" -> ")}`
+    `actions  : ${actions.length === 0 ? "(none, read-only)" : actions.map((a) => `${a.kind}("${a.target}"${a.value === undefined ? "" : `="${a.value}"`})`).join(" -> ")}`
   );
 
   const startedAt = Date.now();
@@ -355,6 +393,7 @@ async function main(): Promise<void> {
     detail?: string;
     actionsCompleted?: number;
     screenshotBase64?: string;
+    pageTextExcerpt?: string;
   };
   try {
     body = JSON.parse(ssh.stdout);
@@ -363,7 +402,20 @@ async function main(): Promise<void> {
   }
   // The render service reports application outcomes in a 200 body so a tunnel
   // cannot strip a structured error off a gateway status. Read `error` first.
-  if (body.error) fail(`render error "${body.error}"${body.detail ? `: ${body.detail}` : ""}`);
+  if (body.error) {
+    // A login_failed now carries the page itself (PR #1419). Print it: the
+    // whole point of those diagnostics is that a login failure is only
+    // explicable by looking at what the page said back.
+    if (body.finalUrl) console.log(`finalUrl : ${body.finalUrl}`);
+    if (body.pageTextExcerpt) console.log(`\npage says:\n  ${body.pageTextExcerpt.replace(/\s+/g, " ").trim()}`);
+    const shotOut = flag("shot");
+    if (shotOut && body.screenshotBase64) {
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(shotOut, Buffer.from(body.screenshotBase64, "base64"));
+      console.log(`shot     : ${shotOut}`);
+    }
+    fail(`render error "${body.error}"${body.detail ? `: ${body.detail}` : ""}`);
+  }
 
   const html = body.html ?? "";
   const text = body.text ?? "";
