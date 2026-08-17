@@ -1602,7 +1602,9 @@ describe("submitPublicBooking", () => {
       e164: "+14805550100",
       name: "Liz Developer",
       email: "liz@example.com",
-      channel: "webchat",
+      // Its own channel, not the borrowed "webchat": nobody chatted with
+      // the widget, and a later real chat must be able to move the value.
+      channel: "booking_page",
       sourceTag: BOOKING_PAGE_SOURCE_TAG
     });
   });

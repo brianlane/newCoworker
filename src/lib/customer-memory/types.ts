@@ -10,7 +10,24 @@
  * Supabase client and our server-only modules.
  */
 
-export type CustomerMemoryChannel = "sms" | "voice" | "dashboard" | "email" | "webchat" | "messenger" | "whatsapp";
+/**
+ * Surfaces an interaction can arrive on. `booking_page` is the public
+ * booking page: it is NOT a messaging surface (nobody can reply there), but
+ * `last_channel` records the last TOUCH, and a booking is a touch. It filed
+ * under `webchat` until 20260822160258 because that was the closest existing
+ * value, which made every reader claim the visitor had chatted with the
+ * widget. Extend this list AND the customer_memories_last_channel_check DB
+ * constraint (plus the record_customer_interaction guard) together.
+ */
+export type CustomerMemoryChannel =
+  | "sms"
+  | "voice"
+  | "dashboard"
+  | "email"
+  | "webchat"
+  | "messenger"
+  | "whatsapp"
+  | "booking_page";
 
 /**
  * Contact classification (the `contacts.type` column). `customer` is the default

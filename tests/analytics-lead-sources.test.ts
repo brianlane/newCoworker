@@ -50,6 +50,22 @@ describe("buildLeadSourceOverview", () => {
     expect(overview.untracked).toBe(0);
   });
 
+  it("labels the channel for owners (booking_page reads as words, tags stay raw)", () => {
+    const overview = buildLeadSourceOverview(
+      [
+        row({ last_channel: "booking_page", tags: ["lead_source_import"] }),
+        row({ last_channel: "booking_page", tags: [] })
+      ],
+      { windowDays: 30, clipped: false }
+    );
+    expect(overview.channels).toEqual([
+      { label: "booking page", newContacts: 2, engaged: 2, claimed: 0 }
+    ]);
+    // Owner-authored tags are not channel values: an underscore someone
+    // deliberately typed must survive untouched.
+    expect(overview.tags.map((t) => t.label)).toEqual(["lead_source_import"]);
+  });
+
   it("tags merge case-insensitively under the first-seen casing", () => {
     const overview = buildLeadSourceOverview(
       [row({ tags: ["Meta Lead"] }), row({ tags: ["meta lead", "  "] })],

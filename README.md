@@ -1049,8 +1049,14 @@ no account). Visitors pick a duration and a slot on a Calendly-style
 two-panel page (EN/ES, visitor-timezone rendering) and book; the write rides
 `bookCalendarAppointment`, so Zoom decoration, the `calendar_booking_dedupe`
 ledger, `appointment_booked` goal fan-out, and contact filing (tag `Booking
-Page`, fires `contact_created` so round-robin lead assignment picks an
-on-shift employee) behave exactly like AI-made bookings. The **owner alert is
+Page`, channel `booking_page`, fires `contact_created` so round-robin lead
+assignment picks an on-shift employee) behave exactly like AI-made bookings.
+The tag and the channel answer different questions and both are kept: the tag
+is the ORIGIN and never expires, the channel is the LAST touch and moves with
+every later interaction. The page filed under `webchat` until migration
+`20260822160258`, which made the contact badge, the CSV export, the MCP read
+tool, and the AI preamble all claim a visitor who only filled in a form had
+chatted with the widget. The **owner alert is
 the exception** and is fired by the page itself rather than by the booking
 core, for two reasons: a page booking was made by the VISITOR, so the copy
 must not credit the AI coworker for it, and the alert reports who is on the

@@ -21,6 +21,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
+import { contactChannelLabel } from "@/lib/customer-memory/channel-label";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -79,7 +80,11 @@ export function buildLeadSourceOverview(
   };
 
   for (const row of rows) {
-    const channel = (row.last_channel ?? "").trim();
+    // Group on the DISPLAY form: `label` is rendered straight into the card,
+    // and a stored value like booking_page would otherwise reach an owner as
+    // a leaked column value. Tags are owner-authored and pass through as-is,
+    // so an underscore someone deliberately typed into a tag survives.
+    const channelLabel = contactChannelLabel(row.last_channel);
     // Case-insensitive dedupe PER CONTACT: a row carrying "VIP" and "vip"
     // is one contact in that tag's bucket, never two — otherwise a tag's
     // counts could exceed the window total.
@@ -88,9 +93,9 @@ export function buildLeadSourceOverview(
       const tag = raw.trim();
       if (tag && !rowTags.has(tag.toLowerCase())) rowTags.set(tag.toLowerCase(), tag);
     }
-    if (channel) bump(channels, channel, row);
+    if (channelLabel) bump(channels, channelLabel, row);
     for (const tag of rowTags.values()) bump(tags, tag, row);
-    if (!channel && rowTags.size === 0) untracked += 1;
+    if (!channelLabel && rowTags.size === 0) untracked += 1;
   }
 
   const byVolume = (a: Bucket, b: Bucket) =>

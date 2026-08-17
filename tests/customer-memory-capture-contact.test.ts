@@ -195,13 +195,13 @@ describe("ensureCapturedContact", () => {
     expect(mockFire).toHaveBeenCalledTimes(1);
   });
 
-  it("honors an explicit sourceTag override (booking page rides webchat)", async () => {
+  it("honors an explicit sourceTag override (booking page has no CAPTURE_SOURCE_TAGS entry)", async () => {
     const { client, updateCalls } = fakeDb({ data: null, error: null });
     mockClientFactory.mockResolvedValue(client);
 
     const out = await ensureCapturedContact(BIZ, {
       e164: PHONE,
-      channel: "webchat",
+      channel: "booking_page",
       sourceTag: "Booking Page"
     });
 
