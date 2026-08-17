@@ -2,10 +2,16 @@
  * Clickwrap acceptance ledger (terms_acceptances): recording and reading
  * the explicit "I agree" clicks for the public legal documents.
  *
- * Two writers:
+ * Three writers:
  *   * source 'signup': the account-creation forms (set-password route with
  *     the user id; the standalone /signup form pre-session, email-keyed).
  *   * source 'gate': the dashboard re-acceptance gate.
+ *   * source 'admin_view_as': the same gate, clicked by an admin who is
+ *     impersonating the tenant. The row still identifies the TENANT (whose
+ *     consent it records), and the distinct source is what keeps "did this
+ *     tenant personally accept?" answerable: filter to ('signup', 'gate').
+ *     Never reuse 'gate' for an operator click: that is a fabricated-consent
+ *     record in a table that exists to be evidence.
  *
  * One reader: the dashboard layout asks for the user's newest row and
  * compares its pinned versions against src/lib/legal/versions.ts. No row,
@@ -18,7 +24,7 @@ import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type AcceptanceSource = "signup" | "gate";
+export type AcceptanceSource = "signup" | "gate" | "admin_view_as";
 
 export type AcceptanceInput = {
   userId?: string | null;

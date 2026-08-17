@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn() }));
-vi.mock("@/lib/admin/view-as", () => ({ isViewAsActive: vi.fn() }));
 vi.mock("@/lib/dashboard/active-business", () => ({
   resolveActiveBusinessIdForAction: vi.fn()
 }));
@@ -20,7 +19,6 @@ vi.mock("next-intl/server", () => ({
 }));
 
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -68,7 +66,6 @@ beforeEach(() => {
   process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID = "price_c5";
 
   vi.mocked(getAuthUser).mockResolvedValue({ userId: "u1", email: "o@example.com" } as never);
-  vi.mocked(isViewAsActive).mockResolvedValue(false);
   vi.mocked(resolveActiveBusinessIdForAction).mockResolvedValue("biz-1");
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({} as never);
   vi.mocked(getSubscription).mockResolvedValue({
@@ -100,13 +97,29 @@ afterEach(() => {
 });
 
 describe("auth and impersonation guards", () => {
-  it("refuses while view-as is active", async () => {
-    // The business is resolved from the SIGNED-IN user, so an impersonating
-    // admin's write would arm charging on the wrong tenant.
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
+  it("arms the rule on the resolved business, not the caller's own", async () => {
+    // Arming auto-reload charges real money, so an admin in view-as must
+    // never arm it on their OWN tenant while the page shows a customer's.
+    // The business id comes from resolveActiveBusinessIdForAction, which
+    // honors the view-as pin.
+    vi.mocked(resolveActiveBusinessIdForAction).mockResolvedValue("biz-tenant");
+    vi.mocked(getAutoReloadCard).mockResolvedValue({
+      businessId: "biz-tenant",
+      stripePaymentMethodId: "pm_1",
+      cardBrand: "visa",
+      cardLast4: "4242",
+      cardExpMonth: 1,
+      cardExpYear: 2030,
+      consentAt: "2026-08-01T00:00:00Z",
+      revokedAt: null
+    });
     const res = await POST(post(VALID));
-    expect(res.status).toBe(403);
-    expect(upsertAutoReloadRule).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(upsertAutoReloadRule).toHaveBeenCalledWith(
+      "biz-tenant",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("refuses an unauthenticated caller", async () => {

@@ -163,6 +163,44 @@ describe("requireMcpBusinessRole", () => {
       expect.objectContaining({ reason: "role_staff_insufficient" })
     );
   });
+
+  it("grants owner for the business an admin's view-as pins", async () => {
+    // Dashboard-bridge only: the operator's email holds no role on a
+    // customer's business, and refusing here would leave every bridged tool
+    // declared-but-dead for an admin in view-as.
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue(null);
+    await expect(
+      requireMcpBusinessRole(
+        { ...AUTH, adminViewAsBusinessId: "biz-1" },
+        "biz-1",
+        "manage_aiflows"
+      )
+    ).resolves.toBe("owner");
+  });
+
+  it("does not extend the view-as grant to any other business", async () => {
+    // The field carries the pinned business ID rather than a boolean exactly
+    // so one turn cannot leak owner powers onto a second tenant.
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue(null);
+    await expect(
+      requireMcpBusinessRole(
+        { ...AUTH, adminViewAsBusinessId: "biz-1" },
+        "biz-2",
+        "view_dashboard"
+      )
+    ).rejects.toBeInstanceOf(McpToolError);
+  });
+
+  it("lets a real role win over the pin (never downgrades an actual member)", async () => {
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValue("staff");
+    await expect(
+      requireMcpBusinessRole(
+        { ...AUTH, adminViewAsBusinessId: "biz-1" },
+        "biz-1",
+        "view_dashboard"
+      )
+    ).resolves.toBe("staff");
+  });
 });
 
 /**

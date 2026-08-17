@@ -13,7 +13,6 @@
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -59,10 +58,6 @@ const ERROR_MESSAGE: Record<string, string> = {
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only, and this route arms real money movement.
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     if (!user?.email) {
       return errorResponse("FORBIDDEN", "Authentication required", 403);
     }

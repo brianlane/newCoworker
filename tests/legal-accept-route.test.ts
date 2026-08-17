@@ -4,7 +4,7 @@ vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
 vi.mock("@/lib/admin/view-as", () => ({
-  isViewAsActive: vi.fn()
+  resolveViewAsTargetUser: vi.fn()
 }));
 vi.mock("@/lib/legal/acceptance", () => ({
   recordAcceptance: vi.fn()
@@ -16,7 +16,7 @@ vi.mock("@/lib/rate-limit", () => ({
 
 import { POST } from "@/app/api/legal/accept/route";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { recordAcceptance } from "@/lib/legal/acceptance";
 import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 
@@ -31,7 +31,11 @@ function makeRequest(body: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue(null);
-  vi.mocked(isViewAsActive).mockResolvedValue(false);
+  vi.mocked(resolveViewAsTargetUser).mockImplementation(async (u) => ({
+    userId: u.userId,
+    email: u.email,
+    impersonating: false
+  }));
   vi.mocked(recordAcceptance).mockResolvedValue();
   vi.mocked(rateLimitDurable).mockResolvedValue({ success: true } as never);
   vi.mocked(rateLimitIdentifierFromRequest).mockReturnValue("203.0.113.9");
@@ -56,11 +60,39 @@ describe("POST /api/legal/accept", () => {
     expect(rateLimitDurable).not.toHaveBeenCalled();
   });
 
-  it("refuses under admin view-as (no fabricated tenant consent)", async () => {
+  it("records for the TENANT under view-as, marked as the operator's click", async () => {
+    // An admin in view-as can clear a tenant's clickwrap gate, and the row it
+    // writes must say so: identity is the TENANT (whose consent it records),
+    // source is 'admin_view_as'. Reusing 'gate' here would put a fabricated
+    // "the tenant personally agreed" row in a table that exists as evidence.
     vi.mocked(getAuthUser).mockResolvedValue({ userId: "admin-1", email: "a@x.co" } as never);
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
+    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
+      userId: "u-tenant",
+      email: "tenant@example.com",
+      impersonating: true
+    });
     const res = await POST(makeRequest({}));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(recordAcceptance).toHaveBeenCalledWith({
+      userId: "u-tenant",
+      email: "tenant@example.com",
+      source: "admin_view_as",
+      ip: "203.0.113.9",
+      userAgent: "TestBrowser/1.0"
+    });
+  });
+
+  it("404s when the impersonated tenant has no login to record against", async () => {
+    // A pending/placeholder owner_email. Recording against the signed-in
+    // admin instead would file the operator's consent as the tenant's.
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "admin-1", email: "a@x.co" } as never);
+    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
+      userId: null,
+      email: "pending-x@example.com",
+      impersonating: true
+    });
+    const res = await POST(makeRequest({}));
+    expect(res.status).toBe(404);
     expect(recordAcceptance).not.toHaveBeenCalled();
   });
 

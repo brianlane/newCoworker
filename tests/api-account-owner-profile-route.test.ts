@@ -3,9 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
-vi.mock("@/lib/admin/view-as", () => ({
-  isViewAsActive: vi.fn()
-}));
 vi.mock("@/lib/dashboard/active-business", () => ({
   resolveActiveBusinessIdForAction: vi.fn()
 }));
@@ -30,7 +27,6 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 
 import { POST } from "@/app/api/account/owner-profile/route";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessProfileFields } from "@/lib/db/businesses";
@@ -83,7 +79,6 @@ describe("api/account/owner-profile route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(isViewAsActive).mockResolvedValue(false);
     vi.mocked(resolveActiveBusinessIdForAction).mockResolvedValue(BIZ as never);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       makeDb({ business: { id: BIZ, phone: "+15145188192" } }) as never
@@ -256,10 +251,21 @@ describe("api/account/owner-profile route", () => {
     expect(body.data.warning).toBeNull();
   });
 
-  it("view-as stays read-only", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
+  it("writes to the resolved active business at the owner-only bar", async () => {
+    // Admin view-as can edit a tenant's owner contact card. What keeps the
+    // write on the tenant is that the business comes from
+    // resolveActiveBusinessIdForAction (view-as aware), asked at
+    // manage_billing so a manager still cannot rewrite the owner's identity.
     const res = await POST(request({ phone: "+16025550147" }));
-    expect(res.status).toBe(403);
-    expect(updateBusinessProfileFields).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(resolveActiveBusinessIdForAction).toHaveBeenCalledWith(
+      expect.anything(),
+      "manage_billing"
+    );
+    expect(updateBusinessProfileFields).toHaveBeenCalledWith(
+      BIZ,
+      { phone: "+16025550147" },
+      expect.anything()
+    );
   });
 });

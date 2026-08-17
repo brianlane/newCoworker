@@ -1,17 +1,16 @@
 /**
  * Owner-facing website-chat-widget settings.
  *
- * GET  ?businessId=            → settings row (minted on first read outside
- *      view-as) + tier-allowed flag.
+ * GET  ?businessId=            → settings row (minted on first read for a
+ *      tier that allows the widget) + tier-allowed flag.
  * POST { businessId, ... }     → update enable/origins/contact-form/theme,
  *      or rotate the site key. manage_settings + Standard+ gated
- *      server-side; view-as is read-only and refused on writes (same
- *      posture as the branding route).
+ *      server-side. Both verbs take an explicit businessId, so an admin in
+ *      view-as reads and writes the tenant they are viewing.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
+import { requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   getOrCreateWidgetSettings,
@@ -57,15 +56,12 @@ export async function GET(request: Request) {
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
     const tierAllowed = webchatAllowedForTier(business.tier);
 
-    // View-as stays read-only — no settings row is minted as a page-load
-    // side effect (same rationale as the mailbox card). A missing row just
-    // renders the not-yet-set-up state.
-    const user = await getAuthUser();
-    const viewAs = await isViewAsActive(user);
-    const settings =
-      viewAs || !tierAllowed
-        ? await getWidgetSettingsForBusiness(businessId)
-        : await getOrCreateWidgetSettings(businessId);
+    // Mint-on-first-read only for a tier that can actually use the widget;
+    // a starter tenant just renders the not-yet-set-up state. An admin in
+    // view-as mints exactly like the owner's first visit would.
+    const settings = tierAllowed
+      ? await getOrCreateWidgetSettings(businessId)
+      : await getWidgetSettingsForBusiness(businessId);
 
     return successResponse({
       tierAllowed,
@@ -98,10 +94,6 @@ export async function POST(request: Request) {
   try {
     const body = postSchema.parse(await request.json());
     await requireBusinessRole(body.businessId, "manage_settings");
-    const user = await getAuthUser();
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
 
     // Tier gate on every write except a pure disable — a downgraded tenant
     // can always turn the widget off / shed config, never turn it on.

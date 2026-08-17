@@ -5,8 +5,6 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
-  defaultNotificationPreferencesRow,
-  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
@@ -55,28 +53,23 @@ export default async function NotificationsPage(props: {
   const businessRow = businesses?.[0] ?? null;
   const businessId = businessRow?.id ?? null;
 
-  // View-as stays strictly read-only: it must not create the tenant's default
-  // preference row as a page-load side effect. When the tenant has never
-  // visited this page (no row yet), render the same in-memory defaults the
-  // owner's first visit would insert, so the admin still previews the real
-  // page instead of a bogus "provision your coworker" empty state. Real
-  // owners keep the create-on-first-visit behavior.
+  // Create-on-first-visit runs for an impersonating admin too: the operator
+  // should land on the same working page the owner's first visit would build,
+  // and be able to save from it. The row is seeded from the TENANT's contacts
+  // either way (seedUserEmail/seedAuthPhone above already exclude the admin's
+  // own address and phone), so nothing of the operator's leaks into it.
   // Prefs and the recent list are independent — one parallel group (for
   // residency tenants the notifications read is a tunnel round-trip).
   const [prefs, recent, whatsappConnected] = await Promise.all([
     businessId && businessRow
-      ? viewAsCtx.viewAs
-        ? getNotificationPreferences(businessId).then(
-            (row) => row ?? defaultNotificationPreferencesRow(businessId)
-          )
-        : getOrCreateNotificationPreferences(businessId, {
-            contactSeeds: {
-              userEmail: seedUserEmail,
-              authPhone: seedAuthPhone,
-              ownerEmail: businessRow.owner_email ?? null,
-              businessPhone: businessRow.phone ?? null
-            }
-          })
+      ? getOrCreateNotificationPreferences(businessId, {
+          contactSeeds: {
+            userEmail: seedUserEmail,
+            authPhone: seedAuthPhone,
+            ownerEmail: businessRow.owner_email ?? null,
+            businessPhone: businessRow.phone ?? null
+          }
+        })
       : Promise.resolve(null),
     businessId ? getNotifications(businessId, { limit: 25 }) : Promise.resolve([]),
     // Gates the "WhatsApp instead of SMS" toggle. ACTIVE, not merely

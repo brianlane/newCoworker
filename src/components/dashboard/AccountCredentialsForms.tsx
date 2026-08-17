@@ -8,6 +8,7 @@ import { PASSWORD_RULES, PASSWORD_MIN_LENGTH, getPasswordValidationError } from 
 import { changeAccountPassword } from "@/lib/account/password-change";
 import { terminateOtherSessions } from "@/lib/auth/terminate-other-sessions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
 
@@ -35,8 +36,40 @@ function StatusLine({ status }: { status: Status }) {
  * old AccountSettingsForms when Settings became a multi-page hub; the
  * business name/timezone cards live in BusinessBasicsForms on the Business
  * page).
+ *
+ * `email` is the account being administered, which under admin view-as is the
+ * TENANT's login, not the signed-in operator's (see loadSettingsContext).
+ *
+ * The two cards split under view-as, and the notices say so:
+ *   * Email is retargeted server-side, applies IMMEDIATELY (the operator has
+ *     no confirmation link to click), and so gets different success copy.
+ *   * Password is NOT retargeted. It runs in the browser against the caller's
+ *     own Supabase session, so it changes the OPERATOR's password. Labeled
+ *     rather than silently hidden, because an unlabeled password form on a
+ *     page that otherwise represents the tenant is exactly how an operator
+ *     rotates their own credentials by accident.
  */
-export function AccountCredentialsForms({ email }: { email: string }) {
+export function AccountCredentialsForms({
+  email,
+  callerEmail,
+  impersonating = false,
+  impersonationNotice,
+  ownLoginNotice
+}: {
+  email: string;
+  /**
+   * The SIGNED-IN user's own email. Only the password card uses it, and it
+   * must not be the `email` above: `changeAccountPassword` re-authenticates
+   * with `signInWithPassword({ email, currentPassword })` against the caller's
+   * own browser session, so handing it the impersonated tenant's address would
+   * fail every re-auth under view-as. Defaults to `email`, which is the same
+   * value whenever nobody is impersonating.
+   */
+  callerEmail?: string;
+  impersonating?: boolean;
+  impersonationNotice?: string;
+  ownLoginNotice?: string;
+}) {
   // --- Email ---
   const [newEmail, setNewEmail] = useState("");
   const [emailStatus, setEmailStatus] = useState<Status>({ kind: "idle" });
@@ -45,7 +78,12 @@ export function AccountCredentialsForms({ email }: { email: string }) {
     e.preventDefault();
     const trimmed = newEmail.trim().toLowerCase();
     if (!trimmed || trimmed === email.toLowerCase()) {
-      setEmailStatus({ kind: "error", message: "Enter a new email different from your current one." });
+      setEmailStatus({
+        kind: "error",
+        message: impersonating
+          ? "Enter a new email different from this account's current one."
+          : "Enter a new email different from your current one."
+      });
       return;
     }
     setEmailStatus({ kind: "saving" });
@@ -62,7 +100,12 @@ export function AccountCredentialsForms({ email }: { email: string }) {
       setNewEmail("");
       setEmailStatus({
         kind: "success",
-        message: `Almost done. We sent a confirmation link to both ${email} and ${trimmed}. Click the link in each inbox to finish the change. Your current email stays active until then.`
+        // Two different flows, so two different truths. The owner's change
+        // waits on confirmation links; an operator's applies on the spot,
+        // and promising a link they will never receive would read as failure.
+        message: impersonating
+          ? `Done. This account's login is now ${trimmed}, effective immediately.`
+          : `Almost done. We sent a confirmation link to both ${email} and ${trimmed}. Click the link in each inbox to finish the change. Your current email stays active until then.`
       });
     } catch {
       setEmailStatus({ kind: "error", message: "Network error. Please try again." });
@@ -90,7 +133,9 @@ export function AccountCredentialsForms({ email }: { email: string }) {
     try {
       const supabase = getSupabaseBrowserClient();
       const result = await changeAccountPassword(supabase.auth, {
-        email,
+        // The caller's own login, never the impersonated tenant's: this
+        // re-authenticates the live browser session.
+        email: callerEmail ?? email,
         currentPassword,
         newPassword
       });
@@ -125,9 +170,14 @@ export function AccountCredentialsForms({ email }: { email: string }) {
     <>
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">Account email</h2>
+        <OwnLoginNotice show={impersonating && Boolean(impersonationNotice)}>
+          {impersonationNotice ?? ""}
+        </OwnLoginNotice>
         <p className="text-xs text-parchment/40 mb-4">
-          Current: <span className="text-parchment/70">{email}</span>. Changing it requires
-          confirming from both your current address and the new one.
+          Current: <span className="text-parchment/70">{email}</span>.{" "}
+          {impersonating
+            ? "Changing it takes effect immediately."
+            : "Changing it requires confirming from both your current address and the new one."}
         </p>
         <form onSubmit={saveEmail} className="space-y-3">
           <Input
@@ -140,7 +190,7 @@ export function AccountCredentialsForms({ email }: { email: string }) {
           />
           <div className="flex items-center gap-3">
             <Button type="submit" size="sm" loading={emailStatus.kind === "saving"} disabled={!newEmail.trim()}>
-              Send confirmation
+              {impersonating ? "Change email now" : "Send confirmation"}
             </Button>
             <StatusLine status={emailStatus} />
           </div>
@@ -149,6 +199,9 @@ export function AccountCredentialsForms({ email }: { email: string }) {
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">Password</h2>
+        <OwnLoginNotice show={impersonating && Boolean(ownLoginNotice)}>
+          {ownLoginNotice ?? ""}
+        </OwnLoginNotice>
         <p className="text-xs text-parchment/40 mb-4">
           Enter your current password to set a new one.
         </p>

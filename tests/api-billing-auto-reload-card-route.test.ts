@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn() }));
-vi.mock("@/lib/admin/view-as", () => ({ isViewAsActive: vi.fn() }));
 vi.mock("@/lib/dashboard/active-business", () => ({
   resolveActiveBusinessIdForAction: vi.fn()
 }));
@@ -15,7 +14,6 @@ vi.mock("next-intl/server", () => ({
 }));
 
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -35,7 +33,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.NEXT_PUBLIC_APP_URL = "https://ncw.example";
   vi.mocked(getAuthUser).mockResolvedValue({ userId: "u1", email: "o@example.com" } as never);
-  vi.mocked(isViewAsActive).mockResolvedValue(false);
   vi.mocked(resolveActiveBusinessIdForAction).mockResolvedValue("biz-1");
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({} as never);
   vi.mocked(getSubscription).mockResolvedValue({ stripe_customer_id: "cus_1" } as never);
@@ -57,10 +54,16 @@ describe("POST /api/billing/auto-reload/card", () => {
     );
   });
 
-  it("refuses while view-as is active", async () => {
-    vi.mocked(isViewAsActive).mockResolvedValue(true);
-    expect((await POST()).status).toBe(403);
-    expect(createAutoReloadSetupSession).not.toHaveBeenCalled();
+  it("mints the session for the resolved business, not the caller's own", async () => {
+    // Admin view-as can re-authorize a tenant's card, and this is the line
+    // that keeps it pointed at the tenant: the business id comes from
+    // resolveActiveBusinessIdForAction (view-as aware), never from
+    // getAuthUser().email.
+    vi.mocked(resolveActiveBusinessIdForAction).mockResolvedValue("biz-tenant");
+    expect((await POST()).status).toBe(200);
+    expect(createAutoReloadSetupSession).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-tenant" })
+    );
   });
 
   it("refuses an unauthenticated caller", async () => {

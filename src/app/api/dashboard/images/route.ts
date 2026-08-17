@@ -16,7 +16,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { GENERATED_IMAGES_BUCKET, MAX_INPUT_IMAGE_BYTES } from "@/lib/image-tools/handlers";
@@ -33,12 +32,6 @@ export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-
-    // Keep admin impersonation read-only: an uploaded object is a write to
-    // the tenant's storage.
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
 
     const form = await request.formData().catch(() => null);
     if (!form) return errorResponse("VALIDATION_ERROR", "Expected multipart form data");

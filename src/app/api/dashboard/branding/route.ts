@@ -5,12 +5,12 @@
  * GET  ?businessId=            → stored branding (or null)
  * POST { businessId, branding } → set; `branding: null` clears to platform
  *      default. Writes are manage_settings (owner or manager; platform
- *      admin passes) + enterprise-tier gated server-side; view-as is
- *      read-only and refused on writes.
+ *      admin passes) + enterprise-tier gated server-side. Both verbs take an
+ *      explicit businessId, so an admin in view-as reads and writes the
+ *      tenant they are viewing.
  */
 import { z } from "zod";
-import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
+import { requireBusinessRole } from "@/lib/auth";
 import { brandingSchema, parseBranding } from "@/lib/plans/branding";
 import { getBusiness, updateBusinessBranding } from "@/lib/db/businesses";
 import { teamAccessAllowedForTier } from "@/lib/team/tier-gate";
@@ -45,10 +45,6 @@ export async function POST(request: Request) {
   try {
     const body = bodySchema.parse(await request.json());
     await requireBusinessRole(body.businessId, "manage_settings");
-    const user = await getAuthUser();
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
 
     const business = await getBusiness(body.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");

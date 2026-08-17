@@ -799,17 +799,33 @@ export async function POST(request: Request) {
     // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
     // The role is read ONCE and composed into the per-bar booleans below.
     //
-    // Deliberately NO isAdmin shortcut: the caller's EMAIL is the single
-    // source of role truth. An admin viewing their own business (self-owned
-    // view-as, which isViewAsActive treats as changes-enabled) resolves
-    // their genuine owner role and gets the full toolset; an admin
-    // impersonating a FOREIGN tenant resolves no role, so the role-gated
-    // tools are simply not declared, matching the view-as read-only policy
-    // instead of handing an impersonator settings mutations.
+    // The caller's EMAIL is the source of role truth for ordinary logins: an
+    // owner resolves owner, a manager manager, a staff teammate staff, and a
+    // stranger nothing. Admin view-as is the one exception, and it is
+    // deliberate rather than a shortcut around the matrix: an impersonating
+    // admin's email holds no role on a FOREIGN tenant, so without this the
+    // operator would be handed a strictly smaller toolset than the owner they
+    // are standing in for, and the MCP bridge would declare nothing at all.
+    // Admin is the platform operator; view-as is full access, and the pinned
+    // business is exactly the one they asked to act on.
+    //
+    // Only for the business the view-as cookie actually pins: an admin with
+    // no cookie, or one pointed elsewhere, resolves no role here. The pinned
+    // id is also handed to the bridge below, where the per-call
+    // requireMcpBusinessRole needs the same answer or every declared bridge
+    // tool would refuse.
+    const adminViewAsBusinessId = await (async () => {
+      if (!user.isAdmin) return undefined;
+      const { getViewAsBusinessId } = await import("@/lib/admin/view-as");
+      const pinned = await getViewAsBusinessId(user);
+      return pinned === body.businessId ? body.businessId : undefined;
+    })().catch(() => undefined);
     const callerRole = await (async () => {
       if (!user.email) return null;
       const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
-      return await getBusinessRoleForEmail(body.businessId, user.email);
+      const own = await getBusinessRoleForEmail(body.businessId, user.email);
+      if (own) return own;
+      return adminViewAsBusinessId ? ("owner" as const) : null;
     })().catch(() => null);
     const { can } = await import("@/lib/authz/policy");
     const canManageSettings = callerRole != null && can(callerRole, "manage_settings");
@@ -850,16 +866,16 @@ export async function POST(request: Request) {
     // MCP-bridge tools (connector parity): the Settings toggles gate the
     // groups, and the bridge itself prunes any tool whose handler bar the
     // caller's role cannot pass (per-tool, mirroring the handlers) — so a
-    // staff turn is never handed a get_flow that can only refuse. The same
-    // role gate covers view-as: an admin on their OWN business resolves
-    // owner and gets the full bridge; an impersonating admin on a foreign
-    // tenant resolves no role, buildMcpBridgeExtraTools returns null, and
-    // nothing is declared — silent-clean instead of error-noisy. Every
-    // bridged handler ALSO re-runs requireMcpBusinessRole per call, so this
-    // composition narrows, never widens.
+    // staff turn is never handed a get_flow that can only refuse. Admin
+    // view-as resolves owner through `callerRole` above and passes the pinned
+    // business to the caller, which is what the per-call
+    // `requireMcpBusinessRole` inside each handler keys on. Declaring the
+    // tools without that would hand the operator tools that always refuse.
+    // Every bridged handler still re-runs that check, so the composition
+    // narrows, never widens.
     const bridgeExtraTools = buildMcpBridgeExtraTools(
       body.businessId,
-      { userId: user.userId, email: user.email ?? "" },
+      { userId: user.userId, email: user.email ?? "", adminViewAsBusinessId },
       {
         read_business_data: toolStates.read_business_data,
         manage_contacts: toolStates.manage_contacts,

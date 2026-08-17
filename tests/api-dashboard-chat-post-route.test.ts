@@ -100,7 +100,15 @@ vi.mock("@/lib/db/business-members", () => ({
   getBusinessRoleForEmail: vi.fn(async () => "owner")
 }));
 
+// Admin view-as: the route asks for the pinned business id when the caller
+// is the platform admin. Mocked because the real reader needs a request-scoped
+// cookie store; default is "no view-as", so non-admin cases are untouched.
+vi.mock("@/lib/admin/view-as", () => ({
+  getViewAsBusinessId: vi.fn(async () => null)
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
+import { getViewAsBusinessId } from "@/lib/admin/view-as";
 import { getAgentToolStates } from "@/lib/db/agent-tool-settings";
 
 /** Point the batched gates mock at a uniform enabled state for every key. */
@@ -946,10 +954,9 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     expect(staffNames).not.toContain("list_employees");
     expect(staffNames).not.toContain("get_notification_preferences");
 
-    // Admin viewing their OWN business (self-owned view-as, which
-    // isViewAsActive treats as changes-enabled): their email resolves the
-    // genuine owner role, so the full bridge declares. This is Brian on the
-    // HQ tenant.
+    // Admin viewing their OWN business (the HQ tenant): their email resolves
+    // the genuine owner role, so the full bridge declares with no
+    // view-as-specific handling at all. This is Brian on the HQ tenant.
     vi.mocked(runInlineChatTurn).mockClear();
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       userId: "admin-1",
@@ -963,9 +970,13 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
     ).toContain("update_business_knowledge");
     expect(selfOwnedArgs.systemInstruction).toContain("DIRECT BUSINESS TOOLS");
 
-    // Admin impersonating a FOREIGN tenant: their email holds no role there,
-    // so no bridge, no ladder, and the role-composed settings tools stay
-    // off — the read-only view-as policy expressed at declaration time.
+    // Admin impersonating a FOREIGN tenant, cookie pinned to THIS business:
+    // their email holds no role here, so without the view-as resolution the
+    // operator would get a strictly smaller toolset than the owner they are
+    // standing in for. They resolve owner instead, and the pinned id rides
+    // along to the bridge caller so the per-call requireMcpBusinessRole
+    // inside each handler agrees (declared-but-refusing tools are worse than
+    // none).
     vi.mocked(runInlineChatTurn).mockClear();
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       userId: "admin-1",
@@ -973,11 +984,37 @@ describe("POST /api/dashboard/chat, inline (central Gemini) primary path", () =>
       isAdmin: true
     } as never);
     vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce(null as never);
+    vi.mocked(getViewAsBusinessId).mockResolvedValueOnce(BIZ);
     await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
-    const foreignArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
-    expect(foreignArgs.extraTools).toBeNull();
-    expect(foreignArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
-    expect(foreignArgs.actionToolGates).toMatchObject({
+    const viewAsArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect((viewAsArgs.extraTools?.declarations ?? []).map((d) => d.name)).toContain(
+      "update_business_knowledge"
+    );
+    expect(viewAsArgs.systemInstruction).toContain("DIRECT BUSINESS TOOLS");
+    expect(viewAsArgs.actionToolGates).toMatchObject({
+      update_notification_preferences: true,
+      flag_contact_spam: true,
+      manage_employee: true
+    });
+
+    // Admin whose view-as pin is a DIFFERENT tenant (or absent): no role, no
+    // bridge. The grant is scoped to the business they actually asked to act
+    // on, not to being admin.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getAuthUser).mockResolvedValueOnce({
+      userId: "admin-1",
+      email: "admin@newcoworker.com",
+      isAdmin: true
+    } as never);
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce(null as never);
+    vi.mocked(getViewAsBusinessId).mockResolvedValueOnce(
+      "99999999-9999-4999-8999-999999999999"
+    );
+    await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    const unpinnedArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(unpinnedArgs.extraTools).toBeNull();
+    expect(unpinnedArgs.systemInstruction).not.toContain("DIRECT BUSINESS TOOLS");
+    expect(unpinnedArgs.actionToolGates).toMatchObject({
       update_notification_preferences: false,
       flag_contact_spam: false,
       manage_employee: false

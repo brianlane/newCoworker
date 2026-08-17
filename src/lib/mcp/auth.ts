@@ -35,6 +35,21 @@ export type McpAuthUser = {
    * predating the second route is.
    */
   client?: "claude" | "chatgpt";
+  /**
+   * Set ONLY by the dashboard-chat bridge, and only when the platform admin
+   * is running a turn under view-as: the business id their view-as cookie
+   * pins. `mcpBusinessRoleOutcome` grants owner for exactly that business
+   * when the caller's email holds no role on it, so an impersonating admin
+   * gets the same bridged toolset as the owner they are standing in for
+   * instead of tools that can only refuse.
+   *
+   * Never derived from request data, and never present on a bearer-token
+   * connector request (`verifySupabaseAccessToken` does not set it): the
+   * only writer is server code that has already checked `user.isAdmin` and
+   * read the httpOnly cookie. It carries the business ID rather than a
+   * boolean so the grant cannot leak to a second business inside one turn.
+   */
+  adminViewAsBusinessId?: string;
 };
 
 /**
@@ -131,7 +146,13 @@ async function mcpBusinessRoleOutcome(
   action: BusinessAction
 ): Promise<{ allowed: true; role: BusinessRole } | { allowed: false; reason: string }> {
   const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
-  const role = await getBusinessRoleForEmail(businessId, auth.email);
+  const emailRole = await getBusinessRoleForEmail(businessId, auth.email);
+  // Admin view-as (dashboard bridge only, see `adminViewAsBusinessId`): the
+  // operator's own email holds no role on a customer's business, and refusing
+  // here would leave every bridged tool declared-but-dead for them.
+  const role =
+    emailRole ??
+    (auth.adminViewAsBusinessId === businessId ? ("owner" as BusinessRole) : null);
   if (!role) return { allowed: false, reason: "no_role" };
 
   const { can } = await import("@/lib/authz/policy");

@@ -12,8 +12,8 @@
  */
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createSmsBonusCheckoutSession } from "@/lib/stripe/client";
@@ -31,12 +31,6 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only: this route resolves the business from the
-    // SIGNED-IN user's email, so an impersonating admin's write would land
-    // on the wrong business. Refuse instead (see isViewAsActive).
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     if (!user?.email) {
       return errorResponse("UNAUTHORIZED", "Authentication required");
     }
@@ -52,6 +46,12 @@ export async function POST(request: Request) {
     // with multiple businesses always checks out for the row the billing
     // page displays.
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
+    // Payer identity, NOT caller identity: under view-as the subscription
+    // belongs to the tenant, so Checkout must open under the TENANT's address
+    // rather than the operator's (Bugbot High on PR #1420). `userId` stays the
+    // caller on purpose: its only reader stores it as `consent_user_id`, i.e.
+    // who authorized the charge, and the operator is the honest answer.
+    const payer = await resolveViewAsTargetUser(user);
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       smsTexts: pack.texts,
       successUrl: `${appUrl}/dashboard/billing?bonus=success&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${appUrl}/dashboard/billing?bonus=cancelled`,
-      customerEmail: user.email,
+      customerEmail: payer.email ?? undefined,
       customerId: subscription.stripe_customer_id ?? undefined,
       userId: user.userId
     });

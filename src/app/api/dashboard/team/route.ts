@@ -14,11 +14,12 @@
  * Auth: requireBusinessRole(businessId, "manage_team") — owner or manager
  * (platform admin passes). Inviting/role-changing is enterprise-gated
  * server-side; revoke + list work on any tier so downgraded businesses can
- * shed members. View-as stays read-only: writes are refused.
+ * shed members. Admin view-as is full access: every write below takes an
+ * explicit businessId, so an impersonating admin's invite/role change/revoke
+ * lands on the tenant they are viewing.
  */
 import { z } from "zod";
-import { authUserExistsByEmail, getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
+import { authUserExistsByEmail, requireBusinessRole } from "@/lib/auth";
 import {
   inviteBusinessMember,
   listBusinessMembers,
@@ -40,14 +41,6 @@ export const dynamic = "force-dynamic";
 
 /** How the invitation reached the invitee (or why it didn't). */
 type InviteDelivery = "auth_invite" | "notice_email" | "none";
-
-async function refuseViewAsWrite() {
-  const user = await getAuthUser();
-  if (await isViewAsActive(user)) {
-    return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-  }
-  return null;
-}
 
 export async function GET(request: Request) {
   try {
@@ -75,8 +68,6 @@ export async function POST(request: Request) {
   try {
     const body = inviteSchema.parse(await request.json());
     const user = await requireBusinessRole(body.businessId, "manage_team");
-    const viewAsRefusal = await refuseViewAsWrite();
-    if (viewAsRefusal) return viewAsRefusal;
 
     await assertTeamAccessAllowed(body.businessId);
 
@@ -160,8 +151,6 @@ export async function PATCH(request: Request) {
   try {
     const body = roleSchema.parse(await request.json());
     await requireBusinessRole(body.businessId, "manage_team");
-    const viewAsRefusal = await refuseViewAsWrite();
-    if (viewAsRefusal) return viewAsRefusal;
     await assertTeamAccessAllowed(body.businessId);
 
     const updated = await updateBusinessMemberRole(body.businessId, body.memberId, body.role);
@@ -189,8 +178,6 @@ export async function DELETE(request: Request) {
     // Deliberately NOT tier-gated: a downgraded business must always be able
     // to shed members.
     await requireBusinessRole(body.businessId, "manage_team");
-    const viewAsRefusal = await refuseViewAsWrite();
-    if (viewAsRefusal) return viewAsRefusal;
 
     const revoked = await revokeBusinessMember(body.businessId, body.memberId);
     if (!revoked) return errorResponse("NOT_FOUND", "Member not found (or already revoked)");

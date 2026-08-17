@@ -34,7 +34,16 @@ export type SettingsBusinessRow = {
 
 export type SettingsContext = {
   user: AuthUser;
-  /** Non-null while an admin is impersonating a tenant (read-only). */
+  /**
+   * The email of the account these pages administer: the signed-in user's
+   * normally, the impersonated tenant OWNER's under view-as. Pages must render
+   * THIS rather than `user.email`, because the user-scoped account APIs
+   * retarget the same way, so showing the operator's address next to a form
+   * that renames the tenant is how an operator renames the wrong account
+   * (Bugbot High on PR #1420).
+   */
+  accountEmail: string | null;
+  /** Non-null while an admin is impersonating a tenant (full access). */
   viewAs: Awaited<ReturnType<typeof resolveViewAsContext>>["viewAs"];
   db: Awaited<ReturnType<typeof createSupabaseServiceClient>>;
   business: SettingsBusinessRow | null;
@@ -46,7 +55,7 @@ export async function loadSettingsContext(): Promise<SettingsContext> {
   const user = await getAuthUser();
   if (!user || !user.email) redirect("/login");
 
-  const { viewAs } = await resolveViewAsContext(user);
+  const { viewAs, ownerEmail } = await resolveViewAsContext(user);
 
   const db = await createSupabaseServiceClient();
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
@@ -62,6 +71,7 @@ export async function loadSettingsContext(): Promise<SettingsContext> {
 
   return {
     user,
+    accountEmail: ownerEmail,
     viewAs,
     db,
     business: (businesses?.[0] as SettingsBusinessRow | undefined) ?? null,

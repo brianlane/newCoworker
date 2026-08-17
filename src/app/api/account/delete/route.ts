@@ -14,6 +14,21 @@
  * The deletion itself mirrors the admin delete-client subscription-less
  * branch: stop any attached VM, delete the auth user (only when this is the
  * owner's last business), then hard-delete the business row (cascades).
+ *
+ * ## Admin view-as
+ *
+ * An admin impersonating a tenant can run this for them. Two halves resolve
+ * differently and both matter:
+ *
+ *  - The BUSINESS comes from `resolveActiveBusinessIdForAction`, which honors
+ *    the view-as pin, so the tenant's business is what gets deleted.
+ *  - The AUTH USER comes from `resolveViewAsTargetUser`, i.e. the tenant
+ *    owner's login, never the admin's. Without that retarget this route
+ *    would delete the tenant's data and then the OPERATOR's own account.
+ *
+ * The password re-verification deliberately stays on the CALLER's own
+ * credentials: it exists to prove the session is not hijacked, and the admin
+ * does not (and should not) know the tenant's password.
  */
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
@@ -22,7 +37,7 @@ import {
   resolveActiveBusinessIdForAction
 } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
+import { resolveViewAsTargetUser } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
@@ -53,11 +68,6 @@ const schema = z.object({
 export async function DELETE(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only — an impersonating admin must never be able to
-    // delete a tenant's account from the tenant-facing surface.
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const body = schema.parse(await request.json());
@@ -68,9 +78,18 @@ export async function DELETE(request: Request) {
       );
     }
 
+    // Whose LOGIN this deletion tears down: the caller's, or the
+    // impersonated tenant owner's under view-as. Resolved before any
+    // destructive step so a tenant whose owner_email has no auth user behind
+    // it still deletes cleanly (userId null → the business goes, no login to
+    // remove) instead of falling through to the admin's own user id.
+    const target = await resolveViewAsTargetUser(user);
+
     // Server-side password re-verification. A throwaway client with the
     // anon key and no session persistence — the sign-in result is discarded;
-    // we only care whether the credentials are valid.
+    // we only care whether the credentials are valid. Always the CALLER's
+    // own password, including under view-as: this is a "prove it is really
+    // you" check on the session, not a claim to know the tenant's secret.
     const env = readSupabaseEnv();
     const verifier = createClient(env.url, env.anonKey, {
       auth: { persistSession: false, autoRefreshToken: false }
@@ -182,11 +201,21 @@ export async function DELETE(request: Request) {
       }
     }
 
-    // Does this login keep access to ANY other business — owned (matched
-    // case-insensitively; owner_email is not lowercased by schema) or via a
-    // business_members role? If so the auth user must survive: deleting it
-    // would kick a manager/staff member out of every other tenant too.
-    const otherAccessible = (await listAccessibleBusinesses(user, db)).filter(
+    // Does the login being torn down keep access to ANY other business,
+    // owned (matched case-insensitively; owner_email is not lowercased by
+    // schema) or via a business_members role? If so the auth user must
+    // survive: deleting it would kick a manager/staff member out of every
+    // other tenant too.
+    //
+    // Asked about the TARGET login, not the caller. Under view-as the admin's
+    // own portfolio is irrelevant, and using it would both spare a tenant
+    // login that should go (the admin owns something) and, worse, feed the
+    // admin's own user id to the delete below.
+    const targetLogin =
+      target.impersonating && target.userId
+        ? { userId: target.userId, email: target.email, isAdmin: false }
+        : user;
+    const otherAccessible = (await listAccessibleBusinesses(targetLogin, db)).filter(
       (b) => b.businessId !== businessId
     );
 
@@ -206,22 +235,22 @@ export async function DELETE(request: Request) {
     await revokeNangoConnectionRows(businessId, nangoSnapshot);
 
     let authUserDeleted = false;
-    if (otherAccessible.length === 0) {
+    if (otherAccessible.length === 0 && target.userId) {
       try {
-        const { error } = await db.auth.admin.deleteUser(user.userId);
+        const { error } = await db.auth.admin.deleteUser(target.userId);
         if (!error || /not found|does not exist/i.test(error.message ?? "")) {
           authUserDeleted = true;
         } else {
           logger.error("account.delete: auth user delete failed after business delete", {
             businessId,
-            supabaseUserId: user.userId,
+            supabaseUserId: target.userId,
             error: error.message
           });
         }
       } catch (err) {
         logger.error("account.delete: auth user delete threw after business delete", {
           businessId,
-          supabaseUserId: user.userId,
+          supabaseUserId: target.userId,
           error: err instanceof Error ? err.message : String(err)
         });
       }
@@ -229,7 +258,10 @@ export async function DELETE(request: Request) {
 
     logger.info("account.delete: self-serve deletion complete", {
       businessId,
-      ownerEmail: user.email,
+      ownerEmail: target.email,
+      // Distinguishes an operator teardown from a genuine self-serve delete
+      // in the logs, which the audit trail for the view-as entry pairs with.
+      deletedBy: target.impersonating ? user.email : null,
       authUserDeleted,
       remainingBusinesses: otherAccessible.length
     });

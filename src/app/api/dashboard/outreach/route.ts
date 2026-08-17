@@ -13,7 +13,6 @@
 
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -66,9 +65,6 @@ export async function PUT(request: Request) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const body = saveSchema.safeParse(await request.json().catch(() => null));
     if (!body.success) {
       return errorResponse("VALIDATION_ERROR", body.error.issues[0]?.message ?? "Invalid body");

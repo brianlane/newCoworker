@@ -11,6 +11,7 @@ import { AccountCredentialsForms } from "@/components/dashboard/AccountCredentia
 import { PasskeysCard } from "@/components/dashboard/PasskeysCard";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
+import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,12 @@ export const dynamic = "force-dynamic";
 export default async function AccountSettingsPage() {
   const t = await getTranslations("dashboard.settings");
   const locale = (await getLocale()) as AppLocale;
-  const { user, business } = await loadSettingsContext();
+  const { user, business, viewAs, accountEmail } = await loadSettingsContext();
+  // Under view-as the account this page administers is the TENANT's, and the
+  // user-scoped APIs already retarget there. `selfOwned` (the admin on their
+  // own HQ tenant) is not impersonation: the account IS theirs.
+  const impersonating = viewAs !== null && !viewAs.selfOwned;
+  const shownEmail = accountEmail ?? user.email ?? "";
   const subscription = business ? await getSubscription(business.id) : null;
   const nextBillingAt =
     subscription?.status === "active" && !subscription.cancel_at_period_end
@@ -30,6 +36,7 @@ export default async function AccountSettingsPage() {
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-1">{t("languageTitle")}</h2>
         <p className="text-xs text-parchment/40 mb-4">{t("languageBlurb")}</p>
+        <OwnLoginNotice show={impersonating}>{t("viewAsLanguageNotice")}</OwnLoginNotice>
         <LanguageSwitcher persist />
       </Card>
 
@@ -38,7 +45,7 @@ export default async function AccountSettingsPage() {
         <dl className="space-y-3 text-sm">
           <div className="flex justify-between">
             <dt className="text-parchment/50">{t("emailLabel")}</dt>
-            <dd className="text-parchment">{user.email}</dd>
+            <dd className="text-parchment">{shownEmail}</dd>
           </div>
           <div className="flex justify-between">
             <dt className="text-parchment/50">{t("planLabel")}</dt>
@@ -106,9 +113,18 @@ export default async function AccountSettingsPage() {
         )}
       </Card>
 
-      <AccountCredentialsForms email={user.email ?? ""} />
+      <AccountCredentialsForms
+        email={shownEmail}
+        callerEmail={user.email ?? ""}
+        impersonating={impersonating}
+        impersonationNotice={t("viewAsAccountNotice")}
+        ownLoginNotice={t("viewAsOwnLoginNotice")}
+      />
 
-      <PasskeysCard />
+      {/* Session-scoped, so it stays the OPERATOR's passkeys under view-as and
+          says so. There is no API to enroll a passkey on someone else's
+          device. */}
+      <PasskeysCard ownLoginNotice={impersonating ? t("viewAsOwnPasskeysNotice") : undefined} />
     </SettingsPageShell>
   );
 }

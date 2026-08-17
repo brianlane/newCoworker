@@ -14,7 +14,6 @@
 
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   deleteEmailCampaign,
@@ -45,9 +44,6 @@ export async function PATCH(request: Request, context: RouteContext) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const { campaignId } = await context.params;
     if (!z.string().uuid().safeParse(campaignId).success) {
       return errorResponse("VALIDATION_ERROR", "Invalid campaign id");
@@ -148,9 +144,6 @@ export async function DELETE(request: Request, context: RouteContext) {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
-    if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
-    }
     const { campaignId } = await context.params;
     if (!z.string().uuid().safeParse(campaignId).success) {
       return errorResponse("VALIDATION_ERROR", "Invalid campaign id");
