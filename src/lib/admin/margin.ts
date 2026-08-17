@@ -3,15 +3,15 @@
  * (PRDs/tier-economics-jul-2026.md) as live code.
  *
  * Revenue is the renewal-aware day-current rate the MRR card uses
- * ({@link dayCurrentSubscriptionRateCents}) or the active enterprise
- * deal's real monthly price. Costs itemize hosting, DID rental, Telnyx
+ * ({@link dayCurrentSubscriptionRateCents}) plus recurring pack add-ons,
+ * priced exactly as computeDayCurrentMrr prices them so the two never
+ * disagree, or the active enterprise deal's real monthly price. Costs itemize hosting, DID rental, Telnyx
  * usage, Gemini (metered spend actuals — `owner_chat_model_spend` is the
  * single pool for ALL per-tenant Gemini usage, including Gemini Live audio
  * settled at call teardown, so there is deliberately NO separate
  * rate-estimated voice line: adding one would double-count), and Stripe
- * fees, each line flagged `actual` (a synced vendor number or our own
- * metering) or `estimate` (per-unit rates from
- * src/lib/plans/enterprise-pricing.ts).
+ * fees, each line flagged by how much it can be trusted (see
+ * {@link MarginLineSource}).
  *
  * Pure computation: callers assemble {@link BusinessMarginInput} (see
  * src/lib/admin/margin-data.ts for the production loader). Nothing bills
@@ -26,6 +26,19 @@ import {
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { dayCurrentSubscriptionRateCents, type MrrSubscriptionInput } from "@/lib/admin/mrr";
+import {
+  listMembershipPackAddonOptions,
+  monthlyPackAddonCents,
+  type MembershipPackAddonOption
+} from "@/lib/billing/membership-pack-addons";
+import {
+  DOMESTIC_STRIPE_FEE_RATE,
+  deriveStripeFeeRate,
+  stripeFeeRateForCountry,
+  type ObservedStripeFees,
+  type StripeFeeRate
+} from "@/lib/plans/stripe-fees";
+import type { BusinessCountry } from "@/lib/plans/business-country";
 
 export type MarginLineKey =
   | "hosting"
@@ -34,7 +47,17 @@ export type MarginLineKey =
   | "gemini_chat"
   | "stripe_fees";
 
-export type MarginLineSource = "actual" | "estimate";
+/**
+ * How much a cost line is worth trusting:
+ *
+ *  - `actual`:      a synced vendor number or our own metering.
+ *  - `calibrated`:  our model, but with its rate derived from synced vendor
+ *    actuals (the Stripe fee line: a real observed fee rate applied to the
+ *    amortized monthly charge, so the line reflects what Stripe really takes
+ *    without inheriting the lumpiness of a term plan's one big charge).
+ *  - `estimate`:    per-unit rates from src/lib/plans/enterprise-pricing.ts.
+ */
+export type MarginLineSource = "actual" | "calibrated" | "estimate";
 
 export type MarginLine = {
   key: MarginLineKey;
@@ -80,6 +103,22 @@ export type BusinessMarginInput = {
   monthVoiceMinutes: number;
   /** Current-period Gemini chat spend from owner_chat_model_spend (micro-USD). */
   aiSpendMicros: number;
+  /**
+   * Tenant's resolved country, the fallback signal for the Stripe fee rate
+   * when no real charges have been observed. Defaults to "US".
+   */
+  country?: BusinessCountry;
+  /**
+   * This tenant's synced Stripe charge totals, used to DERIVE their real
+   * effective fee rate; null when the fee sync has nothing for them.
+   */
+  stripeObservedFees?: ObservedStripeFees | null;
+  /**
+   * Pack catalog for pricing recurring add-ons, same contract as
+   * computeDayCurrentMrr: defaults to the env-gated live catalog, tests
+   * inject fixtures, and an unknown pack id prices as 0.
+   */
+  packAddonOptions?: MembershipPackAddonOption[];
 };
 
 /**
@@ -87,13 +126,19 @@ export type BusinessMarginInput = {
  * months: term plans charge the whole term in one transaction, so the $0.30
  * fixed fee is spread across the term (the canvas's
  * `stripeMonthlyForBiennial` math generalized).
+ *
+ * `rate` defaults to the US-card headline rate. Pass the tenant's resolved
+ * rate (see src/lib/plans/stripe-fees.ts) so an international card or an
+ * observed effective rate is priced correctly.
  */
-export function stripeMonthlyFeeCents(monthlyRateCents: number, commitmentMonths: number): number {
+export function stripeMonthlyFeeCents(
+  monthlyRateCents: number,
+  commitmentMonths: number,
+  rate: StripeFeeRate = DOMESTIC_STRIPE_FEE_RATE
+): number {
   const months = commitmentMonths >= 1 ? commitmentMonths : 1;
   const chargeCents = monthlyRateCents * months;
-  const feeCents =
-    chargeCents * ENTERPRISE_UNIT_COSTS.stripePercent +
-    ENTERPRISE_UNIT_COSTS.stripeFixedCentsPerCharge;
+  const feeCents = chargeCents * rate.percent + rate.fixedCents;
   return feeCents / months;
 }
 
@@ -115,21 +160,33 @@ export function computeBusinessMargin(
     input.subscription.stripe_subscription_id !== null &&
     input.subscription.tier !== "enterprise"
   ) {
-    revenueCents = dayCurrentSubscriptionRateCents(
-      input.subscription as MrrSubscriptionInput & { tier: "starter" | "standard" },
-      now
-    );
-    revenueSource = "subscription";
+    // Plan rate PLUS recurring pack add-ons, exactly as computeDayCurrentMrr
+    // counts them. Packs bill every cycle, so they are revenue; leaving them
+    // out here made per-tenant margin understate a pack-carrying tenant AND
+    // made the fleet revenue base disagree with the MRR card the admin
+    // Dashboard subtracts cost from.
     const period: BillingPeriod = input.subscription.billing_period ?? "monthly";
+    revenueCents =
+      dayCurrentSubscriptionRateCents(
+        input.subscription as MrrSubscriptionInput & { tier: "starter" | "standard" },
+        now
+      ) +
+      monthlyPackAddonCents(
+        input.subscription.membership_pack_addons ?? null,
+        period,
+        input.packAddonOptions ?? listMembershipPackAddonOptions()
+      );
+    revenueSource = "subscription";
     stripeCommitmentMonths = getCommitmentMonths(period);
   }
 
   const lines: MarginLine[] = [];
 
   // ---- Hosting: only boxes the fleet still runs; BYOS boxes cost no
-  // hosting. DID rental is separate and follows the numbers, not the boxes
-  // (same rule as estimateMonthlyPlatformCost in src/lib/admin/mrr.ts,
-  // which the admin dashboard uses; keep the two in step). ----
+  // hosting. DID rental is separate and follows the NUMBERS, not the boxes,
+  // because Telnyx bills per number. There is no second cost path to keep
+  // in step any more: every admin surface composes this engine through
+  // src/lib/admin/fleet-cost.ts. ----
   const hasLiveBox = input.status !== "wiped" && input.hostingerVpsId !== null;
   if (hasLiveBox && input.vpsProvider !== "byos") {
     if (input.hostingerMonthlyPriceCents !== null) {
@@ -195,16 +252,29 @@ export function computeBusinessMargin(
     source: "actual"
   });
 
-  // ---- Stripe fees on whatever we charge (term $0.30 spread over the term). ----
+  // ---- Stripe fees on whatever we charge (term $0.30 spread over the term).
+  // The RATE comes from this tenant's real charges when the fee sync has
+  // seen any, that is what catches an international card, which the flat
+  // 2.9% understates by roughly half, and falls back to a country-keyed
+  // estimate otherwise. The AMOUNT stays amortized either way: billing a
+  // term plan's whole fee in its charge month would make monthly margin
+  // lurch, which is the same reason the estimate spreads the $0.30. ----
   if (revenueCents > 0) {
+    const observed = input.stripeObservedFees ?? null;
+    const derivedRate = observed === null ? null : deriveStripeFeeRate(observed);
+    const rate = derivedRate ?? stripeFeeRateForCountry(input.country ?? "US");
     lines.push({
       key: "stripe_fees",
-      label: "Stripe fees",
+      label:
+        derivedRate === null
+          ? "Stripe fees (est. from card region)"
+          : "Stripe fees (observed rate)",
       cents: stripeMonthlyFeeCents(
         revenueCents,
-        revenueSource === "subscription" ? stripeCommitmentMonths : 1
+        revenueSource === "subscription" ? stripeCommitmentMonths : 1,
+        rate
       ),
-      source: "estimate"
+      source: derivedRate === null ? "estimate" : "calibrated"
     });
   }
 

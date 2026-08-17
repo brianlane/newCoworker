@@ -21,11 +21,16 @@ import {
 import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
 import {
   listHostingerVpsCosts,
+  listStripeFeeMonthly,
   listTelnyxCostDaily,
   listTenantDids,
   type HostingerVpsCostRow,
+  type StripeFeeMonthlyRow,
   type TelnyxCostDailyRow
 } from "@/lib/db/platform-costs";
+import { windowStartMonthUtc } from "@/lib/admin/cost-sync";
+import { resolveBusinessCountry } from "@/lib/plans/business-country";
+import type { ObservedStripeFees } from "@/lib/plans/stripe-fees";
 import { isVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 import {
   computeBusinessMargin,
@@ -45,6 +50,10 @@ export type FleetMarginData = {
   totals: FleetMarginTotals;
   /** True when this month's Telnyx sync rows exist (margin uses invoice actuals). */
   telnyxActuals: boolean;
+  /** True when the Stripe fee sync has any retained rows (fee rates can be observed). */
+  stripeActuals: boolean;
+  /** This month's Stripe fees no tenant's modeled fee line represents. */
+  unmodeledStripeFeeCents: number;
   /** UTC YYYY-MM-DD the month window starts at. */
   monthStartYmd: string;
 };
@@ -169,6 +178,79 @@ export function didCountByBusiness(
   return new Map([...seen].map(([businessId, set]) => [businessId, set.size]));
 }
 
+/**
+ * How much Stripe fee history the rate derivation reads.
+ *
+ * Deliberately far wider than the sync window: a biennial tenant charges
+ * once every 24 months, so a rate derived from a 12-month read would keep
+ * falling back to the country estimate for exactly the tenants whose single
+ * large charge matters most. Rows outside the sync window are never
+ * rewritten, so reading back this far costs nothing but a wider `gte`.
+ */
+export const STRIPE_FEE_HISTORY_MONTHS = 36;
+
+/**
+ * businessId → summed Stripe CHARGE totals across every retained month.
+ * Unattributed rows (null business_id: account-level fees, customers
+ * matching no subscription) are excluded: they belong to no tenant's rate.
+ *
+ * Reads the charge-only columns, never the unrestricted totals. Stripe
+ * keeps the fee when a charge is refunded, so a refunded month's totals
+ * carry a smaller gross against an unchanged fee; deriving a rate from
+ * those would report an inflated rate that can still land inside the
+ * plausible band and be published as `calibrated`.
+ */
+export function stripeObservedByBusiness(
+  rows: StripeFeeMonthlyRow[]
+): Map<string, ObservedStripeFees> {
+  const map = new Map<string, ObservedStripeFees>();
+  for (const row of rows) {
+    if (row.business_id === null) continue;
+    const existing = map.get(row.business_id) ?? {
+      grossCents: 0,
+      feeCents: 0,
+      chargeCount: 0
+    };
+    map.set(row.business_id, {
+      grossCents: existing.grossCents + row.charge_gross_cents,
+      feeCents: existing.feeCents + row.charge_fee_cents,
+      chargeCount: existing.chargeCount + row.charge_count
+    });
+  }
+  return map;
+}
+
+/**
+ * This month's Stripe fees that NO tenant's modeled fee line represents,
+ * and which the fleet total must therefore carry itself. Two sources:
+ *
+ *  1. Rows belonging to no tenant at all (account-level charges, customers
+ *     matching no subscription), where every cent is unmodeled.
+ *  2. The non-charge remainder of an ATTRIBUTED row. A tenant's margin line
+ *     is a rate applied to their amortized plan price, and that rate is
+ *     derived from the charge-only columns, so it represents
+ *     `charge_fee_cents` and nothing else. A dispute or adjustment Stripe
+ *     attaches to that customer sits in `fee_cents` above it, inside no
+ *     rate and inside no leak bucket, and would otherwise be real money
+ *     that simply disappeared from every fleet total.
+ *
+ * Hence `fee_cents - charge_fee_cents` for attributed rows: exactly the
+ * part of the bill no tenant line already accounts for, with no
+ * double-counting of the charge fees that a line does account for.
+ */
+export function unmodeledStripeFeeCents(
+  rows: StripeFeeMonthlyRow[],
+  monthStartYmd: string
+): number {
+  return rows
+    .filter((row) => row.month_start === monthStartYmd)
+    .reduce(
+      (sum, row) =>
+        sum + (row.business_id === null ? row.fee_cents : row.fee_cents - row.charge_fee_cents),
+      0
+    );
+}
+
 /** businessId → this window's summed Telnyx cost (micro-USD); null key rows excluded. */
 export function telnyxMicrosByBusiness(rows: TelnyxCostDailyRow[]): Map<string, number> {
   const map = new Map<string, number>();
@@ -190,7 +272,8 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
     aiSpendMicrosByBusiness,
     hostingerRows,
     telnyxRows,
-    tenantDids
+    tenantDids,
+    stripeFeeRows
   ] = await Promise.all([
       listAllSubscriptions(),
       listActiveEnterpriseDeals(),
@@ -228,7 +311,15 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
           message: err instanceof Error ? err.message : String(err)
         });
         return null;
-      })
+      }),
+      listStripeFeeMonthly(windowStartMonthUtc(now, STRIPE_FEE_HISTORY_MONTHS)).catch(
+        (err: unknown) => {
+          logger.error("loadFleetMargins: stripe fee read failed", {
+            message: err instanceof Error ? err.message : String(err)
+          });
+          return [];
+        }
+      )
     ]);
 
   const subscriptionByBusiness = dedupeSubscriptionsPreferringActive(allSubscriptions);
@@ -240,6 +331,13 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   // Any synced row this month means the Telnyx sync is live: businesses
   // without rows genuinely had no Telnyx cost (actual 0), not "unknown".
   const telnyxActuals = telnyxRows.length > 0;
+  const stripeObserved = stripeObservedByBusiness(stripeFeeRows);
+  // Unlike Telnyx, "no rows for this tenant" is NOT an actual zero here: a
+  // term tenant simply may not have been charged inside the retained
+  // history. Absent observations stay null so the tenant falls back to the
+  // country estimate rather than deriving a rate from nothing.
+  const stripeActuals = stripeFeeRows.length > 0;
+  const unmodeledStripeCents = unmodeledStripeFeeCents(stripeFeeRows, monthStartYmd);
 
   const economics: BusinessMarginEconomics[] = [];
   const byBusiness = new Map<string, BusinessMarginEconomics>();
@@ -271,7 +369,12 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
         didCount: didCounts === null ? null : (didCounts.get(business.id) ?? 0),
         monthSmsSent: usage?.smsSent ?? 0,
         monthVoiceMinutes: usage?.voiceMinutes ?? 0,
-        aiSpendMicros: aiSpendMicrosByBusiness.get(business.id) ?? 0
+        aiSpendMicros: aiSpendMicrosByBusiness.get(business.id) ?? 0,
+        country: resolveBusinessCountry({
+          phone: business.phone ?? null,
+          timezone: business.timezone ?? null
+        }),
+        stripeObservedFees: stripeObserved.get(business.id) ?? null
       },
       now
     );
@@ -288,6 +391,8 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
     subscriptionByBusiness,
     totals: computeFleetMarginTotals(economics),
     telnyxActuals,
+    stripeActuals,
+    unmodeledStripeFeeCents: unmodeledStripeCents,
     monthStartYmd
   };
 }

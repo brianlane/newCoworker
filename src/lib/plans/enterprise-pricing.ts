@@ -60,9 +60,18 @@ export const ENTERPRISE_UNIT_COSTS = {
   voiceGeminiCentsPerMinute: 2.25,
   /** Telnyx DID rental per number per month ($1.00 DID + $0.10 SMS MRC). */
   didMonthlyCents: 110,
-  /** Stripe card fee on every charge. */
+  /** Stripe card fee on every charge (US card, US account). */
   stripePercent: 0.029,
-  stripeFixedCentsPerCharge: 30
+  stripeFixedCentsPerCharge: 30,
+  /**
+   * Stripe's surcharge when the CARD was issued outside the US, on top of
+   * `stripePercent`. Standard published pricing; it is a per-charge fact
+   * about the customer's card, not about our account, so the margin engine
+   * can only estimate it from the tenant's resolved country until the
+   * Stripe fee sync has observed real charges (see
+   * src/lib/plans/stripe-fees.ts).
+   */
+  stripeInternationalPercent: 0.015
 } as const;
 
 /**

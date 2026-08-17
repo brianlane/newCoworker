@@ -60,6 +60,29 @@ export type HostingerVpsCostRow = HostingerVpsCostInsert & {
   snapshot_at: string;
 };
 
+export type StripeFeeMonthlyInsert = {
+  month_start: string; // YYYY-MM-01 (UTC)
+  business_id: string | null;
+  /** Every transaction type, so the totals reconcile with Stripe's net volume. */
+  gross_cents: number;
+  fee_cents: number;
+  net_cents: number;
+  /**
+   * The same money restricted to real card charges. Rate derivation uses
+   * THESE: Stripe keeps the fee when a charge is refunded, so a refund in
+   * the totals lowers gross without lowering fee and inflates the derived
+   * rate.
+   */
+  charge_gross_cents: number;
+  charge_fee_cents: number;
+  charge_count: number;
+};
+
+export type StripeFeeMonthlyRow = StripeFeeMonthlyInsert & {
+  id: number;
+  synced_at: string;
+};
+
 /**
  * Idempotent write for a rolling Telnyx sync window: replace every row with
  * `day >= windowStartDay` with the fresh aggregates. Telnyx only accepts
@@ -171,6 +194,95 @@ export async function listTenantDids(
     }
   }
   return dids;
+}
+
+/**
+ * Idempotent write for the rolling Stripe fee window: replace every row with
+ * `month_start >= windowStart` with the fresh aggregates, in ONE transaction
+ * (`replace_stripe_fee_window`) for the same reason as
+ * {@link replaceTelnyxCostWindow}.
+ */
+export async function replaceStripeFeeWindow(
+  windowStartMonth: string,
+  rows: StripeFeeMonthlyInsert[],
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.rpc("replace_stripe_fee_window", {
+    p_window_start: windowStartMonth,
+    p_rows: rows
+  });
+  if (error) throw new Error(`replaceStripeFeeWindow: ${error.message}`);
+}
+
+/**
+ * All Stripe fee rows with `month_start >= sinceMonth`, oldest first. Paged
+ * for the same reason as {@link listTelnyxCostDaily}: PostgREST silently
+ * caps a single request at 1000 rows.
+ */
+export async function listStripeFeeMonthly(
+  sinceMonth: string,
+  client?: SupabaseClient
+): Promise<StripeFeeMonthlyRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pageSize = 1000;
+  const all: StripeFeeMonthlyRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("stripe_fee_monthly")
+      .select()
+      .gte("month_start", sinceMonth)
+      .order("month_start", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listStripeFeeMonthly: ${error.message}`);
+    const rows = (data ?? []) as StripeFeeMonthlyRow[];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
+
+/**
+ * Stripe customer id → owning business, for attributing a balance
+ * transaction to a tenant. Built from the subscriptions table (the only
+ * place the customer id is recorded); history included, since a canceled
+ * tenant's charges still settled against their customer id. A customer id
+ * reused across rows for one business collapses to the same entry; the
+ * first row wins if two businesses somehow share one, which would be a data
+ * bug rather than something to average over.
+ */
+export async function listStripeCustomerBusinessIds(
+  client?: SupabaseClient
+): Promise<Array<{ businessId: string; stripeCustomerId: string }>> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pageSize = 1000;
+  const seen = new Set<string>();
+  const pairs: Array<{ businessId: string; stripeCustomerId: string }> = [];
+  // Paged, like every other list here: an unbounded select is silently
+  // capped at 1000 rows by PostgREST, and a dropped customer id is not an
+  // error, it is a tenant whose fees quietly stop being attributed.
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("subscriptions")
+      .select("business_id, stripe_customer_id")
+      .not("stripe_customer_id", "is", null)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listStripeCustomerBusinessIds: ${error.message}`);
+    const rows = (data ?? []) as Array<{
+      business_id?: string;
+      stripe_customer_id?: string | null;
+    }>;
+    for (const r of rows) {
+      if (!r.business_id || !r.stripe_customer_id) continue;
+      if (seen.has(r.stripe_customer_id)) continue;
+      seen.add(r.stripe_customer_id);
+      pairs.push({ businessId: r.business_id, stripeCustomerId: r.stripe_customer_id });
+    }
+    if (rows.length < pageSize) break;
+  }
+  return pairs;
 }
 
 /** vm_id → owning business for non-wiped tenants on a Hostinger VM. */

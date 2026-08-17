@@ -4,9 +4,13 @@ import {
   listHostingerVpsCosts,
   listTelnyxCostDaily,
   listTenantDids,
+  listStripeCustomerBusinessIds,
+  listStripeFeeMonthly,
   replaceHostingerVpsCosts,
+  replaceStripeFeeWindow,
   replaceTelnyxCostWindow,
   type HostingerVpsCostInsert,
+  type StripeFeeMonthlyInsert,
   type TelnyxCostDailyInsert
 } from "@/lib/db/platform-costs";
 
@@ -72,6 +76,17 @@ const TELNYX_ROW: TelnyxCostDailyInsert = {
   carrier_fee_micros: 6_000,
   billed_seconds: 0,
   sender: null
+};
+
+const STRIPE_FEE_ROW: StripeFeeMonthlyInsert = {
+  month_start: "2026-07-01",
+  business_id: "biz-1",
+  gross_cents: 28_399,
+  fee_cents: 1280,
+  net_cents: 27_119,
+  charge_gross_cents: 28_399,
+  charge_fee_cents: 1280,
+  charge_count: 1
 };
 
 const HOSTINGER_ROW: HostingerVpsCostInsert = {
@@ -288,6 +303,116 @@ describe("listBusinessVpsAssignments", () => {
     const { client } = mockClient([{ data: [], error: null }]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     expect(await listBusinessVpsAssignments()).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("replaceStripeFeeWindow", () => {
+  it("replaces the window atomically through the SQL function", async () => {
+    const rpc = vi.fn(async () => ({ data: 1, error: null }));
+    await replaceStripeFeeWindow("2026-07-01", [STRIPE_FEE_ROW], { rpc } as never);
+    expect(rpc).toHaveBeenCalledWith("replace_stripe_fee_window", {
+      p_window_start: "2026-07-01",
+      p_rows: [STRIPE_FEE_ROW]
+    });
+  });
+
+  it("throws on an rpc error", async () => {
+    const rpc = vi.fn(async () => ({ data: null, error: { message: "boom" } }));
+    await expect(
+      replaceStripeFeeWindow("2026-07-01", [STRIPE_FEE_ROW], { rpc } as never)
+    ).rejects.toThrow(/replaceStripeFeeWindow: boom/);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({ rpc } as never);
+    await replaceStripeFeeWindow("2026-07-01", []);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listStripeFeeMonthly", () => {
+  /**
+   * The 1000-row PostgREST cap silently truncates an unbounded select, so a
+   * full page must never be treated as the last one.
+   */
+  it("pages through full pages and concatenates", async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({ ...STRIPE_FEE_ROW, id: i + 1 }));
+    const { client } = mockClient([
+      { data: fullPage, error: null },
+      { data: [{ ...STRIPE_FEE_ROW, id: 1001 }], error: null }
+    ]);
+    expect(await listStripeFeeMonthly("2026-01-01", client)).toHaveLength(1001);
+  });
+
+  it("handles a null data page and throws on error", async () => {
+    const empty = mockClient([{ data: null, error: null }]);
+    expect(await listStripeFeeMonthly("2026-01-01", empty.client)).toEqual([]);
+    const err = mockClient([{ data: null, error: { message: "read failed" } }]);
+    await expect(listStripeFeeMonthly("2026-01-01", err.client)).rejects.toThrow(/read failed/);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const { client } = mockClient([{ data: [], error: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    expect(await listStripeFeeMonthly("2026-01-01")).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listStripeCustomerBusinessIds", () => {
+  it("pairs each Stripe customer with its business, skipping unusable rows", async () => {
+    const { client } = mockClient([
+      {
+        data: [
+          { business_id: "biz-1", stripe_customer_id: "cus_1" },
+          // A second row for the same customer (resubscribe history) must
+          // not produce a duplicate pair.
+          { business_id: "biz-1", stripe_customer_id: "cus_1" },
+          { business_id: "biz-2", stripe_customer_id: "cus_2" },
+          { business_id: "biz-3", stripe_customer_id: null },
+          { stripe_customer_id: "cus_4" }
+        ],
+        error: null
+      }
+    ]);
+    expect(await listStripeCustomerBusinessIds(client)).toEqual([
+      { businessId: "biz-1", stripeCustomerId: "cus_1" },
+      { businessId: "biz-2", stripeCustomerId: "cus_2" }
+    ]);
+  });
+
+  /**
+   * PostgREST silently caps an unbounded select at 1000 rows, and a dropped
+   * customer id is not an error: it is a tenant whose Stripe fees quietly
+   * stop being attributed to them.
+   */
+  it("pages past the 1000-row cap", async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      stripe_customer_id: `cus_${i}`
+    }));
+    const { client } = mockClient([
+      { data: fullPage, error: null },
+      { data: [{ business_id: "biz-last", stripe_customer_id: "cus_last" }], error: null }
+    ]);
+    const pairs = await listStripeCustomerBusinessIds(client);
+    expect(pairs).toHaveLength(1001);
+    expect(pairs.at(-1)).toEqual({ businessId: "biz-last", stripeCustomerId: "cus_last" });
+  });
+
+  it("handles null data and throws on error", async () => {
+    const empty = mockClient([{ data: null, error: null }]);
+    expect(await listStripeCustomerBusinessIds(empty.client)).toEqual([]);
+    const err = mockClient([{ data: null, error: { message: "read failed" } }]);
+    await expect(listStripeCustomerBusinessIds(err.client)).rejects.toThrow(/read failed/);
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const { client } = mockClient([{ data: [], error: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    expect(await listStripeCustomerBusinessIds()).toEqual([]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });

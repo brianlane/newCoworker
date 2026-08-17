@@ -6,6 +6,7 @@ type Variant =
   | "error"
   | "urgent"
   | "pending"
+  | "info"
   | "neutral";
 
 interface BadgeProps {
@@ -22,6 +23,7 @@ const variantClasses: Record<Variant, string> = {
   error: "bg-spark-orange/20 text-spark-orange border-spark-orange/30",
   urgent: "bg-spark-orange text-deep-ink border-spark-orange/80",
   pending: "bg-signal-teal/20 text-signal-teal border-signal-teal/30",
+  info: "bg-signal-teal/15 text-signal-teal/90 border-signal-teal/25",
   neutral: "bg-soft-stone/20 text-soft-stone border-soft-stone/30"
 };
 

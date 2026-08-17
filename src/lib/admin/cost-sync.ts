@@ -24,7 +24,11 @@
  */
 
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
-import type { HostingerVpsCostInsert, TelnyxCostDailyInsert } from "@/lib/db/platform-costs";
+import type {
+  HostingerVpsCostInsert,
+  StripeFeeMonthlyInsert,
+  TelnyxCostDailyInsert
+} from "@/lib/db/platform-costs";
 
 export const PLATFORM_COST_SYNC_STATUS_KEY = "platform_cost_sync_status";
 
@@ -44,7 +48,23 @@ export type PlatformCostSyncStatus = {
   telnyxError: string | null;
   hostingerRows: number;
   hostingerError: string | null;
+  /** How many months back the Stripe balance-transaction pull covered. */
+  stripeMonths: number;
+  stripeRows: number;
+  stripeError: string | null;
 };
+
+/**
+ * How far back the Stripe fee pull reaches, in whole months.
+ *
+ * Wider than the Telnyx window on purpose: a term plan charges ONCE every
+ * 12 or 24 months, so a 30-day window would show no charges at all for a
+ * biennial tenant and their fee rate could never be observed. Older rows
+ * survive each sync (the replace only clears months at or after the window
+ * start), so history accumulates beyond this window rather than being
+ * capped by it.
+ */
+export const STRIPE_FEE_WINDOW_MONTHS = 12;
 
 /** Parse the stored status jsonb; null when missing or unusable. */
 export function parsePlatformCostSyncStatus(raw: unknown): PlatformCostSyncStatus | null {
@@ -61,11 +81,46 @@ export function parsePlatformCostSyncStatus(raw: unknown): PlatformCostSyncStatu
     telnyxRows: typeof r.telnyxRows === "number" ? r.telnyxRows : 0,
     telnyxError: typeof r.telnyxError === "string" ? r.telnyxError : null,
     hostingerRows: typeof r.hostingerRows === "number" ? r.hostingerRows : 0,
-    hostingerError: typeof r.hostingerError === "string" ? r.hostingerError : null
+    hostingerError: typeof r.hostingerError === "string" ? r.hostingerError : null,
+    // Status rows written before the Stripe side existed carry none of
+    // these keys; they read as "nothing synced, no error" rather than
+    // failing the whole parse and blanking the Costs page's sync line.
+    stripeMonths: typeof r.stripeMonths === "number" ? r.stripeMonths : 0,
+    stripeRows: typeof r.stripeRows === "number" ? r.stripeRows : 0,
+    stripeError: typeof r.stripeError === "string" ? r.stripeError : null
   };
 }
 
 export type TenantDid = { businessId: string; e164: string };
+
+/**
+ * One Stripe balance transaction, normalized to the few fields the fee
+ * aggregate needs. The Stripe SDK call itself is injected (see
+ * cost-sync-runner.ts) so this module stays testable without a Stripe
+ * client, matching how the Hostinger lists are supplied.
+ */
+export type StripeFeeTransaction = {
+  /** Balance transaction `type`, e.g. "charge", "payment", "refund". */
+  type: string;
+  /** Gross amount in cents; negative for refunds and negative adjustments. */
+  amountCents: number;
+  /** Stripe's cut in cents. */
+  feeCents: number;
+  /** What actually landed, in cents. */
+  netCents: number;
+  /** Settlement instant, unix seconds. */
+  createdUnix: number;
+  /** Customer on the source charge; null when Stripe reported none. */
+  customerId: string | null;
+};
+
+/**
+ * Balance-transaction types that represent a CARD CHARGE, and therefore
+ * carry Stripe's per-charge fixed fee. Only these increment `charge_count`,
+ * which is the $0.30 multiplier when a rate is backed out of the totals; a
+ * refund moves money without adding another fixed fee.
+ */
+const STRIPE_CHARGE_TYPES = new Set(["charge", "payment"]);
 
 export type PlatformCostSyncDeps = {
   /** Null/empty skips the Telnyx side with a recorded error (mirrors pull-cost-data). */
@@ -84,6 +139,21 @@ export type PlatformCostSyncDeps = {
     rows: TelnyxCostDailyInsert[]
   ) => Promise<void>;
   replaceHostingerVpsCosts: (rows: HostingerVpsCostInsert[]) => Promise<void>;
+  /**
+   * Stripe balance transactions settled at or after `sinceUnix`. Null skips
+   * the Stripe side with a recorded error, mirroring `telnyxApiKey`.
+   */
+  listStripeBalanceTransactions:
+    | ((sinceUnix: number) => Promise<StripeFeeTransaction[]>)
+    | null;
+  /** Stripe customer id → owning business, for attributing each transaction. */
+  listStripeCustomerBusinessIds: () => Promise<
+    Array<{ businessId: string; stripeCustomerId: string }>
+  >;
+  replaceStripeFeeWindow: (
+    windowStartMonth: string,
+    rows: StripeFeeMonthlyInsert[]
+  ) => Promise<void>;
   recordStatus: (status: PlatformCostSyncStatus) => Promise<void>;
   now?: Date;
 };
@@ -126,6 +196,103 @@ export function senderLabel(legs: readonly string[]): string | null {
 export function windowStartDayUtc(now: Date, days: number): string {
   const d = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * First day (UTC) of the calendar month `months` back from `now`. Calendar
+ * arithmetic, not 30-day subtraction, so the window boundary always lands
+ * on a month start and matches how the fee rows are bucketed.
+ */
+export function windowStartMonthUtc(now: Date, months: number): string {
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - Math.max(months, 0), 1)
+  );
+  return start.toISOString().slice(0, 10);
+}
+
+/**
+ * Pull the Stripe customer id out of an expanded balance-transaction
+ * `source` (a Charge, Refund, Payout, …). Returns null when the source is
+ * unexpanded (a bare id string), absent, or carries no customer, all of
+ * which mean "cannot attribute to a tenant" rather than an error.
+ *
+ * `unknown` in rather than a Stripe type so this stays testable without a
+ * Stripe client; the runner passes the SDK object straight through.
+ */
+export function stripeCustomerIdFromSource(source: unknown): string | null {
+  if (source === null || typeof source !== "object") return null;
+  const customer = (source as { customer?: unknown }).customer;
+  if (typeof customer === "string") return customer || null;
+  if (customer !== null && typeof customer === "object") {
+    const id = (customer as { id?: unknown }).id;
+    return typeof id === "string" && id ? id : null;
+  }
+  return null;
+}
+
+/**
+ * Aggregate Stripe balance transactions into per-month/tenant fee rows.
+ *
+ * Transactions settled before the window start are dropped: an earlier sync
+ * of a wider window already persisted them, and the replace only clears
+ * months at or after the start, so keeping them would double-count.
+ *
+ * Every transaction type contributes to gross/fee/net, so the totals
+ * reconcile against Stripe's own net volume. Only real charges (see
+ * {@link STRIPE_CHARGE_TYPES}) additionally contribute to the charge-only
+ * subtotals and `charge_count`, and those are what a fee RATE is derived
+ * from: Stripe keeps the fee when a charge is refunded, so a refund folded
+ * into the rate inputs would lower gross while the fee stood still and
+ * report a rate that is too high while still looking plausible.
+ *
+ * A transaction whose customer matches no subscription row lands under a
+ * null `business_id`, the same unattributed bucket convention the Telnyx
+ * sync uses, and the honest answer for account-level fees that belong to no
+ * tenant.
+ */
+export function aggregateStripeFees(params: {
+  transactions: StripeFeeTransaction[];
+  customerToBusiness: Map<string, string>;
+  windowStartMonth: string;
+}): StripeFeeMonthlyInsert[] {
+  const buckets = new Map<string, StripeFeeMonthlyInsert>();
+  for (const txn of params.transactions) {
+    if (!Number.isFinite(txn.createdUnix)) continue;
+    const settled = new Date(txn.createdUnix * 1000);
+    if (Number.isNaN(settled.getTime())) continue;
+    const monthStart = `${settled.toISOString().slice(0, 7)}-01`;
+    if (monthStart < params.windowStartMonth) continue;
+
+    const businessId =
+      txn.customerId === null ? null : (params.customerToBusiness.get(txn.customerId) ?? null);
+
+    const key = `${monthStart}|${businessId ?? ""}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        month_start: monthStart,
+        business_id: businessId,
+        gross_cents: 0,
+        fee_cents: 0,
+        net_cents: 0,
+        charge_gross_cents: 0,
+        charge_fee_cents: 0,
+        charge_count: 0
+      };
+      buckets.set(key, bucket);
+    }
+    const grossCents = Math.round(num(txn.amountCents));
+    const feeCents = Math.round(num(txn.feeCents));
+    bucket.gross_cents += grossCents;
+    bucket.fee_cents += feeCents;
+    bucket.net_cents += Math.round(num(txn.netCents));
+    if (STRIPE_CHARGE_TYPES.has(txn.type)) {
+      bucket.charge_gross_cents += grossCents;
+      bucket.charge_fee_cents += feeCents;
+      bucket.charge_count += 1;
+    }
+  }
+  return [...buckets.values()];
 }
 
 type MdrRecord = Record<string, unknown>;
@@ -415,14 +582,47 @@ export async function runPlatformCostSync(
     hostingerError = err instanceof Error ? err.message : String(err);
   }
 
+  // Stripe fees: a third independently-failing side, same rule as the two
+  // above, a Stripe outage must not lose the Telnyx or Hostinger pull.
+  let stripeRows = 0;
+  let stripeError: string | null = null;
+  const stripeWindowStartMonth = windowStartMonthUtc(now, STRIPE_FEE_WINDOW_MONTHS);
+  if (!deps.listStripeBalanceTransactions) {
+    stripeError = "STRIPE_SECRET_KEY not set, Stripe fee sync skipped";
+  } else {
+    try {
+      const [transactions, customerPairs] = await Promise.all([
+        deps.listStripeBalanceTransactions(
+          Math.floor(Date.parse(`${stripeWindowStartMonth}T00:00:00Z`) / 1000)
+        ),
+        deps.listStripeCustomerBusinessIds()
+      ]);
+      const customerToBusiness = new Map(
+        customerPairs.map((pair) => [pair.stripeCustomerId, pair.businessId])
+      );
+      const rows = aggregateStripeFees({
+        transactions,
+        customerToBusiness,
+        windowStartMonth: stripeWindowStartMonth
+      });
+      await deps.replaceStripeFeeWindow(stripeWindowStartMonth, rows);
+      stripeRows = rows.length;
+    } catch (err) {
+      stripeError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   const status: PlatformCostSyncStatus = {
     lastSyncAt: now.toISOString(),
-    ok: telnyxError === null && hostingerError === null,
+    ok: telnyxError === null && hostingerError === null && stripeError === null,
     telnyxRange: range,
     telnyxRows,
     telnyxError,
     hostingerRows,
-    hostingerError
+    hostingerError,
+    stripeMonths: STRIPE_FEE_WINDOW_MONTHS,
+    stripeRows,
+    stripeError
   };
   await deps.recordStatus(status);
   return status;
