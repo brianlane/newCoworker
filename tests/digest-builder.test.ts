@@ -8,6 +8,7 @@ import {
   groupSmsThreads,
   hasCustomerFacingDigestActivity,
   hasDigestActivity,
+  hiddenDigestFlowIds,
   isRenderableSmsSender,
   routingSummary,
   smsCounterpartFromPayload,
@@ -555,5 +556,63 @@ describe("digest_builder groupSmsThreads", () => {
       { counterpart: "+2", inbound: 1, outbound: 0, lastAt: "2026-06-11T10:00:00Z" },
       { counterpart: "+1", inbound: 1, outbound: 0, lastAt: "2026-06-11T08:00:00Z" }
     ]);
+  });
+});
+
+describe("hiddenDigestFlowIds", () => {
+  /**
+   * The per-flow digest mute (`definition.options.hideFromDigest`). It exists
+   * because HQ's Gmail triage polls all day: the Aug 17 2026 daily summary was
+   * 17 identical "Team inbox triage (HQ), done" lines with the day's one real
+   * call underneath them.
+   *
+   * Its output is used to exclude runs in the QUERY, not after it, because the
+   * runs read is capped at 25 rows and a chatty flow would otherwise evict the
+   * runs the owner wanted rather than merely sit beside them.
+   */
+  it("returns only the flows that opted out", () => {
+    expect(
+      hiddenDigestFlowIds([
+        { id: "muted", definition: { options: { hideFromDigest: true } } },
+        { id: "loud", definition: { options: { hideFromDigest: false } } },
+        { id: "unset", definition: { options: { starAlerts: true } } },
+        { id: "no-options", definition: { steps: [] } }
+      ])
+    ).toEqual(["muted"]);
+  });
+
+  it("treats an unreadable stored definition as not hidden, never a throw", () => {
+    // A digest is a display concern and definitions in the table can predate
+    // any given schema version. Failing here would cost the business its whole
+    // summary email over a shape nobody can read.
+    expect(
+      hiddenDigestFlowIds([
+        { id: "a", definition: null },
+        { id: "b", definition: "not an object" },
+        { id: "c", definition: [] },
+        { id: "d", definition: { options: null } },
+        { id: "e", definition: { options: [] } },
+        { id: "f" },
+        { id: 7, definition: { options: { hideFromDigest: true } } },
+        { id: "", definition: { options: { hideFromDigest: true } } },
+        {}
+      ])
+    ).toEqual([]);
+  });
+
+  it("takes only a literal true, so a truthy string does not mute a flow", () => {
+    // The value is read straight off stored JSON, where a hand-edited "true"
+    // or a 1 is exactly the kind of thing that shows up. Silently muting a
+    // flow the owner never muted is the failure worth ruling out.
+    expect(
+      hiddenDigestFlowIds([
+        { id: "a", definition: { options: { hideFromDigest: "true" } } },
+        { id: "b", definition: { options: { hideFromDigest: 1 } } }
+      ])
+    ).toEqual([]);
+  });
+
+  it("returns an empty list for no flows at all", () => {
+    expect(hiddenDigestFlowIds([])).toEqual([]);
   });
 });

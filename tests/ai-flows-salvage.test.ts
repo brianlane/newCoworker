@@ -213,6 +213,16 @@ describe("salvageFlowDefinition: step salvage (zod level)", () => {
     const off = salvageFlowDefinition({ ...VALID, options: { starAlerts: false } });
     expect(off!.definition.options?.starAlerts).toBeUndefined();
   });
+
+  it("keeps hideFromDigest, so a repair never un-mutes the daily summary", () => {
+    // Salvage runs on an EDIT of a live flow, not only on AI-generated drafts.
+    // Dropping the owner's digest preference here would quietly turn the noise
+    // back on, and the next daily summary is where they would find out.
+    const kept = salvageFlowDefinition({ ...VALID, options: { hideFromDigest: true } });
+    expect(kept!.definition.options?.hideFromDigest).toBe(true);
+    const off = salvageFlowDefinition({ ...VALID, options: { hideFromDigest: false } });
+    expect(off!.definition.options?.hideFromDigest).toBeUndefined();
+  });
 });
 
 describe("salvageFlowDefinition: semantic repair loop", () => {

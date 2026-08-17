@@ -194,6 +194,8 @@ type EditorState = {
   agentInvocable: boolean;
   /** Voice call routing: frame this flow's alert texts in a row of asterisks. */
   starAlerts: boolean;
+  /** Leave this flow's runs out of the daily/weekly summary email. */
+  hideFromDigest: boolean;
   channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
@@ -263,6 +265,7 @@ function emptyEditor(): EditorState {
     allowReentry: true,
     agentInvocable: false,
     starAlerts: false,
+    hideFromDigest: false,
     channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
@@ -458,6 +461,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     allowReentry: def.options?.allowReentry ?? true,
     agentInvocable: def.options?.agentInvocable ?? false,
     starAlerts: def.options?.starAlerts ?? false,
+    hideFromDigest: def.options?.hideFromDigest ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -481,6 +485,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     allowReentry: def.options?.allowReentry ?? true,
     agentInvocable: def.options?.agentInvocable ?? false,
     starAlerts: def.options?.starAlerts ?? false,
+    hideFromDigest: def.options?.hideFromDigest ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -1005,7 +1010,8 @@ function toDefinition(s: EditorState): AiFlowDefinition {
       stopOnResponse: s.stopOnResponse,
       allowReentry: s.allowReentry,
       agentInvocable: s.agentInvocable,
-      starAlerts: s.starAlerts
+      starAlerts: s.starAlerts,
+      hideFromDigest: s.hideFromDigest
     }
   };
 }
@@ -1704,6 +1710,7 @@ export function AiFlowsManager({
         allowReentry: def.options?.allowReentry ?? true,
         agentInvocable: def.options?.agentInvocable ?? false,
         starAlerts: def.options?.starAlerts ?? false,
+        hideFromDigest: def.options?.hideFromDigest ?? false,
         ...triggerToEditorFields(def.trigger),
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
@@ -2882,6 +2889,23 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          <div>
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={editor.hideFromDigest}
+                onChange={(ev) => setEditor({ ...editor, hideFromDigest: ev.target.checked })}
+              />
+              Leave this flow out of the daily summary email
+            </label>
+            <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+              Its runs won&apos;t be listed in your daily or weekly summary, and won&apos;t
+              count toward the event total. Worth checking for a flow that runs on a
+              schedule or watches a mailbox: dozens of identical lines bury the calls and
+              texts you opened the email to read. The flow itself keeps running, and its
+              alerts and run history are unchanged.
+            </p>
+          </div>
           <div>
             <label className="flex items-center gap-2 text-sm text-parchment/70">
               <input

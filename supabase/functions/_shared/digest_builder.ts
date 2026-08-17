@@ -215,6 +215,36 @@ export function buildAiFlowRecapLine(run: DigestAiFlowRun): string {
   return segments.join(" · ");
 }
 
+/**
+ * The ids of a business's flows that opted OUT of the digest
+ * (`definition.options.hideFromDigest`), so the caller can exclude their runs
+ * from the query rather than filtering afterwards.
+ *
+ * Filtering at the QUERY is the point. The runs read is capped (25 rows), so a
+ * chatty flow does not merely add noise, it evicts the runs the owner actually
+ * wants: HQ's Gmail triage ran 17 times on Aug 17 2026 and would have pushed
+ * every other flow off the end of a post-filtered list.
+ *
+ * Reads the stored JSON defensively rather than through the parsed type. A
+ * definition in the table can predate any given schema version, and this is a
+ * display concern: an unreadable shape means "not hidden", never a throw that
+ * costs the business its whole digest.
+ */
+export function hiddenDigestFlowIds(
+  rows: Array<{ id?: unknown; definition?: unknown }>
+): string[] {
+  const out: string[] = [];
+  for (const row of rows) {
+    if (typeof row?.id !== "string" || !row.id) continue;
+    const def = row.definition;
+    if (!def || typeof def !== "object" || Array.isArray(def)) continue;
+    const options = (def as { options?: unknown }).options;
+    if (!options || typeof options !== "object" || Array.isArray(options)) continue;
+    if ((options as { hideFromDigest?: unknown }).hideFromDigest === true) out.push(row.id);
+  }
+  return out;
+}
+
 export function totalDigestEvents(a: DigestActivity): number {
   return (
     a.chatTurns +

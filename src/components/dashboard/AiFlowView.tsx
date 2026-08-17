@@ -1076,6 +1076,12 @@ export function AiFlowView({
           flow when the conversation calls for it.
         </p>
       )}
+      {definition.options?.hideFromDigest && (
+        <p className="text-xs text-parchment/50">
+          Left out of the daily and weekly summary emails: this flow&apos;s runs
+          aren&apos;t listed there and don&apos;t count toward the event total.
+        </p>
+      )}
     </div>
   );
 }

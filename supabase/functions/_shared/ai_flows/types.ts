@@ -1697,6 +1697,21 @@ export type AiFlowOptions = {
    */
   starAlerts?: boolean;
   /**
+   * Leave this flow out of the daily/weekly digest email: notifications-digest
+   * excludes its runs from the query, so they are neither listed nor counted
+   * toward the event total or the "did anything happen" send gate.
+   *
+   * For a polling or scheduled flow, one line per run is not a summary, it is
+   * the whole email: HQ's Gmail triage put 17 identical "Team inbox triage
+   * (HQ), done" lines into the Aug 17 2026 daily summary and buried the one
+   * real call under them.
+   *
+   * Distinct from `digest_customer_facing_only` on notification_preferences,
+   * which decides whether the digest sends AT ALL on a quiet day. This one
+   * decides what a digest that does send contains, per flow. Default off.
+   */
+  hideFromDigest?: boolean;
+  /**
    * Start the run the MOMENT the triggering message arrives: the inbound
    * webhook kicks the worker in the background right after queueing, instead of
    * leaving the run to the next tick (up to about a minute later). The tick is

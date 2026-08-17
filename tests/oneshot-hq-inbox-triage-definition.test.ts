@@ -81,6 +81,17 @@ describe("HQ inbox triage: the definition is valid and authorable", () => {
     expect(() => parseAiFlowDefinition(buildHqInboxTriageDefinition(AGENT_ID))).not.toThrow();
   });
 
+  it("stays out of the daily summary email", () => {
+    // A mailbox poller's run count measures how much mail arrived, not how
+    // much happened. On Aug 17 2026 this flow put 17 identical lines into a
+    // 21-event daily summary and buried the day's one real call under them.
+    // It texts Brian the moment anything here needs him, so its runs are the
+    // one part of that email he could never act on.
+    const def = buildHqInboxTriageDefinition(AGENT_ID) as { options?: { hideFromDigest?: boolean } };
+    expect(def.options?.hideFromDigest).toBe(true);
+    expect(parseAiFlowDefinition(def).options?.hideFromDigest).toBe(true);
+  });
+
   it("keeps the upsert key and the watched mailbox", () => {
     // The applier finds the live row BY NAME, so a rename orphans the flow
     // and silently creates a second one.
@@ -255,7 +266,7 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(category("automated_important")?.description).toMatch(/verify|approve|respond/i);
   });
 
-  it("only reads and labels the merely routine, leaving it in the inbox", () => {
+  it("only labels the merely routine, leaving it in the inbox", () => {
     /**
      * The middle tier, and the reason it exists. On Aug 9 2026 an email titled
      * "[Action Needed] OAuth Verification Request Acknowledgement", on a thread
@@ -267,11 +278,45 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
      */
     const step = steps.find((s) => s.id === "s_org_automated");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_notice" });
-    expect(step?.markRead).toBe(true);
     expect(step?.addLabels).toEqual(["HQ/Automated"]);
     expect(step?.trash).toBeUndefined();
     expect(step?.archive).toBeUndefined();
     expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
+  });
+
+  it("never marks a message read or unread, in any tier", () => {
+    /**
+     * Brian's rule, Aug 17 2026. Three steps used to set `markRead: true`, so
+     * routine mail arrived already read: a Zoom Marketplace approval notice
+     * and a Telnyx rate-change notice both landed that way the same morning,
+     * and the read mark is what hid them.
+     *
+     * `markUnread` fails this too, deliberately. With nothing marking mail
+     * read, forcing `automated_important` back to unread can only undo a human
+     * who read it before the poll ran. Read state belongs to the reader.
+     */
+    for (const step of steps.filter((s) => s.type === "email_organize")) {
+      expect(step.markRead, `${step.id} must not mark read`).toBeUndefined();
+      expect(step.markUnread, `${step.id} must not mark unread`).toBeUndefined();
+    }
+  });
+
+  it("keeps every send inside a branch, so the poller never marks mail read", () => {
+    /**
+     * The second read-marking path, and the one a future edit is most likely
+     * to trip. `markGmailMessageHandled` (src/lib/ai-flows/email-poll.ts) marks
+     * the TRIGGERING message read for any flow carrying an unconditional
+     * `send_email` on the trunk, whatever the steps below say. Both of this
+     * flow's sends live inside the `b_sales` arm behind a `when`, which is what
+     * keeps the whole mailbox out of that path.
+     */
+    expect(definition.steps.filter((s) => s.type === "send_email")).toEqual([]);
+    // And they do still exist, one arm down, so this stays a real constraint
+    // rather than passing because the sends were deleted.
+    expect(steps.filter((s) => s.type === "send_email").map((s) => s.id)).toEqual([
+      "s_send_intro",
+      "s_send_prospect"
+    ]);
   });
 
   it("never removes anything from the inbox, by archive or by folder move", () => {
@@ -310,7 +355,6 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
   it("bins ONLY the unmistakably bulk tier, and never texts about it", () => {
     const step = steps.find((s) => s.id === "s_org_bulk");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_bulk" });
-    expect(step?.markRead).toBe(true);
     expect(step?.trash).toBe(true);
     // Labelled BEFORE binning, so a misclassification is still findable with
     // `label:HQ/Automated in:trash` for the 30 days Gmail keeps it.
@@ -323,17 +367,17 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(binning.map((s) => s.id)).toEqual(["s_org_bulk"]);
   });
 
-  it("texts about important automated mail and leaves it unread in the inbox", () => {
+  it("texts about important automated mail and leaves it in the inbox", () => {
     const notify = steps.find((s) => s.id === "s_notify_automated");
     expect(notify?.type).toBe("notify_owner");
     expect(notify?.when).toEqual({ var: "email_kind", equals: "automated_important" });
 
     const organize = steps.find((s) => s.id === "s_org_automated_important");
-    // Unread and in the inbox ON PURPOSE: the owner's own inbox has to keep
-    // showing the thing that needs action, so this one is never archived.
-    expect(organize?.markUnread).toBe(true);
+    // In the inbox ON PURPOSE: the owner's own inbox has to keep showing the
+    // thing that needs action, so this one is never archived. It used to
+    // additionally force the message unread, which is now covered by the
+    // blanket rule above (nothing in this flow touches read state at all).
     expect(organize?.archive).toBeUndefined();
-    expect(organize?.markRead).toBeUndefined();
     expect(organize?.addLabels).toEqual(["HQ/Automated"]);
   });
 });
