@@ -21,7 +21,7 @@ import { logger } from "@/lib/logger";
 import { can } from "@/lib/authz/policy";
 import { effectiveBranding, type Branding } from "@/lib/plans/branding";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
-import { resolveViewAsContext, resolveViewAsTargetUser } from "@/lib/admin/view-as";
+import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 import { latestAcceptanceFor, needsAcceptance } from "@/lib/legal/acceptance";
 import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
@@ -67,21 +67,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // CURRENT legal versions (src/lib/legal/versions.ts)? Kicked off beside
   // the sidebar read since it only depends on a user id.
   //
-  // Under view-as it asks about the IMPERSONATED OWNER, not the admin: the
-  // point of impersonation is to see (and be able to clear) the tenant's real
-  // state, and gating on the admin's own acceptance would hide a tenant stuck
-  // behind the modal. The accept endpoint retargets the same way and stamps
-  // an operator click with the 'admin_view_as' source, so the ledger still
-  // distinguishes it from the tenant's own agreement.
-  // Resolves to the boolean rather than the row: the view-as branch has a
-  // third answer (the tenant's owner_email has no login behind it, so nobody
-  // can accept and the gate must stay down) that a nullable row cannot carry:
-  // `needsAcceptance(null)` means "no row yet", which would strand the
-  // admin behind a modal that can never be satisfied.
+  // NEVER raised under view-as. Consent is the one thing an operator cannot
+  // do for a tenant (/api/legal/accept refuses an impersonating admin,
+  // deliberately), so surfacing the tenant's outstanding clickwrap here would
+  // strand the operator behind a modal they are not allowed to satisfy. The
+  // tenant clears it themselves on their next sign-in.
   const acceptancePromise: Promise<boolean> = viewAs
-    ? resolveViewAsTargetUser(user).then(async (target) =>
-        target.userId ? needsAcceptance(await latestAcceptanceFor(target.userId)) : false
-      )
+    ? Promise.resolve(false)
     : latestAcceptanceFor(user.userId).then(needsAcceptance);
 
   let grace:

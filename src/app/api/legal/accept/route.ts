@@ -23,24 +23,30 @@ export async function POST(request: Request) {
 
     const user = await getAuthUser();
     if (user) {
-      // USER-scoped: the row belongs to whoever's consent it records. An
-      // admin in view-as records it for the impersonated OWNER (their own
-      // acceptance state is irrelevant to the tenant's gate), stamped with
-      // the 'admin_view_as' source so the ledger never presents an operator
-      // click as the tenant's own. A tenant with no login behind its
-      // owner_email has no gate to clear, so there is nothing to record.
+      // The ONE view-as refusal left in the product, and it is a policy
+      // decision rather than a wrong-row hazard: consent is not an action an
+      // operator can take for someone else. Every other tenant-facing write
+      // retargets to the impersonated owner, but a `terms_acceptances` row
+      // exists to evidence that a SPECIFIC PERSON agreed, and nobody can
+      // agree on their behalf. An operator-recorded row would be a
+      // fabricated legal record no matter how it were labeled, so the
+      // capability does not exist rather than existing-but-marked.
+      //
+      // The dashboard layout does not raise the clickwrap gate under view-as
+      // either, so an operator is never shown a modal this refusal would
+      // strand them behind.
       const target = await resolveViewAsTargetUser(user);
-      if (!target.userId) {
+      if (target.impersonating) {
         return errorResponse(
-          "NOT_FOUND",
-          "This tenant's owner has no login yet, so there is no acceptance to record",
-          404
+          "FORBIDDEN",
+          "Terms acceptance records a person's own consent, so it cannot be done for a tenant. Ask the owner to accept from their own login.",
+          403
         );
       }
       await recordAcceptance({
-        userId: target.userId,
-        email: target.email,
-        source: target.impersonating ? "admin_view_as" : "gate",
+        userId: user.userId,
+        email: user.email,
+        source: "gate",
         ip,
         userAgent
       });

@@ -2,16 +2,18 @@
  * Clickwrap acceptance ledger (terms_acceptances): recording and reading
  * the explicit "I agree" clicks for the public legal documents.
  *
- * Three writers:
+ * Two writers:
  *   * source 'signup': the account-creation forms (set-password route with
  *     the user id; the standalone /signup form pre-session, email-keyed).
  *   * source 'gate': the dashboard re-acceptance gate.
- *   * source 'admin_view_as': the same gate, clicked by an admin who is
- *     impersonating the tenant. The row still identifies the TENANT (whose
- *     consent it records), and the distinct source is what keeps "did this
- *     tenant personally accept?" answerable: filter to ('signup', 'gate').
- *     Never reuse 'gate' for an operator click: that is a fabricated-consent
- *     record in a table that exists to be evidence.
+ *
+ * There is deliberately no operator/admin writer. Admin view-as can perform
+ * every other tenant action, but a row here evidences that a SPECIFIC PERSON
+ * agreed, and nobody can agree on someone else's behalf. `/api/legal/accept`
+ * refuses an impersonating admin, and the dashboard layout does not raise the
+ * gate under view-as, so the refusal never strands anyone. A short-lived
+ * `admin_view_as` source existed on 2026-08-17 (PR #1420) and was removed the
+ * same day with zero rows written; do not reintroduce it.
  *
  * One reader: the dashboard layout asks for the user's newest row and
  * compares its pinned versions against src/lib/legal/versions.ts. No row,
@@ -24,7 +26,7 @@ import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type AcceptanceSource = "signup" | "gate" | "admin_view_as";
+export type AcceptanceSource = "signup" | "gate";
 
 export type AcceptanceInput = {
   userId?: string | null;

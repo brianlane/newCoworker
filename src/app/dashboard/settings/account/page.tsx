@@ -12,6 +12,7 @@ import { PasskeysCard } from "@/components/dashboard/PasskeysCard";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { OwnLoginNotice } from "@/components/dashboard/OwnLoginNotice";
+import { TenantCredentialsCard } from "@/components/dashboard/TenantCredentialsCard";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
 export const dynamic = "force-dynamic";
@@ -125,6 +126,12 @@ export default async function AccountSettingsPage() {
           says so. There is no API to enroll a passkey on someone else's
           device. */}
       <PasskeysCard ownLoginNotice={impersonating ? t("viewAsOwnPasskeysNotice") : undefined} />
+
+      {/* The tenant-facing half, deliberately a separate card from the two
+          above: those act on the operator's own login, this one acts on the
+          tenant's. Keeping "yours" and "theirs" visually distinct is what
+          stops an operator resetting the wrong account. */}
+      {impersonating && <TenantCredentialsCard tenantEmail={shownEmail} />}
     </SettingsPageShell>
   );
 }

@@ -15,7 +15,11 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn().mockReturnValue({}),
 }));
 
-import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
+import {
+  createSupabaseAdminPasskeyClient,
+  createSupabaseServerClient,
+  createSupabaseServiceClient
+} from "@/lib/supabase/server";
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 
@@ -90,5 +94,36 @@ describe("supabase/server", () => {
   it("createSupabaseServiceClient throws when service key missing", async () => {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     await expect(createSupabaseServiceClient()).rejects.toThrow("Missing Supabase service role env vars");
+  });
+
+  it("createSupabaseAdminPasskeyClient opts into the experimental passkey API", async () => {
+    // `auth.admin.passkey.*` throws unless the client was built with this
+    // flag. It is a SEPARATE factory on purpose: the plain service client is
+    // used by nearly every server path, and flipping an experimental flag for
+    // all of them to serve two routes is a far wider blast radius than the
+    // feature warrants.
+    const client = await createSupabaseAdminPasskeyClient();
+    expect(client).toBeDefined();
+    expect(createClient).toHaveBeenCalledWith(
+      "https://mock.supabase.co",
+      "mock_service_role_key",
+      expect.objectContaining({
+        auth: { persistSession: false, experimental: { passkey: true } }
+      }),
+    );
+  });
+
+  it("createSupabaseAdminPasskeyClient throws when service key missing", async () => {
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    await expect(createSupabaseAdminPasskeyClient()).rejects.toThrow(
+      "Missing Supabase service role env vars"
+    );
+  });
+
+  it("createSupabaseAdminPasskeyClient throws when the url is missing", async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    await expect(createSupabaseAdminPasskeyClient()).rejects.toThrow(
+      "Missing Supabase service role env vars"
+    );
   });
 });
