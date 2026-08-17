@@ -92,6 +92,23 @@ export function inboundVoicemailMessageLine(businessName: string, hasEndCall: bo
   );
 }
 
+/**
+ * One-sentence identification for Apple call screening on calls WE place.
+ *
+ * Screening answers the leg with a robotic voice asking the caller to state
+ * their name and the reason for the call, transcribes the answer, and shows
+ * it to the person deciding whether to pick up. One clear sentence is what
+ * gets the call through; a full opener read at the robot looks like spam on
+ * their screen, and conversing with it violates the recordings rule.
+ */
+export function iosScreeningLine(businessName: string): string {
+  return (
+    "If a call screening voice answers (a robotic voice asking you to state your name or the reason for your call, such as Apple call screening), say exactly ONE short sentence: " +
+    `"This is ${businessName}'s office with a quick follow-up call." ` +
+    "Then stay quiet until a real person speaks. When they do, greet them naturally with your opening line as if the call just began."
+  );
+}
+
 export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
@@ -192,6 +209,14 @@ export function intakeSystemInstruction(
       INBOUND_VOICEMAIL_RECOGNITION_LINE,
       inboundVoicemailMessageLine(businessName, hasEndCall)
     );
+  }
+  // Calls WE place can be answered by Apple's call screening (the dial runs
+  // premium_ios_call_screening_detection, so the platform knows too). The
+  // screening prompt transcribes what the caller says for the person deciding
+  // whether to pick up, so ONE clear identification sentence is exactly what
+  // gets the call through; running the whole opener at it reads as spam.
+  if (outboundCall || transfer) {
+    lines.push(iosScreeningLine(businessName));
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
   // must never ask for something the flow already extracted — "why are you

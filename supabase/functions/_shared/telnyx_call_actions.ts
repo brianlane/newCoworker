@@ -185,6 +185,14 @@ export type TelnyxTransferOptions = {
    */
   timeoutSecs?: number;
   /**
+   * Answering-machine detection on the TRANSFER'S new (B) leg. Same modes as
+   * TelnyxDialOptions. Why here: a step target whose phone is off goes to
+   * carrier voicemail in a couple of seconds, well inside any ring window, and
+   * a transfer auto-bridges on answer — so without AMD the caller is connected
+   * to a teammate's voicemail greeting and the chain never advances past it.
+   */
+  answeringMachineDetection?: TelnyxDialOptions["answeringMachineDetection"];
+  /**
    * Opaque state echoed back on this transfer's resulting call-control webhooks
    * (e.g. call.bridged / call.hangup for the B leg). The handoff state machine
    * uses it to correlate a no-answer hangup back to the chain step that issued
@@ -218,6 +226,9 @@ export async function telnyxTransferCall(
   const body: Record<string, unknown> = { to: toE164 };
   if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
     body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.answeringMachineDetection) {
+    body.answering_machine_detection = opts.answeringMachineDetection;
   }
   if (opts.clientState) {
     body.client_state = encodeClientState(opts.clientState);
@@ -344,8 +355,18 @@ export type TelnyxDialOptions = {
    * "premium" is the mode that also reports when the outgoing greeting has
    * finished, which is the only safe moment to start speaking into a
    * voicemail. "detect" answers human-or-machine and nothing more.
+   * "premium_ios_call_screening_detection" is premium PLUS Apple call
+   * screening awareness: same verdicts, and additionally
+   * `call.machine.premium.call_screening.detected` when an iPhone's screening
+   * answered (a live person deciding whether to pick up, never a machine).
    */
-  answeringMachineDetection?: "detect" | "detect_beep" | "detect_words" | "greeting_end" | "premium";
+  answeringMachineDetection?:
+    | "detect"
+    | "detect_beep"
+    | "detect_words"
+    | "greeting_end"
+    | "premium"
+    | "premium_ios_call_screening_detection";
   /**
    * Opaque state echoed back on THIS call's webhooks (call.answered / hangup).
    * The origination flow packs the outbound session id here so the webhook can

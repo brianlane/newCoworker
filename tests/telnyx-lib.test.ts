@@ -346,6 +346,26 @@ describe("telnyx call-control", () => {
     );
   });
 
+  // A handoff step target whose phone is off reaches carrier voicemail inside
+  // any ring window, and a transfer auto-bridges on answer: without AMD the
+  // caller lands in a teammate's voicemail greeting and the chain never
+  // advances past it. The wire field must reach the transfer body.
+  it("telnyxTransferCall carries answering_machine_detection when asked", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxTransferCall(
+      "key",
+      "cc-tf-amd",
+      "+15551234567",
+      { timeoutSecs: 20, answeringMachineDetection: "premium", clientState: "hl:cc-a:0" },
+      fetchMock as typeof fetch
+    );
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(body.answering_machine_detection).toBe("premium");
+  });
+
   it("telnyxTransferCall omits timeout_secs when it is not positive", async () => {
     const fetchMock = vi
       .fn()

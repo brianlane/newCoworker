@@ -66,9 +66,26 @@ export const AMD_GREETING_EVENTS: ReadonlySet<string> = new Set([
   "call.machine.premium.greeting.ended"
 ]);
 
+/**
+ * Fired by the `premium_ios_call_screening_detection` mode when Apple's call
+ * screening answered the leg (result "screening"). NOT a verdict: a live
+ * person is deciding whether to take the call, so it must never be read as
+ * machine evidence. The bridge's outbound persona answers the screening
+ * prompt with one identification sentence; this event exists so the platform
+ * can record that screening happened (and so the dispatch table has a home
+ * for it rather than dropping it).
+ */
+export const AMD_SCREENING_EVENTS: ReadonlySet<string> = new Set([
+  "call.machine.premium.call_screening.detected"
+]);
+
 /** True for any answering-machine detection event, either tier. */
 export function isAmdEvent(eventType: string): boolean {
-  return AMD_DETECTION_EVENTS.has(eventType) || AMD_GREETING_EVENTS.has(eventType);
+  return (
+    AMD_DETECTION_EVENTS.has(eventType) ||
+    AMD_GREETING_EVENTS.has(eventType) ||
+    AMD_SCREENING_EVENTS.has(eventType)
+  );
 }
 
 /**

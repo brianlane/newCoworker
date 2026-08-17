@@ -33,6 +33,7 @@ import {
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
   AMD_DETECTION_EVENTS,
+  AMD_SCREENING_EVENTS,
   classifyAmdResult,
   greetingImpliesMachine,
   isAmdEvent
@@ -420,6 +421,9 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     try {
       const tf = await telnyxTransferCall(apiKey, aLeg, plan.toE164, {
         timeoutSecs: plan.ringSecs,
+        // Same reason as the chain's first transfer: a voicemail answering
+        // auto-bridges, and the machine verdict is what un-sticks the chain.
+        answeringMachineDetection: "premium",
         clientState: encodeHandoffClientState(aLeg, plan.step)
       });
       if (!tf.ok) {
@@ -573,9 +577,42 @@ async function handleMachineDetection(
   payload: Record<string, unknown>
 ): Promise<Response> {
   const callControlId = String(payload["call_control_id"] ?? "");
+  if (!callControlId) return jsonOk("amd_no_leg");
+
+  // A "reach a teammate" B leg: the verdict feeds the ladder's bridge gate.
+  const reach = parseReachClientState(payload["client_state"] as string | undefined);
+  if (reach) {
+    return await handleReachAmd(supabase, eventType, payload, reach, callControlId);
+  }
+
+  // A warm-handoff transfer leg: a machine verdict un-sticks the chain.
+  const handoff = parseHandoffClientState(payload["client_state"] as string | undefined);
+  if (handoff) {
+    return await handleHandoffAmd(supabase, eventType, payload, handoff, callControlId);
+  }
+
   const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
-  if (!outbound || !callControlId) {
+  if (!outbound) {
     return jsonOk("amd_not_outbound");
+  }
+
+  // Apple call screening answered (premium_ios_call_screening_detection only).
+  // NOT a verdict: a live person is deciding whether to take the call, and the
+  // bridge's outbound persona answers the screening prompt with one
+  // identification sentence. Recorded so the call page and the outcome
+  // derivation can tell "screened" from plain dead air.
+  if (AMD_SCREENING_EVENTS.has(eventType)) {
+    await telemetryRecord(supabase, "voice_amd_screening", {
+      call_control_id: callControlId,
+      business_id: outbound.businessId,
+      result: typeof payload["result"] === "string" ? payload["result"] : null
+    });
+    const { error: scrErr } = await supabase.rpc("voice_session_context_merge", {
+      p_call_control_id: callControlId,
+      p_patch: { ios_screening: true }
+    });
+    if (scrErr) console.error("amd: screening stamp failed", scrErr);
+    return jsonOk("amd_screening_noted");
   }
   // Greeting events: the outgoing "leave a message after the tone" has
   // finished, which is the only safe moment to start speaking. Two jobs now.
@@ -632,11 +669,172 @@ async function handleMachineDetection(
   // the leg up: speaking now would record over the outgoing greeting, so the
   // message waits for greeting.ended.
   if (await voicemailScriptFor(supabase, callControlId)) {
-    return (await stampMachine(supabase, callControlId))
-      ? jsonOk("amd_machine_awaiting_greeting")
-      : jsonOk("amd_stamp_failed");
+    if (!(await stampMachine(supabase, callControlId))) return jsonOk("amd_stamp_failed");
+    // The middle ground of the async trade: the assistant talks from the
+    // moment the call answers (a real person never hears dead air), and the
+    // FIRST machine signal silences it. The rest of the greeting plays to a
+    // silent line, so the post-beep recording contains nothing but the
+    // scripted message; before this, whatever the assistant said between the
+    // beep and speakVoicemail's own stop landed at the top of the recording.
+    // Best-effort: the stamp lets speakVoicemail tell "already silenced" from
+    // a stop that genuinely failed (which it still treats as fatal, since
+    // speaking under the assistant's chatter records an unintelligible mess).
+    const muted = await telnyxStreamingStop(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+    if (muted.ok) {
+      const { error: muteErr } = await supabase.rpc("voice_session_context_merge", {
+        p_call_control_id: callControlId,
+        p_patch: { amd_stream_stopped: true }
+      });
+      if (muteErr) console.error("amd: mute stamp failed", muteErr);
+    }
+    return jsonOk("amd_machine_awaiting_greeting");
   }
   return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/**
+ * AMD verdict for a "reach a teammate" B leg.
+ *
+ * A teammate whose phone is off goes to carrier voicemail within a couple of
+ * seconds, which ANSWERS the leg: the answered stamp lands and the ladder
+ * would bridge the caller straight into that voicemail greeting. The ladder
+ * therefore holds its bridge briefly (awaitReachAmdClearance on the bridge
+ * side) and this handler writes what it is waiting for: the verdict, onto the
+ * CALLER's session keyed by attempt, exactly where the answered stamp already
+ * lives. A machine verdict also hangs the B leg up, so the ladder's next dial
+ * is not racing a voicemail that is still recording silence.
+ *
+ * "unknown" is deliberately NOT written: the ladder's clearance cap decides,
+ * and it fails open to bridging, the same treat-as-human bias every other AMD
+ * consumer here has. Greeting/screening events carry nothing useful for a leg
+ * whose only question is bridge-or-skip, so they are acknowledged and dropped.
+ */
+async function handleReachAmd(
+  supabase: SupabaseClient,
+  eventType: string,
+  payload: Record<string, unknown>,
+  reach: { businessId: string; aLegCallControlId: string; attempt: number },
+  bLegCallControlId: string
+): Promise<Response> {
+  if (!AMD_DETECTION_EVENTS.has(eventType)) return jsonOk("amd_reach_ignored");
+  const verdict = classifyAmdResult(payload["result"]);
+  await telemetryRecord(supabase, "voice_amd_verdict", {
+    call_control_id: bLegCallControlId,
+    business_id: reach.businessId,
+    event_type: eventType,
+    result: typeof payload["result"] === "string" ? payload["result"] : null,
+    verdict,
+    leg: "reach"
+  });
+  if (verdict === "unknown") return jsonOk("amd_reach_unknown");
+  // Stale-attempt protection lives in the READER (readReachAmd ignores a
+  // mismatched attempt), mirroring readReachOutcome, so a blind merge is safe
+  // here: verdicts for a torn-down leg classify as unknown and never land.
+  const { error } = await supabase.rpc("voice_session_context_merge", {
+    p_call_control_id: reach.aLegCallControlId,
+    p_patch: { reach_amd: { attempt: reach.attempt, verdict } }
+  });
+  if (error) {
+    // The ladder's clearance cap still resolves the wait; losing the stamp
+    // costs a slower bridge (or a bridged voicemail, the pre-AMD behavior).
+    console.error("reach: amd stamp failed", error);
+  }
+  if (verdict === "machine") {
+    await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", bLegCallControlId);
+  }
+  return jsonOk(`amd_reach_${verdict}`);
+}
+
+/**
+ * Window inside which a machine verdict may yank a freshly BRIDGED handoff
+ * transfer leg. The verdict fires seconds after a voicemail answers, so a
+ * fresh bridge into a machine is un-stickable; past this window the far end
+ * is far more likely a live human whose call must not be cut (a late or
+ * redelivered verdict yanking a real conversation is the worse failure).
+ */
+const HANDOFF_AMD_YANK_WINDOW_MS = 15_000;
+
+/**
+ * AMD verdict for a warm-handoff transfer leg.
+ *
+ * A transfer auto-bridges the caller to whoever answers, and a step target
+ * whose phone is off reaches carrier voicemail inside any ring window: the
+ * caller lands in the teammate's voicemail greeting and, because the session
+ * is marked bridged, the chain treats the call as successfully connected and
+ * never advances. On a machine verdict for the step that is CURRENTLY active:
+ *
+ *   ringing  -> the bridge event lost the race (or was lost): hang the B leg
+ *               up; the existing no-answer hangup path advances the chain.
+ *   bridged  -> flip the session back to ringing (conditionally) and hang the
+ *               B leg up, so the same hangup path advances the chain. Guarded
+ *               by bridged_at freshness; a missing or old stamp fails safe to
+ *               leaving the call alone. The "teammate connected" SMS already
+ *               sent at bridge time cannot be recalled; the failed/next-step
+ *               notifications that follow tell the true story.
+ */
+async function handleHandoffAmd(
+  supabase: SupabaseClient,
+  eventType: string,
+  payload: Record<string, unknown>,
+  handoff: { aLegCallId: string; step: number },
+  bLegCallControlId: string
+): Promise<Response> {
+  if (!AMD_DETECTION_EVENTS.has(eventType)) return jsonOk("amd_handoff_ignored");
+  const verdict = classifyAmdResult(payload["result"]);
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("status, current_step, context, business_id")
+    .eq("call_control_id", handoff.aLegCallId)
+    .maybeSingle();
+  const sess = data as
+    | {
+        status?: string;
+        current_step?: number;
+        context?: Record<string, unknown>;
+        business_id?: string;
+      }
+    | null;
+  await telemetryRecord(supabase, "voice_amd_verdict", {
+    call_control_id: bLegCallControlId,
+    business_id: sess?.business_id ?? null,
+    event_type: eventType,
+    result: typeof payload["result"] === "string" ? payload["result"] : null,
+    verdict,
+    leg: "handoff"
+  });
+  if (verdict !== "machine") return jsonOk(`amd_handoff_${verdict}`);
+  if (!sess || sess.current_step !== handoff.step) return jsonOk("amd_handoff_stale");
+  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  if (sess.status === "ringing") {
+    await telnyxHangupCall(apiKey, bLegCallControlId);
+    return jsonOk("amd_handoff_machine_ringing");
+  }
+  if (sess.status !== "bridged") return jsonOk("amd_handoff_not_active");
+  const bridgedAtRaw = sess.context?.bridged_at;
+  const bridgedAt = typeof bridgedAtRaw === "string" ? Date.parse(bridgedAtRaw) : NaN;
+  if (!Number.isFinite(bridgedAt) || Date.now() - bridgedAt > HANDOFF_AMD_YANK_WINDOW_MS) {
+    return jsonOk("amd_handoff_machine_stale_bridge");
+  }
+  // Flip FIRST, conditionally, so the B hangup that follows reads as a ring
+  // that ended (which advances the chain) and not as a finished conversation.
+  // Losing the flip race (another writer moved the session on) means leaving
+  // the call alone, the safe direction.
+  const { data: flipped } = await supabase
+    .from("voice_handoff_sessions")
+    .update({ status: "ringing" })
+    .eq("call_control_id", handoff.aLegCallId)
+    .eq("status", "bridged")
+    .eq("current_step", handoff.step)
+    .select("call_control_id");
+  if (!(flipped ?? []).length) return jsonOk("amd_handoff_flip_lost");
+  await telnyxHangupCall(apiKey, bLegCallControlId);
+  await telemetryRecord(supabase, "voice_handoff_vm_unstuck", {
+    business_id: sess.business_id ?? null,
+    a_leg: handoff.aLegCallId,
+    b_leg: bLegCallControlId,
+    step: handoff.step
+  });
+  return jsonOk("amd_handoff_machine_unstuck");
 }
 
 /**
@@ -720,6 +918,21 @@ async function handleReachLeg(
     status
   });
   return jsonOk(`reach_${status}`);
+}
+
+/** Did the detection handler already stop the assistant's media stream? */
+async function amdStreamAlreadyStopped(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  return ctx.amd_stream_stopped === true;
 }
 
 /** Has a machine verdict already been recorded for this leg? */
@@ -807,8 +1020,15 @@ async function speakVoicemail(
   // is what used to silence it. A leg held open to leave a message has to stop
   // the fork explicitly or the recording gets the assistant talking through
   // the greeting and over the message.
+  //
+  // The detection handler usually already stopped it at the verdict (the
+  // mute-at-first-machine-signal middle ground), in which case this second
+  // stop can only fail — there is no active stream to stop — and that failure
+  // must not read as "the assistant is still talking". Read the stamp BEFORE
+  // stopping so the order can't race.
+  const alreadySilenced = await amdStreamAlreadyStopped(supabase, callControlId);
   const stopped = await telnyxStreamingStop(apiKey, callControlId);
-  if (!stopped.ok) {
+  if (!stopped.ok && !alreadySilenced) {
     // Speaking now would record our message UNDER the assistant's chatter.
     // A clean "no message" beats an unintelligible one.
     console.error(
@@ -1030,6 +1250,17 @@ async function handleHandoffLifecycle(
       | { business_id: string; from_e164: string; context: HandoffContext }
       | undefined;
     if (bridged) {
+      // Freshness stamp for the AMD un-stick: a machine verdict fires seconds
+      // after a voicemail answers, so handleMachineDetection may yank a
+      // bridged leg ONLY while the bridge is this young. Best-effort; a
+      // missing stamp fails safe (no yank). Written after the flip rather
+      // than in it (context is jsonb; merging in the same statement would be
+      // a read-modify-write race with every other context writer).
+      const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
+        p_call_control_id: parsed.aLegCallId,
+        p_patch: { bridged_at: new Date().toISOString() }
+      });
+      if (stampErr) console.error("handoff: bridged_at stamp failed", stampErr);
       const recipientE164 = bridged.context?.steps?.[parsed.step]?.to_e164 ?? "";
       if (recipientE164) {
         await sendWarmTransferNotifications(supabase, deps.apiKey, {

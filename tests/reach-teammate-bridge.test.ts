@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  awaitReachAmdClearance,
   clampReachRingSeconds,
   encodeReachClientState,
   parseReachLadderConfig,
   pollReachOutcome,
+  readReachAmd,
   readReachOutcome,
   runReachLadder,
   type ReachLadderConfig,
@@ -32,22 +34,38 @@ const CONFIG: ReachLadderConfig = {
   fromE164: "+16232633832"
 };
 
-/** A supabase stub whose session context.reach is scripted per read. */
-function reachSession(stamps: Array<Record<string, unknown> | null>) {
+/**
+ * A supabase stub whose session CONTEXT is scripted per read (last repeats).
+ *
+ * Both readReachOutcome (context.reach) and readReachAmd (context.reach_amd)
+ * read the same row, and the ladder interleaves them: outcome poll first,
+ * then the AMD clearance gate once an answer lands. Scripts therefore carry
+ * whole context objects, and an answered rung that should BRIDGE must also
+ * carry a human reach_amd (or the test pays the clearance cap).
+ */
+function reachSession(contexts: Array<Record<string, unknown> | null>) {
   let i = 0;
   return {
     from: () => ({
       select: () => ({
         eq: () => ({
           maybeSingle: async () => {
-            const reach = stamps[Math.min(i, stamps.length - 1)];
+            const context = contexts[Math.min(i, contexts.length - 1)];
             i += 1;
-            return { data: { context: reach ? { reach } : {} }, error: null };
+            return { data: { context: context ?? {} }, error: null };
           }
         })
       })
     })
   } as never;
+}
+
+/** Shorthand: a context whose rung answered AND cleared AMD as human. */
+function answeredHuman(attempt: number, bLeg: string): Record<string, unknown> {
+  return {
+    reach: { attempt, status: "answered", b_leg: bLeg },
+    reach_amd: { attempt, verdict: "human" }
+  };
 }
 
 function deps(overrides: Partial<ReachTelnyxDeps> = {}): {
@@ -138,12 +156,12 @@ describe("parseReachLadderConfig", () => {
 
 describe("readReachOutcome", () => {
   it("ignores a stamp from a DIFFERENT attempt: a late event is not this answer", async () => {
-    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "old-b" }]);
+    const supa = reachSession([{ reach: { attempt: 0, status: "answered", b_leg: "old-b" } }]);
     expect(await readReachOutcome(supa, A_LEG, 1)).toBeNull();
   });
 
   it("reads the current attempt's stamp", async () => {
-    const supa = reachSession([{ attempt: 1, status: "answered", b_leg: "b-1" }]);
+    const supa = reachSession([{ reach: { attempt: 1, status: "answered", b_leg: "b-1" } }]);
     expect(await readReachOutcome(supa, A_LEG, 1)).toEqual({ status: "answered", bLeg: "b-1" });
   });
 
@@ -173,7 +191,7 @@ describe("pollReachOutcome", () => {
 describe("runReachLadder", () => {
   it("bridges the first target who answers, pre-alerting them as the dial goes out", async () => {
     const { telnyx, calls } = deps();
-    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
+    const supa = reachSession([answeredHuman(0, "b-leg-1")]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
@@ -199,8 +217,8 @@ describe("runReachLadder", () => {
   it("hangs up a missed B leg BEFORE dialing the next target", async () => {
     const { telnyx, calls } = deps();
     const supa = reachSession([
-      { attempt: 0, status: "no_answer", b_leg: "b-leg-1" },
-      { attempt: 1, status: "answered", b_leg: "b-leg-2" }
+      { reach: { attempt: 0, status: "no_answer", b_leg: "b-leg-1" } },
+      answeredHuman(1, "b-leg-2")
     ]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
@@ -219,8 +237,8 @@ describe("runReachLadder", () => {
   it("reports nobody_answered honestly when the whole ladder rings out", async () => {
     const { telnyx, calls } = deps();
     const supa = reachSession([
-      { attempt: 0, status: "no_answer", b_leg: "b-leg-1" },
-      { attempt: 1, status: "no_answer", b_leg: "b-leg-2" }
+      { reach: { attempt: 0, status: "no_answer", b_leg: "b-leg-1" } },
+      { reach: { attempt: 1, status: "no_answer", b_leg: "b-leg-2" } }
     ]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
@@ -241,7 +259,7 @@ describe("runReachLadder", () => {
           : { ok: true, status: 200, callControlId: "b-leg-2" };
       }
     });
-    const supa = reachSession([{ attempt: 1, status: "answered", b_leg: "b-leg-2" }]);
+    const supa = reachSession([answeredHuman(1, "b-leg-2")]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
@@ -263,8 +281,9 @@ describe("runReachLadder", () => {
       }
     });
     const supa = reachSession([
-      { attempt: 0, status: "answered", b_leg: "b-leg-1" },
-      { attempt: 1, status: "answered", b_leg: "b-leg-2" }
+      answeredHuman(0, "b-leg-1"),
+      answeredHuman(0, "b-leg-1"),
+      answeredHuman(1, "b-leg-2")
     ]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
@@ -395,7 +414,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
   it("emits nothing on a bridged success and stays safe with no callback", async () => {
     const { telnyx } = deps();
     const events: string[] = [];
-    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
+    const supa = reachSession([answeredHuman(0, "b-leg-1")]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
@@ -417,5 +436,107 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
       poll: { pollMs: 1, sleep: async () => undefined }
     });
     expect(out.ok).toBe(false);
+  });
+});
+
+/**
+ * The AMD clearance gate. A teammate's voicemail ANSWERS the leg (a phone
+ * that is off reaches it in seconds, inside any ring window), and bridging on
+ * the answer alone put the caller inside the greeting. The ladder now dials
+ * with premium AMD, holds the bridge until the verdict clears, skips a
+ * machine rung silently, and fails OPEN on a missing verdict so a live
+ * teammate is never left holding a silent line.
+ */
+describe("runReachLadder: AMD clearance", () => {
+  it("every rung dials with premium answering-machine detection", async () => {
+    const { telnyx, calls } = deps();
+    const supa = reachSession([answeredHuman(0, "b-leg-1")]);
+    await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    const dialOpts = calls.dial[0] as { answeringMachineDetection?: string };
+    expect(dialOpts.answeringMachineDetection).toBe("premium");
+  });
+
+  it("a machine verdict skips the rung silently: hang up, no bridge, next target", async () => {
+    const { telnyx, calls } = deps();
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    // The stub serves contexts sequentially (outcome read, then the clearance
+    // read), so the machine context appears twice: once for each reader.
+    const machineCtx = {
+      reach: { attempt: 0, status: "answered", b_leg: "b-leg-1" },
+      reach_amd: { attempt: 0, verdict: "machine" }
+    };
+    const supa = reachSession([
+      machineCtx,
+      machineCtx,
+      { reach: { attempt: 1, status: "no_answer", b_leg: "b-leg-2" } }
+    ]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined },
+      telemetry: (type, payload) => events.push({ type, payload })
+    });
+    expect(result).toEqual({ ok: false, detail: "nobody_answered" });
+    // The voicemail leg was released and the caller was NEVER bridged to it.
+    expect(calls.bridge).toEqual([]);
+    expect(calls.hangup).toContain("b-leg-1");
+    expect(calls.dial).toHaveLength(2);
+    expect(events.map((e) => e.type)).toContain("voice_reach_vm_skipped");
+  });
+
+  it("fails open: an answer with no verdict bridges once the cap elapses", async () => {
+    const { telnyx, calls } = deps();
+    const supa = reachSession([{ reach: { attempt: 0, status: "answered", b_leg: "b-leg-1" } }]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined, capMs: 5 }
+    });
+    expect(result).toEqual({ ok: true, connectedName: "Dave Lane", bLeg: "b-leg-1" });
+    expect(calls.bridge).toHaveLength(1);
+  });
+});
+
+describe("readReachAmd / awaitReachAmdClearance", () => {
+  it("ignores a verdict from a different attempt, exactly like the outcome reader", async () => {
+    const supa = reachSession([{ reach_amd: { attempt: 0, verdict: "machine" } }]);
+    expect(await readReachAmd(supa, A_LEG, 1)).toBeNull();
+  });
+
+  it("reads only the two actionable verdicts and drops anything else", async () => {
+    expect(
+      await readReachAmd(reachSession([{ reach_amd: { attempt: 2, verdict: "human" } }]), A_LEG, 2)
+    ).toBe("human");
+    expect(
+      await readReachAmd(
+        reachSession([{ reach_amd: { attempt: 2, verdict: "machine" } }]),
+        A_LEG,
+        2
+      )
+    ).toBe("machine");
+    expect(
+      await readReachAmd(
+        reachSession([{ reach_amd: { attempt: 2, verdict: "surprise" } }]),
+        A_LEG,
+        2
+      )
+    ).toBeNull();
+  });
+
+  it("resolves timeout when no verdict ever lands, without throwing", async () => {
+    const supa = reachSession([null]);
+    const verdict = await awaitReachAmdClearance(supa, A_LEG, 0, {
+      pollMs: 1,
+      sleep: async () => undefined,
+      capMs: 5
+    });
+    expect(verdict).toBe("timeout");
   });
 });
