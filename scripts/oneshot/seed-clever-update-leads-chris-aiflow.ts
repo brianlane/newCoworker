@@ -40,6 +40,7 @@
  *   AIFLOW_CLEVER_UPDATE_ACTIONS_JSON    (default sequence below)
  */
 import { createClient } from "@supabase/supabase-js";
+import { CLEVER_SENDER, DAILY_NEEDLE } from "./amy-clever-weekly-update-sweep-definition";
 import {
   parseAiFlowDefinition,
   summarizeDefinition,
@@ -107,7 +108,12 @@ function buildDefinition(opts: {
       correlationWindowMinutes: 15,
       conditions: [
         { type: "from_matches", value: opts.from },
-        { type: "has_url" }
+        { type: "has_url" },
+        // The weekly "N Active Deals awaiting update" reminder arrives on this
+        // same number and names nobody, so without this needle it lands HERE,
+        // `lead_names` extracts to "", the loop matches zero rows, and the run
+        // reports success having updated nothing. That hid a 29-deal backlog.
+        { type: "contains", value: DAILY_NEEDLE, caseInsensitive: true }
       ]
     },
     steps: [
@@ -158,7 +164,7 @@ async function main(): Promise<void> {
 
   const name = process.env.AIFLOW_SEED_NAME ?? "Clever Update Leads (Chris)";
   const definitionInput = buildDefinition({
-    from: process.env.AIFLOW_CLEVER_CHRIS_FROM ?? "3142077635",
+    from: process.env.AIFLOW_CLEVER_CHRIS_FROM ?? CLEVER_SENDER,
     integrationLabel: process.env.AIFLOW_CLEVER_INTEGRATION_LABEL ?? "Clever",
     needsActionSelector:
       process.env.AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR ??

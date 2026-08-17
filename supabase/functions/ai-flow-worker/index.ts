@@ -269,12 +269,20 @@ const ROWBOAT_ROUTE_TIMEOUT_MS = Number(
 const RENDER_FETCH_TIMEOUT_MS = Number(
   Deno.env.get("AIFLOW_RENDER_FETCH_TIMEOUT_MS") ?? "120000"
 );
-// A forEachLink browse runs up to MAX_FOREACH_ITEMS (render-side, default 25)
+// A forEachLink browse runs up to MAX_FOREACH_ITEMS (render-side, default 6)
 // sequential `networkidle` navigations plus per-item actions inside ONE HTTP
 // response, so the single-page budget would abort the worker fetch mid-loop and
 // leave the Clever portal partially updated. Give it a much larger,
-// independently configurable budget (default 10 min). The render service and
-// any tunnel in front of it must allow a response this long too.
+// independently configurable budget (default 10 min).
+//
+// This budget is NOT the binding constraint, and reading it as one is how the
+// cap ended up unreachable. The tunnel in front of the render service must also
+// allow a response this long, and it does not: tenant tunnels carry no
+// `originRequest` block, so they inherit Cloudflare's default ~100s 524. The
+// real per-request ceiling is therefore ~100s, which is what MAX_FOREACH_ITEMS
+// (render-side) is now sized against. A 524 arrives here as a transport failure
+// and the step RETRIES, re-submitting every row the timed-out pass already did.
+
 const RENDER_FOREACH_FETCH_TIMEOUT_MS = Number(
   Deno.env.get("AIFLOW_RENDER_FOREACH_FETCH_TIMEOUT_MS") ?? "600000"
 );

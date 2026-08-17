@@ -82,6 +82,39 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **Clever sends two different messages from ONE number, and both flows have
+  to say which one they want.** +1 314-207-7635 carries the daily "summary of
+  the new customers you received today" AND the weekly "N Active Deals awaiting
+  update". "Clever Update Leads" was seeded listening to `3142707635`, a
+  transposed digit, so the sweep built for the weekly reminder never ran once.
+  The reminder therefore fell to "Clever Update Leads (Chris)", which filters
+  the card list to the leads NAMED in the message; the weekly text names nobody,
+  so `lead_names` extracted to `""`, the loop matched zero rows, and the run
+  finished `done`. **Zero of 29 active deals updated, reported green** (Aug 12
+  2026; same on Aug 5 with 7 deals). Clever decides how many leads Amy gets from
+  exactly this compliance signal. Fixed Aug 17 2026 by
+  `amy-clever-weekly-update-sweep.ts`, which repoints the sender AND adds a
+  `contains` needle to BOTH flows. Fixing only the sender would have been worse
+  than the bug: both flows would then match both messages, and the sweep would
+  blanket-update her whole active book daily.
+- **A `forEachLink` sweep is capped by Cloudflare, not by the cap.** The whole
+  loop runs inside ONE HTTP response crossing a tunnel with no `originRequest`
+  block, so it inherits Cloudflare's default ~100s 524. At Amy's measured pace
+  (~5s fixed plus ~13s per lead) that is about 6 leads. `MAX_FOREACH_ITEMS` sat
+  at 25, i.e. ~330s, which was never deliverable; it moved to 6 on Aug 17 2026.
+  A 524 is worse than a truncation, because the worker treats it as transient
+  and RETRIES, re-submitting every card the timed-out pass already did. The
+  weekly flow now reads the backlog Clever states, compares it against one
+  pass, and texts Amy the remainder, so a short sweep can never again look like
+  a complete one. Covering the whole backlog needs the loop moved worker-side
+  (one request per item); until then the alert is the honest answer.
+- **The "We Spoke" status the sweep clicks still overclaims.** It is the only
+  status label ever verified against the live Provide Update modal, and it
+  submits reliably, so it stays until the modal's real option list can be read.
+  That needs a Clever session: password login fails (submit is found, enabled,
+  blurred and clicked, and the session still does not establish) and the magic
+  links in Clever's own texts expire in under a day. The per-card NOTE was made
+  honest in the meantime; the status was not.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
@@ -338,7 +371,11 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 accept step, see Sharp edges),
 `clever-spoke-check-unclaimed-patch.ts` +
 `patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
-second trigger, see Sharp edges).
+second trigger, see Sharp edges),
+`amy-clever-weekly-update-sweep.ts` +
+`amy-clever-weekly-update-sweep-definition.ts` (Aug 17 2026: repoints
+the weekly sweep at the real sender, separates the two flows by needle, and
+adds the capacity alert; see Sharp edges).
 
 Unowned-lead recovery (Aug 15 2026): `amy-unowned-lead-team-alert.ts` texts
 the lead-type-tagged team about ONE unowned lead by hand, using the same
