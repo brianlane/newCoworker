@@ -7073,6 +7073,16 @@ function TimeWindowFields({
   );
 }
 
+/** Content equality for two noMatchVars records (order-insensitive). */
+function sameNoMatchVars(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  const ak = Object.keys(a);
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
+}
+
 /**
  * `email_extract.noMatchVars` editor: "name = value" lines.
  *
@@ -7080,8 +7090,16 @@ function TimeWindowFields({
  * Deriving the textarea's value from the parsed record looked simpler and was
  * unusable: a half-typed line has no "=" yet, so the parse dropped it and the
  * controlled value snapped back on every keystroke — nothing could be typed,
- * only a finished line pasted (Bugbot, PR #1401). The call site keys this by
- * step id, so switching steps re-seeds the buffer from that step's record.
+ * only a finished line pasted (Bugbot, PR #1401).
+ *
+ * The buffer re-seeds whenever `value` changes to something OTHER than what
+ * this field last published (React's adjust-state-during-render pattern):
+ * an AI regenerate can replace the step in place while REUSING its id, so the
+ * call site's `key={step.id}` remount alone would keep the previous draft and
+ * a later keystroke would overwrite the regenerated record with it (Bugbot's
+ * second catch on the same PR). While typing, the round-tripped prop is
+ * content-equal to what was just published, so the guard never fights the
+ * keyboard.
  */
 function NoMatchVarsField({
   value,
@@ -7090,11 +7108,16 @@ function NoMatchVarsField({
   value: Record<string, string> | undefined;
   onChange: (v: Record<string, string> | undefined) => void;
 }) {
-  const [text, setText] = useState(() =>
-    Object.entries(value ?? {})
+  const toText = (rec: Record<string, string> | undefined) =>
+    Object.entries(rec ?? {})
       .map(([k, v]) => `${k} = ${v}`)
-      .join("\n")
-  );
+      .join("\n");
+  const [text, setText] = useState(() => toText(value));
+  const [lastKnown, setLastKnown] = useState(value);
+  if (!sameNoMatchVars(value, lastKnown)) {
+    setLastKnown(value);
+    setText(toText(value));
+  }
   return (
     <Field
       label="When no email matches, set (optional; one per line, name = value)"
@@ -7111,7 +7134,9 @@ function NoMatchVarsField({
             return name && val ? ([name, val] as const) : null;
           })
           .filter((e): e is readonly [string, string] => e !== null);
-        onChange(entries.length > 0 ? Object.fromEntries(entries) : undefined);
+        const next = entries.length > 0 ? Object.fromEntries(entries) : undefined;
+        setLastKnown(next);
+        onChange(next);
       }}
       help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
       textarea
