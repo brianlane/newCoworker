@@ -125,12 +125,21 @@ export async function runReachLadder(
     aLegCallControlId: string;
     config: ReachLadderConfig;
     log?: (msg: string, extra?: Record<string, unknown>) => void;
+    /**
+     * Telemetry sink (the bridge's recordDiag). Reach B-leg dial refusals
+     * were previously VISIBLE ONLY in VPS stdout: a Telnyx capacity 403 on
+     * every rung read as "nobody answered" with no queryable trace anywhere
+     * (2026-08-16 incident review). Optional so tests and older callers
+     * need no stub; never awaited, never throws into the ladder.
+     */
+    telemetry?: (eventType: string, payload: Record<string, unknown>) => void;
     /** Test seam: poll cadence + sleep, forwarded to pollReachOutcome. */
     poll?: { pollMs?: number; sleep?: (ms: number) => Promise<void> };
   }
 ): Promise<ReachLadderResult> {
   const { businessId, aLegCallControlId, config } = args;
   const log = args.log ?? (() => undefined);
+  const telemetry = args.telemetry ?? (() => undefined);
   for (let attempt = 0; attempt < config.targets.length; attempt += 1) {
     const target = config.targets[attempt]!;
     if (config.preSmsBody && telnyx.sendPreSms) {
@@ -154,6 +163,12 @@ export async function runReachLadder(
         attempt,
         status: dialRes.status,
         body: dialRes.body?.slice(0, 120)
+      });
+      telemetry("voice_reach_dial_failed", {
+        attempt,
+        to: target.e164,
+        http_status: dialRes.status ?? null,
+        error_snippet: dialRes.body?.slice(0, 120) ?? null
       });
       continue;
     }
@@ -187,6 +202,7 @@ export async function runReachLadder(
     await telnyx.hangup(dialRes.callControlId);
     log("reach: no answer, next target", { attempt });
   }
+  telemetry("voice_reach_exhausted", { targets: config.targets.length });
   return { ok: false, detail: "nobody_answered" };
 }
 

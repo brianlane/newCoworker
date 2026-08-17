@@ -88,6 +88,10 @@ verify_jwt = false
 [functions.chat-spend-velocity-alerts]
 verify_jwt = false
 
+# Weekly Telnyx capacity headroom review (pg_cron, INTERNAL_CRON_SECRET auth).
+[functions.voice-capacity-monitor]
+verify_jwt = false
+
 [functions.customer-memory-summarize-sweep]
 verify_jwt = false
 

@@ -95,7 +95,8 @@ describe("sendVoiceCapacityAlertOnce", () => {
       p_flow_id: INFO.flowId,
       p_telnyx_code: INFO.telnyxCode,
       p_http_status: INFO.httpStatus,
-      p_bucket_minutes: CAPACITY_ALERT_BUCKET_MINUTES
+      p_bucket_minutes: CAPACITY_ALERT_BUCKET_MINUTES,
+      p_kind: "carrier_rejection"
     });
     expect(deletedIds).toEqual([]);
     const [url, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
@@ -207,5 +208,49 @@ describe("sendVoiceCapacityAlertOnce", () => {
     expect(await sendVoiceCapacityAlertOnce(supabase, INFO, () => undefined, okFetch())).toBe(
       "unconfigured"
     );
+  });
+});
+
+/**
+ * The weekly capacity monitor rides the same claim/release dedupe with its
+ * own kind, week-long bucket, and email body; the defaults above must stay
+ * byte-identical for the inline carrier-rejection path.
+ */
+describe("sendVoiceCapacityAlertOnce: monitor overrides", () => {
+  it("claims with the override kind and bucket, and sends the override email", async () => {
+    const { supabase, rpc } = stubSupabase({ data: 21, error: null });
+    const fetchFn = okFetch();
+    const result = await sendVoiceCapacityAlertOnce(
+      supabase,
+      { ...INFO, businessId: null },
+      fullEnv,
+      fetchFn,
+      {
+        kind: "capacity_monitor",
+        bucketMinutes: 10080,
+        email: { subject: "weekly review", text: "the fleet is tight" }
+      }
+    );
+    expect(result).toBe("sent");
+    expect(rpc).toHaveBeenCalledWith("voice_capacity_try_claim_alert", {
+      p_business_id: null,
+      p_flow_id: INFO.flowId,
+      p_telnyx_code: INFO.telnyxCode,
+      p_http_status: INFO.httpStatus,
+      p_bucket_minutes: 10080,
+      p_kind: "capacity_monitor"
+    });
+    const [, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { body: string }
+    ];
+    const body = JSON.parse(init.body) as { subject: string; text: string };
+    expect(body.subject).toBe("weekly review");
+    expect(body.text).toBe("the fleet is tight");
+  });
+
+  it("prints (fleet) for a null business id in the default email", () => {
+    const email = formatCapacityAlertEmail({ ...INFO, businessId: null });
+    expect(email.text).toContain("business_id: (fleet)");
   });
 });

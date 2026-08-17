@@ -2500,6 +2500,50 @@ button already does.
 > turns out not to be honored on a bridged pair, the design moves to a Telnyx
 > conference and the fail-safe above is what protects tenants in the meantime.
 
+## Telnyx outbound call capacity (ops runbook)
+
+Telnyx caps concurrent OUTBOUND calls at three layers, and the MINIMUM wins:
+
+1. **Connection** (each Call Control Application's `outbound.channel_limit`).
+2. **Outbound voice profile** (`concurrent_call_limit`).
+3. **Account pool** (support-ticket-only: NOT readable or writable via API;
+   the granted number lives in the `TELNYX_ACCOUNT_CHANNEL_LIMIT` env and
+   must be updated by hand when Telnyx confirms a raise).
+
+The 2026-08-16 incident: the profile said 10 while the connection sat at 2,
+and the 08:30 Phoenix burst got HTTP 403 "channel limit exceeded" on the
+third simultaneous dial (no leg, no CDR, no webhook). Four defenses now
+stand, in order of when they act:
+
+- **Per-tenant carrier caps**: provisioning creates a dedicated Call Control
+  app + outbound voice profile per tenant (marker `[nc:<businessId>]`),
+  channel limits equal to the plan's `maxConcurrentCalls`, a $25/day per
+  tenant spend fuse, and the full destination whitelist. Existing tenants
+  converge via `scripts/oneshot/migrate-tenants-to-dedicated-telnyx-apps.ts`
+  (idempotent adopt-by-marker; re-run it after a tier change to re-sync the
+  carrier caps).
+- **Pre-dial fleet gate**: `voice_check_availability` refuses flow-placed
+  dials once fleet outbound reservations reach
+  `TELNYX_ACCOUNT_CHANNEL_LIMIT - PLATFORM_OUTBOUND_HEADROOM` (headroom
+  reserves channels for warm transfers and reach_teammate B legs, which dial
+  without reservations).
+- **Classified rejections**: a carrier channel-limit 403 (or the gate's
+  refusal) defers the `place_ai_call` step on a short jittered backoff
+  instead of burning the ladder rung, and resolves
+  `carrier_capacity` only after retries exhaust. Wall-clock resumes carry up
+  to 5 minutes of jitter so morning cohorts no longer stampede one second.
+- **Alerting**: dial-time rejections email the platform admin (deduped
+  hourly, `voice_capacity_alerts`), and the weekly `voice-capacity-monitor`
+  cron (Mondays 15:00 UTC) reviews 14 days of real refusals plus the
+  committed-caps ratio and mails a ready-to-send Telnyx raise request when
+  the pool is tight.
+
+Inspect it all with `tsx debug/telnyx-capacity.ts` (read-only: every app,
+profile, DID binding, effective caps, and live in-flight counts). Raising
+the connection or profile limits is a portal edit or an API PATCH; raising
+the ACCOUNT pool means emailing support@telnyx.com from the account owner
+address, then updating `TELNYX_ACCOUNT_CHANNEL_LIMIT`.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

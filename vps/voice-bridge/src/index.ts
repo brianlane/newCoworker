@@ -1601,7 +1601,11 @@ function main(): void {
                 businessId,
                 aLegCallControlId: callControlId,
                 config: reachConfig,
-                log: (msg, extra) => console.log(`voice-bridge: ${msg}`, extra ?? {})
+                log: (msg, extra) => console.log(`voice-bridge: ${msg}`, extra ?? {}),
+                // B-leg dial refusals become queryable telemetry_events rows
+                // instead of stdout-only lines (a Telnyx capacity 403 on
+                // every rung used to read as "nobody answered").
+                telemetry: recordDiag
               }
             );
             if (!result.ok) {

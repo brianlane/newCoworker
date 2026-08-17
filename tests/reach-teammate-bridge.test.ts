@@ -298,3 +298,75 @@ describe("runReachLadder", () => {
     });
   });
 });
+
+/**
+ * B-leg dial refusals become telemetry (2026-08-16 incident review): a
+ * Telnyx capacity 403 on every rung used to be stdout-only and read to the
+ * caller as "nobody answered". The ladder still advances identically; the
+ * refusal is now queryable.
+ */
+describe("runReachLadder: dial-failure telemetry", () => {
+  it("emits voice_reach_dial_failed per refused rung and voice_reach_exhausted at the end", async () => {
+    const { telnyx } = deps({
+      dial: async () => ({ ok: false, status: 403, body: "User channel limit exceeded D1" })
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const supa = reachSession([null]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined },
+      telemetry: (type, payload) => events.push({ type, payload })
+    });
+    expect(result).toEqual({ ok: false, detail: "nobody_answered" });
+    expect(events).toEqual([
+      {
+        type: "voice_reach_dial_failed",
+        payload: {
+          attempt: 0,
+          to: "+16025245719",
+          http_status: 403,
+          error_snippet: "User channel limit exceeded D1"
+        }
+      },
+      {
+        type: "voice_reach_dial_failed",
+        payload: {
+          attempt: 1,
+          to: "+16026951142",
+          http_status: 403,
+          error_snippet: "User channel limit exceeded D1"
+        }
+      },
+      { type: "voice_reach_exhausted", payload: { targets: 2 } }
+    ]);
+  });
+
+  it("emits nothing on a bridged success and stays safe with no callback", async () => {
+    const { telnyx } = deps();
+    const events: string[] = [];
+    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined },
+      telemetry: (type) => events.push(type)
+    });
+    expect(result.ok).toBe(true);
+    expect(events).toEqual([]);
+
+    // No callback at all: the refused path must not throw.
+    const { telnyx: refusing } = deps({
+      dial: async () => ({ ok: false, status: 403, body: undefined })
+    });
+    const out = await runReachLadder(reachSession([null]), refusing, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    expect(out.ok).toBe(false);
+  });
+});
