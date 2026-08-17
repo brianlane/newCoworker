@@ -22,7 +22,8 @@ vi.mock("@/lib/db/chat-usage", () => ({
 vi.mock("@/lib/db/platform-costs", () => ({
   listHostingerVpsCosts: vi.fn(),
   listTelnyxCostDaily: vi.fn(),
-  listTenantDids: vi.fn()
+  listTenantDids: vi.fn(),
+  listStripeFeeMonthly: vi.fn()
 }));
 
 import {
@@ -31,6 +32,8 @@ import {
   hostingSizesByBusiness,
   loadFleetMargins,
   monthStartYmdUtc,
+  stripeObservedByBusiness,
+  unmodeledStripeFeeCents,
   syncedHostingContradictsPin,
   telnyxMicrosByBusiness,
   didCountByBusiness
@@ -42,14 +45,20 @@ import { getFleetCalendarMonthUsageByBusiness } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
 import {
   listHostingerVpsCosts,
+  listStripeFeeMonthly,
   listTelnyxCostDaily,
   listTenantDids
 } from "@/lib/db/platform-costs";
-import type { HostingerVpsCostRow, TelnyxCostDailyRow } from "@/lib/db/platform-costs";
+import type {
+  HostingerVpsCostRow,
+  StripeFeeMonthlyRow,
+  TelnyxCostDailyRow
+} from "@/lib/db/platform-costs";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE
 } from "@/lib/plans/enterprise-pricing";
+import { computeDayCurrentMrr } from "@/lib/admin/mrr";
 
 const NOW = new Date("2026-07-12T18:00:00.000Z");
 
@@ -147,6 +156,7 @@ beforeEach(() => {
     telnyxRow({ id: 2, record_type: "sip-trunking", cost_micros: 41_000 }),
     telnyxRow({ id: 3, business_id: null, cost_micros: 999_000 })
   ]);
+  vi.mocked(listStripeFeeMonthly).mockResolvedValue([]);
 });
 
 describe("monthStartYmdUtc", () => {
@@ -389,5 +399,217 @@ describe("loadFleetMargins: DID rentals follow the numbers, not the boxes", () =
     );
     // Amy has a box but rents nothing here, so she carries no DID line.
     expect(data.byBusiness.get("biz-amy")!.lines.find((l) => l.key === "did")).toBeUndefined();
+  });
+});
+
+function stripeFeeRow(overrides: Partial<StripeFeeMonthlyRow> = {}): StripeFeeMonthlyRow {
+  return {
+    id: 1,
+    month_start: "2026-07-01",
+    business_id: "biz-amy",
+    gross_cents: 28_399,
+    fee_cents: 1280,
+    net_cents: 27_119,
+    charge_gross_cents: 28_399,
+    charge_fee_cents: 1280,
+    charge_count: 1,
+    synced_at: "2026-07-06T00:00:00Z",
+    ...overrides
+  };
+}
+
+describe("stripeObservedByBusiness", () => {
+  /**
+   * Rates are derived from ALL retained months, not just the current one: a
+   * biennial tenant is charged once every 24 months, so a single-month read
+   * would leave exactly the largest charges unobserved.
+   */
+  it("sums every retained month per business", () => {
+    const map = stripeObservedByBusiness([
+      stripeFeeRow(),
+      stripeFeeRow({
+        id: 2,
+        month_start: "2026-06-01",
+        gross_cents: 9_900,
+        fee_cents: 317,
+        charge_gross_cents: 9_900,
+        charge_fee_cents: 317,
+        charge_count: 1
+      })
+    ]);
+    expect(map.get("biz-amy")).toEqual({
+      grossCents: 38_299,
+      feeCents: 1_597,
+      chargeCount: 2
+    });
+  });
+
+  /**
+   * The rate must come from the charge-only columns. A month whose totals
+   * were dented by a refund (smaller gross, unchanged fee) would otherwise
+   * derive a rate that reads high while still looking plausible.
+   */
+  it("reads the charge-only columns, not the refund-dented totals", () => {
+    const map = stripeObservedByBusiness([
+      stripeFeeRow({ gross_cents: 18_399, fee_cents: 1280, net_cents: 17_119 })
+    ]);
+    expect(map.get("biz-amy")).toEqual({
+      grossCents: 28_399,
+      feeCents: 1280,
+      chargeCount: 1
+    });
+  });
+
+  it("excludes unattributed rows, which belong to no tenant's rate", () => {
+    const map = stripeObservedByBusiness([
+      stripeFeeRow(),
+      stripeFeeRow({ id: 2, business_id: null, fee_cents: 5_000 })
+    ]);
+    expect(map.get("biz-amy")!.feeCents).toBe(1280);
+    expect(map.size).toBe(1);
+  });
+});
+
+describe("loadFleetMargins, Stripe fee observation", () => {
+  it("reads a wide history window and calibrates the fee line from it", async () => {
+    vi.mocked(listStripeFeeMonthly).mockResolvedValue([stripeFeeRow()]);
+    const data = await loadFleetMargins(NOW);
+    expect(vi.mocked(listStripeFeeMonthly)).toHaveBeenCalledWith("2023-07-01");
+    expect(data.stripeActuals).toBe(true);
+    const feeLine = data.byBusiness.get("biz-amy")!.lines.find((l) => l.key === "stripe_fees")!;
+    expect(feeLine.source).toBe("calibrated");
+  });
+
+  /**
+   * Unlike Telnyx, "no rows" is NOT an actual zero: a term tenant may
+   * simply not have been charged inside the retained history, so the fee
+   * line must fall back to the country estimate rather than deriving a rate
+   * from nothing.
+   */
+  it("falls back to the estimate when no fee rows exist", async () => {
+    vi.mocked(listStripeFeeMonthly).mockResolvedValue([]);
+    const data = await loadFleetMargins(NOW);
+    expect(data.stripeActuals).toBe(false);
+    const feeLine = data.byBusiness.get("biz-amy")!.lines.find((l) => l.key === "stripe_fees")!;
+    expect(feeLine.source).toBe("estimate");
+  });
+
+  it("degrades a failed fee read to estimates instead of erroring", async () => {
+    vi.mocked(listStripeFeeMonthly).mockRejectedValue(new Error("stripe fee read failed"));
+    const data = await loadFleetMargins(NOW);
+    expect(data.stripeActuals).toBe(false);
+    expect(data.byBusiness.get("biz-amy")!.revenueCents).toBeGreaterThan(0);
+  });
+
+  it("stringifies a non-Error fee-read failure too", async () => {
+    vi.mocked(listStripeFeeMonthly).mockRejectedValue("stripe fee read exploded");
+    const data = await loadFleetMargins(NOW);
+    expect(data.stripeActuals).toBe(false);
+  });
+
+  /**
+   * The estimate's fallback signal is the tenant's own country, resolved
+   * from their phone/timezone: a Canadian tenant's card is very likely
+   * non-US, and pricing them at the domestic 2.9% understates the fee.
+   */
+  it("resolves the fallback rate from the tenant's phone and timezone", async () => {
+    vi.mocked(listStripeFeeMonthly).mockResolvedValue([]);
+    vi.mocked(listBusinesses).mockResolvedValue([
+      { ...AMY, phone: "+16045551234", timezone: "America/Vancouver" },
+      PILOT
+    ] as never);
+    const canadian = await loadFleetMargins(NOW);
+
+    vi.mocked(listBusinesses).mockResolvedValue([AMY, PILOT] as never);
+    const american = await loadFleetMargins(NOW);
+
+    const feeOf = (data: Awaited<ReturnType<typeof loadFleetMargins>>) =>
+      data.byBusiness.get("biz-amy")!.lines.find((l) => l.key === "stripe_fees")!.cents;
+    expect(feeOf(canadian)).toBeGreaterThan(feeOf(american));
+  });
+});
+
+describe("unmodeledStripeFeeCents", () => {
+  /**
+   * Account-level Stripe fees belong to no tenant, but they are still money
+   * Stripe took: they were being stored and then dropped from every fleet
+   * total, the same way the Telnyx leak bucket would have been.
+   */
+  it("counts every cent of a tenant-less row, this month only", () => {
+    const rows = [
+      stripeFeeRow({ id: 1, business_id: null, fee_cents: 250, charge_fee_cents: 0 }),
+      stripeFeeRow({ id: 2, business_id: null, fee_cents: 400, charge_fee_cents: 0 }),
+      // Previous month: outside the current fleet total.
+      stripeFeeRow({
+        id: 4,
+        business_id: null,
+        month_start: "2026-06-01",
+        fee_cents: 5_000,
+        charge_fee_cents: 0
+      })
+    ];
+    expect(unmodeledStripeFeeCents(rows, "2026-07-01")).toBe(650);
+  });
+
+  /**
+   * A tenant's margin line is a rate derived from the charge-only columns,
+   * so it represents charge_fee_cents and nothing else. A dispute Stripe
+   * attaches to that customer sits above it in fee_cents, inside no rate
+   * and inside no leak bucket, and would otherwise vanish from every fleet
+   * total. Only the remainder is counted, so the charge fees a tenant line
+   * DOES model are not double-counted.
+   */
+  it("counts an attributed row's non-charge remainder, not its charge fees", () => {
+    const rows = [
+      stripeFeeRow({
+        id: 1,
+        business_id: "biz-amy",
+        fee_cents: 1280 + 1_500, // card fee plus a dispute
+        charge_fee_cents: 1280
+      })
+    ];
+    expect(unmodeledStripeFeeCents(rows, "2026-07-01")).toBe(1_500);
+  });
+
+  it("counts nothing extra for an ordinary all-charges tenant month", () => {
+    const rows = [
+      stripeFeeRow({ id: 1, business_id: "biz-amy", fee_cents: 1280, charge_fee_cents: 1280 })
+    ];
+    expect(unmodeledStripeFeeCents(rows, "2026-07-01")).toBe(0);
+  });
+});
+
+describe("loadFleetMargins: the revenue base the Dashboard subtracts cost from", () => {
+  /**
+   * The admin Dashboard prints "MRR minus cost equals net", so the MRR it
+   * shows and the revenue the cost side nets against must be the same money.
+   *
+   * They are computed by different functions over different picks: MRR by
+   * computeDayCurrentMrr, cost by the margin engine over
+   * dedupeSubscriptionsPreferringActive. A tenant mid-resubscribe is exactly
+   * where plain newest-row-wins and prefer-active disagree, so the card is
+   * only honest if MRR is fed the SAME picks the margin engine used. This
+   * asserts that invariant at the producer, not at the page.
+   */
+  it("matches computeDayCurrentMrr over its own picks, even mid-resubscribe", async () => {
+    // Newest row is a pending resubscribe; the live active row is older.
+    vi.mocked(listAllSubscriptions).mockResolvedValue([
+      { ...AMY_SUB, id: "sub-pending", status: "pending", stripe_subscription_id: null },
+      AMY_SUB
+    ] as never);
+
+    const data = await loadFleetMargins(NOW);
+    const picks = [...data.subscriptionByBusiness.values()];
+    // The loader kept the live contract, not the pending checkout.
+    expect(data.subscriptionByBusiness.get("biz-amy")?.id).toBe("sub-row");
+
+    const mrr = computeDayCurrentMrr({
+      subscriptions: picks as never,
+      enterpriseDeals: [{ monthly_cents: 250_000 }],
+      now: NOW
+    });
+    expect(mrr.totalCents).toBe(data.totals.revenueCents);
+    // And the tenant is genuinely revenue-bearing, so this is not 0 === 0.
+    expect(data.totals.revenueCents).toBeGreaterThan(250_000);
   });
 });

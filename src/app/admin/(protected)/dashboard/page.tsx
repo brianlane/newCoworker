@@ -7,11 +7,8 @@ import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
 import { getAdminMutedBusinessIds } from "@/lib/db/admin-mutes";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
-import { getFleetCalendarMonthUsageTotals } from "@/lib/db/usage";
-import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
-import { listTenantDids } from "@/lib/db/platform-costs";
-import { didCountByBusiness } from "@/lib/admin/margin-data";
-import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
+import { computeDayCurrentMrr } from "@/lib/admin/mrr";
+import { loadFleetCostBreakdown } from "@/lib/admin/fleet-cost";
 import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
   formatAdminLabel,
@@ -40,7 +37,7 @@ export default async function AdminDashboardPage() {
   // the fleet-wide feeds below — fetched first so a muted tenant can't eat
   // the feed row limits.
   const muted = await getAdminMutedBusinessIds();
-  const [businesses, alerts, recentActivity, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
+  const [businesses, alerts, recentActivity, systemErrors, vpsInventory, enterpriseDeals, fleetCost] =
     await Promise.all([
       listBusinesses(),
       // 15 rows, matching the activity card: both lists render inside the
@@ -56,17 +53,18 @@ export default async function AdminDashboardPage() {
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
-      // Best effort, like the AI spend read: a transient usage-read failure
-      // degrades the cost estimate to zero metered usage instead of erroring
-      // the whole dashboard.
-      getFleetCalendarMonthUsageTotals().catch((err: unknown) => {
+      // The shared fleet cost model (src/lib/admin/fleet-cost.ts), the
+      // SAME figure the Costs and Revenue pages render, so the three can
+      // never disagree about what the fleet costs or nets. Best effort: a
+      // failed read blanks the cost line rather than erroring the whole
+      // dashboard.
+      loadFleetCostBreakdown().catch((err: unknown) => {
         console.error(
-          "admin dashboard: fleet usage rollup failed",
+          "admin dashboard: fleet cost load failed",
           err instanceof Error ? err.message : err
         );
-        return { smsSent: 0, voiceMinutes: 0 };
-      }),
-      getFleetCurrentAiSpendMicros()
+        return null;
+      })
     ]);
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
@@ -89,35 +87,30 @@ export default async function AdminDashboardPage() {
   // out revenue still inside an open 30-day money-back window) is best
   // effort: a profile-read failure degrades to "everything committed"
   // instead of erroring the whole dashboard.
-  const mrrSubscriptions = await stampRefundExposureFromDb(subscriptions, businesses).catch(
-    (err: unknown) => {
-      console.error(
-        "admin dashboard: refund-exposure stamping failed",
-        err instanceof Error ? err.message : err
-      );
-      return subscriptions;
-    }
-  );
-  const mrr = computeDayCurrentMrr({ subscriptions: mrrSubscriptions, enterpriseDeals });
-  // Telnyx bills per NUMBER, so the DID line follows the numbers rented,
-  // not the boxes provisioned. Best effort: an unreadable list degrades to
-  // the old one-per-live-box heuristic instead of zeroing the DID cost.
-  const didCountsByBusinessId = await listTenantDids()
-    .then(didCountByBusiness)
-    .catch((err: unknown) => {
-      console.error(
-        "admin dashboard: tenant DID read failed",
-        err instanceof Error ? err.message : err
-      );
-      return undefined;
-    });
-  const platformCost = estimateMonthlyPlatformCost({
-    businesses,
-    monthUsage,
-    aiSpendMicros,
-    actuals: { didCountsByBusinessId }
+  // This card prints "MRR − cost · net", so the MRR and the cost side must
+  // be built from the SAME subscription per tenant, or the subtraction on
+  // screen does not hold. They select differently: this page's own map is
+  // newest-row-wins, while the cost side prefers the newest ACTIVE
+  // Stripe-backed row (dedupeSubscriptionsPreferringActive), so a tenant
+  // mid-resubscribe would be dropped from MRR while still counted in cost.
+  // Take the cost side's own picks when they loaded, which makes the two
+  // agree by construction rather than by coincidence; fall back to the
+  // newest-row map only when the cost side is unavailable, in which case
+  // the net line is hidden anyway.
+  const revenueSubscriptions =
+    fleetCost !== null ? [...fleetCost.margins.subscriptionByBusiness.values()] : subscriptions;
+  const mrrSubscriptions = await stampRefundExposureFromDb(
+    revenueSubscriptions,
+    businesses
+  ).catch((err: unknown) => {
+    console.error(
+      "admin dashboard: refund-exposure stamping failed",
+      err instanceof Error ? err.message : err
+    );
+    return revenueSubscriptions;
   });
-  const netCents = mrr.totalCents - platformCost.totalCents;
+  const mrr = computeDayCurrentMrr({ subscriptions: mrrSubscriptions, enterpriseDeals });
+  const breakdown = fleetCost?.breakdown ?? null;
 
   // ── Signup sparkline (last 6 months) ──────────────────────────────────────
   const now = new Date();
@@ -182,13 +175,19 @@ export default async function AdminDashboardPage() {
               ? ` · ${formatMoney(mrr.refundExposedCents)} in refund-window`
               : null}
           </p>
-          <p className="text-xs text-parchment/30 mt-1">
-            − {formatMoney(platformCost.totalCents)}/mo est. cost ·{" "}
-            <span className={netCents >= 0 ? "text-claw-green" : "text-spark-orange"}>
-              net {netCents < 0 ? "−" : ""}
-              {formatMoney(Math.abs(netCents))}
-            </span>
-          </p>
+          {breakdown !== null && (
+            <p className="text-xs text-parchment/30 mt-1">
+              − {formatMoney(breakdown.totalCostCents)}/mo est. cost ·{" "}
+              <span
+                className={
+                  breakdown.netMarginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+                }
+              >
+                net {breakdown.netMarginCents < 0 ? "−" : ""}
+                {formatMoney(Math.abs(breakdown.netMarginCents))}
+              </span>
+            </p>
+          )}
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">VPS Online</p>

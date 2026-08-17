@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   PLATFORM_COST_SYNC_STATUS_KEY,
+  STRIPE_FEE_WINDOW_MONTHS,
+  aggregateStripeFees,
   aggregateTelnyxRecords,
   billingCycleMonths,
   buildHostingerSnapshot,
@@ -9,9 +11,12 @@ import {
   parsePlatformCostSyncStatus,
   senderLabel,
   runPlatformCostSync,
+  stripeCustomerIdFromSource,
   windowStartDayUtc,
+  windowStartMonthUtc,
   type PlatformCostSyncDeps,
-  type PlatformCostSyncStatus
+  type PlatformCostSyncStatus,
+  type StripeFeeTransaction
 } from "@/lib/admin/cost-sync";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 
@@ -34,6 +39,9 @@ function baseDeps(overrides: Partial<PlatformCostSyncDeps> = {}): PlatformCostSy
     listBusinessVpsAssignments: vi.fn(async () => []),
     replaceTelnyxCostWindow: vi.fn(async () => {}),
     replaceHostingerVpsCosts: vi.fn(async () => {}),
+    listStripeBalanceTransactions: vi.fn(async () => []),
+    listStripeCustomerBusinessIds: vi.fn(async () => []),
+    replaceStripeFeeWindow: vi.fn(async () => {}),
     recordStatus: vi.fn(async () => {}),
     now: NOW,
     ...overrides
@@ -626,7 +634,10 @@ describe("parsePlatformCostSyncStatus", () => {
       telnyxRows: 12,
       telnyxError: "boom",
       hostingerRows: 3,
-      hostingerError: "bang"
+      hostingerError: "bang",
+      stripeMonths: 12,
+      stripeRows: 5,
+      stripeError: "kaboom"
     };
     expect(parsePlatformCostSyncStatus(status)).toEqual(status);
     expect(parsePlatformCostSyncStatus({ ...status, telnyxRange: "last_30_days" })?.telnyxRange).toBe(
@@ -643,7 +654,13 @@ describe("parsePlatformCostSyncStatus", () => {
       telnyxRows: 0,
       telnyxError: null,
       hostingerRows: 0,
-      hostingerError: null
+      hostingerError: null,
+      // A status row written before the Stripe side existed carries none of
+      // these keys and must still parse, reading as "nothing synced, no
+      // error" rather than blanking the Costs page's whole sync line.
+      stripeMonths: 0,
+      stripeRows: 0,
+      stripeError: null
     });
   });
 });
@@ -775,5 +792,258 @@ describe("senderLabel", () => {
 
   it("caps the label so a malformed sender id can't bloat the column", () => {
     expect(senderLabel(["x".repeat(200)])).toHaveLength(64);
+  });
+});
+
+describe("windowStartMonthUtc", () => {
+  it("returns the first of the month N months back, in UTC", () => {
+    expect(windowStartMonthUtc(NOW, 12)).toBe("2025-07-01");
+    expect(windowStartMonthUtc(NOW, 0)).toBe("2026-07-01");
+  });
+
+  it("treats a negative window as zero rather than reaching forward", () => {
+    expect(windowStartMonthUtc(NOW, -3)).toBe("2026-07-01");
+  });
+});
+
+describe("stripeCustomerIdFromSource", () => {
+  it("reads the customer from an expanded charge, as a string or an object", () => {
+    expect(stripeCustomerIdFromSource({ customer: "cus_1" })).toBe("cus_1");
+    expect(stripeCustomerIdFromSource({ customer: { id: "cus_2" } })).toBe("cus_2");
+  });
+
+  /**
+   * Every "cannot attribute" shape must come back null rather than throw:
+   * an unattributable transaction is a normal outcome (account-level fees),
+   * not an error.
+   */
+  it("returns null for every unattributable shape", () => {
+    expect(stripeCustomerIdFromSource(null)).toBeNull();
+    expect(stripeCustomerIdFromSource("ch_unexpanded")).toBeNull();
+    expect(stripeCustomerIdFromSource(undefined)).toBeNull();
+    expect(stripeCustomerIdFromSource({})).toBeNull();
+    expect(stripeCustomerIdFromSource({ customer: "" })).toBeNull();
+    expect(stripeCustomerIdFromSource({ customer: null })).toBeNull();
+    expect(stripeCustomerIdFromSource({ customer: { id: "" } })).toBeNull();
+    expect(stripeCustomerIdFromSource({ customer: { id: 7 } })).toBeNull();
+    expect(stripeCustomerIdFromSource({ customer: 7 })).toBeNull();
+  });
+});
+
+function txn(overrides: Partial<StripeFeeTransaction> = {}): StripeFeeTransaction {
+  return {
+    type: "charge",
+    amountCents: 28_399,
+    feeCents: 1280,
+    netCents: 27_119,
+    createdUnix: Math.floor(Date.parse("2026-07-05T12:00:00Z") / 1000),
+    customerId: "cus_1",
+    ...overrides
+  };
+}
+
+describe("aggregateStripeFees", () => {
+  const customerToBusiness = new Map([["cus_1", "biz-1"]]);
+
+  it("buckets per month and tenant, summing gross, fee and net", () => {
+    const rows = aggregateStripeFees({
+      transactions: [
+        txn(),
+        txn({ amountCents: 9_900, feeCents: 317, netCents: 9_583 }),
+        txn({ createdUnix: Math.floor(Date.parse("2026-06-05T12:00:00Z") / 1000) })
+      ],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    const july = rows.find((r) => r.month_start === "2026-07-01")!;
+    expect(july.business_id).toBe("biz-1");
+    expect(july.gross_cents).toBe(28_399 + 9_900);
+    expect(july.fee_cents).toBe(1280 + 317);
+    expect(july.net_cents).toBe(27_119 + 9_583);
+    expect(july.charge_count).toBe(2);
+    expect(rows.find((r) => r.month_start === "2026-06-01")?.charge_count).toBe(1);
+  });
+
+  /**
+   * The same unattributed-bucket convention the Telnyx sync uses: a fee we
+   * cannot pin to a tenant is real platform cost, not something to drop or
+   * to smear across tenants.
+   */
+  it("files unmatched and customer-less transactions under a null business", () => {
+    const rows = aggregateStripeFees({
+      transactions: [
+        txn({ customerId: "cus_unknown" }),
+        txn({ customerId: null, type: "stripe_fee", amountCents: 0, feeCents: 250 })
+      ],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].business_id).toBeNull();
+    expect(rows[0].fee_cents).toBe(1280 + 250);
+    // Only the charge carried a fixed per-charge fee.
+    expect(rows[0].charge_count).toBe(1);
+  });
+
+  it("counts a payment as a charge but a refund as neither", () => {
+    const rows = aggregateStripeFees({
+      transactions: [
+        txn({ type: "payment" }),
+        txn({ type: "refund", amountCents: -9_900, feeCents: 0, netCents: -9_900 })
+      ],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    expect(rows[0].charge_count).toBe(1);
+    expect(rows[0].gross_cents).toBe(28_399 - 9_900);
+  });
+
+  /**
+   * The replace only clears months at or after the window start, so a
+   * transaction from before it would be inserted ALONGSIDE the row an
+   * earlier, wider sync already wrote, double-counting that tenant's fees.
+   */
+  it("drops transactions settled before the window start", () => {
+    const rows = aggregateStripeFees({
+      transactions: [txn({ createdUnix: Math.floor(Date.parse("2025-01-05T12:00:00Z") / 1000) })],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("skips transactions with an unusable timestamp", () => {
+    const rows = aggregateStripeFees({
+      transactions: [
+        txn({ createdUnix: Number.NaN }),
+        txn({ createdUnix: Number.POSITIVE_INFINITY }),
+        txn({ createdUnix: 8.64e15 })
+      ],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("runPlatformCostSync, Stripe fees", () => {
+  it("aggregates and writes the fee window, and reports it in the status", async () => {
+    const replaceStripeFeeWindow = vi.fn(async () => {});
+    const deps = baseDeps({
+      listStripeBalanceTransactions: vi.fn(async () => [
+        {
+          type: "charge",
+          amountCents: 28_399,
+          feeCents: 1280,
+          netCents: 27_119,
+          createdUnix: Math.floor(Date.parse("2026-07-05T12:00:00Z") / 1000),
+          customerId: "cus_1"
+        }
+      ]),
+      listStripeCustomerBusinessIds: vi.fn(async () => [
+        { businessId: "biz-1", stripeCustomerId: "cus_1" }
+      ]),
+      replaceStripeFeeWindow
+    });
+    const status = await runPlatformCostSync(deps);
+
+    expect(status.stripeError).toBeNull();
+    expect(status.stripeRows).toBe(1);
+    expect(status.stripeMonths).toBe(STRIPE_FEE_WINDOW_MONTHS);
+    expect(replaceStripeFeeWindow).toHaveBeenCalledWith("2025-07-01", [
+      {
+        month_start: "2026-07-01",
+        business_id: "biz-1",
+        gross_cents: 28_399,
+        fee_cents: 1280,
+        net_cents: 27_119,
+        charge_gross_cents: 28_399,
+        charge_fee_cents: 1280,
+        charge_count: 1
+      }
+    ]);
+    // The pull starts at the same instant the window does.
+    expect(deps.listStripeBalanceTransactions).toHaveBeenCalledWith(
+      Math.floor(Date.parse("2025-07-01T00:00:00Z") / 1000)
+    );
+  });
+
+  it("records a skip (not a crash) when no Stripe key is configured", async () => {
+    const deps = baseDeps({ listStripeBalanceTransactions: null });
+    const status = await runPlatformCostSync(deps);
+    expect(status.ok).toBe(false);
+    expect(status.stripeError).toMatch(/STRIPE_SECRET_KEY not set/);
+    expect(status.stripeRows).toBe(0);
+    expect(deps.replaceStripeFeeWindow).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The three vendor sides fail independently: a Stripe outage must not
+   * cost us the Telnyx or Hostinger pull that already succeeded.
+   */
+  it("isolates a Stripe failure from the other two sides", async () => {
+    const deps = baseDeps({
+      listStripeBalanceTransactions: vi.fn(async () => {
+        throw new Error("stripe down");
+      })
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.stripeError).toBe("stripe down");
+    expect(status.ok).toBe(false);
+    expect(status.telnyxError).toBeNull();
+    expect(status.hostingerError).toBeNull();
+    expect(deps.replaceTelnyxCostWindow).toHaveBeenCalled();
+    expect(deps.replaceHostingerVpsCosts).toHaveBeenCalled();
+  });
+
+  it("stringifies a non-Error Stripe failure", async () => {
+    const deps = baseDeps({
+      listStripeBalanceTransactions: vi.fn(async () => {
+        throw "stripe exploded";
+      })
+    });
+    const status = await runPlatformCostSync(deps);
+    expect(status.stripeError).toBe("stripe exploded");
+  });
+});
+
+describe("aggregateStripeFees - charge-only subtotals", () => {
+  const customerToBusiness = new Map([["cus_1", "biz-1"]]);
+
+  /**
+   * Stripe does NOT return the fee when a charge is refunded. Folding a
+   * refund into the rate inputs lowers gross while the fee stands still, so
+   * the derived rate reads high while still looking plausible enough to be
+   * published as `calibrated`. The charge-only subtotals are what keeps a
+   * refund out of the rate; the unrestricted totals still carry it so they
+   * reconcile against Stripe's own net volume.
+   */
+  it("keeps refunds out of the rate inputs but inside the reconciling totals", () => {
+    const rows = aggregateStripeFees({
+      transactions: [
+        txn(),
+        txn({ type: "refund", amountCents: -10_000, feeCents: 0, netCents: -10_000 })
+      ],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    const row = rows[0];
+    // Totals carry everything, so they still match Stripe's net volume.
+    expect(row.gross_cents).toBe(28_399 - 10_000);
+    expect(row.net_cents).toBe(27_119 - 10_000);
+    // Rate inputs see only the charge.
+    expect(row.charge_gross_cents).toBe(28_399);
+    expect(row.charge_fee_cents).toBe(1280);
+    expect(row.charge_count).toBe(1);
+  });
+
+  it("excludes non-charge fees (account level, disputes) from the rate inputs", () => {
+    const rows = aggregateStripeFees({
+      transactions: [txn(), txn({ type: "adjustment", amountCents: 0, feeCents: 1_500 })],
+      customerToBusiness,
+      windowStartMonth: "2026-01-01"
+    });
+    expect(rows[0].fee_cents).toBe(1280 + 1_500);
+    expect(rows[0].charge_fee_cents).toBe(1280);
   });
 });

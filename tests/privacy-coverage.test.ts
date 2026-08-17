@@ -171,6 +171,8 @@ const EXEMPT: Record<string, string> = {
   sms_outbound_rate: "rate limiting state",
   subscriptions: "billing",
   telnyx_cost_daily: "cost aggregates",
+  stripe_fee_monthly:
+    "Stripe fee aggregates per month and tenant (gross/fee/net cents, charge counts); operator cost telemetry with no end-customer columns, and business_id detaches via on delete set null so the fleet cost history survives a tenant deletion",
   usage_cap_alerts: "alert dedupe state",
   voice_capacity_alerts:
     "Telnyx capacity alert dedupe + audit (business_id, flow id, carrier error metadata; no person columns); business_id detaches via on delete set null so the fleet-wide audit trail survives a tenant deletion",

@@ -15,7 +15,7 @@ import {
 } from "@/lib/admin/revenue";
 import Link from "next/link";
 import { formatAdminLabel } from "@/lib/admin/dashboard";
-import { loadFleetMargins } from "@/lib/admin/margin-data";
+import { loadFleetCostBreakdown } from "@/lib/admin/fleet-cost";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -31,20 +31,25 @@ function formatMoney(cents: number): string {
 
 export default async function AdminRevenuePage() {
   const t = await getTranslations("admin.pages");
-  const [businesses, subscriptions, deals, margins] = await Promise.all([
+  const [businesses, subscriptions, deals, fleetCost] = await Promise.all([
     listBusinesses(),
     listAllSubscriptions(),
     listActiveEnterpriseDeals(),
-    // Margin data is best effort — the revenue analytics must render even
-    // if the cost side is unavailable.
-    loadFleetMargins().catch((err: unknown) => {
+    // Cost data is best effort, the revenue analytics must render even if
+    // the cost side is unavailable. This is the SAME shared model the
+    // Dashboard and Costs pages use (src/lib/admin/fleet-cost.ts), so Net
+    // Margin here is the complete figure, platform-level costs included,
+    // and matches what those pages show.
+    loadFleetCostBreakdown().catch((err: unknown) => {
       console.error(
-        "admin revenue: margin load failed",
+        "admin revenue: fleet cost load failed",
         err instanceof Error ? err.message : err
       );
       return null;
     })
   ]);
+  const margins = fleetCost?.margins ?? null;
+  const breakdown = fleetCost?.breakdown ?? null;
 
   const revenueSubs: RevenueSubscription[] = subscriptions;
   const businessName = new Map(businesses.map((b) => [b.id, b.name]));
@@ -87,6 +92,9 @@ export default async function AdminRevenuePage() {
   const trendMax = Math.max(...trend.map((p) => p.totalCents), 1);
   const payingCount = payingBusinesses.length;
 
+  // Per-client average uses the per-tenant margin (platform-level costs
+  // like the shared campaign fee belong to no single client), while the Net
+  // Margin KPI below is the complete fleet figure.
   const avgMarginCents =
     margins !== null && margins.totals.payingBusinesses > 0
       ? Math.round(margins.totals.marginCents / margins.totals.payingBusinesses)
@@ -117,19 +125,21 @@ export default async function AdminRevenuePage() {
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Net Margin</p>
-          {margins === null ? (
+          {breakdown === null ? (
             <p className="text-3xl font-bold text-parchment/40">—</p>
           ) : (
             <>
               <p
                 className={`text-3xl font-bold ${
-                  margins.totals.marginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+                  breakdown.netMarginCents >= 0 ? "text-claw-green" : "text-spark-orange"
                 }`}
               >
-                {formatMoney(margins.totals.marginCents)}
+                {formatMoney(breakdown.netMarginCents)}
               </p>
               <p className="text-xs text-parchment/30 mt-1">
-                {margins.totals.marginPct !== null ? `${margins.totals.marginPct}% of revenue` : "no revenue"}
+                {breakdown.netMarginPct !== null
+                  ? `${breakdown.netMarginPct}% of revenue`
+                  : "no revenue"}
                 {" · "}
                 <Link href="/admin/costs" className="hover:text-signal-teal">
                   cost detail
