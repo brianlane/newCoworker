@@ -680,6 +680,13 @@ describe("stripe/client", () => {
     // A biennial sub with the Canada fee as a second item: 24-month-cadence
     // price at $119.76. Phase 1 must keep it by price id; phase 2 (monthly
     // renewal) must convert it to a $4.99 monthly price on the same product.
+    //
+    // This assertion guards BILLING, not an API constraint. Stripe would
+    // accept the unconverted month/24 add-on next to the month/1 renewal plan
+    // (phases follow multiple-of-shortest, same as subscriptions). What breaks
+    // without the conversion is the customer's bill: on month-to-month they
+    // would prepay 24 months of surcharge and lose most of it if they cancel
+    // early. If this test ever fails, fix the code, not the test.
     mockSubscriptionRetrieve.mockResolvedValueOnce({
       schedule: null,
       items: {
