@@ -231,6 +231,21 @@ export async function runReachLadder(
         await telnyx.hangup(bLeg);
         continue;
       }
+      // Stamp "this attempt is being bridged" BEFORE issuing the bridge, so a
+      // machine verdict landing AFTER the clearance cap failed open cannot
+      // hang up a leg the caller is now connected to (the webhook checks this
+      // marker before its machine hangup). A cut mid-conversation on a late,
+      // possibly wrong verdict is the worse failure; a fail-open that really
+      // was a voicemail costs the awkward moment the cap already priced in.
+      // Best-effort: a failed stamp narrows nothing but this protection.
+      try {
+        await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: aLegCallControlId,
+          p_patch: { reach_bridged: { attempt } }
+        });
+      } catch {
+        // The bridge proceeds regardless; only the late-verdict shield thins.
+      }
       const bridgeRes = await telnyx.bridge(aLegCallControlId, {
         otherCallControlId: bLeg,
         parkAfterUnbridge: true,

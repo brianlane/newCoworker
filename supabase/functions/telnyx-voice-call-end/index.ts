@@ -712,8 +712,11 @@ async function handleMachineDetection(
  *
  * "unknown" is deliberately NOT written: the ladder's clearance cap decides,
  * and it fails open to bridging, the same treat-as-human bias every other AMD
- * consumer here has. Greeting/screening events carry nothing useful for a leg
- * whose only question is bridge-or-skip, so they are acknowledged and dropped.
+ * consumer here has. A greeting event whose result is a BEEP counts as machine
+ * evidence in its own right, exactly like the outbound path: relying on the
+ * verdict always arriving first re-introduces the ordering dependency
+ * voice_amd.ts exists to remove, and a beep-first voicemail would otherwise
+ * fail open into the greeting. Other greeting/screening results are dropped.
  */
 async function handleReachAmd(
   supabase: SupabaseClient,
@@ -722,8 +725,10 @@ async function handleReachAmd(
   reach: { businessId: string; aLegCallControlId: string; attempt: number },
   bLegCallControlId: string
 ): Promise<Response> {
-  if (!AMD_DETECTION_EVENTS.has(eventType)) return jsonOk("amd_reach_ignored");
-  const verdict = classifyAmdResult(payload["result"]);
+  const isDetection = AMD_DETECTION_EVENTS.has(eventType);
+  const beepMachine = !isDetection && greetingImpliesMachine(payload["result"]);
+  if (!isDetection && !beepMachine) return jsonOk("amd_reach_ignored");
+  const verdict = isDetection ? classifyAmdResult(payload["result"]) : "machine";
   await telemetryRecord(supabase, "voice_amd_verdict", {
     call_control_id: bLegCallControlId,
     business_id: reach.businessId,
@@ -746,6 +751,25 @@ async function handleReachAmd(
     console.error("reach: amd stamp failed", error);
   }
   if (verdict === "machine") {
+    // A LATE machine verdict can land after the clearance cap already failed
+    // open and the ladder bridged this leg to the caller. Cutting a bridged
+    // leg on a late verdict is the worse failure (the same principle as the
+    // handoff freshness window): the verdict may be wrong, and the caller is
+    // mid-conversation. The ladder stamps context.reach_bridged BEFORE it
+    // issues the bridge command, so reading it here cannot miss a bridge that
+    // is already in flight.
+    const { data: sessRow } = await supabase
+      .from("voice_handoff_sessions")
+      .select("context")
+      .eq("call_control_id", reach.aLegCallControlId)
+      .maybeSingle();
+    const bridgedAttempt = (
+      (sessRow as { context?: { reach_bridged?: { attempt?: unknown } } } | null)?.context
+        ?.reach_bridged ?? null
+    )?.attempt;
+    if (bridgedAttempt === reach.attempt) {
+      return jsonOk("amd_reach_machine_after_bridge");
+    }
     await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", bLegCallControlId);
   }
   return jsonOk(`amd_reach_${verdict}`);
@@ -785,8 +809,14 @@ async function handleHandoffAmd(
   handoff: { aLegCallId: string; step: number },
   bLegCallControlId: string
 ): Promise<Response> {
-  if (!AMD_DETECTION_EVENTS.has(eventType)) return jsonOk("amd_handoff_ignored");
-  const verdict = classifyAmdResult(payload["result"]);
+  // A greeting event carrying a BEEP is machine evidence in its own right,
+  // same as the outbound path: a beep-first voicemail would otherwise never
+  // stamp the step and the chain would stay stuck, the exact hole this
+  // handler exists to close.
+  const isDetection = AMD_DETECTION_EVENTS.has(eventType);
+  const beepMachine = !isDetection && greetingImpliesMachine(payload["result"]);
+  if (!isDetection && !beepMachine) return jsonOk("amd_handoff_ignored");
+  const verdict = isDetection ? classifyAmdResult(payload["result"]) : "machine";
   const { data } = await supabase
     .from("voice_handoff_sessions")
     .select("status, current_step, context, business_id")

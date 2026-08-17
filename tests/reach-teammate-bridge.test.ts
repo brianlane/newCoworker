@@ -45,7 +45,8 @@ const CONFIG: ReachLadderConfig = {
  */
 function reachSession(contexts: Array<Record<string, unknown> | null>) {
   let i = 0;
-  return {
+  const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const stub = {
     from: () => ({
       select: () => ({
         eq: () => ({
@@ -56,8 +57,18 @@ function reachSession(contexts: Array<Record<string, unknown> | null>) {
           }
         })
       })
-    })
-  } as never;
+    }),
+    // The ladder stamps context.reach_bridged via this RPC right before it
+    // bridges, so the webhook's late machine verdict can tell a bridged leg
+    // from a skippable one.
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      rpcCalls.push({ fn, args });
+      return { data: null, error: null };
+    }
+  };
+  return Object.assign(stub, { rpcCalls }) as unknown as Parameters<typeof runReachLadder>[0] & {
+    rpcCalls: typeof rpcCalls;
+  };
 }
 
 /** Shorthand: a context whose rung answered AND cleared AMD as human. */
@@ -540,5 +551,67 @@ describe("readReachAmd / awaitReachAmdClearance", () => {
       capMs: 5
     });
     expect(verdict).toBe("timeout");
+  });
+});
+
+/**
+ * The late-verdict shield. Premium classification can land AFTER the 3s
+ * clearance cap failed open and the caller was bridged; hanging the leg up
+ * then would cut a live conversation on a verdict that may be wrong. The
+ * ladder therefore stamps context.reach_bridged BEFORE issuing the bridge
+ * command, and the webhook's machine hangup checks it first.
+ */
+describe("runReachLadder: reach_bridged stamp", () => {
+  it("stamps the attempt via the context merge BEFORE the bridge command", async () => {
+    const order: string[] = [];
+    const { telnyx } = deps({
+      bridge: async () => {
+        order.push("bridge");
+        return { ok: true, status: 200 };
+      }
+    });
+    const supa = reachSession([answeredHuman(0, "b-leg-1")]);
+    const origRpc = (supa as unknown as { rpc: (fn: string, a: unknown) => Promise<unknown> }).rpc;
+    (supa as unknown as { rpc: (fn: string, a: unknown) => Promise<unknown> }).rpc = async (
+      fn,
+      a
+    ) => {
+      order.push("stamp");
+      return origRpc(fn, a as Record<string, unknown>);
+    };
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(["stamp", "bridge"]);
+    expect(supa.rpcCalls).toEqual([
+      {
+        fn: "voice_session_context_merge",
+        args: { p_call_control_id: A_LEG, p_patch: { reach_bridged: { attempt: 0 } } }
+      }
+    ]);
+  });
+
+  it("a machine skip never stamps: nothing was bridged", async () => {
+    const machineCtx = {
+      reach: { attempt: 0, status: "answered", b_leg: "b-leg-1" },
+      reach_amd: { attempt: 0, verdict: "machine" }
+    };
+    const { telnyx } = deps();
+    const supa = reachSession([
+      machineCtx,
+      machineCtx,
+      { reach: { attempt: 1, status: "no_answer", b_leg: "b-leg-2" } }
+    ]);
+    await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    expect(supa.rpcCalls).toEqual([]);
   });
 });
