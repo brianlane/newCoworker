@@ -10,6 +10,7 @@ import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
+import { contactChannelLabel } from "@/lib/customer-memory/channel-label";
 import {
   describeSegmentFilters,
   matchesSegment,
@@ -481,77 +482,80 @@ export function CustomersList({
             in place. Newest-first, so no bottom anchoring. */}
         <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
         <ul className="divide-y divide-parchment/10">
-          {sorted.map((c) => (
-            <li key={c.e164}>
-              <Link
-                href={`/dashboard/customers/${encodeURIComponent(c.e164)}`}
-                className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-parchment truncate">
-                      {c.name}
-                    </span>
-                    <span
-                      className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${
-                        TYPE_BADGE_CLASS[c.type] ?? "text-parchment/60 bg-parchment/10"
-                      }`}
-                    >
-                      {c.type}
-                    </span>
-                    {c.name !== c.e164 && (
-                      <span className="text-xs text-parchment/50 font-mono">{c.e164}</span>
-                    )}
-                    {c.lastChannel && (
-                      <span className="text-[10px] uppercase tracking-wide text-parchment/60 bg-parchment/10 rounded px-1.5 py-0.5">
-                        {c.lastChannel}
+          {sorted.map((c) => {
+            const channelLabel = contactChannelLabel(c.lastChannel);
+            return (
+              <li key={c.e164}>
+                <Link
+                  href={`/dashboard/customers/${encodeURIComponent(c.e164)}`}
+                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-parchment truncate">
+                        {c.name}
                       </span>
-                    )}
-                    {c.pinned && (
                       <span
-                        className="text-[10px] uppercase tracking-wide text-claw-green/90 bg-claw-green/10 rounded px-1.5 py-0.5"
-                        title="Has pinned notes"
+                        className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${
+                          TYPE_BADGE_CLASS[c.type] ?? "text-parchment/60 bg-parchment/10"
+                        }`}
                       >
-                        pinned
+                        {c.type}
                       </span>
+                      {c.name !== c.e164 && (
+                        <span className="text-xs text-parchment/50 font-mono">{c.e164}</span>
+                      )}
+                      {channelLabel && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/60 bg-parchment/10 rounded px-1.5 py-0.5">
+                          {channelLabel}
+                        </span>
+                      )}
+                      {c.pinned && (
+                        <span
+                          className="text-[10px] uppercase tracking-wide text-claw-green/90 bg-claw-green/10 rounded px-1.5 py-0.5"
+                          title="Has pinned notes"
+                        >
+                          pinned
+                        </span>
+                      )}
+                      {c.ownerName && (
+                        <span
+                          className="text-[10px] tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5"
+                          title="Owning employee"
+                        >
+                          {c.ownerName}&apos;s
+                        </span>
+                      )}
+                      {c.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="text-[10px] tracking-wide text-signal-teal/80 bg-signal-teal/10 rounded px-1.5 py-0.5"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                    {c.summary?.trim() && (
+                      <p className="text-xs text-parchment/60 mt-0.5 line-clamp-2">
+                        {c.summary.trim()}
+                      </p>
                     )}
-                    {c.ownerName && (
-                      <span
-                        className="text-[10px] tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5"
-                        title="Owning employee"
-                      >
-                        {c.ownerName}&apos;s
-                      </span>
-                    )}
-                    {c.tags.map((t) => (
-                      <span
-                        key={t}
-                        className="text-[10px] tracking-wide text-signal-teal/80 bg-signal-teal/10 rounded px-1.5 py-0.5"
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                  {c.summary?.trim() && (
-                    <p className="text-xs text-parchment/60 mt-0.5 line-clamp-2">
-                      {c.summary.trim()}
+                    <p className="text-[10px] text-parchment/40 mt-0.5">
+                      {c.totalInteractions} interaction
+                      {c.totalInteractions === 1 ? "" : "s"}
+                      {c.lastInteractionAt && (
+                        <>
+                          {" • last "}
+                          <LocalDateTime iso={c.lastInteractionAt} />
+                        </>
+                      )}
                     </p>
-                  )}
-                  <p className="text-[10px] text-parchment/40 mt-0.5">
-                    {c.totalInteractions} interaction
-                    {c.totalInteractions === 1 ? "" : "s"}
-                    {c.lastInteractionAt && (
-                      <>
-                        {" • last "}
-                        <LocalDateTime iso={c.lastInteractionAt} />
-                      </>
-                    )}
-                  </p>
-                </div>
-                <span className="text-parchment/40 text-sm shrink-0">View →</span>
-              </Link>
-            </li>
-          ))}
+                  </div>
+                  <span className="text-parchment/40 text-sm shrink-0">View →</span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
         </ConversationScroll>
       </Card>

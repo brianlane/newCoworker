@@ -57,9 +57,11 @@ export type CapturedContactInput = {
   channel: CustomerMemoryChannel;
   /**
    * Override the tag stamped on a NEWLY created contact. Defaults to the
-   * channel's CAPTURE_SOURCE_TAGS entry; surfaces that ride an existing
-   * channel but want their own CRM scoping (the public booking page rides
-   * `webchat` with tag "Booking Page") pass it explicitly.
+   * channel's CAPTURE_SOURCE_TAGS entry; a surface with no entry of its own
+   * passes one explicitly (the public booking page stamps "Booking Page").
+   * Channel and tag answer different questions and both are kept: the
+   * channel is the last TOUCH and moves with every later interaction, the
+   * tag is the ORIGIN and never expires.
    */
   sourceTag?: string;
 };

@@ -1105,7 +1105,7 @@ export async function submitPublicBooking(
     e164: phone,
     name,
     email,
-    channel: "webchat",
+    channel: "booking_page",
     sourceTag: BOOKING_PAGE_SOURCE_TAG
   });
 

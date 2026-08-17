@@ -30,6 +30,7 @@ import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
 import { ContactLanguageEditor } from "@/components/dashboard/ContactLanguageEditor";
 import { getContactLanguage } from "@/lib/db/contact-language";
+import { contactChannelLabel } from "@/lib/customer-memory/channel-label";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
@@ -175,6 +176,7 @@ export default async function CustomerDetailPage({ params }: Props) {
     headerContact?.kind === "owner" || headerContact?.kind === "employee"
       ? headerContact.kind
       : memory.type;
+  const channelLabel = contactChannelLabel(memory.last_channel);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -199,9 +201,9 @@ export default async function CustomerDetailPage({ params }: Props) {
           </p>
         )}
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
-          {memory.last_channel && (
+          {channelLabel && (
             <span className="text-parchment/70 bg-parchment/10 rounded px-2 py-0.5 uppercase tracking-wide">
-              last via {memory.last_channel}
+              last via {channelLabel}
             </span>
           )}
           <span className="text-parchment/70 bg-parchment/10 rounded px-2 py-0.5">
