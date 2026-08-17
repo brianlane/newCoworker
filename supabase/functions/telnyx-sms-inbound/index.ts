@@ -1602,10 +1602,10 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     .limit(25);
   const candidates = (rows as LateClaimCandidate[] | null) ?? [];
 
-  // Bucket precedence (live → late → yank → mine) and all eligibility rules
-  // live in the pure, unit-tested matcher; this function just EXECUTES the
-  // decision it returns.
-  const matched = matchLateClaimReply({
+  // Name resolution, bucket precedence (live → late → yank → mine) and all
+  // eligibility rules live in the pure, unit-tested matcher; this function
+  // just EXECUTES the decision it returns.
+  const resolved = matchLateClaimReply({
     candidates,
     from,
     digit,
@@ -1613,11 +1613,34 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     nowMs: Date.now(),
     windowMs: LATE_CLAIM_WINDOW_MS
   });
-  if (!matched) return null;
+  // The typed name fits two of the sender's lapsed leads. Ask rather than
+  // guess, exactly as the live path does: handing the wrong lead to the wrong
+  // agent is the failure this whole mechanism exists to prevent.
+  if (resolved.outcome === "ambiguous") {
+    return await consumeAmbiguousOfferReply({
+      supabase,
+      businessId,
+      from,
+      ackTo,
+      eventId,
+      envelope,
+      telnyxApiKey,
+      messagingProfileId,
+      smsFromE164,
+      text: ambiguousClaimText(resolved.labels)
+    });
+  }
+  if (resolved.outcome !== "match") return null;
+  const matched = resolved.match;
   const match = matched.row;
   const isLate = matched.kind === "late";
   const isYank = matched.kind === "yank";
   const matchStepIndex = matched.stepIndex;
+  // The comma'd text named this lead, so it is NOT an ETA. Leaving it in the
+  // timeframe slot texts the owner "ETA to contact lead: Aurora Anthony" and
+  // zeroes claimed_agent_eta_minutes, which also disables the first-to-claim
+  // yank. Mirrors `effectiveTimeframe = ""` on the live path.
+  const effectiveTimeframe = matched.namedLabel ? "" : claimTimeframe;
 
   if (matched.kind === "mine") {
     // Re-ack a duplicate claim so the sender gets positive feedback (this path
@@ -1684,7 +1707,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   if (memberName) routing.offered_name = memberName;
   // ETA the teammate stated ("1, 2 hours") → the worker appends it to the owner's
   // claim notice. Cleared when none so a re-claim never carries a stale ETA.
-  if (claimTimeframe) routing.claim_timeframe = claimTimeframe;
+  if (effectiveTimeframe) routing.claim_timeframe = effectiveTimeframe;
   else delete routing.claim_timeframe;
   // Same for a pass_reason from an earlier "2, <reason>": it belongs to that
   // reply, never to this late claim.
@@ -1751,7 +1774,12 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     });
   }
 
-  await logReply();
+  // A named claim made from several candidates confirms WHICH lead was taken;
+  // that is the one thing the sender cannot infer, and it is why they typed a
+  // name. Everything else stays silent (`logReply`): the offer SMS already
+  // carried the lead details. Exactly one of the two persists the reply job.
+  if (resolved.ackLabel) await ack(claimAckText(resolved.ackLabel), "late-claim-named");
+  else await logReply();
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     run_id: match.id,
