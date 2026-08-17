@@ -37,7 +37,8 @@ export interface CapacityAlertSupabase {
 export const CAPACITY_ALERT_BUCKET_MINUTES = 60;
 
 export type CapacityAlertInfo = {
-  businessId: string;
+  /** Null for fleet-level alerts (the weekly monitor). */
+  businessId: string | null;
   flowId: string | null;
   toE164: string;
   httpStatus: number;
@@ -61,7 +62,7 @@ export function formatCapacityAlertEmail(info: CapacityAlertInfo): {
   const lines = [
     "An outbound call was rejected by Telnyx for concurrent-channel capacity.",
     "",
-    `business_id: ${info.businessId}`,
+    `business_id: ${info.businessId ?? "(fleet)"}`,
     `flow_id: ${info.flowId ?? "(none)"}`,
     `callee: ${info.toE164}`,
     `http_status: ${info.httpStatus}`,
@@ -83,6 +84,17 @@ export function formatCapacityAlertEmail(info: CapacityAlertInfo): {
 }
 
 /**
+ * Alert-stream overrides: the weekly capacity monitor rides the same
+ * claim/release dedupe with its own kind, bucket length, and email body.
+ * Omitted = the inline carrier-rejection alert exactly as before.
+ */
+export type CapacityAlertOverrides = {
+  kind?: "carrier_rejection" | "capacity_monitor";
+  bucketMinutes?: number;
+  email?: { subject: string; text: string };
+};
+
+/**
  * Send the admin capacity alert if this fleet-wide bucket has not alerted
  * yet. Never throws; returns what happened for the caller's telemetry.
  */
@@ -90,7 +102,8 @@ export async function sendVoiceCapacityAlertOnce(
   supabase: CapacityAlertSupabase,
   info: CapacityAlertInfo,
   env: (name: string) => string | undefined,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  overrides: CapacityAlertOverrides = {}
 ): Promise<CapacityAlertResult> {
   let claimId: unknown;
   try {
@@ -99,7 +112,8 @@ export async function sendVoiceCapacityAlertOnce(
       p_flow_id: info.flowId,
       p_telnyx_code: info.telnyxCode,
       p_http_status: info.httpStatus,
-      p_bucket_minutes: CAPACITY_ALERT_BUCKET_MINUTES
+      p_bucket_minutes: overrides.bucketMinutes ?? CAPACITY_ALERT_BUCKET_MINUTES,
+      p_kind: overrides.kind ?? "carrier_rejection"
     });
     if (error) {
       console.error("voice-capacity-alert: claim failed", error.message);
@@ -141,7 +155,7 @@ export async function sendVoiceCapacityAlertOnce(
       await release();
       return "unconfigured";
     }
-    const email = formatCapacityAlertEmail(info);
+    const email = overrides.email ?? formatCapacityAlertEmail(info);
     const res = await fetchFn("https://api.resend.com/emails", {
       method: "POST",
       headers: {

@@ -486,3 +486,47 @@ describe("voice_outbound_platform_gate migration (contract)", () => {
     expect(migration).not.toMatch(/voice_reserve_for_call\s*\(/);
   });
 });
+
+/**
+ * voice_capacity_monitor migration: splits the alert dedupe by kind and
+ * re-signs the claim RPC. Same overload hazard as the availability probe:
+ * the old 5-arg claim must be dropped before the 6-arg recreate.
+ */
+describe("voice_capacity_monitor migration (contract)", () => {
+  const migration = readFileSync(
+    join(repoRoot, "supabase/migrations/20260822144118_voice_capacity_monitor.sql"),
+    "utf8"
+  );
+
+  it("adds the kind column and replaces the fleet-wide unique with (kind, bucket)", () => {
+    expect(migration).toMatch(
+      /add column if not exists kind text not null default 'carrier_rejection'\s+check \(kind in \('carrier_rejection', 'capacity_monitor'\)\)/
+    );
+    expect(migration).toMatch(/drop index if exists uq_voice_capacity_alerts_bucket/);
+    expect(migration).toMatch(
+      /create unique index if not exists uq_voice_capacity_alerts_kind_bucket\s+on voice_capacity_alerts \(kind, alert_bucket\)/
+    );
+    expect(migration).toMatch(/on conflict \(kind, alert_bucket\) do nothing/);
+  });
+
+  it("drops the 5-arg claim before recreating with p_kind, and re-grants the 6-arg", () => {
+    const dropAt = migration.indexOf(
+      "drop function if exists public.voice_capacity_try_claim_alert(uuid, uuid, text, int, int);"
+    );
+    const createAt = migration.indexOf(
+      "create or replace function voice_capacity_try_claim_alert("
+    );
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(dropAt);
+    expect(migration).toMatch(/p_kind text default 'carrier_rejection'/);
+    expect(migration).toMatch(
+      /grant execute on function voice_capacity_try_claim_alert\(uuid, uuid, text, int, int, text\) to service_role/
+    );
+  });
+
+  it("schedules the weekly cron through the vault-read pattern", () => {
+    expect(migration).toMatch(/cron\.schedule\(\s*'edge-voice-capacity-monitor',\s*'0 15 \* \* 1'/);
+    expect(migration).toMatch(/voice-capacity-monitor/);
+    expect(migration).toMatch(/timeout_milliseconds := 60000/);
+  });
+});
