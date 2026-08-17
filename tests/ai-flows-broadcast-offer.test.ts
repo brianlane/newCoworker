@@ -225,7 +225,7 @@ function matchClaim(
   candidates: LateClaimCandidate[],
   opts: { from?: string; digit?: string; timeframe?: string } = {}
 ) {
-  return matchLateClaimReply({
+  const r = matchLateClaimReply({
     candidates,
     from: opts.from ?? DAVE,
     digit: opts.digit ?? "1",
@@ -233,6 +233,7 @@ function matchClaim(
     nowMs: NOW,
     windowMs: DAY_MS
   });
+  return r.outcome === "match" ? r.match : null;
 }
 
 /** A live broadcast offer to Dave + Amy (routing.offered stays unset). */
