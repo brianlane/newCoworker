@@ -17,7 +17,11 @@
 import type { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
-import { getBusiness, setPrioritySupportUntil } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  setPrioritySupportUntil,
+  clearPrioritySupportNudgeStamp
+} from "@/lib/db/businesses";
 import { logAdminAction } from "@/lib/admin/audit";
 import {
   startPrioritySupport,
@@ -79,6 +83,11 @@ export async function POST(request: Request) {
       // shorten or clear a window set by mistake, which extendPrioritySupport
       // (the payment path) refuses to do by design.
       await setPrioritySupportUntil(body.businessId, until);
+      // A comp opens a NEW coverage window, so the expiry warning has to be
+      // armed again. Without this, a tenant who was already warned once keeps
+      // their old stamp and the sweep skips them forever, so the comped window
+      // lapses silently.
+      if (until) await clearPrioritySupportNudgeStamp(body.businessId);
       await logAdminAction({
         adminEmail: admin.email,
         action: "priority_support_comp",
@@ -116,8 +125,11 @@ export async function POST(request: Request) {
       adminEmail: admin.email,
       action: "priority_support_pay_link",
       businessId: body.businessId,
-      detail: {}
+      detail: { resumed: result.value.kind === "resumed" }
     });
+    if (result.value.kind === "resumed") {
+      return successResponse({ ok: true, resumed: true });
+    }
     return successResponse({ ok: true, checkoutUrl: result.value.checkoutUrl });
   } catch (err) {
     if (err instanceof z.ZodError) {

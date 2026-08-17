@@ -13,6 +13,7 @@ import {
   createWhiteGloveCheckoutSession,
   createPrioritySupportCheckoutSession,
   cancelPrioritySupportSubscription,
+  resumePrioritySupportSubscription,
   ensureCommitmentSchedule,
   releaseCommitmentSchedule,
   resolveIntroDiscountCouponId,
@@ -1332,6 +1333,20 @@ describe("stripe/client", () => {
         cancel_at_period_end: true
       });
       expect(sub).toMatchObject({ cancel_at_period_end: true });
+    });
+  });
+
+  describe("resumePrioritySupportSubscription", () => {
+    it("clears the wind-down flag rather than opening a second subscription", async () => {
+      // A tenant who cancelled but is still inside the paid period has a LIVE
+      // subscription, so "restart" means un-cancelling that one. A fresh
+      // Checkout would double-bill and the one-live-row index would reject it.
+      mockSubscriptionUpdate.mockResolvedValueOnce({ id: "sub_1", cancel_at_period_end: false });
+      const sub = await resumePrioritySupportSubscription("sub_1");
+      expect(mockSubscriptionUpdate).toHaveBeenCalledWith("sub_1", {
+        cancel_at_period_end: false
+      });
+      expect(sub).toMatchObject({ cancel_at_period_end: false });
     });
   });
 

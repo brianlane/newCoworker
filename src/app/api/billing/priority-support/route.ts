@@ -119,6 +119,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     });
 
     if (!result.ok) return failureResponse(result.reason);
+    // "resumed" means the tenant was winding down and we cleared the flag on
+    // the subscription they still have; there is nothing to redirect to.
+    if (result.value.kind === "resumed") return successResponse({ resumed: true });
     return successResponse({ checkoutUrl: result.value.checkoutUrl });
   } catch (err) {
     if (err instanceof z.ZodError) {

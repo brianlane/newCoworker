@@ -77,7 +77,9 @@ import { getLivePrioritySupportSubscription } from "@/lib/db/priority-support";
 import {
   PRIORITY_SUPPORT_LOW_DAYS_THRESHOLD,
   PRIORITY_SUPPORT_MONTHLY_CENTS,
-  prioritySupportDaysLeft
+  prioritySupportDaysLeft,
+  prioritySupportStatus,
+  prioritySupportStatusIsCovered
 } from "@/lib/plans/priority-support";
 import { formatPriceCents } from "@/lib/pricing";
 // Same operator channels the enterprise dedicated-support card uses: a paying
@@ -361,10 +363,20 @@ export default async function BillingPage(props: {
     (business as { tier?: string | null } | null)?.tier,
     prioritySupportUntilIso
   );
-  const prioritySupportCardState: PrioritySupportCardState = prioritySupportRow
-    ? prioritySupportRow.cancel_at_period_end
-      ? "winding_down"
-      : "renewing"
+  // Coverage decides COVERED vs not; the subscription row only decides whether
+  // it is renewing. Deriving "covered" from the row instead would tell an
+  // admin-comped tenant (open window, no subscription) that their support had
+  // lapsed, and offer to sell it back to them.
+  const prioritySupportCovered = prioritySupportStatusIsCovered(
+    prioritySupportStatus(
+      (business as { tier?: string | null } | null)?.tier,
+      prioritySupportUntilIso
+    )
+  );
+  const prioritySupportCardState: PrioritySupportCardState = prioritySupportCovered
+    ? prioritySupportRow && !prioritySupportRow.cancel_at_period_end
+      ? "renewing"
+      : "winding_down"
     : prioritySupportUntilIso
       ? "lapsed"
       : "none";

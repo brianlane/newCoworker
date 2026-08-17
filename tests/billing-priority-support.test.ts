@@ -69,7 +69,10 @@ describe("startPrioritySupport", () => {
       getSubscriptionRow: vi.fn().mockResolvedValue(ACTIVE_MEMBERSHIP as never),
       createCheckout
     });
-    expect(res).toEqual({ ok: true, value: { checkoutUrl: "https://pay.test/1" } });
+    expect(res).toEqual({
+      ok: true,
+      value: { kind: "checkout", checkoutUrl: "https://pay.test/1" }
+    });
     // The add-on must land on the membership's EXISTING Stripe customer, not
     // open a second customer record for the same business.
     expect(createCheckout).toHaveBeenCalledWith(
@@ -114,7 +117,7 @@ describe("startPrioritySupport", () => {
     expect(createCheckout).not.toHaveBeenCalled();
   });
 
-  it("refuses a tenant who already has a live subscription", async () => {
+  it("refuses a tenant whose subscription is already RENEWING", async () => {
     const createCheckout = vi.fn();
     const res = await startPrioritySupport(base, {
       getLiveRow: vi.fn().mockResolvedValue(LIVE_ROW as never),
@@ -123,6 +126,53 @@ describe("startPrioritySupport", () => {
     });
     expect(res).toEqual({ ok: false, reason: "already_subscribed" });
     expect(createCheckout).not.toHaveBeenCalled();
+  });
+
+  it("RESUMES a subscription that is winding down instead of opening a second one", async () => {
+    // The tenant cancelled but is still inside the period they paid for, so
+    // their subscription is alive. A fresh Checkout would double-bill, and the
+    // one-live-row index would reject the second row anyway.
+    const createCheckout = vi.fn();
+    const resumeSubscription = vi.fn().mockResolvedValue({});
+    const mirror = vi.fn().mockResolvedValue(undefined);
+    const res = await startPrioritySupport(base, {
+      getLiveRow: vi
+        .fn()
+        .mockResolvedValue({ ...LIVE_ROW, status: "canceling", cancel_at_period_end: true } as never),
+      getSubscriptionRow: vi.fn(),
+      createCheckout,
+      resumeSubscription,
+      mirror
+    });
+    expect(res).toEqual({ ok: true, value: { kind: "resumed" } });
+    expect(resumeSubscription).toHaveBeenCalledWith("sub_priority_1");
+    expect(mirror).toHaveBeenCalledWith("sub_priority_1", {
+      status: "active",
+      currentPeriodEnd: new Date("2026-09-17T00:00:00Z"),
+      cancelAtPeriodEnd: false
+    });
+    expect(createCheckout).not.toHaveBeenCalled();
+  });
+
+  it("resumes a winding-down row that has no cached period end", async () => {
+    const mirror = vi.fn().mockResolvedValue(undefined);
+    const res = await startPrioritySupport(base, {
+      getLiveRow: vi.fn().mockResolvedValue({
+        ...LIVE_ROW,
+        status: "canceling",
+        cancel_at_period_end: true,
+        current_period_end: null
+      } as never),
+      getSubscriptionRow: vi.fn(),
+      createCheckout: vi.fn(),
+      resumeSubscription: vi.fn().mockResolvedValue({}),
+      mirror
+    });
+    expect(res).toEqual({ ok: true, value: { kind: "resumed" } });
+    expect(mirror).toHaveBeenCalledWith(
+      "sub_priority_1",
+      expect.objectContaining({ currentPeriodEnd: null })
+    );
   });
 
   it("refuses when there is no active membership", async () => {

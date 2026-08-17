@@ -68,12 +68,18 @@ export function PrioritySupportCard({
         body: JSON.stringify({})
       });
       const json = (await res.json().catch(() => null)) as
-        | { ok: true; data: { checkoutUrl: string } }
+        | { ok: true; data: { checkoutUrl?: string; resumed?: boolean } }
         | { ok: false; error: { message: string } }
         | null;
       if (!res.ok || !json || json.ok === false) {
         setError(json && json.ok === false ? json.error.message : t("startFailed"));
         setBusy(false);
+        return;
+      }
+      // Restarting a subscription that was merely winding down resumes it in
+      // place: no Checkout, no new charge, so there is nothing to redirect to.
+      if (!json.data.checkoutUrl) {
+        window.location.reload();
         return;
       }
       window.location.assign(json.data.checkoutUrl);
@@ -112,16 +118,22 @@ export function PrioritySupportCard({
 
       {covered ? (
         <div className="mt-2 space-y-1">
-          <p
-            className={`text-sm font-semibold ${lowDays ? "text-amber-400" : "text-claw-green"}`}
-          >
-            {daysLeft !== null && daysLeft <= 0 ? t("endsToday") : t("daysLeft", { days: daysLeft ?? 0 })}
-            {coverageEndsLabel ? (
-              <span className="ml-1 font-normal text-parchment/50">
-                {t("through", { date: coverageEndsLabel })}
-              </span>
-            ) : null}
-          </p>
+          {/* A null countdown means we have no usable end date yet (the
+              subscription was just created and Stripe has not reported a
+              period end). Render the state without a number rather than
+              falling back to 0, which would read as "expires today". */}
+          {daysLeft !== null && (
+            <p
+              className={`text-sm font-semibold ${lowDays ? "text-amber-400" : "text-claw-green"}`}
+            >
+              {daysLeft <= 0 ? t("endsToday") : t("daysLeft", { days: daysLeft })}
+              {coverageEndsLabel ? (
+                <span className="ml-1 font-normal text-parchment/50">
+                  {t("through", { date: coverageEndsLabel })}
+                </span>
+              ) : null}
+            </p>
+          )}
           <p className="text-xs text-parchment/60">
             {state === "renewing" ? t("renews", { price: priceLabel }) : t("endsOn")}
           </p>

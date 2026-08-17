@@ -20,7 +20,8 @@
 import type Stripe from "stripe";
 import {
   createPrioritySupportCheckoutSession,
-  cancelPrioritySupportSubscription
+  cancelPrioritySupportSubscription,
+  resumePrioritySupportSubscription
 } from "@/lib/stripe/client";
 import { cancelStripeSubscriptionSafely } from "@/lib/billing/change-plan-orchestrator";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -53,10 +54,31 @@ export type StartPrioritySupportDeps = {
   getSubscriptionRow?: typeof getSubscription;
   getLiveRow?: typeof getLivePrioritySupportSubscription;
   createCheckout?: typeof createPrioritySupportCheckoutSession;
+  resumeSubscription?: typeof resumePrioritySupportSubscription;
+  mirror?: typeof mirrorPrioritySupportSubscription;
 };
 
 /**
- * Validate, then hand back a hosted Checkout URL for the $400/month add-on.
+ * What "start priority support" turned out to mean for this tenant.
+ *
+ * A tenant who cancelled but is still inside the period they paid for has a
+ * LIVE `canceling` subscription, so the honest answer to "restart" is to clear
+ * `cancel_at_period_end` on the subscription they already have, not to open a
+ * second one. Opening a second one is also impossible: the partial unique index
+ * allows one live row per business.
+ */
+export type StartPrioritySupportOutcome =
+  | { kind: "checkout"; checkoutUrl: string }
+  | { kind: "resumed" };
+
+/**
+ * Turn priority support on, by whichever route actually applies.
+ *
+ * Two outcomes, because "restart" is ambiguous. If the tenant cancelled and is
+ * still inside the period they paid for, their subscription is alive and merely
+ * winding down, so this RESUMES it (clears `cancel_at_period_end`) and no new
+ * charge happens until the normal renewal. Otherwise it hands back a hosted
+ * Checkout URL for a fresh subscription.
  *
  * Requires an ACTIVE membership: priority support is an add-on to a live
  * account, and a tenant mid-cancellation should not be starting a second
@@ -75,11 +97,13 @@ export async function startPrioritySupport(
     cancelUrl: string;
   },
   deps: StartPrioritySupportDeps = {}
-): Promise<PrioritySupportResult<{ checkoutUrl: string }>> {
+): Promise<PrioritySupportResult<StartPrioritySupportOutcome>> {
   /* c8 ignore start -- production defaults; unit tests inject deps */
   const getSubscriptionRow = deps.getSubscriptionRow ?? getSubscription;
   const getLiveRow = deps.getLiveRow ?? getLivePrioritySupportSubscription;
   const createCheckout = deps.createCheckout ?? createPrioritySupportCheckoutSession;
+  const resumeSubscription = deps.resumeSubscription ?? resumePrioritySupportSubscription;
+  const mirror = deps.mirror ?? mirrorPrioritySupportSubscription;
   /* c8 ignore stop */
 
   if (!prioritySupportPurchasableForTier(params.tier)) {
@@ -87,7 +111,19 @@ export async function startPrioritySupport(
   }
 
   const live = await getLiveRow(params.businessId);
-  if (live) return { ok: false, reason: "already_subscribed" };
+  if (live) {
+    // Already renewing: nothing to do, and a second subscription would be
+    // double-billing (the partial unique index would reject it anyway).
+    if (!live.cancel_at_period_end) return { ok: false, reason: "already_subscribed" };
+    // Winding down but still inside the paid period: resume in place.
+    await resumeSubscription(live.stripe_subscription_id);
+    await mirror(live.stripe_subscription_id, {
+      status: "active",
+      currentPeriodEnd: live.current_period_end ? new Date(live.current_period_end) : null,
+      cancelAtPeriodEnd: false
+    });
+    return { ok: true, value: { kind: "resumed" } };
+  }
 
   const membership = await getSubscriptionRow(params.businessId);
   if (!membership || membership.status !== "active") {
@@ -103,7 +139,7 @@ export async function startPrioritySupport(
     ...(params.userId ? { userId: params.userId } : {})
   });
 
-  return { ok: true, value: { checkoutUrl: session.url } };
+  return { ok: true, value: { kind: "checkout", checkoutUrl: session.url } };
 }
 
 export type CancelPrioritySupportDeps = {

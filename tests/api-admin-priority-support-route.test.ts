@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
-  setPrioritySupportUntil: vi.fn()
+  setPrioritySupportUntil: vi.fn(),
+  clearPrioritySupportNudgeStamp: vi.fn()
 }));
 vi.mock("@/lib/admin/audit", () => ({ logAdminAction: vi.fn() }));
 vi.mock("@/lib/billing/priority-support", () => ({
@@ -13,7 +14,11 @@ vi.mock("@/lib/billing/priority-support", () => ({
 
 import { POST } from "@/app/api/admin/priority-support/route";
 import { requireAdmin } from "@/lib/auth";
-import { getBusiness, setPrioritySupportUntil } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  setPrioritySupportUntil,
+  clearPrioritySupportNudgeStamp
+} from "@/lib/db/businesses";
 import { logAdminAction } from "@/lib/admin/audit";
 import { startPrioritySupport, cancelPrioritySupport } from "@/lib/billing/priority-support";
 
@@ -72,7 +77,7 @@ describe("api/admin/priority-support route", () => {
     it("returns a checkout url and audits it", async () => {
       vi.mocked(startPrioritySupport).mockResolvedValue({
         ok: true,
-        value: { checkoutUrl: "https://pay.test/1" }
+        value: { kind: "checkout", checkoutUrl: "https://pay.test/1" }
       } as never);
       const res = await post({ businessId: BIZ_ID, action: "pay_link" });
       const json = await res.json();
@@ -135,6 +140,19 @@ describe("api/admin/priority-support route", () => {
       const res = await post({ businessId: BIZ_ID, action: "comp", compUntil: null });
       expect(res.status).toBe(200);
       expect(setPrioritySupportUntil).toHaveBeenCalledWith(BIZ_ID, null);
+      // Nothing to warn about, so the stamp is left alone.
+      expect(clearPrioritySupportNudgeStamp).not.toHaveBeenCalled();
+    });
+
+    it("re-arms the expiry warning when a comp opens a new window", async () => {
+      // A tenant warned about a previous lapse keeps that stamp otherwise, and
+      // the sweep would skip their comped window forever.
+      await post({
+        businessId: BIZ_ID,
+        action: "comp",
+        compUntil: "2026-09-09T00:00:00.000Z"
+      });
+      expect(clearPrioritySupportNudgeStamp).toHaveBeenCalledWith(BIZ_ID);
     });
 
     it("requires compUntil to be present", async () => {

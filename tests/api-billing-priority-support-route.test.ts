@@ -64,12 +64,24 @@ describe("api/billing/priority-support route", () => {
     it("returns a checkout url", async () => {
       vi.mocked(startPrioritySupport).mockResolvedValue({
         ok: true,
-        value: { checkoutUrl: "https://pay.test/1" }
+        value: { kind: "checkout", checkoutUrl: "https://pay.test/1" }
       } as never);
       const res = await post();
       const json = await res.json();
       expect(res.status).toBe(200);
       expect(json.data.checkoutUrl).toBe("https://pay.test/1");
+    });
+
+    it("reports a resume with no checkout url, so the client reloads instead", async () => {
+      vi.mocked(startPrioritySupport).mockResolvedValue({
+        ok: true,
+        value: { kind: "resumed" }
+      } as never);
+      const res = await post();
+      const json = await res.json();
+      expect(res.status).toBe(200);
+      expect(json.data).toEqual({ resumed: true });
+      expect(json.data.checkoutUrl).toBeUndefined();
     });
 
     it("bills the TENANT under admin view-as, not the operator", async () => {
@@ -86,7 +98,7 @@ describe("api/billing/priority-support route", () => {
       } as never);
       vi.mocked(startPrioritySupport).mockResolvedValue({
         ok: true,
-        value: { checkoutUrl: "https://pay.test/1" }
+        value: { kind: "checkout", checkoutUrl: "https://pay.test/1" }
       } as never);
 
       await post();
@@ -99,7 +111,7 @@ describe("api/billing/priority-support route", () => {
     it("tolerates a request with no body at all", async () => {
       vi.mocked(startPrioritySupport).mockResolvedValue({
         ok: true,
-        value: { checkoutUrl: "https://pay.test/1" }
+        value: { kind: "checkout", checkoutUrl: "https://pay.test/1" }
       } as never);
       const res = await POST(
         new Request("http://localhost/api/billing/priority-support", { method: "POST" })

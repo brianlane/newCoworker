@@ -638,6 +638,20 @@ export async function cancelPrioritySupportSubscription(
 }
 
 /**
+ * Undo a wind-down: the tenant changed their mind while still inside the period
+ * they already paid for, so the subscription is alive and merely flagged to
+ * stop. Clearing the flag resumes it with no new charge until the normal
+ * renewal, which is the only correct "restart" for that state. Opening a fresh
+ * subscription instead would double-bill, and the one-live-row index rejects it.
+ */
+export async function resumePrioritySupportSubscription(
+  subscriptionId: string
+): Promise<Stripe.Subscription> {
+  const stripe = getStripe();
+  return stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: false });
+}
+
+/**
  * Card authorization for auto-reload, as a hosted `mode: "setup"` Checkout.
  *
  * The membership card on file was collected under a SUBSCRIPTION mandate,
