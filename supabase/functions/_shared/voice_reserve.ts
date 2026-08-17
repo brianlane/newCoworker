@@ -397,6 +397,12 @@ export async function checkVoiceBudgetAvailable(
      * gate off; the RPC then behaves exactly as before.
      */
     platformMaxOutbound?: number;
+    /**
+     * Per-tenant slots reserved for warm transfers and reach legs: the
+     * tenant's concurrency cap is REDUCED by this much for AI flow dials
+     * (never below 1). Omitted or invalid = no reduction.
+     */
+    outboundDialHeadroom?: number;
   }
 ): Promise<VoiceAvailability> {
   const { businessId } = opts;
@@ -415,7 +421,16 @@ export async function checkVoiceBudgetAvailable(
   const tier = String(bizRow.tier ?? "starter");
   const entRaw = tier === "enterprise" ? bizRow.enterprise_limits : null;
   const cap = tierCapSeconds(tier, entRaw);
-  const concurrent = maxConcurrent(tier, entRaw);
+  // The probe gates AI FLOW DIALS only, so it sees a cap reduced by the
+  // tenant's transfer/reach headroom (never below 1). The authoritative
+  // post-dial reserve keeps the FULL cap: transfers, reach legs, and
+  // inbound answers must always be able to claim the reserved slots.
+  const headroomRaw = opts.outboundDialHeadroom;
+  const headroom =
+    typeof headroomRaw === "number" && Number.isFinite(headroomRaw) && headroomRaw > 0
+      ? Math.floor(headroomRaw)
+      : 0;
+  const concurrent = Math.max(1, maxConcurrent(tier, entRaw) - headroom);
 
   const { data: sub, error: subErr } = await supabase
     .from("subscriptions")

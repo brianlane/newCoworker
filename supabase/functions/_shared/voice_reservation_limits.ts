@@ -6,6 +6,16 @@
  * for `voiceIncludedSecondsPerStripePeriod` and `maxConcurrentCalls`.
  */
 
+/**
+ * Concurrent-call slots reserved OUT of each tenant's cap for the outbound
+ * legs that fire mid-call and are not gated pre-dial: warm transfers of live
+ * callers and reach_teammate rings. AI flow dials defer once the tenant's
+ * in-flight calls reach (cap - headroom), so a busy AI can never eat the
+ * channels a live human needs. Per-tenant override:
+ * business_telnyx_settings.voice_outbound_dial_headroom (null = this).
+ */
+export const TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT = 3;
+
 export const VOICE_RES_LIMITS = {
   starter: {
     // 10 → 25 min in the Jul 2026 starter rebalance: voice is the cheapest

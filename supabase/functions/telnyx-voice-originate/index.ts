@@ -47,6 +47,7 @@ import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { platformMaxConcurrentOutbound } from "../_shared/platform_capacity.ts";
+import { TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT } from "../_shared/voice_reservation_limits.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -199,7 +200,7 @@ serve(async (req: Request) => {
   const [{ data: settingsRow }, { data: routeRow }] = await Promise.all([
     supabase
       .from("business_telnyx_settings")
-      .select("telnyx_connection_id")
+      .select("telnyx_connection_id, voice_outbound_dial_headroom")
       .eq("business_id", businessId)
       .maybeSingle(),
     supabase
@@ -210,8 +211,16 @@ serve(async (req: Request) => {
       .limit(1)
       .maybeSingle()
   ]);
-  const connectionId = (settingsRow as { telnyx_connection_id?: string | null } | null)
-    ?.telnyx_connection_id;
+  const settings = settingsRow as {
+    telnyx_connection_id?: string | null;
+    voice_outbound_dial_headroom?: number | null;
+  } | null;
+  const connectionId = settings?.telnyx_connection_id;
+  // Per-tenant reserve for transfer/reach legs; null = platform default.
+  const tenantDialHeadroom =
+    typeof settings?.voice_outbound_dial_headroom === "number"
+      ? settings.voice_outbound_dial_headroom
+      : TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT;
   const fromDid = (routeRow as { to_e164?: string | null } | null)?.to_e164;
   if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection", dialed: false });
   if (!fromDid) return json(422, { ok: false, error: "no_caller_id", dialed: false });
@@ -226,7 +235,8 @@ serve(async (req: Request) => {
   // leg up before answer so a slip-through is never billed.
   const availability = await checkVoiceBudgetAvailable(supabase, {
     businessId,
-    platformMaxOutbound: platformMaxConcurrentOutbound((name) => Deno.env.get(name))
+    platformMaxOutbound: platformMaxConcurrentOutbound((name) => Deno.env.get(name)),
+    outboundDialHeadroom: tenantDialHeadroom
   });
   if (availability.status === "blocked") {
     await telemetryRecord(supabase, "voice_outbound_blocked", {
@@ -243,15 +253,20 @@ serve(async (req: Request) => {
       message: `Outbound call not placed (pre-dial): ${availability.reason}`,
       payload: { reason: availability.reason, to: callee, phase: "pre_dial" }
     });
-    if (availability.reason === "platform_capacity") {
-      // The FLEET is at its Telnyx outbound-channel ceiling. Not a budget
-      // problem: route the caller into the same short jittered retry path as
-      // a carrier 403 (error "capacity"), not the 4-hour budget defer.
+    if (
+      availability.reason === "platform_capacity" ||
+      availability.reason === "concurrent_limit"
+    ) {
+      // Capacity conditions, not budget problems: the FLEET at its Telnyx
+      // channel ceiling, or THIS tenant at its dial gate (cap minus the
+      // transfer/reach headroom). Channels free within minutes as calls
+      // end, so route both into the same short jittered retry path as a
+      // carrier 403 (error "capacity"), never the 4-hour budget defer.
       // dialed:false, the callee was never rung.
       return json(200, {
         ok: false,
         error: "capacity",
-        reason: "platform_capacity",
+        reason: availability.reason,
         dialed: false
       });
     }

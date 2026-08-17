@@ -131,7 +131,8 @@ describe("TelnyxVoiceInfraClient", () => {
           concurrent_call_limit: 10,
           daily_spend_limit: "25.00",
           daily_spend_limit_enabled: true,
-          whitelisted_destinations: ["CA", "US"]
+          whitelisted_destinations: ["CA", "US"],
+          call_recording: { call_recording_type: "all" }
         }
       })
     );
@@ -151,7 +152,16 @@ describe("TelnyxVoiceInfraClient", () => {
     const [, patchInit] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
     expect(JSON.parse(String(patchInit.body))).toMatchObject({
       concurrent_call_limit: 12,
-      daily_spend_limit_enabled: true
+      daily_spend_limit_enabled: true,
+      call_recording: {
+        call_recording_type: "all",
+        call_recording_format: "wav",
+        call_recording_channels: "single"
+      }
+    });
+    const [, createInit] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(createInit.body))).toMatchObject({
+      call_recording: { call_recording_type: "all" }
     });
   });
 
@@ -197,7 +207,8 @@ describe("TelnyxVoiceInfraClient", () => {
               concurrent_call_limit: "10",
               daily_spend_limit: 25,
               daily_spend_limit_enabled: "yes",
-              whitelisted_destinations: ["US", 12, null, "CA"]
+              whitelisted_destinations: ["US", 12, null, "CA"],
+              call_recording: { call_recording_type: 42 }
             },
             { id: 9, whitelisted_destinations: "US" }
           ]
@@ -223,7 +234,8 @@ describe("TelnyxVoiceInfraClient", () => {
       concurrent_call_limit: null,
       daily_spend_limit: null,
       daily_spend_limit_enabled: false,
-      whitelisted_destinations: ["US", "CA"]
+      whitelisted_destinations: ["US", "CA"],
+      call_recording_type: null
     });
     expect(sparse!.whitelisted_destinations).toEqual([]);
   });
@@ -336,7 +348,8 @@ function fakeInfra(state: {
         concurrent_call_limit: opts.concurrentCallLimit,
         daily_spend_limit: opts.dailySpendLimitUsd,
         daily_spend_limit_enabled: true,
-        whitelisted_destinations: opts.whitelistedDestinations
+        whitelisted_destinations: opts.whitelistedDestinations,
+        call_recording_type: "all"
       };
     },
     async patchOutboundVoiceProfile(id, opts) {
@@ -347,7 +360,8 @@ function fakeInfra(state: {
         concurrent_call_limit: opts.concurrentCallLimit,
         daily_spend_limit: opts.dailySpendLimitUsd,
         daily_spend_limit_enabled: true,
-        whitelisted_destinations: opts.whitelistedDestinations
+        whitelisted_destinations: opts.whitelistedDestinations,
+        call_recording_type: "all"
       };
     },
     async findCallControlAppsByName(needle: string) {
@@ -398,6 +412,7 @@ function adoptableProfile(overrides: Partial<OutboundVoiceProfile> = {}): Outbou
     daily_spend_limit: TENANT_PROFILE_DAILY_SPEND_LIMIT_USD,
     daily_spend_limit_enabled: true,
     whitelisted_destinations: ["CA", "MX", "US"],
+    call_recording_type: "all",
     ...overrides
   };
 }
@@ -492,6 +507,18 @@ describe("ensureTenantVoiceInfra", () => {
       outboundVoiceProfileId: "prof-old",
       webhookUrl: WEBHOOK
     });
+  });
+
+  // Owner: keep the legacy "record all outbound calls" setting "just in
+  // case". The first live apply created profiles with recording OFF; adopt
+  // now converges that drift, and creation carries it from the start.
+  it("converges a profile whose recording drifted off", async () => {
+    const infra = fakeInfra({
+      profiles: [adoptableProfile({ call_recording_type: "none" })],
+      apps: [adoptableApp()]
+    });
+    await ensureTenantVoiceInfra({ infra }, INPUT);
+    expect(infra.calls.patchProfile).toHaveLength(1);
   });
 
   it("widens the whitelist as a union and NEVER narrows it", async () => {

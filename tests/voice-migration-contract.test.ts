@@ -530,3 +530,20 @@ describe("voice_capacity_monitor migration (contract)", () => {
     expect(migration).toMatch(/timeout_milliseconds := 60000/);
   });
 });
+
+/** voice_outbound_dial_headroom: the per-tenant transfer/reach reserve. */
+describe("voice_outbound_dial_headroom migration (contract)", () => {
+  const migration = readFileSync(
+    join(repoRoot, "supabase/migrations/20260822150816_voice_outbound_dial_headroom.sql"),
+    "utf8"
+  );
+
+  it("adds a bounded nullable column (0..9 so one dial slot always survives)", () => {
+    expect(migration).toMatch(
+      /add column if not exists voice_outbound_dial_headroom integer/
+    );
+    expect(migration).toMatch(/voice_outbound_dial_headroom >= 0/);
+    expect(migration).toMatch(/voice_outbound_dial_headroom <= 9/);
+    expect(migration).toMatch(/is null\s+or/);
+  });
+});

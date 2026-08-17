@@ -41,6 +41,7 @@ const sampleSettings = {
   telnyx_sms_from_e164: "+15551234567",
   telnyx_connection_id: null,
   telnyx_outbound_voice_profile_id: null,
+  voice_outbound_dial_headroom: null,
   bridge_media_wss_origin: "wss://x",
   bridge_media_path: "/voice/stream",
   bridge_last_heartbeat_at: null,
