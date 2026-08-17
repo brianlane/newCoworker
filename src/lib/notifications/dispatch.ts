@@ -55,6 +55,7 @@ import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
 } from "../../../supabase/functions/_shared/contact_owner_target";
+import { recordUnownedLeadAlert } from "../../../supabase/functions/_shared/unowned_lead_alerts";
 import { logger } from "@/lib/logger";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
@@ -124,6 +125,12 @@ export type DispatchInput = {
    * noise, never to silence.
    */
   leadTag?: string | null;
+  /**
+   * The lead's display name, used only to label a claimable team broadcast
+   * ("which lead did you mean?"). Optional: an unnamed lead is still
+   * claimable, it just shows as its number.
+   */
+  leadLabel?: string | null;
 };
 
 export type DispatchChannelResult = {
@@ -785,6 +792,29 @@ export async function dispatchUrgentNotification(
             err instanceof Error ? err.message : "send_failed"
           )
         );
+      }
+    }
+    // Make the broadcast claimable by text. Teammates reply "1" to team texts
+    // out of habit (every other one ends in "Reply 1 to claim"), and without
+    // a record that digit resolves against some unrelated older offer. Only
+    // a real team broadcast gets one: an owner-addressed alert has nobody to
+    // race. Never throws, so a bookkeeping failure cannot cost the alert that
+    // already went out.
+    if (targets.routing?.target === "team_broadcast") {
+      try {
+        const db = await createSupabaseServiceClient();
+        await recordUnownedLeadAlert(db, {
+          businessId: input.businessId,
+          leadE164: input.contactE164,
+          leadLabel: input.leadLabel ?? null,
+          recipients: targets.phones,
+          nowMs: Date.now()
+        });
+      } catch (err) {
+        logger.warn("notifications.dispatch: claimable alert record failed", {
+          businessId: input.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
       }
     }
   }

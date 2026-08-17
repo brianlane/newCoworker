@@ -148,6 +148,7 @@ const TO_DAVE = {
 describe("notifications/dispatch", () => {
   const original = process.env;
   let outboundLogInsert: ReturnType<typeof vi.fn>;
+  let alertInsert: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = {
@@ -179,8 +180,19 @@ describe("notifications/dispatch", () => {
     // Service client used ONLY for the best-effort owner_alert outbound-log
     // row after a successful SMS send.
     outboundLogInsert = vi.fn(async () => ({ error: null }));
+    // Two tables come through this client now: the best-effort owner_alert
+    // outbound-log row, and the claimable-alert record written after a team
+    // broadcast. The latter chains .select().maybeSingle(), so it needs a
+    // builder rather than a bare insert.
+    alertInsert = vi.fn(() => ({
+      select: () => ({ maybeSingle: async () => ({ data: { id: "alert1" }, error: null }) })
+    }));
     vi.mocked(createSupabaseServiceClient).mockResolvedValue({
-      from: vi.fn(() => ({ insert: outboundLogInsert }))
+      from: vi.fn((table: string) =>
+        table === "unowned_lead_alerts"
+          ? { insert: alertInsert }
+          : { insert: outboundLogInsert }
+      )
     } as never);
     // Default success shape ({ id, channel }) — the dispatcher destructures
     // the result to stamp telnyx_message_id on the outbound-log row.
@@ -1604,6 +1616,92 @@ describe("notifications/dispatch", () => {
       expect(vi.mocked(deliverWhatsApp)).not.toHaveBeenCalled();
       // No whatsapp row either: a broadcast is not a WhatsApp-shaped event.
       expect(rowsFor("whatsapp")).toEqual([]);
+    });
+
+    it("records the broadcast so a teammate can claim it by texting 1", async () => {
+      // Teammates reply "1" to team texts out of habit. Without this record
+      // that digit resolves against some unrelated older offer, which is
+      // exactly how the lead that prompted all of this stayed unowned.
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE,
+        leadLabel: "Richard"
+      });
+      expect(alertInsert).toHaveBeenCalledTimes(1);
+      const row = alertInsert.mock.calls[0][0] as Record<string, unknown>;
+      expect(row.lead_e164).toBe(LEAD_PHONE);
+      expect(row.lead_label).toBe("Richard");
+      expect(row.recipients).toEqual([DAVE_PHONE, GABBY_PHONE]);
+    });
+
+    it("records NOTHING for an owner-addressed alert", async () => {
+      // An alert that reached one person has nobody to race for it.
+      resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(alertInsert).not.toHaveBeenCalled();
+    });
+
+    it("still delivers the broadcast when the claim record cannot be written", async () => {
+      // The texts already went out; losing claim-by-reply is strictly better
+      // than failing the alert.
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      alertInsert.mockImplementation(() => {
+        throw new Error("table gone");
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls.map((c) => c[1])).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
+
+    });
+
+    it.each([
+      ["an Error", new Error("db gone")],
+      ["a non-Error throw", "string failure"]
+    ])("still delivers when the service client dies mid-dispatch (%s)", async (_label, thrown) => {
+      // recordUnownedLeadAlert swallows its own failures, so the only way to
+      // reach the dispatcher's guard is the client itself dying. It is built
+      // three times before the recording (routing, then one outbound-log row
+      // per recipient), so this fails the fourth build and leaves the two
+      // texts that already went out untouched.
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      const healthy = {
+        from: vi.fn((table: string) =>
+          table === "unowned_lead_alerts"
+            ? { insert: alertInsert }
+            : { insert: outboundLogInsert }
+        )
+      } as never;
+      let builds = 0;
+      vi.mocked(createSupabaseServiceClient).mockImplementation(async () => {
+        builds += 1;
+        if (builds > 3) throw thrown;
+        return healthy;
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls.map((c) => c[1])).toEqual([
+        DAVE_PHONE,
+        GABBY_PHONE
+      ]);
     });
 
     it("falls back to the business owner for an unowned contact", async () => {

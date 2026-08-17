@@ -112,6 +112,11 @@ import {
   isPromptFresh,
   isRelayableOwnerReply
 } from "../_shared/contact_reply_mode.ts";
+import {
+  claimUnownedLeadAlert,
+  findLiveUnownedAlertsFor,
+  type UnownedAlertCandidate
+} from "../_shared/unowned_lead_alerts.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -712,6 +717,143 @@ async function consumeAmbiguousOfferReply(args: {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+/**
+ * A bare "1" answering an unowned-lead ALERT rather than an offer.
+ *
+ * Alerts have no parked run, so none of the offer machinery applies: this
+ * claims the alert row itself, stamps the lead's contact to the claimer, and
+ * tells the other teammates who were texted so two people do not call the
+ * same lead. See `_shared/unowned_lead_alerts.ts` for why the record exists.
+ */
+async function consumeAlertClaim(args: {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  ackTo: string;
+  eventId: string;
+  envelope: unknown;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+  candidate: UnownedAlertCandidate;
+}): Promise<Response> {
+  const { supabase, businessId, from, ackTo, eventId, envelope, telnyxApiKey, smsFromE164 } = args;
+  const nowIso = new Date().toISOString();
+
+  // Who is claiming. A number not on the roster can still hold the alert row
+  // (the recipients list is what authorizes the reply), so a missing member
+  // only means no ownership stamp, never a refused claim.
+  const { data: memberRow } = await supabase
+    .from("ai_flow_team_members")
+    .select("id, name")
+    .eq("business_id", businessId)
+    .eq("phone_e164", from)
+    .maybeSingle();
+  const member = (memberRow as { id?: string; name?: string | null } | null) ?? null;
+
+  const outcome = await claimUnownedLeadAlert(supabase, {
+    businessId,
+    alertId: args.candidate.alertId,
+    memberId: member?.id ?? null,
+    claimedByE164: from,
+    nowIso
+  });
+
+  const label = args.candidate.leadLabel || args.candidate.leadE164;
+  let text: string;
+  const others: string[] = [];
+  if (outcome.ok) {
+    // Ownership so LATER alerts about this lead reach the claimer instead of
+    // the business owner. Compare-and-swap on `owner_employee_id is null`:
+    // a claim never steals a lead somebody already owns.
+    if (member?.id) {
+      const { error: ownErr } = await supabase
+        .from("contacts")
+        .update({ owner_employee_id: member.id, updated_at: nowIso })
+        .eq("business_id", businessId)
+        .or(`customer_e164.eq.${outcome.leadE164},alias_e164s.cs.{${outcome.leadE164}}`)
+        .is("owner_employee_id", null);
+      if (ownErr) console.error("alert claim ownership stamp", ownErr);
+    }
+    text = `You've got ${label} (${outcome.leadE164}). Please reach out to them now.`;
+    const { data: alertRow } = await supabase
+      .from("unowned_lead_alerts")
+      .select("recipients")
+      .eq("id", args.candidate.alertId)
+      .maybeSingle();
+    for (const r of ((alertRow as { recipients?: string[] | null } | null)?.recipients ?? [])) {
+      if (r && r !== from) others.push(r);
+    }
+  } else if (outcome.reason === "already_claimed") {
+    text = `A teammate already took ${label}, you're all set, no action needed.`;
+  } else {
+    text = `That lead is no longer available to claim. Nothing has changed.`;
+  }
+
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) ||
+    args.messagingProfileId;
+  const ackFrom =
+    (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  let ackSent: string | null = null;
+  if (telnyxApiKey && ackProfile && from) {
+    const send = await sendOperationalSms(supabase, businessId, {
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text,
+      idempotencyKey: `${eventId}:alert-claim`
+    });
+    if (!send.ok) console.error("alert claim ack", send.status, send.body.slice(0, 300));
+    else ackSent = text;
+    // Stand-down for everyone else who was texted. Per recipient, so one
+    // failed send cannot suppress the rest.
+    for (const other of others) {
+      const standDown = `${label} was just claimed by a teammate, you're all set, no action needed.`;
+      const s2 = await sendOperationalSms(supabase, businessId, {
+        apiKey: telnyxApiKey,
+        messagingProfileId: ackProfile,
+        fromE164: ackFrom,
+        toE164: other,
+        text: standDown,
+        idempotencyKey: `${eventId}:alert-claim-standdown:${other}`
+      });
+      if (!s2.ok) console.error("alert claim stand-down", other, s2.status);
+    }
+  }
+
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
+  await telemetryRecord(supabase, "unowned_lead_alert_claim", {
+    business_id: businessId,
+    event_id: eventId,
+    alert_id: args.candidate.alertId,
+    claimed: outcome.ok,
+    ...(outcome.ok ? {} : { reason: outcome.reason })
+  });
+  return new Response(
+    JSON.stringify({ ok: true, alert_claim: outcome.ok ? "claimed" : outcome.reason }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 }
 
 /**
@@ -2717,18 +2859,33 @@ serve(async (req: Request) => {
         // normal customer path.
         const bareClaim = replyBody === "1";
         const barePass = replyBody === "2";
+        // Unowned-lead ALERTS are claimable too: teammates reply "1" to them
+        // out of habit, and without a record that digit lands on an unrelated
+        // older offer. Claims only. A "2" retires the sender from an offer,
+        // and there is nothing to retire from on an alert.
+        const alertCandidates = bareClaim
+          ? await findLiveUnownedAlertsFor(supabase, businessId, from, new Date().toISOString())
+          : [];
+
         // A lone "1" while several leads are pending does not say WHICH lead.
         // It used to take whichever run was touched most recently, which is
         // not even reliably the newest offer, and nothing was texted back, so
         // the wrong lead could be claimed silently. Ask instead. A pass is
         // exempt: "2" retires the sender from an offer rather than assigning
         // anyone, so picking the newest cannot mis-assign a lead.
-        if (offer && bareClaim) {
-          const liveOffers = await findLiveOfferRunsFor(supabase, businessId, from);
-          if (liveOffers.length > 1) {
-            const labels = liveOffers.map(
-              (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
-            );
+        //
+        // Offers and alerts are counted TOGETHER, because from the phone they
+        // are indistinguishable: two texts, both about a lead, both answered
+        // with "1".
+        if (bareClaim && (offer || alertCandidates.length > 0)) {
+          const liveOffers = offer ? await findLiveOfferRunsFor(supabase, businessId, from) : [];
+          if (liveOffers.length + alertCandidates.length > 1) {
+            const labels = [
+              ...liveOffers.map(
+                (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
+              ),
+              ...alertCandidates.map((a) => a.leadLabel || a.leadE164)
+            ];
             return await consumeAmbiguousOfferReply({
               supabase,
               businessId,
@@ -2740,6 +2897,22 @@ serve(async (req: Request) => {
               messagingProfileId,
               smsFromE164,
               text: bareDigitAmbiguityText(labels)
+            });
+          }
+          // Exactly one candidate and it is an alert: no run to resume, so
+          // claim the alert here. An offer falls through to the paths below.
+          if (!offer && alertCandidates.length === 1) {
+            return await consumeAlertClaim({
+              supabase,
+              businessId,
+              from,
+              ackTo: to,
+              eventId,
+              envelope,
+              telnyxApiKey,
+              messagingProfileId,
+              smsFromE164,
+              candidate: alertCandidates[0]
             });
           }
         }

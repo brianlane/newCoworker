@@ -618,6 +618,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           // reaching one person and stopping is the wrong answer.
           contactE164: customerPhone,
           leadTag: parsed.data.leadType ?? null,
+          // Labels the claimable broadcast, so "which lead did you mean?"
+          // can name them rather than reading back a phone number.
+          leadLabel: parsed.data.customerName ?? null,
           summary: truncateAtWord(`Texter follow-up needed: ${parsed.data.message}`, 200),
           kind: "sms_team_notify",
           payload: { logId, ...logPayload },
@@ -625,7 +628,13 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           emailBody:
             `Your texting coworker was messaging with ${who} and promised the team ` +
             `would follow up.\n\nRequest: ${parsed.data.message}`,
-          smsBody: truncateAtWord(`[Coworker] Follow up with ${who}: ${parsed.data.message}`, 640)
+          // "Reply 1 to claim" is deliberate: teammates text it back to these
+          // alerts anyway (every other team text ends that way), and without
+          // the affordance the digit lands on an unrelated older offer.
+          smsBody: truncateAtWord(
+            `[Coworker] Follow up with ${who}: ${parsed.data.message}\nReply 1 to claim, or claim them in the dashboard.`,
+            640
+          )
         });
         notified = results.some((r) => r.status === "sent");
       } catch (err) {
