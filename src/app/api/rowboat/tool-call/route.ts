@@ -618,6 +618,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           // reaching one person and stopping is the wrong answer.
           contactE164: customerPhone,
           leadTag: parsed.data.leadType ?? null,
+          // Labels the claimable broadcast, so "which lead did you mean?"
+          // can name them rather than reading back a phone number.
+          leadLabel: parsed.data.customerName ?? null,
           summary: truncateAtWord(`Texter follow-up needed: ${parsed.data.message}`, 200),
           kind: "sms_team_notify",
           payload: { logId, ...logPayload },
@@ -625,6 +628,12 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           emailBody:
             `Your texting coworker was messaging with ${who} and promised the team ` +
             `would follow up.\n\nRequest: ${parsed.data.message}`,
+          // No claim affordance here: only a TEAM BROADCAST records a row for
+          // a "1" to attach to, and this caller cannot know whether the
+          // dispatcher will broadcast or fall back to the owner. Inviting a
+          // digit on an owner-addressed alert would send it to an unrelated
+          // live offer, which is the failure this whole change removes. The
+          // dispatcher appends the line itself when the row exists.
           smsBody: truncateAtWord(`[Coworker] Follow up with ${who}: ${parsed.data.message}`, 640)
         });
         notified = results.some((r) => r.status === "sent");

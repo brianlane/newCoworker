@@ -330,6 +330,23 @@ export async function deleteEndUserData(
       });
     }
 
+    // unowned_lead_alerts (a claimable team alert ABOUT this person: the row
+    // holds their number and name, so erasure has to take it even though the
+    // recipients were teammates). Central-only engine state.
+    {
+      const { data, error } = await db
+        .from("unowned_lead_alerts")
+        .delete()
+        .eq("business_id", businessId)
+        .eq("lead_e164", e164)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`unowned_lead_alerts: ${error.message}`);
+      // Central-only, like the other engine/job tables: the row is written by
+      // the dispatcher and read by the SMS-inbound Edge function, neither of
+      // which goes through a tenant box. Nothing to delete out there.
+      results.push({ table: "unowned_lead_alerts", central: count(data), box: null });
+    }
+
     // scheduled_sms (queued + historical sends to the person)
     {
       const { data, error } = await db
