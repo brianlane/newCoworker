@@ -2369,7 +2369,19 @@
       "viewAsOwnLoginNotice": "Esta tarjeta actua sobre TU PROPIO acceso, no el del cliente. Cambiar una contrasena aqui cambia la contrasena con la que iniciaste sesion.",
       "viewAsLanguageNotice": "Guardar establece el idioma del panel del CLIENTE. Los botones de abajo muestran el tuyo, que no cambia.",
       "viewAsOwnPasskeysNotice": "Estas llaves de acceso pertenecen a TU PROPIO acceso, no al del cliente. Agregar o quitar una aqui cambia como inicias sesion.",
-      "viewAsOwnSessionsNotice": "Esto cierra TUS PROPIAS sesiones, no las del cliente, y termina esta sesion de vista como cliente."
+      "viewAsOwnSessionsNotice": "Esto cierra TUS PROPIAS sesiones, no las del cliente, y termina esta sesion de vista como cliente.",
+      "tenantCredentialsTitle": "Acceso del cliente (admin)",
+      "tenantCredentialsBlurb": "Acciones de soporte sobre el acceso del cliente. Actuan sobre el cliente, no sobre ti.",
+      "tenantResetButton": "Enviar restablecimiento",
+      "tenantResetSent": "Correo de restablecimiento enviado a {email}. Ellos eligen la nueva contrasena; tu nunca la ves.",
+      "tenantResetBlurb": "Envia al cliente un enlace para restablecer su contrasena. Usalo cuando no pueda entrar: el cliente elige la contrasena, asi que nunca se comparte contigo ni por telefono.",
+      "tenantPasskeysTitle": "Llaves de acceso del cliente",
+      "tenantPasskeysEmpty": "Este cliente no tiene llaves de acceso registradas.",
+      "tenantPasskeysCannotAdd": "No puedes agregar una llave de acceso por el cliente. La llave la crea su propio dispositivo y nunca sale de el, asi que debe agregarla el mismo despues de iniciar sesion. Aqui puedes quitar una si perdio el dispositivo.",
+      "tenantPasskeyRemove": "Quitar",
+      "tenantPasskeyRemoved": "Llave de acceso quitada.",
+      "tenantPasskeyNeverUsed": "nunca usada",
+      "tenantActionFailed": "Eso no funciono. Intenta de nuevo."
     },
     "contacts": {
       "languageLabel": "Idioma",

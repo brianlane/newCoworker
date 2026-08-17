@@ -820,10 +820,32 @@ which is the shared home for that warning:
 | Passkeys | `supabase.auth.passkey.*` enrolls the device holding the session. |
 | Sign out everywhere | `/api/auth/signout` revokes the caller's cookies (and clears the view-as cookie). |
 
-Setting a tenant's password or enrolling a passkey for them is not wired up.
 Do not "fix" a labeled card by feeding it the tenant's identity: the label is
 the fix, and the alternative is a form that silently fails or edits the wrong
-account. The language card is labeled for the mirror-image reason: the save
+account. The tenant-side equivalents live in their own card instead
+([src/components/dashboard/TenantCredentialsCard.tsx](src/components/dashboard/TenantCredentialsCard.tsx),
+rendered only under view-as), and both are audited:
+
+- **`POST /api/account/password-reset`** emails the tenant Supabase's recovery
+  link. Deliberately a RESET, not a set: `auth.admin.updateUserById({ password })`
+  would work, and is not used, because it would leave the operator holding a
+  live customer credential they then have to transmit somehow. The tenant picks
+  the password from their own inbox and the operator learns nothing. Composes
+  with `/api/account/email`: if the mailbox is lost too, change the address
+  first, then send the reset. Rate limited per TARGET so a mis-clicking
+  operator cannot flood a customer's inbox.
+- **`GET`/`DELETE /api/account/passkeys`** lists and revokes the tenant's
+  passkeys via `auth.admin.passkey.*` (needs `createSupabaseAdminPasskeyClient`,
+  a separate factory because the experimental flag should not be on for every
+  server path).
+
+**There is no way to enroll a passkey for a tenant, and there never will be.**
+A passkey is minted by the tenant's own authenticator after a user-verification
+gesture, and the private half never leaves their device. Supabase's admin API
+reflects that by offering list and delete only. This is not a permission we
+lack; it is a thing that cannot exist for anyone. The operator's path is to get
+the tenant signed in (the reset above) and let them add it themselves. The card
+says so rather than leaving an operator hunting for a missing button. The language card is labeled for the mirror-image reason: the save
 targets the TENANT's stored locale while the buttons show the operator's own UI
 language, which stays put.
 
@@ -836,11 +858,15 @@ Three deliberate carve-outs:
 - `/api/account/delete` still re-verifies the CALLER's own password. That
   check proves the session is not hijacked; the admin does not know the
   tenant's password, and should not.
-- `/api/legal/accept` records the acceptance for the tenant but stamps
-  `source: 'admin_view_as'` rather than `'gate'`, so "did this tenant
-  personally agree?" stays answerable (filter `source in ('signup','gate')`).
-  An operator click must never be indistinguishable from the tenant's own in a
-  table whose purpose is evidence.
+- `/api/legal/accept` REFUSES an impersonating admin, and it is the ONLY
+  refusal left in the product. This is a policy line, not a wrong-row hazard:
+  a `terms_acceptances` row evidences that a SPECIFIC PERSON agreed, and nobody
+  can agree on someone else's behalf, so an operator-recorded row is fabricated
+  however it is labeled. A labeled `admin_view_as` source shipped briefly in
+  PR #1420 and was withdrawn the same day with zero rows written; do not
+  reintroduce it. The dashboard layout also does not raise the clickwrap gate
+  under view-as, so the refusal never strands an operator behind a modal they
+  are not allowed to satisfy. The tenant clears it on their next sign-in.
 
 One platform limit, not a policy gate: the connector Disconnect
 ([src/app/api/integrations/mcp/route.ts](src/app/api/integrations/mcp/route.ts))

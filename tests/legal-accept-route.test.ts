@@ -60,40 +60,40 @@ describe("POST /api/legal/accept", () => {
     expect(rateLimitDurable).not.toHaveBeenCalled();
   });
 
-  it("records for the TENANT under view-as, marked as the operator's click", async () => {
-    // An admin in view-as can clear a tenant's clickwrap gate, and the row it
-    // writes must say so: identity is the TENANT (whose consent it records),
-    // source is 'admin_view_as'. Reusing 'gate' here would put a fabricated
-    // "the tenant personally agreed" row in a table that exists as evidence.
+  it("REFUSES under view-as: consent cannot be recorded for a tenant", async () => {
+    // The one view-as refusal left in the product, and it is policy rather
+    // than a wrong-row hazard. Every other tenant-facing write retargets to
+    // the impersonated owner; this one must not, because a terms_acceptances
+    // row evidences that a specific person agreed. An operator-recorded row
+    // would be fabricated consent however it were labeled, so the capability
+    // does not exist rather than existing-but-marked (a labeled
+    // 'admin_view_as' source shipped briefly in PR #1420 and was withdrawn).
     vi.mocked(getAuthUser).mockResolvedValue({ userId: "admin-1", email: "a@x.co" } as never);
     vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
       userId: "u-tenant",
       email: "tenant@example.com",
       impersonating: true
+    });
+    const res = await POST(makeRequest({}));
+    expect(res.status).toBe(403);
+    expect(recordAcceptance).not.toHaveBeenCalled();
+  });
+
+  it("still records normally for the admin's OWN login (self-owned view-as)", async () => {
+    // selfOwned impersonation resolves impersonating:false, so the admin
+    // accepting for the HQ tenant they personally own is their own consent and
+    // must keep working.
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "admin-1", email: "a@x.co" } as never);
+    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
+      userId: "admin-1",
+      email: "a@x.co",
+      impersonating: false
     });
     const res = await POST(makeRequest({}));
     expect(res.status).toBe(200);
-    expect(recordAcceptance).toHaveBeenCalledWith({
-      userId: "u-tenant",
-      email: "tenant@example.com",
-      source: "admin_view_as",
-      ip: "203.0.113.9",
-      userAgent: "TestBrowser/1.0"
-    });
-  });
-
-  it("404s when the impersonated tenant has no login to record against", async () => {
-    // A pending/placeholder owner_email. Recording against the signed-in
-    // admin instead would file the operator's consent as the tenant's.
-    vi.mocked(getAuthUser).mockResolvedValue({ userId: "admin-1", email: "a@x.co" } as never);
-    vi.mocked(resolveViewAsTargetUser).mockResolvedValue({
-      userId: null,
-      email: "pending-x@example.com",
-      impersonating: true
-    });
-    const res = await POST(makeRequest({}));
-    expect(res.status).toBe(404);
-    expect(recordAcceptance).not.toHaveBeenCalled();
+    expect(recordAcceptance).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "admin-1", source: "gate" })
+    );
   });
 
   it("records a pre-session signup acceptance keyed by email", async () => {

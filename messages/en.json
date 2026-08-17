@@ -2369,7 +2369,19 @@
       "viewAsOwnLoginNotice": "This card acts on YOUR OWN login, not the tenant's. Changing a password here changes the password you signed in with.",
       "viewAsLanguageNotice": "Saving sets the TENANT's dashboard language. The buttons below show your own, which does not change.",
       "viewAsOwnPasskeysNotice": "These passkeys belong to YOUR OWN login, not the tenant's. Adding or removing one here changes how you sign in.",
-      "viewAsOwnSessionsNotice": "This signs out YOUR OWN sessions, not the tenant's, and ends this view-as session."
+      "viewAsOwnSessionsNotice": "This signs out YOUR OWN sessions, not the tenant's, and ends this view-as session.",
+      "tenantCredentialsTitle": "Tenant sign-in (admin)",
+      "tenantCredentialsBlurb": "Support actions on the tenant's own login. These act on the tenant, not on you.",
+      "tenantResetButton": "Send password reset",
+      "tenantResetSent": "Reset email sent to {email}. They set the new password themselves; you never see it.",
+      "tenantResetBlurb": "Emails the tenant a reset link. Use this when they are locked out: they choose the new password, so it is never shared with you or over the phone.",
+      "tenantPasskeysTitle": "Tenant passkeys",
+      "tenantPasskeysEmpty": "This tenant has no passkeys registered.",
+      "tenantPasskeysCannotAdd": "You cannot add a passkey for a tenant. A passkey is created by their own device and never leaves it, so they must add it themselves after signing in. You can remove one here if they lost the device.",
+      "tenantPasskeyRemove": "Remove",
+      "tenantPasskeyRemoved": "Passkey removed.",
+      "tenantPasskeyNeverUsed": "never used",
+      "tenantActionFailed": "That did not work. Try again."
     },
     "contacts": {
       "languageLabel": "Language",
