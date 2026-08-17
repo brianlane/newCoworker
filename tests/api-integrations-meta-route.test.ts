@@ -31,10 +31,6 @@ vi.mock("@/lib/meta/client", () => ({
   unsubscribePage: vi.fn()
 }));
 
-vi.mock("@/lib/db/businesses", () => ({
-  getBusiness: vi.fn()
-}));
-
 import { PATCH, POST } from "@/app/api/integrations/meta/route";
 import {
   activateMetaConnection,
@@ -45,7 +41,6 @@ import {
   setMetaConnectionDataset
 } from "@/lib/db/meta-connections";
 import { listManagedPages, subscribePageToLeadgen } from "@/lib/meta/client";
-import { getBusiness } from "@/lib/db/businesses";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -177,33 +172,37 @@ describe("POST /api/integrations/meta (page pick)", () => {
     } as never);
   });
 
-  it("names the business already holding the Page instead of a generic failure", async () => {
-    // The Page is unique across tenants (uq_meta_connections_page). Before
-    // this check the activation hit that index and the owner saw only
-    // "An unexpected error occurred" — true, and useless.
+  it("refuses without naming the business that holds the Page", async () => {
+    // uq_meta_connections_page is GLOBAL: the holder can be an unrelated
+    // customer who merely shares a Facebook Page admin with this caller.
+    // Naming them would disclose another tenant's business name, and that
+    // they use the product. We never reveal one business to another, so the
+    // message stays nameless even when the caller owns both (Bugbot
+    // ddcefed0 + Brian, Aug 2026).
     vi.mocked(getMetaPageClaim).mockResolvedValue({ business_id: OTHER_BIZ } as never);
-    vi.mocked(getBusiness).mockResolvedValue({ id: OTHER_BIZ, name: "Meta Review Sandbox" } as never);
 
     const res = await post({ businessId: BIZ, pageId: PAGE.id });
     expect(res.status).toBe(400);
     const json = (await res.json()) as { error: { message: string } };
-    expect(json.error.message).toContain("Meta Review Sandbox");
+    expect(json.error.message).toContain("another business");
     expect(json.error.message).toContain("disconnect it there first");
+    // No identifier of the holder in any form.
+    expect(json.error.message).not.toContain(OTHER_BIZ);
+    expect(json.error.message).not.toMatch(/sandbox|acme|dental/i);
     // Refused BEFORE the Meta-side subscribe, so a rejected pick leaves no
     // dangling subscription to clean up.
     expect(subscribePageToLeadgen).not.toHaveBeenCalled();
     expect(activateMetaConnection).not.toHaveBeenCalled();
   });
 
-  it("still refuses when the holder's name cannot be read, without leaking an id", async () => {
+  it("does not look the holder up at all, so there is nothing to leak", async () => {
+    // Cheapest guarantee against regression: the route has no reference to
+    // the holding business beyond its id, which it never renders.
     vi.mocked(getMetaPageClaim).mockResolvedValue({ business_id: OTHER_BIZ } as never);
-    vi.mocked(getBusiness).mockRejectedValue(new Error("db down"));
-
     const res = await post({ businessId: BIZ, pageId: PAGE.id });
     expect(res.status).toBe(400);
-    const json = (await res.json()) as { error: { message: string } };
-    expect(json.error.message).toContain("another business");
-    expect(json.error.message).not.toContain(OTHER_BIZ);
+    const body = await res.text();
+    expect(body).not.toContain(OTHER_BIZ);
   });
 
   it("lets a business re-pick the Page it already holds (reconnect)", async () => {
@@ -220,7 +219,6 @@ describe("POST /api/integrations/meta (page pick)", () => {
   it("proceeds when no business holds the Page yet", async () => {
     const res = await post({ businessId: BIZ, pageId: PAGE.id });
     expect(res.status).toBe(200);
-    expect(getBusiness).not.toHaveBeenCalled();
     expect(activateMetaConnection).toHaveBeenCalled();
   });
 });

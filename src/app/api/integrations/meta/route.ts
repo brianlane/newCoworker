@@ -15,7 +15,6 @@
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { getBusiness } from "@/lib/db/businesses";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   activateMetaConnection,
@@ -136,12 +135,18 @@ export async function POST(request: Request) {
     // pick never leaves a Meta-side subscription behind either.
     const existingClaim = await getMetaPageClaim(page.id);
     if (existingClaim && existingClaim.business_id !== body.businessId) {
-      const holder = await getBusiness(existingClaim.business_id).catch(() => null);
+      // Deliberately NAMELESS. uq_meta_connections_page is global, so the
+      // holder can be an unrelated customer who merely shares a Facebook Page
+      // admin with this caller; naming them would disclose another tenant's
+      // business name, and that they use the product, to anyone holding Page
+      // admin (Bugbot ddcefed0). We do not reveal one business to another,
+      // and that rule does not bend for the case where the caller happens to
+      // own both: the API cannot tell those apart cheaply enough to be worth
+      // the risk. An operator who needs to know can see it in the admin
+      // tools, or by looking at the Page in Facebook.
       return errorResponse(
         "VALIDATION_ERROR",
-        `"${page.name}" is already connected to ${
-          holder?.name ? `another business on this account (${holder.name})` : "another business"
-        }. A Facebook Page can send its leads to one business at a time — disconnect it there first, then pick it here.`
+        `"${page.name}" is already connected to another business. A Facebook Page can send its leads to one business at a time — disconnect it there first, then pick it here.`
       );
     }
 
