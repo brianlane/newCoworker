@@ -4,8 +4,8 @@
  * Telnyx caps concurrent outbound calls at three layers and the MINIMUM
  * wins: each connection's outbound channel_limit, each outbound voice
  * profile's concurrent_call_limit, and the account-level pool (which the
- * API does not expose; the granted number lives in the
- * TELNYX_ACCOUNT_CHANNEL_LIMIT env). The 2026-08-16 incident happened
+ * API does not expose; the granted number lives in
+ * admin_platform_settings key telnyx_capacity, env as fallback). The 2026-08-16 incident happened
  * because nothing ever read these back: the connection sat at 2 while the
  * profile said 10. This prints all of it side by side, plus what is in
  * flight right now.
@@ -39,8 +39,16 @@ async function telnyx(path: string): Promise<any> {
   return res.json();
 }
 
-const accountLimit = Number(process.env.TELNYX_ACCOUNT_CHANNEL_LIMIT ?? "10");
-const headroom = Number(process.env.PLATFORM_OUTBOUND_HEADROOM ?? "3");
+// The granted pool lives in admin_platform_settings (env is the fallback).
+const { readTelnyxCapacityConfig, gateFromConfig } = await import(
+  "../supabase/functions/_shared/platform_capacity.ts"
+);
+const capacityConfig = await readTelnyxCapacityConfig(
+  db as never,
+  (name) => process.env[name]
+);
+const accountLimit = capacityConfig.accountChannelLimit;
+const headroom = capacityConfig.platformOutboundHeadroom;
 
 const [apps, profiles, numbers] = await Promise.all([
   telnyx("/call_control_applications?page[size]=100"),
@@ -57,8 +65,8 @@ for (const n of numbers.data ?? []) {
   didsByConnection.set(conn, [...(didsByConnection.get(conn) ?? []), n.phone_number]);
 }
 
-console.log(`account pool (env TELNYX_ACCOUNT_CHANNEL_LIMIT): ${accountLimit}`);
-console.log(`platform pre-dial gate: ${Math.max(1, accountLimit - headroom)} (headroom ${headroom})`);
+console.log(`account pool (admin_platform_settings telnyx_capacity): ${accountLimit}`);
+console.log(`platform pre-dial gate: ${gateFromConfig(capacityConfig)} (headroom ${headroom})`);
 console.log(`\n${(apps.data ?? []).length} call control app(s):`);
 let committed = 0;
 for (const app of apps.data ?? []) {
@@ -116,5 +124,5 @@ if (committed > 0 && accountLimit < committed * 2) {
   );
 }
 console.log(
-  "note: the account-level pool is support-ticket-only at Telnyx; if it was raised, update TELNYX_ACCOUNT_CHANNEL_LIMIT so the gate and this report stay truthful."
+  "note: the account-level pool is support-ticket-only at Telnyx; if it was raised, update the telnyx_capacity row in admin_platform_settings so the gate and this report stay truthful."
 );

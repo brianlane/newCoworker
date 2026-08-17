@@ -18,6 +18,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
+import { readTelnyxCapacityConfig } from "../_shared/platform_capacity.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
@@ -115,12 +116,12 @@ serve(async (req: Request) => {
     }
   }
 
-  const accountLimit = Number(Deno.env.get("TELNYX_ACCOUNT_CHANNEL_LIMIT") ?? "10");
+  const capacityConfig = await readTelnyxCapacityConfig(supabase, (name) => Deno.env.get(name));
   const inputs = {
     carrierRejections: carrierRejections ?? 0,
     platformBlocks: platformBlocks ?? 0,
     tenantCaps,
-    accountLimit: Number.isFinite(accountLimit) && accountLimit > 0 ? accountLimit : 10
+    accountLimit: capacityConfig.accountChannelLimit
   };
   const verdict = evaluateCapacityHeadroom(inputs);
 

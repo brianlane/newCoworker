@@ -46,7 +46,7 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.ts";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
-import { platformMaxConcurrentOutbound } from "../_shared/platform_capacity.ts";
+import { gateFromConfig, readTelnyxCapacityConfig } from "../_shared/platform_capacity.ts";
 import { TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT } from "../_shared/voice_reservation_limits.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
@@ -233,9 +233,12 @@ serve(async (req: Request) => {
   // falls through to the dial because the post-dial reserve below — which does
   // the authoritative JIT period refresh — is the real gate, and it hangs the
   // leg up before answer so a slip-through is never billed.
+  // The granted Telnyx pool lives in admin_platform_settings (it changes as
+  // support tickets land); env is only the fallback. Never throws.
+  const capacityConfig = await readTelnyxCapacityConfig(supabase, (name) => Deno.env.get(name));
   const availability = await checkVoiceBudgetAvailable(supabase, {
     businessId,
-    platformMaxOutbound: platformMaxConcurrentOutbound((name) => Deno.env.get(name)),
+    platformMaxOutbound: gateFromConfig(capacityConfig),
     outboundDialHeadroom: tenantDialHeadroom
   });
   if (availability.status === "blocked") {

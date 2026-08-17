@@ -11,6 +11,14 @@ type Props = {
   bridgeHeartbeatAt: string | null;
   forwardToE164?: string | null;
   transferEnabled?: boolean;
+  /** Needed by the dial-headroom control's save call. */
+  businessId?: string;
+  /**
+   * Concurrent-call slots reserved OUT of this business's cap for live
+   * transfers and teammate rings (the AI stops dialing new outbound calls
+   * once in-flight calls reach cap minus this). Null = platform default.
+   */
+  voiceOutboundDialHeadroom?: number | null;
   /**
    * Live translator mode: the AI stays on a transferred call interpreting
    * between the caller and whoever picked up. Shown so the owner knows why a
@@ -50,6 +58,22 @@ const TENANT_HEALTH_COPY: Record<
   unknown: { variant: "neutral", label: "Unknown", hint: "" }
 };
 
+/** The platform default when the business has no override (lockstep with TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT). */
+export const DIAL_HEADROOM_DEFAULT = 3;
+
+/**
+ * Owner-facing description of a headroom choice. Pure so the copy is
+ * unit-testable without rendering React (same pattern as
+ * resolveSmsCampaignCopy below).
+ */
+export function describeDialHeadroom(value: number): string {
+  if (value === 0) {
+    return "The AI may use every line; a live transfer can find them all busy.";
+  }
+  const lines = value === 1 ? "1 line stays" : `${value} lines stay`;
+  return `${lines} free for live transfers and ringing your team; the AI dials with the rest.`;
+}
+
 /**
  * SMS-deliverability copy keyed off the 10DLC campaign status. Kept as a
  * pure function so we can unit-test the messaging without rendering React.
@@ -85,10 +109,39 @@ export function PhoneNumberCard({
   bridgeHeartbeatAt,
   forwardToE164,
   transferEnabled,
+  businessId,
+  voiceOutboundDialHeadroom,
   translatorModeEnabled,
   smsCampaignStatus
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [headroom, setHeadroom] = useState<number>(
+    voiceOutboundDialHeadroom ?? DIAL_HEADROOM_DEFAULT
+  );
+  const [headroomState, setHeadroomState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle"
+  );
+
+  async function saveHeadroom(next: number) {
+    if (!businessId) return;
+    const previous = headroom;
+    setHeadroom(next);
+    setHeadroomState("saving");
+    try {
+      const res = await fetch("/api/business/dial-headroom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, headroom: next })
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setHeadroomState("saved");
+      setTimeout(() => setHeadroomState("idle"), 1500);
+    } catch {
+      setHeadroom(previous);
+      setHeadroomState("error");
+      setTimeout(() => setHeadroomState("idle"), 2500);
+    }
+  }
   const pretty = e164 ? formatDid(e164) : null;
   const bridge = TENANT_HEALTH_COPY[resolveBridgeHealthState(bridgeHeartbeatAt)];
 
@@ -147,6 +200,39 @@ export function PhoneNumberCard({
         <p className="mt-2 text-xs text-parchment/40 italic">
           Warm transfer is currently off.
         </p>
+      )}
+      {businessId && (
+        <div className="mt-3" data-testid="dial-headroom-control">
+          <label
+            htmlFor="dial-headroom"
+            className="text-xs text-parchment/40 uppercase tracking-wider"
+          >
+            Lines held for live transfers
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <select
+              id="dial-headroom"
+              value={headroom}
+              onChange={(event) => void saveHeadroom(Number(event.target.value))}
+              disabled={headroomState === "saving"}
+              className="rounded-md border border-parchment/20 bg-transparent px-2 py-1 text-sm text-parchment"
+            >
+              {Array.from({ length: 10 }, (_, n) => (
+                <option key={n} value={n} className="bg-ink">
+                  {n}
+                  {n === DIAL_HEADROOM_DEFAULT ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+            {headroomState === "saved" && (
+              <span className="text-xs text-signal-teal">Saved ✓</span>
+            )}
+            {headroomState === "error" && (
+              <span className="text-xs text-red-400">Could not save; try again.</span>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-parchment/50">{describeDialHeadroom(headroom)}</p>
+        </div>
       )}
       {forwardToE164 && transferEnabled !== false && translatorModeEnabled && (
         <p className="mt-2 text-xs text-parchment/60">
