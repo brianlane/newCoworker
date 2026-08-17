@@ -12,6 +12,7 @@ import {
   createGeminiTelnyxBridge,
   type TransferCapability,
   type HangupCapability,
+  type VoicemailCapability,
   type DtmfCapability,
   type CallerIdentity,
   type CapturedLead,
@@ -1212,6 +1213,11 @@ function main(): void {
       // session context. Supersedes both transfer capabilities below.
       let intakeReachConfig: ReachLadderConfig | undefined;
       let intakeFlowRun: FlowRunLink | undefined;
+      // The step's authored voicemailTemplate, snapshotted on the session by
+      // telnyx-voice-originate. Present ONLY when the flow author wrote one, so
+      // "no template" still means leave no message: nobody's unapproved copy
+      // goes out on a customer's mailbox.
+      let intakeVoicemailScript = "";
       // Outbound AiFlow legs are placed by telnyx-voice-originate, which writes
       // the handoff session context with `outbound: true`. Everything else is a
       // customer dialing the DID (inbound). Recorded on the transcript so the
@@ -1270,6 +1276,8 @@ function main(): void {
           };
           if (ctx.outbound === true) callDirection = "outbound";
           intakeStarFrame = ctx.star_alerts === true;
+          intakeVoicemailScript =
+            typeof ctx.voicemail?.script === "string" ? ctx.voicemail.script.trim() : "";
           const ai = ctx.ai_takeover ?? undefined;
           intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
           intakeAlsoNotifyE164 =
@@ -1397,6 +1405,74 @@ function main(): void {
             }
           }
         : undefined;
+
+      /**
+       * The assistant's own "this is a recording" verdict, for calls WE placed.
+       *
+       * Carrier AMD is primary and unreliable: it read Jim Inderberg's mailbox
+       * as `human_residence` on 2026-08-17, so nothing stamped the call, the
+       * cadence recorded "spoke with them", and the follow-up text that only
+       * sends on no-answer was skipped. The assistant heard the mailbox; this
+       * is how it says so.
+       *
+       * Two effects, in this order:
+       *   1. Record the machine verdict on the session AND the call row. The
+       *      session stamp is what the hangup path reads to resolve the run's
+       *      outcome to no-answer; the transcript field is what the call page's
+       *      answering-machine badge shows. Both mirror the edge's stampMachine
+       *      exactly, so a call detected here is indistinguishable downstream
+       *      from one AMD caught.
+       *   2. When the step configured a message, CLAIM the right to leave it
+       *      through the same single-winner RPC the edge's own voicemail drop
+       *      uses, and hand the script back to be read aloud. Losing the claim
+       *      means the edge is already speaking it, so the model stays quiet
+       *      rather than talking over a message that is already going out.
+       */
+      const voicemail: VoicemailCapability | undefined =
+        callDirection === "outbound"
+          ? {
+              execute: async () => {
+                const { error: stampErr } = await supabase.rpc("voice_session_context_merge", {
+                  p_call_control_id: callControlId,
+                  p_patch: { machine_detected: true }
+                });
+                if (stampErr) {
+                  // Without the stamp the run would still resolve "answered",
+                  // which is the whole failure this exists to stop. Say so
+                  // loudly and leave no message: a lead the cadence believes
+                  // was reached AND a voicemail is the worst of both.
+                  console.error("voice-bridge: voicemail machine stamp failed", stampErr);
+                  return { ok: false, detail: "stamp failed" };
+                }
+                const { error: badgeErr } = await supabase
+                  .from("voice_call_transcripts")
+                  .update({ answering_machine_result: "machine" })
+                  .eq("call_control_id", callControlId);
+                if (badgeErr) {
+                  console.error("voice-bridge: voicemail badge write failed", badgeErr);
+                }
+                const script = (intakeVoicemailScript ?? "").trim();
+                if (!script) return { ok: true, detail: "recorded, no message configured" };
+                const { data: claimed, error: claimErr } = await supabase.rpc(
+                  "voice_claim_voicemail_speak",
+                  { p_call_control_id: callControlId }
+                );
+                if (claimErr) {
+                  console.error("voice-bridge: voicemail claim failed", claimErr);
+                  return { ok: true, detail: "recorded, claim unavailable" };
+                }
+                if (claimed !== true) return { ok: true, detail: "message already being left" };
+                const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
+                  p_call_control_id: callControlId,
+                  p_patch: { voicemail_spoken: true }
+                });
+                if (spokenErr) {
+                  console.error("voice-bridge: voicemail_spoken stamp failed", spokenErr);
+                }
+                return { ok: true, script, detail: "claimed" };
+              }
+            }
+          : undefined;
 
       // Keypad access for the `press_digits` tool. Always provided when we have
       // an API key; the tool is only DECLARED for a session whose context asked
@@ -1876,6 +1952,7 @@ function main(): void {
             businessTimezone,
             transfer,
             hangup,
+            voicemail,
             dtmf,
             detachMedia,
             direction: callDirection,

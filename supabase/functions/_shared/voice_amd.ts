@@ -112,3 +112,48 @@ export function greetingImpliesMachine(result: unknown): boolean {
   const value = typeof result === "string" ? result.trim().toLowerCase() : "";
   return MACHINE_GREETING_RESULTS.has(value);
 }
+
+/** What a greeting event means for a leg, given what is already known about it. */
+export type GreetingVerdict =
+  /**
+   * Apple call screening announced itself earlier and its prompt has now
+   * ended: a live PERSON is deciding whether to pick up. Cancel the
+   * provisional machine verdict and leave the call alone.
+   */
+  | "screening_person"
+  /**
+   * The greeting has finished on a machine. This is the moment to act: leave
+   * the configured message, or hang up when there is none.
+   */
+  | "machine_resolved"
+  /** Nothing actionable: no verdict, no beep, nothing proven either way. */
+  | "noted";
+
+/**
+ * Decide what a greeting event means. The whole subtlety of the iOS mode
+ * lives here, so it is testable and in one place.
+ *
+ * `prompt_ended` is the trap, and it cost a real call. It is NOT exclusive to
+ * Apple call screening: Telnyx fires it whenever the prompt that followed a
+ * machine verdict ends WITHOUT a beep, and an ordinary voicemail greeting does
+ * exactly that. Reading it as "a person is screening" cancelled a CORRECT
+ * machine verdict on Jennifer Kline's mailbox (2026-08-17 16:08Z), so nothing
+ * hung up, the assistant pitched into her voicemail for two minutes, and the
+ * flow recorded "spoke with them".
+ *
+ * The only proof a person is deciding is a real `call_screening.detected`
+ * event, which the caller passes in as `screeningDetected`. Without it,
+ * `prompt_ended` simply means the greeting finished.
+ *
+ * A beep still resolves regardless of screening: a screened call that rolls to
+ * voicemail ends at a beep like any other.
+ */
+export function classifyGreetingEvent(
+  result: unknown,
+  state: { machineStamped: boolean; screeningDetected: boolean }
+): GreetingVerdict {
+  const value = typeof result === "string" ? result.trim().toLowerCase() : "";
+  if (value === "prompt_ended" && state.screeningDetected) return "screening_person";
+  if (state.machineStamped || greetingImpliesMachine(value)) return "machine_resolved";
+  return "noted";
+}

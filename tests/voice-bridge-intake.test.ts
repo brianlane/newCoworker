@@ -6,6 +6,7 @@ import {
   inboundVoicemailMessageLine,
   intakeSystemInstruction,
   iosScreeningLine,
+  OUTBOUND_VOICEMAIL_TOOL_LINE,
   STAR_ROW
 } from "../vps/voice-bridge/src/intake";
 
@@ -551,5 +552,64 @@ describe("intakeSystemInstruction: Apple call screening identification", () => {
 
   it("carries no em dash", () => {
     expect(iosScreeningLine("Amy Laidlaw")).not.toMatch(/—/);
+  });
+});
+
+/**
+ * Reporting a recording on calls WE placed.
+ *
+ * Carrier AMD is primary and it guesses wrong on personal greetings: it read
+ * Jim Inderberg's mailbox as `human_residence` (2026-08-17), so nothing
+ * stamped the call, the cadence recorded "spoke with them", and the follow-up
+ * text that only sends on no-answer was skipped. On the same day the
+ * assistant delivered a full listing pitch into Jennifer Kline's mailbox and
+ * narrated a transfer it never made. The `voicemail_reached` tool is where
+ * the assistant's own verdict goes, and the rule ships only with the tool.
+ */
+describe("intakeSystemInstruction: reporting a recording", () => {
+  const withTool = intakeSystemInstruction(
+    "Amy Laidlaw",
+    undefined,
+    "America/Phoenix",
+    [],
+    true,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    true
+  );
+
+  it("names the recording signatures verbatim and reports BEFORE speaking", () => {
+    expect(withTool).toContain("`voicemail_reached`");
+    expect(withTool).toContain('"please record your message"');
+    expect(withTool).toContain('"when you have finished recording you may hang up"');
+    expect(withTool).toContain("REPORT IT BEFORE YOU SAY ANYTHING ELSE");
+    // The Jennifer failure in one clause: no pitch at a machine, and no
+    // narrating a transfer that is not happening.
+    expect(withTool).toContain("never narrate an action you are about to take");
+  });
+
+  it("reads a returned script verbatim, and stays silent when there is none", () => {
+    expect(withTool).toContain("read that text aloud word for word");
+    expect(withTool).toContain("If it returns no script, say nothing at all");
+  });
+
+  it("ships the rule only when the tool exists", () => {
+    const withoutTool = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      true
+    );
+    expect(withoutTool).not.toContain("voicemail_reached");
+  });
+
+  it("carries no em dash and never says receptionist", () => {
+    expect(OUTBOUND_VOICEMAIL_TOOL_LINE).not.toMatch(/—/);
+    expect(OUTBOUND_VOICEMAIL_TOOL_LINE.toLowerCase()).not.toContain("receptionist");
   });
 });

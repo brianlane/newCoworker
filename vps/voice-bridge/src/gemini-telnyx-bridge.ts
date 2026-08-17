@@ -195,6 +195,36 @@ export type HangupCapability = {
 };
 
 /**
+ * "I reached a recording, not a person."
+ *
+ * Carrier AMD is the primary voicemail detector and it is NOT reliable: it
+ * classified Jim Inderberg's mailbox as `human_residence` on 2026-08-17
+ * (a personal greeting is one human voice talking, which is precisely what a
+ * human-residence greeting sounds like). When it misses, nothing downstream
+ * ever learns the truth: the flow records "spoke with them", the follow-up
+ * text that only sends on no-answer is skipped, and the lead quietly dies in
+ * a cadence that thinks it succeeded.
+ *
+ * The assistant is the one participant that actually HEARD the mailbox, so it
+ * gets a way to say so. Invoking this is the model's machine verdict: the host
+ * records it on the call (so the outcome resolves to no-answer and the call
+ * page shows a voicemail) and, when the step configured a message, claims the
+ * right to leave it and hands the script back to be read aloud.
+ *
+ * The claim is shared with the edge's own voicemail drop, so the two paths can
+ * never both leave a message on one recording.
+ */
+export type VoicemailCapability = {
+  execute: () => Promise<{
+    /** False only when the record could not be written; the model still ends the call. */
+    ok: boolean;
+    /** The message to read aloud, present only when this side won the claim. */
+    script?: string;
+    detail?: string;
+  }>;
+};
+
+/**
  * Lets the assistant press keypad digits on the live leg. Registered as the
  * `press_digits` tool, and used by the IVR gate below so a partner announcement
  * ("press 1 to accept this referral") is answered when it is actually HEARD.
@@ -331,6 +361,13 @@ export type GeminiBridgeOptions = {
   transfer?: TransferCapability;
   /** When set, registers an `end_call` tool so the assistant can hang up when done. */
   hangup?: HangupCapability;
+  /**
+   * When set, registers a `voicemail_reached` tool so the assistant can report
+   * that it is talking to a recording. Wired for calls WE placed, where a
+   * missed voicemail silently poisons the flow outcome (see
+   * VoicemailCapability).
+   */
+  voicemail?: VoicemailCapability;
   /**
    * When set, registers a `press_digits` tool so the assistant can work a
    * partner IVR. Provided by index.ts whenever a Telnyx API key exists; the
@@ -1362,6 +1399,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     });
   }
+  // `voicemail_reached` is the assistant's own machine verdict, for the calls
+  // where carrier AMD guessing wrong is expensive (see VoicemailCapability).
+  const hasVoicemailTool = Boolean(opts.voicemail);
+  if (hasVoicemailTool) {
+    declarations.push({
+      name: "voicemail_reached",
+      description:
+        "Report that this call reached a RECORDING (a voicemail greeting, an answering machine, or a mailbox menu) rather than a live person. Call this as soon as you are confident, BEFORE saying anything else. It returns `script` when there is a message to leave: read that text aloud word for word, then call end_call. When it returns no script, say nothing at all and call end_call immediately.",
+      parameters: { type: Type.OBJECT, properties: {}, required: [] }
+    });
+  }
   const toolsForSession =
     declarations.length > 0
       ? [{ functionDeclarations: declarations as never }]
@@ -1423,7 +1471,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
             opts.direction === "outbound",
             intake.contextNote,
-            opts.languagePrefs
+            opts.languagePrefs,
+            hasVoicemailTool
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1983,6 +2032,35 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           sendToolResponse(call.id, name, {
             ok,
             detail: ok ? `pressed ${digits}` : "press failed"
+          });
+        })();
+        continue;
+      }
+
+      if (name === "voicemail_reached" && opts.voicemail) {
+        // Answered on its own task so the model's turn completes promptly: it
+        // is waiting on this response to know whether to read a message, and
+        // the mailbox is recording silence while it waits.
+        void (async () => {
+          let result: { ok: boolean; script?: string; detail?: string };
+          try {
+            result = await opts.voicemail!.execute();
+          } catch (err) {
+            console.error("gemini-bridge: voicemail_reached execute threw", err);
+            result = { ok: false, detail: "voicemail record failed" };
+          }
+          const script = (result.script ?? "").trim();
+          sendToolResponse(call.id, name, {
+            ok: result.ok,
+            ...(script ? { script } : {}),
+            detail: script
+              ? "read this message aloud word for word, then end the call"
+              : "leave no message: say nothing and end the call now"
+          });
+          emitDiag("voice_bridge_voicemail_reached", {
+            ok: result.ok,
+            has_script: Boolean(script),
+            detail: result.detail ?? null
           });
         })();
         continue;

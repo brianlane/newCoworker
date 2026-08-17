@@ -475,6 +475,27 @@ Voicemails (Aug 11 2026): `amy-voicemail-scripts.ts` gives all 13
 hears from us instead of only being texted. Before PR #1297 the engine hung up
 on an answering machine and there was no field to put a message in.
 
+- **A voicemail nobody DETECTS is worse than one nobody answers, and carrier
+  AMD misses them.** The outcome of an AI call is derived from whether a
+  machine was detected, and the cadence's follow-up text is gated on
+  `call_outcome equals no_answer`, so an undetected voicemail records
+  "spoke with them", sends no text, stops the ladder, and parks the run for
+  three days waiting on a reply that cannot come. Three calls landed that way:
+  a Mesa seller on Aug 14 (premium AMD returned `human_business`), Jim
+  Inderberg on Aug 17 (`human_residence`: a personal greeting is one human
+  voice, which is exactly what that class sounds like), and Jennifer Kline on
+  Aug 17, where AMD was RIGHT and the greeting-end handler cancelled the
+  correct verdict (see homelight-flow.md's note on `prompt_ended`). Two of the
+  three are carrier AMD simply being wrong, which no code change removes. The
+  assistant now has its own way to say so: a `voicemail_reached` tool that
+  records the machine verdict on the call and hands back the step's authored
+  script to read. The three already-broken calls were corrected by
+  `amy-voicemail-misrecorded-calls.ts`, which stamps the call records and
+  texts Amy the three names to call back. It deliberately does NOT resume the
+  runs: two were `done` and the third was parked mid-cadence, and rewriting a
+  live run's vars to re-drive a completed step risks double-texting the very
+  leads it is rescuing.
+
 - **HomeLight is absent from that script by design, not by oversight.** It
   places no outbound AI call at all: its AI ANSWERS HomeLight's inbound
   live-transfer call. The "a person is on the line by definition" half of
