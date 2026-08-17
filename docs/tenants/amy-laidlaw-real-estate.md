@@ -439,8 +439,16 @@ on an answering machine and there was no field to put a message in.
 
 - **HomeLight is absent from that script by design, not by oversight.** It
   places no outbound AI call at all: its AI ANSWERS HomeLight's inbound
-  live-transfer call, which by definition has a person on the line.
-  ReferralExchange gets its scripts when it gets its call steps.
+  live-transfer call. The "a person is on the line by definition" half of
+  that reasoning broke on Aug 16 2026: after the accept keypress HomeLight
+  bridges ONWARD to the client's own phone, and Thomas L.'s was off, so the
+  AI spent four minutes chatting with his carrier voicemail. The inbound
+  intake persona now recognizes carrier announcements ("is not available",
+  "please record your message", "at the tone") and leaves ONE scripted
+  detail-free message instead (`inboundVoicemailMessageLine` in
+  `vps/voice-bridge/src/intake.ts`); outbound calls keep their authored
+  `voicemailTemplate` policy. ReferralExchange gets its scripts when it gets
+  its call steps.
 - **Every rung is worded differently**, because a ladder that redials leaves a
   message each time and three identical recordings from one number reads as a
   malfunction. The Clever accept ladder's third rung and the spoke check's
