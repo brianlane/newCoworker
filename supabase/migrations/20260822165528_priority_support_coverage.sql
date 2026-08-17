@@ -6,12 +6,17 @@
 -- permanent grant for enterprise. This table makes it purchasable on its own.
 --
 -- It is its OWN month-to-month Stripe subscription, never a line item on the
--- membership subscription: Stripe requires every item on one subscription to
--- share a billing interval, and a 12/24-month membership bills at
--- interval_count 12|24, so a monthly line cannot ride it. Riding it at the
--- plan's cadence (what the usage packs do) would prepay support for the whole
--- term and lock the tenant in, which inverts the product rule: cancel any
--- month, never locked in.
+-- membership subscription. NOTE: the original comment here claimed Stripe
+-- forbids the alternative ("every item must share a billing interval"). That
+-- was wrong; Stripe only requires each item's period to be a multiple of the
+-- shortest, so month/1 rides a month/24 subscription fine. It stays separate
+-- because change-plan rebuilds the membership and would destroy a line item,
+-- the 409 plan_unchanged guard blocks adding one mid-term, and the 30-day
+-- refund carve-out matches lines on the membership invoice. Riding it at the
+-- plan's cadence (what the usage packs do) would also prepay support for the
+-- whole term, inverting the product rule: cancel any month, never locked in.
+-- (Comment-only correction; this migration is already applied and its schema
+-- is unchanged. See src/lib/plans/priority-support.ts.)
 --
 -- This is the FIRST place the repo runs two concurrent Stripe subscriptions on
 -- one business, so the Stripe webhook gates on a `subscriptionKind` metadata
