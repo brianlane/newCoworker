@@ -101,13 +101,26 @@ export type ReachTelnyxDeps = {
 
 export type ReachLadderResult =
   | { ok: true; connectedName: string; bLeg: string }
-  | { ok: false; detail: string };
+  | {
+      ok: false;
+      /**
+       * Why the ladder failed, honestly:
+       *   - "nobody_answered": at least one teammate's phone actually rang
+       *     (or answered but could not be bridged) and nobody ended up
+       *     connected. The caller may fairly be told nobody picked up.
+       *   - "dials_refused": EVERY dial was refused before a phone rang
+       *     (for example a Telnyx channel-limit 403 on each rung). Nobody
+       *     was rung and no pre-alert was sent, so the model must not claim
+       *     the team ignored the call (2026-08-16 incident review).
+       */
+      detail: "nobody_answered" | "dials_refused";
+    };
 
 /**
- * Walk the ladder: for each target in order, text the pre-alert, dial a B
- * leg tagged with the reach client_state, wait for the webhook-stamped
- * outcome on the A leg's session, and either bridge (done) or hang the B
- * leg up and try the next person.
+ * Walk the ladder: for each target in order, dial a B leg tagged with the
+ * reach client_state, text the pre-alert once the dial actually went out,
+ * wait for the webhook-stamped outcome on the A leg's session, and either
+ * bridge (done) or hang the B leg up and try the next person.
  *
  * The B leg is ALWAYS hung up before the next target is dialed: without
  * that, a teammate whose voicemail answered late holds a zombie leg while
@@ -140,15 +153,9 @@ export async function runReachLadder(
   const { businessId, aLegCallControlId, config } = args;
   const log = args.log ?? (() => undefined);
   const telemetry = args.telemetry ?? (() => undefined);
+  let anyDialSucceeded = false;
   for (let attempt = 0; attempt < config.targets.length; attempt += 1) {
     const target = config.targets[attempt]!;
-    if (config.preSmsBody && telnyx.sendPreSms) {
-      try {
-        await telnyx.sendPreSms(target.e164, config.preSmsBody);
-      } catch {
-        // Best-effort by contract.
-      }
-    }
     const dialRes = await telnyx.dial({
       connectionId: config.connectionId,
       to: target.e164,
@@ -171,6 +178,17 @@ export async function runReachLadder(
         error_snippet: dialRes.body?.slice(0, 120) ?? null
       });
       continue;
+    }
+    anyDialSucceeded = true;
+    // Pre-alert AFTER the dial went out, never before: a refused dial used
+    // to leave the teammate hyped for a phone that never rings (2026-08-16
+    // incident review). SMS delivery beats a 20s ring window comfortably.
+    if (config.preSmsBody && telnyx.sendPreSms) {
+      try {
+        await telnyx.sendPreSms(target.e164, config.preSmsBody);
+      } catch {
+        // Best-effort by contract.
+      }
     }
     const outcome = await pollReachOutcome(
       supabase,
@@ -202,8 +220,9 @@ export async function runReachLadder(
     await telnyx.hangup(dialRes.callControlId);
     log("reach: no answer, next target", { attempt });
   }
-  telemetry("voice_reach_exhausted", { targets: config.targets.length });
-  return { ok: false, detail: "nobody_answered" };
+  const detail = anyDialSucceeded ? "nobody_answered" : "dials_refused";
+  telemetry("voice_reach_exhausted", { targets: config.targets.length, detail });
+  return { ok: false, detail };
 }
 
 /**
