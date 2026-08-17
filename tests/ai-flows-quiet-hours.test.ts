@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OFFER_GRACE_MINUTES,
+  applyResumeJitter,
   formatInTimeZone,
   inDailyWindow,
   nextTimeOfDayMs,
@@ -137,5 +138,38 @@ describe("formatInTimeZone", () => {
   });
   it("falls back to the UTC ISO string on an invalid zone", () => {
     expect(formatInTimeZone(phx(8, 40), "Not/AZone")).toBe(new Date(phx(8, 40)).toISOString());
+  });
+});
+
+describe("applyResumeJitter", () => {
+  const base = phx(8, 30);
+
+  it("adds 0..max additive jitter, never early, never past max", () => {
+    expect(applyResumeJitter(base, 300_000, () => 0)).toBe(base);
+    expect(applyResumeJitter(base, 300_000, () => 0.5)).toBe(base + 150_000);
+    // rand() === 1 is exclusive in Math.random but clamp anyway: the result
+    // must stay within the additive window.
+    expect(applyResumeJitter(base, 300_000, () => 1)).toBe(base + 300_000);
+  });
+
+  it("clamps a misbehaving rand outside [0,1]", () => {
+    expect(applyResumeJitter(base, 300_000, () => -3)).toBe(base);
+    expect(applyResumeJitter(base, 300_000, () => 7)).toBe(base + 300_000);
+  });
+
+  it("returns the instant unchanged for non-positive or invalid max", () => {
+    expect(applyResumeJitter(base, 0)).toBe(base);
+    expect(applyResumeJitter(base, -1)).toBe(base);
+    expect(applyResumeJitter(base, Number.NaN)).toBe(base);
+  });
+
+  // The whole point: two runs deferring to the same window edge no longer
+  // resume on the identical millisecond (given distinct rand draws).
+  it("de-phase-locks two runs deferred to the same instant", () => {
+    const a = applyResumeJitter(base, 300_000, () => 0.11);
+    const b = applyResumeJitter(base, 300_000, () => 0.87);
+    expect(a).not.toBe(b);
+    expect(a).toBeGreaterThanOrEqual(base);
+    expect(b).toBeLessThanOrEqual(base + 300_000);
   });
 });

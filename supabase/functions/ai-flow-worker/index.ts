@@ -142,6 +142,7 @@ import {
   shortenSmsBodyUrls
 } from "../_shared/sms_short_links.ts";
 import {
+  applyResumeJitter,
   formatInTimeZone,
   nextTimeOfDayMs,
   offerRespondByMs,
@@ -149,6 +150,10 @@ import {
   smsQuietDecision,
   timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
+import {
+  capacityRetryCountVar,
+  capacityRetryPlan
+} from "../_shared/ai_flows/capacity_retry.ts";
 import {
   RESUME_STEP_ID_VAR,
   flattenSteps,
@@ -241,6 +246,15 @@ const EMAIL_POLL_KICK_TIMEOUT_MS = 75_000;
 // telnyx-voice-originate dials Telnyx (POST /v2/calls) then reserves budget; a
 // few seconds is typical, so allow generous headroom before aborting a sweep.
 const OUTBOUND_ORIGINATE_TIMEOUT_MS = 25_000;
+// Max jitter added to WALL-CLOCK resumes (flow time window, per-step
+// callWindow, sleep untilTime). Those compute the identical second for every
+// deferred run, phase-locking whole cohorts onto one instant: on 2026-08-16
+// three flows' deferred calls all dialed at 08:30:0x Phoenix and the third
+// was rejected at the Telnyx concurrent-channel limit. Five minutes spreads
+// a morning cohort into a trickle while staying inside any usable window.
+// Duration-anchored waits (sleep minutes / untilIso) stay exact: date-anchored
+// booking reminders must not drift.
+const WINDOW_RESUME_JITTER_MS = 300_000;
 // route_to_team: how many times one step entry will ask Rowboat for a sendable
 // next agent (skipping opted-out picks) before giving up to the owner fallback.
 const ROUTE_MAX_LOOKUPS = 6;
@@ -2106,7 +2120,11 @@ async function runStep(
   ) {
     const decision = timeWindowDecision(Date.now(), scope.timeWindow);
     if (!decision.allowed) {
-      return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "flow_time_window" };
+      return {
+        kind: "defer",
+        resumeAtMs: applyResumeJitter(decision.resumeAtMs, WINDOW_RESUME_JITTER_MS),
+        reason: "flow_time_window"
+      };
     }
   }
   await recordStep(supabase, run, index, step, "running");
@@ -2279,7 +2297,11 @@ function sleepStep(
     resumeAtMs = nowMs + action.minutes * 60_000;
   } else if (action.untilTime && action.timezone) {
     const target = parseHHMM(action.untilTime);
-    resumeAtMs = target === null ? null : nextTimeOfDayMs(nowMs, action.timezone, target);
+    const next = target === null ? null : nextTimeOfDayMs(nowMs, action.timezone, target);
+    // Wall-clock waits ("sleep until 08:30") phase-lock every sleeping run
+    // onto the same second; spread them (see WINDOW_RESUME_JITTER_MS).
+    // minutes/untilIso waits below stay exact.
+    resumeAtMs = next === null ? null : applyResumeJitter(next, WINDOW_RESUME_JITTER_MS);
   } else if (action.untilIso !== undefined) {
     // Date-anchored wait (untilDateTemplate / relativeToTemplate): the
     // planner already rendered + offset the instant. null = unparseable
@@ -7709,7 +7731,7 @@ async function placeAiCallStep(
       }
       return {
         kind: "defer",
-        resumeAtMs: decision.resumeAtMs,
+        resumeAtMs: applyResumeJitter(decision.resumeAtMs, WINDOW_RESUME_JITTER_MS),
         reason: "call_window"
       };
     }
@@ -7969,6 +7991,35 @@ async function placeAiCallStep(
         kind: "defer",
         resumeAtMs: Date.now() + PLACE_CALL_BUDGET_RETRY_MINUTES * 60_000,
         reason: `voice budget (${result.reason ?? "blocked"})`
+      };
+    }
+    if (result.errorCode === "capacity") {
+      // Telnyx (or the platform pre-dial gate) refused the dial for
+      // concurrent-channel capacity. Transient by nature: channels free
+      // within minutes as ringing legs resolve, so retry on a short jittered
+      // backoff instead of burning this follow-up attempt (the 2026-08-16
+      // incident resolved this exact case to not_placed, which cancelled the
+      // seller ladder and false-alerted the owner). The counter lives in
+      // scope.vars, so it survives the defer; the step re-runs its window,
+      // STOP, and dial-cap guards on every resume.
+      const countVar = capacityRetryCountVar(action.marker);
+      const soFarRaw = Number(scope.vars[countVar] ?? "0");
+      const retryPlan = capacityRetryPlan(Number.isFinite(soFarRaw) ? soFarRaw : 0);
+      if (retryPlan.kind === "defer") {
+        scope.vars[countVar] = String(retryPlan.retriesSoFar + 1);
+        return {
+          kind: "defer",
+          resumeAtMs: Date.now() + retryPlan.delayMs,
+          reason: `carrier capacity (retry ${retryPlan.retriesSoFar + 1})`
+        };
+      }
+      // Bounded retries exhausted: resolve the truthful terminal reason so
+      // flow gating can distinguish capacity from config failures.
+      setOutcome(CALL_NOT_PLACED_SENTINEL, CALL_REASON.CARRIER_CAPACITY);
+      appendActionTaken(scope, "AI call not placed (carrier capacity, retries exhausted)");
+      return {
+        kind: "ok",
+        result: { outcome: CALL_NOT_PLACED_SENTINEL, reason: CALL_REASON.CARRIER_CAPACITY }
       };
     }
     // Config/validation refusal (no Telnyx connection, invalid callee, ...):

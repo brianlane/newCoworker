@@ -230,6 +230,30 @@ export function timeWindowDecision(nowMs: number, cfg: FlowTimeWindowConfig): Ti
 }
 
 /**
+ * Spread a wall-clock resume instant with additive jitter.
+ *
+ * timeWindowDecision and nextTimeOfDayMs compute the SAME second for every
+ * deferred run ("resume when the window opens at 08:30"), which phase-locks
+ * whole cohorts of runs onto one instant: on 2026-08-16 three flows' deferred
+ * calls all dialed at 08:30:0x Phoenix and the third hit the Telnyx
+ * concurrent-channel limit. Adding 0..maxJitterMs AFTER the computed resume
+ * keeps every run inside its window (jitter only ever pushes later, never
+ * earlier) while de-correlating the herd.
+ *
+ * `rand` is injected for tests; defaults to Math.random. Non-positive
+ * maxJitterMs returns the instant unchanged.
+ */
+export function applyResumeJitter(
+  resumeAtMs: number,
+  maxJitterMs: number,
+  rand: () => number = Math.random
+): number {
+  if (!Number.isFinite(maxJitterMs) || maxJitterMs <= 0) return resumeAtMs;
+  const unit = Math.min(Math.max(rand(), 0), 1);
+  return resumeAtMs + Math.floor(unit * maxJitterMs);
+}
+
+/**
  * Human copy for an instant in the owner's zone, e.g. "8:40 AM on Jun 12" —
  * what `{{offer.deadline}}` renders to inside offer templates. Falls back to
  * the UTC ISO string when the zone is invalid.

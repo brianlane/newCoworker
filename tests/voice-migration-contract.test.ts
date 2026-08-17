@@ -383,3 +383,49 @@ describe("voice_active_sessions: ended-row reaper and un-wedgeable zombie sweep"
     );
   });
 });
+
+/**
+ * voice_capacity_alerts (Telnyx capacity admin alerts): the claim must be
+ * atomic FLEET-WIDE and reachable by the service role, or the alert path
+ * silently dies with "permission denied" in production (the Data API grants
+ * convention: nothing in public is granted by default anymore).
+ */
+describe("voice_capacity_alerts migration (contract)", () => {
+  const migration = readFileSync(
+    join(repoRoot, "supabase/migrations/20260822135958_voice_capacity_alerts.sql"),
+    "utf8"
+  );
+
+  it("claims through a fleet-wide unique bucket (insert-or-nothing)", () => {
+    expect(migration).toMatch(
+      /create unique index if not exists uq_voice_capacity_alerts_bucket\s+on voice_capacity_alerts \(alert_bucket\)/s
+    );
+    expect(migration).toMatch(/on conflict \(alert_bucket\) do nothing/s);
+    // Fleet-wide on purpose: the carrier channel pool is shared, so the
+    // bucket key must NOT include business_id (that would email once per
+    // starved tenant instead of once per incident window).
+    expect(migration).not.toMatch(/on conflict \(business_id, alert_bucket\)/s);
+  });
+
+  it("hardens and grants the claim function for PostgREST", () => {
+    expect(migration).toMatch(/security definer/);
+    expect(migration).toMatch(/set search_path = pg_catalog, public/);
+    expect(migration).toMatch(
+      /revoke all on function voice_capacity_try_claim_alert\(uuid, uuid, text, int, int\) from public/
+    );
+    expect(migration).toMatch(
+      /grant execute on function voice_capacity_try_claim_alert\(uuid, uuid, text, int, int\) to service_role/
+    );
+  });
+
+  it("locks the table to the service role (RLS on, explicit table grants)", () => {
+    expect(migration).toMatch(/alter table voice_capacity_alerts enable row level security/);
+    expect(migration).toMatch(
+      /grant select, insert, delete on table voice_capacity_alerts to service_role/
+    );
+  });
+
+  it("refuses a non-positive bucket length instead of dividing by zero", () => {
+    expect(migration).toMatch(/if p_bucket_minutes is null or p_bucket_minutes < 1 then\s+return null/s);
+  });
+});
