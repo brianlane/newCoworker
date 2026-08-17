@@ -30,11 +30,14 @@ const ROOT = join(__dirname, "..");
  * broken promise instead of firing on any sentence containing "month".
  */
 const REMOVED_DEDUCTION_CLAIMS = [
-  /deducts? one month/i,
-  /minus one month/i,
-  /less one month/i,
-  /one month of service at the monthly rate/i,
-  /withhold(?:s|ing)? one month/i
+  /\bdeducts? one month/i,
+  /\bminus one month/i,
+  // Word-anchored: without \b this matches inside "unless one month", so
+  // ordinary copy like "unless one month has passed" would fail a guard that
+  // is supposed to catch a specific broken promise.
+  /\bless one month/i,
+  /\bone month of service at the monthly rate/i,
+  /\bwithhold(?:s|ing)? one month/i
 ];
 
 /** Surfaces whose text a customer can actually read. */
@@ -81,6 +84,40 @@ describe("refund policy copy matches the shipped refund policy", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  // A guard that fires on innocent copy gets deleted by the next person who
+  // trips it, so the patterns have to be anchored to the claim itself.
+  it("does not fire on ordinary copy that merely contains the same letters", () => {
+    const innocent = [
+      "You can reactivate unless one month has already passed.",
+      "Your plan renews unless one month of notice is given.",
+      "We bill monthly; one month of service is included.",
+      "Cancel any time in the first month of service."
+    ];
+    for (const line of innocent) {
+      for (const claim of REMOVED_DEDUCTION_CLAIMS) {
+        expect(claim.test(line), `${claim} wrongly matched: ${line}`).toBe(false);
+      }
+    }
+  });
+
+  // ...and still catches the real thing, in the shapes it was actually
+  // written in across the catalogs, the Terms page and the cancel sheet.
+  it("still catches every phrasing the deduction was written in", () => {
+    const offending = [
+      "On 12/24-month plans the refund also deducts one month of service at the monthly rate.",
+      "we refund your term payment minus one month of service at the monthly rate",
+      "the refund is less one month of service",
+      "12/24-month plans deduct one month of service at the monthly rate",
+      "we withhold one month at the monthly rate"
+    ];
+    for (const line of offending) {
+      expect(
+        REMOVED_DEDUCTION_CLAIMS.some((claim) => claim.test(line)),
+        `no pattern caught: ${line}`
+      ).toBe(true);
+    }
   });
 
   // The specific file the original sweep missed, pinned by name: it is the
