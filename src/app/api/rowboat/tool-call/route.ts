@@ -628,13 +628,13 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           emailBody:
             `Your texting coworker was messaging with ${who} and promised the team ` +
             `would follow up.\n\nRequest: ${parsed.data.message}`,
-          // "Reply 1 to claim" is deliberate: teammates text it back to these
-          // alerts anyway (every other team text ends that way), and without
-          // the affordance the digit lands on an unrelated older offer.
-          smsBody: truncateAtWord(
-            `[Coworker] Follow up with ${who}: ${parsed.data.message}\nReply 1 to claim, or claim them in the dashboard.`,
-            640
-          )
+          // No claim affordance here: only a TEAM BROADCAST records a row for
+          // a "1" to attach to, and this caller cannot know whether the
+          // dispatcher will broadcast or fall back to the owner. Inviting a
+          // digit on an owner-addressed alert would send it to an unrelated
+          // live offer, which is the failure this whole change removes. The
+          // dispatcher appends the line itself when the row exists.
+          smsBody: truncateAtWord(`[Coworker] Follow up with ${who}: ${parsed.data.message}`, 640)
         });
         notified = results.some((r) => r.status === "sent");
       } catch (err) {

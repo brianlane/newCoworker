@@ -773,9 +773,26 @@ async function consumeAlertClaim(args: {
   let text: string;
   const others: string[] = [];
   if (outcome.ok) {
+    // Retire every OTHER live alert about the same lead, to the same claimer.
+    // Alerts about one lead can pile up (a second reply days later raises a
+    // new one), and leaving the siblings claimable would let a second
+    // teammate claim one and also be told the lead is theirs.
+    const { error: sibErr } = await supabase
+      .from("unowned_lead_alerts")
+      .update({
+        claimed_at: nowIso,
+        claimed_by_e164: from,
+        claimed_by_member_id: member?.id ?? null
+      })
+      .eq("business_id", businessId)
+      .eq("lead_e164", outcome.leadE164)
+      .is("claimed_at", null);
+    if (sibErr) console.error("alert claim sibling retire", sibErr);
+
     // Ownership so LATER alerts about this lead reach the claimer instead of
     // the business owner. Compare-and-swap on `owner_employee_id is null`:
     // a claim never steals a lead somebody already owns.
+    let ownedByOther: string | null = null;
     if (member?.id) {
       const { error: ownErr } = await supabase
         .from("contacts")
@@ -784,15 +801,45 @@ async function consumeAlertClaim(args: {
         .or(`customer_e164.eq.${outcome.leadE164},alias_e164s.cs.{${outcome.leadE164}}`)
         .is("owner_employee_id", null);
       if (ownErr) console.error("alert claim ownership stamp", ownErr);
+      // The compare-and-swap is a silent no-op when somebody already owns the
+      // contact, and telling the claimer "you've got it" on top of that is
+      // how two people end up believing the same thing. Read who actually
+      // owns it now and say so.
+      // Two plain reads rather than an embedded join: the join syntax needs
+      // the FK constraint's exact name, and getting it wrong fails the query
+      // silently, which here would mean falsely telling the claimer the lead
+      // is theirs. The wrong direction to fail in.
+      const { data: ownerRow } = await supabase
+        .from("contacts")
+        .select("owner_employee_id")
+        .eq("business_id", businessId)
+        .or(`customer_e164.eq.${outcome.leadE164},alias_e164s.cs.{${outcome.leadE164}}`)
+        .maybeSingle();
+      const ownerId = (ownerRow as { owner_employee_id?: string | null } | null)?.owner_employee_id;
+      if (ownerId && ownerId !== member.id) {
+        const { data: ownerMember } = await supabase
+          .from("ai_flow_team_members")
+          .select("name")
+          .eq("id", ownerId)
+          .maybeSingle();
+        ownedByOther =
+          ((ownerMember as { name?: string | null } | null)?.name ?? "").trim() || "a teammate";
+      }
     }
-    text = `You've got ${label} (${outcome.leadE164}). Please reach out to them now.`;
+    text = ownedByOther
+      ? `${label} (${outcome.leadE164}) is already owned by ${ownedByOther}, so nothing changed. Check with them before reaching out.`
+      : `You've got ${label} (${outcome.leadE164}). Please reach out to them now.`;
     const { data: alertRow } = await supabase
       .from("unowned_lead_alerts")
       .select("recipients")
       .eq("id", args.candidate.alertId)
       .maybeSingle();
-    for (const r of ((alertRow as { recipients?: string[] | null } | null)?.recipients ?? [])) {
-      if (r && r !== from) others.push(r);
+    // Only stand the others down when this really did become the claimer's
+    // lead; if it was already owned, nobody's state changed.
+    if (!ownedByOther) {
+      for (const r of ((alertRow as { recipients?: string[] | null } | null)?.recipients ?? [])) {
+        if (r && r !== from) others.push(r);
+      }
     }
   } else if (outcome.reason === "already_claimed") {
     text = `A teammate already took ${label}, you're all set, no action needed.`;

@@ -718,7 +718,16 @@ export async function dispatchUrgentNotification(
       // trim trailing periods so the alert never reads "dashboard.. Details:".
       const alertLine =
         input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
-      const text = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
+      // The claim affordance goes on ONLY when a team broadcast is about to
+      // record a row for the digit to attach to. Inviting "1" on an
+      // owner-addressed alert would send it to an unrelated live offer, which
+      // is exactly the failure claimable alerts exist to remove. Callers
+      // cannot make this call: they do not know how routing will resolve.
+      const claimable =
+        targets.routing?.target === "team_broadcast"
+          ? `${alertLine}\nReply 1 to claim, or claim them in the dashboard.`
+          : alertLine;
+      const text = alphaProfile ? withAlphaNoReplyLine(claimable) : claimable;
       try {
         const tenantConfig = await getTelnyxMessagingForBusiness(input.businessId);
         // On the alpha profile the sender IS the profile's alpha identity:

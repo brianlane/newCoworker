@@ -1637,6 +1637,33 @@ describe("notifications/dispatch", () => {
       expect(row.recipients).toEqual([DAVE_PHONE, GABBY_PHONE]);
     });
 
+    it("invites a reply ONLY when a row exists for the digit to attach to", async () => {
+      // Bugbot, PR #1404: the affordance used to be appended by the caller,
+      // which cannot know how routing resolves. On an owner-addressed alert
+      // that invitation sends the "1" to an unrelated live offer, which is
+      // the exact failure claimable alerts exist to remove.
+      resolveContactOwnerTarget.mockResolvedValue(TO_TEAM);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE,
+        smsBody: "[Coworker] Follow up with Richard"
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][2]).toContain("Reply 1 to claim");
+
+      vi.mocked(sendTelnyxSms).mockClear();
+      resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Richard",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE,
+        smsBody: "[Coworker] Follow up with Richard"
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][2]).not.toContain("Reply 1 to claim");
+    });
+
     it("records NOTHING for an owner-addressed alert", async () => {
       // An alert that reached one person has nobody to race for it.
       resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
