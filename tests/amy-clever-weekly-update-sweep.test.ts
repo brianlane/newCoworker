@@ -5,7 +5,7 @@ import {
   ALERT_STEP_ID,
   BACKLOG_STEP_ID,
   BACKLOG_VAR,
-  CAPACITY_ALERT_MESSAGE,
+  capacityAlertMessage,
   CLEVER_SENDER,
   CLEVER_SENDER_TYPO,
   DAILY_NEEDLE,
@@ -360,10 +360,25 @@ describe("addCapacityAlert", () => {
   });
 
   it("tells Amy the real numbers and hands her the portal link", () => {
-    expect(CAPACITY_ALERT_MESSAGE).toContain(`{{vars.${BACKLOG_VAR}}}`);
-    expect(CAPACITY_ALERT_MESSAGE).toContain(`{{vars.${REMAINDER_VAR}}}`);
-    expect(CAPACITY_ALERT_MESSAGE).toContain("{{vars.portal_url}}");
-    expect(CAPACITY_ALERT_MESSAGE).toContain(String(SWEEP_CAPACITY));
+    const message = capacityAlertMessage();
+    expect(message).toContain(`{{vars.${BACKLOG_VAR}}}`);
+    expect(message).toContain(`{{vars.${REMAINDER_VAR}}}`);
+    expect(message).toContain("{{vars.portal_url}}");
+    expect(message).toContain(String(SWEEP_CAPACITY));
+  });
+
+  it("quotes the capacity the math actually used, not the module default", () => {
+    // Otherwise a caller-supplied capacity makes the gate, the remainder and
+    // the sentence Amy reads disagree with each other. The alert exists to be
+    // trusted, so this is the one number it must never get wrong.
+    const def = liveWeekly();
+    addCapacityAlert(def, 10);
+    const branch = def.steps.find((s) => s.id === ALERT_STEP_ID) as unknown as {
+      branches: Array<{ steps: Array<{ message: string }> }>;
+    };
+    const message = branch.branches[0].steps[0].message;
+    expect(message).toContain("cover 10 in one pass");
+    expect(message).not.toContain(`cover ${SWEEP_CAPACITY} in one pass`);
   });
 
   it("is idempotent, so re-running the one-shot cannot stack duplicate alerts", () => {

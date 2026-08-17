@@ -82,6 +82,35 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **ReferralExchange's timeline status was always "no interaction yet".**
+  `re_update` posts to the referral timeline with a fixed status
+  ("No interaction yet" -> "I am still trying to contact <First>"), so the same
+  run could place an AI call, have it answered or warm-transferred to the team
+  minutes earlier, and still tell RE that nobody had been reached. RE sets
+  referral quality and volume from these updates. Fixed Aug 17 2026 by
+  `amy-referralexchange-update-honesty.ts`, which wraps `re_update` in a
+  `re_update_gate` branch: `call_outcome` answered or transferred posts
+  "We are in contact" -> "<First> is open to working with me" instead, and the
+  `else` path keeps `re_update` unchanged **under its own id** (a parked run
+  stores its cursor as a step id and `resolveResumeIndex` stops the run when the
+  id is gone). The trunk does not grow, so the 30-step cap is untouched.
+  The modal's real option tree, read live Aug 17 2026:
+  `No interaction yet` (-> "I am still trying to contact <First>"),
+  `We are in contact` (-> "I have an appointment with <First>" /
+  "<First> is open to working with me" / "<First> does not want to work with
+  me"), `Listing / showing properties`, `Transaction in progress`,
+  `No longer working this referral`. A sub-option is REQUIRED: with only the
+  parent selected the submit button keeps its `disabled` attribute. Sub-option
+  labels embed the lead's first name, so actions match a stable fragment
+  ("is open to working with me"), never the whole label. The gate is positive
+  (`equals answered` / `equals transferred`) and never `notEquals no_answer`,
+  because a call skipped by the calling window resolves to `not_placed`.
+- **RE's update modal has a built-in "Schedule text reminder" (step 3)**, with
+  `button.reminder-button[value="tomorrowMorning"]`, `[value="tomorrowAfternoon"]`
+  and `#reminder-selector[value="pickADate"]`. That is the mechanism a RECURRING
+  RE update would hang off, since a `schedule` trigger produces no URL and
+  `browse_action.urlVar` takes no literal. Not built yet: no RE reminder text
+  has ever arrived, so there is no trigger wording to anchor on.
 - **Clever sends two different messages from ONE number, and both flows have
   to say which one they want.** +1 314-207-7635 carries the daily "summary of
   the new customers you received today" AND the weekly "N Active Deals awaiting
@@ -412,6 +441,10 @@ the owner-addressed `notify_no_phone` steps on ReferralExchange and New Lead
 Intake are still left alone.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
+`amy-referralexchange-update-honesty.ts` +
+`amy-referralexchange-update-honesty-definition.ts` (Aug 17 2026: the posted
+ReferralExchange status stops saying "no interaction yet" after an answered or
+transferred AI call, see Sharp edges),
 `realtor-retrigger-guard.ts`,
 `homelight-dedupe-and-price-digits.ts` (Aug 11 2026: the duplicate-run and
 `price_digits` fixes, see Sharp edges),

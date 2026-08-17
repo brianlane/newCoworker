@@ -124,11 +124,21 @@ export const ALERT_NOTIFY_ID = "capacity_notify";
 export const WEEKLY_NOTE =
   "Weekly update posted automatically by Amy's assistant. This client is active and in ongoing follow-up by phone, text, and email.";
 
-/** Message texted to Amy when the backlog outruns what one pass can update. */
-export const CAPACITY_ALERT_MESSAGE =
-  `Clever wants updates on {{vars.${BACKLOG_VAR}}} active deals this week. ` +
-  `The automated sweep can cover ${SWEEP_CAPACITY} in one pass, so about ` +
-  `{{vars.${REMAINDER_VAR}}} still need you in the portal: {{vars.portal_url}}`;
+/**
+ * Message texted to Amy when the backlog outruns what one pass can update.
+ *
+ * Derived from the SAME capacity the two math steps use, never from the module
+ * default: the whole point of this alert is that the number Amy reads matches
+ * what the sweep actually delivered, and a message baked at import time would
+ * quietly contradict a caller-supplied capacity.
+ */
+export function capacityAlertMessage(capacity = SWEEP_CAPACITY): string {
+  return (
+    `Clever wants updates on {{vars.${BACKLOG_VAR}}} active deals this week. ` +
+    `The automated sweep can cover ${capacity} in one pass, so about ` +
+    `{{vars.${REMAINDER_VAR}}} still need you in the portal: {{vars.portal_url}}`
+  );
+}
 
 /** Deep-clone helper so a builder never mutates the caller's live definition. */
 function clone<T>(value: T): T {
@@ -294,7 +304,7 @@ export function addCapacityAlert(def: AiFlowDefinition, capacity = SWEEP_CAPACIT
             {
               id: ALERT_NOTIFY_ID,
               type: "notify_owner",
-              message: CAPACITY_ALERT_MESSAGE
+              message: capacityAlertMessage(capacity)
             }
           ]
         }
