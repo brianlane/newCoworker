@@ -103,7 +103,14 @@ The full flow, for every code change, however small:
    `debug/_shared.ts`.
 2. **Make the change**, with tests. `npm test` must pass and coverage is
    pinned at 100% for `src/lib/**`, so new logic there needs new assertions.
-   `npx tsc --noEmit` and `npx eslint .` too.
+   `npx tsc --noEmit` and `npx eslint .` too. **Touching
+   `vps/voice-bridge/`? The root `tsc` does NOT cover it** (the root tsconfig
+   excludes it; it is its own package with its own compiler), so also run
+   `cd vps/voice-bridge && npx tsc --noEmit`. Its build otherwise runs for
+   the first time inside the Docker image at REDEPLOY, which is after the
+   merge: on 2026-08-17 a type error there passed every gate, merged green,
+   and then failed the redeploy on all four boxes, leaving main green and the
+   fix not live. CI now runs that compiler too, so this is belt-and-braces.
 3. **Open the PR** and label it for the weekly blog digest: `blog: feature`
    if customers should read about it, `blog: skip` for bug fixes, internal,
    UI cleanup, or ops work. The label is authoritative; unlabeled PRs fall to

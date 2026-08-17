@@ -82,6 +82,20 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # The repo-root tsconfig EXCLUDES vps/voice-bridge (it is its own package
+      # with its own deps and compiler), so nothing above typechecks the bridge.
+      # Its `tsc` runs inside the Docker build instead, which means a type error
+      # there passes every CI gate, merges, and only surfaces when
+      # redeploy-voice-bridge fails on the boxes: on 2026-08-17 that took the
+      # whole 4-box fleet sweep with it, AFTER the merge, leaving main green and
+      # the fix not live. The bridge is the only vps package with its own tsc,
+      # so this one step closes the gap.
+      - name: Typecheck voice-bridge (the compiler its Docker build runs)
+        working-directory: vps/voice-bridge
+        run: |
+          npm ci --ignore-scripts
+          npx tsc --noEmit
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest

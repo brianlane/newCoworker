@@ -1273,6 +1273,12 @@ function main(): void {
             reach_targets?: Record<string, unknown> | null;
             flow_run?: FlowRunLink | null;
             star_alerts?: boolean;
+            /**
+             * The step's authored voicemailTemplate, snapshotted by
+             * telnyx-voice-originate. Absent when the author configured none,
+             * which is what keeps unapproved copy off a customer's mailbox.
+             */
+            voicemail?: { script?: string } | null;
           };
           if (ctx.outbound === true) callDirection = "outbound";
           intakeStarFrame = ctx.star_alerts === true;
