@@ -126,8 +126,10 @@ export function computeBusinessMargin(
 
   const lines: MarginLine[] = [];
 
-  // ---- Hosting + DID: only boxes the fleet still runs (mirrors
-  // estimateMonthlyPlatformCost); BYOS boxes cost no hosting but carry a DID. ----
+  // ---- Hosting: only boxes the fleet still runs; BYOS boxes cost no
+  // hosting. DID rental is separate and follows the numbers, not the boxes
+  // (same rule as estimateMonthlyPlatformCost in src/lib/admin/mrr.ts,
+  // which the admin dashboard uses; keep the two in step). ----
   const hasLiveBox = input.status !== "wiped" && input.hostingerVpsId !== null;
   if (hasLiveBox && input.vpsProvider !== "byos") {
     if (input.hostingerMonthlyPriceCents !== null) {

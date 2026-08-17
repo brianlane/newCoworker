@@ -9,6 +9,8 @@ import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { getFleetCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
+import { listTenantDids } from "@/lib/db/platform-costs";
+import { didCountByBusiness } from "@/lib/admin/margin-data";
 import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
 import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
@@ -97,7 +99,24 @@ export default async function AdminDashboardPage() {
     }
   );
   const mrr = computeDayCurrentMrr({ subscriptions: mrrSubscriptions, enterpriseDeals });
-  const platformCost = estimateMonthlyPlatformCost({ businesses, monthUsage, aiSpendMicros });
+  // Telnyx bills per NUMBER, so the DID line follows the numbers rented,
+  // not the boxes provisioned. Best effort: an unreadable list degrades to
+  // the old one-per-live-box heuristic instead of zeroing the DID cost.
+  const didCountsByBusinessId = await listTenantDids()
+    .then(didCountByBusiness)
+    .catch((err: unknown) => {
+      console.error(
+        "admin dashboard: tenant DID read failed",
+        err instanceof Error ? err.message : err
+      );
+      return undefined;
+    });
+  const platformCost = estimateMonthlyPlatformCost({
+    businesses,
+    monthUsage,
+    aiSpendMicros,
+    actuals: { didCountsByBusinessId }
+  });
   const netCents = mrr.totalCents - platformCost.totalCents;
 
   // ── Signup sparkline (last 6 months) ──────────────────────────────────────
