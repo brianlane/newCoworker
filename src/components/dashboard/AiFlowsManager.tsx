@@ -3830,6 +3830,29 @@ function StepFields({
           />
           Only fill in details that earlier steps left empty (recommended)
         </label>
+        <Field
+          label="When no email matches, set (optional; one per line, name = value)"
+          value={Object.entries(step.noMatchVars ?? {})
+            .map(([k, v]) => `${k} = ${v}`)
+            .join("\n")}
+          onChange={(v) => {
+            const entries = v
+              .split("\n")
+              .map((line) => {
+                const eq = line.indexOf("=");
+                if (eq < 0) return null;
+                const name = line.slice(0, eq).trim();
+                const value = line.slice(eq + 1).trim();
+                return name && value ? ([name, value] as const) : null;
+              })
+              .filter((e): e is readonly [string, string] => e !== null);
+            patchStep(index, {
+              noMatchVars: entries.length > 0 ? Object.fromEntries(entries) : undefined
+            });
+          }}
+          help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
+          textarea
+        />
         <label className={labelClass}>Fields to extract</label>
         {step.fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
@@ -4971,6 +4994,14 @@ function StepFields({
           value={step.continueWhenText ?? ""}
           onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
           help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page proves this step already worked (e.g. "you just accepted"), so the later steps that file the lead and tell your team still happen.'
+        />
+        <Field
+          label="After the actions, the page must say (optional)"
+          value={step.expectText ?? ""}
+          onChange={(v) => patchStep(index, { expectText: v.trim() ? v : undefined })}
+          help={
+            'Proof the actions actually worked: after every action completes, the page must show this text (e.g. "We\'re calling you at") or the step is treated as failed. Use it on clicks that matter - a button can be clicked and still do nothing while the page is mid-load.'
+          }
         />
         <label className={labelClass}>
           Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)

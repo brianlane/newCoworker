@@ -290,6 +290,12 @@ export type StepAction =
       lookbackMinutes: number;
       fields: ExtractField[];
       fillOnlyEmpty: boolean;
+      /**
+       * Written (into still-empty vars only) when NO message matches, so
+       * downstream gates can see "looked and found nothing" instead of an
+       * unset var that no equals/contains gate can match.
+       */
+      noMatchVars?: Record<string, string>;
     }
   | {
       // Document field extraction. The planner resolves the source ref
@@ -644,6 +650,12 @@ export type StepAction =
        * — see FlowStep.continueWhenText. skipWhenText wins when both match.
        */
       continueWhenText?: string;
+      /**
+       * Postcondition the render service holds the page to AFTER the actions:
+       * visible text must show this marker or the step fails like an action
+       * failure (and the markers above classify it) — see FlowStep.expectText.
+       */
+      expectText?: string;
     }
   | {
       kind: "recall_url";
@@ -972,7 +984,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           bodyContains,
           lookbackMinutes: Math.max(1, Math.round(step.lookbackMinutes ?? 60)),
           fields: step.fields,
-          fillOnlyEmpty: step.fillOnlyEmpty === true
+          fillOnlyEmpty: step.fillOnlyEmpty === true,
+          ...(step.noMatchVars && Object.keys(step.noMatchVars).length > 0
+            ? { noMatchVars: step.noMatchVars }
+            : {})
         }
       };
     }
@@ -1678,6 +1693,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             : {}),
           ...(step.continueWhenText && step.continueWhenText.trim()
             ? { continueWhenText: step.continueWhenText.trim() }
+            : {}),
+          ...(step.expectText && step.expectText.trim()
+            ? { expectText: step.expectText.trim() }
             : {})
         }
       };

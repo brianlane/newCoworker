@@ -68,7 +68,14 @@ import rateLimit from "express-rate-limit";
 import { chromium } from "playwright";
 // ACTION mode lives in its own module so it can be unit-tested against a stub
 // page (tests/aiflow-render-actions.test.ts) without booting Express or Chromium.
-import { MAX_FOREACH_ITEMS, NAV_TIMEOUT_MS, parseActions, performActions } from "./actions.mjs";
+import {
+  condenseError,
+  MAX_FOREACH_ITEMS,
+  NAV_TIMEOUT_MS,
+  parseActions,
+  performActions,
+  waitForExpectedText
+} from "./actions.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 /**
@@ -542,7 +549,8 @@ async function respondWithActions(
   wantScreenshot,
   forEachLink,
   wantDebug,
-  forEachMatch
+  forEachMatch,
+  expectText
 ) {
   if (forEachLink) {
     const fe = await performForEach(page, forEachLink, actions, forEachMatch);
@@ -567,7 +575,19 @@ async function respondWithActions(
   // Page source paired with the before-shot, so the dashboard can link the exact
   // markup the automation was about to act on. Debug-only, like the before-shot.
   const beforeSource = wantDebug ? await capturePageSource(page) : null;
-  const acted = await performActions(page, actions);
+  let acted = await performActions(page, actions);
+  // The actions all completed; now hold the step to its declared postcondition.
+  // A miss is reported exactly like an action failure so the worker's existing
+  // classification (permanent fail, page-marker skip/continue, failure shots)
+  // applies unchanged.
+  if (!acted.error && expectText && !(await waitForExpectedText(page, expectText))) {
+    acted = {
+      completed: acted.completed,
+      error: condenseError(
+        `expect_text "${expectText}": the page never showed it after the actions completed`
+      )
+    };
+  }
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
     // ALWAYS grab a diagnostic screenshot + source of the stuck page on an action
@@ -702,6 +722,25 @@ app.post("/render", async (req, res) => {
   if (forEachMatch && !forEachLink) {
     return res.status(400).json({ error: "invalid_for_each_match" });
   }
+  // Post-action expectation (browse_action.expectText): after every action
+  // completed, the page's VISIBLE text must contain this marker within
+  // EXPECT_TEXT_TIMEOUT_MS or the step reports action_failed with the standard
+  // failure captures. It asserts the page's AFTER state because a dispatched
+  // click is not an applied click on a hydrating SPA (HomeLight claim,
+  // 2026-08-16). Requires actions, and is meaningless per-row, so it cannot
+  // combine with forEachLink (the authoring schema forbids both; this guards
+  // hand-crafted requests).
+  const expectRaw = req.body?.expectText;
+  const expectText =
+    typeof expectRaw === "string" && expectRaw.trim() && expectRaw.length <= 200
+      ? expectRaw.trim()
+      : null;
+  if (expectRaw !== undefined && !expectText) {
+    return res.status(400).json({ error: "invalid_expect_text" });
+  }
+  if (expectText && (forEachLink || !actions)) {
+    return res.status(400).json({ error: "invalid_expect_text" });
+  }
 
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
@@ -722,7 +761,8 @@ app.post("/render", async (req, res) => {
           wantScreenshot,
           forEachLink,
           wantDebug,
-          forEachMatch
+          forEachMatch,
+          expectText
         );
       const html = await page.content();
       const text = await readPageText(page);
@@ -822,7 +862,8 @@ app.post("/render", async (req, res) => {
         wantScreenshot,
         forEachLink,
         wantDebug,
-        forEachMatch
+        forEachMatch,
+        expectText
       );
 
     const html = await page.content();

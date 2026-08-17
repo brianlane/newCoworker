@@ -3584,8 +3584,20 @@ async function emailExtractStep(
   }
   const data = payload.data;
   // No matching email yet (the alert may still be in flight): this is a fallback,
-  // not a hard dependency — backfill nothing and let the run continue.
+  // not a hard dependency — backfill nothing and let the run continue. The step's
+  // noMatchVars ARE written (into still-empty vars only), because "looked and
+  // found nothing" must be visible to downstream gates: an unset var matches no
+  // equals/contains condition, which is how the HomeLight reveal ladder sat
+  // inert on every first-read-too-early run (2026-08-16).
   if (!data?.found || typeof data.bodyText !== "string" || !data.bodyText.trim()) {
+    const noMatch: Record<string, string> = {};
+    for (const [k, v] of Object.entries(action.noMatchVars ?? {})) {
+      if (isEmptyVarValue(scope.vars[k])) noMatch[k] = v;
+    }
+    if (Object.keys(noMatch).length > 0) {
+      Object.assign(scope.vars, noMatch);
+      return { kind: "ok", result: { found: false, vars: noMatch } };
+    }
     return { kind: "ok", result: { found: false } };
   }
 
@@ -3781,7 +3793,11 @@ async function browseActionStep(
         ...(action.forEachLink ? { forEachLink: action.forEachLink } : {}),
         // Forward the name filter even when it's an EMPTY array: a requested
         // filter that resolved to no names must update NOTHING, not every row.
-        ...(Array.isArray(action.forEachMatch) ? { forEachMatch: action.forEachMatch } : {})
+        ...(Array.isArray(action.forEachMatch) ? { forEachMatch: action.forEachMatch } : {}),
+        // Postcondition: the render service holds the page to this marker after
+        // the actions and reports action_failed when it never appears, so the
+        // marker classification below applies to expectation misses unchanged.
+        ...(action.expectText ? { expectText: action.expectText } : {})
       }),
       signal: ctrl.signal
     });

@@ -51,6 +51,42 @@ export const CLICK_TEXT_APPEAR_MS = Number(process.env.AIFLOW_CLICK_TEXT_APPEAR_
 export const CLICK_TEXT_APPEAR_POLL_MS = Number(
   process.env.AIFLOW_CLICK_TEXT_APPEAR_POLL_MS ?? 250
 );
+/**
+ * How long a post-action expectation (`expectText`) waits for the page to show
+ * the expected marker before the step is reported as failed.
+ *
+ * Why this exists: on 2026-08-16 Amy's HomeLight `claim_click` resolved the
+ * real claim button, Playwright delivered the click, `actionsCompleted` said 1,
+ * and HomeLight's backend never registered the claim (Telnyx shows no callback
+ * until a human clicked the same button by hand). A dispatched click is not an
+ * applied click on a hydrating SPA, so a consequential action needs to assert
+ * the page's AFTER state, not just that no exception was thrown.
+ */
+export const EXPECT_TEXT_TIMEOUT_MS = Number(process.env.AIFLOW_EXPECT_TEXT_TIMEOUT_MS ?? 10_000);
+
+/**
+ * Wait for `text` to appear (case-insensitive) in the page's VISIBLE text.
+ * Visible text on purpose, not raw HTML: the expectation asserts what a person
+ * would now see ("We're calling you at ..."), and matching markup would pass on
+ * templates that never rendered. Returns true when the marker appeared, false
+ * on timeout; a blank marker is vacuously true. Never throws.
+ */
+export async function waitForExpectedText(page, text, timeoutMs = EXPECT_TEXT_TIMEOUT_MS) {
+  const needle = String(text ?? "")
+    .trim()
+    .toLowerCase();
+  if (!needle) return true;
+  try {
+    await page.waitForFunction(
+      (n) => (document.body?.innerText ?? "").toLowerCase().includes(n),
+      needle,
+      { timeout: timeoutMs }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 export const ACTION_KINDS = new Set([
   "click_text",
   "click_selector",
