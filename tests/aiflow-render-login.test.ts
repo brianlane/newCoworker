@@ -271,6 +271,14 @@ describe("selector tables", () => {
     );
   });
 
+  it("never offers a bare Continue as a submit candidate", () => {
+    // Bugbot, PR #1419: resolveSubmit prefers an ENABLED candidate, so on a page
+    // whose real submit is still validation-disabled, any live "Continue" (SSO
+    // step, cookie banner, or the very modal HomeLight's text-claim path
+    // dismisses) would take the click instead.
+    expect(SUBMIT_SELECTORS.some((s) => /continue/i.test(s))).toBe(false);
+  });
+
   it("matches an email input by autocomplete as well as type", async () => {
     // Clever's field carries autocomplete="email"; HomeLight's client sign-in
     // is a bare text input with no name, which is why the list is this long.

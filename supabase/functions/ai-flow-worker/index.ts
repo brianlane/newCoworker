@@ -3847,7 +3847,32 @@ async function browseActionStep(
         // 2026-08-17 failure (a `type="button"` submit shipping `disabled`)
         // take a day of reading portal markup by hand to explain.
         const why = detail ? `: ${detail}` : "";
-        return { kind: "fail", error: `browse_action: ${errCode}${which}${why}` };
+        // Persist the page evidence too, not just the sentence. The render
+        // service returns a screenshot and page text on login_failed for the
+        // same reason the action arm below gets one: a login that fails on a
+        // captcha, an MFA prompt or a reworded form is only diagnosable by
+        // LOOKING at the page. Storing the detail string alone would have been
+        // a half-delivered fix.
+        const loginShot = await storeScreenshotBestEffort(
+          supabase,
+          run,
+          index,
+          readScreenshotBase64(parsedBody)
+        );
+        const loginSrc = await storeSourceBestEffort(
+          supabase,
+          run,
+          index,
+          readPageSource(parsedBody)
+        );
+        const loginDiag: Record<string, unknown> = {};
+        if (loginShot) loginDiag.screenshot_path = loginShot;
+        if (loginSrc) loginDiag.source_path = loginSrc;
+        return {
+          kind: "fail",
+          error: `browse_action: ${errCode}${which}${why}`,
+          ...(Object.keys(loginDiag).length > 0 ? { result: loginDiag } : {})
+        };
       }
       if (kind === "action") {
         // On an action failure the render service returns BOTH a "before" shot

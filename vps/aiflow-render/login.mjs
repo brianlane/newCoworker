@@ -83,7 +83,13 @@ export const SUBMIT_SELECTORS = [
   'button:has-text("Log in")',
   'button:has-text("Sign in")',
   'button:has-text("Login")',
-  'button:has-text("Continue")',
+  // Deliberately NOT a bare "Continue". It is the single most common label on
+  // things that are not the submit control: SSO steps, cookie banners, and the
+  // very modal HomeLight's text-claim path dismisses with
+  // click_text_while_present("Continue"). Because resolveSubmit prefers an
+  // ENABLED candidate, a page whose real submit is still validation-disabled
+  // would hand the click to whichever Continue happened to be live.
+  // actions.mjs flags the same string as unsafe for the same reason.
   '[role="button"]:has-text("Log in")',
   '[role="button"]:has-text("Sign in")'
 ];
