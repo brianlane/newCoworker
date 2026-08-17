@@ -6,6 +6,7 @@ import {
   buildPoolBoxBurn,
   buildRenewalCalendar,
   buildTelnyxDailySeries,
+  buildUnattributedSenders,
   buildTelnyxTenantWindowBreakdown,
   resolveTelnyxUsageWindowKey,
   sumMarginLinesByKey,
@@ -32,6 +33,7 @@ function telnyxRow(overrides: Partial<TelnyxCostDailyRow> = {}): TelnyxCostDaily
     cost_micros: 159_000,
     carrier_fee_micros: 30_000,
     billed_seconds: 0,
+    sender: null,
     synced_at: "2026-07-12T11:10:00.000Z",
     ...overrides
   };
@@ -779,5 +781,46 @@ describe("buildTelnyxTenantWindowBreakdown", () => {
       totalMicros: 0,
       hasRows: false
     });
+  });
+});
+
+describe("buildUnattributedSenders", () => {
+  it("groups unattributed spend by sender, biggest first, ignoring attributed rows", () => {
+    const senders = buildUnattributedSenders([
+      telnyxRow({ business_id: "biz-1", sender: null, cost_micros: 9_999_999 }),
+      telnyxRow({ business_id: null, sender: "+16028384497", cost_micros: 4_000, record_count: 1 }),
+      telnyxRow({ business_id: null, sender: "+16028384497", cost_micros: 28_100, record_count: 1 }),
+      telnyxRow({
+        business_id: null,
+        sender: "new_coworker_jut3q1af_agent",
+        cost_micros: 6_500,
+        record_count: 3
+      })
+    ]);
+    expect(senders).toEqual([
+      { sender: "+16028384497", costMicros: 32_100, recordCount: 2 },
+      { sender: "new_coworker_jut3q1af_agent", costMicros: 6_500, recordCount: 3 }
+    ]);
+  });
+
+  it("keeps rows synced before the sender column last, and breaks ties by sender", () => {
+    // Both input orders must land the same way: the unnamed row sorts last
+    // whether the comparator meets it as the left or the right operand.
+    const rows = [
+      telnyxRow({ business_id: null, sender: "+15550002222", cost_micros: 1_000, record_count: 1 }),
+      telnyxRow({ business_id: null, sender: "+15550001111", cost_micros: 1_000, record_count: 1 }),
+      telnyxRow({ business_id: null, sender: null, cost_micros: 1_000, record_count: 1 })
+    ];
+    for (const ordered of [rows, [...rows].reverse()]) {
+      expect(buildUnattributedSenders(ordered).map((s) => s.sender)).toEqual([
+        "+15550001111",
+        "+15550002222",
+        null
+      ]);
+    }
+  });
+
+  it("returns nothing when every row is attributed", () => {
+    expect(buildUnattributedSenders([telnyxRow({ business_id: "biz-1" })])).toEqual([]);
   });
 });

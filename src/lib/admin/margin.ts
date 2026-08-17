@@ -69,6 +69,12 @@ export type BusinessMarginInput = {
   hostingerMonthlyPriceCents: number | null;
   /** This month's synced Telnyx cost (micro-USD, fees included); null → estimate. */
   telnyxMonthCostMicros: number | null;
+  /**
+   * Distinct Telnyx DIDs this tenant rents. Null when the DID list could not
+   * be read, which falls back to the old "one DID per live box" heuristic
+   * rather than zeroing the fleet's whole number-rental line.
+   */
+  didCount: number | null;
   /** This calendar month's metered usage. */
   monthSmsSent: number;
   monthVoiceMinutes: number;
@@ -120,8 +126,10 @@ export function computeBusinessMargin(
 
   const lines: MarginLine[] = [];
 
-  // ---- Hosting + DID: only boxes the fleet still runs (mirrors
-  // estimateMonthlyPlatformCost); BYOS boxes cost no hosting but carry a DID. ----
+  // ---- Hosting: only boxes the fleet still runs; BYOS boxes cost no
+  // hosting. DID rental is separate and follows the numbers, not the boxes
+  // (same rule as estimateMonthlyPlatformCost in src/lib/admin/mrr.ts,
+  // which the admin dashboard uses; keep the two in step). ----
   const hasLiveBox = input.status !== "wiped" && input.hostingerVpsId !== null;
   if (hasLiveBox && input.vpsProvider !== "byos") {
     if (input.hostingerMonthlyPriceCents !== null) {
@@ -140,11 +148,19 @@ export function computeBusinessMargin(
       });
     }
   }
-  if (hasLiveBox) {
+  // Telnyx bills per NUMBER, not per box. Counting one DID per live box
+  // dropped every number a tenant rents without one: Truly Insurance's
+  // Canadian DID (+1 519 800 6401) cost $1.10/mo that no cost line carried,
+  // found reconciling the July 2026 invoice. A wiped tenant still drops its
+  // DID: teardown releases the number, and a settings row that outlives it
+  // must not keep charging a dead tenant. Fall back to the box heuristic
+  // only when the DID list is unreadable.
+  const didCount = input.status === "wiped" ? 0 : (input.didCount ?? (hasLiveBox ? 1 : 0));
+  if (didCount > 0) {
     lines.push({
       key: "did",
-      label: "Phone number rental",
-      cents: ENTERPRISE_UNIT_COSTS.didMonthlyCents,
+      label: didCount === 1 ? "Phone number rental" : `Phone number rentals (${didCount})`,
+      cents: didCount * ENTERPRISE_UNIT_COSTS.didMonthlyCents,
       source: "estimate"
     });
   }

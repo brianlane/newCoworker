@@ -334,6 +334,50 @@ export function buildTelnyxTenantWindowBreakdown(
   return { tenants, totalMicros, hasRows: tenants.length > 0 };
 }
 
+export type UnattributedSender = {
+  /** Raw Telnyx sender id (a number, or something like an RCS agent id); null for rows synced before the column existed. */
+  sender: string | null;
+  costMicros: number;
+  recordCount: number;
+};
+
+/**
+ * Unattributed Telnyx spend grouped by the sender that spent it, biggest
+ * first (ties broken by sender so the order is stable, unnamed last).
+ *
+ * Callers pass rows already narrowed to the period they are reporting on.
+ * Rows with a `business_id` are skipped: those are attributed, and their
+ * sender is the tenant's own DID.
+ *
+ * This exists because a bare "$0.03 matched no tenant DID" is unactionable.
+ * Named, the same number reads as either a platform sender that can never
+ * match a DID (the international SMS gateway long code, an RCS agent id) or
+ * a genuine leak worth chasing.
+ */
+export function buildUnattributedSenders(rows: TelnyxCostDailyRow[]): UnattributedSender[] {
+  const bySender = new Map<string | null, UnattributedSender>();
+  for (const row of rows) {
+    if (row.business_id !== null) continue;
+    const sender = row.sender ?? null;
+    let entry = bySender.get(sender);
+    if (!entry) {
+      entry = { sender, costMicros: 0, recordCount: 0 };
+      bySender.set(sender, entry);
+    }
+    entry.costMicros += row.cost_micros;
+    entry.recordCount += row.record_count;
+  }
+  return [...bySender.values()].sort(
+    (a, b) =>
+      b.costMicros - a.costMicros ||
+      (a.sender === null
+        ? 1
+        : b.sender === null
+          ? -1
+          : a.sender.localeCompare(b.sender))
+  );
+}
+
 export type RenewalEvent = {
   kind: "hostinger_renewal" | "hostinger_lapse" | "term_rollover";
   at: string;

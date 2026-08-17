@@ -21,7 +21,8 @@ vi.mock("@/lib/db/chat-usage", () => ({
 }));
 vi.mock("@/lib/db/platform-costs", () => ({
   listHostingerVpsCosts: vi.fn(),
-  listTelnyxCostDaily: vi.fn()
+  listTelnyxCostDaily: vi.fn(),
+  listTenantDids: vi.fn()
 }));
 
 import {
@@ -31,16 +32,24 @@ import {
   loadFleetMargins,
   monthStartYmdUtc,
   syncedHostingContradictsPin,
-  telnyxMicrosByBusiness
+  telnyxMicrosByBusiness,
+  didCountByBusiness
 } from "@/lib/admin/margin-data";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listAllSubscriptions, type SubscriptionRow } from "@/lib/db/subscriptions";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { getFleetCalendarMonthUsageByBusiness } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
-import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
+import {
+  listHostingerVpsCosts,
+  listTelnyxCostDaily,
+  listTenantDids
+} from "@/lib/db/platform-costs";
 import type { HostingerVpsCostRow, TelnyxCostDailyRow } from "@/lib/db/platform-costs";
-import { HOSTING_MONTHLY_CENTS_BY_SIZE } from "@/lib/plans/enterprise-pricing";
+import {
+  ENTERPRISE_UNIT_COSTS,
+  HOSTING_MONTHLY_CENTS_BY_SIZE
+} from "@/lib/plans/enterprise-pricing";
 
 const NOW = new Date("2026-07-12T18:00:00.000Z");
 
@@ -108,6 +117,7 @@ function telnyxRow(overrides: Partial<TelnyxCostDailyRow> = {}): TelnyxCostDaily
     cost_micros: 159_000,
     carrier_fee_micros: 30_000,
     billed_seconds: 0,
+    sender: null,
     synced_at: "2026-07-12T11:10:00.000Z",
     ...overrides
   };
@@ -129,6 +139,9 @@ beforeEach(() => {
     new Map([["biz-amy", 410_000]])
   );
   vi.mocked(listHostingerVpsCosts).mockResolvedValue([HOSTINGER_ROW]);
+  vi.mocked(listTenantDids).mockResolvedValue([
+    { businessId: "biz-amy", e164: "+16028053377" }
+  ]);
   vi.mocked(listTelnyxCostDaily).mockResolvedValue([
     telnyxRow(),
     telnyxRow({ id: 2, record_type: "sip-trunking", cost_micros: 41_000 }),
@@ -304,10 +317,16 @@ describe("loadFleetMargins", () => {
     vi.mocked(getFleetCurrentAiSpendMicrosByBusiness).mockRejectedValue("ai down");
     vi.mocked(listHostingerVpsCosts).mockRejectedValue(new Error("hostinger down"));
     vi.mocked(listTelnyxCostDaily).mockRejectedValue(new Error("telnyx down"));
+    vi.mocked(listTenantDids).mockRejectedValue(new Error("dids down"));
 
     const data = await loadFleetMargins(NOW);
     expect(data.telnyxActuals).toBe(false);
     const amy = data.byBusiness.get("biz-amy")!;
+    // An unreadable DID list must not zero the number-rental line: it falls
+    // back to the old one-DID-per-live-box heuristic.
+    expect(amy.lines.find((l) => l.key === "did")?.cents).toBe(
+      ENTERPRISE_UNIT_COSTS.didMonthlyCents
+    );
     expect(amy.lines.find((l) => l.key === "hosting")?.source).toBe("estimate");
     expect(amy.lines.find((l) => l.key === "telnyx_usage")?.source).toBe("estimate");
     expect(amy.lines.find((l) => l.key === "gemini_chat")?.cents).toBe(0);
@@ -318,6 +337,7 @@ describe("loadFleetMargins", () => {
     vi.mocked(getFleetCurrentAiSpendMicrosByBusiness).mockRejectedValue(new Error("ai down"));
     vi.mocked(listHostingerVpsCosts).mockRejectedValue("hostinger string failure");
     vi.mocked(listTelnyxCostDaily).mockRejectedValue("telnyx string failure");
+    vi.mocked(listTenantDids).mockRejectedValue("dids string failure");
 
     const data = await loadFleetMargins(NOW);
     expect(data.telnyxActuals).toBe(false);
@@ -337,5 +357,37 @@ describe("loadFleetMargins", () => {
   it("defaults `now` to the current time", async () => {
     const data = await loadFleetMargins();
     expect(data.monthStartYmd).toBe(monthStartYmdUtc());
+  });
+});
+
+describe("didCountByBusiness", () => {
+  it("counts DISTINCT numbers, so the SMS + voice-route join can't double a rental", () => {
+    const counts = didCountByBusiness([
+      { businessId: "biz-amy", e164: "+16028053377" },
+      { businessId: "biz-amy", e164: "+16028053377" }, // same number, voice route
+      { businessId: "biz-kyp", e164: "+14388035806" },
+      { businessId: "biz-kyp", e164: "+15198006401" }
+    ]);
+    expect(counts.get("biz-amy")).toBe(1);
+    expect(counts.get("biz-kyp")).toBe(2);
+  });
+
+  it("returns an empty map for no DIDs", () => {
+    expect(didCountByBusiness([]).size).toBe(0);
+  });
+});
+
+describe("loadFleetMargins: DID rentals follow the numbers, not the boxes", () => {
+  it("charges a box-less tenant for the number it rents", async () => {
+    // PILOT has no Hostinger box; give it a DID and it must still cost.
+    vi.mocked(listTenantDids).mockResolvedValue([
+      { businessId: "biz-pilot", e164: "+15198006401" }
+    ]);
+    const data = await loadFleetMargins(NOW);
+    expect(data.byBusiness.get("biz-pilot")!.lines.find((l) => l.key === "did")?.cents).toBe(
+      ENTERPRISE_UNIT_COSTS.didMonthlyCents
+    );
+    // Amy has a box but rents nothing here, so she carries no DID line.
+    expect(data.byBusiness.get("biz-amy")!.lines.find((l) => l.key === "did")).toBeUndefined();
   });
 });

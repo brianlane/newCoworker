@@ -34,6 +34,7 @@ function input(overrides: Partial<BusinessMarginInput> = {}): BusinessMarginInpu
     enterpriseDealMonthlyCents: null,
     hostingerMonthlyPriceCents: null,
     telnyxMonthCostMicros: null,
+    didCount: 1,
     monthSmsSent: 0,
     monthVoiceMinutes: 0,
     aiSpendMicros: 0,
@@ -147,7 +148,7 @@ describe("computeBusinessMargin — cost lines", () => {
     });
   });
 
-  it("skips hosting for BYOS (still a DID) and both for wiped/box-less businesses", () => {
+  it("skips hosting for BYOS, wiped, and box-less businesses", () => {
     const byos = computeBusinessMargin(input({ vpsProvider: "byos" }), NOW);
     expect(line(byos, "hosting")).toBeUndefined();
     expect(line(byos, "did")?.cents).toBe(ENTERPRISE_UNIT_COSTS.didMonthlyCents);
@@ -155,8 +156,37 @@ describe("computeBusinessMargin — cost lines", () => {
     for (const overrides of [{ status: "wiped" }, { hostingerVpsId: null }]) {
       const gone = computeBusinessMargin(input(overrides), NOW);
       expect(line(gone, "hosting")).toBeUndefined();
-      expect(line(gone, "did")).toBeUndefined();
     }
+  });
+
+  it("bills DIDs by number rented, not by box: a box-less tenant still pays", () => {
+    // Truly Insurance's shape when the July 2026 invoice was reconciled: a
+    // Canadian DID, no Hostinger box. The old box-gated line charged $0.
+    const boxless = computeBusinessMargin(input({ hostingerVpsId: null, didCount: 1 }), NOW);
+    expect(line(boxless, "did")?.cents).toBe(ENTERPRISE_UNIT_COSTS.didMonthlyCents);
+
+    const two = computeBusinessMargin(input({ didCount: 2 }), NOW);
+    expect(line(two, "did")).toMatchObject({
+      cents: 2 * ENTERPRISE_UNIT_COSTS.didMonthlyCents,
+      label: "Phone number rentals (2)"
+    });
+
+    // Renting nothing costs nothing, even with a live box.
+    expect(line(computeBusinessMargin(input({ didCount: 0 }), NOW), "did")).toBeUndefined();
+  });
+
+  it("drops the DID line for a wiped tenant even if a settings row lingers", () => {
+    const wiped = computeBusinessMargin(input({ status: "wiped", didCount: 3 }), NOW);
+    expect(line(wiped, "did")).toBeUndefined();
+  });
+
+  it("falls back to one DID per live box when the DID list is unreadable", () => {
+    const unreadable = computeBusinessMargin(input({ didCount: null }), NOW);
+    expect(unreadable.lines.find((l) => l.key === "did")?.cents).toBe(
+      ENTERPRISE_UNIT_COSTS.didMonthlyCents
+    );
+    const noBox = computeBusinessMargin(input({ didCount: null, hostingerVpsId: null }), NOW);
+    expect(noBox.lines.find((l) => l.key === "did")).toBeUndefined();
   });
 
   it("uses Telnyx invoice actuals when synced, per-unit estimates otherwise", () => {

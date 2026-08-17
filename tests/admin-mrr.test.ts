@@ -280,6 +280,49 @@ describe("estimateMonthlyPlatformCost", () => {
     );
   });
 
+  it("bills DIDs by number rented when the DID list is supplied, boxes or not", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [
+        biz({ id: "biz-boxed" }),
+        // Truly Insurance's shape: a rented Canadian DID, no box.
+        biz({ id: "biz-boxless", hostinger_vps_id: null }),
+        // A box that rents no number costs no DID.
+        biz({ id: "biz-no-number" })
+      ],
+      monthUsage: NO_USAGE,
+      aiSpendMicros: 0,
+      actuals: {
+        didCountsByBusinessId: new Map([
+          ["biz-boxed", 1],
+          ["biz-boxless", 1]
+        ])
+      }
+    });
+    expect(result.didCents).toBe(2 * ENTERPRISE_UNIT_COSTS.didMonthlyCents);
+    // Hosting and boxCount still follow the boxes, not the numbers.
+    expect(result.boxCount).toBe(2);
+  });
+
+  it("counts no DID for a wiped tenant whose settings row still lists a number", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [biz({ id: "biz-wiped", status: "wiped" })],
+      monthUsage: NO_USAGE,
+      aiSpendMicros: 0,
+      actuals: { didCountsByBusinessId: new Map([["biz-wiped", 2]]) }
+    });
+    expect(result.didCents).toBe(0);
+  });
+
+  it("ignores the DID map for a business with no id, rather than guessing", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [biz({ id: undefined })],
+      monthUsage: NO_USAGE,
+      aiSpendMicros: 0,
+      actuals: { didCountsByBusinessId: new Map([["biz-1", 1]]) }
+    });
+    expect(result.didCents).toBe(0);
+  });
+
   it("resolves a missing vps_size pin through the deployed-size fallback (legacy standard → kvm8)", () => {
     const result = estimateMonthlyPlatformCost({
       businesses: [biz({ vps_size: null })],

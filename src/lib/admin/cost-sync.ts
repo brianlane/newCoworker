@@ -105,6 +105,23 @@ export function didSuffix(e164: string): string | null {
   return digits.length >= 10 ? digits.slice(-10) : null;
 }
 
+/** Longest sender label we store; real Telnyx sender ids are far shorter. */
+const SENDER_LABEL_MAX = 64;
+
+/**
+ * Label an unattributed record's sender from its legs, preferred leg first.
+ * Falls back to the other leg when ours is blank (Telnyx omits a leg on some
+ * failed records) and to null when both are, so the column never stores an
+ * empty string that would read as a named sender in the UI.
+ */
+export function senderLabel(legs: readonly string[]): string | null {
+  for (const leg of legs) {
+    const trimmed = leg.trim();
+    if (trimmed.length > 0) return trimmed.slice(0, SENDER_LABEL_MAX);
+  }
+  return null;
+}
+
 /** UTC YYYY-MM-DD for "today minus `days`". */
 export function windowStartDayUtc(now: Date, days: number): string {
   const d = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
@@ -222,6 +239,14 @@ export async function fetchTelnyxDetailRecords(params: {
  * (`cld`). Only when the preferred leg matches no tenant DID does the
  * other leg count (tenant-to-tenant traffic then lands on the paying
  * side, never on map iteration order).
+ *
+ * When NEITHER leg matches, the row is unattributed and carries the raw
+ * preferred leg as `sender` so the Costs page can name what spent the
+ * money. That leg is OUR side of the record, so it identifies a platform
+ * number (the international SMS gateway), a non-numeric sender id (an RCS
+ * agent, which the digits-only matcher can never match), or a genuinely
+ * leaked number. Attributed rows keep `sender` null: `business_id`
+ * already names the owner there.
  */
 export function aggregateTelnyxRecords(params: {
   records: MdrRecord[];
@@ -243,12 +268,20 @@ export function aggregateTelnyxRecords(params: {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < params.windowStartDay) continue;
 
     const direction = str(record.direction) || "unknown";
-    const cli = str(record.cli).replace(/[^+\d]/g, "");
-    const cld = str(record.cld).replace(/[^+\d]/g, "");
+    const rawCli = str(record.cli).trim();
+    const rawCld = str(record.cld).trim();
+    const cli = rawCli.replace(/[^+\d]/g, "");
+    const cld = rawCld.replace(/[^+\d]/g, "");
     const [preferredLeg, fallbackLeg] = direction === "inbound" ? [cld, cli] : [cli, cld];
     const businessId = matchOwner(preferredLeg) ?? matchOwner(fallbackLeg);
+    // Our own leg, unnormalized: a non-numeric sender id (RCS agent) survives
+    // here but is stripped to "" by the digits-only matcher above.
+    const sender =
+      businessId !== null
+        ? null
+        : senderLabel(direction === "inbound" ? [rawCld, rawCli] : [rawCli, rawCld]);
 
-    const key = `${day}|${businessId ?? ""}|${direction}`;
+    const key = `${day}|${businessId ?? ""}|${direction}|${sender ?? ""}`;
     let bucket = buckets.get(key);
     if (!bucket) {
       bucket = {
@@ -259,7 +292,8 @@ export function aggregateTelnyxRecords(params: {
         record_count: 0,
         cost_micros: 0,
         carrier_fee_micros: 0,
-        billed_seconds: 0
+        billed_seconds: 0,
+        sender
       };
       buckets.set(key, bucket);
     }

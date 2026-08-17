@@ -232,6 +232,15 @@ export type PlatformCostActuals = {
    * REPLACES the per-unit usage estimate — the vendor's number wins.
    */
   telnyxMonthCostCents?: number;
+  /**
+   * Distinct Telnyx DIDs rented per business (from `listTenantDids`). Telnyx
+   * bills per NUMBER, so this REPLACES the one-DID-per-live-box heuristic:
+   * a tenant renting a number without a box is real vendor spend the box
+   * count never saw. Absent (an unreadable DID list) keeps the heuristic
+   * rather than zeroing the fleet's whole number-rental line. Must stay in
+   * step with the same rule in computeBusinessMargin.
+   */
+  didCountsByBusinessId?: Map<string, number>;
 };
 
 export function estimateMonthlyPlatformCost(params: {
@@ -245,12 +254,25 @@ export function estimateMonthlyPlatformCost(params: {
   let hostingCents = 0;
   let didCents = 0;
   let boxCount = 0;
+  const didCounts = params.actuals?.didCountsByBusinessId;
   for (const business of params.businesses) {
+    // DIDs follow the NUMBERS rented, not the boxes: a box-less tenant can
+    // still hold a Telnyx number, and Telnyx bills it. Only a wiped tenant
+    // drops its DID (teardown releases the number). Without the DID list,
+    // fall back to the old one-per-live-box heuristic.
+    if (business.status !== "wiped") {
+      const rented =
+        didCounts !== undefined
+          ? (business.id !== undefined ? (didCounts.get(business.id) ?? 0) : 0)
+          : business.hostinger_vps_id
+            ? 1
+            : 0;
+      didCents += rented * ENTERPRISE_UNIT_COSTS.didMonthlyCents;
+    }
     // Only boxes the fleet still runs: wiped tenants' VMs are released or
     // parked in the pool (auto-renew off = sunk cost, not recurring spend).
     if (business.status === "wiped" || !business.hostinger_vps_id) continue;
     boxCount += 1;
-    didCents += ENTERPRISE_UNIT_COSTS.didMonthlyCents;
     if (business.vps_provider === "byos") continue;
     const synced = business.id !== undefined ? syncedHosting?.get(business.id) : undefined;
     hostingCents +=

@@ -128,6 +128,7 @@ describe("telnyxMicrosByBusinessInWindow", () => {
       direction: "outbound",
       record_count: 1,
       cost_micros: micros,
+      sender: null,
       carrier_fee_micros: 0,
       billed_seconds: 0,
       synced_at: "2026-07-12T00:00:00.000Z"
