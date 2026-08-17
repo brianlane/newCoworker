@@ -172,6 +172,14 @@ export async function reserveVoiceBudget(
     stripeSecret: string;
     minGrantSeconds?: number;
     maxGrantSeconds?: number;
+    /**
+     * Which way the leg faces. "outbound" stamps the reservation so the
+     * fleet-wide outbound gate (voice_check_availability's
+     * p_platform_max_outbound) can count only channel-consuming legs.
+     * Omitted = "inbound" (the column default), preserving every existing
+     * caller.
+     */
+    direction?: "inbound" | "outbound";
   }
 ): Promise<VoiceReserveResult> {
   const { businessId, callControlId, stripeSecret } = opts;
@@ -320,6 +328,23 @@ export async function reserveVoiceBudget(
       reason: res?.reason === "concurrent_limit" ? "concurrent_limit" : "quota_exhausted"
     };
   }
+  // Stamp the direction AFTER the reserve so the row exists (the RPC's
+  // 8-arg signature is pinned by historical grant migrations and stays
+  // untouched). Best-effort: a failed stamp leaves the default 'inbound',
+  // which UNDER-counts the fleet gate; the 403 classifier backstops that,
+  // and the platform headroom absorbs the sub-second gap either way.
+  // Stamped on duplicates too: an idempotent re-reserve must not lose it.
+  if (opts.direction === "outbound") {
+    try {
+      const { error: dirErr } = await supabase
+        .from("voice_reservations")
+        .update({ direction: "outbound" })
+        .eq("call_control_id", callControlId);
+      if (dirErr) console.error("voice_reserve: direction stamp failed", dirErr.message);
+    } catch (err) {
+      console.error("voice_reserve: direction stamp threw", err);
+    }
+  }
   return {
     ok: true,
     grantSeconds: typeof res.grant_seconds === "number" ? res.grant_seconds : 0,
@@ -340,7 +365,10 @@ export async function reserveVoiceBudget(
  */
 export type VoiceAvailability =
   | { status: "ok"; remainingSeconds: number; bonusSeconds: number }
-  | { status: "blocked"; reason: "concurrent_limit" | "quota_exhausted" }
+  | {
+      status: "blocked";
+      reason: "concurrent_limit" | "quota_exhausted" | "platform_capacity";
+    }
   | {
       status: "indeterminate";
       reason: "no_business" | "no_period_bounds" | "period_stale" | "check_error";
@@ -360,7 +388,16 @@ export type VoiceAvailability =
  */
 export async function checkVoiceBudgetAvailable(
   supabase: ReserveSupabase,
-  opts: { businessId: string; minGrantSeconds?: number }
+  opts: {
+    businessId: string;
+    minGrantSeconds?: number;
+    /**
+     * Fleet-wide outbound concurrency ceiling (the Telnyx account pool minus
+     * headroom for untracked transfer/reach legs). Omitted or non-positive =
+     * gate off; the RPC then behaves exactly as before.
+     */
+    platformMaxOutbound?: number;
+  }
 ): Promise<VoiceAvailability> {
   const { businessId } = opts;
   const minGrantSeconds = opts.minGrantSeconds ?? 60;
@@ -417,7 +454,11 @@ export async function checkVoiceBudgetAvailable(
     p_max_concurrent: concurrent,
     p_stripe_period_start: periodStart,
     p_tier_cap_seconds: cap,
-    p_min_grant_seconds: minGrantSeconds
+    p_min_grant_seconds: minGrantSeconds,
+    p_platform_max_outbound:
+      typeof opts.platformMaxOutbound === "number" && opts.platformMaxOutbound > 0
+        ? Math.floor(opts.platformMaxOutbound)
+        : null
   });
   if (availErr) {
     console.error("voice_check: rpc", availErr);
@@ -439,6 +480,11 @@ export async function checkVoiceBudgetAvailable(
   }
   return {
     status: "blocked",
-    reason: avail?.reason === "concurrent_limit" ? "concurrent_limit" : "quota_exhausted"
+    reason:
+      avail?.reason === "concurrent_limit"
+        ? "concurrent_limit"
+        : avail?.reason === "platform_capacity"
+          ? "platform_capacity"
+          : "quota_exhausted"
   };
 }
