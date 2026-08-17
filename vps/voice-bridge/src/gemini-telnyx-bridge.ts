@@ -220,6 +220,14 @@ export type VoicemailCapability = {
     ok: boolean;
     /** The message to read aloud, present only when this side won the claim. */
     script?: string;
+    /**
+     * True when the OTHER path (the edge's own drop) holds the claim and is
+     * speaking right now. Distinct from "no message configured" even though
+     * both hand back no script, because the two need opposite endings: with a
+     * message already playing into the recording, hanging up would cut it off
+     * mid-sentence, so this case waits and lets the edge end the call.
+     */
+    alreadyBeingLeft?: boolean;
     detail?: string;
   }>;
 };
@@ -2050,16 +2058,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             result = { ok: false, detail: "voicemail record failed" };
           }
           const script = (result.script ?? "").trim();
+          // Three endings, not two. A lost claim means a message is ALREADY
+          // playing into this recording from the other path, so telling the
+          // model to hang up would cut it off mid-sentence; that case waits
+          // and lets the side holding the claim end the call.
+          const detail = script
+            ? "read this message aloud word for word, then end the call"
+            : result.alreadyBeingLeft
+              ? "a message is already being left on this recording: say nothing, and do NOT end the call"
+              : "leave no message: say nothing and end the call now";
           sendToolResponse(call.id, name, {
             ok: result.ok,
             ...(script ? { script } : {}),
-            detail: script
-              ? "read this message aloud word for word, then end the call"
-              : "leave no message: say nothing and end the call now"
+            ...(result.alreadyBeingLeft ? { alreadyBeingLeft: true } : {}),
+            detail
           });
           emitDiag("voice_bridge_voicemail_reached", {
             ok: result.ok,
             has_script: Boolean(script),
+            already_being_left: result.alreadyBeingLeft === true,
             detail: result.detail ?? null
           });
         })();

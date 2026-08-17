@@ -595,6 +595,15 @@ describe("intakeSystemInstruction: reporting a recording", () => {
     expect(withTool).toContain("If it returns no script, say nothing at all");
   });
 
+  // Three endings, not two. When the OTHER path already holds the claim a
+  // message is playing into the recording right now, so hanging up would cut
+  // it off part way through (Bugbot, PR #1428).
+  it("waits instead of hanging up when a message is already being left", () => {
+    expect(withTool).toContain("a message is already being left");
+    expect(withTool).toContain("do NOT end the call");
+    expect(withTool).toContain("cut that message off part way through");
+  });
+
   it("ships the rule only when the tool exists", () => {
     const withoutTool = intakeSystemInstruction(
       "Amy Laidlaw",

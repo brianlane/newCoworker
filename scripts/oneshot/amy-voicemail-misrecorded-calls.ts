@@ -16,7 +16,7 @@
  *                  +1 602-571-1370   then ended without a beep, which the
  *                                    handler misread as Apple call screening
  *                                    and used to cancel the correct verdict
- *                                    (fixed alongside this, see PR #1427)
+ *                                    (fixed alongside this, see PR #1428)
  *   3. 2026-08-17  Jim Inderberg     premium AMD returned `human_residence`
  *                  +1 602-725-4935   (a personal greeting is one human voice,
  *                                    which is what that class sounds like)
@@ -43,9 +43,10 @@
  *   the very leads this is trying to rescue. The owner alert reaches a human
  *   faster and cannot misfire.
  *
- * Idempotent: the stamp is a no-op once set, and the alert carries a dedupe
- * key so a re-run cannot text the owner twice. Dry-run by default, and the
- * dry run prints the exact SMS body.
+ * Idempotent in both halves: the stamp is a compare-and-swap that no-ops once
+ * set, and the owner text is skipped when the ledger already records a run of
+ * this script that sent it, so a second --apply cannot text Amy twice.
+ * Dry-run by default, and the dry run prints the exact SMS body.
  *
  * Usage:
  *   set -a && source .env && set +a
@@ -60,7 +61,7 @@
  * or a call row that no longer looks like the incident.
  */
 import { pathToFileURL } from "node:url";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { recordOneshotApplied } from "./_ledger";
 
 const SCRIPT = "amy-voicemail-misrecorded-calls.ts";
@@ -117,6 +118,31 @@ export function ownerAlertBody(
     ...lines,
     "Worth a call back from someone. The call pages now show these as voicemail, and the detection gap is fixed going forward."
   ].join("\n");
+}
+
+/**
+ * Has an earlier run of this script already texted the owner?
+ *
+ * The call stamps are naturally idempotent (compare-and-swap against NULL);
+ * an SMS is not, and a duplicate "3 leads reached voicemail" alert days later
+ * reads as three MORE leads. The ledger is the only durable record of the
+ * send, so it is the guard. A read failure returns true (skip the text): a
+ * missed alert is recoverable by re-running with the read fixed, a duplicate
+ * one is not recallable.
+ */
+async function ownerAlreadyTexted(db: SupabaseClient): Promise<boolean> {
+  const { data, error } = await db
+    .from("applied_oneshots")
+    .select("details")
+    .eq("business_id", BUSINESS_ID)
+    .eq("script", SCRIPT);
+  if (error) {
+    console.error(`Ledger read failed (${error.message}); not re-sending the owner text.`);
+    return true;
+  }
+  return (data ?? []).some(
+    (r) => (r as { details?: { texted?: unknown } | null }).details?.texted === true
+  );
 }
 
 type Args = { apply: boolean; sms: boolean };
@@ -210,7 +236,9 @@ async function main(): Promise<void> {
   console.log(`Stamped ${toStamp.length} call record(s) as voicemail.`);
 
   let texted = false;
-  if (args.sms) {
+  if (args.sms && (await ownerAlreadyTexted(db))) {
+    console.log("Owner text already sent by an earlier run (ledger); not re-sending.");
+  } else if (args.sms) {
     const apiKey = process.env.TELNYX_API_KEY ?? "";
     if (!apiKey) {
       console.error("TELNYX_API_KEY missing; skipped the owner text (records were still stamped).");
