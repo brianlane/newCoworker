@@ -44,11 +44,17 @@ import { recordOneshotApplied } from "./_ledger";
 export const BOOKING_PAGE_TAG = "Booking Page";
 
 /**
- * How long after a booking the contact rollup may land and still count as
- * the same event. The two writes are consecutive statements in
- * submitPublicBooking, so the real gap is seconds; this is generous enough
- * to survive a slow calendar round trip without ever spanning a separate
- * visit.
+ * How far apart the contact rollup and its booking may sit and still count
+ * as the same event. The two writes are consecutive statements in
+ * submitPublicBooking, so the real gap is seconds.
+ *
+ * The window is SYMMETRIC, which the first dry run forced. The obvious
+ * reading is that the contact write always follows the booking write, and
+ * that is what the ledger showed for +12187702372 (3.3s after). It is not
+ * universal: +12092520704's contact rollup landed 41 SECONDS BEFORE its
+ * booking row, because the ledger row is not stamped at the moment the
+ * visitor submits. A one-directional window silently rejected a contact
+ * whose booking-page row was sitting right there.
  */
 export const PROOF_WINDOW_MS = 2 * 60 * 1000;
 
@@ -65,6 +71,8 @@ export type CandidateContact = {
   display_name: string | null;
   last_channel: string | null;
   last_interaction_at: string | null;
+  created_at: string | null;
+  total_interaction_count: number | null;
 };
 
 export type BookingRow = {
@@ -74,7 +82,8 @@ export type BookingRow = {
 };
 
 export type Decision =
-  | { retag: true; bookingAt: string }
+  | { retag: true; proof: "ledger"; bookingAt: string }
+  | { retag: true; proof: "untouched-since-creation" }
   | { retag: false; reason: string };
 
 /**
@@ -101,19 +110,47 @@ export function decideRetag(
     if (booking.booking_source !== "booking_page") continue;
     const bookedAt = Date.parse(booking.created_at);
     if (Number.isNaN(bookedAt)) continue;
-    // The contact write FOLLOWS the booking write, never precedes it.
-    const gap = lastAt - bookedAt;
-    if (gap < 0 || gap > PROOF_WINDOW_MS) continue;
+    const gap = Math.abs(lastAt - bookedAt);
+    if (gap > PROOF_WINDOW_MS) continue;
     if (!best || gap < best.gap) best = { at: booking.created_at, gap };
   }
+  if (best) return { retag: true, proof: "ledger", bookingAt: best.at };
 
-  if (!best) {
-    return {
-      retag: false,
-      reason: "last interaction does not line up with a booking-page booking (later touch on another channel?)"
-    };
+  // Second, INDEPENDENT proof, for the rows the ledger cannot speak to.
+  // Not every booking-page contact has a matching ledger row: two of the
+  // six live candidates have none at all (the oldest predate
+  // booking_source being stamped). Their creation still proves it.
+  //
+  // ensureCapturedContact writes the "Booking Page" tag ONLY on the call
+  // that CREATED the row, so the tag means the booking page created this
+  // contact. If the row has exactly one interaction AND has not been
+  // touched since creation (created_at == last_interaction_at), that one
+  // interaction IS the creating booking, so it is also the last touch.
+  //
+  // Residual risk, accepted and small: an owner can type the same tag by
+  // hand. To be wrongly retagged, a contact would have to be hand-tagged
+  // "Booking Page", be on last_channel webchat, and have exactly one
+  // interaction that is still its creating one. The cost if that happens
+  // is one badge reading "booking page", and it is reversible.
+  if (
+    contact.total_interaction_count === 1 &&
+    contact.created_at &&
+    Date.parse(contact.created_at) === lastAt
+  ) {
+    return { retag: true, proof: "untouched-since-creation" };
   }
-  return { retag: true, bookingAt: best.at };
+
+  return {
+    retag: false,
+    reason: "no booking-page booking near the last interaction, and the row has been touched since creation (later touch on another channel?)"
+  };
+}
+
+/** Which proof licensed a retag, printed on every line so a run is auditable. */
+export function describeProof(decision: Extract<Decision, { retag: true }>): string {
+  return decision.proof === "ledger"
+    ? `booked ${decision.bookingAt}`
+    : "only interaction, untouched since creation";
 }
 
 type Args = { apply: boolean };
@@ -143,7 +180,9 @@ async function main(): Promise<void> {
 
   const { data: contactRows, error: contactErr } = await db
     .from("contacts")
-    .select("business_id, customer_e164, display_name, last_channel, last_interaction_at")
+    .select(
+      "business_id, customer_e164, display_name, last_channel, last_interaction_at, created_at, total_interaction_count"
+    )
     .eq("last_channel", "webchat")
     .contains("tags", [BOOKING_PAGE_TAG])
     .limit(SCAN_LIMIT);
@@ -201,7 +240,7 @@ async function main(): Promise<void> {
       continue;
     }
     if (!args.apply) {
-      console.log(`WOULD ${label}: webchat -> booking_page (booked ${decision.bookingAt})`);
+      console.log(`WOULD ${label}: webchat -> booking_page (${describeProof(decision)})`);
       retagged.push(contact.customer_e164);
       continue;
     }
@@ -224,7 +263,7 @@ async function main(): Promise<void> {
       skipped.push(contact.customer_e164);
       continue;
     }
-    console.log(`OK    ${label}: webchat -> booking_page (booked ${decision.bookingAt})`);
+    console.log(`OK    ${label}: webchat -> booking_page (${describeProof(decision)})`);
     retagged.push(contact.customer_e164);
   }
 
