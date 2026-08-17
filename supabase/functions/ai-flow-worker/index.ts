@@ -3842,7 +3842,12 @@ async function browseActionStep(
       // selector that no longer matches. Retrying cannot fix any of these.
       if (kind === "login") {
         const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
-        return { kind: "fail", error: `browse_action: ${errCode}${which}` };
+        // Carry the render service's `detail` into the run's error. Without it
+        // a login failure reads as a bare code, which is what made the Clever
+        // 2026-08-17 failure (a `type="button"` submit shipping `disabled`)
+        // take a day of reading portal markup by hand to explain.
+        const why = detail ? `: ${detail}` : "";
+        return { kind: "fail", error: `browse_action: ${errCode}${which}${why}` };
       }
       if (kind === "action") {
         // On an action failure the render service returns BOTH a "before" shot
@@ -4366,7 +4371,11 @@ async function fetchViaRender(
       // config, integration not found, wrong selectors) are permanent setup
       // failures — fail the run rather than retrying transiently.
       if (renderErrorKind(errCode) === "login") {
-        throw new BrowseLoginError(errCode);
+        // Same reasoning as the browse_action login arm: keep the render
+        // service's `detail` (which submit selector it found, whether the
+        // control was enabled, the click error) or the run records only a bare
+        // code and the next person debugs it by reading portal markup.
+        throw new BrowseLoginError(detail ? `${errCode}: ${detail}` : errCode);
       }
       // render_failed / unknown → transient; surface the root cause. Carry any
       // failure screenshot so a debug-enabled caller can store it before the run

@@ -76,6 +76,9 @@ import {
   performActions,
   waitForExpectedText
 } from "./actions.mjs";
+// Same reasoning for the login form: see the Clever 2026-08-17 incident in
+// login.mjs for why the submit control needs an enabled check and a blur.
+import { looksLikeLogin, performLogin } from "./login.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 /**
@@ -260,64 +263,9 @@ async function fetchCredentials(businessId, label) {
   return { username: body.data?.username ?? "", password: body.data?.password ?? "" };
 }
 
-/** First selector in `candidates` that matches an element on the page, else null. */
-async function firstSelector(page, candidates) {
-  for (const sel of candidates) {
-    if (!sel) continue;
-    if (await page.locator(sel).count().catch(() => 0)) return sel;
-  }
-  return null;
-}
-
-const USERNAME_SELECTORS = [
-  'input[type="email"]',
-  'input[autocomplete="username"]',
-  'input[name*="email" i]',
-  'input[name*="login" i]',
-  'input[name*="user" i]'
-];
-
-/**
- * True only when the page looks like an actual login FORM: a password field AND a
- * username/email field. Requiring both avoids treating an authenticated page that
- * merely embeds a stray password input (e.g. a "change password" widget) as a
- * logout, which would otherwise trigger a pointless re-login loop.
- */
-async function looksLikeLogin(page, login) {
-  const hasPass =
-    (await page
-      .locator(login?.passwordSelector ?? 'input[type="password"]')
-      .count()
-      .catch(() => 0)) > 0;
-  if (!hasPass) return false;
-  const userSel = login?.usernameSelector
-    ? [login.usernameSelector]
-    : USERNAME_SELECTORS;
-  return (await firstSelector(page, userSel)) !== null;
-}
-
-async function performLogin(page, creds, login) {
-  const userSel = await firstSelector(page, [
-    login?.usernameSelector,
-    ...USERNAME_SELECTORS,
-    'input[type="text"]'
-  ]);
-  const passSel = await firstSelector(page, [login?.passwordSelector, 'input[type="password"]']);
-  if (!userSel || !passSel) throw new Error("login_form_not_found");
-  await page.fill(userSel, creds.username);
-  await page.fill(passSel, creds.password);
-  const submitSel = await firstSelector(page, [
-    login?.submitSelector,
-    'button[type="submit"]',
-    'input[type="submit"]',
-    'button:has-text("Log in")',
-    'button:has-text("Sign in")',
-    'button:has-text("Login")'
-  ]);
-  if (submitSel) await page.locator(submitSel).first().click().catch(() => {});
-  else await page.locator(passSel).press("Enter");
-  await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
-}
+// looksLikeLogin / performLogin live in login.mjs so they can be unit-tested
+// against a stub page (see tests/aiflow-render-login.test.ts), the same split
+// ACTION mode already uses.
 
 app.use((req, res, next) => {
   if (!RENDER_TOKEN) return next();
@@ -822,9 +770,11 @@ app.post("/render", async (req, res) => {
       // selectors). Report them as `auth_config_error` so the worker fails the
       // run immediately instead of retrying as transient IO.
       let creds;
+      let loginDiagnostics = null;
       try {
         creds = await fetchCredentials(businessId, label);
-        await performLogin(page, creds, auth?.login);
+        loginDiagnostics = await performLogin(page, creds, auth?.login);
+        await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
       } catch (e) {
         poisoned = true;
         console.error(`[render] auth_config_error for ${key}: ${String(e).slice(0, 200)}`);
@@ -841,8 +791,28 @@ app.post("/render", async (req, res) => {
       // hand the extractor a login page.
       if (await looksLikeLogin(page, auth?.login)) {
         poisoned = true;
-        console.error(`[render] login_failed for ${key}`);
-        return res.status(200).json({ error: "login_failed" });
+        // Say WHY. A bare `login_failed` sent someone reading portal markup by
+        // hand for a day (Clever, 2026-08-17) to discover that the submit
+        // control was `type="button"` and shipped `disabled`. Action failures
+        // already persist a screenshot and page source; login failures used to
+        // persist nothing, and that asymmetry was the actual bug.
+        const detail = loginDiagnostics
+          ? `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
+            `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
+            (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "")
+          : "no login diagnostics";
+        console.error(`[render] login_failed for ${key}: ${detail}`);
+        const screenshotBase64 = await captureScreenshot(page);
+        const text = await readPageText(page).catch(() => "");
+        return res.status(200).json({
+          error: "login_failed",
+          detail,
+          finalUrl: page.url(),
+          // Bounded: enough to spot "invalid password" / MFA / a bot challenge
+          // without shipping a whole SPA back through the tunnel.
+          pageTextExcerpt: String(text).slice(0, 600),
+          ...(screenshotBase64 ? { screenshotBase64 } : {})
+        });
       }
     }
 
