@@ -1392,21 +1392,6 @@ function main(): void {
         ? {
             graceMs: readPositiveMs("VOICE_END_CALL_GRACE_MS", 3000),
             execute: async ({ reason }) => {
-              // The model reads the voicemail script and THEN ends the call, so
-              // this is the first moment a message can be reported as actually
-              // delivered. Written before the hangup so the call-end webhook,
-              // which derives its outcome reason from this flag, sees it.
-              // Best-effort: losing it only understates the record, which is
-              // the same direction the edge's own path errs in.
-              if (voicemailScriptHandedOut) {
-                const { error: spokenErr } = await supabase.rpc("voice_session_context_merge", {
-                  p_call_control_id: callControlId,
-                  p_patch: { voicemail_spoken: true }
-                });
-                if (spokenErr) {
-                  console.error("voice-bridge: voicemail_spoken stamp failed", spokenErr);
-                }
-              }
               const result = await telnyxHangupCall(hangupApiKey, callControlId);
               if (!result.ok) {
                 console.error("voice-bridge: end_call hangup failed", result.status, result.body);
@@ -1443,10 +1428,6 @@ function main(): void {
        *      means the edge is already speaking it, so the model stays quiet
        *      rather than talking over a message that is already going out.
        */
-      // Set once the model has been handed the message to read, so end_call
-      // can record that a voicemail actually went out (see the stamp note in
-      // execute below).
-      let voicemailScriptHandedOut = false;
       const voicemail: VoicemailCapability | undefined =
         callDirection === "outbound"
           ? {
@@ -1487,12 +1468,26 @@ function main(): void {
                 // means nobody else may speak; the message still has to be read
                 // by the model, and the hangup path derives its "voicemail_left"
                 // reason from this flag. Stamping now would report a message
-                // that a dropped session never delivered, so it is written at
-                // end_call instead, which is the model's own signal that it
-                // finished reading. The edge path writes it after its speak
-                // succeeds for exactly the same reason.
-                voicemailScriptHandedOut = true;
+                // that a dropped session never delivered. It is written by
+                // confirmSpoken instead. The edge path writes it after its own
+                // speak succeeds for exactly the same reason.
                 return { ok: true, script, detail: "claimed" };
+              },
+              /**
+               * The message was read. Called from the end_call handler the
+               * instant the model asks to hang up, which is the only moment
+               * both AFTER the script was spoken and BEFORE the line falls
+               * silent: a mailbox hangs up on silence, so a stamp scheduled
+               * behind the playout grace loses to the mailbox's own hangup and
+               * a delivered message reads as never left. Best-effort, and it
+               * errs toward understating like the edge path does.
+               */
+              confirmSpoken: async () => {
+                const { error } = await supabase.rpc("voice_session_context_merge", {
+                  p_call_control_id: callControlId,
+                  p_patch: { voicemail_spoken: true }
+                });
+                if (error) console.error("voice-bridge: voicemail_spoken stamp failed", error);
               }
             }
           : undefined;

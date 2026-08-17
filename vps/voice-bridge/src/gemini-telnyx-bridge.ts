@@ -230,6 +230,15 @@ export type VoicemailCapability = {
     alreadyBeingLeft?: boolean;
     detail?: string;
   }>;
+  /**
+   * Record that the message was actually delivered. Called the instant the
+   * model asks to end the call after being handed a script, which is the only
+   * moment that is both AFTER it read the message and BEFORE the line goes
+   * quiet: a mailbox hangs up on silence, so anything scheduled behind the
+   * end_call playout grace loses the race to the mailbox's own hangup and the
+   * message reads as never left.
+   */
+  confirmSpoken?: () => Promise<void>;
 };
 
 /**
@@ -704,6 +713,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
   let endCallRequested = false;
+  // Set once `voicemail_reached` handed the model a message to read, so the
+  // end_call handler knows to confirm the delivery (see confirmSpoken).
+  let voicemailScriptGiven = false;
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
@@ -2067,6 +2079,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             : result.alreadyBeingLeft
               ? "a message is already being left on this recording: say nothing, and do NOT end the call"
               : "leave no message: say nothing and end the call now";
+          if (script) voicemailScriptGiven = true;
           sendToolResponse(call.id, name, {
             ok: result.ok,
             ...(script ? { script } : {}),
@@ -2089,6 +2102,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // Acknowledge immediately so the model's turn completes cleanly, then
         // hang up after a short grace so the spoken goodbye finishes playing.
         sendToolResponse(call.id, name, { ok: true, detail: "ending call" });
+        // Confirm a delivered voicemail NOW, not behind the playout grace
+        // below: the script has been read, so the line is about to go quiet,
+        // and a mailbox hangs up on silence. Its own hangup would otherwise
+        // reach the call-end webhook first and record a message that really
+        // did go out as never left.
+        if (voicemailScriptGiven && opts.voicemail?.confirmSpoken) {
+          voicemailScriptGiven = false;
+          void opts.voicemail.confirmSpoken().catch((err) => {
+            console.error("gemini-bridge: voicemail confirmSpoken threw", err);
+          });
+        }
         if (!endCallRequested) {
           endCallRequested = true;
           const graceMs = opts.hangup.graceMs ?? 3000;
