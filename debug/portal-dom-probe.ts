@@ -393,6 +393,7 @@ async function main(): Promise<void> {
     detail?: string;
     actionsCompleted?: number;
     screenshotBase64?: string;
+    pageTextExcerpt?: string;
   };
   try {
     body = JSON.parse(ssh.stdout);
@@ -401,7 +402,20 @@ async function main(): Promise<void> {
   }
   // The render service reports application outcomes in a 200 body so a tunnel
   // cannot strip a structured error off a gateway status. Read `error` first.
-  if (body.error) fail(`render error "${body.error}"${body.detail ? `: ${body.detail}` : ""}`);
+  if (body.error) {
+    // A login_failed now carries the page itself (PR #1419). Print it: the
+    // whole point of those diagnostics is that a login failure is only
+    // explicable by looking at what the page said back.
+    if (body.finalUrl) console.log(`finalUrl : ${body.finalUrl}`);
+    if (body.pageTextExcerpt) console.log(`\npage says:\n  ${body.pageTextExcerpt.replace(/\s+/g, " ").trim()}`);
+    const shotOut = flag("shot");
+    if (shotOut && body.screenshotBase64) {
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(shotOut, Buffer.from(body.screenshotBase64, "base64"));
+      console.log(`shot     : ${shotOut}`);
+    }
+    fail(`render error "${body.error}"${body.detail ? `: ${body.detail}` : ""}`);
+  }
 
   const html = body.html ?? "";
   const text = body.text ?? "";
