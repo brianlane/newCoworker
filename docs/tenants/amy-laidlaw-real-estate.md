@@ -82,6 +82,87 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **HomeLight cannot be logged into with the stored credential, and a failed
+  read looks like a successful one.** HomeLight's agent sign-in
+  (`homelight.com/users/sign_in` redirects to `sales.homelight.com/users/login`)
+  has an email field and a submit and **no password field**: it is passwordless.
+  The render service only attempts a login when `looksLikeLogin` finds BOTH a
+  password and a username field (`vps/aiflow-render/login.mjs`), so for
+  HomeLight it never attempts one at all. Every HomeLight browse step therefore
+  works *only* because the `hmlt.co` referral link authenticates itself.
+  When that link has expired or been consumed, the step lands on
+  `/client/sign-in` or on the logged-out `/referrals` marketing funnel and
+  **returns that page as a successful read**, with no `login_failed` and no
+  `auth_config_error`. Observed Aug 17 2026 on two referral links (`c9887591`,
+  `d2b56290`): "Go back to my dashboard" was gone and the probe read a signup
+  page. Two consequences: (1) a HomeLight browse step needs a
+  `skipWhenText`/`continueWhenText` guard on a marker only the real referral
+  page shows, or a stale link silently feeds a marketing page into extraction;
+  (2) anything that needs the AGENT DASHBOARD rather than a referral link (a
+  per-client status update, the search overlay path) is not reachable through
+  the credential at all, which is what blocks the HomeLight update flow.
+- **ReferralExchange's timeline status was always "no interaction yet".**
+  `re_update` posts to the referral timeline with a fixed status
+  ("No interaction yet" -> "I am still trying to contact <First>"), so the same
+  run could place an AI call, have it answered or warm-transferred to the team
+  minutes earlier, and still tell RE that nobody had been reached. RE sets
+  referral quality and volume from these updates. Fixed Aug 17 2026 by
+  `amy-referralexchange-update-honesty.ts`, which wraps `re_update` in a
+  `re_update_gate` branch: `call_outcome` answered or transferred posts
+  "We are in contact" -> "<First> is open to working with me" instead, and the
+  `else` path keeps `re_update` unchanged **under its own id** (a parked run
+  stores its cursor as a step id and `resolveResumeIndex` stops the run when the
+  id is gone). The trunk does not grow, so the 30-step cap is untouched.
+  The modal's real option tree, read live Aug 17 2026:
+  `No interaction yet` (-> "I am still trying to contact <First>"),
+  `We are in contact` (-> "I have an appointment with <First>" /
+  "<First> is open to working with me" / "<First> does not want to work with
+  me"), `Listing / showing properties`, `Transaction in progress`,
+  `No longer working this referral`. A sub-option is REQUIRED: with only the
+  parent selected the submit button keeps its `disabled` attribute. Sub-option
+  labels embed the lead's first name, so actions match a stable fragment
+  ("is open to working with me"), never the whole label. The gate is positive
+  (`equals answered` / `equals transferred`) and never `notEquals no_answer`,
+  because a call skipped by the calling window resolves to `not_placed`.
+- **RE's update modal has a built-in "Schedule text reminder" (step 3)**, with
+  `button.reminder-button[value="tomorrowMorning"]`, `[value="tomorrowAfternoon"]`
+  and `#reminder-selector[value="pickADate"]`. That is the mechanism a RECURRING
+  RE update would hang off, since a `schedule` trigger produces no URL and
+  `browse_action.urlVar` takes no literal. Not built yet: no RE reminder text
+  has ever arrived, so there is no trigger wording to anchor on.
+- **Clever sends two different messages from ONE number, and both flows have
+  to say which one they want.** +1 314-207-7635 carries the daily "summary of
+  the new customers you received today" AND the weekly "N Active Deals awaiting
+  update". "Clever Update Leads" was seeded listening to `3142707635`, a
+  transposed digit, so the sweep built for the weekly reminder never ran once.
+  The reminder therefore fell to "Clever Update Leads (Chris)", which filters
+  the card list to the leads NAMED in the message; the weekly text names nobody,
+  so `lead_names` extracted to `""`, the loop matched zero rows, and the run
+  finished `done`. **Zero of 29 active deals updated, reported green** (Aug 12
+  2026; same on Aug 5 with 7 deals). Clever decides how many leads Amy gets from
+  exactly this compliance signal. Fixed Aug 17 2026 by
+  `amy-clever-weekly-update-sweep.ts`, which repoints the sender AND adds a
+  `contains` needle to BOTH flows. Fixing only the sender would have been worse
+  than the bug: both flows would then match both messages, and the sweep would
+  blanket-update her whole active book daily.
+- **A `forEachLink` sweep is capped by Cloudflare, not by the cap.** The whole
+  loop runs inside ONE HTTP response crossing a tunnel with no `originRequest`
+  block, so it inherits Cloudflare's default ~100s 524. At Amy's measured pace
+  (~5s fixed plus ~13s per lead) that is about 6 leads. `MAX_FOREACH_ITEMS` sat
+  at 25, i.e. ~330s, which was never deliverable; it moved to 6 on Aug 17 2026.
+  A 524 is worse than a truncation, because the worker treats it as transient
+  and RETRIES, re-submitting every card the timed-out pass already did. The
+  weekly flow now reads the backlog Clever states, compares it against one
+  pass, and texts Amy the remainder, so a short sweep can never again look like
+  a complete one. Covering the whole backlog needs the loop moved worker-side
+  (one request per item); until then the alert is the honest answer.
+- **The "We Spoke" status the sweep clicks still overclaims.** It is the only
+  status label ever verified against the live Provide Update modal, and it
+  submits reliably, so it stays until the modal's real option list can be read.
+  That needs a Clever session: password login fails (submit is found, enabled,
+  blurred and clicked, and the session still does not establish) and the magic
+  links in Clever's own texts expire in under a day. The per-card NOTE was made
+  honest in the meantime; the status was not.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
@@ -338,7 +419,11 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 accept step, see Sharp edges),
 `clever-spoke-check-unclaimed-patch.ts` +
 `patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
-second trigger, see Sharp edges).
+second trigger, see Sharp edges),
+`amy-clever-weekly-update-sweep.ts` +
+`amy-clever-weekly-update-sweep-definition.ts` (Aug 17 2026: repoints
+the weekly sweep at the real sender, separates the two flows by needle, and
+adds the capacity alert; see Sharp edges).
 
 Unowned-lead recovery (Aug 15 2026): `amy-unowned-lead-team-alert.ts` texts
 the lead-type-tagged team about ONE unowned lead by hand, using the same
@@ -375,6 +460,10 @@ the owner-addressed `notify_no_phone` steps on ReferralExchange and New Lead
 Intake are still left alone.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
+`amy-referralexchange-update-honesty.ts` +
+`amy-referralexchange-update-honesty-definition.ts` (Aug 17 2026: the posted
+ReferralExchange status stops saying "no interaction yet" after an answered or
+transferred AI call, see Sharp edges),
 `realtor-retrigger-guard.ts`,
 `homelight-dedupe-and-price-digits.ts` (Aug 11 2026: the duplicate-run and
 `price_digits` fixes, see Sharp edges),

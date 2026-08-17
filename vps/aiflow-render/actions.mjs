@@ -27,9 +27,35 @@ export const MAX_WHILE_PRESENT_CLICKS = Number(process.env.AIFLOW_MAX_WHILE_PRES
 // once the button is gone (or has gone inert) we want to fall through quickly,
 // not wait the full ACTION_TIMEOUT_MS for a locator that will never resolve.
 export const WHILE_PRESENT_PROBE_MS = Number(process.env.AIFLOW_WHILE_PRESENT_PROBE_MS ?? 2_000);
-// Hard cap on forEachLink list items so one request can't enumerate an unbounded
-// page of links and run the action sequence hundreds of times.
-export const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 25);
+/**
+ * Hard cap on forEachLink list items so one request can't enumerate an
+ * unbounded page of links and run the action sequence hundreds of times.
+ *
+ * Lowered 25 -> 6 on 2026-08-17, because 25 was never deliverable. The WHOLE
+ * loop runs inside a SINGLE HTTP response, and that response crosses a
+ * Cloudflare Tunnel whose ingress rules carry no `originRequest` block
+ * (`src/lib/cloudflare/tunnel.ts` writes hostname and service, nothing else),
+ * so it inherits Cloudflare's default ~100s 524 timeout. Measured on Amy
+ * Laidlaw's completed Clever sweeps, cost is about 5s fixed plus 13s per lead:
+ *
+ *   items 1 -> 20.0s | 2 -> 32.0s | 3 -> 45.4s | 4 -> 59.0s | 5 -> 60.0s
+ *
+ * so 25 items is ~330s, more than three times the edge budget. The old cap was
+ * a generous fiction sitting behind a ceiling nobody had hit yet, only because
+ * the largest sweep the fleet had ever run was 5 leads at 60s. Six items is
+ * ~83s, which fits with headroom.
+ *
+ * A 524 is strictly worse than a truncation: the worker classifies a non-2xx
+ * from the edge as transient and RETRIES the step, so a timed-out pass re-runs
+ * its action sequence on every row it already submitted. Truncation, by
+ * contrast, is reported honestly (see performForEach: the skipped tail counts
+ * as `failed` and carries an explicit error).
+ *
+ * Raising this only pays off once the loop stops living in one response. See
+ * `scripts/oneshot/amy-clever-weekly-update-sweep-definition.ts` for the
+ * backlog arithmetic that makes worker-side looping the real fix.
+ */
+export const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 6);
 /**
  * How long a SINGLE `click_text` waits for its control to turn up before
  * concluding the page does not have one.

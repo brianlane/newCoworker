@@ -37,13 +37,14 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   AIFLOW_CLEVER_UPDATE_FROM            (default "3142707635")
+ *   AIFLOW_CLEVER_UPDATE_FROM            (default "3142077635")
  *   AIFLOW_CLEVER_INTEGRATION_LABEL      (default "Clever")
  *   AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR  (default scopes to the first/"Needs
  *                                         Action" InfiniteList section's cards)
  *   AIFLOW_CLEVER_UPDATE_ACTIONS_JSON    (default sequence below)
  */
 import { createClient } from "@supabase/supabase-js";
+import { CLEVER_SENDER, WEEKLY_NEEDLE } from "./amy-clever-weekly-update-sweep-definition";
 import {
   parseAiFlowDefinition,
   summarizeDefinition,
@@ -116,7 +117,14 @@ function buildDefinition(opts: {
       correlationWindowMinutes: 15,
       conditions: [
         { type: "from_matches", value: opts.from },
-        { type: "has_url" }
+        { type: "has_url" },
+        // Clever sends the daily "new customers" summary and this weekly
+        // reminder from the SAME number, so the sender alone cannot tell them
+        // apart. Without this needle the sweep also fires on the daily message
+        // and blanket-updates the tenant's whole active book every day. Short
+        // stable fragment on purpose: Clever reworded its templates once
+        // already and a long match went dead for weeks.
+        { type: "contains", value: WEEKLY_NEEDLE, caseInsensitive: true }
       ]
     },
     steps: [
@@ -152,7 +160,7 @@ async function main(): Promise<void> {
 
   const name = process.env.AIFLOW_SEED_NAME ?? "Clever Update Leads";
   const definitionInput = buildDefinition({
-    from: process.env.AIFLOW_CLEVER_UPDATE_FROM ?? "3142707635",
+    from: process.env.AIFLOW_CLEVER_UPDATE_FROM ?? CLEVER_SENDER,
     integrationLabel: process.env.AIFLOW_CLEVER_INTEGRATION_LABEL ?? "Clever",
     needsActionSelector:
       process.env.AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR ??

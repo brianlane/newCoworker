@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   runAction,
@@ -7,8 +8,15 @@ import {
   CLOSE_NAME_RE,
   AGREE_NAME_RE,
   CLOSE_ATTR_RE,
-  CLOSE_ICON_RE
+  CLOSE_ICON_RE,
+  MAX_FOREACH_ITEMS
 } from "../vps/aiflow-render/actions.mjs";
+import { SWEEP_CAPACITY } from "../scripts/oneshot/amy-clever-weekly-update-sweep-definition";
+
+const actionsSource = readFileSync(
+  new URL("../vps/aiflow-render/actions.mjs", import.meta.url),
+  "utf8"
+);
 
 /**
  * ACTION-mode engine tests for the per-tenant render sidecar.
@@ -417,5 +425,57 @@ describe("click_text waits for a control that has not hydrated yet", () => {
       runAction(page, { kind: "click_text_while_present", target: "Next", value: "" })
     ).resolves.toBeUndefined();
     expect(run.waits).toBe(0);
+  });
+});
+
+/**
+ * The forEachLink cap is sized against an edge timeout, not against taste.
+ *
+ * The whole loop runs inside ONE HTTP response that crosses a Cloudflare Tunnel
+ * with no `originRequest` overrides, so it gets Cloudflare's default ~100s 524.
+ * The cap sat at 25 for months, which is ~330s of work at the fleet's measured
+ * pace: undeliverable, and dangerous rather than merely wasteful, because the
+ * worker retries a 524 and re-submits every row the timed-out pass already did.
+ *
+ * These numbers come from Amy Laidlaw's own completed Clever sweeps, timed from
+ * the browse step's stored timestamps (items -> seconds):
+ *   1 -> 20.0 | 2 -> 32.0 | 3 -> 45.4 | 4 -> 59.0 | 5 -> 60.0 | 0 -> 4.8
+ * which fits ~5s fixed plus ~13s per item.
+ *
+ * If you are here because you want a bigger cap: the fix is to move the loop
+ * out of a single response (worker-side iteration, one request per item), not
+ * to raise this number. Raising it just moves the failure from "honestly
+ * truncated" to "timed out halfway and then did it twice".
+ */
+describe("MAX_FOREACH_ITEMS fits inside the Cloudflare edge budget", () => {
+  const EDGE_TIMEOUT_S = 100;
+  const FIXED_COST_S = 5;
+  const PER_ITEM_COST_S = 13;
+  const worstCase = (items: number) => FIXED_COST_S + items * PER_ITEM_COST_S;
+
+  it("completes a full pass well inside the ~100s edge timeout", () => {
+    expect(worstCase(MAX_FOREACH_ITEMS)).toBeLessThan(EDGE_TIMEOUT_S);
+  });
+
+  it("keeps real headroom, not a one-second squeak past the line", () => {
+    expect(EDGE_TIMEOUT_S - worstCase(MAX_FOREACH_ITEMS)).toBeGreaterThanOrEqual(10);
+  });
+
+  it("would have failed at the old cap of 25, which is why it moved", () => {
+    expect(worstCase(25)).toBeGreaterThan(EDGE_TIMEOUT_S);
+  });
+
+  it("still processes enough items to be worth looping at all", () => {
+    expect(MAX_FOREACH_ITEMS).toBeGreaterThanOrEqual(5);
+  });
+
+  it("matches the capacity the Clever alert promises Amy", () => {
+    // The alert tells her how many deals one pass covered. If these drift, the
+    // flow texts her a number the sweep never delivered.
+    expect(MAX_FOREACH_ITEMS).toBe(SWEEP_CAPACITY);
+  });
+
+  it("stays overridable per box for an emergency, without a code change", () => {
+    expect(actionsSource).toContain("process.env.AIFLOW_MAX_FOREACH_ITEMS");
   });
 });
