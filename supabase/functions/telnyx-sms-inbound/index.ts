@@ -792,7 +792,10 @@ async function consumeAlertClaim(args: {
     // Ownership so LATER alerts about this lead reach the claimer instead of
     // the business owner. Compare-and-swap on `owner_employee_id is null`:
     // a claim never steals a lead somebody already owns.
+    // Tri-state on purpose. "Nobody else owns it" and "I could not find out"
+    // must not collapse into the same cheerful answer.
     let ownedByOther: string | null = null;
+    let ownerUnknown = false;
     if (member?.id) {
       const { error: ownErr } = await supabase
         .from("contacts")
@@ -809,14 +812,22 @@ async function consumeAlertClaim(args: {
       // the FK constraint's exact name, and getting it wrong fails the query
       // silently, which here would mean falsely telling the claimer the lead
       // is theirs. The wrong direction to fail in.
-      const { data: ownerRow } = await supabase
+      const { data: ownerRow, error: ownerErr } = await supabase
         .from("contacts")
         .select("owner_employee_id")
         .eq("business_id", businessId)
         .or(`customer_e164.eq.${outcome.leadE164},alias_e164s.cs.{${outcome.leadE164}}`)
         .maybeSingle();
+      // Fail SAFE. A read error, or the alias disjunction matching more than
+      // one contact (maybeSingle treats that as an error), leaves `data` null,
+      // and reading that as "nobody owns it" is exactly the false "you've got
+      // it" this block exists to prevent.
+      if (ownerErr) {
+        console.error("alert claim owner read", ownerErr);
+        ownerUnknown = true;
+      }
       const ownerId = (ownerRow as { owner_employee_id?: string | null } | null)?.owner_employee_id;
-      if (ownerId && ownerId !== member.id) {
+      if (!ownerErr && ownerId && ownerId !== member.id) {
         const { data: ownerMember } = await supabase
           .from("ai_flow_team_members")
           .select("name")
@@ -828,7 +839,9 @@ async function consumeAlertClaim(args: {
     }
     text = ownedByOther
       ? `${label} (${outcome.leadE164}) is already owned by ${ownedByOther}, so nothing changed. Check with them before reaching out.`
-      : `You've got ${label} (${outcome.leadE164}). Please reach out to them now.`;
+      : ownerUnknown
+        ? `You've taken ${label} (${outcome.leadE164}), but I could not confirm who owns the lead. Please check the dashboard before reaching out.`
+        : `You've got ${label} (${outcome.leadE164}). Please reach out to them now.`;
     const { data: alertRow } = await supabase
       .from("unowned_lead_alerts")
       .select("recipients")
@@ -836,7 +849,9 @@ async function consumeAlertClaim(args: {
       .maybeSingle();
     // Only stand the others down when this really did become the claimer's
     // lead; if it was already owned, nobody's state changed.
-    if (!ownedByOther) {
+    // Silence for the others only when this really did become the claimer's
+    // lead. Uncertain is not a reason to tell four people to stand down.
+    if (!ownedByOther && !ownerUnknown) {
       for (const r of ((alertRow as { recipients?: string[] | null } | null)?.recipients ?? [])) {
         if (r && r !== from) others.push(r);
       }
