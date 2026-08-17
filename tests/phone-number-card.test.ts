@@ -8,11 +8,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { resolveSmsCampaignCopy } from "@/components/dashboard/PhoneNumberCard";
 import {
   DIAL_HEADROOM_DEFAULT,
-  describeDialHeadroom,
-  resolveSmsCampaignCopy
-} from "@/components/dashboard/PhoneNumberCard";
+  describeDialHeadroom
+} from "@/components/dashboard/dial-headroom";
 import { TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT } from "../supabase/functions/_shared/voice_reservation_limits";
 
 describe("resolveSmsCampaignCopy", () => {
