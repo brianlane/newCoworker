@@ -6154,7 +6154,7 @@ async function emailOrganizeStep(
     const body = await res.text().catch(() => "");
     throw new Error(`email_organize: ${res.status}: ${body.slice(0, 200)}`);
   }
-  let parsed: { ok?: boolean; detail?: string; data?: { provider?: string } };
+  let parsed: { ok?: boolean; detail?: string; data?: { provider?: string; detail?: string } };
   try {
     parsed = (await res.json()) as typeof parsed;
   } catch {
@@ -6171,7 +6171,13 @@ async function emailOrganizeStep(
     result: {
       organized: true,
       provider: parsed.data?.provider ?? null,
-      message_id: action.messageId || null
+      message_id: action.messageId || null,
+      // Partial outcomes ride the success result so run history shows them:
+      // "no_score" (the model produced no number) and
+      // "importance_row_not_found" (filed fine, nothing to score) both mean the
+      // step succeeded and the score did not happen. Dropping them here would
+      // restore the silent success the detail exists to prevent.
+      ...(parsed.data?.detail ? { detail: parsed.data.detail } : {})
     }
   };
 }

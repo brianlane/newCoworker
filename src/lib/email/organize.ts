@@ -86,7 +86,16 @@ function normalizeLabelList(raw?: string[]): string[] {
   return out.slice(0, 20);
 }
 
-function hasAnyAction(actions: OrganizeEmailActions): boolean {
+/**
+ * Whether this request asks the mailbox to do anything at all.
+ *
+ * Exported so the AiFlow gateway can ask the SAME question before dispatching:
+ * a step whose only instruction was a score the model never produced has
+ * nothing to do, and answering that with `no_organize_actions` would fail the
+ * step over a display-only field. One definition, so the two cannot drift into
+ * disagreeing about what "nothing to do" means.
+ */
+export function hasAnyOrganizeAction(actions: OrganizeEmailActions): boolean {
   return Boolean(
     actions.markRead ||
       actions.markUnread ||
@@ -107,7 +116,7 @@ function hasAnyAction(actions: OrganizeEmailActions): boolean {
  * path when connectionId is set.
  */
 export async function organizeMessage(req: OrganizeEmailRequest): Promise<OrganizeEmailResult> {
-  if (!hasAnyAction(req.actions)) {
+  if (!hasAnyOrganizeAction(req.actions)) {
     return { ok: false, detail: "no_organize_actions" };
   }
   if (req.actions.markRead && req.actions.markUnread) {
