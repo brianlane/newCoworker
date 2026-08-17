@@ -13,6 +13,7 @@ import {
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
 import { formatDurationMinutes } from "@/lib/ai-flows/duration";
+import { describeWebhookTriggerSource } from "@/lib/ai-flows/webhook-sources";
 import type { StepStats } from "@/lib/ai-flows/tree";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
@@ -95,10 +96,19 @@ function conditionLabel(c: TriggerCondition): string {
 }
 
 function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; heading?: string }) {
+  // Our own integrations ride the webhook channel, so a flow pinned to one of
+  // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
+  // this page — the generic label is for the channel PICKER, where the owner
+  // is choosing a channel type, not for a flow whose source we already know.
+  const webhookSource =
+    trigger.channel === "webhook" ? describeWebhookTriggerSource(trigger.conditions) : null;
   return (
     <section className={sectionClass}>
       <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">{heading}</h3>
-      <Row label="Starts when" value={CHANNEL_LABELS[trigger.channel]} />
+      <Row
+        label="Starts when"
+        value={webhookSource?.label ?? CHANNEL_LABELS[trigger.channel]}
+      />
       {trigger.channel === "sms" && (
         <>
           <Row
@@ -138,7 +148,13 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
       )}
       {trigger.channel === "webhook" && (
         <>
-          <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
+          {/* A first-party flow is NOT fed by the public endpoint, so the
+              owner is never sent looking for an API key they do not need. */}
+          {webhookSource ? (
+            <Row label="Starts from" value={webhookSource.detail} />
+          ) : (
+            <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
+          )}
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
