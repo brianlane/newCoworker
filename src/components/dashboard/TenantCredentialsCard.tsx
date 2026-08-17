@@ -40,23 +40,39 @@ export function TenantCredentialsCard({ tenantEmail }: { tenantEmail: string }) 
   const t = useTranslations("dashboard.settings");
   const [resetStatus, setResetStatus] = useState<Status>({ kind: "idle" });
   const [passkeys, setPasskeys] = useState<TenantPasskey[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState<Status>({ kind: "idle" });
   const [removingId, setRemovingId] = useState<string | null>(null);
 
+  /**
+   * "No passkeys" and "could not find out" must never render the same.
+   *
+   * The GET route deliberately 500s on a lookup failure instead of returning
+   * an empty list, precisely so this card cannot tell an operator a
+   * locked-out customer has no passkey registered when we simply failed to
+   * ask. Collapsing every non-OK response to `[]` here would throw that away
+   * (Bugbot Medium on PR #1422), so ONLY a 404 (the tenant has no login yet,
+   * so there is genuinely nothing to list) becomes the empty state. Anything
+   * else is an explicit failure the operator can retry.
+   */
   const loadPasskeys = useCallback(async () => {
+    setLoadFailed(false);
     try {
       const res = await fetch("/api/account/passkeys");
-      if (!res.ok) {
-        // A tenant with no login (pending owner_email) 404s here. Render the
-        // empty state rather than an error: there is nothing wrong, there is
-        // just nothing to show.
+      if (res.status === 404) {
         setPasskeys([]);
+        return;
+      }
+      if (!res.ok) {
+        setPasskeys(null);
+        setLoadFailed(true);
         return;
       }
       const body = (await res.json()) as { data?: { passkeys?: TenantPasskey[] } };
       setPasskeys(body.data?.passkeys ?? []);
     } catch {
-      setPasskeys([]);
+      setPasskeys(null);
+      setLoadFailed(true);
     }
   }, []);
 
@@ -134,7 +150,20 @@ export function TenantCredentialsCard({ tenantEmail }: { tenantEmail: string }) 
         <h3 className="text-xs font-semibold text-parchment/80">{t("tenantPasskeysTitle")}</h3>
         <p className="text-xs text-parchment/50">{t("tenantPasskeysCannotAdd")}</p>
 
-        {passkeys !== null && passkeys.length === 0 && (
+        {loadFailed && (
+          <div className="space-y-2">
+            <p className="text-xs text-spark-orange">{t("tenantPasskeysLoadFailed")}</p>
+            <button
+              type="button"
+              className="text-xs text-claw-green hover:underline"
+              onClick={() => void loadPasskeys()}
+            >
+              {t("tenantPasskeysRetry")}
+            </button>
+          </div>
+        )}
+
+        {!loadFailed && passkeys !== null && passkeys.length === 0 && (
           <p className="text-xs text-parchment/40">{t("tenantPasskeysEmpty")}</p>
         )}
 

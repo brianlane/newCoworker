@@ -2381,7 +2381,9 @@
       "tenantPasskeyRemove": "Quitar",
       "tenantPasskeyRemoved": "Llave de acceso quitada.",
       "tenantPasskeyNeverUsed": "nunca usada",
-      "tenantActionFailed": "Eso no funciono. Intenta de nuevo."
+      "tenantActionFailed": "Eso no funciono. Intenta de nuevo.",
+      "tenantPasskeysLoadFailed": "No se pudieron cargar las llaves de acceso de este cliente. Eso no es lo mismo que no tener ninguna, asi que no le digas que no tiene ninguna registrada hasta que esto cargue.",
+      "tenantPasskeysRetry": "Reintentar"
     },
     "contacts": {
       "languageLabel": "Idioma",

@@ -2381,7 +2381,9 @@
       "tenantPasskeyRemove": "Remove",
       "tenantPasskeyRemoved": "Passkey removed.",
       "tenantPasskeyNeverUsed": "never used",
-      "tenantActionFailed": "That did not work. Try again."
+      "tenantActionFailed": "That did not work. Try again.",
+      "tenantPasskeysLoadFailed": "Could not load this tenant's passkeys. This is not the same as having none, so do not tell them they have no passkey registered until this loads.",
+      "tenantPasskeysRetry": "Try again"
     },
     "contacts": {
       "languageLabel": "Language",
