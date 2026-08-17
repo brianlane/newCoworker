@@ -82,6 +82,25 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **HomeLight cannot be logged into with the stored credential, and a failed
+  read looks like a successful one.** HomeLight's agent sign-in
+  (`homelight.com/users/sign_in` redirects to `sales.homelight.com/users/login`)
+  has an email field and a submit and **no password field**: it is passwordless.
+  The render service only attempts a login when `looksLikeLogin` finds BOTH a
+  password and a username field (`vps/aiflow-render/login.mjs`), so for
+  HomeLight it never attempts one at all. Every HomeLight browse step therefore
+  works *only* because the `hmlt.co` referral link authenticates itself.
+  When that link has expired or been consumed, the step lands on
+  `/client/sign-in` or on the logged-out `/referrals` marketing funnel and
+  **returns that page as a successful read**, with no `login_failed` and no
+  `auth_config_error`. Observed Aug 17 2026 on two referral links (`c9887591`,
+  `d2b56290`): "Go back to my dashboard" was gone and the probe read a signup
+  page. Two consequences: (1) a HomeLight browse step needs a
+  `skipWhenText`/`continueWhenText` guard on a marker only the real referral
+  page shows, or a stale link silently feeds a marketing page into extraction;
+  (2) anything that needs the AGENT DASHBOARD rather than a referral link (a
+  per-client status update, the search overlay path) is not reachable through
+  the credential at all, which is what blocks the HomeLight update flow.
 - **ReferralExchange's timeline status was always "no interaction yet".**
   `re_update` posts to the referral timeline with a fixed status
   ("No interaction yet" -> "I am still trying to contact <First>"), so the same
