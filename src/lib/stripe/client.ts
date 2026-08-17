@@ -565,11 +565,17 @@ export type PrioritySupportCheckoutParams = {
  * Hosted Checkout for the $400/month priority support add-on.
  *
  * A SEPARATE `mode: "subscription"` from the tenant's membership, on the same
- * customer. Two reasons it cannot be a line item on the membership instead:
- * Stripe requires every item on one subscription to share a billing interval
- * (a 12/24-month membership bills at `interval_count: 12|24`), and billing it
- * at the plan's cadence would prepay support for the whole term, inverting the
- * product rule that support is cancellable any month.
+ * customer.
+ *
+ * NOT because Stripe forbids the alternative. It was documented that way and
+ * that was wrong: Stripe only requires each item's recurring period to be a
+ * multiple of the shortest, so `month/1` rides a `month/24` subscription fine
+ * (verified 2026-08-17, debug/priority-support-stripe-testmode.ts). It stays
+ * separate for lifecycle reasons: change-plan rebuilds the membership from the
+ * selector's lines and would destroy a line item, the 409 `plan_unchanged`
+ * guard blocks adding one mid-term, and the 30-day refund carve-out matches
+ * lines on the membership invoice. Full reasoning in
+ * src/lib/plans/priority-support.ts.
  *
  * Hosted Checkout rather than creating the subscription off-session against
  * the card already on file: that card was collected under the MEMBERSHIP's

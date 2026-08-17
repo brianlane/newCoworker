@@ -8,12 +8,36 @@
  * it something a tenant can actually buy on its own.
  *
  * Billing shape: its OWN month-to-month Stripe subscription on the tenant's
- * existing customer, never a line item on the membership subscription. Stripe
- * requires every item on one subscription to share a billing interval, and a
- * 12/24-month membership bills at `interval_count: 12|24`, so a monthly line
- * cannot ride it. Riding it at the plan's cadence (what the usage packs do)
- * would prepay support for the whole term and lock the tenant in, which is
- * the opposite of the product rule: cancel any month, never locked in.
+ * existing customer, never a line item on the membership subscription.
+ *
+ * That choice was originally justified as "Stripe requires every item on one
+ * subscription to share a billing interval, so a monthly line cannot ride a
+ * 12/24-month membership". **That is false**, verified against the live API on
+ * 2026-08-17 (debug/priority-support-stripe-testmode.ts). Stripe's actual rule,
+ * quoted from its own error, is that each item's recurring period must be a
+ * MULTIPLE OF THE SHORTEST one. So `month/1` alongside `month/24` is accepted
+ * and bills on its own cadence; only non-divisible pairs like month + week are
+ * refused. A line item on the membership would have worked.
+ *
+ * The reasons it stays separate are lifecycle ones, and they are the load
+ * bearing ones:
+ *
+ *  - **Change-plan rebuilds the membership.** It cancels the old Stripe
+ *    subscription and creates a new one from the selector's lines alone, so a
+ *    line item would be destroyed on every upgrade unless explicitly carried.
+ *    That is the bug migration 20260822034834 exists for, on usage packs.
+ *  - **You cannot add one mid-term anyway.** Change-plan refuses with a 409
+ *    `plan_unchanged` when tier and period are unchanged, so an existing
+ *    tenant could not buy it without also switching plans.
+ *  - **The 30-day refund carve-out matches lines on the membership invoice.**
+ *    A priority line would need its own carve-out rule or it would be refunded
+ *    along with the plan. Separate invoices are structurally outside it.
+ *  - **Independent lifecycle:** support can be cancelled without touching the
+ *    plan, and it survives a plan change untouched.
+ *
+ * Riding it at the plan's cadence (what the usage packs do) would additionally
+ * prepay support for the whole term and lock the tenant in, which inverts the
+ * product rule: cancel any month, never locked in.
  *
  * The subscription starts the day it is bought and renews on that anniversary.
  * It is deliberately NOT anchored to the membership bill date: no proration,
