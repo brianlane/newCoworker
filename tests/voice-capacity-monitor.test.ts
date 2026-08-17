@@ -2,27 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
   CAPACITY_MONITOR_BUCKET_MINUTES,
   CAPACITY_MONITOR_LOOKBACK_DAYS,
-  CAPACITY_MONITOR_OVERCOMMIT_RATIO,
+  CAPACITY_MONITOR_SAFETY_FACTOR,
   evaluateCapacityHeadroom,
   formatCapacityMonitorEmail,
   suggestedPoolRaise
 } from "../supabase/functions/_shared/voice_capacity_monitor";
 
 /**
- * The weekly headroom review: real refusals OR heavy overcommitment flag;
- * a quiet fleet under a comfortable pool stays silent. The email carries a
- * ready-to-send Telnyx raise draft, because the account pool is the one
- * knob their API will not automate.
+ * The weekly headroom review. Two triggers: any REAL refusal in the
+ * lookback window, and the owner's invariant (Aug 2026): the account pool
+ * must stay at least 2x the fleet's committed per-tenant caps. Five tenants
+ * promised 10 concurrent calls each = 50 committed = the pool must be 100.
+ * The email carries a ready-to-send Telnyx raise draft sized to restore the
+ * invariant, because the pool is the one knob their API will not automate.
  */
 describe("evaluateCapacityHeadroom", () => {
-  it("stays quiet when nothing was refused and commitment is sane", () => {
+  it("stays quiet when nothing was refused and the pool holds 2x committed", () => {
     const v = evaluateCapacityHeadroom({
       carrierRejections: 0,
       platformBlocks: 0,
-      tenantCaps: [10, 1],
-      accountLimit: 10
+      tenantCaps: [10, 10, 10, 10, 10],
+      accountLimit: 100
     });
-    expect(v).toEqual({ alert: false, reasons: [], committedCaps: 11 });
+    expect(v).toEqual({ alert: false, reasons: [], committedCaps: 50 });
   });
 
   it("flags any real refusal, carrier or platform gate", () => {
@@ -31,46 +33,60 @@ describe("evaluateCapacityHeadroom", () => {
         carrierRejections: 1,
         platformBlocks: 0,
         tenantCaps: [],
-        accountLimit: 10
+        accountLimit: 100
       }).alert
     ).toBe(true);
     const v = evaluateCapacityHeadroom({
       carrierRejections: 0,
       platformBlocks: 3,
       tenantCaps: [],
-      accountLimit: 10
+      accountLimit: 100
     });
     expect(v.alert).toBe(true);
     expect(v.reasons[0]).toContain("3 platform pre-dial block(s)");
     expect(v.reasons[0]).toContain(`${CAPACITY_MONITOR_LOOKBACK_DAYS} days`);
   });
 
-  it("flags overcommitment past the ratio, and only past it", () => {
+  it("flags a pool below 2x committed caps, and names the target", () => {
+    // 5 standard tenants against the old pool of 10: scream.
+    const tight = evaluateCapacityHeadroom({
+      carrierRejections: 0,
+      platformBlocks: 0,
+      tenantCaps: [10, 10, 10, 10, 10],
+      accountLimit: 10
+    });
+    expect(tight.alert).toBe(true);
+    expect(tight.reasons[0]).toContain("account pool 10 is below 2x");
+    expect(tight.reasons[0]).toContain("50 channels committed");
+    expect(tight.reasons[0]).toContain("at least 100");
+  });
+
+  it("treats exactly 2x as satisfied (boundary is quiet)", () => {
+    expect(CAPACITY_MONITOR_SAFETY_FACTOR).toBe(2);
     const at = evaluateCapacityHeadroom({
       carrierRejections: 0,
       platformBlocks: 0,
-      tenantCaps: [10, 10],
-      accountLimit: 10
+      tenantCaps: [10, 10, 10, 10, 10],
+      accountLimit: 100
     });
-    // Exactly 2x is the boundary: not yet flagged.
     expect(at.alert).toBe(false);
+    // One more standard tenant breaks the invariant: 60 committed needs 120.
     const over = evaluateCapacityHeadroom({
       carrierRejections: 0,
       platformBlocks: 0,
-      tenantCaps: [10, 10, 1],
-      accountLimit: 10
+      tenantCaps: [10, 10, 10, 10, 10, 10],
+      accountLimit: 100
     });
     expect(over.alert).toBe(true);
-    expect(over.reasons[0]).toContain("21 channels");
-    expect(over.reasons[0]).toContain(`${CAPACITY_MONITOR_OVERCOMMIT_RATIO}x`);
+    expect(over.reasons[0]).toContain("at least 120");
   });
 
-  it("never divides by a zero pool", () => {
+  it("a fleet with no committed caps never trips the invariant", () => {
     const v = evaluateCapacityHeadroom({
       carrierRejections: 0,
       platformBlocks: 0,
-      tenantCaps: [10],
-      accountLimit: 0
+      tenantCaps: [],
+      accountLimit: 10
     });
     expect(v.alert).toBe(false);
   });
@@ -85,22 +101,27 @@ describe("formatCapacityMonitorEmail", () => {
       accountLimit: 10
     };
     const verdict = evaluateCapacityHeadroom(inputs);
-    const email = formatCapacityMonitorEmail({ verdict, inputs, suggestedPool: 20 });
+    const email = formatCapacityMonitorEmail({
+      verdict,
+      inputs,
+      suggestedPool: suggestedPoolRaise(verdict.committedCaps)
+    });
     expect(email.subject).toContain("raise the account pool");
     expect(email.text).toContain("2 carrier channel-limit rejection(s)");
     expect(email.text).toContain("Granted account pool: 10");
     expect(email.text).toContain("Sum of per-tenant carrier caps: 30");
     expect(email.text).toContain("support@telnyx.com");
-    expect(email.text).toContain("outbound concurrent call limit to 20");
+    expect(email.text).toContain("outbound concurrent call limit to 60");
     expect(email.text).toContain("TELNYX_ACCOUNT_CHANNEL_LIMIT");
     expect(email.text).toContain("AI coworker");
   });
 });
 
 describe("suggestedPoolRaise", () => {
-  it("doubles the pool, floored at 20, and survives garbage", () => {
-    expect(suggestedPoolRaise(10)).toBe(20);
+  it("asks for 2x the committed caps, floored at 20, and survives garbage", () => {
     expect(suggestedPoolRaise(50)).toBe(100);
+    expect(suggestedPoolRaise(30)).toBe(60);
+    expect(suggestedPoolRaise(1)).toBe(20);
     expect(suggestedPoolRaise(0)).toBe(20);
     expect(suggestedPoolRaise(Number.NaN)).toBe(20);
   });

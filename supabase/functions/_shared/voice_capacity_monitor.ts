@@ -10,13 +10,15 @@
  *      (telemetry voice_outbound_dial_failed with capacity=true) plus the
  *      platform gate's pre-dial platform_capacity blocks. Any nonzero count
  *      means the fleet actually touched its ceiling.
- *   2. Commitment ratio: the sum of per-tenant carrier caps vs the granted
- *      pool. Oversubscription is normal (tenants rarely peak together), but
- *      past 2x the promise stops being credible under simultaneous load.
+ *   2. The headroom invariant (owner policy, Aug 2026): the account pool
+ *      must stay at least SAFETY_FACTOR times the sum of per-tenant carrier
+ *      caps, so the fleet always has double the concurrent capacity it
+ *      could commit to. Example: 5 tenants promised 10 concurrent calls
+ *      each = 50 committed, so the pool must be >= 100.
  *
  * When either trips, the admin gets ONE email per week bucket carrying a
- * ready-to-send raise request, which reduces the unavoidable manual step to
- * forwarding a draft.
+ * ready-to-send raise request sized to restore the invariant, which reduces
+ * the unavoidable manual step to forwarding a draft.
  */
 
 /** One email per this bucket: weekly. */
@@ -25,8 +27,8 @@ export const CAPACITY_MONITOR_BUCKET_MINUTES = 7 * 24 * 60;
 /** Telemetry lookback the counts are computed over. */
 export const CAPACITY_MONITOR_LOOKBACK_DAYS = 14;
 
-/** Commitment ratio (sum of tenant caps / pool) above which we flag. */
-export const CAPACITY_MONITOR_OVERCOMMIT_RATIO = 2;
+/** The pool must be at least this many times the committed tenant caps. */
+export const CAPACITY_MONITOR_SAFETY_FACTOR = 2;
 
 export type CapacityHeadroomInputs = {
   carrierRejections: number;
@@ -53,12 +55,13 @@ export function evaluateCapacityHeadroom(inputs: CapacityHeadroomInputs): Capaci
     );
   }
   if (
-    inputs.accountLimit > 0 &&
-    committedCaps > inputs.accountLimit * CAPACITY_MONITOR_OVERCOMMIT_RATIO
+    committedCaps > 0 &&
+    inputs.accountLimit < committedCaps * CAPACITY_MONITOR_SAFETY_FACTOR
   ) {
     reasons.push(
-      `per-tenant caps total ${committedCaps} channels against an account pool of ` +
-        `${inputs.accountLimit} (over ${CAPACITY_MONITOR_OVERCOMMIT_RATIO}x committed)`
+      `account pool ${inputs.accountLimit} is below ${CAPACITY_MONITOR_SAFETY_FACTOR}x the ` +
+        `fleet's committed per-tenant caps (${committedCaps} channels committed, so the ` +
+        `pool should be at least ${committedCaps * CAPACITY_MONITOR_SAFETY_FACTOR})`
     );
   }
   return { alert: reasons.length > 0, reasons, committedCaps };
@@ -105,8 +108,12 @@ export function formatCapacityMonitorEmail(args: {
   };
 }
 
-/** Next pool worth requesting: double the current, floored at 20. */
-export function suggestedPoolRaise(accountLimit: number): number {
-  if (!Number.isFinite(accountLimit) || accountLimit < 10) return 20;
-  return accountLimit * 2;
+/**
+ * The pool to request: whatever restores the headroom invariant
+ * (SAFETY_FACTOR x committed caps), floored at 20 so a tiny fleet still
+ * asks for a usable pool.
+ */
+export function suggestedPoolRaise(committedCaps: number): number {
+  if (!Number.isFinite(committedCaps) || committedCaps < 10) return 20;
+  return committedCaps * CAPACITY_MONITOR_SAFETY_FACTOR;
 }

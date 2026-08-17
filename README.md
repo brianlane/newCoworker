@@ -2534,9 +2534,11 @@ stand, in order of when they act:
   to 5 minutes of jitter so morning cohorts no longer stampede one second.
 - **Alerting**: dial-time rejections email the platform admin (deduped
   hourly, `voice_capacity_alerts`), and the weekly `voice-capacity-monitor`
-  cron (Mondays 15:00 UTC) reviews 14 days of real refusals plus the
-  committed-caps ratio and mails a ready-to-send Telnyx raise request when
-  the pool is tight.
+  cron (Mondays 15:00 UTC) reviews 14 days of real refusals and enforces
+  the headroom invariant: the account pool must stay at least 2x the sum of
+  per-tenant carrier caps (5 tenants promised 10 each = pool of 100). When
+  either trips it mails a ready-to-send Telnyx raise request sized to
+  restore the invariant.
 
 Inspect it all with `tsx debug/telnyx-capacity.ts` (read-only: every app,
 profile, DID binding, effective caps, and live in-flight counts). Raising
