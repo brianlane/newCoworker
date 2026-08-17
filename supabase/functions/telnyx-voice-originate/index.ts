@@ -50,11 +50,13 @@ import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
+  classifyTelnyxDialFailure,
   encodeOutboundClientState,
   outboundSessionContext,
   parsePlaceCallPayload,
   resolveOutboundCallPlan
 } from "../_shared/voice_outbound.ts";
+import { sendVoiceCapacityAlertOnce } from "../_shared/voice_capacity_alert.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { resolveVoiceContactRefs } from "../_shared/ai_flows/contact_ref.ts";
 
@@ -269,11 +271,70 @@ serve(async (req: Request) => {
   if (!dialRes.ok) {
     const errText = (await dialRes.text()).slice(0, 300);
     console.error("originate: dial failed", dialRes.status, errText);
+    // A channel-limit rejection (HTTP 403 + "channel limit exceeded") is a
+    // TRANSIENT capacity condition: no leg, no CDR, no webhook. Classified
+    // apart from permanent config/auth failures so the worker defers and
+    // retries instead of burning the follow-up attempt (2026-08-16 incident:
+    // this exact rejection resolved not_placed, cancelled a seller ladder,
+    // and false-alerted the owner that "the AI did NOT call").
+    const failure = classifyTelnyxDialFailure(dialRes.status, errText);
     await telemetryRecord(supabase, "voice_outbound_dial_failed", {
       business_id: businessId,
       flow_id: flowId,
-      http_status: dialRes.status
+      run_id: plan.flowRun?.runId ?? null,
+      to_e164: callee,
+      http_status: dialRes.status,
+      telnyx_code: failure.code,
+      telnyx_title: failure.title,
+      error_snippet: errText,
+      connection_id: connectionId,
+      capacity: failure.capacity
     });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "error",
+      event: "voice_outbound_dial_failed",
+      message: failure.capacity
+        ? "Outbound call rejected by Telnyx: concurrent channel limit reached (will retry)"
+        : `Outbound call dial failed (Telnyx HTTP ${dialRes.status})`,
+      payload: {
+        to: callee,
+        http_status: dialRes.status,
+        telnyx_code: failure.code,
+        telnyx_title: failure.title,
+        capacity: failure.capacity
+      }
+    });
+    if (failure.capacity) {
+      // Deduped fleet-wide (one email per hour bucket); never throws.
+      const alertResult = await sendVoiceCapacityAlertOnce(
+        supabase,
+        {
+          businessId,
+          flowId: flowId || null,
+          toE164: callee,
+          httpStatus: dialRes.status,
+          telnyxCode: failure.code,
+          telnyxTitle: failure.title,
+          connectionId: connectionId ?? null
+        },
+        (name) => Deno.env.get(name)
+      );
+      if (alertResult !== "sent" && alertResult !== "already_alerted") {
+        console.warn("originate: capacity alert not sent", alertResult);
+      }
+      // dialed:false, no leg was created and the callee was not rung. The
+      // distinct error code routes place_ai_call into its bounded
+      // defer-and-retry path instead of the terminal not_placed outcome.
+      return json(503, {
+        ok: false,
+        error: "capacity",
+        reason: "carrier_channel_limit",
+        http_status: dialRes.status,
+        dialed: false
+      });
+    }
     // dialed:false — Telnyx rejected POST /v2/calls so NO call leg was created
     // and the callee was not rung; a scheduled caller may safely retry.
     return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status, dialed: false });

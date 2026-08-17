@@ -248,6 +248,53 @@ export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionC
   return ctx;
 }
 
+/** What a failed POST /v2/calls response means for the caller. */
+export type TelnyxDialFailure = {
+  /**
+   * True when Telnyx rejected the dial for CONCURRENT-CHANNEL capacity (the
+   * account/profile/connection channel limit). These rejections are transient
+   * by nature: a channel frees within seconds to minutes, so the caller
+   * should defer and retry rather than record a terminal outcome. Everything
+   * else (auth, validation, unknown) stays non-capacity and keeps today's
+   * no-retry semantics, which is right for permanent config errors.
+   */
+  capacity: boolean;
+  /** Telnyx errors[0].code when the body parsed, else null. */
+  code: string | null;
+  /** Telnyx errors[0].title when the body parsed, else null. */
+  title: string | null;
+};
+
+/**
+ * Classify a non-2xx POST /v2/calls response (telnyx-voice-originate's dial
+ * branch). Conservative on purpose: capacity requires BOTH the 403 status and
+ * channel-limit wording in the raw body, so an auth 403 ("invalid API key")
+ * or a destination 403 can never be classified as retryable capacity.
+ * Matches the two shapes Telnyx documents for channel-limit rejections: the
+ * REST error title ("Channel limit exceeded") and the SIP-derived text
+ * ("User channel limit exceeded"). Tolerates a non-JSON body: the wording
+ * match runs on the raw text either way.
+ */
+export function classifyTelnyxDialFailure(
+  httpStatus: number,
+  bodyText: string
+): TelnyxDialFailure {
+  let code: string | null = null;
+  let title: string | null = null;
+  try {
+    const parsed = JSON.parse(bodyText) as {
+      errors?: { code?: unknown; title?: unknown }[];
+    } | null;
+    const first = Array.isArray(parsed?.errors) ? parsed?.errors[0] : undefined;
+    if (first && typeof first.code === "string" && first.code.trim()) code = first.code.trim();
+    if (first && typeof first.title === "string" && first.title.trim()) title = first.title.trim();
+  } catch {
+    // Non-JSON body (HTML error page, plain text): classify on the raw text.
+  }
+  const capacity = httpStatus === 403 && /channel limit exceeded/i.test(bodyText);
+  return { capacity, code, title };
+}
+
 /**
  * Parse + validate a per-call origination payload (the `call` object a
  * place_ai_call worker step POSTs to telnyx-voice-originate) into an

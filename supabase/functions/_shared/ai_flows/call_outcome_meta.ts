@@ -52,7 +52,15 @@ export const CALL_REASON = {
   /** Business tier does not include outbound AI calls. */
   TIER_BLOCKED: "tier_blocked",
   /** No usable phone number in the step's toVar. */
-  NO_CALLEE_PHONE: "no_callee_phone"
+  NO_CALLEE_PHONE: "no_callee_phone",
+  /**
+   * Telnyx refused the dial for concurrent-channel capacity (account,
+   * profile, or connection channel limit) and the worker's bounded retries
+   * were exhausted too. Terminal form of a transient condition: the step
+   * deferred and re-dialed first (capacity_retry.ts), so by the time a flow
+   * sees this reason the call genuinely could not go out for ~20 minutes.
+   */
+  CARRIER_CAPACITY: "carrier_capacity"
 } as const;
 
 export type CallOutcomeReason = (typeof CALL_REASON)[keyof typeof CALL_REASON];
@@ -85,6 +93,9 @@ export function callOutcomeLabel(
   if (reason === CALL_REASON.OUTSIDE_CALL_WINDOW) return "did not call: outside calling hours";
   if (reason === CALL_REASON.TIER_BLOCKED) return "did not call: outbound calling is not on this plan";
   if (reason === CALL_REASON.NO_CALLEE_PHONE) return "did not call: no usable phone number";
+  if (reason === CALL_REASON.CARRIER_CAPACITY) {
+    return "could not call: all phone lines were busy";
+  }
   switch (outcome) {
     case "transferred":
       return "connected you live";

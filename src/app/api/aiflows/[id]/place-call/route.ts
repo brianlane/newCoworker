@@ -85,7 +85,9 @@ export async function POST(request: Request, { params }: Ctx) {
           ? OUTBOUND_AI_CALLS_UPGRADE_MESSAGE
           : reason === "quota_exhausted"
           ? "Out of voice minutes for this billing period."
-          : reason === "concurrent_limit"
+          : reason === "concurrent_limit" ||
+              reason === "carrier_channel_limit" ||
+              reason === "platform_capacity"
             ? "Too many calls in progress right now; try again shortly."
             : reason === "invalid_callee"
               ? "Enter a valid phone number to call."

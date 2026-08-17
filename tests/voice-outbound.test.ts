@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyTelnyxDialFailure,
   encodeOutboundClientState,
   outboundSessionContext,
   parseOutboundClientState,
@@ -373,5 +374,77 @@ describe("outboundSessionContext: voicemail", () => {
 
   it("treats an all-whitespace script as no script", () => {
     expect("voicemail" in outboundSessionContext({ ...base, voicemailScript: "   " })).toBe(false);
+  });
+});
+
+/**
+ * classifyTelnyxDialFailure: the 2026-08-16 incident classifier. A capacity
+ * rejection (HTTP 403 + channel-limit wording) must be distinguishable from
+ * permanent config/auth failures, because the worker retries capacity and
+ * must NOT retry the rest.
+ */
+describe("classifyTelnyxDialFailure", () => {
+  it("classifies the documented REST channel-limit rejection as capacity", () => {
+    const body = JSON.stringify({
+      errors: [{ code: "90010", title: "Channel limit exceeded", detail: "You have reached the maximum number of concurrent calls." }]
+    });
+    expect(classifyTelnyxDialFailure(403, body)).toEqual({
+      capacity: true,
+      code: "90010",
+      title: "Channel limit exceeded"
+    });
+  });
+
+  it("classifies the SIP-derived wording as capacity even when the body is not JSON", () => {
+    const out = classifyTelnyxDialFailure(403, "403 User channel limit exceeded D1");
+    expect(out.capacity).toBe(true);
+    expect(out.code).toBeNull();
+    expect(out.title).toBeNull();
+  });
+
+  it("does NOT classify an auth 403 as capacity", () => {
+    const body = JSON.stringify({
+      errors: [{ code: "10009", title: "Authentication failed" }]
+    });
+    expect(classifyTelnyxDialFailure(403, body)).toEqual({
+      capacity: false,
+      code: "10009",
+      title: "Authentication failed"
+    });
+  });
+
+  it("requires the 403 status: channel wording on another status is not capacity", () => {
+    const body = JSON.stringify({ errors: [{ code: "90010", title: "Channel limit exceeded" }] });
+    expect(classifyTelnyxDialFailure(422, body).capacity).toBe(false);
+    expect(classifyTelnyxDialFailure(500, body).capacity).toBe(false);
+  });
+
+  it("tolerates malformed bodies (no crash, no capacity)", () => {
+    expect(classifyTelnyxDialFailure(403, "<html>gateway error</html>")).toEqual({
+      capacity: false,
+      code: null,
+      title: null
+    });
+    expect(classifyTelnyxDialFailure(403, "")).toEqual({ capacity: false, code: null, title: null });
+  });
+
+  it("handles valid JSON with no errors array (and a literal null body)", () => {
+    expect(classifyTelnyxDialFailure(403, "{}")).toEqual({
+      capacity: false,
+      code: null,
+      title: null
+    });
+    expect(classifyTelnyxDialFailure(403, "null")).toEqual({
+      capacity: false,
+      code: null,
+      title: null
+    });
+  });
+
+  it("ignores empty/non-string code and title fields", () => {
+    const body = JSON.stringify({ errors: [{ code: 90010, title: "  " }] });
+    const out = classifyTelnyxDialFailure(403, body);
+    expect(out.code).toBeNull();
+    expect(out.title).toBeNull();
   });
 });

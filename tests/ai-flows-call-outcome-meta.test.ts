@@ -43,7 +43,8 @@ describe("callOutcomeLabel", () => {
     [CALL_REASON.DIAL_CAP, "did not call: already tried them several times today"],
     [CALL_REASON.OUTSIDE_CALL_WINDOW, "did not call: outside calling hours"],
     [CALL_REASON.TIER_BLOCKED, "did not call: outbound calling is not on this plan"],
-    [CALL_REASON.NO_CALLEE_PHONE, "did not call: no usable phone number"]
+    [CALL_REASON.NO_CALLEE_PHONE, "did not call: no usable phone number"],
+    [CALL_REASON.CARRIER_CAPACITY, "could not call: all phone lines were busy"]
   ])("explains %s", (reason, expected) => {
     expect(callOutcomeLabel("not_placed", reason)).toBe(expected);
   });

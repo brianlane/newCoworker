@@ -170,6 +170,8 @@ const EXEMPT: Record<string, string> = {
   subscriptions: "billing",
   telnyx_cost_daily: "cost aggregates",
   usage_cap_alerts: "alert dedupe state",
+  voice_capacity_alerts:
+    "Telnyx capacity alert dedupe + audit (business_id, flow id, carrier error metadata; no person columns); business_id detaches via on delete set null so the fleet-wide audit trail survives a tenant deletion",
   usage_pack_auto_reload_rules: "the tenant's own top-up thresholds and spend caps",
   usage_pack_auto_reload_events:
     "auto-reload charge ledger (amounts, Stripe intent ids); billing evidence for an unattended charge, no end-customer identifiers",
