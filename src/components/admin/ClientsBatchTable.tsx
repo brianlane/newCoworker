@@ -7,6 +7,11 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
+import { prioritySupportBadge } from "@/components/admin/PrioritySupportPanel";
+import {
+  prioritySupportDaysLeft,
+  prioritySupportStatus
+} from "@/lib/plans/priority-support";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   clientsCsv,
@@ -334,6 +339,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
               <SortHeader label="Payment" sortKey="payment" sort={sort} onSort={toggleSort} />
               <SortHeader label="Margin/mo" sortKey="margin" sort={sort} onSort={toggleSort} />
               <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
+              <th className="text-left py-3 px-4 text-parchment/40 font-medium">Priority</th>
               <th className="text-left py-3 px-4 text-parchment/40 font-medium">Actions</th>
             </tr>
           </thead>
@@ -440,6 +446,12 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     />
                     {b.isPaused && <Badge variant="error">paused</Badge>}
                   </div>
+                </td>
+                <td className="py-3 px-4 whitespace-nowrap">
+                  {prioritySupportBadge(
+                    prioritySupportStatus(b.tier, b.prioritySupportUntil),
+                    prioritySupportDaysLeft(b.tier, b.prioritySupportUntil)
+                  )}
                 </td>
                 {/* No "Details" link — the business name is the navigation. */}
                 <td className="py-3 px-4 whitespace-nowrap">

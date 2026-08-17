@@ -69,6 +69,20 @@ import {
   hasPrioritySupportForTier,
   listWhiteGlovePackages
 } from "@/lib/plans/white-glove";
+import {
+  PrioritySupportCard,
+  type PrioritySupportCardState
+} from "@/components/billing/PrioritySupportCard";
+import { getLivePrioritySupportSubscription } from "@/lib/db/priority-support";
+import {
+  PRIORITY_SUPPORT_LOW_DAYS_THRESHOLD,
+  PRIORITY_SUPPORT_MONTHLY_CENTS,
+  prioritySupportDaysLeft
+} from "@/lib/plans/priority-support";
+import { formatPriceCents } from "@/lib/pricing";
+// Same operator channels the enterprise dedicated-support card uses: a paying
+// priority customer reaches us the same way an enterprise tenant does.
+import { getEnterpriseSupportContact } from "@/lib/plans/enterprise-support";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +91,7 @@ type SearchParams = {
   planChanged?: string;
   reactivated?: string;
   whiteGlove?: string;
+  prioritySupport?: string;
 };
 
 function formatMinutes(seconds: number): string {
@@ -125,7 +140,8 @@ export default async function BillingPage(props: {
     allCustomOffers,
     autoReloadRules,
     autoReloadCard,
-    autoReloadEvents
+    autoReloadEvents,
+    prioritySupportRow
   ] = business
     ? await Promise.all([
         getSubscription(business.id),
@@ -147,7 +163,10 @@ export default async function BillingPage(props: {
         // not blank the whole billing page.
         listAutoReloadRules(business.id, db).catch(() => []),
         getAutoReloadCard(business.id, db).catch(() => null),
-        listAutoReloadEvents(business.id, 5, db).catch(() => [])
+        listAutoReloadEvents(business.id, 5, db).catch(() => []),
+        // Same non-fatal treatment: the priority support card is an add-on,
+        // and losing it must not blank the page a tenant came here to read.
+        getLivePrioritySupportSubscription(business.id, db).catch(() => null)
       ])
     : [
         null,
@@ -158,7 +177,8 @@ export default async function BillingPage(props: {
         [] as Awaited<ReturnType<typeof listWhiteGloveOffers>>,
         [] as Awaited<ReturnType<typeof listAutoReloadRules>>,
         null,
-        [] as Awaited<ReturnType<typeof listAutoReloadEvents>>
+        [] as Awaited<ReturnType<typeof listAutoReloadEvents>>,
+        null
       ];
 
   // Prefer `business.customer_profile_id` over `subscription.customer_profile_id`
@@ -312,6 +332,12 @@ export default async function BillingPage(props: {
       : searchParams.whiteGlove === "cancelled"
         ? { kind: "warn" as const, text: t("checkoutCancelled") }
         : null;
+  const prioritySupportBanner =
+    searchParams.prioritySupport === "success"
+      ? { kind: "ok" as const, text: t("prioritySupport.started") }
+      : searchParams.prioritySupport === "cancelled"
+        ? { kind: "warn" as const, text: t("prioritySupport.checkoutCancelled") }
+        : null;
 
   // ---- White-glove onboarding (Phase C5) --------------------------------
   const ownedWhiteGlove = getWhiteGlovePackage(
@@ -327,6 +353,29 @@ export default async function BillingPage(props: {
     prioritySupportUntilIso
   );
   const bookingUrl = getWhiteGloveBookingUrl();
+
+  // ---- Priority support add-on ($400/month, its own Stripe subscription) --
+  // Enterprise never sees the card: their window is permanent and free, and
+  // the Support card above already says so.
+  const prioritySupportDays = prioritySupportDaysLeft(
+    (business as { tier?: string | null } | null)?.tier,
+    prioritySupportUntilIso
+  );
+  const prioritySupportCardState: PrioritySupportCardState = prioritySupportRow
+    ? prioritySupportRow.cancel_at_period_end
+      ? "winding_down"
+      : "renewing"
+    : prioritySupportUntilIso
+      ? "lapsed"
+      : "none";
+  const prioritySupportCoverageLabel =
+    prioritySupportUntilIso && prioritySupportCardState !== "none"
+      ? new Date(prioritySupportUntilIso).toLocaleDateString(
+          locale === "es" ? "es-US" : "en-US",
+          { month: "long", day: "numeric", year: "numeric" }
+        )
+      : null;
+  const prioritySupportPriceLabel = formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS);
   // Only OPEN custom offers are payable; paid/revoked rows never render here
   // (fetched in the parallel batch above).
   const customWhiteGloveOffers = allCustomOffers.filter((o) => o.status === "open");
@@ -431,6 +480,26 @@ export default async function BillingPage(props: {
             }
           >
             {whiteGloveBanner.text}
+          </p>
+        </Card>
+      )}
+
+      {prioritySupportBanner && (
+        <Card
+          className={
+            prioritySupportBanner.kind === "ok"
+              ? "border-claw-green/40 bg-claw-green/10"
+              : "border-spark-orange/40 bg-spark-orange/10"
+          }
+        >
+          <p
+            className={
+              prioritySupportBanner.kind === "ok"
+                ? "text-sm text-claw-green"
+                : "text-sm text-spark-orange"
+            }
+          >
+            {prioritySupportBanner.text}
           </p>
         </Card>
       )}
@@ -670,6 +739,23 @@ export default async function BillingPage(props: {
           <p className="mt-2 text-xs text-parchment/50">{t("emailSupportUpsell")}</p>
         )}
       </Card>
+
+      {/* The $400/month add-on. Hidden for Enterprise, whose priority window
+          is permanent and included, so the Support card above is the whole
+          story for them and this would be selling them what they have. */}
+      {!isEnterpriseTier && (
+        <PrioritySupportCard
+          state={prioritySupportCardState}
+          daysLeft={prioritySupportDays}
+          coverageEndsLabel={prioritySupportCoverageLabel}
+          priceLabel={prioritySupportPriceLabel}
+          lowDays={
+            prioritySupportDays !== null &&
+            prioritySupportDays <= PRIORITY_SUPPORT_LOW_DAYS_THRESHOLD
+          }
+          contact={getEnterpriseSupportContact()}
+        />
+      )}
 
       {/* Deliberately unpriced (matches the public /pricing card): interest
           routes to the contact form as a sales lead and a specialist quotes

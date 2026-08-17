@@ -60,6 +60,18 @@ import {
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
+import { PRIORITY_SUPPORT_CHECKOUT_KIND } from "@/lib/plans/priority-support";
+import {
+  applyPrioritySupportInvoicePaid,
+  isPrioritySupportSubscription,
+  prioritySupportPeriodEnd,
+  recordPrioritySupportCheckout,
+  terminatePrioritySupport
+} from "@/lib/billing/priority-support";
+import {
+  markPrioritySupportSubscriptionCanceled,
+  mirrorPrioritySupportSubscription
+} from "@/lib/db/priority-support";
 
 // Vercel Pro allows up to 800s — take all of it. Several dispatch paths
 // below (`dispatchAutoCancelOnPaymentFailure`, `runChangePlanFromCheckout`,
@@ -180,6 +192,33 @@ export async function POST(request: Request) {
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
+
+        // The priority support add-on has its own mirror table. It is NOT in
+        // `subscriptions`, so the membership mirror below would simply no-op
+        // on it; this branch keeps its own row current instead (renewal dates,
+        // and the cancel_at_period_end that drives "renewing" vs "ends on").
+        if (isPrioritySupportSubscription(sub)) {
+          try {
+            await mirrorPrioritySupportSubscription(sub.id, {
+              status:
+                sub.status === "canceled"
+                  ? "canceled"
+                  : sub.cancel_at_period_end
+                    ? "canceling"
+                    : "active",
+              currentPeriodEnd: prioritySupportPeriodEnd(sub),
+              cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end)
+            });
+          } catch (err) {
+            logger.warn("priority_support: subscription mirror failed (non-fatal)", {
+              eventId: event.id,
+              stripeSubscriptionId: sub.id,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+          break;
+        }
+
         // Only mirror rows that are ALREADY linked to this Stripe
         // subscription id. `checkout.session.completed` is the single
         // authoritative site for planting the first linkage (because only
@@ -520,6 +559,29 @@ export async function POST(request: Request) {
 
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
+
+        // The priority support add-on is its own subscription. Its deletion is
+        // NOT a tenant teardown: mark the mirror row and stop, so none of the
+        // membership lifecycle below (auto-reload disable, grace window, VM
+        // stop) fires for what is only an add-on ending.
+        if (isPrioritySupportSubscription(sub)) {
+          try {
+            await markPrioritySupportSubscriptionCanceled(sub.id, new Date());
+            logger.info("priority_support: subscription deleted", {
+              eventId: event.id,
+              stripeSubscriptionId: sub.id,
+              businessId: sub.metadata?.businessId ?? null
+            });
+          } catch (err) {
+            logger.warn("priority_support: cancel mirror failed (non-fatal)", {
+              eventId: event.id,
+              stripeSubscriptionId: sub.id,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+          break;
+        }
+
         // Enterprise-deal bookkeeping: flip the deal row to 'canceled' so the
         // one-live-deal-per-business slot frees up for a future re-deal.
         // Best-effort — the subscription lifecycle below is the authority.
@@ -552,6 +614,24 @@ export async function POST(request: Request) {
               eventId: event.id,
               error: err instanceof Error ? err.message : String(err)
             });
+          }
+          // No membership, no priority support. This is a SEPARATE Stripe
+          // subscription, so nothing about cancelling the membership stops it:
+          // left alone it keeps charging $400/month to an account with no
+          // service behind it. Best-effort by contract (it swallows its own
+          // errors) so it can never abort the teardown below.
+          //
+          // EXCEPT on an upgrade switch. A plan change cancels the OLD Stripe
+          // subscription and builds a new one, which delivers this same event
+          // for a tenant who is still very much active, just on a different
+          // plan. Cancelling their priority support there would silently drop
+          // a paid add-on every time somebody upgrades. The orchestrator's
+          // exact signature is the same one the fallback mirror below
+          // short-circuits on.
+          const isUpgradeSwitch =
+            existing.status === "canceled" && existing.cancel_reason === "upgrade_switch";
+          if (!isUpgradeSwitch) {
+            await terminatePrioritySupport(businessId);
           }
           const now = new Date();
           if (existing.cancel_at_period_end) {
@@ -796,6 +876,44 @@ export async function POST(request: Request) {
             });
           }
 
+          // The priority support add-on is a SECOND Stripe subscription on the
+          // same customer, and it must never reach the membership bookkeeping
+          // below. Specifically the `businessId` fallback right after this
+          // would resolve a priority-support invoice to the MEMBERSHIP row and
+          // then overwrite `stripe_current_period_start/end` with this
+          // subscription's ONE-MONTH window. On a 12/24-month plan that
+          // silently corrupts the cached billing period, which drives the
+          // monthly usage quota windows (deriveMonthlyQuotaWindow), the
+          // renewal date, isCommitmentElapsed, and the contract-term nudge.
+          // Handle it here and leave the switch.
+          if (stripeSub && isPrioritySupportSubscription(stripeSub)) {
+            const psBusinessId = stripeSub.metadata?.businessId?.trim();
+            if (!psBusinessId) {
+              logger.warn("priority_support: paid invoice carries no businessId metadata", {
+                eventId: event.id,
+                subscriptionId
+              });
+              break;
+            }
+            try {
+              await applyPrioritySupportInvoicePaid({
+                businessId: psBusinessId,
+                stripeSubscription: stripeSub
+              });
+            } catch (err) {
+              // Never fail the webhook over coverage bookkeeping: Stripe would
+              // retry the whole event. The next paid invoice re-stamps from
+              // the live period end anyway, since the write is monotonic.
+              logger.error("priority_support: coverage extend failed on invoice.paid", {
+                eventId: event.id,
+                subscriptionId,
+                businessId: psBusinessId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+            break;
+          }
+
           // Race: invoice.paid can beat checkout.session.completed (or the
           // change-plan orchestrator) that plants stripe_subscription_id.
           // Fall back to businessId on Stripe subscription metadata.
@@ -1014,6 +1132,14 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // already exist).
   if (session.metadata?.checkoutKind === "enterprise_deal") {
     await applyEnterpriseDealFromCheckout(session, eventId);
+    return;
+  }
+  // Priority support is mode=subscription but is the tenant's SECOND Stripe
+  // subscription, not their membership. Without this early return it would
+  // fall through to the default signup activation below and be adopted as the
+  // membership subscription for the business.
+  if (session.metadata?.checkoutKind === PRIORITY_SUPPORT_CHECKOUT_KIND) {
+    await applyPrioritySupportFromCheckout(session, eventId);
     return;
   }
   // Card authorization for auto-reload: no charge, just a stored mandate.
@@ -1908,6 +2034,86 @@ async function applyEnterpriseDealFromCheckout(
     setupCents: deal.setup_cents,
     monthlyCents: deal.monthly_cents
   });
+}
+
+/**
+ * Records a completed priority-support Checkout: plants the mirror row for the
+ * tenant's SECOND Stripe subscription and opens the coverage window.
+ *
+ * Coverage is stamped here as well as on `invoice.paid` so the first period is
+ * open even if that event is delayed or lost. Both writes go through the
+ * monotonic `extendPrioritySupport`, so doing it twice is a no-op rather than
+ * a double extension.
+ *
+ * Idempotent under webhook retries: `stripe_subscription_id` is unique and the
+ * partial index allows one live row per business, so a replay resolves to the
+ * existing row instead of opening a second $400/month subscription.
+ */
+async function applyPrioritySupportFromCheckout(
+  session: Stripe.Checkout.Session,
+  eventId: string
+) {
+  const businessId = session.metadata?.businessId?.trim();
+  if (!businessId) {
+    logger.warn("priority_support checkout missing businessId", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+  const subscriptionId =
+    typeof session.subscription === "string"
+      ? session.subscription
+      : session.subscription?.id ?? null;
+  if (!subscriptionId) {
+    logger.error("priority_support checkout session has no subscription id", {
+      eventId,
+      sessionId: session.id,
+      businessId
+    });
+    return;
+  }
+  const customerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+
+  let periodEnd: Date | null = null;
+  try {
+    const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+    periodEnd = prioritySupportPeriodEnd(stripeSub);
+  } catch (err) {
+    // Not fatal: the row still gets planted, and the next `invoice.paid`
+    // stamps coverage from the live period end.
+    logger.warn("priority_support: subscription retrieve failed on checkout", {
+      eventId,
+      subscriptionId,
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  try {
+    const { duplicate } = await recordPrioritySupportCheckout({
+      businessId,
+      stripeSubscriptionId: subscriptionId,
+      stripeCustomerId: customerId,
+      stripeSessionId: session.id,
+      periodEnd,
+      createdBy: session.customer_details?.email ?? session.metadata?.userId ?? "checkout"
+    });
+    logger.info("priority_support: subscription recorded", {
+      eventId,
+      businessId,
+      subscriptionId,
+      duplicate
+    });
+  } catch (err) {
+    logger.error("priority_support: recording checkout failed", {
+      eventId,
+      businessId,
+      subscriptionId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }
 
 /**

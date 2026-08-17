@@ -108,7 +108,8 @@ export default async function AdminClientsPage() {
               subscriptionStatus: subscriptionMap.get(b.id)?.status ?? null,
               ownerQuiet: quietOwners.has(b.id),
               marginCents: marginByBusiness.get(b.id)?.marginCents ?? null,
-              pinned: !!b.admin_pinned
+              pinned: !!b.admin_pinned,
+              prioritySupportUntil: b.priority_support_until ?? null
             }))}
           />
         </Card>

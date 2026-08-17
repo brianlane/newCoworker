@@ -8,6 +8,8 @@ import {
   listBusinesses,
   listBusinessIdsByOwnerEmail,
   recordWhiteGlovePurchase,
+  setPrioritySupportUntil,
+  clearPrioritySupportNudgeStamp,
   setBusinessAdminPinned,
   setBusinessPaused,
   setCustomerChannelsEnabled,
@@ -555,6 +557,63 @@ describe("db/businesses", () => {
         prioritySupportUntil: new Date("2026-08-03T12:00:00.000Z")
       })
     ).rejects.toThrow("recordWhiteGlovePurchase");
+  });
+
+  it("setPrioritySupportUntil sets an exact window", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setPrioritySupportUntil("uuid-biz-1", new Date("2026-09-09T00:00:00.000Z"));
+
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(db.update).toHaveBeenCalledWith({
+      priority_support_until: "2026-09-09T00:00:00.000Z"
+    });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("setPrioritySupportUntil can SHORTEN or clear, unlike extendPrioritySupport", async () => {
+    // This is the whole reason the two writers exist separately: the payment
+    // path is monotonic on purpose, and an operator comping by hand has to be
+    // able to revoke a window set by mistake.
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setPrioritySupportUntil("uuid-biz-1", null);
+
+    // Null clears the window outright, and the update carries no
+    // "only if later" guard, so it overwrites whatever is already there.
+    expect(db.update).toHaveBeenCalledWith({ priority_support_until: null });
+  });
+
+  it("setPrioritySupportUntil throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(setPrioritySupportUntil("uuid-biz-1", null)).rejects.toThrow(
+      "setPrioritySupportUntil"
+    );
+  });
+
+  it("clearPrioritySupportNudgeStamp resets the warning stamp", async () => {
+    // Without this, a tenant who lapses, restarts, and lapses again would
+    // never get a second warning: the sweep reads a non-null stamp as done.
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await clearPrioritySupportNudgeStamp("uuid-biz-1");
+
+    expect(db.update).toHaveBeenCalledWith({ priority_support_nudge_sent_at: null });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("clearPrioritySupportNudgeStamp throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(clearPrioritySupportNudgeStamp("uuid-biz-1")).rejects.toThrow(
+      "clearPrioritySupportNudgeStamp"
+    );
   });
 
   it("updateBusinessOwnerEmail updates owner email", async () => {

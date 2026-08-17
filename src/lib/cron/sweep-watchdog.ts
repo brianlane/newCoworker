@@ -56,6 +56,7 @@ export const SWEEP_EXPECTATIONS: Record<string, { maxGapMinutes: number; schedul
   "data-retention-sweep": { maxGapMinutes: 1500, schedule: "35 1 * * *" },
   "document-expiration-sweep": { maxGapMinutes: 1500, schedule: "5 2 * * *" },
   "monthly-intro-nudge-sweep": { maxGapMinutes: 1500, schedule: "15 15 * * *" },
+  "priority-support-nudge-sweep": { maxGapMinutes: 1500, schedule: "35 15 * * *" },
   "platform-cost-sync": { maxGapMinutes: 1500, schedule: "10 11 * * *" },
   "subscription-grace-sweep": { maxGapMinutes: 1500, schedule: "15 0 * * *" },
   "vps-billing-posture": { maxGapMinutes: 1500, schedule: "0 13 * * *" },

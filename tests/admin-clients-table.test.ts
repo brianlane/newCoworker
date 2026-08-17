@@ -23,6 +23,7 @@ function row(overrides: Partial<AdminClientRow> = {}): AdminClientRow {
     ownerQuiet: false,
     marginCents: 15000,
     pinned: false,
+    prioritySupportUntil: null,
     ...overrides
   };
 }
@@ -165,7 +166,8 @@ describe("pinRowsFirst", () => {
 
 describe("clientsCsv", () => {
   const HEADER =
-    "name,owner_email,tier,payment,status,paused,churn_risk,margin_usd_per_month,created_at,id";
+    "name,owner_email,tier,payment,status,paused,churn_risk,margin_usd_per_month," +
+    "priority_support_until,created_at,id";
 
   it("serializes header + rows with the payment sentinel and quoting", () => {
     const csv = clientsCsv([
@@ -174,13 +176,18 @@ describe("clientsCsv", () => {
     const lines = csv.split("\r\n");
     expect(lines[0]).toBe(HEADER);
     expect(lines[1]).toBe(
-      '"Quote ""Co"", Inc",owner@acme.com,standard,none,online,true,true,150.00,2026-07-01T00:00:00Z,b1'
+      '"Quote ""Co"", Inc",owner@acme.com,standard,none,online,true,true,150.00,,2026-07-01T00:00:00Z,b1'
     );
   });
 
   it("leaves the margin cell empty when unknown", () => {
     const csv = clientsCsv([row({ marginCents: null })]);
-    expect(csv.split("\r\n")[1]).toContain(",online,false,false,,2026-07-01T00:00:00Z");
+    expect(csv.split("\r\n")[1]).toContain(",online,false,false,,,2026-07-01T00:00:00Z");
+  });
+
+  it("carries the priority support coverage end when the tenant has one", () => {
+    const csv = clientsCsv([row({ prioritySupportUntil: "2026-09-09T00:00:00Z" })]);
+    expect(csv.split("\r\n")[1]).toContain(",150.00,2026-09-09T00:00:00Z,2026-07-01T00:00:00Z");
   });
 
   it("produces only the header for zero rows", () => {

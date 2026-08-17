@@ -4,6 +4,12 @@ import { getCommitmentMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_NAME } from "@/lib/plans/canadian-messaging";
 import { MEXICO_MESSAGING_FEE_NAME } from "@/lib/plans/mexican-messaging";
+import {
+  PRIORITY_SUPPORT_CHECKOUT_KIND,
+  PRIORITY_SUPPORT_LINE_NAME,
+  PRIORITY_SUPPORT_MONTHLY_CENTS,
+  PRIORITY_SUPPORT_SUBSCRIPTION_KIND
+} from "@/lib/plans/priority-support";
 
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
@@ -41,13 +47,13 @@ export type CheckoutParams = {
   /**
    * One-time 10DLC carrier-registration pass-through (Phase C3), added as an
    * inline `price_data` line so no per-environment Stripe product setup is
-   * needed. Set by the NEW-SIGNUP checkout only — plan changes and
+   * needed. Set by the NEW-SIGNUP checkout only: plan changes and
    * reactivations reuse the tenant's existing campaign and must not re-charge
    * it. Billed once on the first invoice; the 30-day refund carves it out.
    */
   oneTimeCarrierFeeCents?: number;
   /**
-   * Canadian messaging surcharge — a RECURRING labeled line item riding the
+   * Canadian messaging surcharge: a RECURRING labeled line item riding the
    * subscription (Canadian carriers charge per-message pass-through fees US
    * traffic doesn't). Stripe requires every item on a subscription to share
    * the billing interval, so the fee bills at the plan's cadence: monthly
@@ -57,7 +63,7 @@ export type CheckoutParams = {
    */
   canadaFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
   /**
-   * Mexican messaging surcharge — same shape and cadence rules as
+   * Mexican messaging surcharge: same shape and cadence rules as
    * `canadaFee` (a Mexican tenant's US +1 number texts and calls +52 at
    * international rates). Set only when the signup resolves to Mexico (see
    * isMexicanBusiness); existing tenants are grandfathered. The two fees
@@ -182,7 +188,7 @@ export async function ensureCommitmentSchedule(params: {
     const futurePrice = futurePhase?.items[0]?.price;
     const futurePriceId = typeof futurePrice === "string" ? futurePrice : futurePrice?.id;
     // Idempotent only when the renewal phase matches the plan price AND
-    // carries every subscription item — a schedule built before an add-on
+    // carries every subscription item: a schedule built before an add-on
     // (e.g. the Canadian messaging surcharge) existed must be repaired, or
     // the add-on silently drops at term rollover.
     if (futurePriceId === renewalPriceId && futureItemCount === subscription.items.data.length) {
@@ -200,7 +206,7 @@ export async function ensureCommitmentSchedule(params: {
   }
 
   // Preserve any add-on items beyond the plan (e.g. the Canadian messaging
-  // surcharge) in BOTH phases — rewriting the phases with only the plan item
+  // surcharge) in BOTH phases: rewriting the phases with only the plan item
   // would silently strip a live add-on from the subscription and drop it at
   // renewal.
   const addOnItems = subscription.items.data
@@ -208,7 +214,7 @@ export async function ensureCommitmentSchedule(params: {
     .map((item) => ({ price: item.price.id, quantity: item.quantity ?? 1 }));
 
   // Phase 2 rolls the plan onto the MONTHLY renewal price, and Stripe
-  // requires every item in a phase to share the billing interval — so a
+  // requires every item in a phase to share the billing interval, so a
   // term-cadence add-on (e.g. the Canada fee billed ×24 upfront) must be
   // converted to its monthly equivalent (same product, unit ÷ term months).
   const renewalAddOnItems = subscription.items.data.slice(1).map((item) => {
@@ -424,7 +430,7 @@ export type WhiteGloveCheckoutParams = {
 
 /**
  * One-time Checkout Session for a white-glove onboarding package (Phase C5).
- * Inline `price_data` — the catalog in src/lib/plans/white-glove.ts is the
+ * Inline `price_data`: the catalog in src/lib/plans/white-glove.ts is the
  * pricing source of truth, so no per-environment Stripe product setup is
  * needed. Metadata shape is what the Stripe webhook expects
  * (`checkoutKind: "white_glove_package"`), mirrored onto the payment intent
@@ -470,7 +476,7 @@ export async function createWhiteGloveCheckoutSession(
 }
 
 export type EnterpriseDealCheckoutParams = {
-  /** enterprise_deals.id — the row is the pricing source of truth. */
+  /** enterprise_deals.id: the row is the pricing source of truth. */
   dealId: string;
   businessId: string;
   businessName: string;
@@ -486,7 +492,7 @@ export type EnterpriseDealCheckoutParams = {
 /**
  * Recurring Checkout Session for an admin-authored enterprise deal: a
  * `mode=subscription` session whose monthly price is inline `price_data`
- * (custom per deal — no per-environment Stripe product/price setup), plus an
+ * (custom per deal, no per-environment Stripe product/price setup), plus an
  * optional one-time setup-fee line billed on the first invoice. Metadata
  * shape is what the Stripe webhook expects (`checkoutKind:
  * "enterprise_deal"`); it is mirrored onto the subscription so later
@@ -512,7 +518,7 @@ export async function createEnterpriseDealCheckoutSession(
     {
       price_data: {
         currency: "usd",
-        product_data: { name: `Enterprise plan — ${params.businessName}` },
+        product_data: { name: `Enterprise plan: ${params.businessName}` },
         unit_amount: params.monthlyCents,
         recurring: { interval: "month" }
       },
@@ -542,6 +548,93 @@ export async function createEnterpriseDealCheckoutSession(
   });
   if (!session.url) throw new Error("Stripe checkout session URL is null");
   return { id: session.id, url: session.url };
+}
+
+export type PrioritySupportCheckoutParams = {
+  businessId: string;
+  successUrl: string;
+  cancelUrl: string;
+  /** Existing Stripe customer, so the add-on lands on the same payer. */
+  customerId?: string;
+  customerEmail?: string;
+  /** Absent when an admin generates a pay link for the owner to open. */
+  userId?: string;
+};
+
+/**
+ * Hosted Checkout for the $400/month priority support add-on.
+ *
+ * A SEPARATE `mode: "subscription"` from the tenant's membership, on the same
+ * customer. Two reasons it cannot be a line item on the membership instead:
+ * Stripe requires every item on one subscription to share a billing interval
+ * (a 12/24-month membership bills at `interval_count: 12|24`), and billing it
+ * at the plan's cadence would prepay support for the whole term, inverting the
+ * product rule that support is cancellable any month.
+ *
+ * Hosted Checkout rather than creating the subscription off-session against
+ * the card already on file: that card was collected under the MEMBERSHIP's
+ * subscription mandate, which does not cover starting a second recurring
+ * charge. Auto-reload made the same call for the same reason (see
+ * createAutoReloadSetupSession below).
+ *
+ * No `billing_cycle_anchor` and no `proration_behavior`: Stripe's defaults
+ * start the cycle at creation and charge the full $400, which is what we want.
+ * The tenant gets a second bill date rather than a partial first month.
+ *
+ * `subscriptionKind` is mirrored onto `subscription_data.metadata` and is
+ * load-bearing, not decorative. The webhook's `invoice.paid` handler resolves
+ * an unrecognized subscription by its `businessId` metadata; without this
+ * marker to gate on, a paid priority-support invoice would be attributed to
+ * the MEMBERSHIP row and overwrite its cached billing period with this
+ * subscription's monthly window.
+ */
+export async function createPrioritySupportCheckoutSession(
+  params: PrioritySupportCheckoutParams
+): Promise<{ id: string; url: string }> {
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: PRIORITY_SUPPORT_CHECKOUT_KIND,
+    subscriptionKind: PRIORITY_SUPPORT_SUBSCRIPTION_KIND,
+    businessId: params.businessId,
+    ...(params.userId ? { userId: params.userId } : {})
+  };
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: { name: PRIORITY_SUPPORT_LINE_NAME },
+          unit_amount: PRIORITY_SUPPORT_MONTHLY_CENTS,
+          recurring: { interval: "month" }
+        },
+        quantity: 1
+      }
+    ],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    customer: params.customerId,
+    customer_email: params.customerId ? undefined : params.customerEmail,
+    billing_address_collection: "auto",
+    metadata,
+    subscription_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe checkout session URL is null");
+  return { id: session.id, url: session.url };
+}
+
+/**
+ * Wind the priority support add-on down at the end of the period the tenant
+ * already paid for. Never an immediate cancel: coverage runs to
+ * `current_period_end` and then lapses on its own, because
+ * `businesses.priority_support_until` was already stamped that far out and is
+ * only ever moved forward by payment.
+ */
+export async function cancelPrioritySupportSubscription(
+  subscriptionId: string
+): Promise<Stripe.Subscription> {
+  const stripe = getStripe();
+  return stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
 }
 
 /**

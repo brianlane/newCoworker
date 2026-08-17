@@ -142,10 +142,18 @@ export type BusinessRow = {
   white_glove_package?: "setup" | "buildout" | null;
   white_glove_purchased_at?: string | null;
   /**
-   * Priority call/video support window end (white-glove purchase + 30d).
+   * Priority call/video support window end. Opened by a white-glove purchase
+   * (+30d), by the $400/month priority support subscription (each paid invoice
+   * pushes it to that period's end + grace), or by an admin comp.
    * Null or past = email-only support. Gate via `hasPrioritySupport`.
    */
   priority_support_until?: string | null;
+  /**
+   * When the priority-support expiry warning was last emailed. Stamped BEFORE
+   * the send so an overlapping sweep cannot double-email; cleared when a new
+   * coverage window opens so the next lapse warns again.
+   */
+  priority_support_nudge_sent_at?: string | null;
 };
 
 /**
@@ -472,6 +480,50 @@ export async function recordWhiteGlovePurchase(
     })
     .eq("id", id);
   if (error) throw new Error(`recordWhiteGlovePurchase: ${error.message}`);
+}
+
+/**
+ * Set the priority support window to an exact value, or clear it with null.
+ *
+ * Deliberately NOT monotonic, unlike `extendPrioritySupport` (white-glove-
+ * offers.ts), which only ever moves the window forward. That guarantee is
+ * right for the payment paths, where a webhook retry or an overlapping window
+ * must never shorten coverage a tenant paid for. It is wrong for an operator
+ * comping support by hand, who has to be able to shorten a window set by
+ * mistake or revoke one entirely.
+ *
+ * So the split is: payment paths call extendPrioritySupport, admin calls this.
+ * Do not use this one from a webhook.
+ */
+export async function setPrioritySupportUntil(
+  id: string,
+  until: Date | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ priority_support_until: until ? until.toISOString() : null })
+    .eq("id", id);
+  if (error) throw new Error(`setPrioritySupportUntil: ${error.message}`);
+}
+
+/**
+ * Clear the expiry-nudge stamp so a NEW coverage window can warn again.
+ * Without this, a tenant who lets support lapse and later restarts it would
+ * never get a second warning, because the sweep treats a non-null stamp as
+ * "already told them".
+ */
+export async function clearPrioritySupportNudgeStamp(
+  id: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ priority_support_nudge_sent_at: null })
+    .eq("id", id);
+  if (error) throw new Error(`clearPrioritySupportNudgeStamp: ${error.message}`);
 }
 
 export async function updateEnterpriseLimits(

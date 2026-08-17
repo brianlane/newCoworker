@@ -11,6 +11,8 @@ import {
   createSmsBonusCheckoutSession,
   createVoiceBonusCheckoutSession,
   createWhiteGloveCheckoutSession,
+  createPrioritySupportCheckoutSession,
+  cancelPrioritySupportSubscription,
   ensureCommitmentSchedule,
   releaseCommitmentSchedule,
   resolveIntroDiscountCouponId,
@@ -22,6 +24,7 @@ const mockConstructEvent = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockPortalSessionCreate = vi.fn();
 const mockSubscriptionRetrieve = vi.fn();
+const mockSubscriptionUpdate = vi.fn();
 const mockScheduleCreate = vi.fn();
 const mockScheduleRetrieve = vi.fn();
 const mockScheduleUpdate = vi.fn();
@@ -41,7 +44,8 @@ vi.mock("stripe", () => {
       }
     };
     subscriptions = {
-      retrieve: mockSubscriptionRetrieve
+      retrieve: mockSubscriptionRetrieve,
+      update: mockSubscriptionUpdate
     };
     subscriptionSchedules = {
       create: mockScheduleCreate,
@@ -1169,7 +1173,7 @@ describe("stripe/client", () => {
           {
             price_data: {
               currency: "usd",
-              product_data: { name: "Enterprise plan — Acme Corp" },
+              product_data: { name: "Enterprise plan: Acme Corp" },
               unit_amount: 49_500,
               recurring: { interval: "month" }
             },
@@ -1235,6 +1239,99 @@ describe("stripe/client", () => {
       await expect(createEnterpriseDealCheckoutSession(baseParams)).rejects.toThrow(
         "Stripe checkout session URL is null"
       );
+    });
+  });
+
+  describe("createPrioritySupportCheckoutSession", () => {
+    const baseParams = {
+      businessId: "biz-1",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel"
+    };
+
+    it("creates a month-to-month subscription session at $400 on the existing customer", async () => {
+      const result = await createPrioritySupportCheckoutSession({
+        ...baseParams,
+        customerId: "cus_1",
+        userId: "user-1"
+      });
+
+      expect(result).toEqual({ id: "cs_mock_session", url: "https://checkout.stripe.com/mock" });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "subscription",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Priority support coverage" },
+              unit_amount: 40_000,
+              recurring: { interval: "month" }
+            },
+            quantity: 1
+          }
+        ],
+        customer: "cus_1"
+      });
+      // Month to month for EVERY tenant: no interval_count, so a 12/24-month
+      // membership never drags the add-on onto its cadence.
+      expect(call.line_items[0].price_data.recurring.interval_count).toBeUndefined();
+      // No proration and no anchor: full $400 today, then its own anniversary.
+      expect(call.subscription_data.billing_cycle_anchor).toBeUndefined();
+      expect(call.subscription_data.proration_behavior).toBeUndefined();
+      expect(call.customer_email).toBeUndefined();
+    });
+
+    it("mirrors subscriptionKind onto the SUBSCRIPTION metadata, not just the session", async () => {
+      // Load-bearing: the invoice.paid handler resolves an unrecognized
+      // subscription by businessId, and without this marker a paid
+      // priority-support invoice would overwrite the MEMBERSHIP's cached
+      // billing period with this subscription's one-month window.
+      await createPrioritySupportCheckoutSession({ ...baseParams, customerId: "cus_1" });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.subscription_data.metadata).toMatchObject({
+        checkoutKind: "priority_support",
+        subscriptionKind: "priority_support",
+        businessId: "biz-1"
+      });
+      expect(call.metadata).toMatchObject({ subscriptionKind: "priority_support" });
+    });
+
+    it("falls back to an email when there is no Stripe customer yet", async () => {
+      await createPrioritySupportCheckoutSession({
+        ...baseParams,
+        customerEmail: "owner@example.com"
+      });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.customer).toBeUndefined();
+      expect(call.customer_email).toBe("owner@example.com");
+    });
+
+    it("omits userId from metadata when an admin generates the link", async () => {
+      await createPrioritySupportCheckoutSession(baseParams);
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.metadata.userId).toBeUndefined();
+    });
+
+    it("throws when the session url is null", async () => {
+      mockSessionCreate.mockResolvedValueOnce({ id: "cs_ps_null", url: null });
+      await expect(createPrioritySupportCheckoutSession(baseParams)).rejects.toThrow(
+        "Stripe checkout session URL is null"
+      );
+    });
+  });
+
+  describe("cancelPrioritySupportSubscription", () => {
+    it("winds down at period end rather than cancelling immediately", async () => {
+      // Coverage was already stamped to the end of the paid period and only
+      // ever moves forward, so an immediate cancel would take away days the
+      // tenant paid for.
+      mockSubscriptionUpdate.mockResolvedValueOnce({ id: "sub_1", cancel_at_period_end: true });
+      const sub = await cancelPrioritySupportSubscription("sub_1");
+      expect(mockSubscriptionUpdate).toHaveBeenCalledWith("sub_1", {
+        cancel_at_period_end: true
+      });
+      expect(sub).toMatchObject({ cancel_at_period_end: true });
     });
   });
 

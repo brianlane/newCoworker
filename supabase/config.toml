@@ -113,6 +113,12 @@ verify_jwt = false
 [functions.contract-term-nudge-sweep]
 verify_jwt = false
 
+# Priority support expiry nudge (pg_cron daily at 15:35 UTC). Same plain-hex
+# INTERNAL_CRON_SECRET bearer as the other nudge sweeps, so the gateway JWT
+# check must stay OFF.
+[functions.priority-support-nudge-sweep]
+verify_jwt = false
+
 # Cron sweep watchdog (pg_cron daily at 03:30 UTC). Same plain-hex
 # INTERNAL_CRON_SECRET bearer as the sweeps it watches, so the gateway JWT
 # check must stay OFF.
