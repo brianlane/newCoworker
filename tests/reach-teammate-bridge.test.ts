@@ -375,7 +375,9 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
         return { ok: true, status: 200, callControlId: "b-leg-2" };
       }
     });
-    const supa = reachSession([{ attempt: 1, status: "no_answer", b_leg: "b-leg-2" }]);
+    const supa = reachSession([
+      { reach: { attempt: 1, status: "no_answer", b_leg: "b-leg-2" } }
+    ]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
@@ -400,7 +402,7 @@ describe("runReachLadder: dial-failure telemetry and honesty", () => {
         sequence.push("sms");
       }
     });
-    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
+    const supa = reachSession([answeredHuman(0, "b-leg-1")]);
     const result = await runReachLadder(supa, telnyx, {
       businessId: BIZ,
       aLegCallControlId: A_LEG,
