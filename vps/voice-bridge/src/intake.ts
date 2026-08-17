@@ -58,6 +58,40 @@ export function intakeOpener(
  * the wrong language. The captured fields stay ENGLISH regardless, because
  * they are read by the owner, not the caller.
  */
+/**
+ * Recognize a bridged leg that reached a machine instead of the seller.
+ *
+ * Names the carrier signatures verbatim ("is not available", "please record
+ * your message", "at the tone") because the generic recordings rule names
+ * menus and greetings in the abstract, and on 2026-08-16 the model heard
+ * "592030 is not available." mid-conversation and treated it as the seller
+ * fumbling a phone number: the exact phrases are what make the recognition
+ * fire before the first wrong reply, not after.
+ */
+export const INBOUND_VOICEMAIL_RECOGNITION_LINE =
+  "THE LINE IS NOT ALWAYS A PERSON. This call is bridged onward to the seller's own phone, which can be off or unreachable. A carrier announcement (a voice saying a number \"is not available\", \"cannot be reached\", or \"has a voicemail box that is full\"), an invitation to \"please record your message\" or speak \"at the tone\", or a mailbox menu offering to replay or re-record are RECORDINGS, not the seller. The moment you hear one, stop conversing: ask it nothing, answer it nothing, and never treat a number it reads out as the seller's number.";
+
+/**
+ * The ONE message the inbound live-transfer intake may leave on a voicemail.
+ *
+ * Scoped to the inbound branch only: outbound calls already carry an authored
+ * `voicemailTemplate` (or a deliberate hang-up policy), and a default here
+ * would override that choice. The script carries no price, address, or
+ * briefing detail on purpose: the recordings rule bans reading those into a
+ * mailbox, and this message must stay safe on a stranger's voicemail.
+ */
+export function inboundVoicemailMessageLine(businessName: string, hasEndCall: boolean): string {
+  const ending = hasEndCall
+    ? "then call the `end_call` tool to hang up"
+    : "then end the call by saying nothing more";
+  return (
+    "If a recording invites you to leave a message, leave EXACTLY this one message, once, and nothing else: " +
+    `"Hi, this is the office of ${businessName} calling back about the home you asked about selling. We will try you again shortly. Thank you." ` +
+    `Say it and stop: no questions, no details from your briefing, no second attempt, ${ending}. ` +
+    "If there is no invitation to record, stay silent and end the call the same way."
+  );
+}
+
 export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
@@ -143,7 +177,20 @@ export function intakeSystemInstruction(
       // person on the line is often the ONLY source for it. A hang-up two
       // minutes in otherwise leaves the team with no way to reach them at all.
       "YOUR FIRST PRIORITY is their phone number. Ask for the best number to reach them within your first couple of exchanges, naturally and early (\"what's the best number for you?\"), read it back to confirm it, and record it with `capture_lead` immediately, before you work through anything else on the list. If the call ends abruptly, that number is the one thing that must not be missing.",
-      "Once you have it, tell them someone from the team will be in touch shortly, and use the rest of the call to be useful: answer their questions about selling as best you can, and be honest that a person will handle the specifics you cannot."
+      "Once you have it, tell them someone from the team will be in touch shortly, and use the rest of the call to be useful: answer their questions about selling as best you can, and be honest that a person will handle the specifics you cannot.",
+      // The partner bridges this call ONWARD to the client's own line after
+      // the accept keypress, and that leg can reach a switched-off phone. On
+      // 2026-08-16 (Thomas L.) the bridge landed in a carrier voicemail: the
+      // AI heard "592030 is not available.", asked it whether it was trying
+      // to give a phone number, chatted with the mailbox's time-limit menu,
+      // and Thomas's voicemail recorded four minutes of one-sided intake.
+      // The generic RECORDED_SYSTEM_LINE says never converse with recordings
+      // but leaves "no message given" as stay-silent; this persona's calls
+      // are exactly where a short scripted message beats silence, so the
+      // message is given HERE, with none of the briefing's lead details in
+      // it (the recording ban on details still applies).
+      INBOUND_VOICEMAIL_RECOGNITION_LINE,
+      inboundVoicemailMessageLine(businessName, hasEndCall)
     );
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI

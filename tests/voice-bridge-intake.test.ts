@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   composeIntakeLeadSms,
   DEFAULT_INTAKE_CAPTURE_FIELDS,
+  INBOUND_VOICEMAIL_RECOGNITION_LINE,
+  inboundVoicemailMessageLine,
   intakeSystemInstruction,
   STAR_ROW
 } from "../vps/voice-bridge/src/intake";
@@ -436,5 +438,76 @@ describe("intakeSystemInstruction: the keypad exception is scoped per announceme
   it("names the later-recording case it must not press into", () => {
     expect(instr).toContain("a voicemail menu offering to replay");
     expect(instr).toContain("do not press anything");
+  });
+});
+
+/**
+ * The inbound live-transfer leg can reach a MACHINE, and the generic
+ * recordings rule alone leaves it silent rather than useful.
+ *
+ * On 2026-08-16 (Thomas L., the 16:40Z call) HomeLight bridged the accepted
+ * referral onward to the seller's phone, which was off: a carrier voice said
+ * "592030 is not available.", the model asked it whether it was trying to
+ * give a phone number, and the seller's mailbox recorded four minutes of
+ * one-sided intake before the time-limit menu ended it. Two fixes, both
+ * scoped to the INBOUND branch only: name the carrier signatures verbatim so
+ * recognition fires before the first wrong reply, and hand the persona ONE
+ * pre-written message so the mailbox gets something useful instead of
+ * improvisation (outbound calls keep their authored voicemailTemplate
+ * policy, so they must NOT inherit this default).
+ */
+describe("intakeSystemInstruction: inbound carrier-voicemail handling", () => {
+  const inbound = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true);
+
+  it("names the carrier signatures verbatim so recognition beats the first reply", () => {
+    expect(inbound).toContain('"is not available"');
+    expect(inbound).toContain('"please record your message"');
+    expect(inbound).toContain('"at the tone"');
+    expect(inbound).toContain("never treat a number it reads out as the seller's number");
+  });
+
+  it("gives the ONE scripted message, business-named, with no briefing details", () => {
+    expect(inbound).toContain(
+      '"Hi, this is the office of Amy Laidlaw calling back about the home you asked about selling. We will try you again shortly. Thank you."'
+    );
+    expect(inbound).toContain("leave EXACTLY this one message, once, and nothing else");
+    expect(inbound).toContain("no details from your briefing");
+  });
+
+  it("ends the call via the end_call tool when available, by silence otherwise", () => {
+    expect(inbound).toContain("call the `end_call` tool to hang up");
+    const withoutEndCall = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      false
+    );
+    expect(withoutEndCall).toContain("end the call by saying nothing more");
+  });
+
+  it("outbound and transfer calls keep the authored voicemailTemplate policy instead", () => {
+    const outbound = intakeSystemInstruction(
+      "Amy Laidlaw",
+      undefined,
+      "America/Phoenix",
+      [],
+      true,
+      undefined,
+      true
+    );
+    const transfer = intakeSystemInstruction("Amy Laidlaw", undefined, "America/Phoenix", [], true, {
+      agentName: "Dave"
+    });
+    for (const instr of [outbound, transfer]) {
+      expect(instr).not.toContain("calling back about the home you asked about selling");
+      expect(instr).not.toContain("THE LINE IS NOT ALWAYS A PERSON");
+    }
+  });
+
+  it("carries no em dash and no receptionist label", () => {
+    expect(INBOUND_VOICEMAIL_RECOGNITION_LINE).not.toMatch(/—/);
+    expect(inboundVoicemailMessageLine("Amy Laidlaw", true)).not.toMatch(/—/);
+    expect(INBOUND_VOICEMAIL_RECOGNITION_LINE.toLowerCase()).not.toContain("receptionist");
   });
 });

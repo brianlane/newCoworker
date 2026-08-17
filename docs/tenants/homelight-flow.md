@@ -137,6 +137,21 @@ a key to accept it. Everything downstream follows from that:
   follow: never assume a var-existence check is safe at a step that runs
   before the var is declared, and run
   `tsx debug/audit-relay-contact-owners.ts` after touching ownership code.
+- **After the accept keypress, the bridged leg can be a MACHINE.** HomeLight
+  connects the accepted call onward to the client's own phone, and on Aug 16
+  2026 (Thomas L., 16:40Z) that phone was off: a carrier voice said
+  "592030 is not available.", the AI asked it whether it was trying to give a
+  phone number, and the client's mailbox recorded four minutes of one-sided
+  intake before its time-limit menu ended the call. The inbound intake
+  persona now names the carrier signatures verbatim ("is not available",
+  "please record your message", "at the tone") and leaves ONE scripted,
+  detail-free message, then hangs up (`INBOUND_VOICEMAIL_RECOGNITION_LINE` /
+  `inboundVoicemailMessageLine`, `vps/voice-bridge/src/intake.ts`; pinned by
+  `tests/voice-bridge-intake.test.ts`). Outbound calls are deliberately
+  untouched: their authored `voicemailTemplate` policy already decides what,
+  if anything, gets left. Also note HomeLight treats a voicemail pickup as
+  NOT connected: Thomas's portal contact stayed "withheld" at 10:42, so a
+  claim whose client leg reached voicemail releases nothing.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
