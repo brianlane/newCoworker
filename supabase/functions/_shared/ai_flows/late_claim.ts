@@ -154,8 +154,12 @@ function classifyCandidate(args: {
   return null;
 }
 
-/** The lead a candidate run is about, for name matching. */
-function offerCandidateOf(m: LateClaimMatch): OfferCandidate {
+/**
+ * The lead a candidate run is about, for name matching. `leadPhone` is always
+ * a string here (the var readers return "" when a flow captured no phone), so
+ * callers never need a fallback.
+ */
+function offerCandidateOf(m: LateClaimMatch): OfferCandidate & { leadPhone: string } {
   const vars = (m.row.context?.vars ?? {}) as Record<string, unknown>;
   return {
     runId: m.row.id,
@@ -173,37 +177,61 @@ function offerCandidateOf(m: LateClaimMatch): OfferCandidate {
  * eligible rows. Without this, naming that lead reports an ambiguity whose
  * question is unanswerable ("Which one? Aurora Anthony or Aurora Anthony?").
  *
- * Keyed on the folded name plus the phone digits, so two DIFFERENT leads who
- * share a name stay genuinely ambiguous and get asked about, with the last
- * four digits telling them apart. Two same-named leads that BOTH lack a phone
- * merge, deliberately: there is nothing to ask with, so a deterministic pick
- * (best bucket, newest within it) beats an unanswerable question, and the
- * confirmation text names what was taken.
+ * Grouping is by folded NAME first, and the phone only splits a group when it
+ * actually can. Keying on name+phone directly looked tidier but broke on the
+ * real data: the flows in a chain do not all capture a phone (the no-phone
+ * guard path leaves `lead_phone` empty or "none"), so one lead's runs would
+ * land under different keys and produce the very question this exists to
+ * prevent, now half-labelled: "Aurora Anthony (...0022) or Aurora Anthony".
+ *
+ * So, within one name:
+ * - zero or one distinct phone → one lead, collapse it,
+ * - two or more distinct phones → genuinely different people sharing a name,
+ *   split by phone so the last four digits can tell them apart, and keep the
+ *   phone-less runs as one further entry, because they could belong to either
+ *   and guessing is the failure being avoided.
  */
 function collapseByLead(matches: readonly LateClaimMatch[]): LateClaimMatch[] {
-  const out: LateClaimMatch[] = [];
-  const slotOf = new Map<string, number>();
-  for (const m of matches) {
-    const c = offerCandidateOf(m);
+  /** Input position, kept so the output stays in newest-first order. */
+  type Placed = { at: number; match: LateClaimMatch; phone: string };
+  const unnamed: Placed[] = [];
+  const byName = new Map<string, Placed[]>();
+  matches.forEach((match, at) => {
+    const c = offerCandidateOf(match);
+    const placed: Placed = { at, match, phone: c.leadPhone.replace(/\D/g, "") };
     const folded = normalizeLeadName(c.leadLabel);
     // An unnamed run can never answer to a name, so it is never merged with
-    // another unnamed one: keep it distinct in place.
+    // another unnamed one: keep it distinct.
     if (!folded) {
-      out.push(m);
+      unnamed.push(placed);
+      return;
+    }
+    const group = byName.get(folded);
+    if (group) group.push(placed);
+    else byName.set(folded, [placed]);
+  });
+
+  // Best of a bucket: the strongest claim shape, and among equals the newest
+  // (candidates arrive newest-first, so that is the lowest input position).
+  const best = (bucket: Placed[]): Placed =>
+    bucket.reduce((a, b) => (KIND_RANK[b.match.kind] < KIND_RANK[a.match.kind] ? b : a));
+
+  const picked: Placed[] = [...unnamed];
+  for (const group of byName.values()) {
+    const phones = new Set(group.map((p) => p.phone).filter((p) => p !== ""));
+    if (phones.size <= 1) {
+      picked.push(best(group));
       continue;
     }
-    const key = `${folded}|${(c.leadPhone ?? "").replace(/\D/g, "")}`;
-    const slot = slotOf.get(key);
-    // Candidates arrive newest-first, so the first sighting is the newest and
-    // holds the slot; replace it only for a strictly better bucket.
-    if (slot === undefined) {
-      slotOf.set(key, out.length);
-      out.push(m);
-    } else if (KIND_RANK[m.kind] < KIND_RANK[out[slot].kind]) {
-      out[slot] = m;
+    const byPhone = new Map<string, Placed[]>();
+    for (const p of group) {
+      const bucket = byPhone.get(p.phone);
+      if (bucket) bucket.push(p);
+      else byPhone.set(p.phone, [p]);
     }
+    for (const bucket of byPhone.values()) picked.push(best(bucket));
   }
-  return out;
+  return picked.sort((a, b) => a.at - b.at).map((p) => p.match);
 }
 
 /**
@@ -257,20 +285,21 @@ export function matchLateClaimReply(args: {
         .map((row) => classifyCandidate({ row, from, digit, nowMs, windowMs }))
         .filter((m): m is LateClaimMatch => m !== null)
     );
-    const named = matchOfferByLeadName(eligible.map(offerCandidateOf), typed);
+    const named = matchOfferByLeadName(
+      // The matcher treats the id as opaque, so the position in `eligible` is
+      // the most useful thing to put there: it makes the lookup back a total
+      // index rather than a search that would need an impossible miss handled.
+      eligible.map((m, i) => ({ ...offerCandidateOf(m), runId: String(i) })),
+      typed
+    );
     if (named.kind === "ambiguous") return { outcome: "ambiguous", labels: named.labels };
     if (named.kind === "one") {
-      const hit = eligible.find((m) => m.row.id === named.runId);
-      // `named.runId` came out of this same list, so the lookup always hits;
-      // the guard is here so a future refactor fails closed (fall through to
-      // the ETA reading) rather than throwing inside a webhook.
-      if (hit) {
-        return {
-          outcome: "match",
-          match: { ...hit, namedLabel: named.label },
-          ...(eligible.length > 1 ? { ackLabel: named.label } : {})
-        };
-      }
+      const hit = eligible[Number(named.runId)];
+      return {
+        outcome: "match",
+        match: { ...hit, namedLabel: named.label },
+        ...(eligible.length > 1 ? { ackLabel: named.label } : {})
+      };
     }
     // Named nothing: the text is an ETA after all. Fall through unchanged.
   }

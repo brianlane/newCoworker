@@ -386,6 +386,49 @@ describe("matchLateClaimReply — a NAMED claim after the offer lapsed", () => {
     expect(resolve([named], { digit: "2", timeframe: "Aurora" }).outcome).toBe("none");
   });
 
+  it("collapses one lead's runs even when only some of them captured a phone", () => {
+    // The flows in a chain do not all capture a phone (the no-phone guard path
+    // leaves lead_phone empty or "none"), so keying on name+phone would split
+    // one lead across two entries and ask "Aurora Anthony (...0022) or Aurora
+    // Anthony?" — the exact question this collapse exists to prevent.
+    const withPhone = row({
+      status: "done",
+      routing: { tried: [JASON], offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Aurora Anthony", lead_phone: "+16029200022" }
+    });
+    const withoutPhone = row({
+      status: "done",
+      routing: { tried: [JASON], offered_log: [JASON], step_index: 5 },
+      vars: { lead_name: "Aurora Anthony", lead_phone: "none" },
+      updated_at: new Date(NOW - 60 * 60 * 1000).toISOString()
+    });
+    const r = resolve([withPhone, withoutPhone], { timeframe: "Aurora" });
+    expect(r.outcome).toBe("match");
+    if (r.outcome !== "match") return;
+    expect(r.match.row.id).toBe(withPhone.id);
+    // One lead in play once collapsed, so no confirmation text.
+    expect(r.ackLabel).toBeUndefined();
+  });
+
+  it("splits a name across two real people, and keeps an unphoned run as its own answer", () => {
+    // Two distinct phones under one name means these are different people, so
+    // the phone splits them; a run with no phone could be either, and guessing
+    // is the failure being avoided.
+    const first = lapsed({ name: "Daniel Villanueva", phone: "+16025550111" });
+    // A second run about that same Daniel: it collapses into his one entry.
+    const firstAgain = lapsed({ name: "Daniel Villanueva", phone: "+16025550111" });
+    const second = lapsed({ name: "Daniel Villanueva", phone: "+16025552222" });
+    const unphoned = lapsed({ name: "Daniel Villanueva" });
+    const r = resolve([first, firstAgain, second, unphoned], { timeframe: "Daniel" });
+    expect(r.outcome).toBe("ambiguous");
+    if (r.outcome !== "ambiguous") return;
+    expect(r.labels).toEqual([
+      "Daniel Villanueva (...0111)",
+      "Daniel Villanueva (...2222)",
+      "Daniel Villanueva"
+    ]);
+  });
+
   it("merges two same-named leads with no phone rather than asking an impossible question", () => {
     // Nothing to disambiguate with: "Thomas L. or Thomas L.?" cannot be
     // answered, so the best bucket wins and the ack names what was taken.
