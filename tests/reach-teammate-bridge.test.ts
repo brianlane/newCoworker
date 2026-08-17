@@ -171,7 +171,7 @@ describe("pollReachOutcome", () => {
 });
 
 describe("runReachLadder", () => {
-  it("bridges the first target who answers, pre-alerting them first", async () => {
+  it("bridges the first target who answers, pre-alerting them as the dial goes out", async () => {
     const { telnyx, calls } = deps();
     const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
     const result = await runReachLadder(supa, telnyx, {
@@ -305,9 +305,9 @@ describe("runReachLadder", () => {
  * caller as "nobody answered". The ladder still advances identically; the
  * refusal is now queryable.
  */
-describe("runReachLadder: dial-failure telemetry", () => {
-  it("emits voice_reach_dial_failed per refused rung and voice_reach_exhausted at the end", async () => {
-    const { telnyx } = deps({
+describe("runReachLadder: dial-failure telemetry and honesty", () => {
+  it("all rungs refused: dials_refused, no pre-alerts, telemetry per rung", async () => {
+    const { telnyx, calls } = deps({
       dial: async () => ({ ok: false, status: 403, body: "User channel limit exceeded D1" })
     });
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
@@ -319,7 +319,11 @@ describe("runReachLadder: dial-failure telemetry", () => {
       poll: { pollMs: 1, sleep: async () => undefined },
       telemetry: (type, payload) => events.push({ type, payload })
     });
-    expect(result).toEqual({ ok: false, detail: "nobody_answered" });
+    // Nobody was rung, so the result must NOT read as the team ignoring the
+    // call, and nobody gets hyped by a pre-alert for a phone that never
+    // rings (2026-08-16 incident review).
+    expect(result).toEqual({ ok: false, detail: "dials_refused" });
+    expect(calls.sms).toEqual([]);
     expect(events).toEqual([
       {
         type: "voice_reach_dial_failed",
@@ -339,8 +343,53 @@ describe("runReachLadder: dial-failure telemetry", () => {
           error_snippet: "User channel limit exceeded D1"
         }
       },
-      { type: "voice_reach_exhausted", payload: { targets: 2 } }
+      { type: "voice_reach_exhausted", payload: { targets: 2, detail: "dials_refused" } }
     ]);
+  });
+
+  it("a mix of refused and rang-out rungs stays nobody_answered, pre-alerting only who rang", async () => {
+    let dialCount = 0;
+    const { telnyx, calls } = deps({
+      dial: async () => {
+        dialCount += 1;
+        if (dialCount === 1) return { ok: false, status: 403, body: "channel limit" };
+        return { ok: true, status: 200, callControlId: "b-leg-2" };
+      }
+    });
+    const supa = reachSession([{ attempt: 1, status: "no_answer", b_leg: "b-leg-2" }]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    // Amy's phone really rang and rang out; Dave was never rung. One phone
+    // ringing makes "nobody answered" the truthful summary, and only the
+    // teammate whose phone rang got the heads-up text.
+    expect(result).toEqual({ ok: false, detail: "nobody_answered" });
+    expect(calls.sms).toEqual(["+16026951142"]);
+  });
+
+  it("sends the pre-alert only AFTER the dial goes out", async () => {
+    const sequence: string[] = [];
+    const { telnyx } = deps({
+      dial: async () => {
+        sequence.push("dial");
+        return { ok: true, status: 200, callControlId: "b-leg-1" };
+      },
+      sendPreSms: async () => {
+        sequence.push("sms");
+      }
+    });
+    const supa = reachSession([{ attempt: 0, status: "answered", b_leg: "b-leg-1" }]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    expect(result.ok).toBe(true);
+    expect(sequence).toEqual(["dial", "sms"]);
   });
 
   it("emits nothing on a bridged success and stays safe with no callback", async () => {

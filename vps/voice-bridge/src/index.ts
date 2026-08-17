@@ -1611,11 +1611,24 @@ function main(): void {
             if (!result.ok) {
               console.log("voice-bridge: reach ladder exhausted", {
                 callControlId,
-                reason: reason ?? ""
+                reason: reason ?? "",
+                detail: result.detail
               });
+              if (result.detail === "dials_refused") {
+                // Every dial was refused before a phone rang (for example a
+                // carrier channel-limit 403 on each rung): nobody was rung
+                // and no pre-alert went out, so the model must not blame
+                // the team for missing a call that never reached them.
+                return {
+                  ok: false,
+                  detail:
+                    "could not reach the team's phone lines just now; nobody was actually rung, so offer to take a message or try again shortly"
+                };
+              }
               // The honest failure the persona's script depends on: the
               // model tells the caller nobody could pick up right now and
-              // that the team has been texted (the pre-alerts already went).
+              // that the team has been texted (pre-alerts went out with
+              // each dial that actually rang).
               return { ok: false, detail: "nobody answered; the team was texted the heads-up" };
             }
             console.log("voice-bridge: reach ladder bridged", {
