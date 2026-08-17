@@ -45,6 +45,15 @@ describe("contactChannelLabel", () => {
     expect(contactChannelLabel("telegram")).toBe("telegram");
   });
 
+  it("never returns an inherited Object.prototype member", () => {
+    // A bare index lookup would hand JSX a function for these.
+    for (const inherited of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      const label = contactChannelLabel(inherited);
+      expect(typeof label, inherited).toBe("string");
+    }
+    expect(contactChannelLabel("constructor")).toBe("constructor");
+  });
+
   it("labels every channel in the type (the map is total, so this cannot drift)", () => {
     const channels: CustomerMemoryChannel[] = [
       "sms",

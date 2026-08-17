@@ -35,5 +35,12 @@ export function contactChannelLabel(
 ): string | null {
   const raw = channel?.trim();
   if (!raw) return null;
-  return CHANNEL_DISPLAY_LABELS[raw as CustomerMemoryChannel] ?? raw.replace(/_/g, " ");
+  // Own-property check, not a bare index: a plain object inherits from
+  // Object.prototype, so `labels["constructor"]` would hand back a FUNCTION
+  // and React would be asked to render it. The DB CHECK constraint makes
+  // that unreachable today, which is exactly why it would be missed if the
+  // column ever loosened.
+  return Object.hasOwn(CHANNEL_DISPLAY_LABELS, raw)
+    ? CHANNEL_DISPLAY_LABELS[raw as CustomerMemoryChannel]
+    : raw.replace(/_/g, " ");
 }

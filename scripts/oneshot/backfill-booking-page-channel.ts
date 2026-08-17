@@ -166,10 +166,22 @@ async function main(): Promise<void> {
     .select("business_id, attendee_key, booking_source, created_at")
     .eq("booking_source", "booking_page")
     .in("business_id", [...new Set(candidates.map((c) => c.business_id))])
+    // Newest-first so a capped scan deterministically keeps the bookings
+    // most likely to be somebody's last touch, instead of an arbitrary page.
+    .order("created_at", { ascending: false })
     .limit(SCAN_LIMIT);
   if (bookingErr) {
     console.error(`calendar_booking_dedupe read failed: ${bookingErr.message}`);
     process.exit(1);
+  }
+  // A clipped booking scan is worse than a clipped contact scan: a contact
+  // whose proof row fell outside the cap reads as "does not line up" and is
+  // reported as a SKIP, which looks like a deliberate decision rather than
+  // missing evidence. Say so loudly instead.
+  if ((bookingRows ?? []).length >= SCAN_LIMIT) {
+    console.warn(
+      `WARNING: booking scan filled its ${SCAN_LIMIT}-row cap. Some SKIP lines below may be missing evidence rather than genuinely ineligible.`
+    );
   }
   const bookingsByBusiness = new Map<string, BookingRow[]>();
   for (const row of (bookingRows ?? []) as Array<BookingRow & { business_id: string }>) {
