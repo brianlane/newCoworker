@@ -26,7 +26,7 @@
     "bookedBody": "Your time with {business} is confirmed. A calendar invite is on its way to your email.",
     "bookedBodyNoInvite": "Your time with {business} is confirmed. Save this time; they'll be expecting you.",
     "bookedVideoNote": "The calendar invite includes your video call link.",
-    "bookedZoomLinkLabel": "Open your video call link",
+    "bookedVideoLinkLabel": "Open your video call link",
     "bookedManageLinkLabel": "Reschedule or cancel",
     "manageMetaTitle": "Your appointment",
     "manageHeading": "Your appointment",
@@ -1832,6 +1832,7 @@
       "upcomingTitle": "Upcoming bookings",
       "upcomingEmpty": "No upcoming bookings yet. Booked appointments from your AI coworker and this page will show here.",
       "zoomBadge": "Zoom",
+      "meetBadge": "Meet",
       "waitlistTitle": "Cancellation waitlist",
       "waitlistSubtitle": "When a cancellation frees an earlier slot, the customer next in line gets one text offering it.",
       "waitlistToggle": "On",
@@ -1952,6 +1953,12 @@
         "step3": "Click Connect. You will sign in with your New Coworker account and approve access once.",
         "footer": "Disconnect anytime from ChatGPT's connector settings. Access follows your team role, so a staff login cannot manage automations through ChatGPT either."
       }
+    },
+    "integrationsGoogleMeet": {
+      "title": "Google Meet links",
+      "hint": "Add a Google Meet link to appointments your coworker books on your Google Calendar. Nothing to connect: it uses the Google account above.",
+      "zoomPrecedence": "Zoom comes first when it is connected, so you get one video link, never two. Meet needs a booking on your Google Calendar, so it does not apply to Microsoft, Apple or CalDAV calendars, or to bookings taken when no calendar is connected.",
+      "saveFailed": "Could not save that setting. Try again."
     },
     "integrationsZoom": {
       "marketplaceLink": "View our listing on the Zoom App Marketplace",

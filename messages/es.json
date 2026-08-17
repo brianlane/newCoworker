@@ -26,7 +26,7 @@
     "bookedBody": "Tu cita con {business} está confirmada. La invitación de calendario va en camino a tu correo.",
     "bookedBodyNoInvite": "Tu cita con {business} está confirmada. Guarda este horario; te estarán esperando.",
     "bookedVideoNote": "La invitación de calendario incluye el enlace de la videollamada.",
-    "bookedZoomLinkLabel": "Abrir el enlace de tu videollamada",
+    "bookedVideoLinkLabel": "Abrir el enlace de tu videollamada",
     "bookedManageLinkLabel": "Reprogramar o cancelar",
     "manageMetaTitle": "Tu cita",
     "manageHeading": "Tu cita",
@@ -1832,6 +1832,7 @@
       "upcomingTitle": "Próximas reservas",
       "upcomingEmpty": "Aún no hay reservas próximas. Las citas reservadas por tu coworker de IA y por esta página aparecerán aquí.",
       "zoomBadge": "Zoom",
+      "meetBadge": "Meet",
       "waitlistTitle": "Lista de espera por cancelaciones",
       "waitlistSubtitle": "Cuando una cancelación libera un horario más temprano, el siguiente cliente en la lista recibe un mensaje de texto ofreciéndoselo.",
       "waitlistToggle": "Activada",
@@ -1952,6 +1953,12 @@
         "step3": "Haz clic en Conectar. Iniciaras sesion con tu cuenta de New Coworker y aprobaras el acceso una vez.",
         "footer": "Puedes desconectarla cuando quieras desde la configuracion de conectores de ChatGPT. El acceso sigue tu rol de equipo, asi que una cuenta de personal tampoco puede gestionar automatizaciones desde ChatGPT."
       }
+    },
+    "integrationsGoogleMeet": {
+      "title": "Enlaces de Google Meet",
+      "hint": "Agrega un enlace de Google Meet a las citas que tu coworker agende en tu Google Calendar. No hay nada que conectar: usa la cuenta de Google de arriba.",
+      "zoomPrecedence": "Zoom tiene prioridad cuando está conectado, así que recibes un solo enlace de video, nunca dos. Meet necesita una cita en tu Google Calendar, por lo que no aplica a calendarios de Microsoft, Apple o CalDAV, ni a las reservas hechas sin ningún calendario conectado.",
+      "saveFailed": "No se pudo guardar esa opción. Inténtalo de nuevo."
     },
     "integrationsZoom": {
       "marketplaceLink": "Ver nuestra app en el Zoom App Marketplace",

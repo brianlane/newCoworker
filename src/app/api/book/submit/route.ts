@@ -110,7 +110,7 @@ export async function POST(request: Request) {
       startIso: result.startIso,
       endIso: result.endIso,
       startLocal: result.startLocal,
-      zoomJoinUrl: result.zoomJoinUrl,
+      videoJoinUrl: result.videoJoinUrl,
       manageLink: result.manageLink
     });
   } catch (error) {

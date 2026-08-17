@@ -226,9 +226,36 @@ describe("confirmBookingDedupe", () => {
 
   it("stamps the booking's Zoom meeting id alongside the event id when present", async () => {
     const calls = scriptClient([{ data: null, error: null }]);
-    await confirmBookingDedupe("row-1", "evt-9", "zm-1");
+    await confirmBookingDedupe("row-1", "evt-9", { zoomMeetingId: "zm-1" });
     const update = calls.find((c) => c.name === "update");
     expect(update?.args[0]).toEqual({ event_id: "evt-9", zoom_meeting_id: "zm-1" });
+  });
+
+  it("stamps a Google Meet join URL, which is quoted later rather than called", async () => {
+    // Unlike the Zoom id and the mirror id, this handle is never used to
+    // reach a provider: the conference belongs to the calendar event. It is
+    // stored so reminders and the manage page can show the link.
+    const calls = scriptClient([{ data: null, error: null }]);
+    await confirmBookingDedupe("row-1", "evt-9", {
+      meetJoinUrl: "https://meet.google.com/abc-defg-hij"
+    });
+    const update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toEqual({
+      event_id: "evt-9",
+      meet_join_url: "https://meet.google.com/abc-defg-hij"
+    });
+  });
+
+  it("keeps a Meet booking out of zoom_meeting_id, which only ever holds a Zoom handle", async () => {
+    // The separation is the whole reason these are two columns: nine call
+    // sites read zoom_meeting_id and immediately call the Zoom API.
+    const calls = scriptClient([{ data: null, error: null }]);
+    await confirmBookingDedupe("row-1", "evt-9", {
+      zoomMeetingId: null,
+      meetJoinUrl: "https://meet.google.com/abc-defg-hij"
+    });
+    const update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).not.toHaveProperty("zoom_meeting_id");
   });
 
   it("stamps the shared-calendar mirror id so reschedule and cancel can find it", async () => {
@@ -236,7 +263,7 @@ describe("confirmBookingDedupe", () => {
     // appointment it represents and the team acts on an event that is not
     // happening.
     const calls = scriptClient([{ data: null, error: null }]);
-    await confirmBookingDedupe("row-1", "evt-9", null, "mirror-1");
+    await confirmBookingDedupe("row-1", "evt-9", { sharedCalendarEventId: "mirror-1" });
     const update = calls.find((c) => c.name === "update");
     expect(update?.args[0]).toEqual({
       event_id: "evt-9",

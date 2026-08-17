@@ -63,6 +63,7 @@ function booking(over: Record<string, unknown> = {}) {
     start_at: new Date(NOW + 20 * 60 * 60 * 1000).toISOString(),
     duration_minutes: 30,
     zoom_meeting_id: null,
+    meet_join_url: null,
     manage_token: `ncbm_${"a".repeat(64)}`,
     reminders_sent: {},
     ...over
@@ -328,6 +329,39 @@ describe("sweepBookingReminders", () => {
     out = await sweepBookingReminders(
       SITE,
       db([booking({ zoom_meeting_id: "934123" })]).client,
+      NOW
+    );
+    expect(out.emailsSent).toBe(1);
+    expect(String(mockSendEmail.mock.calls[0][1].bodyText)).toContain("pwd=x");
+  });
+
+  it("serves a stored Meet link without a provider round trip", async () => {
+    // The reason Zoom needs the round trip (a live `?pwd=` the id cannot
+    // reproduce) has no Meet counterpart, so the sweep spends no call here.
+    mockJoinUrl.mockClear();
+    const meetUrl = "https://meet.google.com/abc-defg-hij";
+    const out = await sweepBookingReminders(
+      SITE,
+      db([booking({ meet_join_url: meetUrl })]).client,
+      NOW
+    );
+    expect(out.emailsSent).toBe(1);
+    expect(String(mockSendEmail.mock.calls[0][1].bodyText)).toContain(meetUrl);
+    expect(mockJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it("prefers Zoom when a row somehow carries both", async () => {
+    // Defensive: the booking core never writes both, and Zoom is the
+    // provider whose link the customer was actually sent.
+    mockJoinUrl.mockResolvedValue("https://zoom.example.com/j/1?pwd=x");
+    const out = await sweepBookingReminders(
+      SITE,
+      db([
+        booking({
+          zoom_meeting_id: "934123",
+          meet_join_url: "https://meet.google.com/abc-defg-hij"
+        })
+      ]).client,
       NOW
     );
     expect(out.emailsSent).toBe(1);

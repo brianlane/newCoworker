@@ -57,13 +57,14 @@ type ReminderRow = {
   start_at: string;
   duration_minutes: number | null;
   zoom_meeting_id: string | null;
+  meet_join_url: string | null;
   manage_token: string | null;
   reminders_sent: Record<string, unknown> | null;
 };
 
 const COLUMNS =
   "id,business_id,attendee_key,attendee_email,attendee_name,start_at," +
-  "duration_minutes,zoom_meeting_id,manage_token,reminders_sent";
+  "duration_minutes,zoom_meeting_id,meet_join_url,manage_token,reminders_sent";
 
 /** SMS reminder copy. Kept beside the email catalog entry it mirrors. */
 function reminderSmsCopy(locale: AppLocale): { body: string; change: string } {
@@ -165,9 +166,13 @@ async function sendEmailReminder(
 ): Promise<boolean> {
   /* c8 ignore next -- callers gate on attendee_email before claiming */
   if (!row.attendee_email) return false;
+  // Zoom first, matching the booking core's precedence. Only Zoom needs the
+  // round trip (its live URL carries a `?pwd=` the id cannot reproduce); a
+  // Meet link was stored outright at booking time, so a Meet booking costs
+  // this sweep no provider call at all.
   const joinUrl = row.zoom_meeting_id
     ? await getZoomJoinUrl(row.business_id, row.zoom_meeting_id)
-    : null;
+    : row.meet_join_url;
   const email = buildBookingConfirmationEmail({
     kind: "reminder",
     businessName,

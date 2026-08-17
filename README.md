@@ -1146,6 +1146,55 @@ the Authorize button. It is a standalone route because the dashboard layout's
 unauthenticated redirect is a fixed `/login?redirectTo=/dashboard` and a
 server layout cannot see the current pathname.
 
+## Google Meet: the fallback video link
+
+Zoom is a whole integration. Google Meet is a **flag on the calendar insert**,
+and the difference explains everything about its shape.
+
+A Meet link is not created by a separate service. It is created BY the Google
+Calendar event: `bookOnProvider` sends `conferenceData.createRequest` plus
+`?conferenceDataVersion=1` and Google answers with a `hangoutLink`
+([src/lib/google/meet.ts](src/lib/google/meet.ts)). So there is no OAuth app,
+no token table, no webhook, and **no new scope**: `calendar.events` already
+covers it, which matters because
+[workspace-scopes.ts](src/lib/google/workspace-scopes.ts) documents a new
+sensitive scope as a fresh Google verification, not a code change.
+
+- **Zoom wins; Meet is the fallback.** The Zoom decorator runs first, and
+  `wantsMeet` requires `zoomMeeting === null`. That IS the precedence rule:
+  there is no resolver to keep in step, and a tenant never gets two links.
+- **Google calendars only.** Microsoft and CalDAV have no event that could
+  carry a Meet conference. So does **platform mode** on the booking page,
+  which writes a synthetic `platform:<uuid>` id and no calendar event at all,
+  and is by definition the case where no Google account exists. Those tenants
+  keep Zoom as their only video option. This is the boundary of the design,
+  not a gap to close later.
+- **Opt-in, default off** (`businesses.google_meet_enabled`, toggled on
+  Dashboard → Integrations → Google). Zoom's off switch is "do not connect
+  Zoom"; Google is already connected for mail and calendar by tenants who
+  never asked for video, so defaulting this on would have put a join link on
+  every in-person appointment in the fleet on deploy day.
+- **The conference rides the request that creates the appointment**, so a
+  calendar that refuses `hangoutsMeet` (secondary calendars, which is what
+  `ensureSharedCalendar` makes, do not reliably allow it, least of all on a
+  personal `@gmail.com`) would answer 400 and take the BOOKING with it. The
+  Meet insert therefore goes through `workspaceProxyStatusForBusiness`, and a
+  4xx re-books once with no conference. A failure with **no** status (timeout,
+  socket reset) is deliberately never retried: a timeout that did create the
+  event would book the slot twice.
+- **Nothing to move, delete, or clean up.** The conference belongs to the
+  event, so a reschedule PATCH (which sends no `conferenceData`, and the
+  default `conferenceDataVersion=0` preserves rather than clears) leaves the
+  link alone, and a cancel deletes it with the event. `zoom_meeting_id` stays
+  Zoom's lifecycle handle and must never receive a Meet value: nine call sites
+  read it and immediately call the Zoom API. Meet gets its own terminal
+  column, `calendar_booking_dedupe.meet_join_url`.
+- **The link reaches the customer through OUR channels only.** Nothing sets
+  `sendUpdates`, so Google sends no invitation mail for us. That is why the
+  one re-read for a still-pending conference is load-bearing: if it comes back
+  empty the appointment is real and the event shows a join control, but the
+  confirmation text and email have no link to quote.
+
 ## Public self-serve booking page (Bookings)
 
 Every business can hand out ONE public booking link, `/book/<ncb_token>`

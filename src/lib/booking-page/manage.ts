@@ -84,7 +84,7 @@ export type ManagedBookingView = {
   startIso: string;
   durationMinutes: number;
   /** Join link for the video call, when the booking has one. */
-  zoomJoinUrl: string | null;
+  videoJoinUrl: string | null;
   /** False inside the page's minimum-notice window: view only. */
   changeable: boolean;
   /**
@@ -182,12 +182,14 @@ export async function getManagedBooking(
       timezone: resolved.timezone,
       startIso: resolved.row.start_at,
       durationMinutes: resolved.durationMinutes,
-      // Read back from Zoom rather than rebuilt from the id: a
+      // Zoom is read back rather than rebuilt from the id: a
       // password-protected meeting needs the pwd parameter, and a link
-      // without it opens a page the invitee cannot get past.
-      zoomJoinUrl: resolved.row.zoom_meeting_id
+      // without it opens a page the invitee cannot get past. A Meet link has
+      // no such parameter and never changes, so it was stored at booking
+      // time and is served as-is.
+      videoJoinUrl: resolved.row.zoom_meeting_id
         ? await getZoomJoinUrl(resolved.row.business_id, resolved.row.zoom_meeting_id)
-        : null,
+        : resolved.row.meet_join_url,
       changeable: withinNotice(resolved.row.start_at, resolved.minNoticeMinutes),
       past: Date.parse(resolved.row.start_at) <= Date.now(),
       minNoticeMinutes: resolved.minNoticeMinutes,

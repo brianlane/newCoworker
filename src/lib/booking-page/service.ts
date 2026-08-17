@@ -71,7 +71,7 @@ import {
   type WorkspaceBusyRead
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, isGoogleMeetEnabled } from "@/lib/db/businesses";
 import { listTeamMembers, listTimeOff, markMemberOffered } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
@@ -169,7 +169,7 @@ export type BookingPageContext = {
   timezone: string;
   description: string | null;
   allowedDurations: number[];
-  /** True when bookings will carry a Zoom join link. */
+  /** True when bookings will carry a video join link (Zoom, or Google Meet). */
   videoCall: boolean;
   /**
    * provider = a real calendar backs availability and receives the event
@@ -233,10 +233,20 @@ export async function getBookingPageContext(
     return { ok: false, detail: "calendar_not_connected" };
   }
 
-  const [zoomId, meetingTypes] = await Promise.all([
+  const [zoomId, meetEnabled, meetingTypes] = await Promise.all([
     getActiveZoomConnectionId(page.business_id),
+    isGoogleMeetEnabled(page.business_id),
     listMeetingTypes(page.business_id)
   ]);
+
+  // A Meet link is a property of a Google Calendar event, so the provider
+  // guard is load-bearing rather than decoration. In PLATFORM mode there is
+  // no calendar connection and no event at all (the ledger is the calendar
+  // of record and the booking gets a synthetic `platform:<uuid>` id), so a
+  // Meet link is impossible there by construction, not by omission: platform
+  // mode is precisely the case where no Google account exists to host one.
+  // Zoom stays the only video option for those tenants.
+  const meetAvailable = conn?.provider === "google" && meetEnabled;
 
   return {
     ok: true,
@@ -246,7 +256,7 @@ export async function getBookingPageContext(
       timezone: business.timezone?.trim() || "UTC",
       description: page.description,
       allowedDurations: page.allowed_durations,
-      videoCall: zoomId !== null,
+      videoCall: zoomId !== null || meetAvailable,
       mode: conn ? "provider" : "platform",
       page,
       meetingTypes
@@ -644,7 +654,7 @@ export type SubmitPublicBookingResult =
       endIso: string;
       /** Human-readable local start from the booking core (business zone). */
       startLocal: string | null;
-      zoomJoinUrl: string | null;
+      videoJoinUrl: string | null;
       /**
        * Self-serve reschedule/cancel path for THIS booking
        * (`/book/manage/<token>`), or null when the token could not be
@@ -865,7 +875,7 @@ export async function submitPublicBooking(
       startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
       // The join link was shown on the original confirmation; a retry
       // cannot reconstruct it from the ledger's meeting id alone.
-      zoomJoinUrl: null,
+      videoJoinUrl: null,
       // Same reason: the first confirmation carried the manage link, and
       // minting a second token here would orphan the one already sent.
       manageLink: null
@@ -937,7 +947,7 @@ export async function submitPublicBooking(
   }
 
   let startLocal: string | null = null;
-  let zoomJoinUrl: string | null = null;
+  let videoJoinUrl: string | null = null;
   // The booking's identity, whichever mode wrote it: the provider's event id,
   // or the ledger's synthetic `platform:<uuid>`. Carried out of the branch so
   // the owner alert can name the real booking instead of a literal.
@@ -1001,7 +1011,7 @@ export async function submitPublicBooking(
     }
 
     startLocal = formatBookingStartLocal(start.toISOString(), context.timezone);
-    zoomJoinUrl = zoomMeeting?.joinUrl ?? null;
+    videoJoinUrl = zoomMeeting?.joinUrl ?? null;
     bookedEventId = platformEventId;
 
     // Same post-booking fan-out the provider core runs: a confirmed
@@ -1073,7 +1083,7 @@ export async function submitPublicBooking(
 
     const data = (booked.data ?? {}) as Record<string, unknown>;
     startLocal = typeof data.startLocal === "string" ? data.startLocal : null;
-    zoomJoinUrl = typeof data.zoomJoinUrl === "string" ? data.zoomJoinUrl : null;
+    videoJoinUrl = typeof data.videoJoinUrl === "string" ? data.videoJoinUrl : null;
     bookedEventId = typeof data.eventId === "string" ? data.eventId : null;
 
     // The booking core owns the ledger write in this mode and knows nothing
@@ -1237,7 +1247,7 @@ export async function submitPublicBooking(
       surface: "booking_page",
       bookingAssigneeMemberId: assignee,
       durationMinutes,
-      joinUrl: zoomJoinUrl,
+      joinUrl: videoJoinUrl,
       note: note || null,
       intakeLines
     });
@@ -1251,7 +1261,7 @@ export async function submitPublicBooking(
       startIso: start.toISOString(),
       durationMinutes,
       attendeeEmail: email,
-      joinUrl: zoomJoinUrl,
+      joinUrl: videoJoinUrl,
       manageLink,
       visitorTimeZone: input.visitorTimeZone ?? null,
       locale: input.locale ?? null
@@ -1268,7 +1278,7 @@ export async function submitPublicBooking(
     startIso: start.toISOString(),
     endIso,
     startLocal,
-    zoomJoinUrl,
+    videoJoinUrl,
     manageLink
   };
 }

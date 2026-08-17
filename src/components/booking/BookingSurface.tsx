@@ -73,7 +73,7 @@ export async function BookingSurface({
         bookedBody: t("bookedBody", { business: context.businessName }),
         bookedBodyNoInvite: t("bookedBodyNoInvite", { business: context.businessName }),
         bookedVideoNote: t("bookedVideoNote"),
-        bookedZoomLinkLabel: t("bookedZoomLinkLabel"),
+        bookedVideoLinkLabel: t("bookedVideoLinkLabel"),
         bookedManageLinkLabel: t("bookedManageLinkLabel"),
         poweredBy: t("poweredBy"),
         weekdaysShort: [

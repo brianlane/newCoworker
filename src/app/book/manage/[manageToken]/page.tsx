@@ -60,7 +60,7 @@ export default async function ManageBooking({
           timezone={view.timezone}
           startIso={view.startIso}
           durationMinutes={view.durationMinutes}
-          zoomJoinUrl={view.zoomJoinUrl}
+          videoJoinUrl={view.videoJoinUrl}
           changeable={view.changeable}
           past={view.past}
           bookingPageUrl={view.bookingPageUrl}
@@ -68,7 +68,7 @@ export default async function ManageBooking({
             heading: t("manageHeading"),
             withBusiness: t("manageWithBusiness", { business: view.businessName }),
             durationMinutes: t("durationMinutes"),
-            joinLabel: t("bookedZoomLinkLabel"),
+            joinLabel: t("bookedVideoLinkLabel"),
             rescheduleButton: t("manageRescheduleButton"),
             cancelButton: t("manageCancelButton"),
             cancelConfirm: t("manageCancelConfirm"),

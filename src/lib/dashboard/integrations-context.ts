@@ -57,6 +57,12 @@ export type IntegrationsContext = {
   metaConnection: Awaited<ReturnType<typeof getPublicMetaConnection>>;
   whatsappConnection: Awaited<ReturnType<typeof getPublicWhatsAppConnection>>;
   zoomConnection: Awaited<ReturnType<typeof getPublicZoomConnection>>;
+  /**
+   * Owner opt-in for Google Meet links on bookings. Not a connection: Meet
+   * rides the Google Calendar grant this tenant already has, so the Google
+   * tile renders this as a switch rather than a Connect button.
+   */
+  googleMeetEnabled: boolean;
   slackConnection: Awaited<ReturnType<typeof getPublicSlackConnection>>;
   /** False on starter: the Slack integration is a Standard-tier perk. */
   slackEnabled: boolean;
@@ -94,7 +100,7 @@ export async function loadIntegrationsContext(
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, tier, enterprise_limits")
+    .select("id, tier, enterprise_limits, google_meet_enabled")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
@@ -102,6 +108,7 @@ export async function loadIntegrationsContext(
     id: string;
     tier?: string | null;
     enterprise_limits?: unknown;
+    google_meet_enabled?: boolean | null;
   } | null;
   const businessId = businessRow?.id ?? null;
 
@@ -127,6 +134,7 @@ export async function loadIntegrationsContext(
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
     whatsappConnection: businessId ? await getPublicWhatsAppConnection(businessId) : null,
     zoomConnection: businessId ? await getPublicZoomConnection(businessId) : null,
+    googleMeetEnabled: businessRow?.google_meet_enabled === true,
     slackConnection: businessId ? await getPublicSlackConnection(businessId) : null,
     slackEnabled: slackAllowedForTier(businessRow?.tier),
     // Never load key metadata for non-owners: the key routes refuse

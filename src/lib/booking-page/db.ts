@@ -411,6 +411,7 @@ export type UpcomingBookingRow = {
   start_at: string;
   event_id: string | null;
   zoom_meeting_id: string | null;
+  meet_join_url: string | null;
 };
 
 /**
@@ -427,7 +428,7 @@ export async function listUpcomingBookings(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("calendar_booking_dedupe")
-    .select("attendee_key,start_at,event_id,zoom_meeting_id")
+    .select("attendee_key,start_at,event_id,zoom_meeting_id,meet_join_url")
     .eq("business_id", businessId)
     .gte("start_at", new Date().toISOString())
     .order("start_at", { ascending: true })
@@ -534,6 +535,7 @@ export type ManagedBookingRow = {
   start_at: string;
   event_id: string | null;
   zoom_meeting_id: string | null;
+  meet_join_url: string | null;
   duration_minutes: number | null;
 };
 
@@ -575,7 +577,9 @@ export async function getBookingByManageToken(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("calendar_booking_dedupe")
-    .select("id,business_id,attendee_key,start_at,event_id,zoom_meeting_id,duration_minutes")
+    .select(
+      "id,business_id,attendee_key,start_at,event_id,zoom_meeting_id,meet_join_url,duration_minutes"
+    )
     .eq("manage_token", token)
     .maybeSingle();
   if (error) throw new Error(`getBookingByManageToken: ${error.message}`);
