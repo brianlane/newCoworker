@@ -49,6 +49,41 @@ export const GMAIL_CONNECTION_ROW_ID = "16cff2b9-b4d3-421c-b25d-b40edd80c9a8";
 export const THREAD_COOLDOWN = { key: "{{trigger.thread_id}}", minutes: 720 } as const;
 
 /**
+ * NEVER MARKS READ. Not one step, not one tier. Brian's rule, Aug 17 2026.
+ *
+ * Three `email_organize` steps used to carry `markRead: true`
+ * (`automated_notice`, `billing_receipt`, `automated_bulk`), so mail that had
+ * never been in front of a human arrived already read. Two live examples on
+ * Aug 17: a Zoom Marketplace notice that our OAuth update was approved and
+ * published, and a Telnyx notice that Global Voice Conversational rates change
+ * on Aug 20. Both are routine by the classifier's definition and both are
+ * things Brian wanted to actually see. The read mark is what hid them.
+ *
+ * The reasoning it replaced was sound but solved the wrong problem: bulk mail
+ * with no working unsubscribe was piling up unread, and marking it read
+ * cleared the badge. Labels already solve that, and they solve it without the
+ * flow lying about what a human has looked at. An unread count that is honest
+ * is worth more than an unread count that is small.
+ *
+ * `markUnread` is gone for the same reason, from the other direction: with
+ * nothing marking mail read, forcing `automated_important` back to unread can
+ * only ever undo a human who read it in the minute before the poll. Read state
+ * belongs to the reader. This flow labels, stars, and bins; it does not touch
+ * whether a message has been read.
+ *
+ * The OTHER path that can mark a triggering email read is the poller
+ * (`markGmailMessageHandled` in src/lib/ai-flows/email-poll.ts), and it does
+ * not reach this flow: it fires only for a flow with an UNCONDITIONAL
+ * `send_email` on the trunk, and every send here sits inside the `b_sales`
+ * branch behind a `when`. That predicate was deliberately narrowed for exactly
+ * this flow; see its comment. Adding a trunk-level unguarded `send_email` here
+ * would silently re-enable read-marking on every message the flow sees.
+ *
+ * `tests/oneshot-hq-inbox-triage-definition.test.ts` fails on any step that
+ * sets either field, so this cannot come back by accident.
+ */
+
+/**
  * @param replyDrafterAgentId `business_agents.id` of the reply drafter the
  *   applier upserts before authoring. Passed in rather than hardcoded because
  *   the agent is created by the same one-shot: a literal uuid here would be a
@@ -58,6 +93,29 @@ export const THREAD_COOLDOWN = { key: "{{trigger.thread_id}}", minutes: 720 } as
 export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
   return {
     version: 1,
+    /**
+     * OUT OF THE DAILY SUMMARY. Brian's request, Aug 17 2026.
+     *
+     * This flow polls Gmail on a timer, so its run count tracks how much mail
+     * arrived, not how much happened. The Aug 17 daily summary was 21 events,
+     * 17 of them one line each reading "Team inbox triage (HQ), done", with the
+     * day's single real call and single new customer underneath. The summary is
+     * for the things Brian did not already watch happen; this flow texts him
+     * the moment anything here needs him, so its runs are the one part of that
+     * email he can never act on.
+     *
+     * Pinned here rather than left to the dashboard toggle for the same reason
+     * everything else in this file is pinned: re-running the applier resets the
+     * live row to this definition, so a preference that lived only in the
+     * dashboard would silently revert on the next `--apply`.
+     *
+     * Note this is a DIFFERENT control from `digest_customer_facing_only`
+     * (set on HQ by set-hq-digest-prefs.ts), which decides whether the digest
+     * sends at all on a quiet day. That one did not help here: Aug 17 had a
+     * real call and a real new customer, so the digest correctly sent, and then
+     * buried both.
+     */
+    options: { hideFromDigest: true },
     trigger: {
       channel: "email",
       connectionId: GMAIL_CONNECTION_ROW_ID,
@@ -346,30 +404,30 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         addLabels: ["HQ/Billing"]
       },
       /**
-       * Routine automated mail: read it, file it, never mention it.
+       * Routine automated mail: file it, never mention it.
        *
        * Zapier and friends send mail with no working unsubscribe, so it
        * accumulated unread in the team inbox and every real message had to be
-       * picked out of it. Until now `automated_notice` was classified and then
-       * nothing happened to it, which is the worst of both: the run did the
-       * work of recognising the mail and left it exactly where it was.
+       * picked out of it. Until Aug 2026 `automated_notice` was classified and
+       * then nothing happened to it, which is the worst of both: the run did
+       * the work of recognising the mail and left it exactly where it was.
        *
-       * READ AND LABELLED, and that is all. Nothing in this flow archives
-       * any more: mail disappearing from the inbox is the complaint that
-       * started this, and "where did it go" is a worse failure than a read
-       * message Brian can scroll past.
+       * LABELLED, and that is all. See NEVER MARKS READ below for why the
+       * `markRead: true` this step used to carry is gone. Nothing in this flow
+       * archives either: mail disappearing from the inbox is the complaint
+       * that started this, and "where did it go" is a worse failure than an
+       * unread message Brian can scroll past.
        *
        * This is still the tier uncertainty lands in, and it now costs
-       * nothing: the message stays exactly where it was, marked read and
-       * filed under a label. Only the unmistakably-bulk tier below is
-       * destroyed, and even that is recoverable for 30 days.
+       * nothing at all: the message stays exactly where it was, in the state
+       * it was in, filed under a label. Only the unmistakably-bulk tier below
+       * is destroyed, and even that is recoverable for 30 days.
        */
       {
         id: "s_org_automated",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_notice" },
-        markRead: true,
         addLabels: ["HQ/Automated"]
       },
       /**
@@ -387,7 +445,6 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "billing_receipt" },
-        markRead: true,
         star: true,
         addLabels: ["HQ/Billing"]
       },
@@ -401,15 +458,14 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_bulk" },
-        markRead: true,
         addLabels: ["HQ/Automated"],
         trash: true
       },
       /**
        * The automated mail that DOES matter: an outage, a security alert, a
        * lapsing plan, a broken integration. One text, and the mail is left
-       * UNREAD and in the inbox on purpose, so the owner's own inbox still
-       * shows the thing needing action. Labelled but never archived.
+       * in the inbox on purpose, so the owner's own inbox still shows the
+       * thing needing action. Labelled but never archived.
        */
       {
         id: "s_notify_automated",
@@ -423,7 +479,6 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_important" },
-        markUnread: true,
         addLabels: ["HQ/Automated"]
       }
     ]

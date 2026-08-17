@@ -50,6 +50,7 @@ import {
   groupSmsThreads,
   hasCustomerFacingDigestActivity,
   hasDigestActivity,
+  hiddenDigestFlowIds,
   isRenderableSmsSender,
   smsCounterpartFromPayload,
   windowLabel,
@@ -122,6 +123,39 @@ async function fetchActivity(
   businessId: string,
   sinceIso: string
 ): Promise<{ activity: DigestActivity; error: string | null }> {
+  /**
+   * Flows the owner muted (`options.hideFromDigest`), read BEFORE the batch so
+   * their runs can be excluded in the query itself.
+   *
+   * It costs one extra round trip per business, and it has to: the runs read is
+   * capped at 25 rows, so filtering after the fact would let a chatty polling
+   * flow evict the runs the owner actually wanted to see rather than merely
+   * clutter the list beside them.
+   *
+   * A failure here is deliberately NOT fatal and not reported as a digest
+   * error. The worst case is a digest that lists a muted flow, which is the
+   * behavior every digest had before this option existed; refusing to send over
+   * it would turn a display preference into an outage.
+   */
+  const mutedRes = await supa
+    .from("ai_flows")
+    .select("id, definition")
+    .eq("business_id", businessId)
+    .limit(500);
+  if (mutedRes.error) console.error("digest.muted_flows", businessId, mutedRes.error);
+  const mutedFlowIds = hiddenDigestFlowIds(
+    (mutedRes.data ?? []) as Array<{ id?: unknown; definition?: unknown }>
+  );
+
+  let flowRunsQuery = supa
+    .from("ai_flow_runs")
+    .select("status, created_at, context, ai_flows(name)")
+    .eq("business_id", businessId)
+    .gte("created_at", sinceIso);
+  if (mutedFlowIds.length > 0) {
+    flowRunsQuery = flowRunsQuery.not("flow_id", "in", `(${mutedFlowIds.join(",")})`);
+  }
+
   const [
     chatRes,
     smsInCountRes,
@@ -209,13 +243,7 @@ async function fetchActivity(
         .gte("started_at", sinceIso)
         .order("started_at", { ascending: false })
         .limit(50),
-      supa
-        .from("ai_flow_runs")
-        .select("status, created_at, context, ai_flows(name)")
-        .eq("business_id", businessId)
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false })
-        .limit(25),
+      flowRunsQuery.order("created_at", { ascending: false }).limit(25),
       supa
         .from("contacts")
         // Only real customer profiles are "new customer" digest items — folded

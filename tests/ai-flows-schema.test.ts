@@ -3949,3 +3949,26 @@ describe("TRIGGER_SCOPE_KEYS hygiene", () => {
     expect(dupes).toEqual([]);
   });
 });
+
+describe("options.hideFromDigest", () => {
+  const withOptions = (options: unknown) => ({
+    version: 1,
+    trigger: { channel: "manual" },
+    steps: [{ id: "s1", type: "notify_owner", message: "x" }],
+    options
+  });
+
+  it("keeps the flag through the authoring validator", () => {
+    expect(parseAiFlowDefinition(withOptions({ hideFromDigest: true })).options?.hideFromDigest).toBe(
+      true
+    );
+  });
+
+  it("leaves it unset when the flow never asked", () => {
+    expect(parseAiFlowDefinition(withOptions({})).options?.hideFromDigest).toBeUndefined();
+  });
+
+  it("rejects a non-boolean flag", () => {
+    expect(() => parseAiFlowDefinition(withOptions({ hideFromDigest: "yes" }))).toThrow();
+  });
+});

@@ -2113,6 +2113,23 @@ export const aiFlowDefinitionSchema = z.object({
       // keep-for-owner alert uses, so a live transfer stands out from
       // routine texts. Message bodies are unchanged. Default off.
       starAlerts: z.boolean().optional(),
+      // Leave this flow OUT of the daily/weekly digest email: its runs are not
+      // listed, and they do not count toward the digest's event total or the
+      // "did anything happen" send gate.
+      //
+      // For a flow that runs on a schedule or polls a mailbox, one line per run
+      // is not a summary, it is the whole email. HQ's "Team inbox triage" flow
+      // polls Gmail all day, so the Aug 17 2026 daily summary was 17 identical
+      // "Team inbox triage (HQ), done" lines with the one real call and the one
+      // real new customer buried under them.
+      //
+      // Deliberately NOT the same control as digest_customer_facing_only
+      // (notification_preferences), which decides whether the digest SENDS at
+      // all on a quiet day. This decides what a digest that does send contains,
+      // per flow, so one chatty flow can be silenced without also silencing the
+      // flows the owner does want reported. Default off: a flow is reported
+      // unless its owner says otherwise.
+      hideFromDigest: z.boolean().optional(),
       // Start the run the MOMENT the triggering message arrives, instead of
       // waiting for the worker's next tick (up to about a minute of dead time).
       // The inbound webhook kicks the worker in the background after queueing;
@@ -3581,7 +3598,13 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
           captureStepScreenshots:
             (raw.options as Record<string, unknown>).captureStepScreenshots === true || undefined,
           starAlerts:
-            (raw.options as Record<string, unknown>).starAlerts === true || undefined
+            (raw.options as Record<string, unknown>).starAlerts === true || undefined,
+          // An owner's digest preference has to survive a repair. Salvage runs
+          // on an EDIT of a live flow too, so dropping it here would silently
+          // un-mute a flow the owner muted, and the next daily summary would be
+          // the noise they turned off.
+          hideFromDigest:
+            (raw.options as Record<string, unknown>).hideFromDigest === true || undefined
         }
       : undefined;
 
