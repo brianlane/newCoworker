@@ -4,8 +4,8 @@
  * WHAT IT DOES. A lead tagged "Needs Follow Up" (by a teammate texting "F",
  * by the dashboard tag editor, or by any other tagger) gets called by the AI
  * every three days. When nobody picks up, the AI leaves a voicemail and then
- * texts. It stops the moment the lead replies or books, or a teammate claims
- * them.
+ * texts. It stops the moment the lead replies or books. A teammate CLAIMING
+ * the lead does not stop it: see the `converted` goal for why.
  *
  * THE THREE RULES THIS FLOW EXISTS TO HONOR, in Amy's words:
  *
@@ -21,13 +21,12 @@
  *      note on that step for the half of this rule that is not yet expressible.
  *   3. "Nothing to notify if the lead is cold and not responding." Hence the
  *      notice being gated on the lead having actually said something. A lead
- *      who ignores all eight rounds ends the cadence with `lead_reply` still
+ *      who ignores every round ends the cadence with `lead_reply` still
  *      "no_reply" and nobody is paged.
  *
- * WHY THE COPY VARIES PER ROUND. Eight identical texts and eight identical
- * voicemails from one number over three and a half weeks reads as a
- * malfunction. Each round says something a little different, the later ones
- * are shorter, and the last says it is the last.
+ * WHY THE COPY VARIES PER ROUND. Identical texts and identical voicemails
+ * from one number over a week or more reads as a malfunction. Each round says
+ * something a little different, and the last says it is the last.
  *
  * WHAT THE MESSAGES REFERENCE. Amy asked for the lead's source site and city
  * plus whether they are buying or selling. All three are extracted from the
@@ -117,8 +116,17 @@ function promoteRouteBase(): Record<string, unknown> {
   };
 }
 
-/** How many rounds before the AI stops. Eight rounds is a little over 3 weeks. */
-export const ROUNDS = 8;
+/**
+ * How many rounds before the AI stops. Three rounds is a little over a week.
+ *
+ * It was eight (a little over 3 weeks) until 2026-08-17. Amy's rule is that a
+ * lead should get "at least three tries", and that a claim no longer stops the
+ * cadence (see the `converted` goal). Those two together are why this came
+ * down: with the claim stop removed, eight rounds would have kept the AI
+ * calling a lead a teammate already owns for over three weeks, and Amy's
+ * stated tolerance for that was explicitly "it's only three times".
+ */
+export const ROUNDS = 3;
 
 /**
  * Calling hours, Phoenix. `outside: "defer"`, and the reason is worth stating
@@ -243,8 +251,21 @@ type Step = Record<string, unknown>;
  * it. `wait_for_reply`'s saveAs is an ordinary var: "no_reply" after a
  * timeout, the lead's words otherwise.
  */
+/**
+ * The copy for a round. The LAST round always gets the sign-off wording,
+ * whatever ROUNDS is, and the earlier rounds read from the front of the list.
+ *
+ * Indexing straight by round number looked simpler and silently broke when
+ * ROUNDS came down from eight to three: the cadence would have ended on "Want
+ * us to send recent sales?" and the "this is our last message" wording, which
+ * is the whole reason a lead knows the calls have stopped, would never be
+ * reached. A test pins this for whatever ROUNDS becomes next.
+ */
+function copyForRound(list: readonly string[], n: number): string {
+  return n === ROUNDS ? list[list.length - 1] : list[n - 1];
+}
+
 function roundSteps(n: number): Step[] {
-  const i = n - 1;
   return [
     {
       id: `r${n}_call`,
@@ -254,7 +275,7 @@ function roundSteps(n: number): Step[] {
       contextTemplate:
         "Their name: {{vars.lead_name}}. They enquired through {{vars.lead_site}} about " +
         "{{vars.lead_intent}} in {{vars.lead_city}}. Do not ask them for details we already have.",
-      voicemailTemplate: VOICEMAILS[i],
+      voicemailTemplate: copyForRound(VOICEMAILS, n),
       notifyOwner: true,
       callWindow: CALL_WINDOW,
       saveAs: "call_outcome",
@@ -272,7 +293,7 @@ function roundSteps(n: number): Step[] {
       id: `r${n}_text`,
       type: "send_sms",
       to: "{{vars.lead_phone}}",
-      body: TEXTS[i],
+      body: copyForRound(TEXTS, n),
       // Only when the call did not reach a person. Someone who just spoke to
       // the AI must not also get "we tried to reach you".
       when: { var: "call_outcome", equals: "no_answer" }
@@ -457,7 +478,7 @@ function laterRound(n: number): Step {
  *
  * The notice sits last and is gated on the lead having actually said
  * something. That gate is rule 3 ("nothing to notify if the lead is cold"):
- * without it, every lead who ignored all eight rounds would page the team at
+ * without it, every lead who ignored every round would page the team at
  * the end of the cadence.
  */
 export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
@@ -465,14 +486,29 @@ export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
     { id: "read_lead", type: "extract_text", fields: READ_FIELDS },
     ...roundSteps(1),
     ...Array.from({ length: ROUNDS - 1 }, (_, i) => laterRound(i + 2)),
-    // Booked or claimed are EXTERNAL milestones nothing in this flow observes,
-    // so they stay a goal: either one jumps the run out of a parked wait and
-    // stops the AI calling someone a teammate has already taken.
+    // Booking is an EXTERNAL milestone nothing in this flow observes, so it
+    // stays a goal: it jumps the run out of a parked wait and stops the AI
+    // calling someone who has already put a time in the diary.
+    //
+    // A CLAIM deliberately does not. It used to, and Amy's rule as of
+    // 2026-08-17 is that it must not: "if someone claims it and they don't
+    // reach them it will work out. If someone claims it and they do reach them
+    // then it can stay on follow up because it's only three times." A claim is
+    // a teammate saying they will work the lead, which is not evidence anyone
+    // has actually spoken to them, and the old behavior silently ended the
+    // follow-up on that promise alone. What DOES stop the cadence is the lead
+    // themselves: any reply leaves every later round's guard unmet, and a lead
+    // who tells the AI they already spoke with someone is a reply like any
+    // other.
+    //
+    // Note this event is business-wide by lead phone (applyGoalEvent), so the
+    // claim that used to end this cadence was often raised by a different
+    // flow's route_to_team entirely.
     {
       id: "converted",
       type: "goal",
-      label: "Booked or claimed by a teammate",
-      events: [{ kind: "appointment_booked" }, { kind: "claimed" }]
+      label: "Booked",
+      events: [{ kind: "appointment_booked" }]
     },
   ];
 

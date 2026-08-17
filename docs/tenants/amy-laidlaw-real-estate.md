@@ -636,9 +636,18 @@ Needs Follow Up cadence (Aug 11 2026): `seed-amy-needs-follow-up-aiflow.ts`
 (applier) over `amy-needs-follow-up-definition.ts` (pure builder, pinned by
 `tests/amy-needs-follow-up-definition.test.ts`). A lead tagged
 "Needs Follow Up" gets an AI call every three days; when nobody picks up the AI
-leaves a voicemail and then texts. Eight rounds, each worded differently, the
+leaves a voicemail and then texts. Three rounds, each worded differently, the
 last saying it is the last. The tag comes from a teammate texting `F` (see
 `follow_up_reply.ts`) or from any other tagger.
+
+**Amy changed two rules on 2026-08-17, and they are a pair.** A claim no
+longer ends the cadence, and the cadence came down from eight rounds to three.
+Her words: "if someone claims it and they don't reach them it will work out.
+If someone claims it and they do reach them then it can stay on follow up
+because it's only three times." Keeping eight rounds while dropping the claim
+stop would have kept the AI calling a lead a teammate already owns for over
+three weeks, which is not what "only three times" tolerates. Change one and
+you have to revisit the other.
 
 Four things worth knowing before touching it:
 
@@ -650,12 +659,26 @@ Four things worth knowing before touching it:
   merely finishes, so an ungated notice would page the team about every cold
   lead: the exact opposite of the ask. `wait_for_reply` saves an ordinary var
   ("no_reply" on timeout, the lead's words otherwise), which is gateable.
-- **Rounds 2 to 8 are FLAT branches**, each gated on `lead_reply` still being
+- **Later rounds are FLAT branches**, each gated on `lead_reply` still being
   "no_reply", the same shape the Clever spoke check uses. Branch nesting is
-  capped at 3 levels, so eight nested rounds was never an option.
-- **`appointment_booked` and `claimed` stay a goal**, because nothing in the
-  flow observes them: either jumps the run out of a parked wait so the AI stops
-  calling someone a teammate has already taken.
+  capped at 3 levels, so nested rounds was never an option.
+- **`appointment_booked` stays a goal, `claimed` does NOT (changed Aug 17
+  2026).** Booking is a milestone nothing in the flow observes, so it jumps the
+  run out of a parked wait. A claim used to do the same and no longer does: it
+  is a teammate saying they will work the lead, not evidence anyone reached
+  them, and ending the follow-up on that promise is what left leads with none.
+  The event is business-wide by lead phone (`applyGoalEvent`), so the claim
+  that used to end this cadence was usually raised by a DIFFERENT flow's
+  `route_to_team`. Re-adding it here hands that power back.
+- **Booking is the stop Amy asked for, and on her account it barely fires.**
+  `calendar_book_appointment` is off for sms, voice, webchat and email (PRs
+  #1153, #1158 and the disable one-shots), on only for dashboard. The goal is
+  correct and wired; it just has almost no producer on this tenant.
+- **The sign-off copy is selected by POSITION, not index.** `copyForRound`
+  gives the LAST round the final entry of `VOICEMAILS`/`TEXTS` whatever
+  `ROUNDS` is. Indexing straight by round number is what the 8-to-3 cut would
+  have broken: the cadence would have ended on "Want us to send recent sales?"
+  and the "this is our last message" wording would never be reached.
 - **Calling hours use `outside: "defer"`, and "skip" would break the whole
   feature.** Every round waits exactly 72 hours, so all eight land at the same
   clock time as the first. With "skip" a lead tagged at 2am resolves round 1 to
@@ -663,6 +686,15 @@ Four things worth knowing before touching it:
   three days later it is 2am again: one unlucky tagging time and the lead is
   never contacted at all. "defer" parks the first round until 08:30 and every
   later round inherits that daytime phase.
+- **Shrinking the round count is an index migration, not a config edit.**
+  `ai_flow_runs.current_step` is a flat index over the flattened definition, and
+  this cadence always has runs parked mid-flight (nine on the day of the 8-to-3
+  cut). Removing trailing rounds only truncates the tail, so the prefix holds,
+  but prove it rather than assume it: flatten the live definition and the new
+  one with the engine's own `flattenSteps` and check the first differing index
+  is past the highest live `current_step`. On Aug 17 they matched to index 29
+  against a highest live step of 13, so all nine runs stayed on the same step
+  and simply finish at the new round 3.
 - **A later round stops ONLY when the lead was actually reached**: empty arms
   for `transferred`/`answered` with the work in `else`, the same shape the
   Clever spoke check uses. Both inverses are wrong. Gating only on the reply
