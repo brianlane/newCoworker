@@ -256,7 +256,18 @@ export async function runReachLadder(
       }
       // The teammate answered but the join failed: release them so they are
       // not left holding a silent line, then keep trying the ladder rather
-      // than reporting a success the caller never experienced.
+      // than reporting a success the caller never experienced. The bridge
+      // shield stamped above must not outlive the failed bridge, or a late
+      // machine verdict for this attempt would skip its hangup on a leg that
+      // was never joined, leaving cleanup to rest on the single hangup below.
+      try {
+        await supabase.rpc("voice_session_context_merge", {
+          p_call_control_id: aLegCallControlId,
+          p_patch: { reach_bridged: null }
+        });
+      } catch {
+        // Best-effort: the hangup below still tears the leg down.
+      }
       log("reach: bridge failed after answer", { attempt, status: bridgeRes.status });
       await telnyx.hangup(bLeg);
       continue;

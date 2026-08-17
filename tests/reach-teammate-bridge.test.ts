@@ -595,6 +595,36 @@ describe("runReachLadder: reach_bridged stamp", () => {
     ]);
   });
 
+  it("a failed bridge clears the shield so the leg stays hangable", async () => {
+    const { telnyx, calls } = deps({
+      bridge: async (leg, opts) => {
+        calls.bridge.push({ leg, ...opts });
+        return calls.bridge.length === 1
+          ? { ok: false, status: 500, body: "bridge failed" }
+          : { ok: true, status: 200 };
+      }
+    });
+    const supa = reachSession([
+      answeredHuman(0, "b-leg-1"),
+      answeredHuman(0, "b-leg-1"),
+      answeredHuman(1, "b-leg-2")
+    ]);
+    const result = await runReachLadder(supa, telnyx, {
+      businessId: BIZ,
+      aLegCallControlId: A_LEG,
+      config: CONFIG,
+      poll: { pollMs: 1, sleep: async () => undefined }
+    });
+    expect(result.ok).toBe(true);
+    // Stamp for attempt 0, cleared when its bridge failed, stamped again for
+    // attempt 1: a late machine verdict for attempt 0 must find no shield.
+    expect(supa.rpcCalls.map((c) => c.args.p_patch)).toEqual([
+      { reach_bridged: { attempt: 0 } },
+      { reach_bridged: null },
+      { reach_bridged: { attempt: 1 } }
+    ]);
+  });
+
   it("a machine skip never stamps: nothing was bridged", async () => {
     const machineCtx = {
       reach: { attempt: 0, status: "answered", b_leg: "b-leg-1" },
