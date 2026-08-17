@@ -13,6 +13,7 @@ import {
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
 import { formatDurationMinutes } from "@/lib/ai-flows/duration";
+import { describeWebhookTriggerSource } from "@/lib/ai-flows/webhook-sources";
 import type { StepStats } from "@/lib/ai-flows/tree";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
@@ -138,7 +139,14 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
       )}
       {trigger.channel === "webhook" && (
         <>
-          <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
+          {/* Our own integrations ride the webhook channel too, so a flow
+              pinned to one of them is NOT fed by the public endpoint and the
+              owner should not be sent looking for an API key. */}
+          {describeWebhookTriggerSource(trigger.conditions) ? (
+            <Row label="Starts from" value={describeWebhookTriggerSource(trigger.conditions)!} />
+          ) : (
+            <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
+          )}
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
