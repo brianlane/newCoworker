@@ -268,8 +268,32 @@ These are mistakes already made on this account. Do not remake them.
   only signal was an owner email reading `Clever lead: () none`. Closed the
   same day by `amy-unreachable-lead-team-alert.ts`: all four arrival flows now
   carry a `<prefix>_no_phone_guard` right after the step that extracts the
-  lead, and a lead with no usable number alerts the lead-type-tagged team
-  instead of vanishing.
+  lead, and a lead with no usable number reaches the lead-type-tagged team
+  instead of vanishing. `amy-unreachable-lead-claim-offer.ts` then made that a
+  real claim offer, so "1" takes it.
+
+- **Turning an alert into an OFFER can double-offer a lead.** An alert is
+  fire-and-forget, so an extra one is noise; a parked `route_to_team` is not,
+  and two live claim windows on one lead means two deadlines, two races, and
+  teammates getting contradictory texts. The no-phone guards hit this on
+  exactly two flows: Clever's `route` and Realtor.com's `s4` / `s4_buyer` gate
+  ONLY on `price_gate notEquals "ai"`, with no phone condition, so a $500K+
+  lead with no number would have been offered twice. The no-phone offers there
+  now carry the exact complement, `price_gate equals "ai"`, so the two are
+  mutually exclusive by construction. ReferralExchange (`route_lead_type`) and
+  New Lead Intake (`route_variant`) needed no gate: both vars answer "none"
+  without a phone, so their trunk routes already skip, and adding a gate would
+  have suppressed the only offer those leads get.
+
+- **An informational team text still gets replied "1".** Gabrielle Mota did it
+  57 seconds after the first unclaimed-lead alert landed, and she was not
+  confused: every other team text on this account ends in "Reply 1 to claim",
+  so "1" is muscle memory. The claim machinery only understands parked offer
+  runs, so her "1" resolved against an unrelated older offer (see the
+  bare-digit LIFO rule) and the lead she had just been told about stayed
+  unowned. The alert/offer distinction is real in the engine and invisible on
+  a phone. When adding any team-facing text that is NOT an offer, decide where
+  a stray "1" should land before shipping it.
 
 - **There is no way to ask a flow "is this var blank".** `whenSchema` requires
   a non-empty needle on `equals`/`contains`/`notEquals`, so an emptiness test
@@ -329,6 +353,18 @@ loses no notice she gets today. Pinned by
 `tests/amy-unreachable-lead-team-alert.test.ts`, which asserts the copy only
 uses vars each flow really produces. Applied to all four, Aug 15 2026.
 `--revert --apply` restores the exact previous definitions from the ledger.
+
+**Superseded the same day by `amy-unreachable-lead-claim-offer.ts`**, which
+turns that alert into a real `route_to_team` claim offer (`broadcastAll` +
+`teamTagTemplate`), so "1" claims it exactly like every other team text. The
+guard's condition is untouched; only its consequence moved. Brian, Aug 15
+2026, after a teammate replied "1" to the alert 57 seconds after it landed and
+the claim machinery had nothing to attach it to: "Can we allow for both?" Two
+things it cannot do, both inherent rather than defects: ownership is keyed on
+the lead's phone, so a claim here sets `claimed_agent` but stamps no
+`contacts.owner_employee_id` (there is no contact row without a phone), and
+the owner-addressed `notify_no_phone` steps on ReferralExchange and New Lead
+Intake are still left alone.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`,

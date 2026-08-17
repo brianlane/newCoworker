@@ -9117,7 +9117,8 @@ async function routeBroadcastStep(
     supabase,
     run,
     scope,
-    action.broadcastAll === true ? "all" : (action.agentNames ?? [])
+    action.broadcastAll === true ? "all" : (action.agentNames ?? []),
+    action.teamTag
   );
   const sendable: RoutedAgent[] = [];
   for (const agent of resolved) {
@@ -9138,7 +9139,8 @@ async function routeBroadcastStep(
         run_id: run.id,
         flow_id: run.flow_id,
         agent_names: action.agentNames ?? [],
-        broadcast_all: action.broadcastAll === true
+        broadcast_all: action.broadcastAll === true,
+        ...(action.teamTag ? { team_tag: action.teamTag } : {})
       }
     });
     return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
@@ -9217,7 +9219,7 @@ const BROADCAST_ALL_MAX_RECIPIENTS = 10;
  */
 const ROSTER_SELECTION_COLUMNS =
   "id, name, phone_e164, weekly_schedule, preferred_windows, " +
-  "routing_enabled, named_routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
+  "routing_enabled, named_routing_enabled, named_broadcast_enabled, team_broadcast_enabled, tags";
 
 /**
  * supabase-js infers the row type from a select-string LITERAL; a shared
@@ -9238,6 +9240,7 @@ type RosterSelectionRow = {
   named_routing_enabled?: boolean | null;
   named_broadcast_enabled?: boolean | null;
   team_broadcast_enabled?: boolean | null;
+  tags?: string[] | null;
 };
 
 /**
@@ -9258,7 +9261,9 @@ async function resolveBroadcastAgents(
   supabase: Supabase,
   run: RunRow,
   scope: Scope,
-  names: string[] | "all"
+  names: string[] | "all",
+  /** broadcastAll only: narrow the fan-out to the teammates carrying this tag. */
+  teamTag?: string
 ): Promise<RoutedAgent[]> {
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
@@ -9306,9 +9311,28 @@ async function resolveBroadcastAgents(
   const pickedIds: string[] = [];
   const seenPhones = new Set<string>();
   if (names === "all") {
+    // Lead-type narrowing, through the SAME selector the notify_lead_owner
+    // team alert uses, so an offer and an alert can never disagree about who
+    // covers sellers. Availability was already applied above, so this only
+    // adds the tag rule and its fail-safe: a tag matching nobody leaves the
+    // whole available roster in place rather than offering the lead to no one.
+    const tagAllowed = teamTag
+      ? new Set(
+          selectBroadcastTeam(
+            available.map((r) => ({
+              id: r.id,
+              name: r.name,
+              phone_e164: r.phone_e164,
+              tags: r.tags ?? null
+            })),
+            teamTag
+          ).map((m) => m.id)
+        )
+      : null;
     // broadcastAll: the available roster IS the offer set (rotation order),
     // clamped so a big roster never triggers a mega-blast.
     for (const row of available) {
+      if (tagAllowed && !tagAllowed.has(row.id)) continue;
       if (out.length >= BROADCAST_ALL_MAX_RECIPIENTS) {
         await systemLog(supabase, {
           businessId: run.business_id,

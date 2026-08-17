@@ -76,3 +76,71 @@ describe("route_to_team broadcastAll — planner", () => {
     expect(plan.action).not.toHaveProperty("broadcastAll");
   });
 });
+
+/**
+ * The lead-type filter. Amy's rule is that a seller lead goes to the
+ * teammates who cover sellers, and `broadcastAll` had no way to express that:
+ * it was the whole roster or a hardcoded name list. The tag rides the SAME
+ * selector as the notify_lead_owner team alert, so an offer and an alert can
+ * never disagree about who covers what.
+ */
+describe("route_to_team teamTagTemplate", () => {
+  const scope = {
+    vars: { lead_type: "seller" },
+    trigger: { channel: "tag_changed", from: "+14165550100" }
+  };
+
+  it("accepts a tag alongside broadcastAll", () => {
+    const def = parseAiFlowDefinition(
+      definition(routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" }))
+    );
+    const step = def.steps[0] as { teamTagTemplate?: string };
+    expect(step.teamTagTemplate).toBe("{{vars.lead_type}}");
+  });
+
+  it("REJECTS a tag without broadcastAll", () => {
+    // Narrowing an explicitly named list is a contradiction: the author
+    // already said exactly who to offer, and dropping some of those names by
+    // tag is a surprise no fail-safe can rescue.
+    for (const over of [{}, { agentNames: ["A B", "C D"] }, { agentName: "A B" }]) {
+      expect(() =>
+        parseAiFlowDefinition(definition(routeStep({ ...over, teamTagTemplate: "seller" })))
+      ).toThrow(AiFlowValidationError);
+    }
+  });
+
+  it("renders the tag into the action from the lead's own vars", () => {
+    const plan = planStep(
+      routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.lead_type}}" }) as FlowStep,
+      scope
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect((plan.action as { teamTag?: string }).teamTag).toBe("seller");
+  });
+
+  it("carries a literal tag through unchanged", () => {
+    const plan = planStep(
+      routeStep({ broadcastAll: true, teamTagTemplate: "seller" }) as FlowStep,
+      scope
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect((plan.action as { teamTag?: string }).teamTag).toBe("seller");
+  });
+
+  it("drops the tag when the template renders empty, which means NO filter", () => {
+    // An all-empty render is "no filter", not "a tag nobody has": a template
+    // pointing at an unset var must offer the whole roster, never nobody.
+    const plan = planStep(
+      routeStep({ broadcastAll: true, teamTagTemplate: "{{vars.missing}}" }) as FlowStep,
+      { vars: {}, trigger: { channel: "tag_changed", from: "+14165550100" } }
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.action).not.toHaveProperty("teamTag");
+  });
+
+  it("omits teamTag from the action when the step sets no template", () => {
+    const plan = planStep(routeStep({ broadcastAll: true }) as FlowStep, scope);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.action).not.toHaveProperty("teamTag");
+  });
+});

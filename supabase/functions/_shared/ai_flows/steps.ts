@@ -578,6 +578,8 @@ export type StepAction =
       /** BROADCAST-ALL: offer the entire active roster at once, resolved at
        * execution time (worker caps at 10). Exclusive with every pin. */
       broadcastAll?: boolean;
+      /** Rendered lead-type tag narrowing a broadcastAll offer (fail-safe: see team_broadcast.ts). */
+      teamTag?: string;
       /** After-hours claim-deadline extension. */
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
@@ -1588,6 +1590,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // enforces both-or-neither; a half-configured rule is dropped, not
       // half-applied). Template stays unrendered like the other route copy.
       const ownerDirect = step.ownerDirectWhen && step.ownerDirectTemplate?.trim();
+      const routeTeamTag = step.teamTagTemplate
+        ? renderTemplate(step.teamTagTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       return {
         ok: true,
         action: {
@@ -1602,6 +1607,11 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(agentNames.length >= 2 ? { agentNames } : {}),
           ...(step.broadcastAll === true ? { broadcastAll: true } : {}),
+          // Rendered here, like the notify_lead_owner team alert: an all-empty
+          // render means "no filter", not "a tag nobody has", so a template
+          // pointing at an unset var offers the whole roster rather than
+          // nobody. The schema keeps this broadcastAll-only.
+          ...(routeTeamTag ? { teamTag: routeTeamTag } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.
