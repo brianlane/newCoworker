@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decideRetag,
+  describeProof,
   PROOF_WINDOW_MS,
   type BookingRow,
   type CandidateContact
@@ -25,6 +26,10 @@ const contact = (over: Partial<CandidateContact> = {}): CandidateContact => ({
   last_channel: "webchat",
   // The real gap observed on the contact that prompted this: 3.3 seconds.
   last_interaction_at: "2026-08-03T21:46:50.043Z",
+  // Touched since creation by default, so the ledger proof is what is
+  // under test unless a case opts into the creation proof.
+  created_at: "2026-08-01T00:00:00.000Z",
+  total_interaction_count: 3,
   ...over
 });
 
@@ -39,8 +44,20 @@ describe("decideRetag", () => {
   it("retags when the last interaction is the booking write itself", () => {
     expect(decideRetag(contact(), [booking()])).toEqual({
       retag: true,
+      proof: "ledger",
       bookingAt: BOOKED_AT
     });
+  });
+
+  it("accepts a contact rollup that landed BEFORE its booking row", () => {
+    // Live case +12092520704: the contact write beat the ledger row by 41
+    // seconds. A one-directional window rejected it even though the
+    // booking-page row was sitting right there, so the window is symmetric.
+    const decision = decideRetag(
+      contact({ last_interaction_at: "2026-08-13T13:43:29.201Z" }),
+      [booking({ created_at: "2026-08-13T13:44:10.780Z" })]
+    );
+    expect(decision).toMatchObject({ retag: true, proof: "ledger" });
   });
 
   it("leaves a contact who chatted AFTER booking on webchat", () => {
@@ -51,24 +68,88 @@ describe("decideRetag", () => {
       [booking()]
     );
     expect(decision.retag).toBe(false);
-    expect(decision).toMatchObject({ reason: expect.stringContaining("does not line up") });
+    expect(decision).toMatchObject({
+      reason: expect.stringContaining("later touch on another channel")
+    });
   });
 
-  it("ignores a booking that lands after the contact's last interaction", () => {
-    // Clock skew or an unrelated later booking: the contact write always
-    // FOLLOWS the booking it came from, so a negative gap proves nothing.
-    const decision = decideRetag(contact({ last_interaction_at: "2026-08-03T21:46:40.000Z" }), [
-      booking()
-    ]);
-    expect(decision.retag).toBe(false);
-  });
-
-  it("accepts a gap at the window edge and rejects one past it", () => {
+  it("accepts a gap at either window edge and rejects one past it", () => {
     const bookedMs = Date.parse(BOOKED_AT);
-    const atEdge = new Date(bookedMs + PROOF_WINDOW_MS).toISOString();
-    const pastEdge = new Date(bookedMs + PROOF_WINDOW_MS + 1).toISOString();
-    expect(decideRetag(contact({ last_interaction_at: atEdge }), [booking()]).retag).toBe(true);
-    expect(decideRetag(contact({ last_interaction_at: pastEdge }), [booking()]).retag).toBe(false);
+    const afterEdge = new Date(bookedMs + PROOF_WINDOW_MS).toISOString();
+    const beforeEdge = new Date(bookedMs - PROOF_WINDOW_MS).toISOString();
+    const pastAfter = new Date(bookedMs + PROOF_WINDOW_MS + 1).toISOString();
+    const pastBefore = new Date(bookedMs - PROOF_WINDOW_MS - 1).toISOString();
+    expect(decideRetag(contact({ last_interaction_at: afterEdge }), [booking()]).retag).toBe(true);
+    expect(decideRetag(contact({ last_interaction_at: beforeEdge }), [booking()]).retag).toBe(true);
+    expect(decideRetag(contact({ last_interaction_at: pastAfter }), [booking()]).retag).toBe(false);
+    expect(decideRetag(contact({ last_interaction_at: pastBefore }), [booking()]).retag).toBe(false);
+  });
+
+  describe("creation proof (no ledger row to lean on)", () => {
+    // Live cases +15550100000 and +16026866672: one interaction, never
+    // touched since, and no booking_source='booking_page' row anywhere,
+    // because the oldest bookings predate that column being stamped.
+    const untouched = (over: Partial<CandidateContact> = {}) =>
+      contact({
+        total_interaction_count: 1,
+        created_at: "2026-07-25T06:02:04.757Z",
+        last_interaction_at: "2026-07-25T06:02:04.757Z",
+        ...over
+      });
+
+    it("retags a single-interaction row untouched since creation", () => {
+      expect(decideRetag(untouched(), [])).toEqual({
+        retag: true,
+        proof: "untouched-since-creation"
+      });
+    });
+
+    it("refuses once the row has been touched after creation", () => {
+      // Live case +16025551234: created 15:50:24, last touched 15:54:40,
+      // two interactions, no bookings. Genuinely ambiguous, stays webchat.
+      const decision = decideRetag(
+        untouched({
+          total_interaction_count: 2,
+          last_interaction_at: "2026-07-25T06:05:00.000Z"
+        }),
+        []
+      );
+      expect(decision.retag).toBe(false);
+    });
+
+    it("refuses on a second interaction even at the same timestamp", () => {
+      expect(decideRetag(untouched({ total_interaction_count: 2 }), []).retag).toBe(false);
+    });
+
+    it("refuses when created_at is missing", () => {
+      expect(decideRetag(untouched({ created_at: null }), []).retag).toBe(false);
+    });
+
+    it("prefers the ledger proof when both would apply", () => {
+      // BOTH timestamps move to the booking instant, so the row is a
+      // single untouched interaction (creation proof qualifies) that also
+      // sits on a booking_page row (ledger proof qualifies). Overriding
+      // only last_interaction_at would leave created_at behind, disqualify
+      // the creation proof, and quietly test nothing about precedence.
+      const both = untouched({ created_at: BOOKED_AT, last_interaction_at: BOOKED_AT });
+      expect(decideRetag(both, [])).toMatchObject({ proof: "untouched-since-creation" });
+      expect(decideRetag(both, [booking()])).toEqual({
+        retag: true,
+        proof: "ledger",
+        bookingAt: BOOKED_AT
+      });
+    });
+  });
+
+  describe("describeProof", () => {
+    it("names the evidence behind each retag", () => {
+      expect(describeProof({ retag: true, proof: "ledger", bookingAt: BOOKED_AT })).toBe(
+        `booked ${BOOKED_AT}`
+      );
+      expect(describeProof({ retag: true, proof: "untouched-since-creation" })).toBe(
+        "only interaction, untouched since creation"
+      );
+    });
   });
 
   it("picks the closest booking when several are in range", () => {
@@ -77,7 +158,7 @@ describe("decideRetag", () => {
       booking(),
       booking({ created_at: closer })
     ]);
-    expect(decision).toEqual({ retag: true, bookingAt: closer });
+    expect(decision).toEqual({ retag: true, proof: "ledger", bookingAt: closer });
   });
 
   it("ignores bookings belonging to a different attendee", () => {
