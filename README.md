@@ -2910,6 +2910,41 @@ Typical shape: `email` or `tenant_email` trigger → `classify` → `branch` →
 poll; AI-mailbox inbound remains Cloudflare Email Routing → `/api/email/inbound`.
 No Gmail watch / Graph push subscriptions.
 
+### `importanceTemplate`: a score you may sort by and must not route on
+
+`email_organize` can also record a **1-10 relative importance** for the message
+(`importanceTemplate`, normally `"{{vars.email_importance}}"` off an earlier
+`extract_text` field). It lands on `email_log.importance` and drives exactly one
+thing: the **Importance** sort on Dashboard → Emails, with the score shown as a
+muted `6/10` chip so a reordered list is interpretable.
+
+**Nothing may branch on it.** Not a `when`, not a branch condition, not an
+alerting or digest decision. The value comes from a language model, and models
+cluster and drift on unanchored numeric scales: the same email can score 5 one
+run and 7 the next. That is good enough to rank a list roughly and not good
+enough to decide whether to wake an owner at 3am. Routing belongs to `classify`,
+whose categories are prose a human can read, argue with, and edit when they
+misfire; a threshold on a score is a category boundary you can neither read nor
+edit. The rule of thumb: **scores rank, categories route.**
+
+Practical consequences of it being display-only:
+
+- The score is written on **every** backend, connected mailboxes included,
+  because Gmail and Outlook have no such field and the value lives on our own
+  `email_log` row.
+- Parsing is lenient about shape and strict about range
+  (`coerceEmailImportance`): the leading integer is taken and clamped to 1-10,
+  so `"6"`, `" 6 "` and `"6/10"` all score 6, while `"high"` or `""` score
+  nothing. Null means *never scored*, which sorts to the bottom rather than
+  being read as least important.
+- A missing `email_log` row downgrades to an `importance_row_not_found` detail
+  instead of failing the step. Failing a real labelling action because a
+  cosmetic field had nowhere to land would be the wrong trade; succeeding
+  silently would be worse.
+- Anchor the extract field's description (name what a 3 and an 8 look like).
+  It will not make the score reproducible, but it keeps it roughly monotonic,
+  which is all an ordering needs.
+
 ## Email coworker (replies in threads the assistant started)
 
 Inbound email used to reach AI only as an AiFlow TRIGGER, so a delegate's

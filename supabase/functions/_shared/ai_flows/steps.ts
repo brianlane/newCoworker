@@ -455,6 +455,13 @@ export type StepAction =
       addLabels?: string[];
       removeLabels?: string[];
       moveToFolder?: string;
+      /**
+       * The RENDERED importance template, still text. Carried unparsed on
+       * purpose: the platform gateway owns coercing it to a 1-10 integer (or
+       * dropping it), so the range rule lives in one place next to the column's
+       * check constraint instead of being reimplemented in the engine.
+       */
+      importanceText?: string;
     }
   | {
       /**
@@ -1482,10 +1489,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const moveToFolder = step.moveToFolder
         ? renderTemplate(step.moveToFolder, scope, { collapseEmpty: true }).trim()
         : "";
+      // Display-only 1-10 score. Rendered here and PARSED at the API boundary,
+      // so a model that answered "6/10", "high", or nothing at all costs the
+      // score and never the step: the labelling this flow actually depends on
+      // must not fail over a cosmetic field.
+      const importanceText = step.importanceTemplate
+        ? renderTemplate(step.importanceTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       return {
         ok: true,
         action: {
           kind: "email_organize",
+          ...(importanceText ? { importanceText } : {}),
           messageId,
           ...(emailLogId ? { emailLogId } : {}),
           ...(connectionId ? { connectionId } : {}),

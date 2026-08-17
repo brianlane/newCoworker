@@ -3972,3 +3972,36 @@ describe("options.hideFromDigest", () => {
     expect(() => parseAiFlowDefinition(withOptions({ hideFromDigest: "yes" }))).toThrow();
   });
 });
+
+describe("email_organize importanceTemplate", () => {
+  const organize = (extra: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "manual" },
+    steps: [
+      { id: "s0", type: "extract_text", fields: [{ name: "email_importance" }] },
+      { id: "s1", type: "email_organize", ...extra }
+    ]
+  });
+
+  it("counts as an action on its own", () => {
+    // A flow whose only job is to score mail for the Emails page is a real
+    // flow, so scoring must satisfy the at-least-one-action rule.
+    const def = parseAiFlowDefinition(
+      organize({ importanceTemplate: "{{vars.email_importance}}" })
+    );
+    expect(def.steps[1]).toMatchObject({ importanceTemplate: "{{vars.email_importance}}" });
+  });
+
+  it("still rejects a step that does nothing at all", () => {
+    expect(() => parseAiFlowDefinition(organize({}))).toThrow();
+  });
+
+  it("validates the vars it references, so a typo cannot author cleanly", () => {
+    // Registered in collectTemplateRefs. Without that, a score pointing at a
+    // var no step produces would save fine and silently store null forever,
+    // which is exactly how {{trigger.message_ref}} once shipped.
+    expect(() =>
+      parseAiFlowDefinition(organize({ importanceTemplate: "{{vars.never_set}}" }))
+    ).toThrow();
+  });
+});

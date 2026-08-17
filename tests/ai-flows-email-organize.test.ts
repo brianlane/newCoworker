@@ -347,3 +347,83 @@ describe("email_organize schema + planner", () => {
     });
   });
 });
+
+describe("email_organize importanceTemplate: producer end", () => {
+  /**
+   * Asserted at the PLANNER, not on a hand-built action. The schema accepting a
+   * field and the gateway handling it buy nothing if the planner in between
+   * drops it, which is exactly how `message_ref` shipped
+   * emitted-but-unreferenceable.
+   */
+  const scope = (vars: Record<string, string>) => ({
+    vars,
+    trigger: {
+      channel: "email" as const,
+      windowText: "hi",
+      url: null,
+      from: "a@b.com",
+      message_id: "gmail-1",
+      email_log_id: "00000000-0000-4000-8000-000000000099"
+    }
+  });
+
+  it("renders the score and carries it onto the action", () => {
+    const plan = planStep(
+      {
+        id: "org1",
+        type: "email_organize",
+        addLabels: ["HQ/Automated"],
+        importanceTemplate: "{{vars.email_importance}}"
+      } as FlowStep,
+      scope({ email_importance: "6" })
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    // Carried as TEXT, unparsed: the gateway owns the 1-10 rule so it lives in
+    // one place next to the column's check constraint.
+    expect(plan.action).toMatchObject({ kind: "email_organize", importanceText: "6" });
+  });
+
+  it("passes prose straight through for the gateway to reject", () => {
+    const plan = planStep(
+      {
+        id: "org1",
+        type: "email_organize",
+        addLabels: ["HQ/Automated"],
+        importanceTemplate: "{{vars.email_importance}}"
+      } as FlowStep,
+      scope({ email_importance: "high" })
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).toMatchObject({ importanceText: "high" });
+  });
+
+  it("omits the key when the var rendered empty, rather than sending a blank", () => {
+    // An unset var collapses to "". Sending importanceText:"" would ask the
+    // gateway to score the message null, wiping any score already there; the
+    // step never asked for that, so the key must simply not be present.
+    const plan = planStep(
+      {
+        id: "org1",
+        type: "email_organize",
+        addLabels: ["HQ/Automated"],
+        importanceTemplate: "{{vars.email_importance}}"
+      } as FlowStep,
+      scope({})
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).not.toHaveProperty("importanceText");
+  });
+
+  it("omits the key when the step never asked for a score", () => {
+    const plan = planStep(
+      { id: "org1", type: "email_organize", addLabels: ["HQ/Automated"] } as FlowStep,
+      scope({ email_importance: "6" })
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).not.toHaveProperty("importanceText");
+  });
+});

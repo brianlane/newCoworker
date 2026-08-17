@@ -135,6 +135,24 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
             description:
               "Who the sender is, as a person and a company, from the signature or the body. Format: 'Name (Company)'. Just the name if there is no company, and an empty string if neither is stated. The email address alone does not count, we already have it."
           },
+          /**
+           * DISPLAY ONLY, and anchored on purpose.
+           *
+           * Nothing branches on this number: it sorts the dashboard Emails page
+           * so a day's mail can be skimmed worst-first. Routing stays on
+           * `s_classify`, whose categories are prose that can be argued with.
+           *
+           * The bands exist because an unanchored 1-10 is where models cluster
+           * and drift. Naming what a 3 and an 8 actually look like will not make
+           * the score reproducible, but it keeps it roughly monotonic, which is
+           * all an ordering needs. Digits-only because the value is templated
+           * straight into `importanceTemplate`, and prose there scores nothing.
+           */
+          {
+            name: "email_importance",
+            description:
+              "How much this needs Brian, 1-10, digits only. 1-2 bulk or ads; 3-4 routine notices; 5-6 a result we were waiting on, or a cost or policy change; 7-8 a customer or prospect awaiting a reply; 9-10 an outage, security problem, or failed payment. Judge the ask, not the sender's tone."
+          },
           {
             name: "email_gist",
             description:
@@ -197,10 +215,32 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
             description:
               "Bulk mail nobody ever needs to read again and that we are not already corresponding on: marketing, newsletters, product announcements, promotions, event invitations, vendor drip campaigns"
           },
+          /**
+           * The middle rung, added Aug 17 2026 after the Zoom miss.
+           *
+           * "New Coworker OAuth has been updated and published" classified
+           * `automated_notice` and was treated identically to a Slack "Find and
+           * join channels" digest: labelled, silent, indistinguishable. Both
+           * calls were defensible one at a time, which is the tell that the
+           * tier itself was missing rather than the classifier being wrong.
+           *
+           * The signal built for exactly this case could not fire. Mail that
+           * "continues a conversation we are in" is never routine, but
+           * `thread_has_our_reply` only knows about EMAIL, and that update was
+           * submitted through the Zoom Marketplace portal, so the thread had no
+           * history at all. This description carries the knowledge that signal
+           * could not: name the platforms, and the classifier can match on
+           * sender and content without needing a thread.
+           */
+          {
+            value: "automated_review",
+            description:
+              "A result from a platform we submitted to, where OUR OWN product's live state changed: app review, marketplace publication, OAuth or domain verification, a rate change on a service we run on"
+          },
           {
             value: "automated_notice",
             description:
-              "Routine automated mail that asks nothing of us and is not part of a conversation we are in: our own alert and contact-form copies, calendar invites, digests, usage summaries, hosting renewals"
+              "Routine automated mail: asks nothing of us, not part of a conversation we are in, reports no result we were waiting on. Our alert copies, calendar invites, digests, usage summaries, hosting renewals"
           }
         ],
         saveAs: "email_kind"
@@ -386,6 +426,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_sales",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "sales_lead" },
         addLabels: ["HQ/Sales"]
       },
@@ -393,6 +434,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_support",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "support" },
         addLabels: ["HQ/Support"]
       },
@@ -400,6 +442,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_billing",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "billing" },
         addLabels: ["HQ/Billing"]
       },
@@ -427,8 +470,30 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_automated",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "automated_notice" },
         addLabels: ["HQ/Automated"]
+      },
+      /**
+       * The review tier: worth Brian's eyes, not worth his phone.
+       *
+       * SILENT on purpose. Its whole reason for existing is that the choice was
+       * previously "text him" or "make it look like a newsletter", and the
+       * right answer for a Zoom publication notice is neither. A nested label
+       * gives it its own row in Gmail's sidebar, so `HQ/Automated/Review` reads
+       * at a glance as the pile worth skimming.
+       *
+       * A nested label rather than a star, deliberately: every starred message
+       * in this mailbox is a payment receipt, and that signal is currently
+       * clean. Two meanings on one star costs more than it buys.
+       */
+      {
+        id: "s_org_review",
+        type: "email_organize",
+        connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
+        when: { var: "email_kind", equals: "automated_review" },
+        addLabels: ["HQ/Automated/Review"]
       },
       /**
        * Receipts get STARRED, because that is what Brian does by hand.
@@ -444,6 +509,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_receipt",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "billing_receipt" },
         star: true,
         addLabels: ["HQ/Billing"]
@@ -457,6 +523,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_bulk",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "automated_bulk" },
         addLabels: ["HQ/Automated"],
         trash: true
@@ -478,6 +545,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         id: "s_org_automated_important",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
+        importanceTemplate: "{{vars.email_importance}}",
         when: { var: "email_kind", equals: "automated_important" },
         addLabels: ["HQ/Automated"]
       }

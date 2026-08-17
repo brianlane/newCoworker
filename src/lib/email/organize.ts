@@ -18,6 +18,7 @@ import {
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import {
   organizeTenantEmailLog,
+  setEmailLogImportance,
   softDeleteEmailLogEntry,
   type OrganizeTenantEmailInput
 } from "@/lib/db/email-log";
@@ -46,6 +47,15 @@ export type OrganizeEmailActions = {
   removeLabels?: string[];
   /** Folder display name (null/empty clears to Inbox for tenant; provider move for Outlook/Gmail). */
   moveToFolder?: string | null;
+  /**
+   * Display-only 1-10 importance score for this message (null clears it).
+   *
+   * Unlike every other action here, this has no provider counterpart: Gmail and
+   * Outlook have no such field, so it is written to our own email_log row on
+   * ALL paths, connected mailboxes included. It sorts the dashboard Emails page
+   * and must never gate alerting, routing, or digest behavior.
+   */
+  importance?: number | null;
 };
 
 export type OrganizeEmailRequest = {
@@ -76,7 +86,16 @@ function normalizeLabelList(raw?: string[]): string[] {
   return out.slice(0, 20);
 }
 
-function hasAnyAction(actions: OrganizeEmailActions): boolean {
+/**
+ * Whether this request asks the mailbox to do anything at all.
+ *
+ * Exported so the AiFlow gateway can ask the SAME question before dispatching:
+ * a step whose only instruction was a score the model never produced has
+ * nothing to do, and answering that with `no_organize_actions` would fail the
+ * step over a display-only field. One definition, so the two cannot drift into
+ * disagreeing about what "nothing to do" means.
+ */
+export function hasAnyOrganizeAction(actions: OrganizeEmailActions): boolean {
   return Boolean(
     actions.markRead ||
       actions.markUnread ||
@@ -87,7 +106,8 @@ function hasAnyAction(actions: OrganizeEmailActions): boolean {
       actions.unstar ||
       (actions.addLabels && actions.addLabels.length > 0) ||
       (actions.removeLabels && actions.removeLabels.length > 0) ||
-      actions.moveToFolder !== undefined
+      actions.moveToFolder !== undefined ||
+      actions.importance !== undefined
   );
 }
 
@@ -96,7 +116,7 @@ function hasAnyAction(actions: OrganizeEmailActions): boolean {
  * path when connectionId is set.
  */
 export async function organizeMessage(req: OrganizeEmailRequest): Promise<OrganizeEmailResult> {
-  if (!hasAnyAction(req.actions)) {
+  if (!hasAnyOrganizeAction(req.actions)) {
     return { ok: false, detail: "no_organize_actions" };
   }
   if (req.actions.markRead && req.actions.markUnread) {
@@ -121,7 +141,8 @@ export async function organizeMessage(req: OrganizeEmailRequest): Promise<Organi
   };
 
   if (!req.connectionId) {
-    return organizeTenant(req.businessId, req.emailLogId, req.messageId, actions);
+    const result = await organizeTenant(req.businessId, req.emailLogId, req.messageId, actions);
+    return withImportance(req, actions, result);
   }
 
   const row = await getWorkspaceOAuthConnection(req.businessId, req.connectionId);
@@ -133,10 +154,44 @@ export async function organizeMessage(req: OrganizeEmailRequest): Promise<Organi
   if (!messageId) return { ok: false, detail: "message_id_required" };
 
   const provider = providerFromKey(row.provider_config_key);
-  if (provider === "google") {
-    return organizeGmail(req.businessId, row, messageId, actions);
-  }
-  return organizeOutlook(req.businessId, row, messageId, actions);
+  const result =
+    provider === "google"
+      ? await organizeGmail(req.businessId, row, messageId, actions)
+      : await organizeOutlook(req.businessId, row, messageId, actions);
+  return withImportance(req, actions, result);
+}
+
+/**
+ * Write the display-only importance score after the provider work, on every
+ * path. Runs last so a message is filed at the provider before we annotate our
+ * own copy of it, and only on success, so a failed labelling never leaves a
+ * score claiming the step ran.
+ *
+ * A missing email_log row DOWNGRADES to a detail note instead of failing the
+ * step. The score is display-only, and a connected mailbox can legitimately
+ * organize a message we hold no row for (an owner acting from the reading pane
+ * on older mail). Failing a real labelling action because a cosmetic field had
+ * nowhere to land would be the wrong trade, and a silent success would be
+ * worse, so it says so in `detail`.
+ */
+async function withImportance(
+  req: OrganizeEmailRequest,
+  actions: OrganizeEmailActions,
+  result: OrganizeEmailResult
+): Promise<OrganizeEmailResult> {
+  if (actions.importance === undefined || !result.ok) return result;
+  const wrote = await setEmailLogImportance(
+    req.businessId,
+    { emailLogId: req.emailLogId, providerMessageId: req.messageId },
+    actions.importance
+  );
+  if (wrote) return result;
+  return {
+    ...result,
+    detail: result.detail
+      ? `${result.detail},importance_row_not_found`
+      : "importance_row_not_found"
+  };
 }
 
 async function organizeTenant(
