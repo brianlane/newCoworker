@@ -213,10 +213,22 @@ export async function ensureCommitmentSchedule(params: {
     .slice(1)
     .map((item) => ({ price: item.price.id, quantity: item.quantity ?? 1 }));
 
-  // Phase 2 rolls the plan onto the MONTHLY renewal price, and Stripe
-  // requires every item in a phase to share the billing interval, so a
-  // term-cadence add-on (e.g. the Canada fee billed ×24 upfront) must be
-  // converted to its monthly equivalent (same product, unit ÷ term months).
+  // Phase 2 rolls the plan onto the MONTHLY renewal price, so a term-cadence
+  // add-on (e.g. the Canada fee billed x24 upfront) is converted to its
+  // monthly equivalent: same product, unit / term months.
+  //
+  // This is a PRICING requirement, not a Stripe one. The comment here used to
+  // say Stripe requires every item in a phase to share the billing interval.
+  // It does not: phases follow the same multiple-of-shortest rule
+  // subscriptions do, so a month/24 add-on sits happily beside a month/1 plan
+  // (verified 2026-08-17, debug/stripe-schedule-phase-interval-probe.ts).
+  //
+  // DO NOT remove the conversion on the strength of that. Without it, a tenant
+  // who rolls onto month-to-month keeps a surcharge that only bills every 24
+  // months, so they prepay two years of it while on a plan they can cancel
+  // monthly: cancel in month 3 and they have paid ~21 months of surcharge they
+  // will never use. The conversion is what keeps the add-on's cadence matched
+  // to the plan the tenant is actually on.
   const renewalAddOnItems = subscription.items.data.slice(1).map((item) => {
     const price = item.price;
     const quantity = item.quantity ?? 1;
