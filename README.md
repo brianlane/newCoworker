@@ -2507,8 +2507,9 @@ Telnyx caps concurrent OUTBOUND calls at three layers, and the MINIMUM wins:
 1. **Connection** (each Call Control Application's `outbound.channel_limit`).
 2. **Outbound voice profile** (`concurrent_call_limit`).
 3. **Account pool** (support-ticket-only: NOT readable or writable via API;
-   the granted number lives in the `TELNYX_ACCOUNT_CHANNEL_LIMIT` env and
-   must be updated by hand when Telnyx confirms a raise).
+   the granted number lives in `admin_platform_settings` key
+   `telnyx_capacity` and is one row update when Telnyx confirms a raise;
+   env `TELNYX_ACCOUNT_CHANNEL_LIMIT` is only the fallback).
 
 The 2026-08-16 incident: the profile said 10 while the connection sat at 2,
 and the 08:30 Phoenix burst got HTTP 403 "channel limit exceeded" on the
@@ -2522,11 +2523,13 @@ stand, in order of when they act:
   converge via `scripts/oneshot/migrate-tenants-to-dedicated-telnyx-apps.ts`
   (idempotent adopt-by-marker; re-run it after a tier change to re-sync the
   carrier caps).
-- **Pre-dial fleet gate**: `voice_check_availability` refuses flow-placed
-  dials once fleet outbound reservations reach
-  `TELNYX_ACCOUNT_CHANNEL_LIMIT - PLATFORM_OUTBOUND_HEADROOM` (headroom
-  reserves channels for warm transfers and reach_teammate B legs, which dial
-  without reservations).
+- **Pre-dial gates**: `voice_check_availability` refuses flow-placed dials
+  once fleet outbound reservations reach the pool minus the fleet headroom
+  (both from the `telnyx_capacity` settings row), and per tenant once
+  in-flight calls reach the tenant cap minus
+  `business_telnyx_settings.voice_outbound_dial_headroom` (owner-editable on
+  the dashboard phone card, default 3), reserving that tenant's own lines
+  for warm transfers and reach_teammate rings.
 - **Classified rejections**: a carrier channel-limit 403 (or the gate's
   refusal) defers the `place_ai_call` step on a short jittered backoff
   instead of burning the ladder rung, and resolves
@@ -2544,7 +2547,9 @@ Inspect it all with `tsx debug/telnyx-capacity.ts` (read-only: every app,
 profile, DID binding, effective caps, and live in-flight counts). Raising
 the connection or profile limits is a portal edit or an API PATCH; raising
 the ACCOUNT pool means emailing support@telnyx.com from the account owner
-address, then updating `TELNYX_ACCOUNT_CHANNEL_LIMIT`.
+address, then updating the `telnyx_capacity` row in
+`admin_platform_settings` (the seed migration's header shows the one-line
+`jsonb_set` update).
 
 ## Telnyx voice inbound (ops note)
 

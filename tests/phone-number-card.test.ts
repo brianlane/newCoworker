@@ -8,7 +8,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { resolveSmsCampaignCopy } from "@/components/dashboard/PhoneNumberCard";
+import {
+  DIAL_HEADROOM_DEFAULT,
+  describeDialHeadroom,
+  resolveSmsCampaignCopy
+} from "@/components/dashboard/PhoneNumberCard";
+import { TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT } from "../supabase/functions/_shared/voice_reservation_limits";
 
 describe("resolveSmsCampaignCopy", () => {
   it("returns null when status is missing (unknown/uninitialized — don't show a banner)", () => {
@@ -39,5 +44,28 @@ describe("resolveSmsCampaignCopy", () => {
     expect(c?.variant).toBe("error");
     expect(c?.label).toMatch(/needs attention/i);
     expect(c?.hint).toMatch(/automatically retry/i);
+  });
+});
+
+/**
+ * The dial-headroom control (owner chooses the consequence at their cap).
+ * Copy is pure so it stays testable without React, and the default must
+ * stay in lockstep with the worker-side constant or the "(default)" marker
+ * in the dropdown lies.
+ */
+describe("describeDialHeadroom", () => {
+  it("stays in lockstep with the platform default", () => {
+    expect(DIAL_HEADROOM_DEFAULT).toBe(TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT);
+  });
+
+  it("explains zero honestly (transfers can find every line busy)", () => {
+    expect(describeDialHeadroom(0)).toContain("every line");
+    expect(describeDialHeadroom(0)).toContain("busy");
+  });
+
+  it("pluralizes the reserved-lines copy", () => {
+    expect(describeDialHeadroom(1)).toContain("1 line stays");
+    expect(describeDialHeadroom(3)).toContain("3 lines stay");
+    expect(describeDialHeadroom(3)).toContain("live transfers");
   });
 });
