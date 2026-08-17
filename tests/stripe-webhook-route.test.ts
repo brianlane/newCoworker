@@ -112,8 +112,43 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
   recordWhiteGlovePurchase: vi.fn(),
+  setPrioritySupportUntil: vi.fn().mockResolvedValue(undefined),
+  clearPrioritySupportNudgeStamp: vi.fn().mockResolvedValue(undefined),
   updateBusinessOwnerEmailIfPending: vi.fn().mockResolvedValue(true)
 }));
+
+const { mockDisableAutoReloadForBusiness } = vi.hoisted(() => ({
+  mockDisableAutoReloadForBusiness: vi.fn().mockResolvedValue(0)
+}));
+
+// Dynamically imported inside the handler; vi.mock still intercepts it.
+vi.mock("@/lib/db/auto-reload", () => ({
+  disableAutoReloadForBusiness: mockDisableAutoReloadForBusiness,
+  disableAutoReloadForBusinessesByPaymentMethod: vi.fn().mockResolvedValue(0),
+  saveAutoReloadCard: vi.fn().mockResolvedValue(undefined),
+  reenableAutoReloadAfterCardAuthorized: vi.fn().mockResolvedValue(0),
+  clawbackAutoReloadGrantForCharge: vi.fn().mockResolvedValue(false)
+}));
+
+vi.mock("@/lib/db/priority-support", () => ({
+  getLivePrioritySupportSubscription: vi.fn().mockResolvedValue(null),
+  recordPrioritySupportSubscription: vi.fn(),
+  mirrorPrioritySupportSubscription: vi.fn().mockResolvedValue(undefined),
+  markPrioritySupportSubscriptionCanceled: vi.fn().mockResolvedValue(undefined)
+}));
+
+// Keep the REAL `isPrioritySupportSubscription` / `prioritySupportPeriodEnd`
+// so these tests exercise the actual metadata gate the route depends on;
+// stub only the side-effectful calls.
+vi.mock("@/lib/billing/priority-support", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/billing/priority-support")>();
+  return {
+    ...actual,
+    applyPrioritySupportInvoicePaid: vi.fn().mockResolvedValue(true),
+    recordPrioritySupportCheckout: vi.fn().mockResolvedValue({ duplicate: false }),
+    terminatePrioritySupport: vi.fn().mockResolvedValue(false)
+  };
+});
 
 vi.mock("@/lib/db/promotions", () => ({
   recordPromotionRedemption: vi.fn()
@@ -219,10 +254,26 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { logger } from "@/lib/logger";
+import {
+  applyPrioritySupportInvoicePaid,
+  recordPrioritySupportCheckout,
+  terminatePrioritySupport
+} from "@/lib/billing/priority-support";
+import {
+  markPrioritySupportSubscriptionCanceled,
+  mirrorPrioritySupportSubscription
+} from "@/lib/db/priority-support";
 
 describe("stripe webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS but keeps implementations, so a
+    // `mockResolvedValue` set by one test leaks into every later one. That
+    // matters for `getSubscription`: the subscription.deleted handler reads it
+    // to tell a plan change from a real cancellation, so a leaked active row
+    // would silently make later tests take the plan-change path. Reset it to a
+    // known state and let each test opt in.
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
     mockVoiceBonusRpc.mockClear();
     mockVoiceBonusRpc.mockImplementation((name: string) => {
       if (name === "apply_voice_bonus_grant_from_checkout") {
@@ -3268,12 +3319,16 @@ describe("stripe webhook route", () => {
   });
 
   it("short-circuits customer.subscription.deleted fallback for already-finalized upgrade_switch rows", async () => {
-    // The change-plan orchestrator finalizes the old subscription row
-    // inline (status=canceled, cancel_reason=upgrade_switch) BEFORE
-    // calling Stripe cancel, which triggers this webhook. The fallback
-    // mirror below would otherwise race the orchestrator's own write
-    // and re-stamp `stripe_subscription_cached_at`. Assert we skip the
-    // mirror entirely in that case.
+    // Late or replayed delivery: the change-plan orchestrator has already
+    // stamped the old row (status=canceled, cancel_reason=upgrade_switch) at
+    // its step 8. The fallback mirror would otherwise race the orchestrator's
+    // own write and re-stamp `stripe_subscription_cached_at`, so we skip it.
+    //
+    // NOTE: this is NOT the common case. The orchestrator cancels in Stripe at
+    // step 6 and stamps the row at step 8, so the webhook usually arrives
+    // while the row still looks active. That case is covered by
+    // "treats a plan change as a switch even before the orchestrator stamps
+    // the row" below, and is why the check also reads the replacement row.
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_change_sub",
       business_id: "biz_change",
@@ -3305,7 +3360,7 @@ describe("stripe webhook route", () => {
     expect(response.status).toBe(200);
     expect(updateSubscription).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
-      "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
+      "customer.subscription.deleted: skipping fallback mirror for a plan change",
       expect.objectContaining({
         businessId: "biz_change",
         subscriptionId: "old_change_sub"
@@ -3607,5 +3662,495 @@ describe("stripe webhook helpers", () => {
     expect(parseChatCreditMicrosFromMetadata("1e6")).toBeNull();
     expect(parseChatCreditMicrosFromMetadata("1000000001")).toBeNull();
     expect(parseChatCreditMicrosFromMetadata("99999999999")).toBeNull();
+  });
+});
+
+/**
+ * Priority support is the tenant's SECOND Stripe subscription on the same
+ * customer, which is a shape this repo had never had before. These are the
+ * regressions that shape can cause: every one of them is the webhook
+ * confusing the add-on for the membership, or vice versa.
+ */
+describe("stripe webhook route: priority support add-on", () => {
+  const PRIORITY_META = { subscriptionKind: "priority_support", businessId: "biz_ps" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStripeRetrieve.mockResolvedValue({
+      id: "sub_priority",
+      metadata: PRIORITY_META,
+      cancel_at_period_end: false,
+      current_period_end: 1702678400
+    });
+  });
+
+  async function fire() {
+    return POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+  }
+
+  it("a paid priority-support invoice NEVER rewrites the membership billing period", async () => {
+    // The trap: invoice.paid resolves an unrecognized subscription by its
+    // `businessId` metadata and then writes the period cache onto whatever it
+    // found. Without the subscriptionKind gate, this invoice would land on the
+    // MEMBERSHIP row and overwrite a 12/24-month period with a one-month
+    // window, silently re-anchoring the usage quota windows, the renewal date,
+    // isCommitmentElapsed, and the contract-term nudge.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_invoice",
+      type: "invoice.paid",
+      data: {
+        object: { parent: { subscription_details: { subscription: "sub_priority" } } }
+      }
+    } as never);
+    // No local row for this Stripe id, which is what sends the handler into
+    // the businessId fallback.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "membership_row",
+      business_id: "biz_ps",
+      status: "active"
+    } as never);
+
+    const response = await fire();
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(applyPrioritySupportInvoicePaid).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz_ps" })
+    );
+  });
+
+  it("a MEMBERSHIP invoice still updates the membership period", async () => {
+    // The other half of the gate: ordinary membership invoices must keep
+    // working exactly as before.
+    mockStripeRetrieve.mockResolvedValue({
+      id: "sub_membership",
+      metadata: { businessId: "biz_ps" },
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_membership_invoice",
+      type: "invoice.paid",
+      data: {
+        object: { parent: { subscription_details: { subscription: "sub_membership" } } }
+      }
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "membership_row"
+    } as never);
+
+    await fire();
+
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "membership_row",
+      expect.objectContaining({ status: "active" })
+    );
+    expect(applyPrioritySupportInvoicePaid).not.toHaveBeenCalled();
+  });
+
+  it("skips a paid priority invoice with no businessId rather than guessing", async () => {
+    mockStripeRetrieve.mockResolvedValue({
+      id: "sub_priority",
+      metadata: { subscriptionKind: "priority_support" },
+      current_period_end: 1702678400
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_no_biz",
+      type: "invoice.paid",
+      data: {
+        object: { parent: { subscription_details: { subscription: "sub_priority" } } }
+      }
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null as never);
+
+    expect((await fire()).status).toBe(200);
+    expect(applyPrioritySupportInvoicePaid).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("never fails the webhook when coverage bookkeeping throws", async () => {
+    // Failing here would make Stripe retry the whole event; the next paid
+    // invoice re-stamps from the live period end anyway.
+    vi.mocked(applyPrioritySupportInvoicePaid).mockRejectedValueOnce(new Error("db down"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_invoice_err",
+      type: "invoice.paid",
+      data: {
+        object: { parent: { subscription_details: { subscription: "sub_priority" } } }
+      }
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null as never);
+
+    expect((await fire()).status).toBe(200);
+  });
+
+  it("a priority-support checkout records the add-on and does NOT run signup activation", async () => {
+    // mode=subscription would otherwise fall through to the default membership
+    // activation and adopt this as the tenant's plan subscription.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_checkout",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_ps_1",
+          mode: "subscription",
+          subscription: "sub_priority",
+          customer: "cus_1",
+          customer_details: { email: "owner@test.com" },
+          metadata: { checkoutKind: "priority_support", businessId: "biz_ps", userId: "user-1" }
+        }
+      }
+    } as never);
+
+    const response = await fire();
+
+    expect(response.status).toBe(200);
+    expect(recordPrioritySupportCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz_ps",
+        stripeSubscriptionId: "sub_priority",
+        stripeCustomerId: "cus_1",
+        stripeSessionId: "cs_ps_1"
+      })
+    );
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    expect(ensureCommitmentSchedule).not.toHaveBeenCalled();
+  });
+
+  it("still records the add-on when the subscription retrieve fails", async () => {
+    // The row must exist even without a period end; the next invoice.paid
+    // stamps coverage from the live period.
+    mockStripeRetrieve.mockRejectedValueOnce(new Error("stripe down"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_checkout_retrieve_fail",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_ps_2",
+          mode: "subscription",
+          subscription: "sub_priority",
+          customer: "cus_1",
+          metadata: { checkoutKind: "priority_support", businessId: "biz_ps" }
+        }
+      }
+    } as never);
+
+    expect((await fire()).status).toBe(200);
+    expect(recordPrioritySupportCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ periodEnd: null })
+    );
+  });
+
+  it("skips a priority-support checkout with no businessId or no subscription", async () => {
+    for (const object of [
+      {
+        id: "cs_ps_3",
+        mode: "subscription",
+        subscription: "sub_priority",
+        metadata: { checkoutKind: "priority_support" }
+      },
+      {
+        id: "cs_ps_4",
+        mode: "subscription",
+        metadata: { checkoutKind: "priority_support", businessId: "biz_ps" }
+      }
+    ]) {
+      vi.clearAllMocks();
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_ps_bad",
+        type: "checkout.session.completed",
+        data: { object }
+      } as never);
+      expect((await fire()).status).toBe(200);
+      expect(recordPrioritySupportCheckout).not.toHaveBeenCalled();
+    }
+  });
+
+  it("mirrors add-on status on customer.subscription.updated without touching the membership", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_updated",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_priority",
+          status: "active",
+          cancel_at_period_end: true,
+          current_period_end: 1702678400,
+          metadata: PRIORITY_META
+        }
+      }
+    } as never);
+
+    expect((await fire()).status).toBe(200);
+    expect(mirrorPrioritySupportSubscription).toHaveBeenCalledWith(
+      "sub_priority",
+      expect.objectContaining({ status: "canceling", cancelAtPeriodEnd: true })
+    );
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("mirrors a canceled add-on status", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_updated_canceled",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_priority",
+          status: "canceled",
+          cancel_at_period_end: false,
+          current_period_end: 1702678400,
+          metadata: PRIORITY_META
+        }
+      }
+    } as never);
+
+    expect((await fire()).status).toBe(200);
+    expect(mirrorPrioritySupportSubscription).toHaveBeenCalledWith(
+      "sub_priority",
+      expect.objectContaining({ status: "canceled" })
+    );
+  });
+
+  it("survives a mirror failure without failing the webhook", async () => {
+    vi.mocked(mirrorPrioritySupportSubscription).mockRejectedValueOnce(new Error("db down"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_updated_err",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_priority",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: PRIORITY_META
+        }
+      }
+    } as never);
+    expect((await fire()).status).toBe(200);
+  });
+
+  it("deleting the ADD-ON never tears the tenant down", async () => {
+    // It is only an add-on ending: no auto-reload disable, no grace window,
+    // no VM stop.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_deleted",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_priority", metadata: PRIORITY_META } }
+    } as never);
+
+    expect((await fire()).status).toBe(200);
+    expect(markPrioritySupportSubscriptionCanceled).toHaveBeenCalledWith(
+      "sub_priority",
+      expect.any(Date)
+    );
+    expect(getSubscriptionByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("survives a cancel-mirror failure without failing the webhook", async () => {
+    vi.mocked(markPrioritySupportSubscriptionCanceled).mockRejectedValueOnce(
+      new Error("db down")
+    );
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_ps_deleted_err",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_priority", metadata: PRIORITY_META } }
+    } as never);
+    expect((await fire()).status).toBe(200);
+  });
+
+  it("cancels the add-on when the MEMBERSHIP is torn down", async () => {
+    // A separate Stripe subscription keeps charging $400/month otherwise.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_membership_deleted",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_membership", metadata: { businessId: "biz_ps" } } }
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "membership_row",
+      business_id: "biz_ps",
+      status: "active",
+      cancel_at_period_end: false,
+      grace_ends_at: null,
+      wiped_at: null
+    } as never);
+
+    await fire();
+
+    expect(terminatePrioritySupport).toHaveBeenCalledWith("biz_ps");
+  });
+
+  it("does NOT cancel the add-on on an upgrade switch", async () => {
+    // A plan change cancels the OLD Stripe subscription and builds a new one,
+    // delivering this same event for a tenant who is still very much active.
+    // Cancelling their priority support here would silently drop a paid add-on
+    // every time somebody upgrades.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_upgrade_switch_deleted",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_old", metadata: { businessId: "biz_ps" } } }
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "old_membership_row",
+      business_id: "biz_ps",
+      status: "canceled",
+      cancel_reason: "upgrade_switch",
+      cancel_at_period_end: false,
+      grace_ends_at: null,
+      wiped_at: null
+    } as never);
+
+    await fire();
+
+    expect(terminatePrioritySupport).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A plan change cancels the OLD Stripe subscription and builds a new one, so
+ * `customer.subscription.deleted` fires for a tenant who is still active. The
+ * orchestrator cancels in Stripe at step 6 and only stamps the old row
+ * `upgrade_switch` at step 8, with the slow box teardown in between, so the
+ * webhook normally lands while the row still looks active. Anything in that
+ * handler that tears down tenant state has to survive that window.
+ */
+describe("stripe webhook route: plan change vs real cancellation", () => {
+  const DELETED = {
+    id: "evt_old_sub_deleted",
+    type: "customer.subscription.deleted",
+    data: { object: { id: "sub_old", metadata: { businessId: "biz_switch" } } }
+  };
+
+  const OLD_ROW_MID_ORCHESTRATION = {
+    id: "old_row",
+    business_id: "biz_switch",
+    // Step 8 has NOT run yet: the row still looks completely live.
+    status: "active",
+    cancel_reason: null,
+    cancel_at_period_end: false,
+    grace_ends_at: null,
+    wiped_at: null,
+    canceled_at: null
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
+    vi.mocked(verifyWebhook).mockReturnValue(DELETED as never);
+  });
+
+  async function fire() {
+    return POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+  }
+
+  it("does NOT disable auto-reload on a plan change, even before the row is stamped", async () => {
+    // The bug: `disableAutoReloadForBusiness` fired unconditionally, and
+    // nothing ever re-enables those rules, so every upgrade or downgrade
+    // silently stopped the tenant's top-ups.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    // Step 5 already created the replacement, which is the signal that works
+    // regardless of how steps 6 and 8 interleave with webhook delivery.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    const response = await fire();
+
+    expect(response.status).toBe(200);
+    expect(mockDisableAutoReloadForBusiness).not.toHaveBeenCalled();
+    expect(terminatePrioritySupport).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("DOES disable auto-reload on a real cancellation", async () => {
+    // The newest row is the one being deleted, so there is no replacement and
+    // the tenant really is leaving.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      ...OLD_ROW_MID_ORCHESTRATION,
+      status: "canceled",
+      cancel_reason: "customer_request"
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "old_row",
+      business_id: "biz_switch",
+      status: "canceled",
+      stripe_subscription_id: "sub_old"
+    } as never);
+
+    await fire();
+
+    expect(mockDisableAutoReloadForBusiness).toHaveBeenCalledWith(
+      "biz_switch",
+      "subscription_canceled"
+    );
+    expect(terminatePrioritySupport).toHaveBeenCalledWith("biz_switch");
+  });
+
+  it("treats a plan change as a switch even before the orchestrator stamps the row", async () => {
+    // Same window as the auto-reload case, asserted on the fallback mirror:
+    // the old row must not be re-stamped or given a grace deadline.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    await fire();
+
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      "customer.subscription.deleted: plan change, skipping tenant teardown",
+      expect.objectContaining({ businessId: "biz_switch" })
+    );
+  });
+
+  it("still disables auto-reload when the replacement never became active", async () => {
+    // A change-plan that failed before step 5, or a signup row stuck pending:
+    // no live replacement, so this is a real teardown.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_row",
+      business_id: "biz_switch",
+      status: "pending",
+      stripe_subscription_id: "sub_new"
+    } as never);
+
+    await fire();
+
+    expect(mockDisableAutoReloadForBusiness).toHaveBeenCalled();
+  });
+
+  it("keeps the teardown non-fatal when the auto-reload disable throws", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(
+      OLD_ROW_MID_ORCHESTRATION as never
+    );
+    vi.mocked(getSubscription).mockResolvedValue(null as never);
+    mockDisableAutoReloadForBusiness.mockRejectedValueOnce(new Error("rpc down"));
+
+    expect((await fire()).status).toBe(200);
+    expect(terminatePrioritySupport).toHaveBeenCalled();
   });
 });

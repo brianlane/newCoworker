@@ -51,6 +51,14 @@ import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel"
 import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
 import { VpsProviderPanel } from "@/components/admin/VpsProviderPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
+import { PrioritySupportPanel } from "@/components/admin/PrioritySupportPanel";
+import { getLivePrioritySupportSubscription } from "@/lib/db/priority-support";
+import {
+  PRIORITY_SUPPORT_MONTHLY_CENTS,
+  prioritySupportDaysLeft,
+  prioritySupportStatus
+} from "@/lib/plans/priority-support";
+import { formatPriceCents } from "@/lib/pricing";
 import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
 import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { parseBranding } from "@/lib/plans/branding";
@@ -99,7 +107,8 @@ export default async function BusinessDetailPage({
     telnyxRoute,
     telnyxSettings,
     whiteGloveOffers,
-    enterpriseDeals
+    enterpriseDeals,
+    prioritySupportRow
   ] = await Promise.all([
     getBusiness(businessId),
     getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
@@ -113,7 +122,8 @@ export default async function BusinessDetailPage({
     getTelnyxVoiceRouteForBusiness(businessId),
     getBusinessTelnyxSettings(businessId),
     listWhiteGloveOffers(businessId),
-    listEnterpriseDeals(businessId)
+    listEnterpriseDeals(businessId),
+    getLivePrioritySupportSubscription(businessId).catch(() => null)
   ]);
   const postureReport = await getLatestVpsPostureReport(businessId);
   const teamMembers = await listBusinessMembers(businessId);
@@ -301,6 +311,21 @@ export default async function BusinessDetailPage({
           </p>
         </Card>
       )}
+
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Priority support ({formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS)}/month)
+        </h2>
+        <PrioritySupportPanel
+          businessId={businessId}
+          status={prioritySupportStatus(business.tier, business.priority_support_until)}
+          daysLeft={prioritySupportDaysLeft(business.tier, business.priority_support_until)}
+          coverageUntilIso={business.priority_support_until ?? null}
+          renewing={Boolean(prioritySupportRow && !prioritySupportRow.cancel_at_period_end)}
+          subscribed={Boolean(prioritySupportRow)}
+          priceLabel={formatPriceCents(PRIORITY_SUPPORT_MONTHLY_CENTS)}
+        />
+      </Card>
 
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">

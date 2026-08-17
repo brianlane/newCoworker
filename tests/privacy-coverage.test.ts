@@ -164,6 +164,8 @@ const EXEMPT: Record<string, string> = {
   gemini_spend_events: "spend ledger",
   owner_chat_model_spend: "spend ledger",
   owner_chat_spend_reservations: "spend ledger",
+  priority_support_subscriptions:
+    "the tenant's own $400/month priority support subscription: business_id, Stripe subscription/customer/session ids, status, and period dates. No end-customer identifiers. `created_by` is the OWNER or the ADMIN who started it, i.e. account-scope evidence of who authorized the charge, the same boundary usage_pack_auto_reload_cards draws. Cascades with the business.",
   promotion_redemptions: "billing",
   sms_bonus_grants: "billing",
   sms_outbound_rate: "rate limiting state",

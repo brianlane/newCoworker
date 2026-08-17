@@ -31,6 +31,14 @@ export type AdminClientRow = {
    * top of the table, surviving column sorts — see {@link pinRowsFirst}.
    */
   pinned: boolean;
+  /**
+   * `businesses.priority_support_until`, so the fleet view can show which
+   * tenants hold the $400/month priority support add-on and which are about
+   * to lapse. Null means no coverage. Enterprise is permanent regardless of
+   * this value, which is why the badge is derived from tier + this together
+   * (see prioritySupportStatus).
+   */
+  prioritySupportUntil: string | null;
 };
 
 /** Sentinel for "no subscription row" in the payment filter. */
@@ -135,6 +143,7 @@ export function clientsCsv(rows: AdminClientRow[]): string {
       "paused",
       "churn_risk",
       "margin_usd_per_month",
+      "priority_support_until",
       "created_at",
       "id"
     ],
@@ -147,6 +156,7 @@ export function clientsCsv(rows: AdminClientRow[]): string {
       row.isPaused,
       row.ownerQuiet,
       row.marginCents !== null ? (row.marginCents / 100).toFixed(2) : "",
+      row.prioritySupportUntil ?? "",
       row.createdAt,
       row.id
     ])
