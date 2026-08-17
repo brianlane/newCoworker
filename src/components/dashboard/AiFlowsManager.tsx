@@ -3830,6 +3830,11 @@ function StepFields({
           />
           Only fill in details that earlier steps left empty (recommended)
         </label>
+        <NoMatchVarsField
+          key={step.id}
+          value={step.noMatchVars}
+          onChange={(v) => patchStep(index, { noMatchVars: v })}
+        />
         <label className={labelClass}>Fields to extract</label>
         {step.fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
@@ -4971,6 +4976,14 @@ function StepFields({
           value={step.continueWhenText ?? ""}
           onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
           help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page proves this step already worked (e.g. "you just accepted"), so the later steps that file the lead and tell your team still happen.'
+        />
+        <Field
+          label="After the actions, the page must say (optional)"
+          value={step.expectText ?? ""}
+          onChange={(v) => patchStep(index, { expectText: v.trim() ? v : undefined })}
+          help={
+            'Proof the actions actually worked: after every action completes, the page must show this text (e.g. "We\'re calling you at") or the step is treated as failed. Use it on clicks that matter - a button can be clicked and still do nothing while the page is mid-load.'
+          }
         />
         <label className={labelClass}>
           Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)
@@ -7057,6 +7070,77 @@ function TimeWindowFields({
         </div>
       )}
     </section>
+  );
+}
+
+/** Content equality for two noMatchVars records (order-insensitive). */
+function sameNoMatchVars(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  const ak = Object.keys(a);
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
+}
+
+/**
+ * `email_extract.noMatchVars` editor: "name = value" lines.
+ *
+ * Keeps the RAW text in local state and publishes only the lines that parse.
+ * Deriving the textarea's value from the parsed record looked simpler and was
+ * unusable: a half-typed line has no "=" yet, so the parse dropped it and the
+ * controlled value snapped back on every keystroke — nothing could be typed,
+ * only a finished line pasted (Bugbot, PR #1401).
+ *
+ * The buffer re-seeds whenever `value` changes to something OTHER than what
+ * this field last published (React's adjust-state-during-render pattern):
+ * an AI regenerate can replace the step in place while REUSING its id, so the
+ * call site's `key={step.id}` remount alone would keep the previous draft and
+ * a later keystroke would overwrite the regenerated record with it (Bugbot's
+ * second catch on the same PR). While typing, the round-tripped prop is
+ * content-equal to what was just published, so the guard never fights the
+ * keyboard.
+ */
+function NoMatchVarsField({
+  value,
+  onChange
+}: {
+  value: Record<string, string> | undefined;
+  onChange: (v: Record<string, string> | undefined) => void;
+}) {
+  const toText = (rec: Record<string, string> | undefined) =>
+    Object.entries(rec ?? {})
+      .map(([k, v]) => `${k} = ${v}`)
+      .join("\n");
+  const [text, setText] = useState(() => toText(value));
+  const [lastKnown, setLastKnown] = useState(value);
+  if (!sameNoMatchVars(value, lastKnown)) {
+    setLastKnown(value);
+    setText(toText(value));
+  }
+  return (
+    <Field
+      label="When no email matches, set (optional; one per line, name = value)"
+      value={text}
+      onChange={(raw) => {
+        setText(raw);
+        const entries = raw
+          .split("\n")
+          .map((line) => {
+            const eq = line.indexOf("=");
+            if (eq < 0) return null;
+            const name = line.slice(0, eq).trim();
+            const val = line.slice(eq + 1).trim();
+            return name && val ? ([name, val] as const) : null;
+          })
+          .filter((e): e is readonly [string, string] => e !== null);
+        const next = entries.length > 0 ? Object.fromEntries(entries) : undefined;
+        setLastKnown(next);
+        onChange(next);
+      }}
+      help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
+      textarea
+    />
   );
 }
 

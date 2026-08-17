@@ -868,6 +868,20 @@ const nonBranchStepMembers = [
     lookbackMinutes: z.number().int().min(1).max(1440).optional(),
     fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS),
     fillOnlyEmpty: z.boolean().optional(),
+    // What to write when NO mailbox message matches at all. Without this the
+    // step writes NOTHING on a no-match ({found:false}), which is invisible to
+    // downstream gates: a retry rung gated on `status equals "missing"` never
+    // fires because the status var does not exist (Amy's HomeLight reveal
+    // ladder sat inert exactly this way, 2026-08-16). Keys count as produced
+    // vars; values are written only where the var is still empty, so a real
+    // extracted value from an earlier read is never clobbered by a later
+    // no-match.
+    noMatchVars: z
+      .record(varName, z.string().min(1).max(80))
+      .refine((o) => Object.keys(o).length >= 1 && Object.keys(o).length <= MAX_EXTRACT_FIELDS, {
+        message: `noMatchVars must carry 1..${MAX_EXTRACT_FIELDS} entries`
+      })
+      .optional(),
     when: whenSchema.optional()
   }),
   // Read typed fields out of a DOCUMENT — the triggering email's PDF/text
@@ -1695,6 +1709,17 @@ const nonBranchStepMembers = [
     // flow can be safely re-run for the same lead.
     // skipWhenText is evaluated FIRST and wins when both markers match.
     continueWhenText: z.string().min(1).max(200).optional(),
+    // Postcondition: after every action completed, the page's VISIBLE text must
+    // show this marker (case-insensitive) within the render service's expect
+    // window, or the step fails exactly like an action failure (failure shots,
+    // then skipWhenText/continueWhenText classification). Exists because a
+    // dispatched click is not an applied click: on 2026-08-16 Amy's HomeLight
+    // claim button was really clicked (actionsCompleted: 1) and HomeLight's
+    // backend never registered the claim; the page state ("We're calling you
+    // at") is the only honest signal the action DID something. Incompatible
+    // with forEachLink (no single after-page in a loop; enforced in
+    // validateDefinitionSemantics).
+    expectText: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
   // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for
@@ -2673,6 +2698,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.rememberUrlKeyedByVar) {
         issues.push(`Step "${step.id}" can't combine forEachLink with rememberUrlKeyedByVar.`);
       }
+      if (step.expectText) {
+        issues.push(
+          `Step "${step.id}" can't combine forEachLink with expectText; a loop has no single after-page to hold to the expectation.`
+        );
+      }
     }
 
     // forEachLinkMatchVar narrows a forEachLink loop to rows naming one of the
@@ -3244,6 +3274,9 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "email_extract") {
       for (const f of step.fields) vars.add(f.name);
+      // A no-match writes these instead of the fields, so they are produced
+      // vars in exactly the same sense (and usually the same names).
+      for (const k of Object.keys(step.noMatchVars ?? {})) vars.add(k);
     } else if (step.type === "doc_extract") {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "browse_action") {

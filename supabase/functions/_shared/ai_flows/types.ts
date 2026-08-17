@@ -564,6 +564,13 @@ export type FlowStep =
       fields: ExtractField[];
       /** When true, a field is written only if its var is currently empty/"none" (backfill, never clobber). */
       fillOnlyEmpty?: boolean;
+      /**
+       * Written when NO mailbox message matches at all. Without this a no-match
+       * writes NOTHING, which downstream `equals "missing"` gates cannot see
+       * (the var does not exist). Applied only where the var is still empty,
+       * so an earlier read's real value is never clobbered by a later no-match.
+       */
+      noMatchVars?: Record<string, string>;
       when?: StepCondition;
     }
   | {
@@ -1088,6 +1095,15 @@ export type FlowStep =
        * skipWhenText is checked FIRST and wins when both markers match.
        */
       continueWhenText?: string;
+      /**
+       * Postcondition: after every action completed, the page's VISIBLE text
+       * must show this marker (case-insensitive) within the render service's
+       * expect window, or the step fails exactly like an action failure and
+       * the markers above classify the failure page. A dispatched click is
+       * not an applied click on a hydrating SPA (Amy's HomeLight claim,
+       * 2026-08-16). Incompatible with forEachLink.
+       */
+      expectText?: string;
       when?: StepCondition;
     }
   | {

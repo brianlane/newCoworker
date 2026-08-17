@@ -34,6 +34,7 @@ export const WHILE_PRESENT_PROBE_MS: number;
 export const MAX_FOREACH_ITEMS: number;
 export const CLICK_TEXT_APPEAR_MS: number;
 export const CLICK_TEXT_APPEAR_POLL_MS: number;
+export const EXPECT_TEXT_TIMEOUT_MS: number;
 export const MAX_OVERLAY_DISMISS_ROUNDS: number;
 export const ACTION_KINDS: Set<string>;
 export const ERROR_DETAIL_MAX: number;
@@ -61,3 +62,8 @@ export function runAction(
   action: RenderAction,
   opts?: { appearTimeoutMs?: number }
 ): Promise<void>;
+export function waitForExpectedText(
+  page: RenderPage,
+  text: unknown,
+  timeoutMs?: number
+): Promise<boolean>;

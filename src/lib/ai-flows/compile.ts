@@ -268,7 +268,15 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "(both options work on browse_extract and browse_action; skipWhenText ends the",
   "run, continueWhenText does not), and \"auth\":{\"integrationLabel\":",
   '"<the stored integration\'s label>"} to log in first, only when the user',
-  "names a login/integration they have saved. Saved-person references (toRef/",
+  'names a login/integration they have saved. A browse_action may carry',
+  '"expectText":"We\'re calling you" as PROOF the actions worked: after every',
+  "action completes the page must show that text or the step fails like an",
+  "action failure (a button can be clicked and still do nothing on a page that",
+  "is mid-load; use it on clicks that matter). An email_extract may carry",
+  '"noMatchVars":{"u1_status":"missing"} to write those values (into',
+  "still-empty vars only) when NO email matches, so a later step gated on the",
+  "status can tell \"looked and found nothing\" from \"never looked\".",
+  "Saved-person references (toRef/",
   "fromRef/agentRef/notifyRef) are picked in the editor and can NOT be authored",
   "here. Use the literal phone/name fields instead."
 ].join("\n");
