@@ -229,17 +229,21 @@ export const INSTAGRAM_COMMENT_SOURCE = "instagram_comment";
  * brief with the handle, the comment, and what it's actually asking for, so a
  * buying question doesn't sit unseen under a photo for two days.
  *
- * Deliberately NO reply / send_sms / upsert_customer step:
+ * It also answers the comment publicly, since holding a buyer for two days
+ * under a photo is the thing this starter exists to stop. Public, not
+ * private, on purpose: Instagram allows exactly ONE private reply per
+ * comment, ever, and spending it on a generic acknowledgement would burn the
+ * only message the owner has for the real answer. The `reply_to_comment`
+ * step supports both, so an owner who wants the DM changes one setting.
+ *
+ * Still deliberately NO send_sms / upsert_customer step:
  *   - a comment carries a username, never a phone, and the CRM is phone-keyed,
  *     so "file them as a contact" would file nothing;
  *   - a commenter has not consented to texts or marketing email, the same rule
- *     the Instagram prospect starter follows;
- *   - we do not implement comment replies (POST /{comment_id}/replies), so the
- *     brief tells the owner to reply on Instagram instead of implying the
- *     coworker already did.
+ *     the Instagram prospect starter follows.
  *
- * Installed DISABLED like the other starters, so the owner reads the brief
- * wording before anything reaches them.
+ * Installed DISABLED like the other starters, so the owner reads both the
+ * public reply and the brief before anything reaches them or their post.
  */
 export function instagramCommentTemplate(): LibraryStarterTemplate {
   return {
@@ -280,6 +284,16 @@ export function instagramCommentTemplate(): LibraryStarterTemplate {
           ]
         },
         {
+          id: "s_reply",
+          type: "reply_to_comment",
+          replyMode: "public",
+          // Answers the comment, promises nothing, and does not pretend to be
+          // the owner. Spam gets no reply at all: a public "thanks!" under a
+          // scam comment is worse than silence.
+          body: "Thanks for the comment! We'll come back to you on this shortly.",
+          when: { var: "comment_intent", notEquals: "spam" }
+        },
+        {
           id: "s_notify_owner",
           type: "notify_owner",
           message:
@@ -288,7 +302,7 @@ export function instagramCommentTemplate(): LibraryStarterTemplate {
             // dangling comma in the owner's alert.
             "New Instagram comment from @{{vars.commenter_handle}}: " +
             "\"{{vars.comment_text}}\" Looks like: {{vars.comment_intent}}. " +
-            "Reply on Instagram when you get a minute; I can't reply to comments for you."
+            "I replied on the post so they know you saw it; the real answer is yours."
         }
       ]
     }

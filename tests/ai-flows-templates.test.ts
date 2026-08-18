@@ -362,19 +362,40 @@ describe("instagramCommentTemplate", () => {
     expect(evaluateTriggerConditions(conditions, "any text", INSTAGRAM_SCRAPER_SOURCE)).toBe(false);
   });
 
-  it("never contacts the commenter: no send/file step, and the brief says so", () => {
-    // A commenter gave no consent and a comment carries no phone, so anything
-    // that texts, emails, or files them would be both broken and unlawful.
+  it("answers ON Instagram and nowhere else: no text, email, or CRM filing", () => {
+    // The rule this pins has not changed, only what satisfies it. A commenter
+    // gave no consent to be texted or emailed and a comment carries no phone,
+    // so anything that reaches them OFF the platform would be both broken and
+    // unlawful. Replying where they commented is the one channel they chose.
     const def = instagramCommentTemplate().definition;
     const types = def.steps.map((s) => s.type);
-    expect(types).toEqual(["extract_text", "notify_owner"]);
+    expect(types).toEqual(["extract_text", "reply_to_comment", "notify_owner"]);
     for (const banned of ["send_sms", "send_email", "send_whatsapp", "upsert_customer"]) {
       expect(types).not.toContain(banned);
     }
+  });
+
+  it("replies PUBLICLY, never spending the single private reply", () => {
+    // Instagram allows exactly ONE private reply per comment, ever. Spending
+    // it on a generic acknowledgement would burn the only message the owner
+    // has left for the real answer.
+    const reply = instagramCommentTemplate().definition.steps.find(
+      (s) => s.type === "reply_to_comment"
+    );
+    expect((reply as { replyMode: string }).replyMode).toBe("public");
+  });
+
+  it("stays quiet under spam, and never claims it cannot reply", () => {
+    const def = instagramCommentTemplate().definition;
+    const reply = def.steps.find((s) => s.type === "reply_to_comment");
+    // A public "thanks!" under a scam comment is worse than silence.
+    expect((reply as { when?: { var: string; notEquals?: string } }).when).toEqual({
+      var: "comment_intent",
+      notEquals: "spam"
+    });
+    // The brief used to tell the owner we could not reply. We can now.
     const brief = JSON.stringify(def.steps);
-    // We do not implement comment replies, so the brief must not imply we did.
-    expect(brief).toContain("Reply on Instagram");
-    expect(brief).toContain("can't reply to comments for you");
+    expect(brief).not.toContain("can't reply to comments for you");
   });
 
   it("leaves no dangling punctuation when a var renders empty", () => {

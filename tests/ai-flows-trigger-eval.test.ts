@@ -516,13 +516,94 @@ describe("webhookTriggerScope", () => {
       windowText: "full_name: Jane\nlink: https://fb.me/lead/1",
       url: "https://fb.me/lead/1",
       from: "facebook_lead_ads",
-      event_id: "lead-123"
+      event_id: "lead-123",
+      // Named keys too, so a step can say {{trigger.full_name}} instead of
+      // digging the value back out of the flattened blob.
+      full_name: "Jane",
+      link: "https://fb.me/lead/1"
     });
   });
   it("omits event_id when unknown and bounds the source label", () => {
     const scope = webhookTriggerScope({ source: "s".repeat(200), data: { a: 1 } });
     expect("event_id" in scope).toBe(false);
     expect(scope.from.length).toBe(120);
+  });
+
+  it("publishes an Instagram comment's fields under their own names", () => {
+    // This is what makes reply_to_comment default to the right comment.
+    const scope = webhookTriggerScope({
+      source: "instagram_comment",
+      eventId: "c-1",
+      data: {
+        comment_id: "c-1",
+        comment_text: "how much?",
+        username: "buyer",
+        media_id: "m-9"
+      }
+    });
+    expect(scope.comment_id).toBe("c-1");
+    expect(scope.comment_text).toBe("how much?");
+    expect(scope.username).toBe("buyer");
+    expect(scope.media_id).toBe("m-9");
+  });
+
+  it("never lets a payload key overwrite what the trigger actually was", () => {
+    // A hostile (or just careless) bridge payload carrying its own "channel"
+    // or "from" must not be able to rewrite the trigger's identity, which
+    // from_matches conditions and the engine both key on.
+    const scope = webhookTriggerScope({
+      source: "facebook_lead_ads",
+      eventId: "real-id",
+      data: {
+        channel: "email",
+        from: "somewhere_else",
+        url: "https://evil.test",
+        windowText: "spoofed",
+        event_id: "spoofed-id"
+      }
+    });
+    expect(scope.channel).toBe("webhook");
+    expect(scope.from).toBe("facebook_lead_ads");
+    expect(scope.event_id).toBe("real-id");
+    expect(scope.windowText).toContain("spoofed");
+    expect(scope.url).toBe("https://evil.test");
+  });
+
+  it("promotes only scalars under plain names, and truncates long values", () => {
+    const scope = webhookTriggerScope({
+      source: "bridge",
+      data: {
+        nested: { deep: "value" },
+        list: [1, 2],
+        nothing: null,
+        count: 7,
+        flag: true,
+        "dotted.key": "unreachable",
+        "spaced key": "unreachable",
+        long: "x".repeat(900)
+      }
+    });
+    // Numbers and booleans render as strings; objects, arrays, and null are
+    // left to the flattened blob.
+    expect(scope.count).toBe("7");
+    expect(scope.flag).toBe("true");
+    expect("nested" in scope).toBe(false);
+    expect("list" in scope).toBe(false);
+    expect("nothing" in scope).toBe(false);
+    // `{{trigger.x}}` cannot address these, so promoting them is dead weight.
+    expect("dotted.key" in scope).toBe(false);
+    expect("spaced key" in scope).toBe(false);
+    expect((scope.long as string).length).toBe(500);
+  });
+
+  it("caps how many payload keys a hostile payload can add", () => {
+    const many: Record<string, unknown> = {};
+    for (let i = 0; i < 200; i += 1) many[`k${i}`] = `v${i}`;
+    const scope = webhookTriggerScope({ source: "bridge", eventId: "e", data: many });
+    // 40 payload keys, plus the five the scope always carries.
+    expect(Object.keys(scope).length).toBe(45);
+    expect(scope.k0).toBe("v0");
+    expect("k40" in scope).toBe(false);
   });
 });
 

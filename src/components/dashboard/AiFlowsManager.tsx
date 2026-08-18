@@ -528,6 +528,10 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_whatsapp":
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
+    case "reply_to_comment":
+      // Public by default: the safe one. Instagram allows only ONE private
+      // reply per comment, so that mode is a deliberate choice, not a default.
+      return { id, type, replyMode: "public", body: "" };
     case "send_email":
       return { id, type, to: "", subject: "", body: "" };
     case "email_organize":
@@ -4162,6 +4166,46 @@ function StepFields({
           messaged you within 24 hours, the message goes out through an approved
           template (Meta bills per template message); if the template is still in
           review, the step is skipped with a note.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "reply_to_comment") {
+    return (
+      <div className="space-y-2">
+        <label className={labelClass}>How to reply</label>
+        <div className="flex flex-wrap gap-2">
+          {(["public", "private"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => patchStep(index, { replyMode: m })}
+              className={`rounded-md border px-2 py-1 text-xs ${
+                step.replyMode === m
+                  ? "border-signal-teal text-signal-teal"
+                  : "border-parchment/15 text-parchment/60 hover:border-parchment/40"
+              }`}
+            >
+              {m === "public" ? "Publicly, on the comment" : "Privately, in their inbox"}
+            </button>
+          ))}
+        </div>
+        <Field
+          label="Reply"
+          value={step.body}
+          onChange={(v) => patchStep(index, { body: v })}
+          textarea
+        />
+        <Field
+          label="Which comment (leave empty to answer the one that started this flow)"
+          value={step.commentId ?? ""}
+          onChange={(v) => patchStep(index, { commentId: v.trim() ? v : undefined })}
+          help="Defaults to {{trigger.comment_id}}, the comment that triggered the run."
+        />
+        <p className="text-[11px] text-parchment/40">
+          {step.replyMode === "private"
+            ? "Instagram allows only ONE private reply per comment, and only within 7 days of it (during the broadcast, for a Live). Past that, the step is skipped with a note rather than retried."
+            : "Posts a reply on the comment thread, where everyone reading the post sees it."}
         </p>
       </div>
     );

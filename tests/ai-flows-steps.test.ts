@@ -2724,3 +2724,94 @@ describe("planStep: send_sms mediaUrlVar (MMS attach)", () => {
     );
   });
 });
+
+describe("planStep: reply_to_comment", () => {
+  const base = {
+    id: "r",
+    type: "reply_to_comment",
+    replyMode: "public",
+    body: "Thanks {{trigger.username}}!"
+  };
+
+  /** The scope an instagram_comment webhook run actually carries. */
+  const commentScope: StepScope = {
+    vars: {},
+    trigger: {
+      channel: "webhook",
+      from: "instagram_comment",
+      comment_id: "c-1",
+      username: "buyer",
+      event_id: "c-1"
+    }
+  };
+
+  it("defaults to the comment that triggered the run, and renders the body", () => {
+    expect(planStep(base as FlowStep, commentScope)).toEqual({
+      ok: true,
+      action: {
+        kind: "reply_to_comment",
+        replyMode: "public",
+        commentId: "c-1",
+        body: "Thanks buyer!"
+      }
+    });
+  });
+
+  it("carries the private mode through", () => {
+    const plan = planStep({ ...base, replyMode: "private" } as FlowStep, commentScope);
+    expect((plan as { action: { replyMode: string } }).action.replyMode).toBe("private");
+  });
+
+  it("falls back to event_id for a run enqueued before comment_id existed", () => {
+    // Runs parked across the deploy that added named trigger keys still only
+    // have event_id, which for a comment event IS the comment id.
+    const legacy: StepScope = {
+      vars: {},
+      trigger: { channel: "webhook", from: "instagram_comment", event_id: "c-legacy" }
+    };
+    const plan = planStep(base as FlowStep, legacy);
+    expect((plan as { action: { commentId: string } }).action.commentId).toBe("c-legacy");
+  });
+
+  it("answers a different comment when one is named explicitly", () => {
+    const plan = planStep(
+      { ...base, commentId: "{{vars.found_comment}}" } as FlowStep,
+      { vars: { found_comment: "c-other" }, trigger: commentScope.trigger }
+    );
+    expect((plan as { action: { commentId: string } }).action.commentId).toBe("c-other");
+  });
+
+  it("skips (never fails) when there is no comment to answer", () => {
+    // A flow with several triggers can reach this step off a non-comment
+    // event; that must not sink the whole run.
+    expect(planStep(base as FlowStep, { vars: {}, trigger: { channel: "email" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "reply_to_comment",
+        replyMode: "public",
+        commentId: "",
+        // collapseEmpty tidies the gap the missing var left.
+        body: "Thanks!",
+        skipReason: "no_comment_id"
+      }
+    });
+  });
+
+  it("does NOT fall back to the trigger when an explicit comment renders empty", () => {
+    // Asking for a specific comment and getting nothing must not silently
+    // redirect the reply onto the triggering comment instead.
+    const plan = planStep(
+      { ...base, commentId: "{{vars.missing}}" } as FlowStep,
+      { vars: {}, trigger: commentScope.trigger }
+    );
+    expect((plan as { action: { skipReason?: string } }).action.skipReason).toBe("no_comment_id");
+  });
+
+  it("fails when the reply text templates to nothing", () => {
+    // An empty public comment is not a thing Instagram accepts, and posting
+    // a blank reply on a tenant's post would be worse than not replying.
+    expect(
+      planStep({ ...base, body: "{{vars.nothing}}" } as FlowStep, commentScope)
+    ).toEqual({ ok: false, error: "reply_to_comment: body is empty after templating" });
+  });
+});

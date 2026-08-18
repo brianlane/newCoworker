@@ -470,10 +470,44 @@ export type WebhookEventInput = {
 export function webhookTriggerScope(event: WebhookEventInput): TriggerScope {
   const windowText = flattenWebhookPayload(event.data);
   return {
+    // Named payload keys FIRST, so a reserved name below always wins: a
+    // payload carrying its own "channel" or "from" must not be able to
+    // rewrite what the trigger actually was.
+    ...webhookPayloadKeys(event.data),
     channel: "webhook",
     windowText,
     url: firstUrlInText(windowText),
     from: event.source.slice(0, 120),
     ...(event.eventId ? { event_id: event.eventId.slice(0, 200) } : {})
   };
+}
+
+/** Bounds on the named keys promoted out of a webhook payload. */
+const WEBHOOK_SCOPE_MAX_KEYS = 40;
+const WEBHOOK_SCOPE_MAX_VALUE_CHARS = 500;
+
+/**
+ * Promote a webhook payload's top-level scalars to named trigger keys, so a
+ * step can say `{{trigger.comment_id}}` instead of digging the value back
+ * out of the flattened windowText blob.
+ *
+ * Top level only, scalars only, and bounded in both count and length: the
+ * blob stays the place to read nested structure, and a hostile payload
+ * cannot grow the run context. Steps templating an absent key get "" as
+ * they always have, so this only ever adds reach.
+ */
+function webhookPayloadKeys(data: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (Object.keys(out).length >= WEBHOOK_SCOPE_MAX_KEYS) break;
+    // Only plain identifier-ish names: `{{trigger.x}}` cannot address
+    // anything else anyway, so a dotted or spaced key would be dead weight.
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (typeof value === "string") {
+      out[key] = value.slice(0, WEBHOOK_SCOPE_MAX_VALUE_CHARS);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      out[key] = String(value);
+    }
+  }
+  return out;
 }

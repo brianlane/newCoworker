@@ -2000,6 +2000,9 @@ const COMM_STEP_TYPES = new Set<string>([
   "send_sms",
   "send_whatsapp",
   "send_email",
+  // A comment reply is public (or lands in someone's inbox) the moment it
+  // posts, so it waits for business hours like every other outward touch.
+  "reply_to_comment",
   "notify_owner",
   "notify_lead_owner",
   "route_to_team",
@@ -2192,6 +2195,8 @@ async function runStep(
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_whatsapp":
       return sendWhatsAppStep(supabase, run, scope, action);
+    case "reply_to_comment":
+      return replyToCommentStep(run, scope, action);
     case "send_email":
       return sendEmailStep(supabase, run, index, scope, action);
     case "email_organize":
@@ -5495,6 +5500,120 @@ async function sendWhatsAppStep(
     }` + (result.via === "template" ? " (via approved template, outside the 24h window)" : "")
   );
   return { kind: "ok", result: { to: toE164, via: result.via ?? "text" } };
+}
+
+/**
+ * Answer the Instagram comment that triggered the run, publicly or
+ * privately. Bridged through the platform's internal endpoint because the
+ * Graph client and the page token's decryption both need Node.
+ *
+ * Failure taxonomy, which matters here more than usual: Meta allows ONE
+ * private reply per comment inside a 7-day window, so most refusals can
+ * never succeed on a retry. The endpoint classifies them and only
+ * "send_failed" comes back retryable. Anything else is reported as a skip
+ * with Meta's own words, so a burned retry budget never turns into a
+ * duplicate reply on the tenant's post.
+ */
+async function replyToCommentStep(
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "reply_to_comment" }>
+): Promise<StepOutcome> {
+  const label = action.replyMode === "public" ? "public reply" : "private reply";
+  if (action.skipReason) {
+    appendActionTaken(
+      scope,
+      `skipped the Instagram ${label}, this run was not started by a comment`
+    );
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+
+  const appUrl = (Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "").trim().replace(/\/$/, "");
+  const bearer = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!appUrl || !bearer) {
+    return { kind: "fail", error: "reply_to_comment: platform delivery is not configured" };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${appUrl}/api/internal/instagram-comment-reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearer}`,
+        // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs only
+        // when Origin matches NEXT_PUBLIC_APP_URL.
+        Origin: appUrl
+      },
+      body: JSON.stringify({
+        businessId: run.business_id,
+        commentId: action.commentId,
+        text: action.body,
+        mode: action.replyMode
+      })
+    });
+  } catch (err) {
+    // Transport blip: retryable.
+    return {
+      kind: "fail",
+      error: `reply_to_comment: delivery endpoint unreachable (${(err as Error).message})`
+    };
+  }
+  if (!res.ok) {
+    return { kind: "fail", error: `reply_to_comment: delivery endpoint answered ${res.status}` };
+  }
+  const payload = (await res.json().catch(() => null)) as {
+    data?: { ok?: boolean; id?: string | null; reason?: string; detail?: string };
+  } | null;
+  const result = payload?.data;
+  if (!result?.ok) {
+    const reason = result?.reason ?? "send_failed";
+    if (reason === "not_connected") {
+      appendActionTaken(
+        scope,
+        `skipped the Instagram ${label}, Instagram is not connected under Integrations`
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    if (reason === "connection_inactive") {
+      // Like send_whatsapp: an inactive connection stays inactive until the
+      // owner reconnects, so retrying only burns the retry budget.
+      appendActionTaken(
+        scope,
+        `skipped the Instagram ${label}, the Instagram connection is inactive; reconnect it under Integrations`
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    if (reason === "no_page_id") {
+      appendActionTaken(
+        scope,
+        `skipped the Instagram ${label}, no Facebook Page is linked to the Instagram account`
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    if (reason === "refused") {
+      // Permanent for this comment: already answered privately, past the
+      // 7-day window, comment deleted, permission not granted. Retrying can
+      // only produce the same refusal.
+      appendActionTaken(
+        scope,
+        `couldn't post the Instagram ${label}: ${result?.detail ?? "Instagram refused it"}`
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    return {
+      kind: "fail",
+      error: `reply_to_comment: ${label} failed (${result?.detail ?? "unknown"})`
+    };
+  }
+
+  appendActionTaken(
+    scope,
+    action.replyMode === "public"
+      ? "replied publicly on the Instagram comment"
+      : "sent the commenter a private Instagram message"
+  );
+  return { kind: "ok", result: { mode: action.replyMode, id: result.id ?? null } };
 }
 
 async function sendSmsStep(

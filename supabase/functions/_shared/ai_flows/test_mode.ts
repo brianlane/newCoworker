@@ -78,6 +78,17 @@ export function simulateTestAction(
           action.to,
         body: action.body
       };
+    case "reply_to_comment":
+      // A test run must never post on a real tenant's Instagram post.
+      if (action.skipReason) {
+        return { simulated: "reply_to_comment", skipped: action.skipReason };
+      }
+      return {
+        simulated: "reply_to_comment",
+        mode: action.replyMode,
+        commentId: action.commentId,
+        body: action.body
+      };
     case "send_email":
       // Same skip semantics as send_sms.
       if (action.skipReason) {

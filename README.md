@@ -2413,6 +2413,50 @@ user token holding `ads_management` + `business_management`, and
 privilege list. Without a dataset the stage events simply defer, then expire
 at Meta's 7-day window; nothing errors.
 
+### Instagram comments: trigger, and reply back
+
+A comment on a connected tenant's Instagram post arrives on the same
+`/api/webhooks/meta` callback (`changes[].field === "comments"`, our own
+account's comments suppressed) and is dispatched as a webhook flow event
+under `source: "instagram_comment"` with the comment id as the idempotency
+key (`src/lib/meta/webhook.ts`). Requires `instagram_manage_comments` at
+Advanced Access, or Meta delivers nothing.
+
+The payload's top-level scalars are published as NAMED trigger keys as well
+as inside `{{trigger.windowText}}`, so a step can say
+`{{trigger.comment_id}}`, `{{trigger.comment_text}}`, `{{trigger.username}}`,
+`{{trigger.media_id}}` (`webhookTriggerScope`, bounded at 40 keys / 500 chars
+each; the reserved keys `channel` / `windowText` / `url` / `from` /
+`event_id` always win, so a payload cannot rewrite what the trigger was).
+This applies to every webhook source, bridges included.
+
+The **`reply_to_comment` step** answers it, in one of two modes:
+
+| `replyMode` | Endpoint | Limits |
+| --- | --- | --- |
+| `public` | `POST /{comment_id}/replies` | none beyond Instagram's 2,200-char comment ceiling |
+| `private` | `POST /{page_id}/messages`, `recipient: {comment_id}` | **ONE per comment, ever**, and only within 7 days of it (during the broadcast, for a Live) |
+
+The private node is the PAGE id because we are a Facebook Login app; the
+`/{ig_user_id}/messages` form in Meta's docs is the Instagram Login variant
+on `graph.instagram.com` and 400s here. Permissions:
+`instagram_manage_comments` for both, plus `pages_messaging` for private.
+
+Same bridge shape as `send_whatsapp`: the Deno worker cannot call Graph, so
+it POSTs `/api/internal/instagram-comment-reply` with the cron bearer. That
+route owns the **failure taxonomy**, which is the load-bearing part. Because
+a private reply is single-use, a refusal is reported as a SKIP
+(`reason: "refused"`, carrying Meta's own words into `actions_taken`) and a
+retryable outcome (`send_failed`) is limited to an allowlist of transient
+Meta codes plus 5xx/timeouts. A retryable allowlist, not a permanent-error
+list: Meta does not enumerate the refusal codes for these paths, and erring
+the other way would spam a commenter's inbox.
+
+The "Instagram comment follow-up" starter uses `public` deliberately, gated
+on the comment not being spam. Spending the single private reply on a
+generic acknowledgement would burn the only message the owner has left for
+the real answer.
+
 ### Messenger + Instagram DM conversation channel
 
 A connected Page's Messenger (and linked Instagram professional account's DM)

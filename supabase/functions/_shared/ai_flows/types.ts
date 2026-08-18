@@ -664,6 +664,30 @@ export type FlowStep =
       when?: StepCondition;
     }
   | {
+      /**
+       * Answer the Instagram comment that triggered this flow. `public`
+       * posts on the comment thread (POST /{comment_id}/replies); `private`
+       * sends Meta's private reply into the commenter's Instagram inbox
+       * (POST /{page_id}/messages with recipient {comment_id}).
+       *
+       * The worker cannot call Graph itself, so it goes through the
+       * platform's internal instagram-comment-reply endpoint, same
+       * arrangement as send_whatsapp.
+       *
+       * Meta caps private replies at ONE per comment inside a 7-day window
+       * (during the broadcast only, for a Live), so a refusal is reported
+       * as a skip, never retried.
+       */
+      id: string;
+      type: "reply_to_comment";
+      replyMode: "public" | "private";
+      /** Reply text template. */
+      body: string;
+      /** Comment to answer; defaults to the one that triggered the run. */
+      commentId?: string;
+      when?: StepCondition;
+    }
+  | {
       id: string;
       type: "send_email";
       /** Recipient address (templatable, e.g. a fixed owner address). */

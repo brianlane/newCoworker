@@ -29,6 +29,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   doc_extract: "Read details from a document (PDF or Word)",
   send_sms: "Send a text",
   send_whatsapp: "Send a WhatsApp message",
+  reply_to_comment: "Reply to the Instagram comment",
   send_email: "Send an email",
   email_organize: "Organize an email (label / move / archive)",
   approval_gate: "Ask me to approve first",
@@ -72,6 +73,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_whatsapp:
     "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
+  reply_to_comment:
+    "Answers the Instagram comment that started this automation. \"Publicly\" posts a reply on the comment thread, where everyone reading the post sees it. \"Privately\" sends the commenter a direct message in their Instagram inbox - Instagram allows only ONE of those per comment, and only within 7 days of the comment.",
   send_email:
     "Sends an email. You can reuse details earlier steps found, and attach a business document - including a PDF a \"Run an agent\" step just generated.",
   email_organize:

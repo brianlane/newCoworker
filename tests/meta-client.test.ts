@@ -36,6 +36,9 @@ import {
   getInstagramContainerStatus,
   getInstagramMediaPermalink,
   getInstagramMediaState,
+  replyToInstagramComment,
+  sendInstagramPrivateReply,
+  INSTAGRAM_COMMENT_MAX_LENGTH,
   getLinkedInstagramAccount,
   getMessengerProfile,
   registerWhatsAppPhoneNumber,
@@ -913,5 +916,70 @@ describe("getInstagramMediaState", () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "" }));
     await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
+  });
+});
+
+describe("Instagram comment replies", () => {
+  it("posts a public reply on the comment's own replies edge", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "reply-1" }));
+    const res = await replyToInstagramComment("comment-9", "page-tok", "Thanks!");
+    expect(res).toEqual({ commentId: "reply-1" });
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith("/comment-9/replies")).toBe(true);
+    expect(url.searchParams.get("message")).toBe("Thanks!");
+    expect(url.searchParams.get("access_token")).toBe("page-tok");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+  });
+
+  it("addresses a private reply by comment_id on the PAGE node", async () => {
+    // We are a Facebook Login app: the /{ig_user_id}/messages form in Meta's
+    // docs is the Instagram Login variant and would 400 here. What makes this
+    // a private reply rather than an ordinary DM is recipient.comment_id.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { message_id: "m-1" }));
+    const res = await sendInstagramPrivateReply("page-7", "page-tok", "comment-9", "Hi there");
+    expect(res).toEqual({ messageId: "m-1" });
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith("/page-7/messages")).toBe(true);
+    expect(JSON.parse(url.searchParams.get("recipient") ?? "{}")).toEqual({
+      comment_id: "comment-9"
+    });
+    expect(JSON.parse(url.searchParams.get("message") ?? "{}")).toEqual({ text: "Hi there" });
+  });
+
+  it("trims to each surface's ceiling rather than letting Meta reject the call", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "reply-1" }));
+    await replyToInstagramComment("c", "t", "x".repeat(INSTAGRAM_COMMENT_MAX_LENGTH + 50));
+    const comment = new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("message") ?? "";
+    expect(comment.length).toBe(INSTAGRAM_COMMENT_MAX_LENGTH);
+    expect(comment.endsWith("…")).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { message_id: "m-1" }));
+    await sendInstagramPrivateReply("p", "t", "c", "y".repeat(MESSENGER_MAX_TEXT_LENGTH + 50));
+    const dm = JSON.parse(
+      new URL(fetchMock.mock.calls[1][0] as string).searchParams.get("message") ?? "{}"
+    ) as { text: string };
+    expect(dm.text.length).toBe(MESSENGER_MAX_TEXT_LENGTH);
+    expect(dm.text.endsWith("…")).toBe(true);
+  });
+
+  it("returns a null id when Meta answers without one", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await replyToInstagramComment("c", "t", "hi")).toEqual({ commentId: null });
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await sendInstagramPrivateReply("p", "t", "c", "hi")).toEqual({ messageId: null });
+  });
+
+  it("propagates Meta's refusal, codes intact, for the caller to classify", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, { error: { message: "outside window", code: 10, error_subcode: 2534022 } })
+    );
+    const err = await sendInstagramPrivateReply("p", "t", "c", "hi").catch(
+      (e) => e as MetaApiError
+    );
+    expect(err).toBeInstanceOf(MetaApiError);
+    expect((err as MetaApiError).metaCode).toBe(10);
+    expect((err as MetaApiError).metaSubcode).toBe(2534022);
   });
 });
