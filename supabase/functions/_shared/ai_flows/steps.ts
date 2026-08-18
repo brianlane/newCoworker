@@ -20,6 +20,7 @@ import {
 } from "./engine.ts";
 import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
+import { emailContactKey } from "../contact_key.ts";
 import type {
   BrowseAuth,
   CallWindow,
@@ -715,9 +716,16 @@ export type StepAction =
       // and reads the name/email vars; the worker does the alias-aware, fill-only
       // write (and skips known business contacts).
       kind: "upsert_customer";
+      /** The contact KEY: an E.164 number, or an `email:` key for a phoneless lead. */
       e164: string;
       name: string;
       email: string;
+      /**
+       * The flow's own var name for the address, present only when the key IS
+       * an email key. The duplicate-lead guard matches prior runs on this field
+       * (a phoneless lead has no lead_phone to match on).
+       */
+      emailVar?: string;
       /**
        * Resolved lead language ("en"/"es") when the step named a var holding
        * one. Any other value is dropped at plan time, so the worker never
@@ -1983,7 +1991,20 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // customer record is keyed by E.164, so an unusable value is a recoverable
       // "missing input" (skip-able), not a thrown error.
       const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
-      if (!e164) {
+      const readVar = (name?: string): string => {
+        if (!name) return "";
+        const v = scope.vars?.[name];
+        return typeof v === "string" ? v.trim() : "";
+      };
+      const leadEmail = readVar(step.emailVar);
+      // No usable phone, but an address: file the contact keyed by that
+      // address rather than skipping. This is the ReferralExchange /
+      // Realtor.com shape (an emailed lead with no number), which used to
+      // leave the lead with no contact row at all: invisible in Contacts,
+      // untaggable, unownable, and unreachable by every tag-triggered cadence.
+      const emailKey = e164 ? null : emailContactKey(leadEmail);
+      const contactKey = e164 ?? emailKey;
+      if (!contactKey) {
         // Skip (with a note), never fail — mirroring update_contact and the
         // send steps. A "none"/empty/scrubbed phone slips past a
         // `notEquals: "none"` when-guard as the empty string, and filing is
@@ -2001,11 +2022,6 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
-      const readVar = (name?: string): string => {
-        if (!name) return "";
-        const v = scope.vars?.[name];
-        return typeof v === "string" ? v.trim() : "";
-      };
       // Language: only the two supported tokens survive, so an extraction that
       // answered "none" (or anything else) simply leaves the stored language
       // alone instead of writing junk onto the contact.
@@ -2023,9 +2039,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ok: true,
         action: {
           kind: "upsert_customer",
-          e164,
+          e164: contactKey,
           name,
-          email: readVar(step.emailVar),
+          email: leadEmail,
+          // The var NAME the flow used for the address, carried so the
+          // duplicate-lead guard can match a re-submitted EMAIL lead on the
+          // same field the flow filled, instead of guessing a convention.
+          ...(emailKey && step.emailVar ? { emailVar: step.emailVar } : {}),
           ...(language ? { language } : {})
         }
       };
@@ -2074,10 +2094,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const raw = scope.vars?.[step.phoneVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
       const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
+      // Same fallback as upsert_customer: an email-only lead has a contact row
+      // now, so their tags are reachable. Without this the tag write skips and
+      // every tag-triggered cadence stays closed to them.
+      const emailRaw = step.emailVar ? scope.vars?.[step.emailVar] : undefined;
+      const contactKey =
+        e164 ?? emailContactKey(typeof emailRaw === "string" ? emailRaw : "");
       const addTags = step.addTags ?? [];
       const removeTags = step.removeTags ?? [];
       const note = step.noteTemplate ? renderTemplate(step.noteTemplate, scope).trim() : "";
-      if (!e164) {
+      if (!contactKey) {
         // Skip (with a note), never fail: the tag write is auxiliary
         // bookkeeping and a missing lead phone must not kill the run.
         return {
@@ -2095,7 +2121,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ok: true,
         action: {
           kind: "update_contact",
-          e164,
+          e164: contactKey,
           addTags,
           removeTags,
           ...(note ? { note } : {})

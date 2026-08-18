@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMAIL_CONTACT_KEY_PREFIX,
+  isFilterSafeEmail,
   classifyContactKey,
   contactAliasOrFilter,
   contactKeyEmail,
@@ -54,8 +55,14 @@ describe("emailContactKey", () => {
     expect(emailContactKey(PHONE)).toBeNull();
   });
 
-  it("refuses a comma, which would break a PostgREST filter string", () => {
+  it("refuses every PostgREST filter metacharacter", () => {
+    // These values are interpolated into `.or()` filter strings (the alias
+    // match and the duplicate-lead guard), where any of them changes which
+    // rows match. Real addresses never carry them.
     expect(emailContactKey("a,b@example.com")).toBeNull();
+    expect(emailContactKey("a(b@example.com")).toBeNull();
+    expect(emailContactKey("a)b@example.com")).toBeNull();
+    expect(emailContactKey('a"b@example.com')).toBeNull();
   });
 
   it("refuses an address longer than the 254-char column limit", () => {
@@ -157,5 +164,14 @@ describe("contactAliasOrFilter", () => {
     // Not a valid key, but the caller is asking how to match it; the exact-match
     // fallback is reserved for email keys specifically.
     expect(contactAliasOrFilter("amy")).toBe("customer_e164.eq.amy,alias_e164s.cs.{amy}");
+  });
+});
+
+describe("isFilterSafeEmail", () => {
+  it("accepts exactly what could become a key, so a raw-address caller gets the same guarantee", () => {
+    expect(isFilterSafeEmail(ADDRESS)).toBe(true);
+    expect(isFilterSafeEmail("a,b@example.com")).toBe(false);
+    expect(isFilterSafeEmail("a(b@example.com")).toBe(false);
+    expect(isFilterSafeEmail(null)).toBe(false);
   });
 });

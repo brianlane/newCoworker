@@ -744,6 +744,42 @@ describe("planStep: update_contact", () => {
     });
   });
 
+  it("keys by the EMAIL when there is no usable phone, so an email-only lead can be tagged", () => {
+    // Without this the tag write skips, and every tag-triggered cadence stays
+    // closed to a lead who only ever gave us an address.
+    const withEmail = { ...step, emailVar: "lead_email" } as FlowStep;
+    const plan = planStep(withEmail, {
+      vars: { lead_phone: "none", lead_email: " VALM0417@Gmail.com " }
+    });
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "update_contact",
+        e164: "email:valm0417@gmail.com",
+        addTags: ["Contacted"],
+        removeTags: ["New Lead"]
+      }
+    });
+  });
+
+  it("prefers the phone whenever there is one, even with an email var set", () => {
+    const withEmail = { ...step, emailVar: "lead_email" } as FlowStep;
+    const plan = planStep(withEmail, {
+      vars: { lead_phone: "+16474494244", lead_email: "val@example.com" }
+    });
+    expect(plan.ok && plan.action.kind === "update_contact" && plan.action.e164).toBe(
+      "+16474494244"
+    );
+  });
+
+  it("still skips when neither the phone nor the email is usable", () => {
+    const withEmail = { ...step, emailVar: "lead_email" } as FlowStep;
+    const plan = planStep(withEmail, { vars: { lead_phone: "none", lead_email: "none" } });
+    expect(plan.ok && plan.action.kind === "update_contact" && plan.action.skipReason).toBe(
+      "no_contact_phone"
+    );
+  });
+
   it("renders noteTemplate into the action's note, and omits it when empty", () => {
     const withNote = planStep(
       {
@@ -2555,6 +2591,60 @@ describe("planStep: upsert_customer", () => {
       });
     }
   });
+  it("files an email-only lead keyed by their address instead of skipping", () => {
+    // The ReferralExchange / Realtor.com shape. Before this, a lead with an
+    // address and no number got NO contact row at all: invisible in Contacts,
+    // untaggable, unownable, unreachable by any tag-triggered cadence.
+    const r = planStep(base, {
+      vars: { lead_phone: "none", lead_name: "Valerie Marino", lead_email: "valm0417@gmail.com" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "upsert_customer",
+        e164: "email:valm0417@gmail.com",
+        name: "Valerie Marino",
+        email: "valm0417@gmail.com",
+        // Carried only on the email-keyed path: the duplicate-lead guard has no
+        // lead_phone to match on, so it matches this var instead.
+        emailVar: "lead_email"
+      }
+    });
+  });
+
+  it("prefers a real phone over the email, and carries no emailVar then", () => {
+    const r = planStep(base, {
+      vars: { lead_phone: "+14804929641", lead_email: "valm0417@gmail.com" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "upsert_customer",
+        e164: "+14804929641",
+        name: "",
+        email: "valm0417@gmail.com"
+      }
+    });
+  });
+
+  it("still skips when the phone is unusable and the email is junk", () => {
+    const r = planStep(base, { vars: { lead_phone: "call me", lead_email: "none" } });
+    expect(r.ok && r.action.kind === "upsert_customer" && r.action.skipReason).toBe(
+      "no_contact_phone"
+    );
+  });
+
+  it("refuses an address carrying a PostgREST filter metacharacter", () => {
+    // The address is interpolated into an `.or()` filter by the duplicate-lead
+    // guard, so a comma or paren would change which rows match.
+    for (const junk of ["a,b@example.com", "a(b@example.com", 'a"b@example.com']) {
+      const r = planStep(base, { vars: { lead_phone: "none", lead_email: junk } });
+      expect(r.ok && r.action.kind === "upsert_customer" && r.action.skipReason, junk).toBe(
+        "no_contact_phone"
+      );
+    }
+  });
+
   it("SKIPS an impossible +1 number instead of filing it as customer_e164", () => {
     // The KYP Aug 1 2026 lead: this exact value was written to the contact
     // row and every later dial of that contact would have failed at Telnyx.

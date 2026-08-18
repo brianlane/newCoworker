@@ -29,6 +29,7 @@ import {
   type CustomerLanguage,
   type DetectCustomerLanguageResult
 } from "./customer_language.ts";
+import { contactAliasOrFilter, contactKeyEmail } from "./contact_key.ts";
 
 // Minimal structural client (the _shared convention): only the query shapes
 // this module uses, so both the edge runtime client and test fakes fit.
@@ -51,10 +52,12 @@ const NO_STATE: ContactLanguageState = {
   exists: false
 };
 
-/** Alias-aware contact match, mirroring every other contact lookup. */
-function contactMatchFilter(customerE164: string): string {
-  return `customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`;
-}
+/**
+ * Alias-aware contact match, mirroring every other contact lookup. Null for an
+ * `email:` key, which is matched exactly instead (alias_e164s only ever holds
+ * numbers). See supabase/functions/_shared/contact_key.ts.
+ */
+const contactMatchFilter = contactAliasOrFilter;
 
 /** Read the stored language state. Any trouble answers "nothing stored". */
 export async function readContactLanguageState(
@@ -63,12 +66,15 @@ export async function readContactLanguageState(
   customerE164: string
 ): Promise<ContactLanguageState> {
   try {
-    const { data } = await supabase
+    const base = supabase
       .from("contacts")
       .select("customer_e164, preferred_language, language_source")
-      .eq("business_id", businessId)
-      .or(contactMatchFilter(customerE164))
-      .maybeSingle();
+      .eq("business_id", businessId);
+    const filter = contactMatchFilter(customerE164);
+    const { data } = await (filter
+      ? base.or(filter)
+      : base.eq("customer_e164", customerE164)
+    ).maybeSingle();
     return contactLanguageStateFromRow(data);
   } catch (e) {
     console.error("readContactLanguageState", e);
@@ -124,9 +130,16 @@ export async function persistDetectedContactLanguage(
     // First contact: the contacts row is created later in the job, so an
     // UPDATE would hit zero rows and the detection would be lost. Insert now;
     // on a concurrent-create race fall back to the update.
-    const { error: insErr } = await supabase
-      .from("contacts")
-      .insert({ business_id: businessId, customer_e164: customerE164, ...patch });
+    // An email-keyed row must carry its address in `email` too, or the DB
+    // constraint contacts_email_key_matches_email rejects the insert and a
+    // detected language is silently lost on first contact.
+    const keyEmail = contactKeyEmail(customerE164);
+    const { error: insErr } = await supabase.from("contacts").insert({
+      business_id: businessId,
+      customer_e164: customerE164,
+      ...(keyEmail ? { email: keyEmail } : {}),
+      ...patch
+    });
     if (insErr) {
       await supabase
         .from("contacts")

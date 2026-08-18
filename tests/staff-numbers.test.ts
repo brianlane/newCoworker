@@ -50,6 +50,49 @@ describe("staffNumberCheck", () => {
     });
   });
 
+  it("matches an email-keyed contact against the roster's EMAILS", async () => {
+    // An email-keyed contact carries no number, so the phone arm always misses
+    // and the whole protection would evaporate for exactly the contacts it was
+    // extended to cover. A teammate's own address must never be filed or tagged
+    // as a lead.
+    const db = makeDb({
+      ai_flow_team_members: [
+        { data: null, error: null }, // phone arm: no match
+        { data: { id: "m2" }, error: null } // email arm: teammate
+      ]
+    });
+    expect(
+      await staffNumberCheck(db, BIZ, ["email:dave@example.com"], "customer")
+    ).toEqual({ staff: true, readFailed: false });
+  });
+
+  it("clears an email-keyed contact whose address is on nobody's roster row", async () => {
+    const db = makeDb({
+      ai_flow_team_members: [
+        { data: null, error: null }, // phone arm
+        { data: null, error: null } // email arm
+      ],
+      business_telnyx_settings: [{ data: null, error: null }],
+      businesses: [{ data: null, error: null }],
+      notification_preferences: [{ data: null, error: null }]
+    });
+    expect(
+      await staffNumberCheck(db, BIZ, ["email:stranger@example.com"], "customer")
+    ).toEqual({ staff: false, readFailed: false });
+  });
+
+  it("fails SAFE when the roster email lookup errors", async () => {
+    const db = makeDb({
+      ai_flow_team_members: [
+        { data: null, error: null },
+        { data: null, error: { message: "boom" } }
+      ]
+    });
+    expect(
+      await staffNumberCheck(db, BIZ, ["email:dave@example.com"], "customer")
+    ).toEqual({ staff: true, readFailed: true });
+  });
+
   it("treats a roster hit as staff, active or not", async () => {
     const db = makeDb({ ai_flow_team_members: [{ data: { id: "m1" }, error: null }] });
     expect(await staffNumberCheck(db, BIZ, ["+16025551234"], "customer")).toEqual({

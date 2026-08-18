@@ -2212,6 +2212,50 @@ describe("trigger channels", () => {
     }
   });
 
+  it("accepts update_contact.emailVar and scope-checks it like phoneVar", () => {
+    // emailVar is the fallback identity for a lead with no usable phone: the
+    // contact is keyed by the address, which is the only way an email-only
+    // lead can carry a tag at all.
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [
+        { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }, { name: "lead_email" }] },
+        {
+          id: "u",
+          type: "update_contact",
+          phoneVar: "lead_phone",
+          emailVar: "lead_email",
+          addTags: ["Contacted"]
+        }
+      ]
+    });
+    expect(def.steps[1]).toMatchObject({ type: "update_contact", emailVar: "lead_email" });
+
+    try {
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "webhook", conditions: [] },
+        steps: [
+          { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+          {
+            id: "u",
+            type: "update_contact",
+            phoneVar: "lead_phone",
+            emailVar: "ghost_email",
+            addTags: ["X"]
+          }
+        ]
+      });
+      expect.unreachable("expected emailVar scope validation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AiFlowValidationError);
+      expect((err as AiFlowValidationError).issues.join(" ")).toContain(
+        "emailVar {{vars.ghost_email}}"
+      );
+    }
+  });
+
   it("scope-checks update_contact's noteTemplate like any other template", () => {
     const base = {
       version: 1,

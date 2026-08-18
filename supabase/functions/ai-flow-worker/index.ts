@@ -26,6 +26,11 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.4
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
+  contactAliasOrFilter,
+  contactKeyEmail,
+  isEmailContactKey
+} from "../_shared/contact_key.ts";
+import {
   acceptSelfNameRetryValue,
   isPersonNameField,
   isSelfNameValue,
@@ -2672,6 +2677,10 @@ const DUPLICATE_LEAD_WINDOW_HOURS = 72;
  * PR #575). A flow filing leads under a fully custom var name degrades to
  * pre-guard behavior (a duplicate intro), never a lost lead.
  *
+ * An EMAIL-keyed lead (no phone at all) is matched on the address stored in
+ * the flow's own email var, named by the planner, since none of the three
+ * number keys can hold an address.
+ *
  * A CANCELED prior run counts only when it actually texted the lead before
  * being stopped — an owner canceling a run pre-outreach must not make the
  * lead's next submission fall silent (Bugbot Medium on PR #575).
@@ -2682,10 +2691,21 @@ async function findDuplicateLeadRun(
   supabase: Supabase,
   run: RunRow,
   scope: Scope,
-  leadE164: string
+  leadE164: string,
+  emailVar?: string
 ): Promise<string | null> {
   const channel = typeof scope.trigger?.channel === "string" ? scope.trigger.channel : "";
   if (channel !== "tenant_email" && channel !== "webhook") return null;
+  // An email-keyed lead has no phone for the three number keys below to match,
+  // so the guard would silently never fire for exactly the leads that arrive by
+  // email, which is the channel it exists to protect. Match the ADDRESS on the
+  // var the flow actually filled instead. Both parts of that filter are safe to
+  // interpolate: the var name passed the schema's varName pattern, and the
+  // address passed emailContactKey's metacharacter refusals. With no email var
+  // to match on, degrade to pre-guard behavior (a duplicate intro), the same
+  // way a fully custom phone var name already does.
+  const leadEmail = contactKeyEmail(leadE164);
+  if (leadEmail && !emailVar) return null;
   try {
     const { data: selfRow, error: selfErr } = await supabase
       .from("ai_flow_runs")
@@ -2711,7 +2731,9 @@ async function findDuplicateLeadRun(
         .eq("flow_id", run.flow_id)
         .neq("id", run.id)
         .or(
-          `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+          leadEmail
+            ? `context->vars->>${emailVar}.eq.${leadEmail}`
+            : `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
         )
         .gte("updated_at", sinceIso)
         .lt("created_at", myCreatedAt)
@@ -2788,7 +2810,7 @@ async function upsertCustomerStep(
   if (action.skipReason) {
     // Mirror the update_contact skip path: filing is bookkeeping, and a
     // phoneless lead must not fail a run whose sends skip for the same value.
-    appendActionTaken(scope, "skipped saving the contact (no usable phone)");
+    appendActionTaken(scope, "skipped saving the contact (no usable phone or email)");
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
   // Existence pre-check (alias-aware) so the contact_created trigger below
@@ -2798,12 +2820,15 @@ async function upsertCustomerStep(
   let existedBefore = true;
   let precheckFailed = false;
   try {
-    const { data: existing, error: existErr } = await supabase
+    const existBase = supabase
       .from("contacts")
       .select("id")
-      .eq("business_id", run.business_id)
-      .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
-      .maybeSingle();
+      .eq("business_id", run.business_id);
+    const existFilter = contactAliasOrFilter(action.e164);
+    const { data: existing, error: existErr } = await (existFilter
+      ? existBase.or(existFilter)
+      : existBase.eq("customer_e164", action.e164)
+    ).maybeSingle();
     if (existErr) precheckFailed = true;
     else existedBefore = existing != null;
   } catch (e) {
@@ -2844,7 +2869,7 @@ async function upsertCustomerStep(
   // beats a lost lead.
   const duplicateOfRunId = isTestModeTrigger(scope.trigger)
     ? null
-    : await findDuplicateLeadRun(supabase, run, scope, action.e164);
+    : await findDuplicateLeadRun(supabase, run, scope, action.e164, action.emailVar);
   // An explicit upsert_customer step IS the lead, so the flow's origin always
   // applies (no co-recipient gating, unlike recordLeadCustomerProfile).
   await enrichCustomerProfile(
@@ -2904,12 +2929,15 @@ async function upsertCustomerStep(
     // a "new contact" event for a lead that was never filed would start
     // automations on a phantom. A verify-read failure just skips the event.
     try {
-      const { data: createdRow, error: verifyErr } = await supabase
+      const verifyBase = supabase
         .from("contacts")
         .select("id")
-        .eq("business_id", run.business_id)
-        .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
-        .maybeSingle();
+        .eq("business_id", run.business_id);
+      const verifyFilter = contactAliasOrFilter(action.e164);
+      const { data: createdRow, error: verifyErr } = await (verifyFilter
+        ? verifyBase.or(verifyFilter)
+        : verifyBase.eq("customer_e164", action.e164)
+      ).maybeSingle();
       if (!verifyErr && createdRow != null) {
         await enqueueContactEventRuns(supabase, run.business_id, {
           kind: "contact_created",
@@ -3014,15 +3042,18 @@ async function updateContactStep(
   if (action.skipReason) {
     // Mirror the send_sms skip path: the note keeps {{vars.actions_taken}}
     // honest for downstream steps ("tagging never ran, and here's why").
-    appendActionTaken(scope, "skipped a contact-tag update (no usable phone)");
+    appendActionTaken(scope, "skipped a contact-tag update (no usable phone or email)");
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
-  const { data, error } = await supabase
+  const lookupBase = supabase
     .from("contacts")
     .select("id, tags, type, customer_e164, alias_e164s")
-    .eq("business_id", run.business_id)
-    .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
-    .maybeSingle();
+    .eq("business_id", run.business_id);
+  const lookupFilter = contactAliasOrFilter(action.e164);
+  const { data, error } = await (lookupFilter
+    ? lookupBase.or(lookupFilter)
+    : lookupBase.eq("customer_e164", action.e164)
+  ).maybeSingle();
   if (error) throw new Error(`update_contact lookup: ${error.message}`);
   const contact = data as {
     id: string;
@@ -3034,7 +3065,7 @@ async function updateContactStep(
   if (!contact) {
     appendActionTaken(
       scope,
-      `skipped a contact-tag update (no contact on file for ${action.e164})`
+      `skipped a contact-tag update (no contact on file for ${contactKeyEmail(action.e164) ?? action.e164})`
     );
     return {
       kind: "ok",
@@ -3059,7 +3090,7 @@ async function updateContactStep(
   ) {
     appendActionTaken(
       scope,
-      `skipped a contact-tag update (${action.e164} is a staff contact; protection is on in Settings)`
+      `skipped a contact-tag update (${contactKeyEmail(action.e164) ?? action.e164} is a staff contact; protection is on in Settings)`
     );
     return {
       kind: "ok",

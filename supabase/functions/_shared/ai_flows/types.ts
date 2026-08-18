@@ -1153,6 +1153,12 @@ export type FlowStep =
       type: "upsert_customer";
       phoneVar: string;
       nameVar?: string;
+      /**
+       * The lead's email. Linked to the contact when `phoneVar` resolves to a
+       * number, and used as the contact's IDENTITY when it does not: a lead
+       * with an address and no number is filed as `email:<addr>` instead of
+       * being skipped.
+       */
       emailVar?: string;
       /**
        * Var holding the person's language ("en"/"es"; anything else ignored).
@@ -1200,6 +1206,14 @@ export type FlowStep =
        */
       type: "update_contact";
       phoneVar: string;
+      /**
+       * Fallback identity for a lead with no usable phone: the var holding
+       * their email address. The contact is then keyed by that address
+       * (`email:<addr>`), which is the only way an email-only lead can carry a
+       * tag at all, and therefore the only way a tag-triggered cadence can
+       * reach them. Ignored whenever `phoneVar` resolves to a real number.
+       */
+      emailVar?: string;
       addTags?: string[];
       removeTags?: string[];
       /**

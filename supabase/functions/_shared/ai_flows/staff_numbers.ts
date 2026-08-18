@@ -16,6 +16,7 @@
  * follow-up cadence.
  */
 import { isSelfPhone } from "./extracted_contact.ts";
+import { contactKeyEmail } from "../contact_key.ts";
 
 // Minimal structural client (matches the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -102,10 +103,11 @@ export async function loadStaffMatcher(
 }
 
 /**
- * Do any of these numbers belong to our side of the business? True when the
- * stored contact row is typed owner/employee, or any number sits on the
+ * Do any of these contact keys belong to our side of the business? True when
+ * the stored contact row is typed owner/employee, or any number sits on the
  * ai_flow_team_members roster (active or not: a deactivated broker is still
- * staff), or matches the business's own derived numbers.
+ * staff), or an `email:` key's ADDRESS sits on that roster, or a number matches
+ * the business's own derived numbers.
  *
  * `readFailed` reports that a lookup errored so the answer is not trustworthy.
  * Every caller treats that as staff (fail SAFE: better to decline than to
@@ -137,6 +139,30 @@ export async function staffNumberCheck(
     return { staff: true, readFailed: true };
   }
   if (member != null) return { staff: true, readFailed: false };
+
+  // An email-keyed contact carries no number the roster could match, so the
+  // number arm above always misses and the whole protection would evaporate
+  // for exactly the contacts it was added for. Compare the ADDRESS against the
+  // roster's emails instead. Same doctrine, same fail-safe: a read error means
+  // staff, because filing (or tagging) a teammate under a lead's name is worse
+  // than a missing contact row.
+  const addresses = contactNumbers
+    .map((n) => contactKeyEmail(n))
+    .filter((a): a is string => a !== null);
+  if (addresses.length > 0) {
+    const { data: byEmail, error: emailErr } = await supabase
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", businessId)
+      .in("email", addresses)
+      .limit(1)
+      .maybeSingle();
+    if (emailErr) {
+      console.error("staff roster email check", emailErr);
+      return { staff: true, readFailed: true };
+    }
+    if (byEmail != null) return { staff: true, readFailed: false };
+  }
   // isSelfPhone is the SHARED both-sides-normalized comparator (the same one
   // the extraction scrub and the send_sms self-send guard use), so the guards
   // can never disagree on what counts as "ourselves".
