@@ -20,7 +20,10 @@ import {
   rowMatchesMailbox,
   type MailboxOption
 } from "@/lib/dashboard/email-mailbox";
-import { coerceEmailsFiltersForMailbox } from "@/lib/dashboard/email-filters";
+import {
+  coerceEmailsFiltersForMailbox,
+  emailsFiltersActive
+} from "@/lib/dashboard/email-filters";
 
 const EMAIL_SORT_OPTIONS: SortOption[] = [
   { key: "created_at", label: "Date" },
@@ -886,6 +889,25 @@ export function EmailsList({
   const labelFilter = initialLabel;
   const mailboxFilter = initialMailbox;
   const isConnectedMailbox = Boolean(mailboxFilter) && mailboxFilter !== AI_MAILBOX_KEY;
+  /**
+   * Is the list narrowed right now? Drives whether the controls render at all.
+   *
+   * They used to be gated on `rows.length > 0`, which is a dead end: a filter
+   * combination with no results hid the very buttons needed to leave it, so the
+   * only way back was editing the URL. `?view=inbox&mailbox=ai` reached that
+   * state on a real account, because Inbox is AI-mailbox-only and the AI
+   * mailbox was empty while the connected Gmail had plenty.
+   *
+   * The original intent still holds for a business with NO email at all: filter
+   * chips over a permanently empty page are noise. That case is "no rows AND no
+   * filters", which is what this distinguishes.
+   */
+  const filtersActive = emailsFiltersActive({
+    view: viewFilter,
+    folder: folderFilter,
+    label: labelFilter,
+    mailbox: mailboxFilter
+  });
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
   function navigateFilters(next: {
@@ -1038,7 +1060,7 @@ export function EmailsList({
           selected ? "hidden md:block md:w-72 lg:w-80 shrink-0" : "w-full"
         ].join(" ")}
       >
-        {rows.length > 0 && (
+        {(rows.length > 0 || filtersActive) && (
           <div className="mb-2 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <SearchControl
@@ -1172,7 +1194,7 @@ export function EmailsList({
           </div>
         )}
         <Card padding="sm">
-          {rows.length === 0 && (
+          {rows.length === 0 && !filtersActive && (
             <div className="text-center py-8">
               <p className="text-parchment/60">No email activity yet.</p>
               <p className="text-xs text-parchment/40 mt-2">
@@ -1181,9 +1203,27 @@ export function EmailsList({
               </p>
             </div>
           )}
-          {rows.length > 0 && visibleRows.length === 0 && (
+          {visibleRows.length === 0 && (rows.length > 0 || filtersActive) && (
             <div className="py-6 text-center text-sm text-parchment/50">
-              No emails match this filter.
+              {/* Never "no email activity yet" here: the account HAS mail, this
+                  filter just does not match any of it, and saying otherwise
+                  sends the owner looking for a delivery problem. */}
+              <p>No emails match this filter.</p>
+              {(filtersActive || query.trim()) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Clears the SEARCH BOX too. It is a client-side filter that
+                    // navigateFilters cannot see, so a URL reset alone would
+                    // leave the list empty and the button looking broken.
+                    setQuery("");
+                    navigateFilters({ view: "all", folder: "", label: "", mailbox: "" });
+                  }}
+                  className="mt-3 rounded-lg border border-parchment/25 px-3 py-1 text-xs font-semibold text-parchment/70 transition-colors hover:bg-parchment/5"
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           )}
           <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">

@@ -4,7 +4,8 @@ import {
   coerceEmailsViewFilter,
   emailListFiltersFromView,
   parseEmailsViewFilter,
-  withLinkedEmailRow
+  withLinkedEmailRow,
+  emailsFiltersActive
 } from "@/lib/dashboard/email-filters";
 import {
   AI_MAILBOX_KEY,
@@ -202,5 +203,43 @@ describe("withLinkedEmailRow", () => {
 
   it("handles an empty list, which is the case the deep link exists for", () => {
     expect(withLinkedEmailRow([], row("z"))).toEqual([row("z")]);
+  });
+});
+
+describe("emailsFiltersActive", () => {
+  /**
+   * The predicate behind the Emails page's empty state. It decides whether the
+   * filter controls render at all, and whether "no rows" reads as "no mail" or
+   * "no mail matching this filter".
+   *
+   * The bug it fixes: the controls were gated on the row count, so a filter
+   * with no results hid the buttons needed to escape it. `?view=inbox&mailbox=ai`
+   * hit that on a live account, because Inbox is an AI-mailbox-only view and
+   * that mailbox was empty while the connected Gmail had plenty.
+   */
+  it("is false only for the unfiltered default", () => {
+    expect(emailsFiltersActive({ view: "all" })).toBe(false);
+    expect(emailsFiltersActive({ view: "all", folder: "", label: "", mailbox: "" })).toBe(false);
+  });
+
+  it("is true for the combination that produced the dead end", () => {
+    expect(emailsFiltersActive({ view: "inbox", mailbox: AI_MAILBOX_KEY })).toBe(true);
+  });
+
+  it.each([
+    ["a non-default view", { view: "unread" as const }],
+    ["a folder", { view: "all" as const, folder: "Receipts" }],
+    ["a label", { view: "all" as const, label: "HQ/Automated" }],
+    ["a mailbox", { view: "all" as const, mailbox: "16cff2b9-b4d3-421c-b25d-b40edd80c9a8" }]
+  ])("is true for %s on its own", (_label, input) => {
+    expect(emailsFiltersActive(input)).toBe(true);
+  });
+
+  it("ignores whitespace-only values, which are not a narrowing", () => {
+    // A blank query param is not a filter, and treating it as one would keep
+    // the chips on screen for a business with no email at all.
+    expect(emailsFiltersActive({ view: "all", folder: "   ", label: " ", mailbox: "  " })).toBe(
+      false
+    );
   });
 });

@@ -163,3 +163,35 @@ export function withLinkedEmailRow<T extends { id: string }>(
   if (!linked) return rows;
   return rows.some((r) => r.id === linked.id) ? rows : [linked, ...rows];
 }
+
+/**
+ * Is the Emails list narrowed to a subset right now?
+ *
+ * Lives here rather than inline in EmailsList because two separate decisions
+ * read it and they must not drift: whether to RENDER the filter controls, and
+ * whether an empty list means "no mail at all" or "no mail matching this".
+ *
+ * The controls used to be gated on the row count alone, which is a dead end. A
+ * filter combination with no results hid the very buttons needed to leave it,
+ * so the only way out was editing the URL. `?view=inbox&mailbox=ai` reached
+ * that state on a live account: Inbox is an AI-mailbox-only view, and that
+ * mailbox was empty while the connected Gmail had plenty.
+ *
+ * Deliberately NOT counting the search box. That is client-side text matching
+ * over already-loaded rows, it has its own visible input to clear, and folding
+ * it in here would make a typed query keep the filter chips alive on a business
+ * that has no email at all, which is the one case the chips should stay hidden.
+ */
+export function emailsFiltersActive(input: {
+  view: EmailsViewFilter;
+  folder?: string;
+  label?: string;
+  mailbox?: string;
+}): boolean {
+  return Boolean(
+    input.view !== "all" ||
+      (input.folder ?? "").trim() ||
+      (input.label ?? "").trim() ||
+      (input.mailbox ?? "").trim()
+  );
+}
