@@ -286,6 +286,10 @@ async function publishOne(
     }
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);
+    // Without this a 190 here only ever became error_detail text on the post
+    // row: the owner read a raw Graph message and nothing flagged the
+    // connection or told them their credential had died.
+    await reportMetaCallFailure(post.business_id, err, { surface: "instagram_publish" });
   }
   if (unsettled) return { kind: "unsettled" };
 

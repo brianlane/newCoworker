@@ -5,6 +5,7 @@
  * never-throw contract.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MetaApiError } from "@/lib/meta/client";
 
 vi.mock("@/lib/meta/token-health", () => ({
   reportMetaCallFailure: vi.fn(async () => false),
@@ -465,33 +466,71 @@ describe("processMessengerJobs", () => {
 });
 
 describe("a dead Meta token during a send", () => {
-  it("is TERMINAL, not a three-attempt transient", async () => {
-    // Retrying cannot mint a credential, so burning the retry budget just
-    // delays the job's death and hides the real cause from the owner.
+  /** A 190 exactly as graphRequest throws it. */
+  const deadToken = () => new MetaApiError("request_failed", "Session has expired", 400, 190);
+
+  it("is TERMINAL for EVERY job in the outage, not just the first", async () => {
+    // The bug this pins: the terminal test used to be reportMetaCallFailure's
+    // return value, which means "I was the first to notice". Every job after
+    // the first therefore fell through to the normal three-attempt requeue
+    // and dead-lettered as turn_failed.
     const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
-    vi.mocked(reportMetaCallFailure).mockResolvedValue(true);
+
+    for (const firstNotice of [true, false]) {
+      vi.mocked(reportMetaCallFailure).mockClear();
+      vi.mocked(reportMetaCallFailure).mockResolvedValue(firstNotice);
+      const deps = makeDeps({
+        claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+        send: vi.fn(async () => {
+          throw deadToken();
+        })
+      });
+      await processMessengerJobs({}, deps);
+
+      expect(deps.fail).toHaveBeenCalledWith(
+        "job-1",
+        "meta_token_expired",
+        expect.any(String),
+        expect.any(String)
+      );
+      expect(deps.requeue).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does NOT flag the Facebook connection when WHATSAPP's credential dies", async () => {
+    // WhatsApp also goes through graphRequest and can throw a 190, but that
+    // is the WhatsApp credential in whatsapp_connections. Flagging
+    // meta_connections would tell the owner their Facebook connection died.
+    const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
+    vi.mocked(reportMetaCallFailure).mockClear();
 
     const deps = makeDeps({
       claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+      getConversation: vi.fn(async () => ({ ...CONVERSATION, platform: "whatsapp" as const })),
       send: vi.fn(async () => {
-        throw new Error("Session has expired");
+        throw deadToken();
       })
     });
     await processMessengerJobs({}, deps);
 
-    expect(vi.mocked(reportMetaCallFailure)).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Error),
-      { surface: "messenger_send" }
-    );
-    expect(deps.fail).toHaveBeenCalledWith(
+    expect(vi.mocked(reportMetaCallFailure)).not.toHaveBeenCalled();
+    expect(deps.fail).not.toHaveBeenCalledWith(
       "job-1",
       "meta_token_expired",
       expect.any(String),
       expect.any(String)
     );
-    // First attempt, and it did NOT requeue.
-    expect(deps.requeue).not.toHaveBeenCalled();
-    vi.mocked(reportMetaCallFailure).mockResolvedValue(false);
+  });
+
+  it("leaves ordinary failures on the normal retry ladder", async () => {
+    const deps = makeDeps({
+      claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+      send: vi.fn(async () => {
+        throw new MetaApiError("request_failed", "rate limited", 400, 4);
+      })
+    });
+    await processMessengerJobs({}, deps);
+    expect(deps.requeue).toHaveBeenCalled();
+    expect(deps.fail).not.toHaveBeenCalled();
   });
 });

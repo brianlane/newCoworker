@@ -4,6 +4,7 @@
  * guidance, stale-publishing dead-lettering, and per-post error isolation.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MetaApiError } from "@/lib/meta/client";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => {
@@ -17,6 +18,10 @@ vi.mock("@/lib/social/db", async (importOriginal) => ({
   listPublishedPostsToRecheck: vi.fn(),
   patchSocialPost: vi.fn(),
   transitionSocialPost: vi.fn()
+}));
+vi.mock("@/lib/meta/token-health", () => ({
+  reportMetaCallFailure: vi.fn(async () => false),
+  clearMetaTokenInvalid: vi.fn(async () => undefined)
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -904,6 +909,29 @@ describe("processSocialPostSweep — Starter in-flight rows settle truthfully", 
         error_detail: expect.stringMatching(/Standard/)
       }),
       db
+    );
+  });
+});
+
+describe("processSocialPostSweep — a dead Meta token during publish", () => {
+  it("reports the dead token, not just an error string on the post row", async () => {
+    // This wiring silently never landed the first time: the import was added
+    // and the call was not, so a 190 here only ever became error_detail text
+    // and nothing flagged the connection or told the owner.
+    const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
+    vi.mocked(reportMetaCallFailure).mockClear();
+
+    listDue.mockResolvedValue([post()]);
+    transition.mockResolvedValue(true);
+    createContainer.mockRejectedValue(
+      new MetaApiError("request_failed", "Session has expired", 400, 190)
+    );
+
+    await processSocialPostSweep(deps());
+    expect(vi.mocked(reportMetaCallFailure)).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(MetaApiError),
+      { surface: "instagram_publish" }
     );
   });
 });

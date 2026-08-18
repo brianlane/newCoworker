@@ -45,6 +45,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
 import { messengerAllowedForTier } from "@/lib/messenger/tier-gate";
 import { logger } from "@/lib/logger";
+import { isMetaTokenDead } from "@/lib/meta/client";
 import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 export const MESSENGER_WORKER_ID = "platform-messenger-worker";
@@ -202,12 +203,17 @@ export async function processMessengerJobs(
       }
     };
 
+    // Hoisted out of the try so the catch below can tell a Meta failure from
+    // a WhatsApp one: they use different credentials and only one of them
+    // lives in meta_connections.
+    let jobPlatform: MessengerConversationRow["platform"] | null = null;
     try {
       const conversation = await getConversation(job.conversation_id);
       if (!conversation) {
         await failJob("conversation_missing", job.conversation_id);
         continue;
       }
+      jobPlatform = conversation.platform;
 
       // Meta policy: replies only inside the 24h standard messaging
       // window. Nudges beyond it ride SMS (once a phone is captured).
@@ -297,10 +303,20 @@ export async function processMessengerJobs(
       // nothing to answer (e.g. the owner's manual reply is the newest
       // turn), no_key means the platform is misconfigured — retrying
       // cannot change either.
-      // A dead Meta token is terminal for every job on this tenant, not a
-      // transient worth three attempts: retrying cannot mint a credential.
-      // It also escalates to the owner, which no other failure here does.
-      if (await reportMetaCallFailure(job.business_id, err, { surface: "messenger_send" })) {
+      // A dead Meta token is terminal for EVERY job in the outage, not just
+      // the one that noticed first: retrying cannot mint a credential.
+      //
+      // The terminal test is isMetaTokenDead, not reportMetaCallFailure's
+      // return value. That return means "I was the first to notice", so
+      // using it here made every job after the first fall through to the
+      // normal three-attempt requeue and dead-letter as turn_failed.
+      //
+      // WhatsApp is excluded on purpose. It also goes through graphRequest
+      // and can throw a 190, but that is the WhatsApp credential, held in
+      // whatsapp_connections. Flagging meta_connections for it would tell
+      // the owner their FACEBOOK connection died when it had not.
+      if (jobPlatform !== "whatsapp" && isMetaTokenDead(err)) {
+        await reportMetaCallFailure(job.business_id, err, { surface: "messenger_send" });
         await failJob("meta_token_expired", detail);
         continue;
       }
