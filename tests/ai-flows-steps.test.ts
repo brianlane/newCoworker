@@ -2831,6 +2831,27 @@ describe("planStep: reply_to_comment", () => {
   });
 });
 
+describe("reply_to_comment: a missing app permission reads as OUR gap", () => {
+  it("never tells the owner to reconnect or implies they did something wrong", async () => {
+    // The Facebook public-reply permission is not granted to our app yet.
+    // The note must not send the owner to reconnect a healthy connection, and
+    // must not show them a raw Graph error for something they cannot fix.
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("supabase/functions/ai-flow-worker/index.ts", "utf8");
+    const start = src.indexOf("async function replyToCommentStep(");
+    const body = src.slice(start, src.indexOf("\nasync function ", start + 10));
+    const branch = body.slice(
+      body.indexOf('reason === "permission_not_granted"'),
+      body.indexOf('reason === "refused"')
+    );
+    expect(branch).toContain("isn't approved by");
+    expect(branch).toContain("Nothing is wrong with your connection");
+    expect(branch).not.toMatch(/reconnect/i);
+    // It is a SKIP, not a failure: retrying cannot grant a permission.
+    expect(branch).toContain("skipped: true");
+  });
+});
+
 describe("reply_to_comment: owner-facing copy names the right network", () => {
   it("has no hardcoded network name left in the worker's step messages", async () => {
     // Bugbot caught three appendActionTaken lines still saying "Instagram"

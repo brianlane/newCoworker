@@ -14,6 +14,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/cron-auth", () => ({ assertCronAuth: vi.fn() }));
 vi.mock("@/lib/db/meta-connections", () => ({ getMetaConnection: vi.fn() }));
+vi.mock("@/lib/meta/token-health", () => ({
+  reportMetaCallFailure: vi.fn(async () => false),
+  clearMetaTokenInvalid: vi.fn(async () => undefined)
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -158,10 +162,60 @@ describe("POST /api/internal/comment-reply", () => {
     expect(await (await POST(req(body))).json()).toMatchObject({ data: { ok: true } });
   });
 
+  it("calls a MISSING APP PERMISSION its own thing, not a dead token", async () => {
+    // The failure mode this prevents: reporting it as a dead token would send
+    // an owner to redo an OAuth flow that was never the problem, and
+    // reporting it as "refused" would show them a raw Graph error for
+    // something they cannot fix. The gap is in OUR App Review approvals.
+    for (const code of [10, 200, 299]) {
+      fbReply.mockRejectedValueOnce(metaError(code));
+      const payload = (await (await POST(req({ ...body, platform: "facebook" }))).json()) as {
+        data: { reason: string; detail?: string };
+      };
+      expect(payload.data.reason).toBe("permission_not_granted");
+      expect(payload.data.detail).toBe("Meta said no");
+    }
+    // And it must NOT be escalated as a broken connection.
+    const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
+    expect(vi.mocked(reportMetaCallFailure)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT claim an approval gap on the private path, where 10 means the window", async () => {
+    // Messenger answers 10 for a send OUTSIDE the allowed window. Claiming
+    // "we are not approved" there would replace the real reason with a
+    // reassurance that happens to be false.
+    for (const code of [10, 200, 299]) {
+      privateReply.mockRejectedValueOnce(metaError(code));
+      const payload = (await (
+        await POST(req({ ...body, mode: "private", platform: "facebook" }))
+      ).json()) as { data: { reason: string } };
+      expect(payload.data.reason).toBe("refused");
+    }
+  });
+
+  it("does NOT claim an approval gap on Instagram, where we ARE approved", async () => {
+    // The same codes mean a tenant revoked a scope. Reporting Meta's own
+    // words is honest; claiming our app is unapproved is not.
+    for (const code of [10, 200, 299]) {
+      publicReply.mockRejectedValueOnce(metaError(code));
+      const payload = (await (await POST(req(body))).json()) as { data: { reason: string } };
+      expect(payload.data.reason).toBe("refused");
+    }
+  });
+
+  it("detects it from Meta's answer, so approval makes it work with no deploy", async () => {
+    // Deliberately not a hardcoded scope list: the day App Review grants
+    // pages_manage_engagement, the same call simply succeeds.
+    fbReply.mockResolvedValue({ commentId: "fb-reply-1" });
+    const res = await POST(req({ ...body, platform: "facebook" }));
+    expect(await res.json()).toMatchObject({ data: { ok: true } });
+  });
+
   it("calls a permanent refusal `refused`, so the worker skips instead of retrying", async () => {
     // Already replied, past the 7-day window, comment deleted, permission
     // missing: all HTTP 400s that can never succeed on a retry.
-    for (const code of [10, 100, 190, 200, undefined]) {
+    // 10/200/299 are handled above as permission_not_granted.
+    for (const code of [100, 190, undefined]) {
       publicReply.mockRejectedValueOnce(metaError(code));
       const payload = (await (await POST(req(body))).json()) as {
         data: { reason: string; detail?: string };

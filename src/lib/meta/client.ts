@@ -90,6 +90,35 @@ export const META_ERROR_CODE_UNKNOWN_OBJECT = 100;
 export const META_ERROR_CODE_BAD_TOKEN = 190;
 
 /**
+ * Meta's permission-denied codes.
+ *
+ * CAREFUL: these do NOT on their own mean "our app lacks an App Review
+ * approval". Meta reuses them for a tenant-revoked scope, and Messenger
+ * answers 10 for a send outside the allowed messaging window. A caller may
+ * only read them as an approval gap where it independently knows that is the
+ * cause, e.g. the Facebook public comment reply, whose
+ * pages_manage_engagement is missing from our app for every tenant.
+ *
+ * Worth having at all because the honest message differs completely from a
+ * dead token: "your connection stopped working, reconnect it" would send an
+ * owner to redo an OAuth flow that was never the problem.
+ */
+export const META_ERROR_CODES_PERMISSION_DENIED = new Set([
+  10, // "Application does not have permission for this action"
+  200, // "(#200) App does not have <permission> permission"
+  299 // permission error on a specific edge
+]);
+
+/** True when Meta refused because OUR APP lacks the permission. */
+export function isMetaPermissionDenied(err: unknown): boolean {
+  return (
+    err instanceof MetaApiError &&
+    err.metaCode !== undefined &&
+    META_ERROR_CODES_PERMISSION_DENIED.has(err.metaCode)
+  );
+}
+
+/**
  * True when Meta refused the call because the TOKEN is dead, rather than
  * because of anything about the request.
  *

@@ -4207,6 +4207,13 @@ function StepFields({
             ? "Instagram allows only ONE private reply per comment, and only within 7 days of it (during the broadcast, for a Live). Past that, the step is skipped with a note rather than retried."
             : "Posts a reply on the comment thread, where everyone reading the post sees it."}
         </p>
+        {step.replyMode === "public" ? (
+          <p className="text-[11px] text-spark-orange/80">
+            On Instagram this works today. On Facebook Pages it is waiting on approval from
+            Meta, so a Facebook flow skips the public reply with a note instead of posting.
+            Private replies work on both.
+          </p>
+        ) : null}
       </div>
     );
   }
