@@ -31,6 +31,13 @@ export type EditFlowToolDeps = {
   listFlows?: typeof listAiFlows;
   compileEdit?: typeof editAiFlowDefinition;
   persistUpdate?: typeof updateAiFlow;
+  /**
+   * Which surface asked for this edit ("ai_edit_sms" / "ai_edit_dashboard").
+   * Per-turn context, not a model argument: it rides the deps so the model
+   * cannot claim the change came from somewhere it did not.
+   */
+  editSource?: string;
+  editActor?: string | null;
 };
 
 export type EditAiFlowToolResult =
@@ -79,7 +86,9 @@ export async function editAiFlowTool(
       businessId,
       id: flow.id,
       definition: compiled.definition,
-      ...(args.newName ? { name: args.newName } : {})
+      ...(args.newName ? { name: args.newName } : {}),
+      ...(deps.editSource !== undefined ? { editSource: deps.editSource } : {}),
+      ...(deps.editActor !== undefined ? { editActor: deps.editActor } : {})
     });
   } catch (err) {
     logger.warn("edit_aiflow: persist failed", {

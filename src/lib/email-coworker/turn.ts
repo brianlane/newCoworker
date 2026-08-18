@@ -106,6 +106,7 @@ async function emailToolGates(businessId: string) {
     list_aiflows: false,
     run_aiflow: false,
     edit_aiflow: false,
+    undo_aiflow_edit: false,
     generate_image: false,
     update_notification_preferences: false,
     flag_contact_spam: false,
@@ -199,7 +200,9 @@ export async function runEmailCoworkerTurn(args: {
     // send that follows. Without a budget the engine would happily spend the
     // whole request on model steps, and the route would die after the
     // message was already marked seen: no reply, no retry.
-    budgetMs: EMAIL_TURN_BUDGET_MS
+    budgetMs: EMAIL_TURN_BUDGET_MS,
+    flowEditSource: "ai_edit_email",
+    flowEditActor: message.fromEmail
   });
 
   if (!inline.ok) {

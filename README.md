@@ -2198,6 +2198,68 @@ runtime in `_shared/pipelines/lifecycle.ts`, the Next-side wrapper in
 `src/lib/pipelines/lifecycle-hooks.ts`. Existing leads are backfilled per
 tenant by a one-shot, which fires no hooks and edits no flows.
 
+## AiFlow edit history and undo
+
+Every change to an AiFlow's definition or name appends the PRIOR state to
+`ai_flow_definition_versions`, so any edit can be reversed. This is a
+database TRIGGER (`ai_flows_snapshot_definition`, migration
+20260822182135), not an app-code helper, for the same reason the
+`ai_flow_runs` revision counter is one: writers do not opt in, so a
+forgetful path cannot skip it. That matters more here than there, because
+`ai_flows` has many writers outside `src/lib` (dozens of `debug/` and
+`scripts/oneshot/` scripts write the table straight through PostgREST).
+
+Why it exists: `updateAiFlow` overwrites `definition` in place, and the AI
+paths replace the WHOLE definition. The owner coworker's `edit_aiflow` tool
+does not patch a flow, it regenerates it through a model from the current
+JSON plus the instruction, so an unwanted edit is not reconstructible after
+the fact and cannot be reversed by describing the opposite change (that
+writes a third version). MCP's `update_flow` swallows a whole definition
+object the same way. Before this, the only rollback anywhere was by hand:
+one-shots stashing a `previous_definition` blob in
+`applied_oneshots.details`.
+
+An enabled-only flip does NOT create a version. It is already tracked by
+`enabled_changed_at`, and snapshotting it would bury real edits under toggle
+churn. Restoring likewise never changes `enabled`: an undo that silently
+switched an automation back on would be a bigger surprise than the edit it
+reverses.
+
+### Attribution: a write-only carrier, cleared every time
+
+A row-level trigger cannot see application context, so writers stamp
+`ai_flows.edit_source` / `edit_actor` in the same UPDATE and the trigger
+copies them onto the version row. Those two columns are **write-only**: the
+trigger consumes and nulls them on every update, so they always read back
+null.
+
+Persisting them would be worse than useless. A column that kept its value
+would be inherited by the next writer that forgot to stamp, so an
+unattributed edit by a debug script would be recorded as coming from
+whichever surface edited the flow last, and a false attribution in an audit
+trail is worse than an absent one. Nothing is lost: a version row records
+the source of the edit that REPLACED it, so the newest row's source is the
+provenance of the definition that is live right now.
+
+Current sources: `dashboard`, `ai_edit_dashboard`, `ai_edit_sms`,
+`ai_edit_slack`, `ai_edit_email`, `mcp`, `mcp_restore`, `white_glove`. An
+unstamped writer lands in the history with a null source, which reads as
+"nobody said", never as a surface.
+
+### Undoing
+
+- Owner coworker (dashboard chat and owner-SMS): `undo_aiflow_edit`, sharing
+  the `edit_aiflow` Settings toggle rather than carrying its own, the way
+  `list_aiflows` shares `run_aiflow`'s. A surface allowed to rewrite a live
+  automation must always be allowed to take that rewrite back.
+- MCP: `list_flow_versions` (what changed, when, from which surface) and
+  `restore_flow_version` (no `version_id` undoes the last edit).
+
+Restores go through `updateAiFlow` rather than writing `ai_flows` directly,
+so a restore validates like any other edit and is itself snapshotted. Undo
+is therefore undoable, and reverting the wrong change is not a second
+unrecoverable event.
+
 ## AiFlow team routing: claim notices (SMS + optional email)
 
 `route_to_team` offers a lead to the roster (reply "1" to claim, "2" to pass,

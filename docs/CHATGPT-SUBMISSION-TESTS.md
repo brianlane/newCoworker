@@ -325,6 +325,18 @@ re-annotated without this file being updated in the same PR.
 - **Open World: False** The change is stored in our database. Saving an automation does not run it.
 - **Destructive: True** Destructive because the supplied step list replaces the stored one, so steps that are not resubmitted are lost.
 
+### `list_flow_versions`
+
+- **Read Only: True** It reads the recorded edit history of one automation and writes nothing.
+- **Open World: False** A read of our own database, with no external call.
+- **Destructive: False** A read, which changes nothing in the account.
+
+### `restore_flow_version`
+
+- **Read Only: False** It writes a previous definition back over the current one.
+- **Open World: False** The write lands in our own database. Restoring an automation does not run it.
+- **Destructive: True** Destructive because the definition that was live is replaced. It is recorded in the same history first, so the restore can itself be undone, but the live state is still overwritten.
+
 ### `set_flow_enabled`
 
 - **Read Only: False** It changes an automation's enabled flag.

@@ -62,6 +62,7 @@ const EMAIL_GATES: ActionToolGates = {
   list_aiflows: false,
   run_aiflow: false,
   edit_aiflow: false,
+  undo_aiflow_edit: false,
   generate_image: false,
   update_notification_preferences: false,
   flag_contact_spam: false,

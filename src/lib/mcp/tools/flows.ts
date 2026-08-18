@@ -251,7 +251,11 @@ export const updateFlowTool = defineMcpTool({
       businessId,
       id: args.flow_id,
       ...(args.name !== undefined ? { name: args.name } : {}),
-      ...(args.definition !== undefined ? { definition: args.definition } : {})
+      ...(args.definition !== undefined ? { definition: args.definition } : {}),
+      // A whole-definition replace from an external client is exactly the
+      // edit the history exists for; stamp who made it.
+      editSource: "mcp",
+      editActor: auth.userId
     });
     return { updated: true, flow_id: row.id, name: row.name, enabled: row.enabled };
   }
@@ -393,6 +397,82 @@ export const runFlowTool = defineMcpTool({
   }
 });
 
+export const listFlowVersionsTool = defineMcpTool({
+  name: "list_flow_versions",
+  title: "List an automation's edit history",
+  annotations: TOOL_BEHAVIOR.readLocal,
+  outputSchema: z.object({
+    versions: z.array(
+      z.object({
+        version_id: z.number(),
+        replaced_at: z.string(),
+        source: z.string().nullable(),
+        actor: z.string().nullable(),
+        name: z.string(),
+        step_count: z.number()
+      })
+    )
+  }),
+  description:
+    "List the recorded earlier versions of one AiFlow, newest first. Each entry is the state the automation was in BEFORE one edit, with when that edit happened and which surface made it (`dashboard`, `ai_edit_sms`, `mcp`, ...). Use this to answer \"what changed and when\" before restoring anything.",
+  schema: {
+    business_id: businessIdField,
+    flow_id: z.string().uuid()
+  },
+  handler: async (args, auth) => {
+    const businessId = await resolveMcpBusinessId(auth, args.business_id);
+    await requireMcpBusinessRole(auth, businessId, "manage_aiflows");
+    const { listFlowVersions } = await import("@/lib/ai-flows/versions");
+    const rows = await listFlowVersions(businessId, args.flow_id);
+    return {
+      versions: rows.map((row) => ({
+        version_id: row.id,
+        replaced_at: row.replaced_at,
+        source: row.source,
+        actor: row.actor,
+        name: row.name,
+        step_count: row.definition.steps.length
+      }))
+    };
+  }
+});
+
+export const restoreFlowVersionTool = defineMcpTool({
+  name: "restore_flow_version",
+  title: "Undo an automation edit",
+  annotations: TOOL_BEHAVIOR.mutateLocal,
+  outputSchema: z.object({
+    restored: z.boolean(),
+    flow_id: z.string(),
+    name: z.string(),
+    restored_from: z.string()
+  }),
+  description:
+    "Put an earlier version of an AiFlow back. With no version_id this undoes the most recent edit, which is the usual case; pass a version_id from list_flow_versions to go further back. Restores the definition and the name, and deliberately does NOT change whether the automation is enabled. The restore is itself recorded, so it can be undone in turn.",
+  schema: {
+    business_id: businessIdField,
+    flow_id: z.string().uuid(),
+    version_id: z.number().int().positive().optional()
+  },
+  handler: async (args, auth) => {
+    const businessId = await resolveMcpBusinessId(auth, args.business_id);
+    await requireMcpBusinessRole(auth, businessId, "manage_aiflows");
+    const { restoreFlowVersion } = await import("@/lib/ai-flows/versions");
+    const result = await restoreFlowVersion(businessId, args.flow_id, {
+      ...(args.version_id !== undefined ? { versionId: args.version_id } : {}),
+      editSource: "mcp_restore",
+      editActor: auth.userId
+    });
+    if (!result.ok) throw new McpToolError(result.message);
+    return {
+      restored: true,
+      flow_id: result.flowId,
+      name: result.flowName,
+      restored_from: result.replacedAt
+    };
+  }
+});
+
 export const flowTools = [
   listFlowsTool,
   getFlowTool,
@@ -401,5 +481,7 @@ export const flowTools = [
   updateFlowTool,
   setFlowEnabledTool,
   triggerFlowTool,
-  runFlowTool
+  runFlowTool,
+  listFlowVersionsTool,
+  restoreFlowVersionTool
 ];

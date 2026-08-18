@@ -246,6 +246,10 @@ export async function POST(request: Request) {
       // Bridged read chains need headroom; the 60s budget below still
       // bounds the wall clock regardless of the step count.
       maxToolSteps: 6,
+      // Provenance for the definition history: an edit made by text is the
+      // one an owner is least likely to remember agreeing to.
+      flowEditSource: "ai_edit_sms",
+      flowEditActor: body.ownerE164,
       // No builder UI on SMS to hand a draft card to — creation tools off,
       // so compile work can't succeed into a void (the model points the
       // owner to dashboard chat / /dashboard/aiflows for authoring instead).
@@ -280,6 +284,9 @@ export async function POST(request: Request) {
         // needed, so the SMS surface gets the tool too (unlike the
         // draft-card creation tools below).
         edit_aiflow: editAiflowEnabled,
+        // Same toggle: the surface that can rewrite a live automation by
+        // text must be able to take that rewrite back by text.
+        undo_aiflow_edit: editAiflowEnabled,
         // The dashboard image tool returns an inline /api/dashboard/images
         // URL + markdown — there is nowhere to render that over SMS (the
         // texting coworker's MMS path is a different tool). Off by design.

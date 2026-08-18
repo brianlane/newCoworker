@@ -74,6 +74,7 @@ const ALL_GATES: ActionToolGates = {
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,
+  undo_aiflow_edit: true,
   // Owner-over-SMS surface: the dashboard image tool has nowhere to render
   // (same reason the production route pins it false).
   generate_image: false,

@@ -627,6 +627,14 @@ export async function runInlineChatTurn(
      * card attributes the burn honestly.
      */
     spendSurface?: string;
+    /**
+     * Provenance stamped onto any AiFlow this turn edits, so the definition
+     * history says which surface made the change (migration 20260822182135).
+     * Per-turn context rather than a tool argument: the model supplies what
+     * to change, never who is changing it.
+     */
+    flowEditSource?: string;
+    flowEditActor?: string | null;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -634,7 +642,13 @@ export async function runInlineChatTurn(
   const chatStep = deps.chatStep ?? geminiChatStep;
   const compileFlow = deps.compileFlow ?? compileAiFlowFromDescription;
   const lookupKnowledge = deps.lookupKnowledge ?? lookupBusinessKnowledge;
-  const runActionTool = deps.runActionTool ?? executeActionTool;
+  const baseRunActionTool = deps.runActionTool ?? executeActionTool;
+  // Wrap rather than widen executeToolCall's parameter list: provenance is
+  // the same for every call in the turn, so it belongs on the bound dep.
+  const flowEditSource = args.flowEditSource ?? "ai_edit";
+  const flowEditActor = args.flowEditActor ?? null;
+  const runActionTool: typeof executeActionTool = (targetBusinessId, call, callDeps) =>
+    baseRunActionTool(targetBusinessId, call, { ...callDeps, flowEditSource, flowEditActor });
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };

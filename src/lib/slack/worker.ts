@@ -383,6 +383,8 @@ async function runOneSlackJob(
     maxToolSteps: 6,
     budgetMs: SLACK_TURN_BUDGET_MS,
     spendSurface: "slack_chat",
+    flowEditSource: "ai_edit_slack",
+    flowEditActor: speaker,
     onTextDelta: (text) => {
       if (!stream) return;
       if (text.includes(STREAM_WITHHOLD_MARKER)) return;
@@ -409,6 +411,7 @@ async function runOneSlackJob(
       // Owner-power tools: per-surface toggle AND the verified owner. A
       // team member in the workspace can read and act, never reconfigure.
       edit_aiflow: isOwner && editAiflowEnabled,
+      undo_aiflow_edit: isOwner && editAiflowEnabled,
       generate_image: false,
       update_notification_preferences: isOwner && notificationPrefsToolEnabled,
       flag_contact_spam: isOwner && flagSpamToolEnabled,

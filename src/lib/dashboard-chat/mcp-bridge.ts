@@ -69,6 +69,7 @@ export const MCP_BRIDGE_TOOL_GATES: Readonly<Record<string, McpBridgeGateKey>> =
   fetch: "read_business_data",
   get_flow: "read_business_data",
   get_flow_schema: "read_business_data",
+  list_flow_versions: "read_business_data",
   list_agents: "read_business_data",
   list_employees: "read_business_data",
   get_notification_preferences: "read_business_data",
@@ -110,6 +111,7 @@ export const MCP_BRIDGE_TOOL_ACTIONS: Readonly<Record<string, BusinessAction>> =
   fetch: "operate_messages",
   get_flow: "manage_aiflows",
   get_flow_schema: "manage_aiflows",
+  list_flow_versions: "manage_aiflows",
   list_agents: "manage_aiflows",
   list_employees: "manage_settings",
   get_notification_preferences: "manage_settings",
@@ -148,6 +150,7 @@ export const MCP_BRIDGE_EXCLUDED: Readonly<Record<string, string>> = {
   update_employee: "capability duplicate of inline manage_employee",
   create_flow: "capability duplicate of the draft-first create_aiflow: chat creation stays owner-reviewed in the builder; connectors keep live create_flow",
   update_flow: "capability duplicate of inline edit_aiflow, which validates and self-repairs instead of replacing raw JSON",
+  restore_flow_version: "capability duplicate of inline undo_aiflow_edit, which resolves the flow by name the way the owner refers to it",
   list_businesses: "the surface is pinned to one business; a cross-business enumerator invites scope-hopping",
   search: "cross-business fan-out; with a pinned business it degenerates to search_contacts + get_sms_thread"
 };
@@ -214,7 +217,7 @@ export function mcpBridgeToolsPreamble(opts: { creationToolsDeclared: boolean })
     ? " create_aiflow drafts a new one for the owner to activate in the builder;"
     : " there is NO creation tool on this surface, to build a new automation point the owner at dashboard chat or the AiFlows builder;";
   return `DIRECT BUSINESS TOOLS: you can read and change this business's real data (contacts, text conversations, call transcripts, recent activity, tasks, automations, roster, hours, knowledge, per-channel tool policies). Ground answers in tool reads; when a read tool can answer, call it instead of guessing.
-- Automations, one path each: list_aiflows finds one; get_flow inspects its steps; edit_aiflow applies a plain-English change to a live automation (validated; prefer it for ANY edit);${creationArm} set_flow_enabled turns one on or off; run_aiflow starts one for a contact.
+- Automations, one path each: list_aiflows finds one; get_flow inspects its steps; edit_aiflow applies a plain-English change to a live automation (validated; prefer it for ANY edit); undo_aiflow_edit puts the version before the last edit back, and list_flow_versions says what changed, when, and from which surface;${creationArm} set_flow_enabled turns one on or off; run_aiflow starts one for a contact.
 - Look the contact up with search_contacts BEFORE texting or calling anyone by name. Never invent or guess a phone number or email.
 - Knowledge edits: get_business_knowledge first, then update_business_knowledge targeting ONE section.
 - OUT OF SCOPE, never attempt with any tool; direct the owner to Settings or support instead: changing any phone number (business line, owner phone), plan or billing changes, buying/porting numbers, connecting or disconnecting integrations, bulk deletions, refunds.`;
