@@ -523,7 +523,74 @@ also excluded from this alert at the call site
 that the owner already knows what they just booked. That leaves the public
 booking page as the only producer of a booking alert on this tenant today.
 
+## Email as a follow-up vehicle (Aug 18 2026)
+
+A ReferralExchange lead (Valerie Marino) arrived with an email and no phone,
+and the team offer said so plainly: "the AI cannot text or call them. Somebody
+has to work this one by hand." Brian: "Add email as a vehicle for follow ups
+for ai."
+
+**What an email-only lead got before.** Traced on her live run (`89d9025e`):
+the flow offered her to the team, sent her ONE intro email, told Amy nobody
+could be texted, and stopped. Every SMS and call step skipped, because
+`sms_lead_type` and `route_lead_type` both read `none` for a lead with no
+phone option. Nothing followed.
+
+**Why the existing cadence could not just be reused.** "Needs Follow Up (AI
+cadence)" is triggered by a TAG on a contact, and `update_contact` takes a
+`phoneVar`. Contacts are keyed `(business_id, customer_e164)`, so an
+email-only lead has no contact row at all (confirmed: Valerie has none) and
+cannot be tagged. Every round of that cadence is call + text +
+`wait_for_reply`, and `wait_for_reply` is phone-only too. So the email cadence
+lives INSIDE the lead-source flows, where `{{vars.lead_email}}` is in scope.
+
+`scripts/oneshot/amy-email-followup-cadence.ts` appends one block to
+ReferralExchange Lead, Realtor.com Lead, New Lead Intake and Clever Lead -
+Accept. HomeLight Referral is deliberately excluded: it already runs its own
+three-rung email ladder to the lead.
+
+**Shape.** Gated on `lead_phone` not containing `+` (the SAME predicate the
+flows' own no-phone guards use) and `lead_email` containing `@`. Then three
+rounds a day apart: wait, read the mailbox, send unless something came back.
+
+**Reading replies without `wait_for_reply`.** The check is an `email_extract`
+poll of Amy's connected Outlook, the mechanism the bad-phone branch already
+uses for bounce detection. It carries NO `fromContains` on purpose: a bounce
+notice comes from a postmaster, not from the lead, so matching on the lead's
+ADDRESS APPEARING in the message catches a reply and a delivery failure alike,
+and one Gemini field says which (`replied` / `bounced` / `none`).
+`lookbackMinutes` maxes at 1440, which is exactly the gap between rounds.
+
+**Two traps this design is shaped around:**
+
+- `noMatchVars` is load-bearing, not polish. Without it a quiet mailbox writes
+  nothing, the gate var never exists, and every step reading it sits inert.
+  Amy's HomeLight reveal ladder failed exactly that way on 2026-08-16.
+- Each round gets its OWN stop var (`efu_stop_1..3`) rather than sharing one.
+  A shared var is sticky once it reads `replied`, so a flat cadence gated on
+  it would re-alert the owner on every later round for a single reply. The
+  per-round var also carries the stop cascade without a branch per round,
+  which matters because the schema caps branch nesting at three levels.
+
+A reply goes to whoever owns the lead (`notify_lead_owner`, falling back to
+the team); a bounce goes to Amy with the standard `‼️‼️‼️‼️‼️` banner, because
+an address that does not work plus no phone means nobody can reach that lead
+at all.
+
+**A claim does not stop it**, matching her standing rule that a claim is a
+teammate saying they will work the lead, not evidence anyone was reached.
+Valerie's run is claimed by Gabrielle Mota and still gets the emails.
+
+Leads WITH a phone are untouched: Brian chose email-only over adding email to
+every round, so a lead getting calls and texts keeps getting exactly those.
+
 ## One-shots
+
+**`amy-email-followup-cadence.ts` (Aug 18 2026):** appends the three-round
+email follow-up block to ReferralExchange Lead, Realtor.com Lead, New Lead
+Intake and Clever Lead - Accept. Pure append, so parked runs keep their
+`current_step`. `--revert --apply` removes it; the ledger row carries
+`previous_definition` for each flow.
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
