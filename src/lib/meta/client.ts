@@ -1,7 +1,7 @@
 /**
  * Direct Meta (Facebook) Graph API client for the Lead Ads integration.
  *
- * No SDK — typed fetch helpers against graph.facebook.com, plus the OAuth
+ * No SDK: typed fetch helpers against graph.facebook.com, plus the OAuth
  * plumbing (login URL, code/token exchanges, HMAC-signed `state`) and the
  * webhook signature check. Credentials come from the platform Meta app
  * (`META_APP_ID` / `META_APP_SECRET`); per-tenant page tokens live in
@@ -52,10 +52,10 @@ export const META_LOGIN_SCOPES = [
   "business_management"
 ] as const;
 
-/** Outbound budget per Graph call — fail fast on a stuck upstream. */
+/** Outbound budget per Graph call: fail fast on a stuck upstream. */
 export const META_REQUEST_TIMEOUT_MS = 15_000;
 
-/** OAuth `state` validity window — one login round-trip, not a session. */
+/** OAuth `state` validity window: one login round-trip, not a session. */
 export const META_STATE_TTL_MS = 15 * 60 * 1000;
 
 export class MetaApiError extends Error {
@@ -66,7 +66,7 @@ export class MetaApiError extends Error {
     /**
      * Meta's own `error.code` / `error.error_subcode` from the response body.
      * The HTTP status alone cannot tell "this object is gone" (code 100) from
-     * "your token expired" (code 190) — both are 400 — and confusing the two
+     * "your token expired" (code 190): both are 400: and confusing the two
      * would let one bad token mark a tenant's whole feed as deleted.
      */
     public readonly metaCode?: number,
@@ -76,6 +76,13 @@ export class MetaApiError extends Error {
     this.name = "MetaApiError";
   }
 }
+
+/**
+ * Meta's own app id for the Facebook Page Inbox. Since Graph v12.0 an echo of
+ * a message a PERSON typed in the Page Inbox carries this as its `app_id`,
+ * which is how a colleague's reply is told apart from our own send.
+ */
+export const META_PAGE_INBOX_APP_ID = "26390203743090";
 
 /** Meta's error code for "object does not exist / cannot be loaded". */
 export const META_ERROR_CODE_UNKNOWN_OBJECT = 100;
@@ -163,7 +170,7 @@ export function verifyMetaOAuthState(state: string): string | null {
 /* ------------------------------------------------------------------ */
 
 /**
- * The OAuth redirect URI — must byte-match a "Valid OAuth Redirect URI" on
+ * The OAuth redirect URI: must byte-match a "Valid OAuth Redirect URI" on
  * the Meta app. Prefers the public app URL so the registered production URI
  * is used even behind proxies; request origin covers local dev.
  */
@@ -304,7 +311,7 @@ export async function exchangeForLongLivedToken(shortLivedToken: string): Promis
 export type MetaManagedPage = {
   id: string;
   name: string;
-  /** Page access token — permanent when derived from a long-lived user token. */
+  /** Page access token: permanent when derived from a long-lived user token. */
   accessToken: string;
 };
 
@@ -400,7 +407,14 @@ export const META_PAGE_SUBSCRIBED_FIELDS = [
   // to item "comment" + verb "add"; see src/lib/meta/webhook.ts. Pages
   // connected before this shipped need re-subscribing:
   // debug/meta-resubscribe-pages.ts.
-  "feed"
+  "feed",
+  // Click-to-Messenger / m.me?ref= attribution. Without it we cannot say
+  // which ad produced a conversation, on a lead-ads-first product.
+  "messaging_referrals",
+  // Page-side sends, INCLUDING ones a person typed in Meta's Page Inbox.
+  // That is the point: an echo we did not send means a colleague is in the
+  // thread, and the AI must stop answering over them.
+  "message_echoes"
 ] as const;
 
 /** Subscribe our app to the Page's webhook fields (leadgen + messaging). */
@@ -449,7 +463,7 @@ export async function createInstagramMediaContainer(
 /**
  * A media container's publish state (`GET /{creation_id}?fields=status_code`).
  * PUBLISHED means the post is live even if our publish call's response was
- * lost — the stale-publish sweep uses this to resolve interrupted publishes
+ * lost: the stale-publish sweep uses this to resolve interrupted publishes
  * truthfully instead of guessing.
  */
 export async function getInstagramContainerStatus(
@@ -486,7 +500,7 @@ export async function publishInstagramMedia(
 }
 
 /**
- * A published media's public URL (`GET /{media_id}?fields=permalink`) —
+ * A published media's public URL (`GET /{media_id}?fields=permalink`) ,
  * what the dashboard links "view the post" to. Best-effort: a missing or
  * malformed permalink returns null rather than failing a publish that
  * already succeeded.
@@ -510,9 +524,9 @@ export async function getInstagramMediaPermalink(
 /**
  * Does this published Instagram media still exist?
  *
- *   "exists"  — Meta returned the media.
- *   "missing" — Meta says the object is gone (owner deleted the post).
- *   "unknown" — anything else: timeout, 5xx, rate limit, expired token.
+ *   "exists" : Meta returned the media.
+ *   "missing": Meta says the object is gone (owner deleted the post).
+ *   "unknown": anything else: timeout, 5xx, rate limit, expired token.
  *
  * The three-way answer is the point. A deleted post and an expired page
  * token BOTH come back as HTTP 400, so a caller that treats every failure
@@ -545,7 +559,7 @@ export async function getInstagramMediaState(
  * We used to call `POST /{page_id}/dataset` to get-or-create the Page's
  * Conversions API dataset. That endpoint appears nowhere in Meta's public
  * Graph API reference, and it answers every caller with
- * `(#200) App does not have page_events permission on the Page` — the same
+ * `(#200) App does not have page_events permission on the Page`: the same
  * 403 for a page token and for a user token carrying ads_management +
  * business_management, so it is an app-level gap no scope of ours closes.
  * `page_events` is not attached to any use case and is absent from this
@@ -559,7 +573,7 @@ export async function getInstagramMediaState(
  * something we derive. See src/lib/meta/capi.ts for the upload half.
  */
 
-/** Best-effort unsubscribe on disconnect — never throws. */
+/** Best-effort unsubscribe on disconnect: never throws. */
 export async function unsubscribePage(pageId: string, pageToken: string): Promise<void> {
   try {
     await graphRequest(
@@ -584,7 +598,7 @@ export async function unsubscribePage(pageId: string, pageToken: string): Promis
 export const MESSENGER_MAX_TEXT_LENGTH = 2000;
 
 /**
- * Send a text reply to a Messenger PSID or Instagram-scoped user id —
+ * Send a text reply to a Messenger PSID or Instagram-scoped user id ,
  * the same `/{page_id}/messages` edge serves both platforms with the
  * page token. `messaging_type: "RESPONSE"` declares this a reply inside
  * Meta's 24h standard messaging window (the caller gates on the window
@@ -719,7 +733,7 @@ export async function sendInstagramPrivateReply(
 }
 
 /**
- * Best-effort display name for a Messenger PSID / IG-scoped id — profile
+ * Best-effort display name for a Messenger PSID / IG-scoped id: profile
  * access is permission- and window-limited, so failures return null and
  * the conversation just shows the raw id.
  */
@@ -759,7 +773,7 @@ export async function getMessengerProfile(
 }
 
 /**
- * The IG professional account linked to a Page (null when none) —
+ * The IG professional account linked to a Page (null when none) ,
  * captured at page-pick time so instagram-object webhook entries can be
  * resolved to the owning tenant.
  */
@@ -874,7 +888,7 @@ export function whatsappTemplateStateKey(name: string, language: string): string
 /**
  * Send a free-form text to a WhatsApp user (wa_id / E.164 digits) from
  * the tenant's business number. Only valid inside the 24h customer
- * service window — the deliver helper gates on that BEFORE calling.
+ * service window: the deliver helper gates on that BEFORE calling.
  */
 export async function sendWhatsAppMessage(
   phoneNumberId: string,
@@ -978,7 +992,7 @@ export async function exchangeEmbeddedSignupCode(code: string): Promise<string> 
  *
  * The `/register` call sets (or must match) the number's two-step
  * verification PIN. Deriving it from a server secret + the phone number id
- * means a reconnect re-registers with the SAME PIN — idempotent, no stored
+ * means a reconnect re-registers with the SAME PIN: idempotent, no stored
  * secret, no "PIN mismatch" on the second connect. Mapped to 100000–999999
  * so it is always six digits with no leading zero and never all-zero.
  */
@@ -992,7 +1006,7 @@ export function deriveWhatsAppRegistrationPin(phoneNumberId: string): string {
 /**
  * Register a phone number on the Cloud API so it can send and receive.
  * Embedded Signup verifies the number but does NOT put it on the Cloud
- * API — until this runs, `platform_type` stays `NOT_APPLICABLE` and
+ * API: until this runs, `platform_type` stays `NOT_APPLICABLE` and
  * consumers see "invite on WhatsApp". Idempotent: re-registering an
  * already-registered number with the same derived PIN succeeds.
  */
@@ -1024,7 +1038,7 @@ export async function subscribeWabaToApp(wabaId: string, token: string): Promise
   }
 }
 
-/** Best-effort unsubscribe on disconnect — never throws. */
+/** Best-effort unsubscribe on disconnect: never throws. */
 export async function unsubscribeWabaFromApp(wabaId: string, token: string): Promise<void> {
   try {
     await graphRequest(
@@ -1092,7 +1106,7 @@ export async function registerWhatsAppTemplates(
         status: typeof payload?.status === "string" ? payload.status : "PENDING"
       });
     } catch (err) {
-      // Every registration failure reports FAILED — including the
+      // Every registration failure reports FAILED: including the
       // reconnect-time "name already exists" 400, which is
       // indistinguishable from a genuinely rejected payload at this
       // layer. The connect route follows up with

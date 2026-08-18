@@ -1,12 +1,12 @@
 /**
  * Service-role data access for the Messenger/Instagram DM channel
- * (messenger_conversations / messenger_messages / messenger_jobs —
+ * (messenger_conversations / messenger_messages / messenger_jobs ,
  * migration 20260715201015_messenger_channel.sql).
  *
  * Every table is RLS-on/no-policies, so ALL access flows through here
  * after the caller's own auth: the Meta webhook route verifies the
  * X-Hub-Signature-256 first, the internal worker requires the cron
- * bearer, and the dashboard routes gate on requireBusinessRole — same
+ * bearer, and the dashboard routes gate on requireBusinessRole: same
  * trust model as webchat/db.ts.
  */
 
@@ -32,6 +32,11 @@ export type MessengerConversationRow = {
   /** Sticky thread language for AI replies (en/es); null until known. */
   preferred_language?: "en" | "es" | null;
   last_user_message_at: string;
+  /**
+   * Click-to-Messenger / ig.me attribution as Meta sent it, stamped once on
+   * the first referral seen for the thread.
+   */
+  referral?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -129,7 +134,7 @@ export async function upsertMessengerConversation(
   if (!error) {
     return { conversation: data as MessengerConversationRow, isNew: true };
   }
-  // Insert race: the identity index made us lose — re-read the winner.
+  // Insert race: the identity index made us lose: re-read the winner.
   const winner = await getMessengerConversationByIdentity(input, db);
   if (winner) return { conversation: winner, isNew: false };
   throw new Error(`upsertMessengerConversation: ${error.message}`);
@@ -153,7 +158,7 @@ async function getMessengerConversationByIdentity(
 
 /**
  * Side-effect-free identity lookup for OUTBOUND paths (the WhatsApp
- * deliver helper's 24h-window read) — unlike upsertMessengerConversation
+ * deliver helper's 24h-window read): unlike upsertMessengerConversation
  * it never bumps the window clock.
  */
 export async function getMessengerConversationByIdentityPublic(
@@ -170,7 +175,7 @@ export async function getMessengerConversationByIdentityPublic(
 /**
  * Conversation row for a BUSINESS-INITIATED thread (outbound WhatsApp to
  * a contact who never messaged first). last_user_message_at is backdated
- * to epoch so the fresh row reads as a CLOSED 24h window — only a real
+ * to epoch so the fresh row reads as a CLOSED 24h window: only a real
  * inbound message (upsertMessengerConversation) opens it. Races re-read
  * the winner.
  */
@@ -203,9 +208,54 @@ export async function insertOutboundMessengerConversation(
 
 /**
  * Persist the detected thread language so later turns (and the SMS bridge,
- * once a phone is captured) stay sticky. Detection-only writes — there is no
+ * once a phone is captured) stay sticky. Detection-only writes: there is no
  * owner override at the conversation level (that lives on contacts).
  */
+/**
+ * The thread for one person on one platform, without needing the page id.
+ * A Page-side echo names the account and the recipient but not the page the
+ * conversation was filed under, and a business has one thread per person per
+ * platform, so this is unambiguous.
+ */
+export async function findMessengerConversation(
+  businessId: string,
+  platform: MessengerPlatform,
+  psid: string,
+  client?: SupabaseClient
+): Promise<MessengerConversationRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("messenger_conversations")
+    .select()
+    .eq("business_id", businessId)
+    .eq("platform", platform)
+    .eq("psid", psid)
+    .maybeSingle();
+  if (error) throw new Error(`findMessengerConversation: ${error.message}`);
+  return (data as MessengerConversationRow | null) ?? null;
+}
+
+/**
+ * Stamp ad attribution, ONCE. Guarded on the column still being null so the
+ * referral that started the conversation wins over any later re-entry from a
+ * different ad. Returns whether this call was the one that stamped it.
+ */
+export async function setMessengerConversationReferral(
+  conversationId: string,
+  referral: Record<string, unknown>,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("messenger_conversations")
+    .update({ referral, updated_at: new Date().toISOString() })
+    .eq("id", conversationId)
+    .is("referral", null)
+    .select("id");
+  if (error) throw new Error(`setMessengerConversationReferral: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
 export async function setMessengerConversationLanguage(
   conversationId: string,
   language: "en" | "es",
@@ -293,7 +343,7 @@ export async function listMessengerConversationsForBusiness(
 
 /**
  * Append a message. For inbound user messages, `mid` is Meta's message id
- * and the partial unique index dedupes webhook redeliveries — a duplicate
+ * and the partial unique index dedupes webhook redeliveries: a duplicate
  * returns null so the caller skips enqueueing a second job.
  */
 export async function appendMessengerMessage(
@@ -332,7 +382,7 @@ export async function appendMessengerMessage(
  * Compensating delete for enqueue-failed paths (webchat's
  * deleteWebchatMessage rationale): a stored inbound message whose reply
  * job failed to insert is removed so the transcript never carries a
- * message no worker will ever answer — and a Meta redelivery can
+ * message no worker will ever answer: and a Meta redelivery can
  * re-ingest it cleanly past the mid dedupe.
  */
 export async function deleteMessengerMessage(

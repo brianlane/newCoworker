@@ -1,6 +1,6 @@
 /**
  * Service-role data access for per-tenant WhatsApp Business connections
- * (whatsapp_connections — migration 20260811210000_whatsapp_channel.sql).
+ * (whatsapp_connections: migration 20260811210000_whatsapp_channel.sql).
  *
  * The Embedded Signup business token is AES-256-GCM encrypted at rest via
  * src/lib/integrations/secrets.ts (calendly/meta pattern). RLS is on with
@@ -18,10 +18,18 @@ import {
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Per-template review status, keyed by template name. */
+/**
+ * Per-template review status, keyed by whatsappTemplateStateKey(name,
+ * language): the bare name for en_US, `name:es` for other languages.
+ *
+ * `status` is what deliverWhatsApp gates on and is normalized to APPROVED for
+ * every Meta event that still permits sending (REINSTATED, FLAGGED, LOCKED).
+ * `lastEvent` keeps Meta's raw event so the owner-facing detail can name the
+ * real state, e.g. a FLAGGED template that is sendable but at risk.
+ */
 export type WhatsAppTemplatesState = Record<
   string,
-  { status: string; language: string }
+  { status: string; language: string; lastEvent?: string }
 >;
 
 type StoredWhatsAppConnectionRow = {
@@ -37,7 +45,7 @@ type StoredWhatsAppConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (Cloud API calls). */
+/** Decrypted row: server-side use only (Cloud API calls). */
 export type WhatsAppConnectionRow = Omit<
   StoredWhatsAppConnectionRow,
   "access_token_encrypted"
@@ -128,7 +136,34 @@ export async function getActiveWhatsAppConnectionByPhoneNumberId(
 }
 
 /**
- * Whoever holds this phone number's unique claim (active or paused) —
+ * EVERY active connection on a WABA id. Plural because `waba_id` carries no
+ * unique constraint and a WABA can legitimately be shared across tenants,
+ * which is precisely what isWabaClaimedByOtherBusiness exists to detect. A
+ * maybeSingle() here would ERROR on a shared WABA, and a caller swallowing
+ * that error would silently drop the update for every tenant on it.
+ *
+ * Template status webhooks name the WABA, not the phone number, so the
+ * phone-number lookup cannot serve them.
+ */
+export async function listActiveWhatsAppConnectionsByWabaId(
+  wabaId: string,
+  client?: SupabaseClient
+): Promise<WhatsAppConnectionRow[]> {
+  const id = wabaId.trim();
+  if (!id) return [];
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("whatsapp_connections")
+    .select(ALL_COLUMNS)
+    .eq("waba_id", id)
+    .eq("is_active", true)
+    .limit(200);
+  if (error) throw new Error(`listActiveWhatsAppConnectionsByWabaId: ${error.message}`);
+  return ((data ?? []) as unknown as StoredWhatsAppConnectionRow[]).map(toDecryptedRow);
+}
+
+/**
+ * Whoever holds this phone number's unique claim (active or paused) ,
  * pre-insert conflict messaging for the connect route.
  */
 export async function getWhatsAppPhoneNumberClaim(
@@ -148,7 +183,7 @@ export async function getWhatsAppPhoneNumberClaim(
 /**
  * Whether any OTHER business also holds a connection on this WABA (a
  * multi-number WABA shared across tenants). Consulted before the
- * reconnect path unsubscribes an abandoned WABA — tearing down the app
+ * reconnect path unsubscribes an abandoned WABA: tearing down the app
  * subscription would silence every number under it.
  */
 export async function isWabaClaimedByOtherBusiness(

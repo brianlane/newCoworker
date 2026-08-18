@@ -22,6 +22,7 @@ import {
   deleteWhatsAppConnection,
   isWabaClaimedByOtherBusiness,
   getActiveWhatsAppConnectionByPhoneNumberId,
+  listActiveWhatsAppConnectionsByWabaId,
   getPublicWhatsAppConnection,
   getWhatsAppConnection,
   getWhatsAppPhoneNumberClaim,
@@ -134,6 +135,33 @@ describe("reads", () => {
     await expect(
       getActiveWhatsAppConnectionByPhoneNumberId("pn-9", makeDb(c3))
     ).rejects.toThrow(/route down/);
+  });
+
+  it("returns EVERY active connection on a shared WABA", async () => {
+    // waba_id has no unique constraint and a WABA can be shared across
+    // tenants (isWabaClaimedByOtherBusiness exists for exactly that). A
+    // maybeSingle() here would error on a shared WABA and the caller would
+    // drop the update for all of them.
+    const c = chain({ data: [STORED, { ...STORED, business_id: "biz-2" }], error: null });
+    (c as unknown as { limit: unknown }).limit = vi.fn(() => c);
+    const rows = await listActiveWhatsAppConnectionsByWabaId("waba-9", makeDb(c));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].accessToken).toBe("business-token");
+    expect(c.eq).toHaveBeenCalledWith("waba_id", "waba-9");
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+
+    const empty = chain({ data: null, error: null });
+    (empty as unknown as { limit: unknown }).limit = vi.fn(() => empty);
+    expect(await listActiveWhatsAppConnectionsByWabaId("waba-9", makeDb(empty))).toEqual([]);
+
+    // A blank id must not match anything.
+    expect(await listActiveWhatsAppConnectionsByWabaId("  ", makeDb(empty))).toEqual([]);
+
+    const err = chain({ data: null, error: { message: "waba down" } });
+    (err as unknown as { limit: unknown }).limit = vi.fn(() => err);
+    await expect(
+      listActiveWhatsAppConnectionsByWabaId("waba-9", makeDb(err))
+    ).rejects.toThrow(/waba down/);
   });
 
   it("isWabaClaimedByOtherBusiness detects sharing / exclusivity / errors", async () => {
@@ -280,6 +308,8 @@ describe("default service client", () => {
     expect(await getPublicWhatsAppConnection(BIZ)).toBeNull();
     expect(await getActiveWhatsAppConnectionByPhoneNumberId("pn-9")).toBeNull();
     expect(await getWhatsAppPhoneNumberClaim("pn-9")).toBeNull();
+    (c as unknown as { limit: unknown }).limit = vi.fn(() => c);
+    expect(await listActiveWhatsAppConnectionsByWabaId("waba-9")).toEqual([]);
     await saveWhatsAppConnection(
       {
         businessId: BIZ,
