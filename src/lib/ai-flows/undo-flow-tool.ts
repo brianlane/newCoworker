@@ -16,6 +16,7 @@ import { z } from "zod";
 import { listAiFlows } from "@/lib/ai-flows/db";
 import { resolveAiFlowByRef } from "@/lib/ai-flows/manual-run-tool";
 import { listFlowVersions, restoreFlowVersion } from "@/lib/ai-flows/versions";
+import { announceFlowChange } from "@/lib/ai-flows/change-notice";
 
 export const undoAiflowToolArgsSchema = z.object({
   flow: z.string().min(1).max(200)
@@ -26,6 +27,7 @@ export type UndoFlowToolDeps = {
   listFlows?: typeof listAiFlows;
   fetchVersions?: typeof listFlowVersions;
   restoreVersion?: typeof restoreFlowVersion;
+  announce?: typeof announceFlowChange;
   editSource?: string;
   editActor?: string | null;
 };
@@ -50,6 +52,7 @@ export async function undoAiFlowEditTool(
   /* c8 ignore start -- production defaults; tests inject */
   const listFlows = deps.listFlows ?? listAiFlows;
   const restoreVersion = deps.restoreVersion ?? restoreFlowVersion;
+  const announce = deps.announce ?? announceFlowChange;
   /* c8 ignore stop */
 
   const flows = await listFlows(businessId);
@@ -63,6 +66,16 @@ export async function undoAiFlowEditTool(
     ...(deps.editActor !== undefined ? { editActor: deps.editActor } : {})
   });
   if (!restored.ok) return { ok: false, message: restored.message };
+
+  // Same out-of-band trace as an edit: an undo is a definition write too.
+  await announce({
+    businessId,
+    flowId: restored.flowId,
+    flowName: restored.flowName,
+    action: "reverted",
+    source: deps.editSource,
+    actor: deps.editActor ?? null
+  });
 
   return {
     ok: true,

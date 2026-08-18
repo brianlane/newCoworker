@@ -101,6 +101,41 @@ describe("undoAiFlowEditTool", () => {
     expect(restoreVersion.mock.calls[0][2]).not.toHaveProperty("fetchVersions");
   });
 
+  it("announces the revert out of band, like an edit", async () => {
+    const announce = vi.fn(async () => {});
+    await undoAiFlowEditTool(
+      "biz-1",
+      { flow: FLOW.id },
+      {
+         
+        listFlows: (async () => [FLOW]) as any,
+         
+        restoreVersion: (async () => okRestore) as any,
+        announce,
+        editSource: "ai_edit_sms",
+        editActor: "+15555550100"
+      }
+    );
+    expect(announce).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "reverted", source: "ai_edit_sms", flowId: FLOW.id })
+    );
+  });
+
+  it("does not announce a restore that refused", async () => {
+    const announce = vi.fn(async () => {});
+    await undoAiFlowEditTool(
+      "biz-1",
+      { flow: FLOW.id },
+      {
+         
+        listFlows: (async () => [FLOW]) as any,
+        restoreVersion: (async () => ({ ok: false as const, message: "nothing to undo" })) as any,
+        announce
+      }
+    );
+    expect(announce).not.toHaveBeenCalled();
+  });
+
   it("relays an unresolvable flow reference", async () => {
     const restoreVersion = vi.fn();
     const result = await undoAiFlowEditTool(

@@ -2356,6 +2356,28 @@ questions from the first pass still stand.
 `ai_flow_pending_edits.ambiguities` is therefore always empty by
 construction. It is kept, and re-checked at confirm time, as defense in
 depth: a row that somehow carries one can never be applied.
+## The owner finds out anyway
+
+An approved edit is not the same as the owner still knowing about it
+tomorrow. A text thread scrolls, and the surface most likely to be used away
+from a laptop is the one whose history is hardest to go back through. So an
+AI-applied change leaves two traces the conversation cannot swallow:
+
+- a `system_log` event, `aiflow_changed_by_ai`, carrying the flow, the
+  action, the edit source, the actor and the diff lines,
+- an owner notification whose SMS body names the one thing that reverses it
+  ("undo that") and whose button lands on that automation.
+
+`src/lib/ai-flows/change-notice.ts` owns both, and both are best effort: a
+change that landed must never be reported as failed because an alert did not
+send.
+
+**Dashboard and one-shot edits are deliberately NOT announced.** The owner is
+looking at the automation when they edit it in the builder, and we are
+already in the loop on a white-glove change. An alert for something you just
+watched yourself do is the kind of noise that teaches people to ignore
+alerts. The announced sources are exactly the AI ones: `ai_edit_sms`,
+`ai_edit_email`, `ai_edit_slack`, `ai_edit_dashboard`, `mcp`, `mcp_restore`.
 
 ## AiFlow team routing: claim notices (SMS + optional email)
 
