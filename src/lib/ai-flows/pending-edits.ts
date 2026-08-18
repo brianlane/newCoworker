@@ -85,6 +85,29 @@ export async function stagePendingEdit(
   return data as PendingEditRow;
 }
 
+/**
+ * Read a staged edit without claiming it.
+ *
+ * The validation checks a confirm has to make (right flow, still fresh, no
+ * open questions) do not need the claim, and running them after it would
+ * burn a single-use token on a refusal that wrote nothing.
+ */
+export async function peekPendingEdit(
+  businessId: string,
+  token: string,
+  opts: { client?: SupabaseClient } = {}
+): Promise<PendingEditRow | null> {
+  const db = await resolveDb(opts.client);
+  const { data, error } = await db
+    .from("ai_flow_pending_edits")
+    .select(PENDING_COLS)
+    .eq("business_id", businessId)
+    .eq("token", token)
+    .maybeSingle();
+  if (error) throw new Error(`peekPendingEdit: ${error.message}`);
+  return (data ?? null) as PendingEditRow | null;
+}
+
 export type ConsumeResult =
   | { ok: true; row: PendingEditRow }
   | { ok: false; message: string };

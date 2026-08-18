@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PENDING_EDIT_TTL_MINUTES,
   consumePendingEdit,
+  peekPendingEdit,
   stagePendingEdit
 } from "@/lib/ai-flows/pending-edits";
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
@@ -203,5 +204,29 @@ describe("consumePendingEdit", () => {
      
     const res = await consumePendingEdit(BIZ, "tok-1", { client: db as any, now: () => NOW });
     expect(res).toMatchObject({ ok: false });
+  });
+});
+
+describe("peekPendingEdit", () => {
+  it("reads without claiming, so a refusal does not burn a single-use token", async () => {
+    const { db, calls } = makeDb([{ data: row() }]);
+     
+    const found = await peekPendingEdit(BIZ, "tok-1", { client: db as any });
+    expect(found?.token).toBe("tok-1");
+    expect(calls[0].update).toBeUndefined();
+  });
+
+  it("returns null for an unknown token", async () => {
+    const { db } = makeDb([{ data: null }]);
+     
+    expect(await peekPendingEdit(BIZ, "tok-1", { client: db as any })).toBeNull();
+  });
+
+  it("throws on a read error", async () => {
+    const { db } = makeDb([{ error: { message: "boom" } }]);
+    await expect(
+       
+      peekPendingEdit(BIZ, "tok-1", { client: db as any })
+    ).rejects.toThrow("peekPendingEdit: boom");
   });
 });

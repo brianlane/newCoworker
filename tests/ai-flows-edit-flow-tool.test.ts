@@ -94,6 +94,7 @@ function happyDeps(overrides: Partial<EditFlowToolDeps> = {}): EditFlowToolDeps 
     highestLiveStep: vi.fn(async () => null),
     stageEdit: vi.fn(async () => pendingRow()),
     consumeEdit: vi.fn(async () => ({ ok: true as const, row: pendingRow() })),
+    peekEdit: vi.fn(async () => pendingRow()),
     ...overrides
   };
 }
@@ -269,7 +270,10 @@ describe("editAiFlowTool: blast radius", () => {
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) {
       expect(res.message).toContain(`/dashboard/aiflows?edit=${FLOW_ID}`);
-      expect(res.message).toContain("Nothing was changed");
+      // Nothing was staged, so the message must NOT imply a pending change
+      // is sitting in the dashboard waiting to be approved.
+      expect(res.message).toContain("nothing was saved anywhere");
+      expect(res.message).not.toContain("ready to review");
     }
     expect(deps.stageEdit).not.toHaveBeenCalled();
   });
@@ -346,6 +350,7 @@ describe("editAiFlowTool: applying (second call)", () => {
 
   it("relays a consume refusal (unknown, replayed or expired token) verbatim", async () => {
     const deps = happyDeps({
+      peekEdit: vi.fn(async () => null),
       consumeEdit: vi.fn(async () => ({
         ok: false as const,
         message: "That change was already applied once. It has NOT been applied a second time."
@@ -359,44 +364,39 @@ describe("editAiFlowTool: applying (second call)", () => {
 
   it("refuses a token staged against a DIFFERENT automation", async () => {
     const deps = happyDeps({
-      consumeEdit: vi.fn(async () => ({
-        ok: true as const,
-        row: pendingRow({ flow_id: "44444444-4444-4444-8444-444444444444" })
-      }))
+      peekEdit: vi.fn(async () => pendingRow({ flow_id: "44444444-4444-4444-8444-444444444444" }))
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.message).toContain("different automation");
     expect(deps.persistUpdate).not.toHaveBeenCalled();
+    // The refusal wrote nothing, so it must not spend the single-use token.
+    expect(deps.consumeEdit).not.toHaveBeenCalled();
   });
 
   it("refuses when the flow moved between staging and confirming", async () => {
     // Otherwise the owner's yes applies to a diff that no longer describes
     // what is live, silently overwriting whatever happened in between.
     const deps = happyDeps({
-      consumeEdit: vi.fn(async () => ({
-        ok: true as const,
-        row: pendingRow({ base_updated_at: "2026-07-01T00:00:00Z" })
-      })),
+      peekEdit: vi.fn(async () => pendingRow({ base_updated_at: "2026-07-01T00:00:00Z" })),
       listFlows: vi.fn(async () => [flowRow({ updated_at: "2026-07-02T00:00:00Z" })])
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.message).toContain("changed after that summary");
     expect(deps.persistUpdate).not.toHaveBeenCalled();
+    expect(deps.consumeEdit).not.toHaveBeenCalled();
   });
 
   it("refuses a staged edit that still carries open questions", async () => {
     const deps = happyDeps({
-      consumeEdit: vi.fn(async () => ({
-        ok: true as const,
-        row: pendingRow({ ambiguities: ["which teammate should it text?"] })
-      }))
+      peekEdit: vi.fn(async () => pendingRow({ ambiguities: ["which teammate should it text?"] }))
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.message).toContain("which teammate should it text?");
     expect(deps.persistUpdate).not.toHaveBeenCalled();
+    expect(deps.consumeEdit).not.toHaveBeenCalled();
   });
 
   it("a persist failure degrades to an honest 'not changed' (Error and non-Error throws)", async () => {
@@ -407,7 +407,12 @@ describe("editAiFlowTool: applying (second call)", () => {
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: false });
-    if (!res.ok) expect(res.message).toContain("NOT changed");
+    if (!res.ok) {
+      expect(res.message).toContain("NOT changed");
+      // Honest about the spent token rather than inviting a retry that would
+      // come back "already applied".
+      expect(res.message).toContain("used up");
+    }
     expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
       "edit_aiflow: persist failed",
       expect.objectContaining({ error: "db down" })

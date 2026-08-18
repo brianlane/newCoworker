@@ -37,7 +37,8 @@ vi.mock("@/lib/ai-flows/pending-edits", () => ({
   consumePendingEdit: vi.fn(async (_biz: string, token: string) => {
     const row = stagedTokens.rows.get(token);
     return row ? { ok: true as const, row } : { ok: false as const, message: "not staged any more" };
-  })
+  }),
+  peekPendingEdit: vi.fn(async (_biz: string, token: string) => stagedTokens.rows.get(token) ?? null)
 }));
 vi.mock("@/lib/ai-flows/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai-flows/db")>();

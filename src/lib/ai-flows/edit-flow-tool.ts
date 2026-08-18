@@ -29,7 +29,11 @@ import { highestActiveRunStep, listAiFlows, updateAiFlow } from "@/lib/ai-flows/
 import { editAiFlowDefinition } from "@/lib/ai-flows/compile-service";
 import { resolveAiFlowByRef } from "@/lib/ai-flows/manual-run-tool";
 import { classifyEditRisk, diffFlowDefinitions } from "@/lib/ai-flows/edit-diff";
-import { consumePendingEdit, stagePendingEdit } from "@/lib/ai-flows/pending-edits";
+import {
+  consumePendingEdit,
+  peekPendingEdit,
+  stagePendingEdit
+} from "@/lib/ai-flows/pending-edits";
 import { logger } from "@/lib/logger";
 
 export const editAiflowToolArgsSchema = z.object({
@@ -56,6 +60,7 @@ export type EditFlowToolDeps = {
   highestLiveStep?: typeof highestActiveRunStep;
   stageEdit?: typeof stagePendingEdit;
   consumeEdit?: typeof consumePendingEdit;
+  peekEdit?: typeof peekPendingEdit;
   /** Defaults to "rich"; the SMS and email surfaces pass "text". */
   surfaceKind?: EditSurfaceKind;
   editSource?: string;
@@ -103,6 +108,7 @@ export async function editAiFlowTool(
   const highestLiveStep = deps.highestLiveStep ?? highestActiveRunStep;
   const stageEdit = deps.stageEdit ?? stagePendingEdit;
   const consumeEdit = deps.consumeEdit ?? consumePendingEdit;
+  const peekEdit = deps.peekEdit ?? peekPendingEdit;
   const surfaceKind = deps.surfaceKind ?? "rich";
   /* c8 ignore stop */
 
@@ -114,6 +120,7 @@ export async function editAiFlowTool(
   if (args.confirmationToken !== undefined) {
     return await applyStagedEdit(businessId, flow, args.confirmationToken, {
       consumeEdit,
+      peekEdit,
       persistUpdate,
       ...(deps.editSource !== undefined ? { editSource: deps.editSource } : {}),
       ...(deps.editActor !== undefined ? { editActor: deps.editActor } : {})
@@ -152,7 +159,7 @@ export async function editAiFlowTool(
     return {
       ok: false,
       message:
-        `This change would alter what the automation DOES (${describeRisk(risk, liveStep)}), not just its wording, and that is not something to approve from a text message. Nothing was changed. Tell the owner the exact change is ready to review at ${dashboardPointer(flow.id)} and that you can apply it from there or from the dashboard chat.`
+        `This change would alter what the automation DOES (${describeRisk(risk, liveStep)}), not just its wording, and that is not something to approve from a text message. NOTHING was changed and nothing was saved anywhere, so there is no pending change waiting. Tell the owner plainly that this one needs to be made where they can see the whole automation: ${dashboardPointer(flow.id)}, or by asking you again from the dashboard chat.`
     };
   }
 
@@ -213,39 +220,46 @@ async function applyStagedEdit(
   token: string,
   deps: {
     consumeEdit: typeof consumePendingEdit;
+    peekEdit: typeof peekPendingEdit;
     persistUpdate: typeof updateAiFlow;
     editSource?: string;
     editActor?: string | null;
   }
 ): Promise<EditAiFlowToolResult> {
+  // Check BEFORE claiming. The token is single use, so validating after the
+  // claim would burn it on a refusal that wrote nothing, and the owner would
+  // be told to try again by a path that can no longer succeed.
+  const peeked = await deps.peekEdit(businessId, token);
+  if (peeked !== null) {
+    if (peeked.flow_id !== flow.id) {
+      return {
+        ok: false,
+        message:
+          "That confirmation belongs to a different automation, so nothing was changed. Re-describe the change for the automation you mean."
+      };
+    }
+    if (peeked.ambiguities.length > 0) {
+      return {
+        ok: false,
+        message: `That change still has unanswered questions (${peeked.ambiguities.join("; ")}), so it was NOT applied. Ask the owner those questions, then describe the change again.`
+      };
+    }
+    // The flow moved between staging and confirming: the owner would be
+    // approving a diff that no longer describes what is live.
+    if (peeked.base_updated_at !== flow.updated_at) {
+      return {
+        ok: false,
+        message:
+          "The automation changed after that summary was written, so applying it now would overwrite work that happened in between. Nothing was changed. Describe the edit again to get a fresh summary."
+      };
+    }
+  }
+
+  // Claim last, immediately before the write. An unknown, replayed or
+  // expired token is diagnosed here.
   const claimed = await deps.consumeEdit(businessId, token);
   if (!claimed.ok) return { ok: false, message: claimed.message };
   const pending = claimed.row;
-
-  if (pending.flow_id !== flow.id) {
-    return {
-      ok: false,
-      message:
-        "That confirmation belongs to a different automation, so nothing was changed. Re-describe the change for the automation you mean."
-    };
-  }
-
-  if (pending.ambiguities.length > 0) {
-    return {
-      ok: false,
-      message: `That change still has unanswered questions (${pending.ambiguities.join("; ")}), so it was NOT applied. Ask the owner those questions, then describe the change again.`
-    };
-  }
-
-  // The flow moved between staging and confirming: the owner would be
-  // approving a diff that no longer describes what is live.
-  if (pending.base_updated_at !== flow.updated_at) {
-    return {
-      ok: false,
-      message:
-        "The automation changed after that summary was written, so applying it now would overwrite work that happened in between. Nothing was changed. Describe the edit again to get a fresh summary."
-    };
-  }
 
   let updated;
   try {
@@ -263,10 +277,14 @@ async function applyStagedEdit(
       flowId: flow.id,
       error: err instanceof Error ? err.message : String(err)
     });
+    // The confirmation is spent even though nothing was written. Say so
+    // rather than inviting a retry that would come back "already applied":
+    // releasing the claim instead would race a concurrent confirm that has
+    // already been told the change landed.
     return {
       ok: false,
       message:
-        "The confirmed automation could not be saved, so the flow was NOT changed. Tell the owner to try again."
+        "The confirmed automation could not be saved, so the flow was NOT changed, and that confirmation is now used up. Tell the owner it did not go through and describe the change again to get a fresh summary to approve."
     };
   }
 
