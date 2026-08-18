@@ -95,6 +95,7 @@ function happyDeps(overrides: Partial<EditFlowToolDeps> = {}): EditFlowToolDeps 
     stageEdit: vi.fn(async () => pendingRow()),
     consumeEdit: vi.fn(async () => ({ ok: true as const, row: pendingRow() })),
     peekEdit: vi.fn(async () => pendingRow()),
+    announce: vi.fn(async () => {}),
     ...overrides
   };
 }
@@ -489,6 +490,32 @@ describe("editAiFlowTool: applying (second call)", () => {
       })
     });
     expect(await editAiFlowTool(BIZ, CONFIRM, deps2)).toMatchObject({ ok: false });
+  });
+
+  it("announces the applied change out of band, with the diff the owner approved", async () => {
+    // A text thread scrolls. The owner should still know tomorrow.
+    const deps = happyDeps({ editSource: "ai_edit_sms", editActor: "+15555550100" });
+    await editAiFlowTool(BIZ, CONFIRM, deps);
+    expect(deps.announce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        flowId: FLOW_ID,
+        action: "edited",
+        source: "ai_edit_sms",
+        actor: "+15555550100",
+        summary: pendingRow().summary
+      })
+    );
+  });
+
+  it("does not announce anything when the write failed", async () => {
+    const deps = happyDeps({
+      persistUpdate: vi.fn(async () => {
+        throw new Error("db down");
+      })
+    });
+    await editAiFlowTool(BIZ, CONFIRM, deps);
+    expect(deps.announce).not.toHaveBeenCalled();
   });
 
   it("carries provenance onto the applied write", async () => {

@@ -34,6 +34,7 @@ import {
   peekPendingEdit,
   stagePendingEdit
 } from "@/lib/ai-flows/pending-edits";
+import { announceFlowChange } from "@/lib/ai-flows/change-notice";
 import { logger } from "@/lib/logger";
 
 export const editAiflowToolArgsSchema = z.object({
@@ -61,6 +62,7 @@ export type EditFlowToolDeps = {
   stageEdit?: typeof stagePendingEdit;
   consumeEdit?: typeof consumePendingEdit;
   peekEdit?: typeof peekPendingEdit;
+  announce?: typeof announceFlowChange;
   /** Defaults to "rich"; the SMS and email surfaces pass "text". */
   surfaceKind?: EditSurfaceKind;
   editSource?: string;
@@ -124,6 +126,7 @@ export async function editAiFlowTool(
   const stageEdit = deps.stageEdit ?? stagePendingEdit;
   const consumeEdit = deps.consumeEdit ?? consumePendingEdit;
   const peekEdit = deps.peekEdit ?? peekPendingEdit;
+  const announce = deps.announce ?? announceFlowChange;
   const surfaceKind = deps.surfaceKind ?? "rich";
   /* c8 ignore stop */
 
@@ -137,6 +140,7 @@ export async function editAiFlowTool(
       consumeEdit,
       peekEdit,
       persistUpdate,
+      announce,
       ...(deps.editSource !== undefined ? { editSource: deps.editSource } : {}),
       ...(deps.editActor !== undefined ? { editActor: deps.editActor } : {})
     });
@@ -255,6 +259,7 @@ async function applyStagedEdit(
     consumeEdit: typeof consumePendingEdit;
     peekEdit: typeof peekPendingEdit;
     persistUpdate: typeof updateAiFlow;
+    announce: typeof announceFlowChange;
     editSource?: string;
     editActor?: string | null;
   }
@@ -330,6 +335,19 @@ async function applyStagedEdit(
         "The confirmed automation could not be saved, so the flow was NOT changed, and that confirmation is now used up. Tell the owner it did not go through and describe the change again to get a fresh summary to approve."
     };
   }
+
+  // Out of band, after the write: the owner should still know tomorrow, when
+  // the conversation this was approved in has scrolled away. Never awaited
+  // for its result beyond completion, and never able to fail the change.
+  await deps.announce({
+    businessId,
+    flowId: updated.id,
+    flowName: updated.name,
+    action: "edited",
+    source: deps.editSource,
+    actor: deps.editActor ?? null,
+    summary: pending.summary
+  });
 
   return {
     ok: true,
