@@ -318,6 +318,15 @@ describe("splitFlowEditEnvelope", () => {
     expect(out.questions).toEqual(["ok"]);
   });
 
+  it("reads questions off a BARE definition too, and strips the key", () => {
+    // Otherwise Layer 4 fails open: the model told us it guessed, and the
+    // change gets staged anyway.
+    const out = splitFlowEditEnvelope({ ...DEF, questions: ["Which teammate?"] });
+    expect(out.questions).toEqual(["Which teammate?"]);
+    expect(out.definition).toEqual(DEF);
+    expect(out.definition).not.toHaveProperty("questions");
+  });
+
   it("degrades to no questions when the model returns a BARE definition", () => {
     // The self-repair retry's prompt is about fixing validation issues, so it
     // answers with a bare definition. That must parse, not fail.
@@ -345,6 +354,10 @@ describe("buildFlowEditUserText: the questions contract", () => {
     });
     expect(text).toContain('"definition"');
     expect(text).toContain('"questions"');
+    // The head of the prompt must not also ask for a bare definition: that
+    // contradiction is what makes the bare shape likely in the first place.
+    expect(text).toContain("Do not return the definition on its own");
+    expect(text).not.toContain("return the FULL updated JSON");
     expect(text).toContain("had to GUESS about");
     // A question must never replace doing the work: the definition still comes.
     expect(text).toContain("still");
