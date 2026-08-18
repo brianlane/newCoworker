@@ -19,8 +19,19 @@ describe("phi_access_log is append-only and never swept", () => {
       .filter((f) => readFileSync(join(MIGRATIONS, f), "utf8").includes("phi_access_log"));
   }
 
+  /** Migrations that CREATE the table, as opposed to merely mentioning it. */
+  function migrationsCreatingTable(): string[] {
+    return migrationsTouchingTable().filter((f) =>
+      /create table[^;]*phi_access_log/is.test(readFileSync(join(MIGRATIONS, f), "utf8"))
+    );
+  }
+
   it("is created by exactly one migration", () => {
-    expect(migrationsTouchingTable().length).toBeGreaterThan(0);
+    // Exactly one CREATE, so the table's definition has a single home and a
+    // second, competing definition is caught. Later migrations may still touch
+    // it (an added index or column is legitimate); what must not happen is the
+    // schema being defined in two places.
+    expect(migrationsCreatingTable()).toHaveLength(1);
   });
 
   /** SQL with `-- line comments` stripped, so prose about UPDATE is not read as a grant. */
