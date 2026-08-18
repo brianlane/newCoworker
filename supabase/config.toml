@@ -53,6 +53,9 @@ verify_jwt = false
 [functions.voice-bridge-health-alerts]
 verify_jwt = false
 
+[functions.call-integrity-sweep]
+verify_jwt = false
+
 [functions.subscription-grace-sweep]
 verify_jwt = false
 

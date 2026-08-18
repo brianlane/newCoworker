@@ -16,18 +16,11 @@
  * real calls. It cannot prevent a recurrence, but it will name one within a
  * day instead of us learning it from a customer months later.
  *
- * TWO SIGNATURES, both taken from the incident (call 28f9c228).
- *
- * 1. ROLE LEAK. One assistant turn, transcribed from the audio it actually
- *    played down the line, read: "...that's 975 568. Is that correct?user /
- *    Correct. I want to sell my house ASAP.Got it, ASAP. And what's the
- *    property address...". The literal token "user" inside its own speech is
- *    the tell, and it is a shape no legitimate reply produces.
- *
- * 2. TALKING TO A RECORDING. The caller side of that call was a keypad menu
- *    and then a voicemail system ("Replay your message. Press one."). The AI
- *    ran its full intake script at it. Flagged when the caller turns look
- *    machine-generated and the assistant still took several turns.
+ * The detection rules, and the reasoning behind each, live in
+ * `supabase/functions/_shared/call_integrity.ts`. They are shared with the
+ * daily `call-integrity-sweep` Edge cron so the scheduled guard and this
+ * on-demand one cannot drift apart. This script is the wider-window,
+ * tenant-filterable version, and it writes nothing.
  *
  *   tsx debug/audit-call-integrity.ts                      # last 14 days, fleet
  *   tsx debug/audit-call-integrity.ts --days 90
@@ -40,6 +33,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
 import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
+import {
+  detectCallIntegrity,
+  type CallIntegrityKind,
+  type IntegrityTurn
+} from "../supabase/functions/_shared/call_integrity.ts";
 
 loadEnv();
 
@@ -61,35 +59,7 @@ function arg(name: string): string | null {
 const days = Number.parseInt(arg("days") ?? "14", 10) || 14;
 const businessFilter = arg("business");
 
-/**
- * A role label the model wrote INSIDE its own speech. Anchored to a boundary
- * plus a colon or newline so the ordinary word ("the user manual") does not
- * match; the incident's shape was "Is that correct?user\nCorrect. I want...".
- */
-const ROLE_TOKEN_LEAK = /(^|[\s.!?"])(user|assistant|model)\s*[:\n]/i;
-
-/** Phrases only a recording says. Matched against the CALLER side. */
-const MACHINE_PHRASES = [
-  "press one",
-  "press 1",
-  "press two",
-  "press pound",
-  "press star",
-  "leave a message",
-  "at the beep",
-  "after the tone",
-  "record your message",
-  "re-record",
-  "voicemail",
-  "is not available",
-  "please hold",
-  "your call is important"
-];
-
-/** Assistant turns before "it held a conversation with the machine". */
-const CONVERSATION_TURNS = 3;
-
-type Turn = { role: string | null; content: string | null; turn_index: number | null };
+type Turn = IntegrityTurn & { turn_index: number | null };
 type CallRow = {
   id: string;
   business_id: string;
@@ -102,7 +72,7 @@ type Finding = {
   business: string;
   caller: string | null;
   startedAt: string | null;
-  kind: "role_leak" | "talked_to_recording";
+  kind: CallIntegrityKind;
   detail: string;
 };
 
@@ -119,11 +89,6 @@ async function turnsFor(db: SupabaseClient, transcriptId: string): Promise<Turn[
     { label: `turns for ${transcriptId}` }
   );
   return rows;
-}
-
-function looksMachine(text: string): boolean {
-  const t = text.toLowerCase();
-  return MACHINE_PHRASES.some((p) => t.includes(p));
 }
 
 async function main(): Promise<void> {
@@ -143,6 +108,12 @@ async function main(): Promise<void> {
       let q = db
         .from("voice_call_transcripts")
         .select("id, business_id, caller_e164, started_at")
+        // Terminal calls only, matching the sweep: a verdict taken mid-call
+        // is unreliable, because an in-progress call can be sitting on an
+        // IVR with a greeting or two behind it and complete normally.
+        // "errored" stays in scope: it is terminal, keeps its turns, and a
+        // call that misbehaved and then died is worth seeing.
+        .neq("status", "in_progress")
         .gte("started_at", since)
         // `id` is the tiebreaker, and it is required, not tidiness. Range
         // paging re-runs the query per page and Postgres does not guarantee
@@ -178,34 +149,8 @@ async function main(): Promise<void> {
       startedAt: call.started_at
     };
 
-    for (const t of turns) {
-      if (t.role !== "assistant" || !t.content) continue;
-      if (ROLE_TOKEN_LEAK.test(t.content)) {
-        findings.push({
-          ...base,
-          kind: "role_leak",
-          detail: t.content.replace(/\s+/g, " ").slice(0, 240)
-        });
-        break;
-      }
-    }
-
-    const callerTurns = turns.filter((t) => t.role !== "assistant" && t.content);
-    const assistantTurns = turns.filter((t) => t.role === "assistant" && t.content);
-    const machineTurns = callerTurns.filter((t) => looksMachine(t.content!));
-    // Every caller turn reads as a recording AND the AI kept going anyway.
-    if (
-      callerTurns.length > 0 &&
-      machineTurns.length === callerTurns.length &&
-      assistantTurns.length >= CONVERSATION_TURNS
-    ) {
-      findings.push({
-        ...base,
-        kind: "talked_to_recording",
-        detail:
-          `${assistantTurns.length} assistant turns against ${callerTurns.length} ` +
-          `machine-sounding caller turns, e.g. "${machineTurns[0]!.content!.replace(/\s+/g, " ").slice(0, 120)}"`
-      });
+    for (const finding of detectCallIntegrity(turns)) {
+      findings.push({ ...base, kind: finding.kind, detail: finding.detail });
     }
   }
 
