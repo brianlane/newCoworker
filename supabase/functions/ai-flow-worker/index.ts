@@ -5519,11 +5519,14 @@ async function replyToCommentStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "reply_to_comment" }>
 ): Promise<StepOutcome> {
+  // Every owner-facing line below names the network. A Facebook comment flow
+  // that says "Instagram is not connected" sends the owner to the wrong page.
+  const network = action.platform === "facebook" ? "Facebook" : "Instagram";
   const label = action.replyMode === "public" ? "public reply" : "private reply";
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      `skipped the Instagram ${label}, this run was not started by a comment`
+      `skipped the ${network} ${label}, this run was not started by a comment`
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -5536,7 +5539,7 @@ async function replyToCommentStep(
 
   let res: Response;
   try {
-    res = await fetch(`${appUrl}/api/internal/instagram-comment-reply`, {
+    res = await fetch(`${appUrl}/api/internal/comment-reply`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -5549,7 +5552,8 @@ async function replyToCommentStep(
         businessId: run.business_id,
         commentId: action.commentId,
         text: action.body,
-        mode: action.replyMode
+        mode: action.replyMode,
+        platform: action.platform
       })
     });
   } catch (err) {
@@ -5571,7 +5575,7 @@ async function replyToCommentStep(
     if (reason === "not_connected") {
       appendActionTaken(
         scope,
-        `skipped the Instagram ${label}, Instagram is not connected under Integrations`
+        `skipped the ${network} ${label}, ${network} is not connected under Integrations`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
@@ -5580,14 +5584,16 @@ async function replyToCommentStep(
       // owner reconnects, so retrying only burns the retry budget.
       appendActionTaken(
         scope,
-        `skipped the Instagram ${label}, the Instagram connection is inactive; reconnect it under Integrations`
+        `skipped the ${network} ${label}, the ${network} connection is inactive; reconnect it under Integrations`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
     if (reason === "no_page_id") {
       appendActionTaken(
         scope,
-        `skipped the Instagram ${label}, no Facebook Page is linked to the Instagram account`
+        action.platform === "facebook"
+          ? `skipped the ${network} ${label}, the connection has no Facebook Page`
+          : `skipped the ${network} ${label}, no Facebook Page is linked to the Instagram account`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
@@ -5597,7 +5603,7 @@ async function replyToCommentStep(
       // only produce the same refusal.
       appendActionTaken(
         scope,
-        `couldn't post the Instagram ${label}: ${result?.detail ?? "Instagram refused it"}`
+        `couldn't post the ${network} ${label}: ${result?.detail ?? `${network} refused it`}`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
@@ -5610,8 +5616,8 @@ async function replyToCommentStep(
   appendActionTaken(
     scope,
     action.replyMode === "public"
-      ? "replied publicly on the Instagram comment"
-      : "sent the commenter a private Instagram message"
+      ? `replied publicly on the ${network} comment`
+      : `sent the commenter a private ${network} message`
   );
   return { kind: "ok", result: { mode: action.replyMode, id: result.id ?? null } };
 }

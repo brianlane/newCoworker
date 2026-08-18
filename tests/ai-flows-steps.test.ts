@@ -2751,6 +2751,7 @@ describe("planStep: reply_to_comment", () => {
       action: {
         kind: "reply_to_comment",
         replyMode: "public",
+        platform: "instagram",
         commentId: "c-1",
         body: "Thanks buyer!"
       }
@@ -2773,6 +2774,19 @@ describe("planStep: reply_to_comment", () => {
     expect((plan as { action: { commentId: string } }).action.commentId).toBe("c-legacy");
   });
 
+  it("keeps the Facebook surface even when it has nothing to answer", () => {
+    // The skip note names the network, so the owner reads "the Facebook
+    // public reply" rather than a generic one.
+    const plan = planStep(base as FlowStep, {
+      vars: {},
+      trigger: { channel: "webhook", from: "facebook_comment" }
+    });
+    expect((plan as { action: { platform: string; skipReason?: string } }).action).toMatchObject({
+      platform: "facebook",
+      skipReason: "no_comment_id"
+    });
+  });
+
   it("answers a different comment when one is named explicitly", () => {
     const plan = planStep(
       { ...base, commentId: "{{vars.found_comment}}" } as FlowStep,
@@ -2789,6 +2803,7 @@ describe("planStep: reply_to_comment", () => {
       action: {
         kind: "reply_to_comment",
         replyMode: "public",
+        platform: "instagram",
         commentId: "",
         // collapseEmpty tidies the gap the missing var left.
         body: "Thanks!",
@@ -2813,5 +2828,29 @@ describe("planStep: reply_to_comment", () => {
     expect(
       planStep({ ...base, body: "{{vars.nothing}}" } as FlowStep, commentScope)
     ).toEqual({ ok: false, error: "reply_to_comment: body is empty after templating" });
+  });
+});
+
+describe("reply_to_comment: owner-facing copy names the right network", () => {
+  it("has no hardcoded network name left in the worker's step messages", async () => {
+    // Bugbot caught three appendActionTaken lines still saying "Instagram"
+    // inside a function that had already computed `network`. A Facebook
+    // comment flow reporting "Instagram is not connected" sends the owner to
+    // the wrong integrations page. This pins the whole function rather than
+    // the three lines, so the next one added cannot regress.
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("supabase/functions/ai-flow-worker/index.ts", "utf8");
+    const start = src.indexOf("async function replyToCommentStep(");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\nasync function ", start + 10));
+
+    for (const line of body.split("\n")) {
+      // appendActionTaken and fail messages are what the owner reads.
+      if (!/appendActionTaken|error:/.test(line) && !/^\s*`/.test(line)) continue;
+      // The one legitimate mention: the Instagram-only case where a Page must
+      // be LINKED to an IG account, which has no Facebook equivalent.
+      if (line.includes("no Facebook Page is linked to the Instagram account")) continue;
+      expect(line).not.toMatch(/\bInstagram\b/);
+    }
   });
 });

@@ -85,6 +85,7 @@ export function simulateTestAction(
       }
       return {
         simulated: "reply_to_comment",
+        platform: action.platform,
         mode: action.replyMode,
         commentId: action.commentId,
         body: action.body

@@ -2533,14 +2533,34 @@ Meta retries neither and reads anything else as a broken integration; Meta's
 own docs say a malformed answer can get the callback removed or the app
 disabled. A forged signature severs nothing.
 
-### Instagram comments: trigger, and reply back
+### Comments on your posts: trigger, and reply back (Instagram AND Facebook)
 
-A comment on a connected tenant's Instagram post arrives on the same
-`/api/webhooks/meta` callback (`changes[].field === "comments"`, our own
-account's comments suppressed) and is dispatched as a webhook flow event
-under `source: "instagram_comment"` with the comment id as the idempotency
-key (`src/lib/meta/webhook.ts`). Requires `instagram_manage_comments` at
-Advanced Access, or Meta delivers nothing.
+Both surfaces land on the same `/api/webhooks/meta` callback, but they arrive
+in COMPLETELY different shapes:
+
+| | Instagram | Facebook Page |
+| --- | --- | --- |
+| object / field | `instagram` / `comments` | `page` / **`feed`** |
+| comment id | `value.id` | `value.comment_id` |
+| text | `value.text` | `value.message` |
+| commenter | `value.from.username` | `value.from.name` |
+| the post | `value.media.id` | `value.post_id` |
+| flow source | `instagram_comment` | `facebook_comment` |
+| resolved by | IG professional account id | Page id |
+
+**The `feed` field is the whole Page firehose**, carrying posts, likes,
+reactions and shares as well, so the parser filters to `item === "comment"`
+AND `verb === "add"`. Without the item check a like fires a flow; without the
+verb check an edit fires it a second time and a removal fires it on a comment
+that no longer exists. On both surfaces the account's OWN comments are
+suppressed, or our public reply arrives back as a new comment and answers
+itself.
+
+Instagram needs `instagram_manage_comments` at Advanced Access; Facebook
+needs `feed` in `META_PAGE_SUBSCRIBED_FIELDS`. **A Page's subscription is
+fixed when it connects**, so adding a field does nothing for Pages already
+connected: run `debug/meta-resubscribe-pages.ts --apply` (dry run by
+default), which is idempotent and is the tool for every future field too.
 
 The payload's top-level scalars are published as NAMED trigger keys as well
 as inside `{{trigger.windowText}}`, so a step can say
@@ -2552,10 +2572,19 @@ This applies to every webhook source, bridges included.
 
 The **`reply_to_comment` step** answers it, in one of two modes:
 
-| `replyMode` | Endpoint | Limits |
-| --- | --- | --- |
-| `public` | `POST /{comment_id}/replies` | none beyond Instagram's 2,200-char comment ceiling |
-| `private` | `POST /{page_id}/messages`, `recipient: {comment_id}` | **ONE per comment, ever**, and only within 7 days of it (during the broadcast, for a Live) |
+| `replyMode` | Instagram | Facebook | Limits |
+| --- | --- | --- | --- |
+| `public` | `POST /{comment_id}/replies` | `POST /{comment_id}/comments` | the 2,200-char comment ceiling |
+| `private` | `POST /{page_id}/messages`, `recipient: {comment_id}` | identical | **ONE per comment, ever**, within 7 days (during the broadcast, for a Live) |
+
+The private reply is the SAME call on both: the Messenger Send API on the
+Page node, addressed by `recipient.comment_id`. Only the public edge differs.
+
+**Which network is derived, never authored.** The step has no `platform`
+field; the planner reads `{{trigger.from}}`, so a run started by
+`facebook_comment` answers on Facebook and anything else on Instagram. An
+owner cannot pick the wrong one, and a flow written for Instagram cannot
+accidentally post on a Facebook Page.
 
 The private node is the PAGE id because we are a Facebook Login app; the
 `/{ig_user_id}/messages` form in Meta's docs is the Instagram Login variant

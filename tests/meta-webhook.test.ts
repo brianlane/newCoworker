@@ -322,7 +322,8 @@ describe("parseMetaWebhookBody", () => {
     });
     expect(parsed?.comments).toEqual([
       {
-        instagramAccountId: "ig-1",
+        platform: "instagram",
+        accountId: "ig-1",
         commentId: "42",
         mediaId: "m-1",
         text: "love this! price?",
@@ -337,7 +338,8 @@ describe("parseMetaWebhookBody", () => {
     });
     expect(sparse?.comments).toEqual([
       {
-        instagramAccountId: "ig-1",
+        platform: "instagram",
+        accountId: "ig-1",
         commentId: "c-4",
         mediaId: "",
         text: "",
@@ -749,7 +751,8 @@ describe("processMetaWebhookEvents", () => {
       ],
       comments: [
         {
-          instagramAccountId: "ig-1",
+          platform: "instagram",
+          accountId: "ig-1",
           commentId: "c-1",
           mediaId: "m-1",
           text: "price?",
@@ -757,7 +760,8 @@ describe("processMetaWebhookEvents", () => {
           fromUsername: "jane"
         },
         {
-          instagramAccountId: "ig-2",
+          platform: "instagram",
+          accountId: "ig-2",
           commentId: "c-2",
           mediaId: "",
           text: "hello",
@@ -788,7 +792,8 @@ describe("processMetaWebhookEvents", () => {
 
 describe("processMetaCommentEvent", () => {
   const EVENT = {
-    instagramAccountId: "ig-1",
+    platform: "instagram" as const,
+    accountId: "ig-1",
     commentId: "c-1",
     mediaId: "m-1",
     text: "how much for a cut?",
@@ -867,5 +872,174 @@ describe("processMetaCommentEvent", () => {
 
     processWebhookFlowEventMock.mockRejectedValue("string throw");
     expect(await processMetaCommentEvent(EVENT)).toBe(false);
+  });
+});
+
+describe("processMetaCommentEvent: Facebook", () => {
+  const FB_EVENT = {
+    platform: "facebook" as const,
+    accountId: "p1",
+    commentId: "fb-c-1",
+    mediaId: "fb-p-1",
+    text: "how much?",
+    fromId: "777",
+    fromUsername: "Jane Doe"
+  };
+  const CONN = { business_id: BIZ, page_id: "p1", instagram_account_id: "ig-1" };
+
+  it("resolves the tenant by PAGE id, not Instagram id", async () => {
+    getActiveMetaConnectionByPageIdMock.mockResolvedValue(CONN);
+    processWebhookFlowEventMock.mockResolvedValue({ enqueued: 1, flowsMatched: 1 });
+
+    expect(await processMetaCommentEvent(FB_EVENT)).toBe(true);
+    expect(getActiveMetaConnectionByPageIdMock).toHaveBeenCalledWith("p1");
+    expect(getActiveMetaConnectionByInstagramIdMock).not.toHaveBeenCalled();
+    expect(processWebhookFlowEventMock).toHaveBeenCalledWith(BIZ, {
+      source: "facebook_comment",
+      eventId: "fb-c-1",
+      data: {
+        comment_id: "fb-c-1",
+        comment_text: "how much?",
+        username: "Jane Doe",
+        from_id: "777",
+        media_id: "fb-p-1",
+        // page_id, not instagram_account_id: a Facebook comment has no IG
+        // account, and a flow templating the wrong one would render blank.
+        page_id: "p1"
+      }
+    });
+  });
+
+  it("acknowledges an unconnected Page without enqueueing", async () => {
+    getActiveMetaConnectionByPageIdMock.mockResolvedValue(null);
+    expect(await processMetaCommentEvent(FB_EVENT)).toBe(false);
+    expect(processWebhookFlowEventMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("Facebook Page comments (object page, field feed)", () => {
+  const PAGE = "1202310049632520";
+
+  function feed(value: Record<string, unknown>) {
+    return parseMetaWebhookBody({
+      object: "page",
+      entry: [{ id: PAGE, changes: [{ field: "feed", value }] }]
+    });
+  }
+
+  const COMMENT = {
+    item: "comment",
+    verb: "add",
+    comment_id: "fb-c-1",
+    post_id: "fb-p-1",
+    message: "how much for a cut?",
+    from: { id: "777", name: "Jane Doe" }
+  };
+
+  it("parses a new comment on a Page post", async () => {
+    expect((await feed(COMMENT))!.comments).toEqual([
+      {
+        platform: "facebook",
+        accountId: PAGE,
+        commentId: "fb-c-1",
+        mediaId: "fb-p-1",
+        text: "how much for a cut?",
+        fromId: "777",
+        fromUsername: "Jane Doe"
+      }
+    ]);
+  });
+
+  it("IGNORES everything on the feed that is not a NEW comment", async () => {
+    // The feed field is the whole Page firehose. Without the item check a
+    // like fires a flow; without the verb check an edit fires it a second
+    // time, and a removal fires it on a comment that no longer exists.
+    for (const value of [
+      { ...COMMENT, item: "like" },
+      { ...COMMENT, item: "post" },
+      { ...COMMENT, item: "reaction" },
+      { ...COMMENT, item: "share" },
+      { ...COMMENT, verb: "edited" },
+      { ...COMMENT, verb: "remove" },
+      { ...COMMENT, verb: "hide" },
+      { ...COMMENT, item: undefined },
+      { ...COMMENT, verb: undefined }
+    ]) {
+      expect((await feed(value))!.comments).toEqual([]);
+    }
+  });
+
+  it("suppresses the Page's OWN comments, so our reply cannot re-trigger", async () => {
+    // Our public reply arrives back as a feed comment from the Page itself.
+    // Without this, every reply starts another run, which answers itself.
+    expect((await feed({ ...COMMENT, from: { id: PAGE, name: "New Coworker" } }))!.comments).toEqual(
+      []
+    );
+  });
+
+  it("drops a feed change whose fields are the wrong TYPE", async () => {
+    // The outer schema already guarantees `value` is an object, so the inner
+    // parse only ever fails on a type mismatch inside it.
+    for (const value of [
+      { ...COMMENT, item: 123 },
+      { ...COMMENT, verb: { a: 1 } },
+      { ...COMMENT, message: 5 },
+      { ...COMMENT, from: "jane" }
+    ]) {
+      expect((await feed(value as unknown as Record<string, unknown>))!.comments).toEqual([]);
+    }
+  });
+
+  it("still emits a comment that carries no `from` block", async () => {
+    // Unusual but real, and the comment is still worth acting on. Matches the
+    // Instagram path, which also emits with an empty fromId rather than
+    // dropping. The echo guard compares against the Page id, and "" is not it.
+    expect(
+      (await feed({ item: "comment", verb: "add", comment_id: "c", message: "hi" }))!.comments
+    ).toEqual([
+      {
+        platform: "facebook",
+        accountId: PAGE,
+        commentId: "c",
+        mediaId: "",
+        text: "hi",
+        fromId: "",
+        fromUsername: ""
+      }
+    ]);
+  });
+
+  it("drops a comment with no id, and tolerates missing optional fields", async () => {
+    expect((await feed({ ...COMMENT, comment_id: undefined }))!.comments).toEqual([]);
+
+    const sparse = (await feed({ item: "comment", verb: "add", comment_id: "c", from: { id: "9" } }))!;
+    expect(sparse.comments).toEqual([
+      {
+        platform: "facebook",
+        accountId: PAGE,
+        commentId: "c",
+        mediaId: "",
+        text: "",
+        fromId: "9",
+        fromUsername: ""
+      }
+    ]);
+  });
+
+  it("still parses leadgen on the same object, which shares the changes array", async () => {
+    const events = (await parseMetaWebhookBody({
+      object: "page",
+      entry: [
+        {
+          id: PAGE,
+          changes: [
+            { field: "leadgen", value: { page_id: PAGE, leadgen_id: "lg-1" } },
+            { field: "feed", value: COMMENT }
+          ]
+        }
+      ]
+    }))!;
+    expect(events.leadgen).toEqual([{ pageId: PAGE, leadgenId: "lg-1" }]);
+    expect(events.comments).toHaveLength(1);
   });
 });

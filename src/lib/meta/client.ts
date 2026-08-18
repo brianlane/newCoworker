@@ -377,7 +377,13 @@ export async function listManagedPages(userToken: string): Promise<MetaManagedPa
 export const META_PAGE_SUBSCRIBED_FIELDS = [
   "leadgen",
   "messages",
-  "messaging_postbacks"
+  "messaging_postbacks",
+  // Comments on the Page's own posts. The `feed` field is the whole Page
+  // firehose (posts, likes, reactions, shares as well), so the parser filters
+  // to item "comment" + verb "add"; see src/lib/meta/webhook.ts. Pages
+  // connected before this shipped need re-subscribing:
+  // debug/meta-resubscribe-pages.ts.
+  "feed"
 ] as const;
 
 /** Subscribe our app to the Page's webhook fields (leadgen + messaging). */
@@ -621,6 +627,31 @@ export async function replyToInstagramComment(
       : message;
   const payload = await graphRequest(
     `/${commentId}/replies`,
+    { message: trimmed, access_token: pageToken },
+    { method: "POST" }
+  );
+  const id = (payload as { id?: unknown } | null)?.id;
+  return { commentId: typeof id === "string" ? id : null };
+}
+
+/**
+ * Reply publicly on a FACEBOOK Page comment: `POST /{comment_id}/comments`
+ * with the Page token. Note the edge differs from Instagram's, which is
+ * `/replies`, same idea with a different noun.
+ *
+ * Permission: `pages_manage_engagement`. Returns the new comment's id.
+ */
+export async function replyToFacebookComment(
+  commentId: string,
+  pageToken: string,
+  message: string
+): Promise<{ commentId: string | null }> {
+  const trimmed =
+    message.length > INSTAGRAM_COMMENT_MAX_LENGTH
+      ? `${message.slice(0, INSTAGRAM_COMMENT_MAX_LENGTH - 1)}…`
+      : message;
+  const payload = await graphRequest(
+    `/${commentId}/comments`,
     { message: trimmed, access_token: pageToken },
     { method: "POST" }
   );

@@ -386,11 +386,18 @@ export type StepAction =
       /**
        * Answer the triggering Instagram comment, publicly on the thread or
        * privately in the commenter's inbox. The worker posts it through the
-       * platform's internal instagram-comment-reply endpoint (the Graph
+       * platform's internal comment-reply endpoint (the Graph
        * client needs Node), same bridge shape as send_whatsapp.
        */
       kind: "reply_to_comment";
       replyMode: "public" | "private";
+      /**
+       * Which surface to answer on, derived from the trigger source rather
+       * than authored: a run started by facebook_comment answers on Facebook,
+       * anything else on Instagram. Keeping it off the step means an owner
+       * cannot pick the wrong one.
+       */
+      platform: "instagram" | "facebook";
       commentId: string;
       body: string;
       /** Nothing to answer (no comment id in scope) → skip, not fail. */
@@ -1193,6 +1200,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // Default to the comment that triggered the run. webhookTriggerScope
       // publishes it as both comment_id and event_id; prefer the named one
       // so a flow reads plainly, and fall back for older runs.
+      // Derived, never authored: the surface follows the trigger that
+      // started the run.
+      const replyPlatform =
+        String((scope.trigger as Record<string, unknown> | undefined)?.from ?? "") ===
+        "facebook_comment"
+          ? "facebook"
+          : "instagram";
       const commentTemplate = step.commentId ?? "{{trigger.comment_id}}";
       const commentId =
         renderTemplate(commentTemplate, scope).trim() ||
@@ -1205,6 +1219,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           action: {
             kind: "reply_to_comment",
             replyMode: step.replyMode,
+            platform: replyPlatform,
             commentId: "",
             body: replyBody,
             skipReason: "no_comment_id"
@@ -1216,6 +1231,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         action: {
           kind: "reply_to_comment",
           replyMode: step.replyMode,
+          platform: replyPlatform,
           commentId,
           body: replyBody
         }

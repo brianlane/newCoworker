@@ -139,15 +139,24 @@ export type MetaLeadgenEvent = {
   leadgenId: string;
 };
 
+export type CommentPlatform = "instagram" | "facebook";
+
 export type MetaCommentEvent = {
-  /** The IG professional account whose media was commented on. */
-  instagramAccountId: string;
-  /** IG comment id — the flow-event idempotency key. */
+  /**
+   * Which surface the comment is on. The two arrive in COMPLETELY different
+   * shapes: Instagram sends object "instagram" field "comments" with the
+   * comment under `value.id`, Facebook sends object "page" field "feed" with
+   * an `item`/`verb` pair and the comment under `value.comment_id`.
+   */
+  platform: CommentPlatform;
+  /** IG professional account id, or the Page id for Facebook. */
+  accountId: string;
+  /** Comment id: the flow-event idempotency key. */
   commentId: string;
-  /** The commented media, when the delivery carried it. */
+  /** The commented media (IG) or post (Facebook), when carried. */
   mediaId: string;
   text: string;
-  /** IG-scoped commenter id + public username (may be absent). */
+  /** Scoped commenter id + display name / username (may be absent). */
   fromId: string;
   fromUsername: string;
 };
@@ -169,6 +178,33 @@ const commentChangeValueSchema = z
       .optional(),
     media: z
       .object({ id: z.union([z.string(), z.number()]).optional() })
+      .passthrough()
+      .optional()
+  })
+  .passthrough();
+
+/**
+ * Facebook Page feed change payload (object "page", field "feed"). The feed
+ * field carries EVERYTHING that happens on the Page's posts: comments, the
+ * posts themselves, likes, reactions, shares. `item` says which, and `verb`
+ * says whether it was added, edited, removed, or hidden, so both must be
+ * checked or a flow fires on a like, or twice on an edit.
+ */
+const feedChangeValueSchema = z
+  .object({
+    item: z.string().optional(),
+    verb: z.string().optional(),
+    comment_id: z.union([z.string(), z.number()]).optional(),
+    post_id: z.union([z.string(), z.number()]).optional(),
+    parent_id: z.union([z.string(), z.number()]).optional(),
+    // Facebook says "message"; Instagram says "text".
+    message: z.string().optional(),
+    from: z
+      .object({
+        id: z.union([z.string(), z.number()]).optional(),
+        // Facebook says "name"; Instagram says "username".
+        name: z.string().optional()
+      })
       .passthrough()
       .optional()
   })
@@ -266,11 +302,35 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
 
     if (platform === "messenger") {
       for (const change of entry.changes ?? []) {
-        if (change.field !== "leadgen") continue;
-        const pageId = String(change.value.page_id ?? entry.id ?? "");
-        const leadgenId = String(change.value.leadgen_id ?? "");
-        if (!pageId || !leadgenId) continue;
-        events.leadgen.push({ pageId, leadgenId });
+        if (change.field === "leadgen") {
+          const pageId = String(change.value.page_id ?? entry.id ?? "");
+          const leadgenId = String(change.value.leadgen_id ?? "");
+          if (!pageId || !leadgenId) continue;
+          events.leadgen.push({ pageId, leadgenId });
+          continue;
+        }
+        if (change.field !== "feed") continue;
+        const feed = feedChangeValueSchema.safeParse(change.value);
+        if (!feed.success) continue;
+        // The feed field carries the whole Page: posts, likes, reactions,
+        // shares. Only a NEWLY ADDED comment starts a flow: without the
+        // verb check an edit would re-fire, and without the item check a
+        // like would fire at all.
+        if (feed.data.item !== "comment" || feed.data.verb !== "add") continue;
+        const commentId = String(feed.data.comment_id ?? "");
+        const fromId = String(feed.data.from?.id ?? "");
+        // The Page commenting or replying on its own post must never trigger
+        // flows, or our own reply starts another run (the IG echo rule).
+        if (!entryId || !commentId || fromId === entryId) continue;
+        events.comments.push({
+          platform: "facebook",
+          accountId: entryId,
+          commentId,
+          mediaId: String(feed.data.post_id ?? ""),
+          text: feed.data.message?.trim() ?? "",
+          fromId,
+          fromUsername: feed.data.from?.name?.trim() ?? ""
+        });
       }
     }
 
@@ -285,7 +345,8 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
         // trigger flows (the DM path's echo rule, applied to comments).
         if (!entryId || !commentId || fromId === entryId) continue;
         events.comments.push({
-          instagramAccountId: entryId,
+          platform: "instagram",
+          accountId: entryId,
           commentId,
           mediaId: String(value.data.media?.id ?? ""),
           text: value.data.text?.trim() ?? "",
@@ -395,8 +456,9 @@ export const MESSENGER_FLOW_SOURCES: Record<MessengerPlatform, string> = {
   whatsapp: "whatsapp"
 };
 
-/** Flow-trigger source label for IG comment events. */
+/** Flow-trigger source labels for comment events, per surface. */
 export const INSTAGRAM_COMMENT_FLOW_SOURCE = "instagram_comment";
+export const FACEBOOK_COMMENT_FLOW_SOURCE = "facebook_comment";
 
 /**
  * Resolve and enqueue one IG comment event as a webhook flow event. Never
@@ -405,32 +467,37 @@ export const INSTAGRAM_COMMENT_FLOW_SOURCE = "instagram_comment";
  * Returns true when the comment reached the flow engine.
  */
 export async function processMetaCommentEvent(event: MetaCommentEvent): Promise<boolean> {
-  const { instagramAccountId, commentId } = event;
+  const { platform, accountId, commentId } = event;
+  const isInstagram = platform === "instagram";
 
-  const limiter = rateLimit(`meta-webhook-comment:${instagramAccountId}`, META_WEBHOOK_RATE);
+  const limiter = rateLimit(`meta-webhook-comment:${accountId}`, META_WEBHOOK_RATE);
   if (!limiter.success) {
-    logger.warn("meta comment webhook rate limited", { instagramAccountId });
+    logger.warn("meta comment webhook rate limited", { platform, accountId });
     return false;
   }
 
-  const connection = await getActiveMetaConnectionByInstagramId(instagramAccountId).catch(
-    (err) => {
-      logger.warn("meta comment connection lookup failed", {
-        instagramAccountId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      return null;
-    }
-  );
+  // Instagram deliveries key on the IG professional account; Facebook feed
+  // deliveries key on the Page itself.
+  const connection = await (isInstagram
+    ? getActiveMetaConnectionByInstagramId(accountId)
+    : getActiveMetaConnectionByPageId(accountId)
+  ).catch((err) => {
+    logger.warn("meta comment connection lookup failed", {
+      platform,
+      accountId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  });
   if (!connection) {
     // Unknown/disabled account: acknowledge so Meta doesn't retry forever.
-    logger.warn("meta comment for unconnected account", { instagramAccountId });
+    logger.warn("meta comment for unconnected account", { platform, accountId });
     return false;
   }
 
   try {
     const result = await processWebhookFlowEvent(connection.business_id, {
-      source: INSTAGRAM_COMMENT_FLOW_SOURCE,
+      source: isInstagram ? INSTAGRAM_COMMENT_FLOW_SOURCE : FACEBOOK_COMMENT_FLOW_SOURCE,
       eventId: event.commentId,
       data: {
         comment_id: event.commentId,
@@ -438,12 +505,13 @@ export async function processMetaCommentEvent(event: MetaCommentEvent): Promise<
         ...(event.fromUsername ? { username: event.fromUsername } : {}),
         ...(event.fromId ? { from_id: event.fromId } : {}),
         ...(event.mediaId ? { media_id: event.mediaId } : {}),
-        instagram_account_id: instagramAccountId
+        ...(isInstagram ? { instagram_account_id: accountId } : { page_id: accountId })
       }
     });
     logger.info("meta comment processed", {
       businessId: connection.business_id,
-      instagramAccountId,
+      platform,
+      accountId,
       commentId,
       enqueued: result.enqueued,
       flowsMatched: result.flowsMatched
@@ -452,7 +520,8 @@ export async function processMetaCommentEvent(event: MetaCommentEvent): Promise<
   } catch (err) {
     logger.warn("meta comment processing failed", {
       businessId: connection.business_id,
-      instagramAccountId,
+      platform,
+      accountId,
       commentId,
       error: err instanceof Error ? err.message : String(err)
     });
