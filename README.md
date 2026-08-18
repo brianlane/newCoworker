@@ -2698,6 +2698,36 @@ Meta retries neither and reads anything else as a broken integration; Meta's
 own docs say a malformed answer can get the callback removed or the app
 disabled. A forged signature severs nothing.
 
+### Webhook fields are subscribed at TWO levels, and both are required
+
+This is the trap that made five shipped features receive nothing, so it goes
+first. Meta delivers a field only when BOTH of these are set:
+
+| Level | Where | Script |
+| --- | --- | --- |
+| **App** | `POST /{app-id}/subscriptions`, per object | `debug/meta-app-subscriptions.ts` |
+| **Page** | `POST /{page_id}/subscribed_apps` | `debug/meta-resubscribe-pages.ts` |
+
+Adding a field to `META_PAGE_SUBSCRIBED_FIELDS` and re-subscribing every Page
+does **nothing on its own**: the app is not asking for the field, so Meta
+sends none and the new handler sits there receiving no deliveries, silently.
+`feed`, `messaging_referrals`, `message_echoes`, `live_comments`, and
+`message_template_status_update` were all shipped, all page-subscribed, and
+all inert until the app level was set.
+
+The `instagram` and `whatsapp_business_account` objects have **no page-level
+step at all**, so for those the app level is the only subscription there is.
+
+Both scripts are dry-run by default, idempotent, and read back after writing.
+The app-level one writes the UNION of current and wanted fields, because
+POSTing a field list REPLACES it and a field somebody added in the dashboard
+must not be silently dropped.
+
+**Adding a webhook field is therefore three steps:** handle it in
+`src/lib/meta/webhook.ts`, add it to `WANTED` in
+`debug/meta-app-subscriptions.ts` (and to `META_PAGE_SUBSCRIBED_FIELDS` if it
+is a `page` field), then run both scripts with `--apply`.
+
 ### Comments on your posts: trigger, and reply back (Instagram AND Facebook)
 
 Both surfaces land on the same `/api/webhooks/meta` callback, but they arrive
@@ -2722,10 +2752,11 @@ suppressed, or our public reply arrives back as a new comment and answers
 itself.
 
 Instagram needs `instagram_manage_comments` at Advanced Access; Facebook
-needs `feed` in `META_PAGE_SUBSCRIBED_FIELDS`. **A Page's subscription is
-fixed when it connects**, so adding a field does nothing for Pages already
-connected: run `debug/meta-resubscribe-pages.ts --apply` (dry run by
-default), which is idempotent and is the tool for every future field too.
+needs `feed` at BOTH subscription levels (see the section above). **A Page's
+subscription is fixed when it connects**, so adding a field does nothing for
+Pages already connected: run `debug/meta-resubscribe-pages.ts --apply` (dry
+run by default), which is idempotent and is the tool for every future field
+too.
 
 The payload's top-level scalars are published as NAMED trigger keys as well
 as inside `{{trigger.windowText}}`, so a step can say
