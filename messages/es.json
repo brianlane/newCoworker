@@ -187,7 +187,7 @@
       "faqUsageCapsQ": "¿Qué pasa si agoto mis minutos de voz o SMS incluidos?",
       "faqUsageCapsA": "Tu coworker deja de hacer llamadas de voz medidas o enviar textos a clientes al alcanzar el límite mensual, y recibes una alerta mucho antes. Los límites se reinician cada mes y puedes mejorar tu plan en cualquier momento desde el panel. También puedes comprar paquetes únicos de minutos de voz, SMS o chat con IA desde Panel → Facturación sin cambiar de plan, o agregar paquetes recurrentes con descuento al iniciar o cambiar una membresía (5% mes a mes, 10% en 12 meses, 20% en 24 meses; se renuevan con tu plan). Los paquetes de uso no son reembolsables. El uso extra se consume después de tu asignación mensual incluida y dura hasta el final de tu periodo de facturación o 30 días desde la compra, lo que sea más tarde.",
       "faqWhiteGloveQ": "¿Qué incluye el onboarding white-glove?",
-      "faqWhiteGloveA": "Dos paquetes únicos: <b>White-glove setup</b> cubre configuración guiada, portabilidad de número y una llamada de entrenamiento 1:1 en vivo; <b>White-glove buildout</b> agrega todo lo del setup más una construcción completa de AiFlows a medida. Ambos incluyen 30 días de soporte prioritario por llamada y video. <link>Cuéntanos que te interesa</link> y un especialista te contactará.",
+      "faqWhiteGloveA": "Dos paquetes únicos: <b>White-glove setup</b> cubre configuración guiada, portabilidad de número y una llamada de entrenamiento 1:1 en vivo; <b>White-glove buildout</b> agrega todo lo del setup más una construcción completa de AiFlows a medida. Ambos incluyen 30 días de soporte prioritario por teléfono y video. <link>Cuéntanos que te interesa</link> y un especialista te contactará.",
       "ctaTitle": "¿Listo para contratar a tu New Coworker?",
       "ctaSubtitle": "Elige un plan y tu coworker estará en vivo en minutos.",
       "ctaLabel": "Elige tu plan"
@@ -598,8 +598,8 @@
       "keepNumberQ": "¿Puedo conservar mi número de negocio actual?",
       "keepNumberA": "Sí. Los planes Standard y Enterprise permiten portar tu propio número. Nosotros gestionamos la portabilidad y tu coworker contesta en tu número existente. Todos los planes también incluyen un número dedicado que funciona desde el primer día.",
       "whiteGloveQ": "¿Alguien puede configurar todo por mí?",
-      "whiteGloveA": "Sí. <b>White-glove setup ($750)</b> te da un especialista que configura todo en vivo contigo, gestiona la portabilidad del número y te entrena 1:1. <b>White-glove buildout ($2,000)</b> agrega una construcción completa de flujos a medida. Ambos incluyen 30 días de soporte prioritario por llamada y video. Mira <link>precios</link> para más detalles.",
-      "whiteGlovePlain": "Sí. White-glove setup ($750) te da un especialista que configura todo en vivo contigo, gestiona la portabilidad del número y te entrena 1:1. White-glove buildout ($2,000) agrega una construcción completa de flujos a medida. Ambos incluyen 30 días de soporte prioritario por llamada y video.",
+      "whiteGloveA": "Sí. <b>White-glove setup ($750)</b> te da un especialista que configura todo en vivo contigo, gestiona la portabilidad del número y te entrena 1:1. <b>White-glove buildout ($2,000)</b> agrega una construcción completa de flujos a medida. Ambos incluyen 30 días de soporte prioritario por teléfono y video. Mira <link>precios</link> para más detalles.",
+      "whiteGlovePlain": "Sí. White-glove setup ($750) te da un especialista que configura todo en vivo contigo, gestiona la portabilidad del número y te entrena 1:1. White-glove buildout ($2,000) agrega una construcción completa de flujos a medida. Ambos incluyen 30 días de soporte prioritario por teléfono y video.",
       "carrierFeeQ": "¿Qué es la tarifa única de registro de operador de {carrierFee}?",
       "carrierFeeA": "Los operadores de EE. UU. exigen que todo negocio que envía mensajes de texto complete el registro 10DLC. Trasladamos esta tarifa única al costo. Se cobra al registrarte y no es reembolsable porque los operadores no nos la devuelven.",
       "readyQ": "¿Qué necesito tener listo antes de que empiece?",
@@ -678,7 +678,7 @@
       "formBody": "Ya sea que estés evaluando planes, necesites ayuda con la configuración o facturación, o quieras que un especialista construya todo contigo, usa el formulario y responderemos lo antes posible. La mayoría de las consultas se responden en 24 horas.",
       "support": {
         "title": "Soporte",
-        "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria; los clientes white-glove tienen una línea prioritaria de llamada y video por 30 días."
+        "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria; los clientes white-glove tienen una línea prioritaria de teléfono y video por 30 días."
       },
       "enterprise": {
         "title": "Ventas Enterprise",
@@ -2118,15 +2118,15 @@
       "support": "Soporte",
       "whiteGloveService": "Servicio white-glove",
       "purchased": "comprado.",
-      "enterprisePriority": "El soporte prioritario por llamada y video siempre está activo con tu plan Enterprise.",
-      "priorityOpenUntil": "El soporte prioritario por llamada y video está abierto hasta {date}.",
-      "priorityEnded": "Tu ventana prioritaria de llamada y video terminó; el soporte continúa por correo.",
+      "enterprisePriority": "El soporte prioritario por teléfono y video siempre está activo con tu plan Enterprise.",
+      "priorityOpenUntil": "El soporte prioritario por teléfono y video está abierto hasta {date}.",
+      "priorityEnded": "Tu ventana prioritaria de teléfono y video terminó; el soporte continúa por correo.",
       "bookSession": "Reserva una sesión cuando quieras:",
       "schedulingLink": "enlace de agenda",
-      "emailSupportUpsell": "Tu plan incluye soporte por correo. Agrega onboarding white-glove abajo para soporte en vivo por llamada y video con un especialista.",
+      "emailSupportUpsell": "Tu plan incluye soporte por correo. Agrega onboarding white-glove abajo para soporte en vivo por teléfono y video con un especialista.",
       "prioritySupport": {
         "title": "Soporte prioritario",
-        "blurb": "Soporte prioritario por llamada y video con un especialista, además del soporte por correo que incluye tu plan.",
+        "blurb": "Soporte prioritario por teléfono y video con un especialista, además del soporte por correo que incluye tu plan.",
         "daysLeft": "{days, plural, one {# día restante} other {# días restantes}}",
         "endsToday": "Termina hoy",
         "through": "hasta el {date}",
@@ -2149,10 +2149,10 @@
         "checkoutCancelled": "Pago cancelado. No se cobró nada."
       },
       "whiteGloveTitle": "Onboarding white-glove",
-      "whiteGloveBlurb": "Onboarding único y práctico con un especialista. Cualquiera de los paquetes abre una línea prioritaria de llamada y video por 30 días. Cuéntanos que te interesa y un especialista te contactará con una cotización.",
+      "whiteGloveBlurb": "Onboarding único y práctico con un especialista. Cualquiera de los paquetes abre una línea prioritaria de teléfono y video por 30 días. Cuéntanos que te interesa y un especialista te contactará con una cotización.",
       "contactUs": "Contáctanos",
       "customOfferTitle": "Tu oferta personalizada",
-      "customOfferBlurb": "Preparada para tu negocio por nuestro equipo. Pago único; incluye una línea prioritaria de llamada y video por 30 días.",
+      "customOfferBlurb": "Preparada para tu negocio por nuestro equipo. Pago único; incluye una línea prioritaria de teléfono y video por 30 días.",
       "autoReload": {
         "title": "Recarga automatica",
         "blurb": "Recarga automaticamente antes de quedarte sin saldo, para que las llamadas y los mensajes nunca se detengan. Cobramos la tarjeta que autorices y tu defines el limite.",
@@ -2880,7 +2880,7 @@
       "line1": "Gracias por comprar {packageName}, un especialista trabajará contigo uno a uno para dejar tu coworker de IA totalmente afinado.",
       "bookingLine": "Reserva tu sesión de onboarding aquí: {bookingUrl}",
       "replyLine": "Responde a este correo y agendamos tu sesión de onboarding.",
-      "priorityLine": "Tu línea prioritaria de soporte por llamada y video está abierta hasta el {date}.",
+      "priorityLine": "Tu línea prioritaria de soporte por teléfono y video está abierta hasta el {date}.",
       "ctaBook": "Reservar tu sesión"
     },
     "monthlyIntroNudge": {
@@ -2908,7 +2908,7 @@
     "prioritySupportNudge": {
       "subject": "Tu soporte prioritario está por terminar",
       "line1": "Hola, un aviso rápido para que nada te tome por sorpresa.",
-      "line2": "Tu soporte prioritario por llamada y video termina el {date}, es decir, en {days}.",
+      "line2": "Tu soporte prioritario por teléfono y video termina el {date}, es decir, en {days}.",
       "line3": "Después de esa fecha, el soporte continúa por correo sin costo adicional. Nada más de tu plan cambia.",
       "line4": "¿Quieres mantener abierta la línea prioritaria? Reactívala por {price}/mes desde Facturación en tu panel. Puedes cancelar cuando quieras.",
       "cta": "Reactivar soporte prioritario",
