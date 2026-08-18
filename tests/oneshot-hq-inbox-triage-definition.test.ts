@@ -327,6 +327,30 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(cat("automated_review")).not.toMatch(/renewal/i);
   });
 
+  it("keeps a platform outcome that still asks us something OUT of the review tier", () => {
+    /**
+     * The neighbour ABOVE the review tier, which the first wording missed.
+     *
+     * The Aug 18 2026 nightly caught "Your app submission needs changes /
+     * Respond with an updated build to continue" classifying
+     * `automated_review`, the SILENT tier, while the ChatGPT app and Meta App
+     * Review were both in flight. The description named the platforms and
+     * stopped, so it read as "any mail about a review" rather than "a review
+     * that is over".
+     *
+     * The live boundary is pinned in tests/e2e/hq-inbox-classify.e2e.test.ts
+     * against the real model. This is the deterministic half: the copy has to
+     * SAY the outcome is finished, because a tier that texts and a tier that
+     * is silent cannot be told apart by anything else here.
+     */
+    const cat = (v: string) =>
+      (steps.find((s) => s.id === "s_classify")?.categories ?? []).find((c) => c.value === v)
+        ?.description ?? "";
+    expect(cat("automated_review")).toMatch(/done|finished|no reply|nothing further/i);
+    // And the tier that DOES page still owns anything asking for a response.
+    expect(cat("automated_important")).toMatch(/respond/i);
+  });
+
   it("scores every filed message for the Emails page, and routes on none of it", () => {
     /**
      * The display-only 1-10 score. Every email_organize step carries it, so the
