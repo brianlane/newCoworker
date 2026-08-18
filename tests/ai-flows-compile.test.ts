@@ -6,6 +6,7 @@ import {
   buildFlowAdaptUserText,
   buildFlowCompileUserText,
   buildFlowEditUserText,
+  splitFlowEditEnvelope,
   buildFlowRepairUserText,
   extractFlowJson,
   humanizeCompileIssues
@@ -297,5 +298,56 @@ describe("extractFlowJson", () => {
   });
   it("returns null when the sliced region is invalid JSON", () => {
     expect(extractFlowJson("prefix { not: valid } suffix")).toBeNull();
+  });
+});
+
+describe("splitFlowEditEnvelope", () => {
+  const DEF = { version: 1, trigger: { channel: "manual" }, steps: [] };
+
+  it("unwraps the envelope and trims the questions", () => {
+    expect(
+      splitFlowEditEnvelope({
+        definition: DEF,
+        questions: ["  Which teammate?  ", "How long a wait?"]
+      })
+    ).toEqual({ definition: DEF, questions: ["Which teammate?", "How long a wait?"] });
+  });
+
+  it("drops empty and non-string questions rather than asking a blank one", () => {
+    const out = splitFlowEditEnvelope({ definition: DEF, questions: ["ok", "", "   ", 7, null] });
+    expect(out.questions).toEqual(["ok"]);
+  });
+
+  it("degrades to no questions when the model returns a BARE definition", () => {
+    // The self-repair retry's prompt is about fixing validation issues, so it
+    // answers with a bare definition. That must parse, not fail.
+    expect(splitFlowEditEnvelope(DEF)).toEqual({ definition: DEF, questions: [] });
+  });
+
+  it("treats a missing or non-array questions key as none", () => {
+    expect(splitFlowEditEnvelope({ definition: DEF }).questions).toEqual([]);
+    expect(splitFlowEditEnvelope({ definition: DEF, questions: "nope" }).questions).toEqual([]);
+  });
+
+  it("passes null, arrays and primitives straight through", () => {
+    expect(splitFlowEditEnvelope(null)).toEqual({ definition: null, questions: [] });
+    expect(splitFlowEditEnvelope([1, 2])).toEqual({ definition: [1, 2], questions: [] });
+    expect(splitFlowEditEnvelope("x")).toEqual({ definition: "x", questions: [] });
+  });
+});
+
+describe("buildFlowEditUserText: the questions contract", () => {
+  it("asks for the two-key envelope and for guesses to be surfaced", () => {
+    const text = buildFlowEditUserText({
+      currentName: "Lead follow-up",
+      currentDefinitionJson: "{}",
+      instructions: "change the wording"
+    });
+    expect(text).toContain('"definition"');
+    expect(text).toContain('"questions"');
+    expect(text).toContain("had to GUESS about");
+    // A question must never replace doing the work: the definition still comes.
+    expect(text).toContain("still");
+    expect(text).toContain("best definition alongside");
   });
 });

@@ -70,6 +70,15 @@ export type EditFlowToolDeps = {
 export type EditAiFlowToolResult =
   | {
       ok: true;
+      staged: false;
+      /** Open questions the owner must answer before anything can be staged. */
+      questions: string[];
+      flowId: string;
+      flowName: string;
+      note: string;
+    }
+  | {
+      ok: true;
       staged: true;
       confirmationToken: string;
       flowId: string;
@@ -144,6 +153,22 @@ export async function editAiFlowTool(
     return { ok: false, message: compiled.message };
   }
 
+  // Layer 4: what the compile had to GUESS blocks staging outright. No token
+  // is issued, so the model cannot reach the apply call at all until the
+  // owner has answered. This inverts the default from "act unless unsure"
+  // to "cannot act until resolved".
+  const questions = compiled.questions ?? [];
+  if (questions.length > 0) {
+    return {
+      ok: true,
+      staged: false,
+      questions,
+      flowId: flow.id,
+      flowName: flow.name,
+      note: `NOTHING HAS CHANGED, and nothing is staged. Working out this change meant guessing about the points listed in questions. Ask the owner those questions in your own words, in one short message, and when they answer, call edit_aiflow again with their answers folded into the instructions. Do not guess on their behalf, and do not ask for confirmation of a change you have not described yet.`
+    };
+  }
+
   const diff = diffFlowDefinitions(flow.definition, compiled.definition, {
     currentName: flow.name,
     ...(args.newName !== undefined ? { newName: args.newName } : {})
@@ -177,8 +202,10 @@ export async function editAiFlowTool(
       definition: compiled.definition,
       newName: args.newName ?? null,
       summary: diff.summary,
-      // Layer 4 (blocking questions) fills this; nothing produces one yet,
-      // and an empty list is what "no open questions" looks like.
+      // Always empty by construction: a compile that produced questions
+      // returned above without staging. Kept as a column and re-checked at
+      // confirm time as defense in depth, so a row that somehow carries one
+      // can never be applied.
       ambiguities: [],
       risk,
       baseUpdatedAt: flow.updated_at,

@@ -520,8 +520,53 @@ export function buildFlowEditUserText(input: {
     buildAvailableMailboxesBlock(input.mailboxes ?? []),
     "",
     "Requested changes:",
-    input.instructions.trim()
+    input.instructions.trim(),
+    "",
+    "Return a JSON object with exactly two keys:",
+    '  "definition": the FULL updated definition object described above.',
+    '  "questions": an array of short plain-English questions.',
+    "",
+    "Put a question in that array for anything the request left genuinely",
+    "ambiguous that you had to GUESS about: which teammate, which of two",
+    "similarly named steps, how long a wait should be, whether a change",
+    "applies to one branch or all of them. Ask about the guess you actually",
+    "made, phrased for the business owner, not about schema details. Return an",
+    "empty array when the request was specific enough that you guessed at",
+    "nothing. Never use a question as a substitute for doing the work: still",
+    "return your best definition alongside it."
   ].join("\n");
+}
+
+/**
+ * Split the edit response envelope `{ definition, questions }` from a bare
+ * definition.
+ *
+ * The edit prompt asks for the envelope, but a model that answers with a
+ * bare definition (or the self-repair retry, whose prompt is about fixing
+ * validation issues) must still work: that degrades to "no questions", never
+ * to a parse failure. Detection is by shape rather than by trusting the key
+ * to exist, since a definition itself never has a `definition` key.
+ */
+export function splitFlowEditEnvelope(candidate: unknown): {
+  definition: unknown;
+  questions: string[];
+} {
+  if (
+    candidate === null ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate) ||
+    !("definition" in candidate)
+  ) {
+    return { definition: candidate, questions: [] };
+  }
+  const envelope = candidate as { definition: unknown; questions?: unknown };
+  const questions = Array.isArray(envelope.questions)
+    ? envelope.questions
+        .filter((q): q is string => typeof q === "string")
+        .map((q) => q.trim())
+        .filter((q) => q.length > 0)
+    : [];
+  return { definition: envelope.definition, questions };
 }
 
 /**

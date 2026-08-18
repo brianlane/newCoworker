@@ -649,6 +649,99 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
   });
 
+  it("changes at most ONE automation per turn, and says why it stopped", async () => {
+    // A turn can make several tool calls, so one message could otherwise
+    // rewrite three automations before anyone read a word of it.
+    const runActionTool = vi.fn(
+      async (_biz: string, _call: unknown, _deps?: Record<string, unknown>) => ({
+        ok: true,
+        flowId: "flow-1",
+        flowName: "Lead follow-up"
+      })
+    );
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "A", instructions: "i", confirmationToken: "t1" })
+      )
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "B", instructions: "i", confirmationToken: "t2" })
+      )
+      .mockResolvedValueOnce(textStep("done"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    // The second apply never reached the executor at all.
+    expect(runActionTool).toHaveBeenCalledTimes(1);
+    // Find the refusal wherever it landed in the replayed contents.
+    const serialized = JSON.stringify(chatStep.mock.calls[2][0].contents);
+    expect(serialized).toContain("One automation per message");
+  });
+
+  it("an undo counts against the same per-turn cap as an edit", async () => {
+    const runActionTool = vi.fn(
+      async (_biz: string, _call: unknown, _deps?: Record<string, unknown>) => ({
+        ok: true,
+        flowId: "flow-1",
+        flowName: "Lead follow-up"
+      })
+    );
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "A", instructions: "i", confirmationToken: "t1" })
+      )
+      .mockResolvedValueOnce(toolStep("undo_aiflow_edit", { flow: "B" }))
+      .mockResolvedValueOnce(textStep("done"));
+    await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), { chatStep, runActionTool });
+    expect(runActionTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("STAGING is not capped: describing a second change writes nothing", async () => {
+    // Only calls that commit count. A staging call has no confirmationToken.
+    const runActionTool = vi.fn(
+      async (_biz: string, _call: unknown, _deps?: Record<string, unknown>) => ({
+        ok: true,
+        staged: true,
+        confirmationToken: "t",
+        flowId: "flow-1"
+      })
+    );
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("edit_aiflow", { flow: "A", instructions: "i" }))
+      .mockResolvedValueOnce(toolStep("edit_aiflow", { flow: "B", instructions: "i" }))
+      .mockResolvedValueOnce(textStep("done"));
+    await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), { chatStep, runActionTool });
+    expect(runActionTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("a REFUSED change does not spend the turn's one slot", async () => {
+    const runActionTool = vi
+      .fn<
+        (
+          biz: string,
+          call: unknown,
+          deps?: Record<string, unknown>
+        ) => Promise<Record<string, unknown>>
+      >()
+      .mockResolvedValueOnce({ ok: false, message: "stale" })
+      .mockResolvedValueOnce({ ok: true, flowId: "flow-1", flowName: "Lead follow-up" });
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "A", instructions: "i", confirmationToken: "t1" })
+      )
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "A", instructions: "i", confirmationToken: "t2" })
+      )
+      .mockResolvedValueOnce(textStep("done"));
+    await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), { chatStep, runActionTool });
+    expect(runActionTool).toHaveBeenCalledTimes(2);
+  });
+
   it("omits Settings-disabled action tools and declares none without gates", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(
