@@ -1886,6 +1886,11 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("update_contact"),
     phoneVar: varName,
+    // Fallback identity when the lead has no usable phone: the var holding
+    // their email. The contact is keyed by that address, which is the only way
+    // an email-only lead can carry a tag (and so the only way a tag-triggered
+    // cadence reaches them). Ignored when phoneVar resolves to a number.
+    emailVar: varName.optional(),
     addTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
     removeTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
     // Context for whatever the tag change sets in motion: rendered and carried
@@ -3039,6 +3044,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (!vars.has(step.phoneVar) && !ENGINE_VARS.has(step.phoneVar)) {
         issues.push(
           `Step "${step.id}" updates a contact using {{vars.${step.phoneVar}}} which no earlier step produces.`
+        );
+      }
+      if (step.emailVar && !vars.has(step.emailVar) && !ENGINE_VARS.has(step.emailVar)) {
+        issues.push(
+          `Step "${step.id}" updates a contact using emailVar {{vars.${step.emailVar}}} which no earlier step produces.`
         );
       }
       if (!step.addTags && !step.removeTags) {

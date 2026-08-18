@@ -16,7 +16,7 @@ import {
  * a flow's question in Spanish stayed flagged English forever.
  */
 
-type Call = { table: string; op: string; payload?: unknown };
+type Call = { table: string; op: string; payload?: unknown; filter?: string };
 
 /**
  * Minimal contacts-table fake: records every write, answers the single
@@ -28,21 +28,28 @@ function makeDb(opts: { row?: unknown; readError?: boolean; insertError?: boolea
     from(table: string) {
       return {
         select() {
-          return {
-            eq() {
-              return {
-                or() {
-                  return {
-                    maybeSingle: async () => {
-                      calls.push({ table, op: "select" });
-                      if (opts.readError) throw new Error("read boom");
-                      return { data: opts.row ?? null };
-                    }
-                  };
-                }
-              };
+          // The read is `.eq(business_id)` then EITHER `.or(alias filter)` for a
+          // number key OR a second `.eq(customer_e164)` for an email key, so the
+          // chain has to accept both shapes.
+          const terminal = {
+            maybeSingle: async () => {
+              calls.push({ table, op: "select", filter: lastFilter });
+              if (opts.readError) throw new Error("read boom");
+              return { data: opts.row ?? null };
             }
           };
+          let lastFilter: string | undefined;
+          const afterBiz = {
+            or(filter: string) {
+              lastFilter = `or:${filter}`;
+              return terminal;
+            },
+            eq(column: string, value: unknown) {
+              lastFilter = `eq:${column}=${String(value)}`;
+              return terminal;
+            }
+          };
+          return { eq: () => afterBiz };
         },
         update(payload: unknown) {
           calls.push({ table, op: "update", payload });
@@ -128,6 +135,41 @@ describe("readContactLanguageState", () => {
       exists: false
     });
     errSpy.mockRestore();
+  });
+});
+
+describe("email-keyed contacts", () => {
+  it("reads with an exact match, never the alias filter", async () => {
+    // alias_e164s only ever holds NUMBERS a merge folded away, and an address
+    // in a comma-delimited PostgREST filter is an escaping hazard.
+    const { db, calls } = makeDb({ row: null });
+    await readContactLanguageState(db, "biz", "email:val@example.com");
+    expect(calls[0]?.filter).toBe("eq:customer_e164=email:val@example.com");
+  });
+
+  it("still uses the alias filter for a number key", async () => {
+    const { db, calls } = makeDb({ row: null });
+    await readContactLanguageState(db, "biz", "+16025551234");
+    expect(calls[0]?.filter).toMatch(/^or:customer_e164\.eq\.\+16025551234,alias_e164s/);
+  });
+
+  it("carries the address into the first-contact INSERT", async () => {
+    // Without `email`, the DB constraint contacts_email_key_matches_email
+    // rejects the row and the detected language is silently lost.
+    const { db, calls } = makeDb();
+    await persistDetectedContactLanguage(db, "biz", "email:val@example.com", "es", {
+      preferred: null,
+      source: null,
+      primaryE164: null,
+      exists: false
+    });
+    expect(calls.find((c) => c.op === "insert")?.payload).toEqual({
+      business_id: "biz",
+      customer_e164: "email:val@example.com",
+      email: "val@example.com",
+      preferred_language: "es",
+      language_source: "detected"
+    });
   });
 });
 

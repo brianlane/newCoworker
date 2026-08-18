@@ -17,6 +17,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMAIL_CONTACT_KEY_PREFIX,
+  emailIlikePattern,
+  isFilterSafeEmail,
   classifyContactKey,
   contactAliasOrFilter,
   contactKeyEmail,
@@ -54,8 +56,19 @@ describe("emailContactKey", () => {
     expect(emailContactKey(PHONE)).toBeNull();
   });
 
-  it("refuses a comma, which would break a PostgREST filter string", () => {
+  it("refuses every PostgREST filter metacharacter", () => {
+    // These values are interpolated into `.or()` filter strings (the alias
+    // match and the duplicate-lead guard), where any of them changes which
+    // rows match. Real addresses never carry them.
     expect(emailContactKey("a,b@example.com")).toBeNull();
+    expect(emailContactKey("a(b@example.com")).toBeNull();
+    expect(emailContactKey("a)b@example.com")).toBeNull();
+    expect(emailContactKey('a"b@example.com')).toBeNull();
+    // Asterisk is refused rather than escaped, because it CANNOT be escaped:
+    // PostgREST turns `*` into `%` while parsing an ilike pattern, before SQL
+    // sees it, so a backslash does not survive. An address carrying one could
+    // wildcard-match other runs and suppress a different person's outreach.
+    expect(emailContactKey("a*b@example.com")).toBeNull();
   });
 
   it("refuses an address longer than the 254-char column limit", () => {
@@ -157,5 +170,30 @@ describe("contactAliasOrFilter", () => {
     // Not a valid key, but the caller is asking how to match it; the exact-match
     // fallback is reserved for email keys specifically.
     expect(contactAliasOrFilter("amy")).toBe("customer_e164.eq.amy,alias_e164s.cs.{amy}");
+  });
+});
+
+describe("isFilterSafeEmail", () => {
+  it("accepts exactly what could become a key, so a raw-address caller gets the same guarantee", () => {
+    expect(isFilterSafeEmail(ADDRESS)).toBe(true);
+    expect(isFilterSafeEmail("a,b@example.com")).toBe(false);
+    expect(isFilterSafeEmail("a(b@example.com")).toBe(false);
+    expect(isFilterSafeEmail("a*b@example.com")).toBe(false);
+    expect(isFilterSafeEmail(null)).toBe(false);
+  });
+});
+
+describe("emailIlikePattern", () => {
+  it("escapes the LIKE wildcards so the match is literal", () => {
+    // An underscore is common in a real local part. Unescaped, this pattern
+    // would also match firstXlast@x.com and could suppress a DIFFERENT
+    // person's outreach in the duplicate-lead guard.
+    expect(emailIlikePattern("first_last@x.com")).toBe("first\\_last@x.com");
+    expect(emailIlikePattern("a%b@x.com")).toBe("a\\%b@x.com");
+    expect(emailIlikePattern("a\\b@x.com")).toBe("a\\\\b@x.com");
+  });
+
+  it("leaves an ordinary address untouched", () => {
+    expect(emailIlikePattern(ADDRESS)).toBe(ADDRESS);
   });
 });

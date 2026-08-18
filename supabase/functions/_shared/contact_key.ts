@@ -36,11 +36,22 @@ export const EMAIL_CONTACT_KEY_PREFIX = "email:";
  * RFC 5322: real addresses are too varied to validate strictly, and the cost of
  * refusing a valid address is higher than the cost of storing an odd one.
  *
- * The extra refusal here is the comma: a key containing one would break a
- * PostgREST `.or()` filter string, and {@link contactAliasOrFilter} depends on
- * that never happening.
+ * The extra refusals are the PostgREST filter metacharacters: comma, parens,
+ * double quote, and asterisk. A key carrying one of those could change which
+ * rows a filter matches, and both {@link contactAliasOrFilter} and the
+ * duplicate-lead guard interpolate the value directly.
+ *
+ * Asterisk is refused rather than escaped because it CANNOT be escaped:
+ * PostgREST translates `*` to `%` while parsing a like/ilike pattern, before
+ * SQL ever sees it, so a backslash does not survive the trip. `%` and `_` are
+ * different: they reach SQL intact and {@link emailIlikePattern} escapes them,
+ * which matters because an underscore is common in a real local part.
+ *
+ * Real addresses use none of these (parens are RFC 5322 comment syntax and
+ * effectively never appear), so refusing costs nothing and removes a whole
+ * class of escaping bug.
  */
-const EMAIL_KEY_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
+const EMAIL_KEY_RE = /^[^\s@,()"*]+@[^\s@,()"*]+\.[^\s@,()"*]+$/;
 
 /** E.164, or a bare 3-8 digit short code. Mirrors CONTACT_NUMBER_RE in src. */
 const NUMBER_KEY_RE = /^(\+[1-9]\d{6,15}|\d{3,8})$/;
@@ -117,4 +128,36 @@ export function formatContactKey(key: string | null | undefined): string {
 export function contactAliasOrFilter(key: string): string | null {
   if (classifyContactKey(key) === "email") return null;
   return `customer_e164.eq.${key},alias_e164s.cs.{${key}}`;
+}
+
+/**
+ * Is this address safe to interpolate into a PostgREST filter string?
+ *
+ * True exactly when {@link emailContactKey} would accept it, which is the
+ * point: every address that becomes a contact key has already been through
+ * that gate, and a caller building a filter from a RAW address (the
+ * duplicate-lead guard matches on the flow's email var) gets the same
+ * guarantee without having to know the rule.
+ */
+export function isFilterSafeEmail(email: string | null | undefined): boolean {
+  return emailContactKey(email) !== null;
+}
+
+/**
+ * The PostgREST `ilike` pattern that matches this address literally.
+ *
+ * Two problems it solves at once. Casing: an address is one identity however it
+ * was typed, but a value stored by some other code path (a prior run's
+ * extraction, a roster row) keeps whatever casing it arrived with, so an
+ * equality match silently never fires. Wildcards: `%` and `_` are LIKE
+ * metacharacters, and an underscore is common in a real local part, so
+ * `first_last@x.com` would otherwise also match `firstXlast@x.com` and could
+ * suppress a DIFFERENT person's outreach.
+ *
+ * The address itself is already free of the metacharacters that cannot be
+ * escaped, `*` among them (see EMAIL_KEY_RE), so the escaped result is safe to
+ * interpolate into a filter.
+ */
+export function emailIlikePattern(address: string): string {
+  return address.replace(/[%_\\]/g, (m) => `\\${m}`);
 }

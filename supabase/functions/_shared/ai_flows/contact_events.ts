@@ -37,6 +37,7 @@ import {
 import { recordStageChangeForMeta } from "./meta_capi.ts";
 import { reentryBlocked } from "./reentry.ts";
 import type { TriggerCondition } from "./types.ts";
+import { contactKeyEmail, isEmailContactKey } from "../contact_key.ts";
 
 export type ContactEventKind = "contact_created" | "tag_changed" | "owner_assigned";
 
@@ -155,18 +156,24 @@ export async function hydrateContactEventContact(
   const needsEmail = contact.email === undefined;
   const needsTags = contact.tags === undefined;
   if (!needsName && !needsEmail && !needsTags) return contact;
-  // The phone is interpolated into a PostgREST `or` filter, where a stray
-  // comma or paren would change what the filter means. Anything that is not
-  // a clean E.164 number simply skips hydration (the pre-fix behavior).
+  // The key is interpolated into a PostgREST `or` filter, where a stray comma
+  // or paren would change what the filter means. A clean E.164 number is safe;
+  // so is an `email:` key, whose address was validated against the same
+  // metacharacters before it could become a key (contact_key.ts), and which is
+  // matched exactly rather than through the alias arm. Anything else skips
+  // hydration, which is the pre-fix behavior.
   const e164 = typeof contact.e164 === "string" ? contact.e164.trim() : "";
-  if (!isE164(e164)) return contact;
+  const emailKeyed = isEmailContactKey(e164) && contactKeyEmail(e164) !== null;
+  if (!isE164(e164) && !emailKeyed) return contact;
   try {
-    const { data, error } = await supabase
+    const base = supabase
       .from("contacts")
       .select("display_name, email, tags")
-      .eq("business_id", businessId)
-      .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`)
-      .maybeSingle();
+      .eq("business_id", businessId);
+    const { data, error } = await (emailKeyed
+      ? base.eq("customer_e164", e164)
+      : base.or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`)
+    ).maybeSingle();
     if (error) {
       console.error("contact_events: hydrate", error);
       return contact;

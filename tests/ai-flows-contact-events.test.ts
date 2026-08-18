@@ -596,6 +596,34 @@ describe("hydrateContactEventContact", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("hydrates an email-keyed contact with an exact match, not the alias filter", async () => {
+    // Without this, a contact_created event for an email-only lead carried no
+    // tags line, so a flow triggering on `tags contains ...` never fired for
+    // exactly the leads the email key was added to reach.
+    const KEY = "email:valm0417@gmail.com";
+    const { db, calls } = makeDb([
+      { data: { display_name: "Valerie", email: "valm0417@gmail.com", tags: ["RefEx"] }, error: null }
+    ]);
+    expect(await hydrateContactEventContact(db, BIZ, { e164: KEY })).toEqual({
+      e164: KEY,
+      name: "Valerie",
+      email: "valm0417@gmail.com",
+      tags: ["RefEx"]
+    });
+    expect(calls.some((c) => c.name === "or")).toBe(false);
+    expect(calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "customer_e164",
+      KEY
+    ]);
+  });
+
+  it("skips the read for a malformed email key", async () => {
+    const { db, calls } = makeDb([]);
+    const e164 = "email:garbage";
+    expect(await hydrateContactEventContact(db, BIZ, { e164 })).toEqual({ e164 });
+    expect(calls).toHaveLength(0);
+  });
+
   it("skips the read for a phone that cannot be interpolated into the filter", async () => {
     // A stray comma or paren would change what the `or` filter means, so
     // anything that is not clean E.164 keeps the pre-hydration behavior.
