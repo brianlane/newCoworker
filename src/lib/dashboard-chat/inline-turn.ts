@@ -52,6 +52,7 @@ import {
   type AgentOutputFormat
 } from "@/lib/agents/core";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import type { EditSurfaceKind } from "@/lib/ai-flows/edit-flow-tool";
 import {
   actionToolDeclarations,
   executeActionTool,
@@ -256,8 +257,10 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // A run_aiflow enqueue is committed the moment it lands in the queue —
   // a fallback rerun would enqueue the same automation twice.
   "run_aiflow",
-  // An edit_aiflow update is persisted to the live flow the moment the
-  // core returns ok — a fallback rerun would re-apply (or double-apply) it.
+  // An edit_aiflow update is persisted to the live flow the moment the core
+  // reports applied:true. NOTE the extra condition in committedSideEffect
+  // below: edit_aiflow also returns ok:true when it merely STAGED a change
+  // for the owner to confirm, and that wrote nothing.
   "edit_aiflow",
   // An undo restores a definition over the live one just as irreversibly as
   // an edit writes one. Unpinned, a wrap-up failure would let the worker
@@ -292,6 +295,23 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
 type SideEffectLog = { happened: boolean; notes: string[] };
+
+/**
+ * Whether an ok:true result actually COMMITTED something.
+ *
+ * `edit_aiflow` is the one tool whose success does not imply a write: the
+ * first call of the confirm handshake stages a change and returns ok:true
+ * having touched nothing. Pinning on that would let a degraded wrap-up tell
+ * the owner their automation was updated when it was only described, and
+ * would suppress the worker fallback that should have answered instead.
+ */
+function committedSideEffect(name: ActionToolName, result: unknown): boolean {
+  if (!SIDE_EFFECT_TOOLS.has(name)) return false;
+  if (typeof result !== "object" || result === null) return false;
+  if ((result as { ok?: unknown }).ok !== true) return false;
+  if (name === "edit_aiflow") return (result as { applied?: unknown }).applied === true;
+  return true;
+}
 
 /**
  * The owner-facing fact line for one confirmed side effect, used when the
@@ -424,16 +444,12 @@ async function executeToolCall(
       return { ok: false, message: `unknown tool: ${call.name}` };
     }
     const result = await runActionTool(businessId, { name: call.name, args: call.args });
-    // Marked only on a CONFIRMED effect (ok:true): a cleanly-refused send
-    // (opt-out, validation, quota) or failed booking committed nothing, so
-    // pinning the turn would both suppress a legitimate worker fallback and
-    // let the degraded copy imply an action that never happened.
-    if (
-      SIDE_EFFECT_TOOLS.has(call.name) &&
-      typeof result === "object" &&
-      result !== null &&
-      (result as { ok?: unknown }).ok === true
-    ) {
+    // Marked only on a CONFIRMED effect: a cleanly-refused send (opt-out,
+    // validation, quota), a failed booking, or an edit that was merely
+    // STAGED for confirmation committed nothing, so pinning the turn would
+    // both suppress a legitimate worker fallback and let the degraded copy
+    // imply an action that never happened.
+    if (committedSideEffect(call.name, result)) {
       sideEffects.happened = true;
       sideEffects.notes.push(sideEffectNote(call.name, result));
     }
@@ -645,6 +661,11 @@ export async function runInlineChatTurn(
      */
     flowEditSource?: string;
     flowEditActor?: string | null;
+    /**
+     * "text" where the owner cannot see the automation while deciding (SMS,
+     * email): structural edits refuse there and point at the dashboard.
+     */
+    flowEditSurfaceKind?: EditSurfaceKind;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -657,8 +678,14 @@ export async function runInlineChatTurn(
   // the same for every call in the turn, so it belongs on the bound dep.
   const flowEditSource = args.flowEditSource ?? "ai_edit";
   const flowEditActor = args.flowEditActor ?? null;
+  const flowEditSurfaceKind = args.flowEditSurfaceKind ?? "rich";
   const runActionTool: typeof executeActionTool = (targetBusinessId, call, callDeps) =>
-    baseRunActionTool(targetBusinessId, call, { ...callDeps, flowEditSource, flowEditActor });
+    baseRunActionTool(targetBusinessId, call, {
+      ...callDeps,
+      flowEditSource,
+      flowEditActor,
+      flowEditSurfaceKind
+    });
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };

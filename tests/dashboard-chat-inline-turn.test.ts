@@ -690,7 +690,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       },
       // Flow-edit provenance rides the deps on EVERY call, so an edit made
       // in a turn is attributable without the model being asked who it is.
-      { flowEditSource: "ai_edit", flowEditActor: null }
+      { flowEditSource: "ai_edit", flowEditActor: null, flowEditSurfaceKind: "rich" }
     );
     const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
       functionResponse: { name: string; response: { result: { messageId: string } } };
@@ -958,6 +958,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     // ok; a worker-fallback rerun would re-apply it.
     const runActionTool = vi.fn(async () => ({
       ok: true,
+      applied: true,
       flowId: "flow-1",
       flowName: "Lead follow-up"
     }));
@@ -977,7 +978,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     }
 
     // Nameless result (defensive arm): the note still lands, without quotes.
-    const namelessTool = vi.fn(async () => ({ ok: true, flowId: "flow-1" }));
+    const namelessTool = vi.fn(async () => ({ ok: true, applied: true, flowId: "flow-1" }));
     const chatStep2 = vi
       .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
       .mockResolvedValueOnce(
@@ -990,6 +991,45 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) expect(res2.content).toContain("Automation was updated as requested");
+  });
+
+  it("a non-object tool result never pins the turn", async () => {
+    // Defensive: an executor that answered with a bare value committed
+    // nothing we can vouch for, so the worker fallback must stay available.
+    const runActionTool = vi.fn(async () => "unexpected" as unknown);
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15555550100", body: "hi" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("a STAGED edit is never side-effect pinned: it wrote nothing", async () => {
+    // edit_aiflow returns ok:true for a staged change too. Pinning on that
+    // would let a degraded wrap-up tell the owner their automation was
+    // updated when it was only described back to them.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      staged: true,
+      confirmationToken: "tok",
+      flowId: "flow-1",
+      flowName: "Lead follow-up"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("edit_aiflow", { flow: "Lead follow-up", instructions: "t" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    if (res.ok) {
+      expect(res.content).not.toContain("was updated as requested");
+    }
   });
 
   it("a successful undo_aiflow_edit is side-effect pinned, wrap-up failure keeps ok:true with the restore note", async () => {

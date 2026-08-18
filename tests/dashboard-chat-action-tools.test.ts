@@ -7,6 +7,44 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+// edit_aiflow's staging store and its in-flight probe are internals of the
+// shared core, not action-tool deps: mock the modules rather than widening
+// ActionToolDeps with plumbing this dispatcher does not otherwise touch.
+const stagedTokens = vi.hoisted(() => ({ rows: new Map<string, Record<string, unknown>>() }));
+vi.mock("@/lib/ai-flows/pending-edits", () => ({
+  PENDING_EDIT_TTL_MINUTES: 15,
+  stagePendingEdit: vi.fn(async (input: Record<string, unknown>) => {
+    const row = {
+      id: "pending-1",
+      business_id: input.businessId,
+      flow_id: input.flowId,
+      token: "tok-test",
+      definition: input.definition,
+      new_name: input.newName ?? null,
+      summary: input.summary,
+      ambiguities: input.ambiguities,
+      risk: input.risk,
+      base_updated_at: input.baseUpdatedAt,
+      surface: input.surface ?? null,
+      actor: input.actor ?? null,
+      created_at: "2026-08-18T00:00:00Z",
+      expires_at: "2026-08-18T00:15:00Z",
+      consumed_at: null
+    };
+    stagedTokens.rows.set("tok-test", row);
+    return row;
+  }),
+  consumePendingEdit: vi.fn(async (_biz: string, token: string) => {
+    const row = stagedTokens.rows.get(token);
+    return row ? { ok: true as const, row } : { ok: false as const, message: "not staged any more" };
+  }),
+  peekPendingEdit: vi.fn(async (_biz: string, token: string) => stagedTokens.rows.get(token) ?? null)
+}));
+vi.mock("@/lib/ai-flows/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai-flows/db")>();
+  return { ...actual, highestActiveRunStep: vi.fn(async () => null) };
+});
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -1144,9 +1182,7 @@ describe("edit_aiflow", () => {
     steps: [{ id: "s1", type: "notify_owner", message: "updated" }]
   };
 
-  it("stamps the turn's provenance onto the persisted edit", async () => {
-    // Attribution is the difference between "something rewrote this flow at
-    // 1am" and "the SMS coworker did". It must not come from the model.
+  it("stages on the first call and writes nothing", async () => {
     const persistFlowUpdate = vi.fn(async () => ({ ...FLOW, definition: EDITED }));
     const deps = happyDeps({
       listFlows: vi.fn(async () => [FLOW]) as never,
@@ -1159,14 +1195,41 @@ describe("edit_aiflow", () => {
       flowEditSource: "ai_edit_sms",
       flowEditActor: "+15555550100"
     });
-    await executeActionTool(
+    const res = await executeActionTool(
       BIZ,
       { name: "edit_aiflow", args: { flow: FLOW.id, instructions: "reword it" } },
       deps
     );
-    expect(persistFlowUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ editSource: "ai_edit_sms", editActor: "+15555550100" })
+    expect(res).toMatchObject({ ok: true, staged: true });
+    expect(persistFlowUpdate).not.toHaveBeenCalled();
+  });
+
+  it("passes the surface kind through, so SMS gets the text-surface rules", async () => {
+    // A structural edit refuses on a text surface; the dispatcher is the only
+    // thing that knows which surface the turn is on.
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: {
+          version: 1,
+          trigger: { channel: "manual" },
+          steps: [
+            { id: "s0", type: "notify_owner", message: "new" },
+            { id: "s1", type: "notify_owner", message: "original" }
+          ]
+        } as never,
+        warnings: []
+      })) as never,
+      flowEditSurfaceKind: "text"
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "edit_aiflow", args: { flow: FLOW.id, instructions: "add a step" } },
+      deps
     );
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { message: string }).message).toContain("/dashboard/aiflows?edit=");
   });
 
   it("delegates to the shared core: compile against the current definition, then persist in place", async () => {
@@ -1189,18 +1252,46 @@ describe("edit_aiflow", () => {
       },
       deps
     );
-    expect(res).toMatchObject({ ok: true, flowId: FLOW.id, flowName: "Lead follow-up" });
+    expect(res).toMatchObject({ ok: true, staged: true, flowId: FLOW.id });
     expect(compileFlowEdit).toHaveBeenCalledWith({
       businessId: BIZ,
       flowName: "Lead follow-up",
       currentDefinition: FLOW.definition,
       instructions: "say 'updated' instead"
     });
-    expect(persistFlowUpdate).toHaveBeenCalledWith({
-      businessId: BIZ,
-      id: FLOW.id,
-      definition: EDITED
+    // Staging only: the live flow is untouched until the owner confirms.
+    expect(persistFlowUpdate).not.toHaveBeenCalled();
+
+    // Second call, with the token: the staged bytes land, provenance and all.
+    const token = (res as { confirmationToken: string }).confirmationToken;
+    const confirmDeps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      persistFlowUpdate: persistFlowUpdate as never,
+      flowEditSource: "ai_edit_dashboard",
+      flowEditActor: "owner@example.com"
     });
+    const applied = await executeActionTool(
+      BIZ,
+      {
+        name: "edit_aiflow",
+        args: {
+          flow: "Lead follow-up",
+          instructions: "say 'updated' instead",
+          confirmationToken: token
+        }
+      },
+      confirmDeps
+    );
+    expect(applied).toMatchObject({ ok: true, flowId: FLOW.id, flowName: "Lead follow-up" });
+    expect(persistFlowUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        id: FLOW.id,
+        definition: EDITED,
+        editSource: "ai_edit_dashboard",
+        editActor: "owner@example.com"
+      })
+    );
   });
 
   it("rejects invalid args before touching the core, and passes compile refusals through", async () => {

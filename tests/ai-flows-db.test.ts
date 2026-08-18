@@ -12,6 +12,7 @@ import {
   listAiFlowRunSteps,
   listAiFlowRuns,
   listAiFlows,
+  highestActiveRunStep,
   updateAiFlow
 } from "@/lib/ai-flows/db";
 
@@ -1115,5 +1116,40 @@ describe("cancelAiFlowRun", () => {
        
       cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any)
     ).rejects.toThrow("cancelAiFlowRun: u");
+  });
+});
+
+describe("highestActiveRunStep", () => {
+  it("returns the furthest in-flight index, filtered to non-terminal runs", async () => {
+    const { db, builder } = makeDb({ array: [{ current_step: 7 }] });
+     
+    expect(await highestActiveRunStep("biz-1", "flow-1", db as any)).toBe(7);
+    // Reuses CANCELABLE_RUN_STATUSES: "what can be stopped" and "what is
+    // still in flight" are the same question, and two lists would drift.
+    expect(builder.in).toHaveBeenCalledWith("status", CANCELABLE_RUN_STATUSES);
+    expect(builder.order).toHaveBeenCalledWith("current_step", { ascending: false });
+    expect(builder.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("returns null when nothing is parked, so an edit is judged as unblocked", async () => {
+    const { db } = makeDb({ array: [] });
+     
+    expect(await highestActiveRunStep("biz-1", "flow-1", db as any)).toBeNull();
+  });
+
+  it("treats a null result as nothing parked", async () => {
+    const { db } = makeDb({ array: null });
+     
+    expect(await highestActiveRunStep("biz-1", "flow-1", db as any)).toBeNull();
+  });
+
+  it("throws on a read error rather than reporting 'nothing in flight'", async () => {
+    // Failing open here would let a structural edit through by claiming no
+    // runs exist, which is the exact case the check is for.
+    const { db } = makeDb({ array: null, error: { message: "boom" } });
+    await expect(
+       
+      highestActiveRunStep("biz-1", "flow-1", db as any)
+    ).rejects.toThrow("highestActiveRunStep: boom");
   });
 });

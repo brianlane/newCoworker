@@ -2260,6 +2260,61 @@ so a restore validates like any other edit and is itself snapshotted. Undo
 is therefore undoable, and reverting the wrong change is not a second
 unrecoverable event.
 
+## Editing an AiFlow by AI: the confirm handshake
+
+`edit_aiflow` is a TWO-call protocol. The first call compiles the edit, diffs
+it against the live definition and STAGES it in `ai_flow_pending_edits`,
+writing nothing to `ai_flows`. The second call, carrying the token the first
+returned, applies the staged bytes.
+
+The gate used to be a sentence in the tool description ("Use ONLY after the
+owner explicitly confirmed the exact changes") and nothing enforced it. A
+model handed a written-out multi-part spec reasonably reads it as already
+confirmed, because the owner did write it all out. On the owner-SMS surface
+that meant one text message could rewrite live automations in a single turn.
+
+**The compiled definition is stored, not recompiled on confirm.** This tool
+does not patch a definition, it regenerates the whole thing through a model,
+so the same instruction run twice can produce two different results.
+Confirming a described change and then applying a freshly generated one would
+make the confirmation meaningless. The bytes the owner agreed to are the bytes
+that land.
+
+Three things are re-checked at confirm time, each refusing rather than
+guessing:
+
+- **Single use.** The claim is a compare-and-swap in the WHERE clause, so two
+  confirmations arriving together cannot both apply. A replayed token says
+  "already applied once", not a generic failure.
+- **Still fresh.** `base_updated_at` must still match the flow's
+  `updated_at`. If the flow moved in between, the owner's yes was given to a
+  diff that no longer describes what is live.
+- **Same automation.** A token staged against another flow is refused.
+
+### Blast radius: what an edit is allowed to do, and where
+
+`ai_flow_runs.current_step` is a flat index over the FLATTENED definition
+(see `_shared/ai_flows/branching.ts`), so inserting a step near the top
+renumbers everything after it and resumes every parked run on the wrong
+instruction. `src/lib/ai-flows/edit-diff.ts` computes the first index where
+the two flattened id lists disagree and compares it against the furthest
+`current_step` among the flow's in-flight runs (`highestActiveRunStep`, which
+reuses `CANCELABLE_RUN_STATUSES` rather than re-listing the non-terminal
+states).
+
+| Risk | What it means | Text surfaces (SMS, email) | Rich surfaces |
+| --- | --- | --- | --- |
+| `none` | the instruction changed nothing | refused, nothing staged | refused |
+| `wording` | same steps in the same order, different field values | staged, confirm normally | staged |
+| `structural` | steps added, removed or reordered, or the trigger changed | **refused**, pointed at the dashboard | staged with the risk named |
+| `in_flight` | the divergence sits at or before a parked run's index | **refused** | staged with the risk named |
+
+The line that draws: **by text you can change what an automation SAYS;
+changing what it DOES needs the owner looking at it.** That is why appending
+to the end of a flow is only `structural` and inserting at the top with runs
+parked is `in_flight`: an append leaves the old id list as a prefix of the
+new one, so no live index changes meaning.
+
 ## AiFlow team routing: claim notices (SMS + optional email)
 
 `route_to_team` offers a lead to the roster (reply "1" to claim, "2" to pass,

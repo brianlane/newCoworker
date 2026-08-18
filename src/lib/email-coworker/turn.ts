@@ -202,7 +202,8 @@ export async function runEmailCoworkerTurn(args: {
     // message was already marked seen: no reply, no retry.
     budgetMs: EMAIL_TURN_BUDGET_MS,
     flowEditSource: "ai_edit_email",
-    flowEditActor: message.fromEmail
+    flowEditActor: message.fromEmail,
+    flowEditSurfaceKind: "text"
   });
 
   if (!inline.ok) {

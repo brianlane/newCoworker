@@ -46,7 +46,11 @@ import {
   runAiFlowTool,
   runAiflowToolArgsSchema
 } from "@/lib/ai-flows/manual-run-tool";
-import { editAiFlowTool, editAiflowToolArgsSchema } from "@/lib/ai-flows/edit-flow-tool";
+import {
+  editAiFlowTool,
+  editAiflowToolArgsSchema,
+  type EditSurfaceKind
+} from "@/lib/ai-flows/edit-flow-tool";
 import { editAiFlowDefinition } from "@/lib/ai-flows/compile-service";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
@@ -378,7 +382,7 @@ const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
 const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
   name: "edit_aiflow",
   description:
-    "Edit one of the business's EXISTING AiFlow automations in place, small tweaks (change a message's wording, a wait time, a recipient) or larger restructuring, keeping its id, run history, and enabled state. Use ONLY after the owner explicitly confirmed the exact changes in this conversation: first describe what you will change in plain words and wait for their yes. The change takes effect IMMEDIATELY on the live automation (there is no review step), so never call this speculatively. `flow` is the flow's id or its exact-enough name; `instructions` is the complete, specific change description, including any exact wording the owner gave. The platform validates the edited automation and refuses anything unsafe, when it refuses, the flow is unchanged; relay the reason honestly.",
+    "Change one of the business's EXISTING AiFlow automations: wording, timing, recipients, or larger restructuring, keeping its id, run history and enabled state. THIS TAKES TWO CALLS. Call it FIRST without confirmationToken: nothing is changed, and you get back a plain-English summary of exactly what the edit would do plus a confirmationToken. Read that summary back to the owner in your own words and wait for a clear yes. ONLY then call it again with the same flow and instructions plus that confirmationToken, which applies it. If the owner says no or anything ambiguous, do not call it again. `flow` is the flow's id or its exact-enough name; `instructions` is the complete, specific change including any exact wording the owner gave. The platform validates the edit and refuses anything unsafe; when it refuses, the flow is unchanged, so relay the reason honestly and never claim a change was applied.",
   parameters: {
     type: "object",
     properties: {
@@ -391,6 +395,11 @@ const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
       newName: {
         type: "string",
         description: "A new name for the automation, ONLY when the owner asked to rename it."
+      },
+      confirmationToken: {
+        type: "string",
+        description:
+          "ONLY on the second call, after the owner said yes: the token the first call returned. Never invent one."
       }
     },
     required: ["flow", "instructions"]
@@ -782,6 +791,12 @@ export type ActionToolDeps = {
   /** Flow-edit provenance for the snapshot trigger; see edit-flow-tool.ts. */
   flowEditSource?: string;
   flowEditActor?: string | null;
+  /**
+   * "text" on surfaces where the owner cannot see the automation while
+   * deciding and a reply is one line (SMS, email). Structural edits refuse
+   * there; wording changes still go through the same confirm handshake.
+   */
+  flowEditSurfaceKind?: EditSurfaceKind;
 };
 
 /**
@@ -1066,6 +1081,9 @@ export async function executeActionTool(
           listFlows,
           compileEdit: compileFlowEdit,
           persistUpdate: persistFlowUpdate,
+          ...(deps.flowEditSurfaceKind !== undefined
+            ? { surfaceKind: deps.flowEditSurfaceKind }
+            : {}),
           ...(deps.flowEditSource !== undefined ? { editSource: deps.flowEditSource } : {}),
           ...(deps.flowEditActor !== undefined ? { editActor: deps.flowEditActor } : {})
         });

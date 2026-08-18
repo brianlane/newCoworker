@@ -250,6 +250,10 @@ export async function POST(request: Request) {
       // one an owner is least likely to remember agreeing to.
       flowEditSource: "ai_edit_sms",
       flowEditActor: body.ownerE164,
+      // By text the coworker can change what an automation SAYS. Changing
+      // what it DOES needs the owner looking at the flow, so structural
+      // edits refuse here and point at the dashboard.
+      flowEditSurfaceKind: "text",
       // No builder UI on SMS to hand a draft card to — creation tools off,
       // so compile work can't succeed into a void (the model points the
       // owner to dashboard chat / /dashboard/aiflows for authoring instead).
