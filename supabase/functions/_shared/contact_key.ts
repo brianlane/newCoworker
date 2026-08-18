@@ -134,3 +134,21 @@ export function contactAliasOrFilter(key: string): string | null {
 export function isFilterSafeEmail(email: string | null | undefined): boolean {
   return emailContactKey(email) !== null;
 }
+
+/**
+ * The PostgREST `ilike` pattern that matches this address literally.
+ *
+ * Two problems it solves at once. Casing: an address is one identity however it
+ * was typed, but a value stored by some other code path (a prior run's
+ * extraction, a roster row) keeps whatever casing it arrived with, so an
+ * equality match silently never fires. Wildcards: `%` and `_` are LIKE
+ * metacharacters, and an underscore is common in a real local part, so
+ * `first_last@x.com` would otherwise also match `firstXlast@x.com` and could
+ * suppress a DIFFERENT person's outreach.
+ *
+ * The address itself is already free of PostgREST filter metacharacters (see
+ * EMAIL_KEY_RE), so the escaped result is safe to interpolate into a filter.
+ */
+export function emailIlikePattern(address: string): string {
+  return address.replace(/[%_\\]/g, (m) => `\\${m}`);
+}

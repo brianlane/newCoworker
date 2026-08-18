@@ -28,6 +28,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
   contactAliasOrFilter,
   contactKeyEmail,
+  emailIlikePattern,
   isEmailContactKey
 } from "../_shared/contact_key.ts";
 import {
@@ -2706,6 +2707,11 @@ async function findDuplicateLeadRun(
   // way a fully custom phone var name already does.
   const leadEmail = contactKeyEmail(leadE164);
   if (leadEmail && !emailVar) return null;
+  // Case-insensitive on purpose. contactKeyEmail lowercases the key, but the
+  // prior run stored whatever casing ITS extraction produced ("VALM0417@
+  // Gmail.com"), so an equality would never match and every email re-submission
+  // would sail through the guard. ilike with the LIKE wildcards escaped is
+  // exact-modulo-case: an underscore in a local part stays an underscore.
   try {
     const { data: selfRow, error: selfErr } = await supabase
       .from("ai_flow_runs")
@@ -2732,7 +2738,7 @@ async function findDuplicateLeadRun(
         .neq("id", run.id)
         .or(
           leadEmail
-            ? `context->vars->>${emailVar}.eq.${leadEmail}`
+            ? `context->vars->>${emailVar}.ilike.${emailIlikePattern(leadEmail)}`
             : `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
         )
         .gte("updated_at", sinceIso)

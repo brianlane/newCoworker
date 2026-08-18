@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMAIL_CONTACT_KEY_PREFIX,
+  emailIlikePattern,
   isFilterSafeEmail,
   classifyContactKey,
   contactAliasOrFilter,
@@ -173,5 +174,20 @@ describe("isFilterSafeEmail", () => {
     expect(isFilterSafeEmail("a,b@example.com")).toBe(false);
     expect(isFilterSafeEmail("a(b@example.com")).toBe(false);
     expect(isFilterSafeEmail(null)).toBe(false);
+  });
+});
+
+describe("emailIlikePattern", () => {
+  it("escapes the LIKE wildcards so the match is literal", () => {
+    // An underscore is common in a real local part. Unescaped, this pattern
+    // would also match firstXlast@x.com and could suppress a DIFFERENT
+    // person's outreach in the duplicate-lead guard.
+    expect(emailIlikePattern("first_last@x.com")).toBe("first\\_last@x.com");
+    expect(emailIlikePattern("a%b@x.com")).toBe("a\\%b@x.com");
+    expect(emailIlikePattern("a\\b@x.com")).toBe("a\\\\b@x.com");
+  });
+
+  it("leaves an ordinary address untouched", () => {
+    expect(emailIlikePattern(ADDRESS)).toBe(ADDRESS);
   });
 });

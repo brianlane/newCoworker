@@ -24,7 +24,7 @@ function makeDb(byTable: Record<string, Scripted[]>) {
   const from = (table: string) => {
     const pop = () => Promise.resolve(queues[table]?.shift() ?? { data: null, error: null });
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "in", "limit"]) {
+    for (const m of ["select", "in", "limit", "not"]) {
       builder[m] = () => builder;
     }
     // `eq` is terminal for the roster LOAD (no maybeSingle) and chained for
@@ -58,7 +58,9 @@ describe("staffNumberCheck", () => {
     const db = makeDb({
       ai_flow_team_members: [
         { data: null, error: null }, // phone arm: no match
-        { data: { id: "m2" }, error: null } // email arm: teammate
+        // Stored with the casing the dashboard saved, NOT lowercased: an
+        // equality done in the database would miss this teammate entirely.
+        { data: [{ email: "Dave@Example.com" }], error: null }
       ]
     });
     expect(
@@ -70,7 +72,25 @@ describe("staffNumberCheck", () => {
     const db = makeDb({
       ai_flow_team_members: [
         { data: null, error: null }, // phone arm
-        { data: null, error: null } // email arm
+        // A null page and a row with no address both degrade to "no match"
+        // rather than throwing: the filter should exclude them, but the roster
+        // is the wrong place to discover a broken assumption.
+        { data: [{ email: null }, { email: "  " }], error: null }
+      ],
+      business_telnyx_settings: [{ data: null, error: null }],
+      businesses: [{ data: null, error: null }],
+      notification_preferences: [{ data: null, error: null }]
+    });
+    expect(
+      await staffNumberCheck(db, BIZ, ["email:stranger@example.com"], "customer")
+    ).toEqual({ staff: false, readFailed: false });
+  });
+
+  it("treats a null roster page as no match", async () => {
+    const db = makeDb({
+      ai_flow_team_members: [
+        { data: null, error: null }, // phone arm
+        { data: null, error: null } // roster emails: null page
       ],
       business_telnyx_settings: [{ data: null, error: null }],
       businesses: [{ data: null, error: null }],

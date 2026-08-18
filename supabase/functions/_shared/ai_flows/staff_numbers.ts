@@ -146,22 +146,30 @@ export async function staffNumberCheck(
   // roster's emails instead. Same doctrine, same fail-safe: a read error means
   // staff, because filing (or tagging) a teammate under a lead's name is worse
   // than a missing contact row.
-  const addresses = contactNumbers
-    .map((n) => contactKeyEmail(n))
-    .filter((a): a is string => a !== null);
-  if (addresses.length > 0) {
-    const { data: byEmail, error: emailErr } = await supabase
+  const addresses = new Set(
+    contactNumbers.map((n) => contactKeyEmail(n)).filter((a): a is string => a !== null)
+  );
+  if (addresses.size > 0) {
+    // Compared in JS, lowercased on BOTH sides. contactKeyEmail lowercases (an
+    // address is one identity however it was typed) while roster emails keep
+    // whatever casing the dashboard or a CSV import stored, so a database-side
+    // equality would miss `Dave@Example.com` and the protection would quietly
+    // not apply. A roster is a handful of rows, so reading it whole is cheap.
+    const { data: roster, error: emailErr } = await supabase
       .from("ai_flow_team_members")
-      .select("id")
+      .select("email")
       .eq("business_id", businessId)
-      .in("email", addresses)
-      .limit(1)
-      .maybeSingle();
+      .not("email", "is", null);
     if (emailErr) {
       console.error("staff roster email check", emailErr);
       return { staff: true, readFailed: true };
     }
-    if (byEmail != null) return { staff: true, readFailed: false };
+    const rosterEmails = ((roster ?? []) as Array<{ email?: string | null }>)
+      .map((m) => (m.email ?? "").trim().toLowerCase())
+      .filter(Boolean);
+    if (rosterEmails.some((e) => addresses.has(e))) {
+      return { staff: true, readFailed: false };
+    }
   }
   // isSelfPhone is the SHARED both-sides-normalized comparator (the same one
   // the extraction scrub and the send_sms self-send guard use), so the guards
