@@ -22,7 +22,7 @@ vi.mock("@/lib/messenger/db", () => ({
   setMessengerConversationReferral: vi.fn()
 }));
 vi.mock("@/lib/db/whatsapp-connections", () => ({
-  getWhatsAppConnectionByWabaId: vi.fn(),
+  listActiveWhatsAppConnectionsByWabaId: vi.fn(),
   updateWhatsAppTemplates: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
@@ -42,7 +42,7 @@ import {
   setMessengerConversationReferral
 } from "@/lib/messenger/db";
 import {
-  getWhatsAppConnectionByWabaId,
+  listActiveWhatsAppConnectionsByWabaId,
   updateWhatsAppTemplates
 } from "@/lib/db/whatsapp-connections";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -56,7 +56,7 @@ const byIg = vi.mocked(getActiveMetaConnectionByInstagramId);
 const findConv = vi.mocked(findMessengerConversation);
 const appendMsg = vi.mocked(appendMessengerMessage);
 const stampRef = vi.mocked(setMessengerConversationReferral);
-const wabaConn = vi.mocked(getWhatsAppConnectionByWabaId);
+const wabaConns = vi.mocked(listActiveWhatsAppConnectionsByWabaId);
 const setTemplates = vi.mocked(updateWhatsAppTemplates);
 const sysLog = vi.mocked(recordSystemLog);
 
@@ -77,10 +77,12 @@ beforeEach(() => {
   findConv.mockResolvedValue({ id: "conv-1" } as never);
   appendMsg.mockResolvedValue({ id: 9 } as never);
   stampRef.mockResolvedValue(true);
-  wabaConn.mockResolvedValue({
-    business_id: BIZ,
-    templates: { nc_contact_followup: { status: "APPROVED", language: "en" } }
-  } as never);
+  wabaConns.mockResolvedValue([
+    {
+      business_id: BIZ,
+      templates: { nc_contact_followup: { status: "APPROVED", language: "en_US" } }
+    }
+  ] as never);
   setTemplates.mockResolvedValue(undefined as never);
   sysLog.mockResolvedValue(undefined);
 });
@@ -257,11 +259,121 @@ describe("processMetaTemplateStatusEvent", () => {
     // is APPROVED, so this write is the entire fix.
     expect(await processMetaTemplateStatusEvent(STATUS)).toBe(true);
     expect(setTemplates).toHaveBeenCalledWith(BIZ, {
-      nc_contact_followup: { status: "PAUSED", language: "en" }
+      nc_contact_followup: { status: "PAUSED", language: "en_US", lastEvent: "PAUSED" }
     });
   });
 
-  it("tells the owner when an approved template goes bad", async () => {
+  it("keeps a SENDABLE event sendable instead of blocking it", async () => {
+    // Meta emits REINSTATED, not APPROVED, when a paused template becomes
+    // usable again. FLAGGED means at-risk-but-sendable and LOCKED means
+    // cannot-be-edited. Writing any of them verbatim would leave
+    // deliverWhatsApp refusing a template that works, until a manual
+    // reconnect refreshed it from Graph.
+    for (const event of ["APPROVED", "REINSTATED", "FLAGGED", "LOCKED"]) {
+      setTemplates.mockClear();
+      expect(await processMetaTemplateStatusEvent({ ...STATUS, status: event })).toBe(true);
+      expect(setTemplates).toHaveBeenCalledWith(BIZ, {
+        nc_contact_followup: { status: "APPROVED", language: "en_US", lastEvent: event }
+      });
+    }
+  });
+
+  it("blocks every event that genuinely stops sends", async () => {
+    for (const event of [
+      "PAUSED",
+      "REJECTED",
+      "DISABLED",
+      "PENDING",
+      "IN_APPEAL",
+      "ARCHIVED",
+      "DELETED",
+      "PENDING_DELETION",
+      "LIMIT_EXCEEDED"
+    ]) {
+      setTemplates.mockClear();
+      await processMetaTemplateStatusEvent({ ...STATUS, status: event });
+      const written = setTemplates.mock.calls[0][1] as Record<string, { status: string }>;
+      expect(written.nc_contact_followup.status).toBe(event);
+    }
+  });
+
+  it("keeps Meta's raw event alongside, so FLAGGED is not silently hidden", async () => {
+    await processMetaTemplateStatusEvent({ ...STATUS, status: "FLAGGED" });
+    const written = setTemplates.mock.calls[0][1] as Record<string, { lastEvent: string }>;
+    expect(written.nc_contact_followup.lastEvent).toBe("FLAGGED");
+  });
+
+  it("targets the LANGUAGE-KEYED entry, not the bare name", async () => {
+    // Stored state keys en_US bare and other languages with a suffix. Keying
+    // a Spanish update by the bare name would paused-flag the English variant
+    // and leave the Spanish one being sent.
+    wabaConns.mockResolvedValue([
+      {
+        business_id: BIZ,
+        templates: {
+          nc_contact_followup: { status: "APPROVED", language: "en_US" },
+          "nc_contact_followup:es": { status: "APPROVED", language: "es" }
+        }
+      }
+    ] as never);
+    await processMetaTemplateStatusEvent({ ...STATUS, language: "es" });
+    expect(setTemplates).toHaveBeenCalledWith(BIZ, {
+      nc_contact_followup: { status: "APPROVED", language: "en_US" },
+      "nc_contact_followup:es": { status: "PAUSED", language: "es", lastEvent: "PAUSED" }
+    });
+  });
+
+  it("normalizes every English code Meta sends onto the en_US key", async () => {
+    // The webhook sends en-US or plain en; we key English as en_US. Without
+    // normalizing, an English update would create a phantom key nothing reads.
+    for (const language of ["en", "en-US", "en_US", ""]) {
+      setTemplates.mockClear();
+      await processMetaTemplateStatusEvent({ ...STATUS, language });
+      const written = setTemplates.mock.calls[0][1] as Record<string, unknown>;
+      expect(Object.keys(written)).toEqual(["nc_contact_followup"]);
+    }
+  });
+
+  it("normalizes a regional Spanish code onto the es key", async () => {
+    wabaConns.mockResolvedValue([
+      {
+        business_id: BIZ,
+        templates: { "nc_contact_followup:es": { status: "APPROVED", language: "es" } }
+      }
+    ] as never);
+    await processMetaTemplateStatusEvent({ ...STATUS, language: "es_MX" });
+    const written = setTemplates.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(written)).toEqual(["nc_contact_followup:es"]);
+  });
+
+  it("applies to EVERY tenant on a shared WABA", async () => {
+    // A singular lookup would have errored on a shared WABA and dropped the
+    // update for all of them.
+    wabaConns.mockResolvedValue([
+      { business_id: BIZ, templates: { nc_contact_followup: { status: "APPROVED", language: "en_US" } } },
+      { business_id: "biz-2", templates: { nc_contact_followup: { status: "APPROVED", language: "en_US" } } }
+    ] as never);
+    expect(await processMetaTemplateStatusEvent(STATUS)).toBe(true);
+    expect(setTemplates).toHaveBeenCalledTimes(2);
+    expect(sysLog).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps going when one tenant's write fails", async () => {
+    wabaConns.mockResolvedValue([
+      { business_id: BIZ, templates: { nc_contact_followup: { status: "APPROVED", language: "en_US" } } },
+      { business_id: "biz-2", templates: { nc_contact_followup: { status: "APPROVED", language: "en_US" } } }
+    ] as never);
+    setTemplates.mockRejectedValueOnce(new Error("db down"));
+    setTemplates.mockResolvedValueOnce(undefined as never);
+    expect(await processMetaTemplateStatusEvent(STATUS)).toBe(true);
+    // Only the tenant that succeeded gets the owner-facing log.
+    expect(sysLog).toHaveBeenCalledTimes(1);
+
+    setTemplates.mockRejectedValue("db down, no Error");
+    expect(await processMetaTemplateStatusEvent(STATUS)).toBe(false);
+  });
+
+  it("tells the owner when a template stops being sendable", async () => {
     await processMetaTemplateStatusEvent(STATUS);
     expect(sysLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -280,16 +392,15 @@ describe("processMetaTemplateStatusEvent", () => {
     expect(msg).not.toContain("()");
   });
 
-  it("stays quiet when a template becomes APPROVED", async () => {
-    // Good news needs no alert; the status write still happens.
-    expect(await processMetaTemplateStatusEvent({ ...STATUS, status: "APPROVED" })).toBe(true);
+  it("stays quiet for an event that keeps the template sendable", async () => {
+    expect(await processMetaTemplateStatusEvent({ ...STATUS, status: "REINSTATED" })).toBe(true);
     expect(setTemplates).toHaveBeenCalled();
     expect(sysLog).not.toHaveBeenCalled();
   });
 
   it("REFUSES to invent an entry for a template we never registered", async () => {
-    // An unknown name is somebody else's template on the same WABA, and
-    // adding it would make deliverWhatsApp consider sending it.
+    // An unknown key is somebody else's template on the same WABA, and adding
+    // it would make deliverWhatsApp consider sending it.
     expect(
       await processMetaTemplateStatusEvent({ ...STATUS, templateName: "not_ours" })
     ).toBe(false);
@@ -297,29 +408,30 @@ describe("processMetaTemplateStatusEvent", () => {
   });
 
   it("preserves the other templates and the entry's other fields", async () => {
-    wabaConn.mockResolvedValue({
-      business_id: BIZ,
-      templates: {
-        nc_contact_followup: { status: "APPROVED", language: "en", id: "t-1" },
-        nc_owner_alert: { status: "APPROVED", language: "en" }
+    wabaConns.mockResolvedValue([
+      {
+        business_id: BIZ,
+        templates: {
+          nc_contact_followup: { status: "APPROVED", language: "en_US", id: "t-1" },
+          nc_owner_alert: { status: "APPROVED", language: "en_US" }
+        }
       }
-    } as never);
+    ] as never);
     await processMetaTemplateStatusEvent(STATUS);
     expect(setTemplates).toHaveBeenCalledWith(BIZ, {
-      nc_contact_followup: { status: "PAUSED", language: "en", id: "t-1" },
-      nc_owner_alert: { status: "APPROVED", language: "en" }
+      nc_contact_followup: { status: "PAUSED", language: "en_US", id: "t-1", lastEvent: "PAUSED" },
+      nc_owner_alert: { status: "APPROVED", language: "en_US" }
     });
   });
 
-  it("does nothing for an unconnected WABA, and tolerates no templates", async () => {
-    wabaConn.mockResolvedValue(null);
+  it("does nothing for an unconnected WABA, tolerates no templates, never throws", async () => {
+    wabaConns.mockResolvedValue([]);
     expect(await processMetaTemplateStatusEvent(STATUS)).toBe(false);
 
-    // A lookup failure is swallowed the same way, not thrown at the webhook.
-    wabaConn.mockRejectedValue(new Error("db down"));
+    wabaConns.mockRejectedValue(new Error("db down"));
     expect(await processMetaTemplateStatusEvent(STATUS)).toBe(false);
 
-    wabaConn.mockResolvedValue({ business_id: BIZ, templates: null } as never);
+    wabaConns.mockResolvedValue([{ business_id: BIZ, templates: null }] as never);
     expect(await processMetaTemplateStatusEvent(STATUS)).toBe(false);
   });
 });

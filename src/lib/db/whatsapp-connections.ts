@@ -18,10 +18,18 @@ import {
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Per-template review status, keyed by template name. */
+/**
+ * Per-template review status, keyed by whatsappTemplateStateKey(name,
+ * language): the bare name for en_US, `name:es` for other languages.
+ *
+ * `status` is what deliverWhatsApp gates on and is normalized to APPROVED for
+ * every Meta event that still permits sending (REINSTATED, FLAGGED, LOCKED).
+ * `lastEvent` keeps Meta's raw event so the owner-facing detail can name the
+ * real state, e.g. a FLAGGED template that is sendable but at risk.
+ */
 export type WhatsAppTemplatesState = Record<
   string,
-  { status: string; language: string }
+  { status: string; language: string; lastEvent?: string }
 >;
 
 type StoredWhatsAppConnectionRow = {
@@ -128,23 +136,30 @@ export async function getActiveWhatsAppConnectionByPhoneNumberId(
 }
 
 /**
- * The connection behind a WABA id. Template status webhooks name the WABA,
- * not the phone number, so the phone-number lookup cannot serve them.
+ * EVERY active connection on a WABA id. Plural because `waba_id` carries no
+ * unique constraint and a WABA can legitimately be shared across tenants,
+ * which is precisely what isWabaClaimedByOtherBusiness exists to detect. A
+ * maybeSingle() here would ERROR on a shared WABA, and a caller swallowing
+ * that error would silently drop the update for every tenant on it.
+ *
+ * Template status webhooks name the WABA, not the phone number, so the
+ * phone-number lookup cannot serve them.
  */
-export async function getWhatsAppConnectionByWabaId(
+export async function listActiveWhatsAppConnectionsByWabaId(
   wabaId: string,
   client?: SupabaseClient
-): Promise<WhatsAppConnectionRow | null> {
+): Promise<WhatsAppConnectionRow[]> {
+  const id = wabaId.trim();
+  if (!id) return [];
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("whatsapp_connections")
     .select(ALL_COLUMNS)
-    .eq("waba_id", wabaId)
+    .eq("waba_id", id)
     .eq("is_active", true)
-    .maybeSingle();
-  if (error) throw new Error(`getWhatsAppConnectionByWabaId: ${error.message}`);
-  if (!data) return null;
-  return toDecryptedRow(data as unknown as StoredWhatsAppConnectionRow);
+    .limit(200);
+  if (error) throw new Error(`listActiveWhatsAppConnectionsByWabaId: ${error.message}`);
+  return ((data ?? []) as unknown as StoredWhatsAppConnectionRow[]).map(toDecryptedRow);
 }
 
 /**

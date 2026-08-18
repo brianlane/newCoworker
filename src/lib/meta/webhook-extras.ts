@@ -25,10 +25,10 @@ import {
   type MessengerPlatform
 } from "@/lib/messenger/db";
 import {
-  getWhatsAppConnectionByWabaId,
+  listActiveWhatsAppConnectionsByWabaId,
   updateWhatsAppTemplates
 } from "@/lib/db/whatsapp-connections";
-import { getMetaAppId } from "@/lib/meta/client";
+import { getMetaAppId, whatsappTemplateStateKey } from "@/lib/meta/client";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import type {
@@ -168,6 +168,37 @@ export async function processMetaReferralEvent(event: MetaReferralEvent): Promis
 }
 
 /**
+ * Meta's template events that still mean "you can send this".
+ *
+ * deliverWhatsApp gates on `status === "APPROVED"` and nothing else, so
+ * writing an event verbatim is wrong in BOTH directions, and the dangerous
+ * direction is blocking a template that works:
+ *
+ *   REINSTATED  no longer flagged or disabled, sendable again
+ *   FLAGGED     negative feedback, AT RISK but still sendable
+ *   LOCKED      cannot be EDITED, still sendable
+ *
+ * Everything else (PAUSED, REJECTED, DISABLED, PENDING, IN_APPEAL, ARCHIVED,
+ * DELETED, PENDING_DELETION, LIMIT_EXCEEDED) genuinely stops sends.
+ */
+const SENDABLE_TEMPLATE_EVENTS = new Set(["APPROVED", "REINSTATED", "FLAGGED", "LOCKED"]);
+
+/**
+ * Normalize Meta's language code to the one our template keys use.
+ *
+ * We key English as `en_US`; the webhook sends `en-US` or plain `en`
+ * depending on how the template was created. Without this a Spanish update
+ * would land on the English entry, or an English one would create a phantom
+ * `nc_owner_alert:en-US` key that nothing reads.
+ */
+function templateLanguageKey(language: string): string {
+  const normalized = language.trim().replace("-", "_");
+  if (!normalized || normalized === "en" || normalized.startsWith("en_")) return "en_US";
+  // "es_MX" and "es" both address our single Spanish variant.
+  return normalized.split("_")[0];
+}
+
+/**
  * Apply a WhatsApp template status change to the stored template state.
  *
  * deliverWhatsApp refuses to send an out-of-window message unless the stored
@@ -178,43 +209,71 @@ export async function processMetaReferralEvent(event: MetaReferralEvent): Promis
 export async function processMetaTemplateStatusEvent(
   event: MetaTemplateStatusEvent
 ): Promise<boolean> {
-  const connection = await getWhatsAppConnectionByWabaId(event.wabaId).catch(() => null);
-  if (!connection) {
+  // Plural: a WABA can be shared across tenants, and a singular lookup would
+  // error on that and drop the update for all of them.
+  const connections = await listActiveWhatsAppConnectionsByWabaId(event.wabaId).catch(() => []);
+  if (connections.length === 0) {
     logger.warn("meta template status for unconnected waba", { wabaId: event.wabaId });
     return false;
   }
-  const templates = connection.templates ?? {};
-  const existing = templates[event.templateName];
-  // Only touch a template we already track. An unknown name is somebody
-  // else's template on the same WABA, and inventing an entry for it would
-  // make deliverWhatsApp consider sending something we never registered.
-  if (!existing) return false;
 
-  const next = {
-    ...templates,
-    [event.templateName]: { ...existing, status: event.status }
-  };
-  await updateWhatsAppTemplates(connection.business_id, next);
+  // Language-aware key: en_US keeps the bare name, other languages are
+  // suffixed. Getting this wrong points a Spanish update at the English entry.
+  const key = whatsappTemplateStateKey(event.templateName, templateLanguageKey(event.language));
+  const sendable = SENDABLE_TEMPLATE_EVENTS.has(event.status);
+  // What deliverWhatsApp gates on. The raw event is kept alongside so the
+  // owner-facing detail can still name the real state.
+  const status = sendable ? "APPROVED" : event.status;
 
-  // An approved template going bad is the case worth surfacing: it means
-  // out-of-window WhatsApp sends are about to start skipping.
-  if (event.status !== "APPROVED") {
-    await recordSystemLog({
+  let applied = false;
+  for (const connection of connections) {
+    const templates = connection.templates ?? {};
+    const existing = templates[key];
+    // Only touch a template we already track. An unknown key is somebody
+    // else's template on the same WABA, and inventing an entry for it would
+    // make deliverWhatsApp consider sending something we never registered.
+    if (!existing) continue;
+
+    try {
+      await updateWhatsAppTemplates(connection.business_id, {
+        ...templates,
+        [key]: { ...existing, status, lastEvent: event.status }
+      });
+    } catch (err) {
+      logger.error("meta template status write failed", {
+        businessId: connection.business_id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      continue;
+    }
+    applied = true;
+
+    // A template that stopped being sendable is the case worth surfacing: it
+    // means out-of-window WhatsApp sends are about to start skipping.
+    if (!sendable) {
+      await recordSystemLog({
+        businessId: connection.business_id,
+        source: "app",
+        level: "warn",
+        event: "whatsapp_template_status_changed",
+        message:
+          `WhatsApp template ${event.templateName} is now ${event.status}` +
+          (event.reason ? ` (${event.reason})` : "") +
+          ". Messages sent outside the 24-hour window will be skipped until it is approved again.",
+        payload: {
+          template: event.templateName,
+          key,
+          status: event.status,
+          reason: event.reason
+        }
+      });
+    }
+    logger.info("meta template status applied", {
       businessId: connection.business_id,
-      source: "app",
-      level: "warn",
-      event: "whatsapp_template_status_changed",
-      message:
-        `WhatsApp template ${event.templateName} is now ${event.status}` +
-        (event.reason ? ` (${event.reason})` : "") +
-        ". Messages sent outside the 24-hour window will be skipped until it is approved again.",
-      payload: { template: event.templateName, status: event.status, reason: event.reason }
+      key,
+      event: event.status,
+      status
     });
   }
-  logger.info("meta template status applied", {
-    businessId: connection.business_id,
-    template: event.templateName,
-    status: event.status
-  });
-  return true;
+  return applied;
 }
