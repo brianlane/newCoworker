@@ -119,10 +119,10 @@ const STOP_FIELD_DESCRIPTION =
 /** The three follow-ups, in order. Amy's voice, and short enough to read on a phone. */
 export const FOLLOW_UPS: ReadonlyArray<{ subject: string; body: string }> = [
   {
-    subject: "Following up on your home search, {{vars.lead_name}}",
+    subject: "About your home search, {{vars.lead_name}}",
     body:
       "Hi {{vars.lead_name}},\n\n" +
-      "I reached out yesterday and wanted to make sure my note did not get buried.\n\n" +
+      "I saw your enquiry come through and wanted to reach out personally.\n\n" +
       "I do not have a phone number for you, so email is the best way for us to start. " +
       "If you just reply to this message with a good time and a number, I will call you myself.\n\n" +
       "A few things I can send over in the meantime, whichever is useful:\n" +
@@ -155,7 +155,26 @@ export const FOLLOW_UPS: ReadonlyArray<{ subject: string; body: string }> = [
   }
 ];
 
-/** The mailbox poll that decides whether the cadence keeps going. */
+/**
+ * The mailbox poll that decides whether the cadence keeps going.
+ *
+ * KNOWN BOUND, shared with every other email_extract in this account: the
+ * fetch returns at most EMAIL_FETCH_MAX_MESSAGES (25) inbox messages in the
+ * window, newest first, and `fromContains` filters AFTER that fetch rather
+ * than narrowing it. On a mailbox taking more than 25 messages a day (Amy's
+ * takes lead alerts from four portals) a reply can sit outside those 25 and
+ * read as "none".
+ *
+ * The consequence is bounded and deliberately accepted here: the cadence
+ * sends one more email than it should, and the owner does not get the
+ * proactive alert. The reply itself is not lost, because it is sitting in the
+ * inbox this poll just read. The same exposure already applies to the bounce
+ * check the bad-phone branch has been running for months.
+ *
+ * If it does bite, the fix belongs in src/lib/ai-flows/email-fetch.ts (raise
+ * the cap, or push the sender filter into the Gmail/Graph query so the 25
+ * applies to candidates rather than to all mail), not in this flow.
+ */
 function checkStep(round: number): Step {
   const step: Step = {
     id: `${EFU}_check_${round}`,
@@ -173,7 +192,7 @@ function checkStep(round: number): Step {
   // Rounds after the first only look at all when the previous round found
   // nothing. A skipped check leaves its var unwritten, which reads as "" and
   // fails every gate below it, so one stop cascades through the rest.
-  if (round > 1) step.when = { var: stopVar(round - 1), equals: "none" };
+  if (round > 0) step.when = { var: stopVar(round - 1), equals: "none" };
   return step;
 }
 
@@ -183,7 +202,9 @@ function sleepStep(round: number): Step {
     type: "sleep",
     minutes: ROUND_GAP_MINUTES
   } as Step;
-  if (round > 1) step.when = { var: stopVar(round - 1), equals: "none" };
+  // Every sleep waits only while the previous read found nothing, so a reply
+  // stops the cadence instead of parking it for another day first.
+  step.when = { var: stopVar(round - 1), equals: "none" };
   return step;
 }
 
@@ -236,11 +257,28 @@ function roundSteps(round: number): Step[] {
 }
 
 /**
+ * The read that happens BEFORE any waiting.
+ *
+ * Round one sleeps a full day and then looks back a day, so its window opens
+ * where the sleep began, not where the flow's own intro email went out. The
+ * block runs at the END of the flow, after a team offer and a park that can
+ * last hours, so a lead who answered the intro promptly would fall outside
+ * round one's window entirely: the cadence would send three more emails to
+ * someone who had already replied.
+ *
+ * This read covers the day leading up to the block instead, and its answer
+ * gates the first sleep, so an early reply stops everything before it starts.
+ */
+function openingCheck(): Step[] {
+  return [checkStep(0), ...stopSteps(0)];
+}
+
+/**
  * Build the block. Flat rounds inside two gates: the schema caps branch
  * nesting at three levels, and a branch per round would have been five.
  */
 export function buildEmailFollowUpBlock(): Step {
-  const rounds: Step[] = [1, 2, 3].flatMap((n) => roundSteps(n));
+  const rounds: Step[] = [...openingCheck(), ...[1, 2, 3].flatMap((n) => roundSteps(n))];
 
   // Two nested gates rather than one: a step `when` carries exactly one
   // condition, and this needs both "no phone" and "has an email".

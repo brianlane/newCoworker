@@ -83,13 +83,25 @@ describe("the gates that decide who gets this at all", () => {
 });
 
 describe("the stop cascade", () => {
-  it("round 1 reads the mailbox unconditionally; later rounds only if the last one found nothing", () => {
-    expect(stepById(`${EFU}_check_1`).when).toBeUndefined();
-    expect(stepById(`${EFU}_wait_1`).when).toBeUndefined();
-    for (const n of [2, 3]) {
+  it("reads the mailbox BEFORE the first sleep, so an early reply stops it starting", () => {
+    // The block runs at the end of the flow, after a team offer and a park
+    // that can last hours. Without this read, round one's window would open a
+    // day after the sleep began and miss a prompt reply to the intro email
+    // entirely, sending three more emails to someone who already answered.
+    expect(stepById(`${EFU}_check_0`).when).toBeUndefined();
+    expect(stepById(`${EFU}_wait_1`).when).toEqual({ var: stopVar(0), equals: "none" });
+  });
+
+  it("every later read and sleep only happens if the last read found nothing", () => {
+    for (const n of [1, 2, 3]) {
       expect(stepById(`${EFU}_check_${n}`).when).toEqual({ var: stopVar(n - 1), equals: "none" });
       expect(stepById(`${EFU}_wait_${n}`).when).toEqual({ var: stopVar(n - 1), equals: "none" });
     }
+  });
+
+  it("alerts on the opening read too, so a reply that beat the cadence is not silent", () => {
+    expect(stepById(`${EFU}_replied_0`).when).toEqual({ var: stopVar(0), equals: "replied" });
+    expect(stepById(`${EFU}_bounced_0`).when).toEqual({ var: stopVar(0), equals: "bounced" });
   });
 
   it("a send is gated on its OWN round's answer, so a skipped check stops it too", () => {
@@ -104,9 +116,9 @@ describe("the stop cascade", () => {
   it("gives every round its own stop var, so one reply cannot alert three times", () => {
     // A single shared var is sticky once it reads "replied": a flat cadence
     // gated on it would re-alert on every later round for one reply.
-    const vars = [1, 2, 3].map(stopVar);
-    expect(new Set(vars).size).toBe(3);
-    for (const n of [1, 2, 3]) {
+    const vars = [0, 1, 2, 3].map(stopVar);
+    expect(new Set(vars).size).toBe(4);
+    for (const n of [0, 1, 2, 3]) {
       expect(stepById(`${EFU}_replied_${n}`).when).toEqual({ var: stopVar(n), equals: "replied" });
       expect(stepById(`${EFU}_bounced_${n}`).when).toEqual({ var: stopVar(n), equals: "bounced" });
     }
@@ -117,7 +129,7 @@ describe("the mailbox read", () => {
   it("always writes a no-match value, so a quiet mailbox does not leave the ladder inert", () => {
     // Amy's HomeLight reveal ladder sat inert exactly this way (2026-08-16):
     // no noMatchVars, so the gate var never existed and nothing ever fired.
-    for (const n of [1, 2, 3]) {
+    for (const n of [0, 1, 2, 3]) {
       const check = stepById(`${EFU}_check_${n}`) as Step & { noMatchVars: Record<string, string> };
       expect(check.noMatchVars).toEqual({ [stopVar(n)]: "none" });
     }
@@ -156,6 +168,15 @@ describe("the copy", () => {
 
   it("asks for a reply rather than a call back, since there is no phone", () => {
     for (const copy of FOLLOW_UPS) expect(copy.body.toLowerCase()).toContain("repl");
+  });
+
+  it("the first email never claims Amy already wrote to them", () => {
+    // Two of the four target flows (Realtor.com, Clever Accept) send an
+    // email-only lead nothing at all, so this IS first contact there.
+    const first = `${FOLLOW_UPS[0].subject}\n${FOLLOW_UPS[0].body}`.toLowerCase();
+    for (const claim of ["reached out yesterday", "my note", "i emailed", "following up on my"]) {
+      expect(first).not.toContain(claim);
+    }
   });
 
   it("carries no em dashes anywhere", () => {

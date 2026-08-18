@@ -561,6 +561,12 @@ ADDRESS APPEARING in the message catches a reply and a delivery failure alike,
 and one Gemini field says which (`replied` / `bounced` / `none`).
 `lookbackMinutes` maxes at 1440, which is exactly the gap between rounds.
 
+An opening read runs BEFORE the first sleep. The block sits at the end of the
+flow, after a team offer and a park that can last hours, so round one's window
+would otherwise open a day after that and miss a prompt reply to the intro
+email entirely, sending three more emails to somebody who had already
+answered.
+
 **Two traps this design is shaped around:**
 
 - `noMatchVars` is load-bearing, not polish. Without it a quiet mailbox writes
@@ -571,6 +577,17 @@ and one Gemini field says which (`replied` / `bounced` / `none`).
   it would re-alert the owner on every later round for a single reply. The
   per-round var also carries the stop cascade without a branch per round,
   which matters because the schema caps branch nesting at three levels.
+
+**A known bound, accepted on purpose.** The mailbox fetch returns at most 25
+inbox messages in the window, newest first, and `fromContains` filters AFTER
+that fetch rather than narrowing it. Amy takes lead alerts from four portals,
+so on a busy day a reply can sit outside those 25 and read as `none`. The
+consequence is one extra follow-up and no proactive alert; the reply itself is
+not lost, because it is sitting in the inbox that poll just read. The same
+exposure already applies to the bounce check the bad-phone branch has run for
+months. If it bites, the fix is in `src/lib/ai-flows/email-fetch.ts` (raise
+`EMAIL_FETCH_MAX_MESSAGES`, or push the sender filter into the Gmail/Graph
+query), not in the flow.
 
 A reply goes to whoever owns the lead (`notify_lead_owner`, falling back to
 the team); a bounce goes to Amy with the standard `‼️‼️‼️‼️‼️` banner, because
