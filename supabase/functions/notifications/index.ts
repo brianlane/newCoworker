@@ -42,6 +42,10 @@ import {
   releaseOperationalSms
 } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
+import {
+  notificationMustBePhiFree,
+  phiFreeNotificationCopy
+} from "../_shared/hipaa_notification_redaction.ts";
 import { resolveInternationalFrom } from "../_shared/sms_international_gateway.ts";
 import { smsDestinationCountry } from "../_shared/sms_destination_rates.ts";
 import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
@@ -64,6 +68,11 @@ type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
   email: string | null;
+  /**
+   * `businesses.hipaa_mode`. UNDEFINED (not false) when the row could not be
+   * read; notificationMustBePhiFree treats unknown as "redact".
+   */
+  hipaaMode?: boolean;
   phone: string | null;
   smsUrgent: boolean;
   whatsappUrgent: boolean;
@@ -192,11 +201,15 @@ async function resolveTargets(
 
   const { data: business } = await supa
     .from("businesses")
-    .select("owner_email")
+    .select("owner_email, hipaa_mode")
     .eq("id", businessId)
     .maybeSingle();
+  // Left UNDEFINED when no row came back, so notificationMustBePhiFree can
+  // fail closed on an unreadable business rather than assuming "not HIPAA".
+  let hipaaMode: boolean | undefined;
   if (business) {
     ownerEmail = ((business.owner_email as string | null) ?? "").trim() || null;
+    hipaaMode = business.hipaa_mode === true;
   }
 
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
@@ -222,7 +235,8 @@ async function resolveTargets(
     emailUrgent,
     dashboardAlerts,
     unsubscribed,
-    routing
+    routing,
+    hipaaMode
   };
 }
 
@@ -409,6 +423,13 @@ serve(async (req: Request) => {
       ? String(record.log_payload.contact_e164)
       : null;
   const targets = await resolveTargets(supa, record.business_id, scopedContactE164);
+  // HIPAA lane: every channel below hands content to a vendor that cannot
+  // hold PHI. Shared with the Node dispatcher so the rule cannot drift
+  // between the two implementations. `summary` itself stays intact: the
+  // recordRow history lives in a store the BAA covers.
+  const phiFree = notificationMustBePhiFree(targets.hipaaMode)
+    ? phiFreeNotificationCopy(dashboardUrl)
+    : null;
   const basePayload: Record<string, unknown> = {
     summary,
     logId: record.id,
@@ -650,7 +671,8 @@ serve(async (req: Request) => {
     // Trim trailing periods so a "."-terminated summary can't produce
     // "dashboard.. Details:" (mirrors dispatch.ts). Built before the meter
     // so the counted units match the exact body sent.
-    const alertLine = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+    const alertLine =
+      phiFree?.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     const smsText = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
     // Owner alerts are METERED against the tenant's monthly pool like all
     // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
@@ -814,26 +836,30 @@ serve(async (req: Request) => {
       // and alert summaries can embed multiline provider errors: the KYP
       // Telnyx 40310 alert email died exactly that way (Aug 1 2026). One
       // line, clipped; the body keeps the full summary.
-      const subject = `Urgent: ${oneLineSubject(summary)}`;
+      const subject = phiFree?.emailSubject ?? `Urgent: ${oneLineSubject(summary)}`;
       // Fallback records append the delivery explanation so the owner
       // knows why this arrived by email and (only when it is their number
       // that cannot work) what to change.
       const noteSuffix =
         record.task_type === "owner_notify_fallback" ? `\n\n${fallbackNote}` : "";
-      const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}${noteSuffix}\n\nView details: ${dashboardUrl}`;
+      const baseText =
+        phiFree?.emailBody ??
+        `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}${noteSuffix}\n\nView details: ${dashboardUrl}`;
       const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe: ${unsubscribeUrl}`;
       const html = buildBrandedEmailHtml({
         siteUrl: appUrl,
         documentTitle: subject,
-        heading: subject,
-        bodyBlocks: [
-          { kind: "text", text: "Your AI Coworker flagged an urgent event." },
-          { kind: "text", text: `Summary: ${summary}` },
-          { kind: "text", text: `Business ID: ${record.business_id}` },
-          ...(record.task_type === "owner_notify_fallback"
-            ? [{ kind: "text" as const, text: fallbackNote }]
-            : [])
-        ],
+        heading: phiFree?.emailHeading ?? subject,
+        bodyBlocks: phiFree
+          ? [{ kind: "text" as const, text: phiFree.emailBody }]
+          : [
+              { kind: "text", text: "Your AI Coworker flagged an urgent event." },
+              { kind: "text", text: `Summary: ${summary}` },
+              { kind: "text", text: `Business ID: ${record.business_id}` },
+              ...(record.task_type === "owner_notify_fallback"
+                ? [{ kind: "text" as const, text: fallbackNote }]
+                : [])
+            ],
         cta: { label: "Open dashboard", href: dashboardUrl },
         unsubscribeUrl,
         recipientEmail: targets.email
@@ -964,7 +990,9 @@ serve(async (req: Request) => {
         body: JSON.stringify({
           businessId: record.business_id,
           to: targets.phone,
-          text: `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
+          text:
+            phiFree?.smsBody ??
+            `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
           audience: "owner"
         })
       });
@@ -1094,13 +1122,18 @@ serve(async (req: Request) => {
         },
         body: JSON.stringify({
           businessId: record.business_id,
-          text: `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
+          text:
+            phiFree?.smsBody ??
+            `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
           // Same compact card buildSlackAlertBlocks renders on the Node
           // path, kept in lockstep so both pipelines look identical.
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: `*New Coworker Alert*\n${summary}` }
+              text: {
+                type: "mrkdwn",
+                text: `*New Coworker Alert*\n${phiFree?.summary ?? summary}`
+              }
             },
             {
               type: "context",

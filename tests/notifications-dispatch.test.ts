@@ -1983,6 +1983,164 @@ describe("notifications/dispatch", () => {
       expect(smsRowOf()?.status).toBe("sent");
     });
 
+    describe("HIPAA lane: PHI-free notifications", () => {
+      /** Everything a HIPAA alert must never put in front of a vendor. */
+      const PHI = "Jane Doe says her lower back pain is worse after the epidural";
+
+      async function dispatchAsHipaaTenant(extra: Record<string, unknown> = {}) {
+        vi.mocked(getBusiness).mockResolvedValue({ ...BUSINESS, hipaa_mode: true } as never);
+        vi.mocked(slackAlertTargetState).mockResolvedValue({
+          connected: true,
+          deliverable: true,
+          alertChannelName: "alerts"
+        });
+        vi.mocked(deliverSlackAlert).mockResolvedValue({
+          ok: true,
+          channelId: "C1",
+          channelName: "alerts"
+        } as never);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: PHI,
+          kind: "urgent_alert",
+          emailBody: PHI,
+          emailSubject: PHI,
+          emailHeading: PHI,
+          smsBody: PHI,
+          ctaPath: `/dashboard/customers/${encodeURIComponent(LEAD_PHONE)}`,
+          ...extra
+        });
+      }
+
+      /** Every string this dispatch handed to a third party. */
+      function outboundStrings(): string[] {
+        const out: string[] = [];
+        for (const call of vi.mocked(sendOwnerEmail).mock.calls) {
+          out.push(String(call[2] ?? ""));
+          const body = call[3] as { text?: string; html?: string } | string | undefined;
+          out.push(typeof body === "string" ? body : `${body?.text ?? ""} ${body?.html ?? ""}`);
+        }
+        for (const call of vi.mocked(sendTelnyxSms).mock.calls) out.push(String(call[2] ?? ""));
+        for (const call of vi.mocked(deliverWhatsApp).mock.calls) {
+          out.push(String((call[0] as { text?: string })?.text ?? ""));
+        }
+        for (const call of vi.mocked(deliverSlackAlert).mock.calls) {
+          const arg = call[0] as { text?: string; blocks?: unknown };
+          out.push(String(arg?.text ?? ""));
+          out.push(JSON.stringify(arg?.blocks ?? []));
+        }
+        return out.filter(Boolean);
+      }
+
+      it("keeps caller content off email, SMS, WhatsApp and Slack", async () => {
+        await dispatchAsHipaaTenant();
+        const sent = outboundStrings();
+        // Guard the guard: a vacuous pass if nothing was actually delivered.
+        expect(sent.length).toBeGreaterThan(0);
+        for (const text of sent) expect(text).not.toContain(PHI);
+      });
+
+      it("strips the contact deep link, which is itself an identifier", async () => {
+        await dispatchAsHipaaTenant();
+        for (const text of outboundStrings()) {
+          expect(text).not.toContain(encodeURIComponent(LEAD_PHONE));
+          expect(text).not.toContain(LEAD_PHONE);
+        }
+      });
+
+      it("beats an emailTemplate override too", async () => {
+        await dispatchAsHipaaTenant({
+          emailSubject: undefined,
+          emailBody: undefined,
+          emailHeading: undefined,
+          emailTemplate: () => ({
+            subject: PHI,
+            heading: PHI,
+            body: PHI,
+            ctaLabel: "Open",
+            ctaPath: "/dashboard"
+          })
+        });
+        for (const text of outboundStrings()) expect(text).not.toContain(PHI);
+      });
+
+      it("still tells the owner to go look", async () => {
+        await dispatchAsHipaaTenant();
+        const sent = outboundStrings().join(" ");
+        expect(sent).toContain("https://app.example.com/dashboard");
+        expect(sent).toMatch(/needs your attention/i);
+      });
+
+      it("keeps the REAL content in the dashboard history row", async () => {
+        // The notifications row is our own store, covered by the BAA. Redacting
+        // it would blind the owner to their own data without removing a single
+        // third-party disclosure.
+        await dispatchAsHipaaTenant();
+        const rows = vi.mocked(insertNotification).mock.calls.map((c) => c[0]);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => (r as { summary: string }).summary === PHI)).toBe(true);
+      });
+
+      it("a non-HIPAA tenant is completely unaffected, on every channel", async () => {
+        // This is the guard-the-guard for the negative tests above. If an
+        // argument index in outboundStrings() were wrong, that channel's text
+        // would never be inspected and its "does not contain PHI" assertion
+        // would pass for the wrong reason. Proving the SAME extraction finds
+        // the content when redaction is OFF is what makes the negatives mean
+        // something.
+        vi.mocked(getBusiness).mockResolvedValue({ ...BUSINESS, hipaa_mode: false } as never);
+        vi.mocked(slackAlertTargetState).mockResolvedValue({
+          connected: true,
+          deliverable: true,
+          alertChannelName: "alerts"
+        });
+        vi.mocked(deliverSlackAlert).mockResolvedValue({
+          ok: true,
+          channelId: "C1",
+          channelName: "alerts"
+        } as never);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: PHI,
+          kind: "urgent_alert",
+          emailSubject: PHI,
+          emailBody: PHI,
+          smsBody: PHI
+        });
+        expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalled();
+        expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
+        expect(vi.mocked(deliverSlackAlert)).toHaveBeenCalled();
+        expect(vi.mocked(deliverWhatsApp)).toHaveBeenCalled();
+        const sent = outboundStrings();
+        expect(sent.some((t) => t.includes(PHI))).toBe(true);
+        // Each channel individually, so one chatty channel cannot mask three
+        // silent ones.
+        expect(String(vi.mocked(sendOwnerEmail).mock.calls[0]?.[2])).toContain(PHI);
+        expect(String(vi.mocked(sendTelnyxSms).mock.calls[0]?.[2])).toContain(PHI);
+        const slackArg = vi.mocked(deliverSlackAlert).mock.calls[0]?.[0] as {
+          text?: string;
+          blocks?: unknown;
+        };
+        expect(`${slackArg?.text ?? ""}${JSON.stringify(slackArg?.blocks ?? [])}`).toContain(PHI);
+        expect(
+          String((vi.mocked(deliverWhatsApp).mock.calls[0]?.[0] as { text?: string })?.text)
+        ).toContain(PHI);
+      });
+
+      it("FAILS CLOSED when the business row cannot be read", async () => {
+        // getBusiness swallows its errors and returns null, so this is the
+        // realistic shape of a database blip, not an exotic one.
+        vi.mocked(getBusiness).mockResolvedValue(null as never);
+        await dispatchUrgentNotification({
+          businessId: BIZ,
+          summary: PHI,
+          kind: "urgent_alert",
+          smsBody: PHI
+        });
+        for (const text of outboundStrings()) expect(text).not.toContain(PHI);
+      });
+    });
+
     it("resolveNotificationTargets defaults whatsappReplacesSms to false and reads a stored true", async () => {
       const t1 = await resolveNotificationTargets(BIZ);
       expect(t1.whatsappReplacesSms).toBe(false);

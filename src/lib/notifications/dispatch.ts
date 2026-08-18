@@ -58,6 +58,10 @@ import {
 import { recordUnownedLeadAlert } from "../../../supabase/functions/_shared/unowned_lead_alerts";
 import { logger } from "@/lib/logger";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
+import {
+  notificationMustBePhiFree,
+  phiFreeNotificationCopy
+} from "../../../supabase/functions/_shared/hipaa_notification_redaction";
 import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
 import type { AppLocale } from "@/i18n/routing";
 
@@ -146,6 +150,12 @@ export type DispatchResult = {
 
 export type ResolvedTargets = {
   email: string | null;
+  /**
+   * `businesses.hipaa_mode`. UNDEFINED (not false) when the business row could
+   * not be read, which notificationMustBePhiFree treats as "redact": see that
+   * helper for why this one fails closed.
+   */
+  hipaaMode?: boolean;
   /** The business owner's login email — the address `ui_locale` is keyed to. */
   ownerEmail: string | null;
   /** The first of {@link phones}, kept so single-recipient callers are unchanged. */
@@ -292,9 +302,16 @@ export async function resolveNotificationTargets(
     });
   }
 
+  let hipaaMode: boolean | undefined;
   try {
     const business = await getBusiness(businessId);
     ownerEmail = business?.owner_email?.trim() || null;
+    // Definite boolean only when a row actually came back. getBusiness
+    // swallows its errors and returns null, so `business?.hipaa_mode === true`
+    // would quietly turn a failed read into "not HIPAA" and send content: the
+    // null case has to stay UNKNOWN for the fail-closed default to mean
+    // anything. The catch below covers a genuine throw the same way.
+    hipaaMode = business ? business.hipaa_mode === true : undefined;
   } catch (err) {
     logger.warn("resolveNotificationTargets: business lookup failed", {
       businessId,
@@ -360,6 +377,7 @@ export async function resolveNotificationTargets(
 
   return {
     phones,
+    hipaaMode,
     // Email redirects only when the roster row actually has an address;
     // otherwise it stays with the owner so a redirected alert keeps a second
     // delivery path (see contact_owner_target's emailTarget).
@@ -442,7 +460,20 @@ export async function dispatchUrgentNotification(
   // deeper destination: an alert that asks for one specific action should
   // land on the screen that performs it, and the button, the fallback link,
   // and the SMS link must not disagree about where that is.
-  const dashboardUrl = `${appUrl}${input.ctaPath ?? "/dashboard"}`;
+  // HIPAA lane: every channel below hands content to a vendor that cannot
+  // hold PHI (Resend has no BAA, Meta and Slack are third-party, and Telnyx
+  // SMS rides the narrow conduit exception). When on, the alert degrades to a
+  // doorbell and the real content is read back from the dashboard instead.
+  const phiFree = notificationMustBePhiFree(targets.hipaaMode)
+    ? phiFreeNotificationCopy(`${appUrl}/dashboard`)
+    : null;
+  // The deep link is itself a disclosure: callers pass paths like
+  // `/dashboard/customers/%2B15551234567`, and a patient's phone number is an
+  // identifier. A HIPAA alert points at the plain dashboard so neither the
+  // email button nor the SMS link carries one.
+  const dashboardUrl = phiFree
+    ? `${appUrl}/dashboard`
+    : `${appUrl}${input.ctaPath ?? "/dashboard"}`;
   const summary = input.summary;
   const kind = input.kind;
   const payload: Record<string, unknown> = {
@@ -593,12 +624,19 @@ export async function dispatchUrgentNotification(
     )}`;
     // Rendered here, not by the caller, because the locale is only known
     // once the recipient is resolved. Explicit fields still win over it.
-    const templated = input.emailTemplate?.(ownerLocale);
+    // Redacted copy is rebuilt here because the owner's locale is only known
+    // once the recipient is resolved. It wins over caller-supplied fields AND
+    // the template: an override is a caller convenience, never a way to put
+    // patient detail back into a HIPAA tenant's outbound mail.
+    const phiFreeEmail = phiFree ? phiFreeNotificationCopy(dashboardUrl, ownerLocale) : null;
+    const templated = phiFree ? undefined : input.emailTemplate?.(ownerLocale);
     const subject =
+      phiFreeEmail?.emailSubject ??
       input.emailSubject ??
       templated?.subject ??
       emailCopy.common.urgentSubject.replace("{summary}", summary);
     const body =
+      phiFreeEmail?.emailBody ??
       input.emailBody ??
       templated?.body ??
       `${emailCopy.common.urgentBody.replace("{summary}", summary)}\n\nView details: ${dashboardUrl}`;
@@ -612,7 +650,7 @@ export async function dispatchUrgentNotification(
       siteUrl: appUrl,
       documentTitle: subject,
       // Falling back to the subject keeps every existing alert byte-identical.
-      heading: input.emailHeading ?? templated?.heading ?? subject,
+      heading: phiFreeEmail?.emailHeading ?? input.emailHeading ?? templated?.heading ?? subject,
       bodyBlocks: bodyParagraphs.map((t) => ({ kind: "text" as const, text: t })),
       cta: {
         label: input.ctaLabel ?? templated?.ctaLabel ?? emailCopy.common.openDashboard,
@@ -717,7 +755,9 @@ export async function dispatchUrgentNotification(
       // The summary usually ends with "." and the template appends its own;
       // trim trailing periods so the alert never reads "dashboard.. Details:".
       const alertLine =
-        input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+        phiFree?.smsBody ??
+        input.smsBody ??
+        `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
       // The claim affordance goes on ONLY when a team broadcast is about to
       // record a row for the digit to attach to. Inviting "1" on an
       // owner-addressed alert would send it to an unrelated live offer, which
@@ -870,7 +910,9 @@ export async function dispatchUrgentNotification(
     // The summary usually ends with "." and the template appends its own;
     // trim trailing periods so the alert never reads "dashboard.. Details:".
     const text =
-      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+      phiFree?.smsBody ??
+      input.smsBody ??
+      `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     try {
       // Owner alerts follow the owner's saved UI language, keyed to the
       // OWNER login email (a custom alert_email may be someone else's).
@@ -948,12 +990,17 @@ export async function dispatchUrgentNotification(
     );
   } else {
     const text =
-      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+      phiFree?.smsBody ??
+      input.smsBody ??
+      `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     try {
       const delivered = await deliverSlackAlert({
         businessId: input.businessId,
         text,
-        blocks: buildSlackAlertBlocks({ summary, detailsUrl: dashboardUrl })
+        blocks: buildSlackAlertBlocks({
+          summary: phiFree?.summary ?? summary,
+          detailsUrl: dashboardUrl
+        })
       });
       if (delivered.ok) {
         results.push(
