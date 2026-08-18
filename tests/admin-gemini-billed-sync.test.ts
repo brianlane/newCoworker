@@ -74,7 +74,8 @@ describe("buildBilledQuery", () => {
   it("inlines the validated table, the escaped service, and the window day", () => {
     const query = buildBilledQuery(TABLE, DEFAULT_GEMINI_BILLING_SERVICE, "2026-06-14");
     expect(query).toContain(`FROM \`${TABLE}\``);
-    expect(query).toContain("service.description = 'Generative Language API'");
+    expect(DEFAULT_GEMINI_BILLING_SERVICE).toBe("Gemini API");
+    expect(query).toContain("service.description = 'Gemini API'");
     expect(query).toContain(">= '2026-06-14'");
     expect(query).toContain("GROUP BY day, project_id");
   });
@@ -143,10 +144,42 @@ describe("runGeminiBilledSync", () => {
 
   it("passes a custom service description into the query", async () => {
     const runQuery = vi.fn(async (_query: string) => []);
-    await runGeminiBilledSync(baseDeps({ runQuery, serviceDescription: "Vertex AI" }));
+    const status = await runGeminiBilledSync(
+      baseDeps({ runQuery, serviceDescription: "Vertex AI" })
+    );
     expect(vi.mocked(runQuery).mock.calls[0][0]).toContain(
       "service.description = 'Vertex AI'"
     );
+    // The zero-row diagnostic names the service actually filtered on, so the
+    // admin card points at the value to fix.
+    expect(status.error).toContain('"Vertex AI"');
+  });
+
+  it("treats a configured sync that matched ZERO rows as not-ok, not a quiet month", async () => {
+    // Regression pin: the default was "Generative Language API" (which Google
+    // does not use) from setup until 2026-08-18. It matched nothing every run
+    // while reporting ok, so the reconciliation card read "$0 billed" for 30
+    // days instead of showing a broken filter.
+    const deps = baseDeps({ runQuery: vi.fn(async () => []) });
+    const status = await runGeminiBilledSync(deps);
+    expect(status.configured).toBe(true);
+    expect(status.ok).toBe(false);
+    expect(status.rows).toBe(0);
+    expect(status.error).toContain('no billed rows matched service "Gemini API"');
+    expect(status.error).toContain("2026-04-15");
+    expect(status.error).toContain("GEMINI_BILLING_SERVICE_DESCRIPTION");
+    // The window is still cleared: stale rows must not outlive a bad filter.
+    expect(deps.replaceGeminiBilledWindow).toHaveBeenCalledWith("2026-04-15", []);
+    expect(deps.recordStatus).toHaveBeenCalledWith(status);
+  });
+
+  it("stays ok when at least one row matched", async () => {
+    const status = await runGeminiBilledSync(
+      baseDeps({
+        runQuery: vi.fn(async () => [{ day: "2026-07-18", project_id: "p", cost: "0.0" }])
+      })
+    );
+    expect(status).toMatchObject({ ok: true, rows: 1, error: null });
   });
 
   it("records a skip (configured=false, still ok=false is NOT set) when the table is missing", async () => {

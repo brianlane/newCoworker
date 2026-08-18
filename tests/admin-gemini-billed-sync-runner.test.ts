@@ -59,7 +59,7 @@ describe("runProductionGeminiBilledSync", () => {
     expect(bigQueryQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         key: expect.objectContaining({ project_id: "p" }),
-        query: expect.stringContaining("service.description = 'Generative Language API'")
+        query: expect.stringContaining("service.description = 'Gemini API'")
       })
     );
     expect(replaceGeminiBilledWindow).toHaveBeenCalledWith(expect.any(String), [
@@ -79,7 +79,7 @@ describe("runProductionGeminiBilledSync", () => {
     process.env.GEMINI_BILLING_SERVICE_DESCRIPTION = "   ";
     await runProductionGeminiBilledSync();
     expect(vi.mocked(bigQueryQuery).mock.calls[1][0].query).toContain(
-      "service.description = 'Generative Language API'"
+      "service.description = 'Gemini API'"
     );
   });
 

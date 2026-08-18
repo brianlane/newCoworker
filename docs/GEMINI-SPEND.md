@@ -123,12 +123,23 @@ The live wiring (all done Jul 20 2026; recorded here for rebuilds):
    - `GCP_BILLING_SA_KEY_JSON` — the full JSON key, verbatim
    - `GCP_BILLING_EXPORT_TABLE` — the table id above
    - optional `GEMINI_BILLING_SERVICE_DESCRIPTION` — defaults to
-     `Generative Language API`; override only if Google renames the SKU
-     service.
+     `Gemini API`, which is what Google actually labels this service in the
+     billing export (NOT `Generative Language API`, the endpoint's own
+     name). The filter is an exact match, so a wrong value here matches
+     zero rows; override only if Google renames the service again. Confirm
+     with: `SELECT DISTINCT service.description FROM <export table>`.
 4. First sync: Admin → Costs → **Sync now** (the Gemini billed sync rides
    it), or the daily 11:10 UTC cron. Until the export's first table write
    lands, the sync reports a table-not-found error — self-heals on the next
    daily run.
+
+A configured sync that matches **zero rows** across the whole 95-day window
+reports not-ok with the service name it filtered on, and the admin card shows
+that in orange. It is treated as a broken filter rather than a quiet month,
+because a live project running Gemini always bills something. That check
+exists because the default was `Generative Language API` from setup until
+2026-08-18: it matched nothing on every run, and the reconciliation card read
+"$0 billed" the whole time while Google was billing about $60/month.
 
 If the env vars are ever removed the sync records "not configured" and
 skips — the metered ledger works regardless; only the billed comparison is

@@ -24,8 +24,18 @@ import type { GeminiBilledDailyInsert } from "@/lib/db/gemini-spend";
 
 export const GEMINI_BILLED_SYNC_STATUS_KEY = "gemini_billed_sync_status";
 
-/** Default Cloud Billing `service.description` for Gemini API spend. */
-export const DEFAULT_GEMINI_BILLING_SERVICE = "Generative Language API";
+/**
+ * Default Cloud Billing `service.description` for Gemini API spend.
+ *
+ * Google labels this service "Gemini API" in the billing export, NOT
+ * "Generative Language API" (the API's own endpoint name). The filter is an
+ * exact string match, so the old value matched zero rows on every run from
+ * setup until 2026-08-18: verified live against the export, where the only
+ * Gemini service present is "Gemini API" ($60.88 over 30 days) and
+ * "Generative Language API" returns 0 rows. Override with
+ * GEMINI_BILLING_SERVICE_DESCRIPTION if Google renames it again.
+ */
+export const DEFAULT_GEMINI_BILLING_SERVICE = "Gemini API";
 
 /**
  * Rolling sync window: must cover the WIDEST admin range (/admin/gemini's
@@ -125,7 +135,7 @@ export function billedWindowStartDayUtc(now: Date, days: number = BILLED_SYNC_WI
 export type GeminiBilledSyncDeps = {
   /** Null when the operator hasn't finished setup — sync records a skip. */
   exportTableId: string | null;
-  /** Billing `service.description` to filter on (default Generative Language API). */
+  /** Billing `service.description` to filter on (default "Gemini API"). */
   serviceDescription?: string;
   /** Runs the aggregate query; null when the SA key env is absent/unusable. */
   runQuery:
@@ -156,16 +166,24 @@ export async function runGeminiBilledSync(
   } else {
     try {
       windowStartDay = billedWindowStartDayUtc(now);
+      const service = deps.serviceDescription ?? DEFAULT_GEMINI_BILLING_SERVICE;
       const raw = await deps.runQuery!(
-        buildBilledQuery(
-          tableId!,
-          deps.serviceDescription ?? DEFAULT_GEMINI_BILLING_SERVICE,
-          windowStartDay
-        )
+        buildBilledQuery(tableId!, service, windowStartDay)
       );
       const inserts = billedRowsFromQuery(raw);
       await deps.replaceGeminiBilledWindow(windowStartDay, inserts);
       rows = inserts.length;
+      // A configured sync that matches NOTHING across the whole 95-day
+      // window is a broken filter, not a quiet billing month: any live
+      // project running Gemini bills something. Reporting ok here is what
+      // let a wrong service name ("Generative Language API") render as
+      // "$0 billed" on the admin card for 30 days instead of an error.
+      if (rows === 0) {
+        error =
+          `no billed rows matched service "${service}" since ${windowStartDay}: ` +
+          "check GEMINI_BILLING_SERVICE_DESCRIPTION against the export's " +
+          "service.description values (see docs/GEMINI-SPEND.md)";
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
@@ -174,8 +192,8 @@ export async function runGeminiBilledSync(
   const status: GeminiBilledSyncStatus = {
     lastSyncAt: now.toISOString(),
     configured,
-    // Pre-setup skips are expected, not failures — only a configured sync
-    // that errored reports not-ok.
+    // Pre-setup skips are expected, not failures: only a configured sync
+    // that errored, or matched nothing at all, reports not-ok.
     ok: configured && error === null,
     rows,
     error: configured ? error : null,
