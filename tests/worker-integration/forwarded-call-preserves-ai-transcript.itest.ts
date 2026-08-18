@@ -88,7 +88,9 @@ describe("a warm transfer does not destroy the AI transcript it belongs to", () 
     expect(row.call_kind).toBe("forwarded");
     expect(row.forwarded_to_e164).toBe("+16025245719");
     expect(row.status).toBe("completed");
-    expect(row.started_at).toBe("2026-08-18T18:46:03.799+00:00");
+    // Compared as an instant, not as a string: PostgREST's timestamptz
+    // rendering is not a contract this test should depend on.
+    expect(Date.parse(row.started_at as string)).toBe(Date.parse(startedAt));
     expect(row.ended_at).not.toBeNull();
   });
 
