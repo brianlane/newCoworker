@@ -42,7 +42,9 @@ import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-ma
 import { listSmsLinksForContact } from "@/lib/db/sms-links";
 import {
   classifyContactKey,
-  formatContactKey
+  formatContactKey,
+  isDialableContactKey,
+  isEmailContactKey
 } from "../../../../../supabase/functions/_shared/contact_key";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
@@ -162,8 +164,18 @@ export default async function CustomerDetailPage({ params }: Props) {
   // customer. Exclude self and any non-customer directory row (company short
   // codes, vendors, testers, owner/employee) so an irreversible merge can never
   // collapse a real person into a lead-source or vendor entry.
+  // Merge is number-shaped: merge_customer_memories records the folded-away
+  // key in `alias_e164s`, and alias matching only ever resolves NUMBERS, so an
+  // email-keyed contact on either side would vanish rather than redirect. Both
+  // the target list and the control below are restricted to number keys until
+  // the RPC learns about email keys.
   const mergeCandidates = allCustomers
-    .filter((c) => c.customer_e164 !== memory.customer_e164 && c.type === "customer")
+    .filter(
+      (c) =>
+        c.customer_e164 !== memory.customer_e164 &&
+        c.type === "customer" &&
+        !isEmailContactKey(c.customer_e164)
+    )
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
   // The URL number can be a merged-in alias, and the owner/override identity
@@ -263,11 +275,15 @@ export default async function CustomerDetailPage({ params }: Props) {
         teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
       />
 
-      <ContactReplyModeToggle
-        businessId={business.id}
-        customerE164={memory.customer_e164}
-        initialMode={memory.sms_reply_mode}
-      />
+      {/* SMS reply mode: only meaningful for a contact who can receive a text.
+          An email-keyed contact has no inbound SMS to answer automatically. */}
+      {isDialableContactKey(memory.customer_e164) && (
+        <ContactReplyModeToggle
+          businessId={business.id}
+          customerE164={memory.customer_e164}
+          initialMode={memory.sms_reply_mode}
+        />
+      )}
 
       {/* Document request: customers with a real (textable) number only —
           short-code/service rows can't receive the request SMS. */}
@@ -287,7 +303,7 @@ export default async function CustomerDetailPage({ params }: Props) {
           non-customer (company short code, vendor, tester, owner/employee) so a
           directory row can never be folded into a customer and deleted — the
           target list is already restricted to customers above. */}
-      {memory.type === "customer" && (
+      {memory.type === "customer" && !isEmailContactKey(memory.customer_e164) && (
         <CustomerMergeAction
           businessId={business.id}
           customerE164={memory.customer_e164}

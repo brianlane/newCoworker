@@ -552,6 +552,26 @@ export type CustomerOwnerEdit = {
   nameSource?: ContactNameSource;
 };
 
+/**
+ * Thrown when an edit would change the address an email-keyed contact IS.
+ *
+ * For a phone-keyed contact `email` is a linked detail the owner may edit or
+ * clear freely. For an email-keyed one it is the identity: the DB invariant
+ * contacts_email_key_matches_email ties the column to the key, so a "clear the
+ * email" save would come back as a raw constraint violation. This is the
+ * controlled refusal instead, and it says what to do (the address a contact is
+ * keyed by changes by adding the new contact, not by editing the old one).
+ */
+export class EmailKeyedContactError extends Error {
+  constructor(public readonly customerE164: string) {
+    super(
+      "This contact is identified by their email address, so the address cannot be changed or " +
+        "removed here. Add a contact with the new address instead."
+    );
+    this.name = "EmailKeyedContactError";
+  }
+}
+
 /** Owner-driven edit (contacts page). Only writes the fields the owner controls. */
 export async function updateCustomerOwnerFields(
   businessId: string,
@@ -559,6 +579,13 @@ export async function updateCustomerOwnerFields(
   edit: CustomerOwnerEdit,
   client?: SupabaseClient
 ): Promise<void> {
+  // The key's own address is the one email value that is not editable. A save
+  // that merely re-sends the SAME address (the edit form posts every field) is
+  // a no-op, not a refusal.
+  const keyEmail = contactKeyEmail(customerE164);
+  if (keyEmail && "email" in edit && (edit.email ?? "").trim().toLowerCase() !== keyEmail) {
+    throw new EmailKeyedContactError(customerE164);
+  }
   const db = client ?? (await createSupabaseServiceClient());
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),

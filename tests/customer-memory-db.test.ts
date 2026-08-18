@@ -38,6 +38,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   CustomerExistsError,
   DEFAULT_LIST_LIMIT,
+  EmailKeyedContactError,
   ensureEmailContact,
   MAX_LIST_LIMIT,
   createCustomerMemory,
@@ -1767,6 +1768,51 @@ describe("ensureEmailContact", () => {
       row: created,
       created: true
     });
+  });
+});
+
+describe("updateCustomerOwnerFields on an email-keyed contact", () => {
+  it("refuses an edit that would change the address the contact IS", async () => {
+    // Without this the DB constraint contacts_email_key_matches_email rejects
+    // the write, and the owner sees a raw Postgres error on a normal save.
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await expect(
+      updateCustomerOwnerFields(BIZ, EMAIL_KEY, { email: "someone.else@example.com" }, client)
+    ).rejects.toBeInstanceOf(EmailKeyedContactError);
+    expect(fromCalls).toHaveLength(0);
+  });
+
+  it("refuses clearing the address too", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    await expect(
+      updateCustomerOwnerFields(BIZ, EMAIL_KEY, { email: null }, client)
+    ).rejects.toBeInstanceOf(EmailKeyedContactError);
+  });
+
+  it("allows a save that re-sends the SAME address, which is what the edit form posts", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, EMAIL_KEY, { email: " VALM0417@Gmail.com " }, client);
+    expect(fromCalls.length).toBeGreaterThan(0);
+  });
+
+  it("leaves every other field editable", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, EMAIL_KEY, { displayName: "Valerie" }, client);
+    const update = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(update.display_name).toBe("Valerie");
+  });
+
+  it("does not constrain a phone-keyed contact's email at all", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: null }, client);
+    const update = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(update.email).toBeNull();
   });
 });
 

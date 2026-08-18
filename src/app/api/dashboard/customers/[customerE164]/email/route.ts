@@ -20,13 +20,19 @@ import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
+import { classifyContactKey } from "../../../../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
 
 const SEND_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
+// Any contact KEY, not just a number: an email-keyed contact is precisely the
+// one you would want to email, and the recipient address comes from the row's
+// `email` column either way.
 const paramsSchema = z.object({
-  customerE164: z.string().regex(/^\+[1-9]\d{6,15}$/)
+  customerE164: z.string().refine((v) => classifyContactKey(v) !== null, {
+    message: "Not a contact key"
+  })
 });
 
 const querySchema = z.object({ businessId: z.string().uuid() });

@@ -25,6 +25,7 @@ import { computeStageMove } from "@/lib/pipelines/move";
 import { getCustomerMemory, updateCustomerOwnerFields } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import { classifyContactKey } from "../../../../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +34,12 @@ const MOVE_RATE = { interval: 60 * 1000, maxRequests: 60 };
 const querySchema = z.object({ businessId: z.string().uuid() });
 const paramsSchema = z.object({ pipelineId: z.string().uuid() });
 const bodySchema = z.object({
-  // E.164 or a 3-8 digit short code, matching the contacts routes.
-  contactE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/),
+  // Any contact KEY, matching the contacts routes: a number, a short code, or
+  // an `email:` key. A stage is a tag, and an email-only lead is exactly the
+  // kind of contact a board tracks.
+  contactE164: z.string().refine((v) => classifyContactKey(v) !== null, {
+    message: "Not a contact key"
+  }),
   stageId: z.string().uuid().nullable()
 });
 
