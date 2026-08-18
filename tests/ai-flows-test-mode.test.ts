@@ -22,6 +22,42 @@ describe("isTestModeTrigger", () => {
   });
 });
 
+describe("simulateTestAction: reply_to_comment", () => {
+  it("never posts on a real tenant's Instagram post, and mirrors planner skips", () => {
+    // A test run reaching Graph would put a visible reply on a live post
+    // under a real customer's comment. It reports what it WOULD have said.
+    expect(
+      simulateTestAction(
+        {
+          kind: "reply_to_comment",
+          replyMode: "public",
+          commentId: "c-9",
+          body: "Thanks!"
+        } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({
+      simulated: "reply_to_comment",
+      mode: "public",
+      commentId: "c-9",
+      body: "Thanks!"
+    });
+
+    expect(
+      simulateTestAction(
+        {
+          kind: "reply_to_comment",
+          replyMode: "private",
+          commentId: "",
+          body: "Hi",
+          skipReason: "no_comment_id"
+        } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "reply_to_comment", skipped: "no_comment_id" });
+  });
+});
+
 describe("simulateTestAction: send_whatsapp", () => {
   it("simulates sends (recipient precedence) and honors planner skips", () => {
     expect(

@@ -384,6 +384,20 @@ export type StepAction =
     }
   | {
       /**
+       * Answer the triggering Instagram comment, publicly on the thread or
+       * privately in the commenter's inbox. The worker posts it through the
+       * platform's internal instagram-comment-reply endpoint (the Graph
+       * client needs Node), same bridge shape as send_whatsapp.
+       */
+      kind: "reply_to_comment";
+      replyMode: "public" | "private";
+      commentId: string;
+      body: string;
+      /** Nothing to answer (no comment id in scope) → skip, not fail. */
+      skipReason?: string;
+    }
+  | {
+      /**
        * Share a business document: the WORKER validates the doc (ready,
        * client-audience, not expired), mints a business_document_shares
        * link, substitutes it for the `{{share_url}}` token in `message`
@@ -1171,6 +1185,43 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         }
       };
     }
+    case "reply_to_comment": {
+      const replyBody = renderTemplate(step.body, scope, { collapseEmpty: true }).trim();
+      if (!replyBody) {
+        return { ok: false, error: "reply_to_comment: body is empty after templating" };
+      }
+      // Default to the comment that triggered the run. webhookTriggerScope
+      // publishes it as both comment_id and event_id; prefer the named one
+      // so a flow reads plainly, and fall back for older runs.
+      const commentTemplate = step.commentId ?? "{{trigger.comment_id}}";
+      const commentId =
+        renderTemplate(commentTemplate, scope).trim() ||
+        (step.commentId ? "" : renderTemplate("{{trigger.event_id}}", scope).trim());
+      if (!commentId) {
+        // A flow that also runs off a non-comment trigger has nothing to
+        // answer here, so skip it rather than failing the whole run.
+        return {
+          ok: true,
+          action: {
+            kind: "reply_to_comment",
+            replyMode: step.replyMode,
+            commentId: "",
+            body: replyBody,
+            skipReason: "no_comment_id"
+          }
+        };
+      }
+      return {
+        ok: true,
+        action: {
+          kind: "reply_to_comment",
+          replyMode: step.replyMode,
+          commentId,
+          body: replyBody
+        }
+      };
+    }
+
     case "send_whatsapp": {
       // Same recipient semantics as send_sms (minus group replies and MMS):
       // named roster member / saved contact ref pass through UNRENDERED for

@@ -48,6 +48,10 @@ export const FLOW_STEP_TYPES = [
   "doc_extract",
   "send_sms",
   "send_whatsapp",
+  // Answer the Instagram comment that triggered the flow: publicly on the
+  // comment thread, or privately in the commenter's Instagram inbox
+  // (Meta's "private reply", one per comment, within 7 days).
+  "reply_to_comment",
   "send_email",
   // Organize a triggering email: label / move / archive / mark read in the
   // connected Gmail/Outlook mailbox or the AI coworker's in-app email_log.
@@ -991,6 +995,25 @@ const nonBranchStepMembers = [
     /** Dynamic teammate recipient; see send_sms toAgentNameVar. */
     toAgentNameVar: varName.optional(),
     toRef: contactRefSchema.optional(),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
+    // Answer the Instagram comment that triggered this flow. `public` posts
+    // a reply on the comment thread where everyone reading the post sees it;
+    // `private` sends Meta's "private reply" straight to the commenter's
+    // Instagram inbox. Meta caps private replies at ONE per comment, inside
+    // 7 days of the comment (during the broadcast only, for a Live), so a
+    // refusal there is a skip, never a retry.
+    type: z.literal("reply_to_comment"),
+    replyMode: z.enum(["public", "private"]),
+    body: z.string().min(1).max(2200),
+    /**
+     * Which comment to answer. Defaults to the one that triggered the run
+     * ({{trigger.comment_id}}); override only to answer a different comment
+     * an earlier step found.
+     */
+    commentId: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -2227,6 +2250,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.to ?? "", step.body, step.quietHours?.emailSubject ?? ""];
     case "send_whatsapp":
       return [step.to ?? "", step.body];
+    case "reply_to_comment":
+      return [step.commentId ?? "", step.body];
     case "send_email":
       return [
         step.to,

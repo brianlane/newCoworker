@@ -50,6 +50,7 @@ import {
   Minus,
   Phone,
   Plus,
+  Reply,
   Search,
   Send,
   ShieldCheck,
@@ -87,6 +88,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   doc_extract: "read",
   send_sms: "comm",
   send_whatsapp: "comm",
+  reply_to_comment: "comm",
   send_email: "comm",
   email_organize: "read",
   approval_gate: "wait",
@@ -134,6 +136,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   doc_extract: <FileText className="h-4 w-4" />,
   send_sms: <MessageSquare className="h-4 w-4" />,
   send_whatsapp: <MessageCircle className="h-4 w-4" />,
+  reply_to_comment: <Reply className="h-4 w-4" />,
   send_email: <Send className="h-4 w-4" />,
   email_organize: <FolderOpen className="h-4 w-4" />,
   approval_gate: <ShieldCheck className="h-4 w-4" />,
@@ -197,6 +200,10 @@ function stepSubtitle(step: FlowStep): string {
             : step.to
               ? `to ${step.to}`
               : "";
+    case "reply_to_comment":
+      return step.replyMode === "public"
+        ? "publicly, on the comment"
+        : "privately, in their Instagram inbox";
     case "send_email":
       return `to ${step.to}`;
     case "email_organize": {

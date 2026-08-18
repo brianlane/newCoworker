@@ -459,6 +459,26 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           </Chip>
         </>
       );
+    case "reply_to_comment":
+      return (
+        <>
+          <Row
+            label="How"
+            value={
+              step.replyMode === "public"
+                ? "Publicly, on the comment thread"
+                : "Privately, in the commenter's Instagram inbox"
+            }
+          />
+          <Row label="Reply" value={step.body} />
+          {step.commentId && <Row label="Which comment" value={step.commentId} mono />}
+          {step.replyMode === "private" && (
+            <Chip>
+              Instagram allows one private reply per comment, within 7 days of it
+            </Chip>
+          )}
+        </>
+      );
     case "send_email":
       return (
         <>

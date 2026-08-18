@@ -545,6 +545,86 @@ export async function sendMessengerMessage(
   return { messageId: typeof messageId === "string" ? messageId : null };
 }
 
+/* ------------------------------------------------------------------ */
+/* Instagram comment replies                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Instagram's comment ceiling. Meta rejects longer text outright rather
+ * than truncating, so we trim before sending.
+ */
+export const INSTAGRAM_COMMENT_MAX_LENGTH = 2200;
+
+/**
+ * Reply publicly, on the comment thread itself: `POST /{comment_id}/replies`
+ * with the tenant's PAGE token. Everyone who reads the post sees it.
+ *
+ * Permission: `instagram_manage_comments` (plus `instagram_basic` and
+ * `pages_read_engagement`, both already in META_LOGIN_SCOPES). Returns the
+ * new comment's id when Meta provides one.
+ *
+ * Docs: Instagram Platform → Comment Moderation ("Reply to a comment").
+ */
+export async function replyToInstagramComment(
+  commentId: string,
+  pageToken: string,
+  message: string
+): Promise<{ commentId: string | null }> {
+  const trimmed =
+    message.length > INSTAGRAM_COMMENT_MAX_LENGTH
+      ? `${message.slice(0, INSTAGRAM_COMMENT_MAX_LENGTH - 1)}…`
+      : message;
+  const payload = await graphRequest(
+    `/${commentId}/replies`,
+    { message: trimmed, access_token: pageToken },
+    { method: "POST" }
+  );
+  const id = (payload as { id?: unknown } | null)?.id;
+  return { commentId: typeof id === "string" ? id : null };
+}
+
+/**
+ * Reply privately, in the commenter's Instagram inbox: the SAME
+ * `/{page_id}/messages` edge sendMessengerMessage uses, but addressed by
+ * `recipient: {comment_id}` instead of a user id, which is what makes Meta
+ * treat it as a private reply.
+ *
+ * We are a Facebook Login app, so the node is the PAGE id. The
+ * `/{ig_user_id}/messages` form in Meta's docs is the Instagram Login
+ * variant on graph.instagram.com and does not apply here.
+ *
+ * Permissions: `instagram_manage_comments` + `pages_messaging`.
+ *
+ * Meta's hard limits, which the caller cannot work around: ONE private
+ * reply per comment, and only within 7 days of the comment (during the
+ * broadcast only, for a Live). A second attempt comes back as an API
+ * error, not a silent no-op.
+ *
+ * Docs: Instagram Messaging → Private Replies.
+ */
+export async function sendInstagramPrivateReply(
+  pageId: string,
+  pageToken: string,
+  commentId: string,
+  text: string
+): Promise<{ messageId: string | null }> {
+  const trimmed =
+    text.length > MESSENGER_MAX_TEXT_LENGTH
+      ? `${text.slice(0, MESSENGER_MAX_TEXT_LENGTH - 1)}…`
+      : text;
+  const payload = await graphRequest(
+    `/${pageId}/messages`,
+    {
+      recipient: JSON.stringify({ comment_id: commentId }),
+      message: JSON.stringify({ text: trimmed }),
+      access_token: pageToken
+    },
+    { method: "POST" }
+  );
+  const messageId = (payload as { message_id?: unknown } | null)?.message_id;
+  return { messageId: typeof messageId === "string" ? messageId : null };
+}
+
 /**
  * Best-effort display name for a Messenger PSID / IG-scoped id — profile
  * access is permission- and window-limited, so failures return null and
