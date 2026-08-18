@@ -21,8 +21,7 @@ import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-co
 import { listVpsInventory } from "@/lib/db/vps-inventory";
 import {
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
-  TELNYX_MRC_TAX_RATE,
-  TELNYX_USAGE_TAX_RATE,
+  estimateTelnyxTaxCents,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import type { MarginLineKey } from "@/lib/admin/margin";
@@ -61,14 +60,18 @@ describe("composeFleetCost", () => {
       unattributedTelnyxCents: 100,
       unmodeledStripeFeeCents: 250,
       poolHostingCents: 1_199,
-      monthVoiceMinutes: 50
+      monthVoiceMinutes: 50,
+      monthTelnyxVoiceCents: 60
     });
 
     const voiceAdjunct = Math.round(50 * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE);
-    const tax = Math.round(
-      (2_000 + 100 + voiceAdjunct) * TELNYX_USAGE_TAX_RATE +
-        (990 + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS) * TELNYX_MRC_TAX_RATE
-    );
+    // Voice and recurring are taxed in full, messaging only on its
+    // intrastate share; the leak bucket rides with messaging.
+    const tax = estimateTelnyxTaxCents({
+      recurringCents: 990 + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+      voiceUsageCents: 60 + voiceAdjunct,
+      messagingUsageCents: 2_000 + 100 - 60
+    });
     expect(result.voiceAdjunctCents).toBe(voiceAdjunct);
     expect(result.telnyxTaxCents).toBe(tax);
     expect(result.campaignFeeCents).toBe(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS);
@@ -93,7 +96,8 @@ describe("composeFleetCost", () => {
       unattributedTelnyxCents: 0,
       unmodeledStripeFeeCents: 0,
       poolHostingCents: 0,
-      monthVoiceMinutes: 0
+      monthVoiceMinutes: 0,
+      monthTelnyxVoiceCents: 0
     });
     expect(result.netMarginPct).toBe(
       Math.round((result.netMarginCents / 100_000) * 1000) / 10
@@ -113,7 +117,8 @@ describe("composeFleetCost", () => {
       unattributedTelnyxCents: 0,
       unmodeledStripeFeeCents: 0,
       poolHostingCents: 0,
-      monthVoiceMinutes: 0
+      monthVoiceMinutes: 0,
+      monthTelnyxVoiceCents: 0
     });
     expect(result.netMarginPct).toBeNull();
     expect(result.netMarginCents).toBeLessThan(0);
@@ -317,5 +322,49 @@ describe("loadFleetCostBreakdown", () => {
     const data = await loadFleetCostBreakdown();
     expect(vi.mocked(loadFleetMargins)).toHaveBeenCalledTimes(1);
     expect(data.breakdown.totalCostCents).toBeGreaterThan(0);
+  });
+});
+
+describe("composeFleetCost: Telnyx tax follows geography, not charge family", () => {
+  const base = {
+    marginTotals: {
+      revenueCents: 100_000,
+      costCents: 0,
+      marginCents: 100_000,
+      marginPct: 100,
+      payingBusinesses: 1
+    },
+    unattributedTelnyxCents: 0,
+    unmodeledStripeFeeCents: 0,
+    poolHostingCents: 0,
+    monthVoiceMinutes: 0,
+    monthTelnyxVoiceCents: 0
+  };
+
+  it("barely moves when messaging grows 10x, because the traffic leaves the state", () => {
+    const at1x = composeFleetCost({
+      ...base,
+      perTenantCents: perTenant({ telnyx_usage: 3_036, did: 550 })
+    });
+    const at10x = composeFleetCost({
+      ...base,
+      perTenantCents: perTenant({ telnyx_usage: 30_360, did: 550 })
+    });
+    // The old usage-vs-MRC model grew tax roughly linearly with messaging
+    // and would have read about $16 here; the real bill stays near $2.
+    expect(at10x.telnyxTaxCents).toBeLessThan(at1x.telnyxTaxCents * 3);
+    expect(at10x.telnyxTaxCents).toBeLessThan(300);
+  });
+
+  it("taxes a dollar of DID rental far harder than a dollar of messaging", () => {
+    const did = composeFleetCost({
+      ...base,
+      perTenantCents: perTenant({ telnyx_usage: 0, did: 10_000 })
+    });
+    const messaging = composeFleetCost({
+      ...base,
+      perTenantCents: perTenant({ telnyx_usage: 10_000, did: 0 })
+    });
+    expect(did.telnyxTaxCents).toBeGreaterThan(messaging.telnyxTaxCents * 5);
   });
 });

@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
-  TELNYX_MRC_TAX_RATE,
-  TELNYX_USAGE_TAX_RATE,
+  TELNYX_TPT_COMBINED_RATE,
+  TELNYX_MESSAGING_INTRASTATE_SHARE,
+  estimateTelnyxTaxCents,
   VOICE_ALL_IN_CENTS_PER_MINUTE,
   DEFAULT_ENTERPRISE_SETUP_LABOR_CENTS,
   estimateEnterpriseMonthlyCost,
@@ -25,10 +26,11 @@ describe("estimateEnterpriseMonthlyCost", () => {
     const didCents = 3 * ENTERPRISE_UNIT_COSTS.didMonthlyCents; // 330
     // Tax hits the Telnyx share only: SMS + the Telnyx voice component at
     // the usage rate, DID MRCs at the MRC rate. Gemini's share is untaxed.
-    const taxCents =
-      (smsCents + 500 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute) *
-        TELNYX_USAGE_TAX_RATE +
-      didCents * TELNYX_MRC_TAX_RATE;
+    const taxCents = estimateTelnyxTaxCents({
+      recurringCents: didCents,
+      voiceUsageCents: 500 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute,
+      messagingUsageCents: smsCents
+    });
     const expected =
       HOSTING_MONTHLY_CENTS_BY_SIZE.kvm8 + // 7399
       smsCents +
@@ -38,7 +40,6 @@ describe("estimateEnterpriseMonthlyCost", () => {
 
     expect(est.items).toHaveLength(5);
     expect(est.totalCents).toBe(Math.round(expected));
-    expect(est.totalCents).toBe(11_006);
   });
 
   it("defaults extraDids to 0 (one included DID)", () => {
@@ -50,7 +51,7 @@ describe("estimateEnterpriseMonthlyCost", () => {
     expect(est.totalCents).toBe(
       Math.round(
         HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2 +
-          ENTERPRISE_UNIT_COSTS.didMonthlyCents * (1 + TELNYX_MRC_TAX_RATE)
+          ENTERPRISE_UNIT_COSTS.didMonthlyCents * (1 + TELNYX_TPT_COMBINED_RATE)
       )
     );
   });
@@ -116,5 +117,42 @@ describe("suggestEnterprisePrice", () => {
     expect(() => suggestEnterprisePrice(10_000, 91)).toThrow(/targetMarginPct/);
     expect(() => suggestEnterprisePrice(-1, 50)).toThrow(/monthlyCostCents/);
     expect(() => suggestEnterprisePrice(10_000, 50, -5)).toThrow(/setupLaborCents/);
+  });
+});
+
+describe("estimateTelnyxTaxCents", () => {
+  it("taxes recurring and voice in full, messaging only on its intrastate share", () => {
+    expect(
+      estimateTelnyxTaxCents({
+        recurringCents: 1000,
+        voiceUsageCents: 100,
+        messagingUsageCents: 10_000
+      })
+    ).toBe(
+      Math.round(
+        (1000 + 100 + 10_000 * TELNYX_MESSAGING_INTRASTATE_SHARE) * TELNYX_TPT_COMBINED_RATE
+      )
+    );
+  });
+
+  it("reproduces the July 2026 invoice's sales tax to the cent", () => {
+    // Invoice #0004: numbers $11.16 + feature MRC $0.46 + 10DLC $10.00
+    // recurring, voice+data $0.82, messaging $30.36. Its tax summary read
+    // city $0.17 + state $1.57 + county $0.20 = $1.94 of sales tax, plus
+    // $0.11 federal USF and $0.01 cost recovery for a $2.05 total. This
+    // models the $1.94; the federal fees are deliberately out of scope.
+    expect(
+      estimateTelnyxTaxCents({
+        recurringCents: 1116 + 46 + 1000,
+        voiceUsageCents: 82,
+        messagingUsageCents: 3036
+      })
+    ).toBe(194);
+  });
+
+  it("is zero when nothing was spent", () => {
+    expect(
+      estimateTelnyxTaxCents({ recurringCents: 0, voiceUsageCents: 0, messagingUsageCents: 0 })
+    ).toBe(0);
   });
 });

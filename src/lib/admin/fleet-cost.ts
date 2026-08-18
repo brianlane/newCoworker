@@ -24,8 +24,7 @@
 import { logger } from "@/lib/logger";
 import {
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
-  TELNYX_MRC_TAX_RATE,
-  TELNYX_USAGE_TAX_RATE,
+  estimateTelnyxTaxCents,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { buildPoolBoxBurn, sumMarginLinesByKey } from "@/lib/admin/costs-view";
@@ -79,20 +78,30 @@ export function composeFleetCost(params: {
   poolHostingCents: number;
   /** This month's metered voice minutes, for the invoice-only adjuncts. */
   monthVoiceMinutes: number;
+  /**
+   * The VOICE (sip-trunking) share of this month's synced Telnyx spend.
+   * Tax treats voice and messaging differently, so the two must arrive
+   * apart; the rest of the month's spend is taken as messaging.
+   */
+  monthTelnyxVoiceCents: number;
 }): FleetCostBreakdown {
   const voiceAdjunctCents = Math.round(
     params.monthVoiceMinutes * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
   );
-  // Telnyx taxes, calibrated from the June 2026 invoice: the usage rate
-  // covers everything metered (attributed + leak + adjuncts), the MRC rate
-  // covers number rentals and the campaign fee.
-  const telnyxTaxCents = Math.round(
-    (params.perTenantCents.telnyx_usage +
-      params.unattributedTelnyxCents +
-      voiceAdjunctCents) *
-      TELNYX_USAGE_TAX_RATE +
-      (params.perTenantCents.did + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS) * TELNYX_MRC_TAX_RATE
-  );
+  // Arizona taxes telecom by GEOGRAPHY, not by charge family: number
+  // rentals and the campaign fee are sourced to the Mesa billing address
+  // and taxed in full, voice is predominantly in-state, and messaging is
+  // taxable only on its intrastate share. The unattributed bucket rides
+  // with messaging: every sender seen in it so far has been a messaging
+  // one. See estimateTelnyxTaxCents.
+  const telnyxTaxCents = estimateTelnyxTaxCents({
+    recurringCents: params.perTenantCents.did + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+    voiceUsageCents: params.monthTelnyxVoiceCents + voiceAdjunctCents,
+    messagingUsageCents:
+      params.perTenantCents.telnyx_usage +
+      params.unattributedTelnyxCents -
+      params.monthTelnyxVoiceCents
+  });
 
   const totalCostCents =
     params.marginTotals.costCents +
@@ -185,6 +194,11 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
   );
   const monthVoiceMinutes =
     monthTelnyxRows.reduce((sum, r) => sum + r.billed_seconds, 0) / 60;
+  const monthTelnyxVoiceCents = Math.round(
+    monthTelnyxRows
+      .filter((r) => r.record_type === "sip-trunking")
+      .reduce((sum, r) => sum + r.cost_micros, 0) / 10_000
+  );
 
   return {
     margins,
@@ -197,7 +211,8 @@ export async function loadFleetCostBreakdown(now: Date = new Date()): Promise<Fl
       unattributedTelnyxCents,
       unmodeledStripeFeeCents: margins.unmodeledStripeFeeCents,
       poolHostingCents,
-      monthVoiceMinutes
+      monthVoiceMinutes,
+      monthTelnyxVoiceCents
     })
   };
 }
