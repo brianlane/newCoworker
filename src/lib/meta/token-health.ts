@@ -1,5 +1,5 @@
 /**
- * "This tenant's Meta credential is dead" — detected once, told once.
+ * "This tenant's Meta credential is dead": detected once, told once.
  *
  * A Meta page token can stop working without anyone touching New Coworker:
  * the owner changes their Facebook password, loses their Page admin role, or
