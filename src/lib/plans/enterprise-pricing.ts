@@ -1,5 +1,5 @@
 /**
- * Enterprise deal pricing — cost model + suggested setup/monthly prices.
+ * Enterprise deal pricing: cost model + suggested setup/monthly prices.
  *
  * Enterprise is custom-priced ($0 in tier.ts; "Contact Sales" on /pricing),
  * so the operator needs to know what a given deal COSTS us before quoting.
@@ -7,7 +7,7 @@
  * canvas (PRDs/tier-economics-jul-2026.md): live Hostinger catalog (Jul 2
  * 2026), Amy's 90-day Telnyx invoice records, the vps/voice-bridge Gemini
  * Live rate, and standard Stripe pricing. They are estimation inputs for the
- * admin panel calculator — nothing bills from them — so drift against the
+ * admin panel calculator (nothing bills from them), so drift against the
  * live vendor catalogs degrades a SUGGESTION, never an invoice.
  */
 
@@ -23,7 +23,7 @@ export const HOSTING_MONTHLY_CENTS_BY_SIZE: Record<VpsSize, number> = {
 };
 
 /**
- * Per-unit marginal costs, in cents (fractional cents kept — totals are
+ * Per-unit marginal costs, in cents (fractional cents kept, totals are
  * rounded once at the end).
  */
 export const ENTERPRISE_UNIT_COSTS = {
@@ -101,16 +101,98 @@ export const TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS = 1000;
 export const TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE = 0.4;
 
 /**
- * Effective Telnyx tax rates, calibrated from the June 2026 invoice
- * (Arizona account address). Telnyx taxes usage and recurring fees very
- * differently: $0.389 of tax landed on $7.16 of usage (5.4%: state,
- * county, city sales tax + federal USF on voice) while $0.071 landed on
- * $11.10 of MRCs (0.64%). Jurisdiction and product-mix dependent, so
- * recalibrate against a newer invoice if the account address or the
- * usage mix shifts materially.
+ * Combined Arizona transaction privilege tax on telecommunications at the
+ * account's Mesa billing address, verified against primary sources on
+ * 2026-08-17 (ADOR TPT rate table effective 2026-07-01, business code 005
+ * Communications):
+ *
+ *   state    5.6%  (5% telecom classification, A.R.S. 42-5010(A)(1)(c),
+ *                   plus the 0.6% education increment, 42-5010.01,
+ *                   in force through 2041)
+ *   Maricopa 0.7%
+ *   Mesa     2.0%
+ *
+ * Mesa happens to tax telecom at its retail rate; other Arizona cities do
+ * not (Marana charges 4% on communications vs 2.5% retail), so this must be
+ * re-derived if the billing address ever moves.
  */
-export const TELNYX_USAGE_TAX_RATE = 0.054;
-export const TELNYX_MRC_TAX_RATE = 0.0064;
+export const TELNYX_TPT_COMBINED_RATE = 0.083;
+
+/**
+ * Share of messaging spend that Arizona can actually tax.
+ *
+ * The tax turns on GEOGRAPHY, not product type. A.R.S. 42-5064(A) limits
+ * the telecommunications classification to "the business of providing
+ * intrastate telecommunications services", and (E)(5) requires the traffic
+ * to "originate and terminate in this state". Cities are barred from
+ * reaching interstate telecom outright by 42-6004(A)(2). Messaging is NOT
+ * exempt (ADOR ruling TPR 04-1 Example 7: "Charges for text messaging are
+ * taxable"), it is simply mostly out of state: A2P traffic from our tenant
+ * DIDs lands nationwide, so only the Arizona-to-Arizona sliver is in scope.
+ * 42-5064(D)(1) expressly lets the carrier apply such an allocation.
+ *
+ * 3% is INFERRED from the July 2026 invoice, not confirmed by Telnyx: the
+ * $1.94 of sales tax implies a taxable base near $23.37, and everything
+ * except messaging totals $22.44, leaving roughly 3% of the $30.36
+ * messaging line. That the remainder is nonzero is itself the evidence for
+ * an intrastate allocation rather than a blanket exclusion (a blanket one
+ * would have yielded $1.86).
+ *
+ * Expect this to DRIFT DOWNWARD: it is the Arizona-to-Arizona fraction of
+ * fleet traffic, and most tenants are not in Arizona (Montreal, Ontario,
+ * Miami). To replace it with a real number, ask Telnyx for the per-line
+ * taxable base on a recent invoice and the intrastate allocation percentage
+ * they apply to Arizona messaging. That second answer also says whether
+ * their basis is interstate sourcing (stable, and what this models) or an
+ * FCC information-service classification, which Arizona's statute does not
+ * support and which would mean back-tax exposure on the untaxed remainder.
+ *
+ * To re-derive it from an invoice unaided: sum the city, state and county
+ * tax lines, divide by TELNYX_TPT_COMBINED_RATE for the taxable base,
+ * subtract every non-messaging charge, then divide by the messaging line.
+ */
+export const TELNYX_MESSAGING_INTRASTATE_SHARE = 0.03;
+
+/**
+ * Estimated Telnyx tax on one month of spend, in cents.
+ *
+ * The single implementation behind every view that reports Telnyx tax (the
+ * fleet cost model in src/lib/admin/fleet-cost.ts, which the Dashboard,
+ * Revenue and Costs pages all render, plus the enterprise deal calculator
+ * below) so they cannot drift apart.
+ *
+ * Recurring charges (DID rentals, the 10DLC campaign fee) are sourced to
+ * the Mesa service address with no origination/termination split to make,
+ * so they are taxed in full. Voice is likewise treated as fully taxable:
+ * the July 2026 invoice reconciles that way, and our bridged AI calls are
+ * predominantly Arizona-to-Arizona. Messaging carries only its intrastate
+ * share.
+ *
+ * This returns SALES tax only, and reproduces the July 2026 invoice's
+ * city + state + county lines exactly ($1.94; see the test). The invoice's
+ * $2.05 total also carried $0.11 federal USF and $0.01 cost recovery,
+ * deliberately excluded here: USF applies to interstate and international
+ * TELECOM revenue, and messaging is excluded federally as a Title I
+ * information service (FCC 18-178), so it assessed just $0.28 of revenue.
+ * The model therefore runs about $0.12/month light. Add a USF line only if
+ * the fleet ever carries material interstate voice; the Q3 2026
+ * contribution factor is 38.8%, an all-time high, so it would not stay
+ * negligible.
+ */
+export function estimateTelnyxTaxCents(params: {
+  /** DID rentals + the 10DLC campaign fee. */
+  recurringCents: number;
+  /** Voice legs plus the invoice-only adjuncts. */
+  voiceUsageCents: number;
+  /** SMS/MMS/RCS spend, taxed only on its intrastate share. */
+  messagingUsageCents: number;
+}): number {
+  const taxable =
+    params.recurringCents +
+    params.voiceUsageCents +
+    params.messagingUsageCents * TELNYX_MESSAGING_INTRASTATE_SHARE;
+  return Math.round(taxable * TELNYX_TPT_COMBINED_RATE);
+}
 
 /** All-in voice cost per minute (Telnyx + Gemini Live). */
 export const VOICE_ALL_IN_CENTS_PER_MINUTE =
@@ -153,7 +235,7 @@ function assertFiniteNonNegative(value: number, name: string): void {
 
 /**
  * Estimated monthly marginal cost of hosting one enterprise tenant at the
- * given usage. Excludes Stripe fees — those depend on the PRICE, not the
+ * given usage. Excludes Stripe fees: those depend on the PRICE, not the
  * cost, and are solved for in {@link suggestEnterprisePrice}.
  */
 export function estimateEnterpriseMonthlyCost(
@@ -168,12 +250,16 @@ export function estimateEnterpriseMonthlyCost(
   const sms = usage.smsPerMonth * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage;
   const voice = usage.voiceMinutesPerMonth * VOICE_ALL_IN_CENTS_PER_MINUTE;
   const dids = (1 + extraDids) * ENTERPRISE_UNIT_COSTS.didMonthlyCents;
-  // Tax applies to the Telnyx components only: SMS, the Telnyx share of the
-  // voice minute (Gemini bills through Google untaxed here), and DID MRCs.
-  const telnyxUsageTaxable =
-    sms + usage.voiceMinutesPerMonth * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute;
-  const taxes =
-    telnyxUsageTaxable * TELNYX_USAGE_TAX_RATE + dids * TELNYX_MRC_TAX_RATE;
+  // Tax applies to the Telnyx components only (Gemini bills through Google
+  // untaxed here). DID MRCs are sourced to the billing address and taxed in
+  // full; messaging only on its intrastate share. The 10DLC campaign fee is
+  // NOT included: it is a flat platform-wide cost, never per-tenant.
+  const taxes = estimateTelnyxTaxCents({
+    recurringCents: dids,
+    voiceUsageCents:
+      usage.voiceMinutesPerMonth * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute,
+    messagingUsageCents: sms
+  });
 
   const items: EnterpriseCostLineItem[] = [
     { label: `Hosting (${usage.vpsSize.toUpperCase()} monthly SKU)`, cents: hosting },

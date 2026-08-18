@@ -34,8 +34,6 @@ import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
-  TELNYX_MRC_TAX_RATE,
-  TELNYX_USAGE_TAX_RATE,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
