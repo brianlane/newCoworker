@@ -39,12 +39,14 @@ import {
   createInstagramMediaContainer,
   getInstagramContainerStatus,
   getInstagramMediaPermalink,
+  getInstagramMediaState,
   publishInstagramMedia
 } from "@/lib/meta/client";
 import { GENERATED_IMAGES_BUCKET, normalizeImageRef } from "@/lib/image-tools/handlers";
 import { logger } from "@/lib/logger";
 import {
   listDueScheduledPosts,
+  listPublishedPostsToRecheck,
   listPublishingPosts,
   patchSocialPost,
   transitionSocialPost,
@@ -55,6 +57,20 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** A publish stuck this long is a crashed sweep, not a slow Graph call. */
 export const SOCIAL_PUBLISH_STALE_MINUTES = 15;
+
+/**
+ * The deleted-post re-check: how far back it looks, how long a post rests
+ * between looks, and how many posts one pass asks about.
+ *
+ * All three exist because this sweep runs EVERY MINUTE. Without the interval
+ * it would spend a Graph call per live post per minute (~21,600 a day) to
+ * catch an event that happens a handful of times a year. With it, each post
+ * is asked about four times a day and a quiet fleet does zero Graph calls on
+ * almost every beat.
+ */
+export const SOCIAL_RECHECK_WINDOW_DAYS = 45;
+export const SOCIAL_RECHECK_INTERVAL_HOURS = 6;
+export const SOCIAL_RECHECK_BATCH = 15;
 
 /**
  * In-flight rows younger than this are left alone: the pass that claimed
@@ -115,6 +131,8 @@ export type SocialSweepResult = {
    * preparing, ambiguous publish calls, and unverifiable-but-young rows.
    */
   unsettled: number;
+  /** Published posts Meta now reports as gone (deleted on Instagram). */
+  removed: number;
   errors: Array<{ postId: string; message: string }>;
 };
 
@@ -125,6 +143,7 @@ export type SocialSweepDeps = {
   publishMedia?: typeof publishInstagramMedia;
   containerStatus?: typeof getInstagramContainerStatus;
   mediaPermalink?: typeof getInstagramMediaPermalink;
+  mediaState?: typeof getInstagramMediaState;
   loadConnection?: typeof getMetaConnection;
   now?: () => Date;
   /** Injectable readiness-poll delay (tests run instantly). */
@@ -416,18 +435,20 @@ export async function processSocialPostSweep(
   const publishMedia = deps.publishMedia ?? publishInstagramMedia;
   const containerStatus = deps.containerStatus ?? getInstagramContainerStatus;
   const mediaPermalink = deps.mediaPermalink ?? getInstagramMediaPermalink;
+  const mediaState = deps.mediaState ?? getInstagramMediaState;
   const loadConnection = deps.loadConnection ?? getMetaConnection;
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   /* c8 ignore stop */
-  const graph: GraphDeps = {
+  const graph = {
     createContainer,
     publishMedia,
     containerStatus,
     mediaPermalink,
+    mediaState,
     loadConnection,
     sleep
-  };
+  } satisfies GraphDeps & { mediaState: typeof getInstagramMediaState };
 
   const result: SocialSweepResult = {
     promoted: 0,
@@ -435,6 +456,7 @@ export async function processSocialPostSweep(
     failed: 0,
     staled: 0,
     unsettled: 0,
+    removed: 0,
     errors: []
   };
 
@@ -536,5 +558,97 @@ export async function processSocialPostSweep(
     }
   }
 
+  await recheckPublishedPosts(db, graph, result, now());
+
   return result;
+}
+
+/**
+ * Notice posts the owner deleted on Instagram.
+ *
+ * Publishing is fire-and-forget today: the row is stamped `published` and
+ * never looked at again, so a post deleted on Instagram still shows in the
+ * dashboard as live, linking to a permalink that 404s.
+ *
+ * Marking is deliberately conservative. `getInstagramMediaState` answers
+ * "missing" only for Meta's own unknown-object code; a timeout, a 5xx, a
+ * rate limit, or an EXPIRED PAGE TOKEN all answer "unknown" and are left
+ * alone. That asymmetry is the whole safety property: the cost of a missed
+ * deletion is a stale row until the next pass, while the cost of a false
+ * positive is telling a tenant their live posts were deleted.
+ */
+async function recheckPublishedPosts(
+  db: SupabaseClient,
+  graph: GraphDeps & { mediaState: typeof getInstagramMediaState },
+  result: SocialSweepResult,
+  now: Date
+): Promise<void> {
+  const nowIso = now.toISOString();
+  const sinceIso = new Date(
+    now.getTime() - SOCIAL_RECHECK_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const checkedBeforeIso = new Date(
+    now.getTime() - SOCIAL_RECHECK_INTERVAL_HOURS * 60 * 60 * 1000
+  ).toISOString();
+  let posts: SocialPostRow[];
+  try {
+    posts = await listPublishedPostsToRecheck(
+      sinceIso,
+      checkedBeforeIso,
+      SOCIAL_RECHECK_BATCH,
+      db
+    );
+  } catch (err) {
+    // A failed listing must never fail the publish sweep that already ran.
+    logger.warn("social-post-sweep: recheck listing failed", {
+      message: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  // One connection read per tenant per pass, not per post: a batch is
+  // usually one tenant's backlog.
+  const connections = new Map<string, MetaConnectionRow | null>();
+
+  for (const post of posts) {
+    try {
+      if (!connections.has(post.business_id)) {
+        connections.set(post.business_id, await graph.loadConnection(post.business_id, db));
+      }
+      const connection = connections.get(post.business_id) ?? null;
+      // No usable connection is not evidence of deletion — it is evidence we
+      // cannot ask. Disconnecting Meta must not wipe a tenant's post history.
+      const askable = Boolean(connection?.pageToken) && connection?.is_active === true;
+      const state = askable
+        ? await graph.mediaState(post.ig_media_id!, connection!.pageToken!)
+        : "unknown";
+      // Stamp every post we looked at, including the ones we could not ask
+      // about. Without it a disconnected tenant's stalest rows would refill
+      // the batch on every cron beat and starve everyone else's.
+      await patchSocialPost(
+        post.business_id,
+        post.id,
+        state === "missing"
+          ? {
+              removed_at: nowIso,
+              // The permalink is dead once the media is gone; keeping it
+              // would hand the owner a link straight to a 404.
+              ig_permalink: null,
+              removed_check_at: nowIso
+            }
+          : { removed_check_at: nowIso },
+        db
+      );
+      if (state !== "missing") continue;
+      result.removed += 1;
+      logger.info("social-post-sweep: post removed on instagram", {
+        postId: post.id,
+        businessId: post.business_id
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("social-post-sweep: recheck failed", { postId: post.id, message });
+      result.errors.push({ postId: post.id, message });
+    }
+  }
 }

@@ -35,6 +35,7 @@ import {
   deriveWhatsAppRegistrationPin,
   getInstagramContainerStatus,
   getInstagramMediaPermalink,
+  getInstagramMediaState,
   getLinkedInstagramAccount,
   getMessengerProfile,
   registerWhatsAppPhoneNumber,
@@ -244,6 +245,32 @@ describe("graph transport errors", () => {
     await expect(getUserName("tok")).rejects.toMatchObject({
       code: "upstream_unreachable"
     });
+  });
+
+  it("carries Meta's own error code and subcode through to the caller", async () => {
+    // The HTTP status is 400 for a deleted object AND for an expired token,
+    // so callers can only tell them apart by Meta's numeric code.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, {
+        error: { message: "Unsupported get request.", code: 100, error_subcode: 33 }
+      })
+    );
+    const err = await getUserName("tok").catch((e) => e as MetaApiError);
+    expect((err as MetaApiError).metaCode).toBe(100);
+    expect((err as MetaApiError).metaSubcode).toBe(33);
+  });
+
+  it("leaves the codes undefined on a non-JSON error body", async () => {
+    // An HTML error page or an empty body is not a verdict about anything.
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({}),
+      text: async () => "<html>bad gateway</html>"
+    } as never);
+    const err = await getUserName("tok").catch((e) => e as MetaApiError);
+    expect((err as MetaApiError).metaCode).toBeUndefined();
+    expect((err as MetaApiError).metaSubcode).toBeUndefined();
   });
 
   it("aborts a hung request after the timeout budget", async () => {
@@ -846,5 +873,45 @@ describe("verifyMetaWebhookSignature", () => {
     expect(verifyMetaWebhookSignature(body, "sha256=deadbeef")).toBe(false);
     expect(verifyMetaWebhookSignature(body, "sha1=whatever")).toBe(false);
     expect(verifyMetaWebhookSignature(body, null)).toBe(false);
+  });
+});
+
+describe("getInstagramMediaState", () => {
+  it("reports a live media as existing", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "media-9" }));
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("exists");
+  });
+
+  it("reports missing ONLY on Meta's unknown-object code", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, { error: { message: "Unsupported get request.", code: 100 } })
+    );
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("missing");
+  });
+
+  it("reports unknown for a bad token, a 5xx, and a timeout", async () => {
+    // An expired page token (code 190) is the dangerous look-alike: same HTTP
+    // 400 as a deleted post. Treating it as deletion would wipe a tenant's
+    // whole post history the moment their token lapsed.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, { error: { message: "Session expired", code: 190 } })
+    );
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: { message: "oops" } }));
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
+
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    fetchMock.mockRejectedValueOnce(abort);
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
+  });
+
+  it("reports unknown when a 200 comes back without a usable id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "" }));
+    await expect(getInstagramMediaState("media-9", "page-tok")).resolves.toBe("unknown");
   });
 });
