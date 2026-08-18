@@ -10,7 +10,7 @@ function member(over: Partial<BookingAlertMember> = {}): BookingAlertMember {
   return {
     id: "m1",
     name: "Dave Lane",
-    phone_e164: "+16025245719",
+    phone_e164: "+15555550101",
     active: true,
     ...over
   };
@@ -56,8 +56,8 @@ describe("resolveBookingAlertRecipients", () => {
 
   it("a null id list means every active member", () => {
     const out = resolveBookingAlertRecipients("employees", null, [
-      member({ id: "a", phone_e164: "+16025245719" }),
-      member({ id: "b", phone_e164: "+14807202013" })
+      member({ id: "a", phone_e164: "+15555550101" }),
+      member({ id: "b", phone_e164: "+15555550102" })
     ]);
     expect(out.members.map((m) => m.id)).toEqual(["a", "b"]);
   });
@@ -74,8 +74,8 @@ describe("resolveBookingAlertRecipients", () => {
       "employees",
       ["b"],
       [
-        member({ id: "a", phone_e164: "+16025245719" }),
-        member({ id: "b", phone_e164: "+14807202013" })
+        member({ id: "a", phone_e164: "+15555550101" }),
+        member({ id: "b", phone_e164: "+15555550102" })
       ]
     );
     expect(out.members.map((m) => m.id)).toEqual(["b"]);
@@ -107,18 +107,53 @@ describe("resolveBookingAlertRecipients", () => {
 
   it("trims the number it hands back", () => {
     const out = resolveBookingAlertRecipients("employees", null, [
-      member({ phone_e164: "  +16025245719  " })
+      member({ phone_e164: "  +15555550101  " })
     ]);
-    expect(out.members[0].phone_e164).toBe("+16025245719");
+    expect(out.members[0].phone_e164).toBe("+15555550101");
   });
 
   it("texts one message when two roster rows share a phone", () => {
     // The same person entered twice should not get the alert twice.
     const out = resolveBookingAlertRecipients("employees", null, [
-      member({ id: "a", phone_e164: "+16025245719" }),
-      member({ id: "b", phone_e164: "+16025245719" })
+      member({ id: "a", phone_e164: "+15555550101" }),
+      member({ id: "b", phone_e164: "+15555550101" })
     ]);
     expect(out.members.map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("does not text the owner twice on 'both'", () => {
+    // Amy Laidlaw is an active row on her OWN roster carrying the same number
+    // her notification_preferences.phone_number holds, so without this she
+    // gets the owner alert and an employee SMS for the same booking.
+    const out = resolveBookingAlertRecipients(
+      "both",
+      null,
+      [
+        member({ id: "owner", name: "Amy Laidlaw", phone_e164: "+15555550100" }),
+        member({ id: "a", phone_e164: "+15555550101" })
+      ],
+      "+15555550100"
+    );
+    expect(out.owner).toBe(true);
+    expect(out.members.map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("DOES text that same person on 'employees', where no owner alert goes out", () => {
+    const out = resolveBookingAlertRecipients(
+      "employees",
+      null,
+      [member({ id: "owner", name: "Amy Laidlaw", phone_e164: "+15555550100" })],
+      "+15555550100"
+    );
+    expect(out.owner).toBe(false);
+    expect(out.members.map((m) => m.id)).toEqual(["owner"]);
+  });
+
+  it("ignores a blank or missing owner phone", () => {
+    const roster = [member({ id: "a", phone_e164: "+15555550101" })];
+    expect(resolveBookingAlertRecipients("both", null, roster, "   ").members).toHaveLength(1);
+    expect(resolveBookingAlertRecipients("both", null, roster, null).members).toHaveLength(1);
+    expect(resolveBookingAlertRecipients("both", null, roster).members).toHaveLength(1);
   });
 
   it("returns nobody when the roster is empty", () => {
@@ -132,12 +167,12 @@ describe("buildBookingAlertSms", () => {
     attendeeName: "Aurora Anthony",
     startLocal: "Mon Aug 18, 2:00 PM",
     summary: "Buyer consultation",
-    attendeePhone: "+16029200022"
+    attendeePhone: "+15555550199"
   };
 
   it("names the holder when the appointment is assigned", () => {
     const text = buildBookingAlertSms({ ...base, assigneeName: "Dave Lane" });
-    expect(text).toContain("Aurora Anthony +16029200022");
+    expect(text).toContain("Aurora Anthony +15555550199");
     expect(text).toContain("Buyer consultation");
     expect(text).toContain("Mon Aug 18, 2:00 PM");
     expect(text).toContain("Assigned to Dave Lane.");

@@ -464,8 +464,8 @@ describe("maybeAlertUnassignedBooking: gates and failure", () => {
  */
 describe("the employee audience", () => {
   const ROSTER = [
-    { id: "a", name: "Dave Lane", phone_e164: "+16025245719", active: true },
-    { id: "b", name: "Gabrielle Mota", phone_e164: "+14807202013", active: true }
+    { id: "a", name: "Dave Lane", phone_e164: "+15555550101", active: true },
+    { id: "b", name: "Gabrielle Mota", phone_e164: "+15555550102", active: true }
   ];
 
   function prefs(over: Record<string, unknown>) {
@@ -492,7 +492,7 @@ describe("the employee audience", () => {
     });
     expect(out).toBe("sent_unowned");
     expect(dispatchUrgentNotification).toHaveBeenCalled();
-    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+16025245719", "+14807202013"]);
+    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+15555550101", "+15555550102"]);
     expect(String(sendSms.mock.calls[0][2])).toContain("NOT assigned to anyone yet.");
   });
 
@@ -517,7 +517,7 @@ describe("the employee audience", () => {
       listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
       sendSms
     });
-    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+14807202013"]);
+    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+15555550102"]);
   });
 
   it("one dead number does not cost the others their message", async () => {

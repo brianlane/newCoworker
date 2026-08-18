@@ -67,10 +67,13 @@
  *     a claim happens, so there is nothing for a text-and-call cadence to run
  *     against. Its banner and capitals still apply.
  *
- * WAIT LENGTH: 120 minutes, copied from the sibling under-$1M arm. It clears
- * the owner-direct nudges (10 and 30 minutes) and the three unclaimed
- * reminders (20-minute intervals) with room to spare, so "three attempts to
- * owner" have all landed and lapsed before the AI takes over.
+ * "UNCLAIMED BY OWNER" IS NOT `claimed_agent`. The worker states it outright:
+ * an owner ack stops the reminders but "claimed_agent stays 'none'
+ * throughout (the owner acking is NOT a teammate claim)". Gating the new arm
+ * on claimed_agent would have swept every $1M+ lead Amy DID acknowledge into
+ * the AI cadence. It gates on the exhaustion marker the worker appends to
+ * actions_taken instead, which fires only after the alert and both reminders
+ * went unanswered: exactly the "three attempts to owner" Amy described.
  *
  * Read-modify-write against the LIVE definitions, validated through the same
  * parseAiFlowDefinition the dashboard uses, idempotent, dry-run by default.
@@ -117,8 +120,26 @@ export const UNCLAIMED_BANNER = "‼️‼️‼️‼️‼️";
  */
 export const OWNER_NOTICE_OFF = "owner-notice-disabled-by-amy-2026-08-17";
 
-/** How long the AI waits out Amy's own attempts on a $1M+ lead. */
-export const HIGH_DOLLAR_WAIT_MINUTES = 120;
+/**
+ * What the worker appends to `actions_taken` when the owner ignored the
+ * high-value alert AND both reminders (ownerDirectResume, the nudges-exhausted
+ * path). Copied literal, pinned to the worker source by a test.
+ *
+ * This, not `claimed_agent`, is the signal for "unclaimed by owner". The
+ * worker is explicit that an owner ack is not a claim: "A reply, any reply,
+ * acknowledges the alert and stops the reminders; claimed_agent stays 'none'
+ * throughout (the owner acking is NOT a teammate claim)". Gating the takeover
+ * on `claimed_agent == "none"` would therefore have swept every $1M+ lead Amy
+ * DID acknowledge into the AI cadence, which is the opposite of her rule.
+ *
+ * Matching the exhaustion marker positively also means no waiting step is
+ * needed: the route step does not complete until the owner replies or the
+ * second reminder lapses at 30 minutes, so the verdict is already in
+ * `actions_taken` by the time this branch evaluates. And a late "1" cannot
+ * change it, because the exhaustion path deletes `step_index`, which makes the
+ * late-claim matcher skip the run entirely.
+ */
+export const OWNER_IGNORED_MARKER = "owner did not acknowledge the high-value alert";
 
 type Step = Record<string, unknown>;
 export type Definition = { steps?: Step[] } & Record<string, unknown>;
@@ -323,7 +344,8 @@ export function addHighDollarTakeover(
   def: Definition,
   branchId: string,
   prefix: string,
-  notes: string[]
+  notes: string[],
+  opts: { ownerDirect: boolean } = { ownerDirect: true }
 ): boolean {
   const branch = findStepDeep(def.steps, branchId);
   if (!branch || branch.type !== "branch") {
@@ -361,27 +383,36 @@ export function addHighDollarTakeover(
   // the cadence's immediate round-1 call IS the first contact and the note is
   // deliberately omitted.
 
+  // Which "nobody has this" actually applies depends on who was asked.
+  //
+  //  - ownerDirect flows kept the $1M+ lead for Amy and never offered it, so
+  //    claimed_agent is "none" whether she answered or not. The only honest
+  //    signal is the worker's exhaustion marker.
+  //  - Follow Up Requested has no ownerDirectTemplate at all, so its $1M+
+  //    leads DO go to the team and claimed_agent means what it usually means.
+  const stillOpen = opts.ownerDirect
+    ? { var: "actions_taken", contains: OWNER_IGNORED_MARKER }
+    : { var: "claimed_agent", equals: "none" };
+
   arms.push({
     id: armId,
-    label: "$1M+: Amy had it direct, and her attempts lapsed unclaimed",
+    label: opts.ownerDirect
+      ? "$1M+: Amy had it direct, and all three attempts lapsed unanswered"
+      : "$1M+: offered to the team and nobody claimed it",
     condition: { var: "price_under_1m", equals: "no" },
     steps: [
       {
-        id: `${armId}_wait`,
-        type: "sleep",
-        when: { var: "claimed_agent", equals: "none" },
-        minutes: HIGH_DOLLAR_WAIT_MINUTES
-      },
-      {
         id: `${armId}_check`,
         type: "branch",
-        question: "Still unclaimed after Amy's own attempts?",
+        question: opts.ownerDirect
+          ? "Did the owner ignore the high-dollar alert and both reminders?"
+          : "Still unclaimed after the offer ran its course?",
         else: [],
         branches: [
           {
             id: `${armId}_still`,
-            label: "Still unclaimed: the AI owns the follow-up now",
-            condition: { var: "claimed_agent", equals: "none" },
+            label: "Nobody has this lead: the AI owns the follow-up now",
+            condition: stillOpen,
             steps: [tag]
           }
         ]
@@ -470,7 +501,11 @@ export function patchHomeLight(def: Definition): PatchResult {
 export function patchFollowUpRequested(def: Definition): PatchResult {
   const notes: string[] = [];
   let changed = bannerOwnerFallbacks(def, notes);
-  if (addHighDollarTakeover(def, "fur_team_unclaimed", "fur", notes)) changed = true;
+  // No ownerDirectTemplate in this flow, so a $1M+ lead really is offered to
+  // the team here and claimed_agent is the right signal.
+  if (addHighDollarTakeover(def, "fur_team_unclaimed", "fur", notes, { ownerDirect: false })) {
+    changed = true;
+  }
   return { changed, notes };
 }
 

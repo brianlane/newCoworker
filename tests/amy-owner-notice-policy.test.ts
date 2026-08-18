@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { flattenSteps } from "../supabase/functions/_shared/ai_flows/branching";
 import { FINAL_REMINDER_BANNER } from "../supabase/functions/_shared/ai_flows/offer_reminders";
+import { readFileSync } from "node:fs";
 import {
-  HIGH_DOLLAR_WAIT_MINUTES,
+  OWNER_IGNORED_MARKER,
   OLD_HIGH_VALUE_RULE,
   OWNER_NOTICE_OFF,
   UNCLAIMED_BANNER,
@@ -106,7 +107,8 @@ function fixture(prefix = "re"): Definition {
           { name: "price_gate" },
           { name: "price_under_1m" },
           { name: "route_lead_type" },
-          { name: "lead_type" }
+          { name: "lead_type" },
+          { name: "actions_taken" }
         ]
       },
       routeStep("route_seller", {
@@ -326,25 +328,44 @@ describe("the $1M+ takeover arm", () => {
     expect(after.slice(0, before.length)).toEqual(before);
   });
 
-  it("waits out Amy's three attempts before the AI takes over", () => {
+  it("does NOT gate on claimed_agent, because an owner ack never sets it", () => {
+    // Bugbot caught this, and the worker agrees in so many words: "A reply,
+    // any reply, acknowledges the alert and stops the reminders;
+    // claimed_agent stays 'none' throughout". Gating on claimed_agent would
+    // sweep every $1M+ lead Amy DID acknowledge into the AI cadence, which
+    // is the exact opposite of what she asked for.
     const def = fixture();
     addHighDollarTakeover(def, "re_team_unclaimed", "re", []);
-    const wait = findStepDeep(def.steps, "re_tu_high_wait")!;
-    expect(wait.minutes).toBe(HIGH_DOLLAR_WAIT_MINUTES);
-    // The owner-direct nudges land at 10 and 30 minutes and the unclaimed
-    // reminders run three rounds 20 minutes apart, so 120 clears both.
-    expect(HIGH_DOLLAR_WAIT_MINUTES).toBeGreaterThan(30 + 3 * 20);
+    const arms = (findStepDeep(def.steps, "re_tu_high_check")!.branches ?? []) as Array<
+      Record<string, unknown>
+    >;
+    expect(arms[0].condition).toEqual({ var: "actions_taken", contains: OWNER_IGNORED_MARKER });
   });
 
-  it("only tags a lead that is still unclaimed", () => {
+  it("pins the marker to the string the worker actually appends", () => {
+    // A copied literal that drifts would silently stop matching, and the arm
+    // would simply never fire again with no failure anywhere.
+    const worker = readFileSync("supabase/functions/ai-flow-worker/index.ts", "utf8");
+    expect(worker).toContain(OWNER_IGNORED_MARKER);
+  });
+
+  it("needs no waiting step, because the route step already held the run", () => {
+    // The owner-direct park does not complete until the owner replies or the
+    // second reminder lapses at 30 minutes, so the verdict is in
+    // actions_taken by the time this branch evaluates.
     const def = fixture();
     addHighDollarTakeover(def, "re_team_unclaimed", "re", []);
-    expect(findStepDeep(def.steps, "re_tu_high_wait")!.when).toEqual({
-      var: "claimed_agent",
-      equals: "none"
-    });
-    const check = findStepDeep(def.steps, "re_tu_high_check")!;
-    const arms = check.branches as Array<Record<string, unknown>>;
+    expect(findStepDeep(def.steps, "re_tu_high_wait")).toBeUndefined();
+  });
+
+  it("falls back to claimed_agent for a flow with no owner-direct path", () => {
+    // Follow Up Requested has no ownerDirectTemplate, so its $1M+ leads DO go
+    // to the team and the exhaustion marker can never appear.
+    const def = fixture("fur");
+    addHighDollarTakeover(def, "fur_team_unclaimed", "fur", [], { ownerDirect: false });
+    const arms = (findStepDeep(def.steps, "fur_tu_high_check")!.branches ?? []) as Array<
+      Record<string, unknown>
+    >;
     expect(arms[0].condition).toEqual({ var: "claimed_agent", equals: "none" });
   });
 

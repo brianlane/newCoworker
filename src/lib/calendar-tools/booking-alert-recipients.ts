@@ -63,17 +63,29 @@ export function parseBookingAlertAudience(raw: unknown): BookingAlertAudience {
  *    ever mean a mistake.
  *  - Two roster rows sharing a phone (the same person entered twice) get one
  *    message, not two.
+ *  - On "both", a member whose number IS the owner's alert number is dropped:
+ *    they are already getting this booking as the owner alert, and a second
+ *    copy as an employee is the same news twice. This is not hypothetical.
+ *    Amy Laidlaw is an active row on her own roster carrying the same number
+ *    her notification_preferences.phone_number holds. On "employees" the
+ *    owner alert is not sent at all, so the same person SHOULD be texted, and
+ *    is.
  */
 export function resolveBookingAlertRecipients(
   audience: BookingAlertAudience,
   memberIds: readonly string[] | null | undefined,
-  roster: readonly BookingAlertMember[]
+  roster: readonly BookingAlertMember[],
+  ownerPhone?: string | null
 ): BookingAlertRecipients {
   const owner = audience === "owner" || audience === "both";
   if (audience === "owner") return { owner, members: [] };
 
   const wanted = memberIds && memberIds.length > 0 ? new Set(memberIds) : null;
   const seenPhones = new Set<string>();
+  // Only when the owner leg actually runs. Seeded into the same set the
+  // roster de-dupe uses, so there is one rule and one place it is applied.
+  const ownerNumber = ownerPhone?.trim() ?? "";
+  if (owner && ownerNumber.length > 0) seenPhones.add(ownerNumber);
   const members: BookingAlertMember[] = [];
   for (const m of roster) {
     if (!m.active) continue;

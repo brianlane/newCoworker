@@ -445,11 +445,31 @@ The three attempts Amy asked for already existed: `ownerDirectNudges` re-sends
 in ALL CAPS at 10 and 30 minutes. What did NOT exist was anything afterwards.
 Each `*_team_unclaimed` branch carried one arm (`price_under_1m notEquals
 "no"`) and an empty `else`, so a $1M+ lead Amy never claimed fell out of the
-flow with no follow-up. A `*_tu_high` arm now waits 120 minutes (clearing both
-nudges and the three 20-minute unclaimed reminders), re-checks
-`claimed_agent == "none"`, and tags "Needs Follow Up" so the cadence picks it
-up. Added to ReferralExchange, Realtor.com, New Lead Intake, Clever Accept and
-Follow Up Requested.
+flow with no follow-up. A `*_tu_high` arm now tags "Needs Follow Up" so the
+cadence picks it up. Added to ReferralExchange, Realtor.com, New Lead Intake,
+Clever Accept and Follow Up Requested.
+
+**"Unclaimed by owner" is NOT `claimed_agent`, and this is the trap in the
+whole feature.** `ownerDirectResume` says it outright: an owner reply "stops
+the reminders; claimed_agent stays 'none' throughout (the owner acking is NOT
+a teammate claim)". A takeover gated on `claimed_agent == "none"` would
+therefore have swept every $1M+ lead Amy DID acknowledge into the AI cadence.
+The arm gates on the marker the worker appends to `actions_taken` when the
+alert and both reminders all went unanswered ("owner did not acknowledge the
+high-value alert after two reminders"), which is exactly Amy's "three attempts
+to owner and unclaimed by owner". A test pins that literal against the worker
+source, since a copied string that drifts would stop matching with no failure
+anywhere.
+
+That also removes the need for any waiting step: the owner-direct park holds
+the run until she replies or the second reminder lapses at 30 minutes, so the
+verdict is already in `actions_taken` when the branch evaluates. A late "1"
+cannot change it either, because the exhaustion path deletes `step_index` and
+the late-claim matcher then skips the run entirely.
+
+**Follow Up Requested is the exception**: it has no `ownerDirectTemplate`, so
+its $1M+ leads really are offered to the team, the exhaustion marker can never
+appear, and its arm gates on `claimed_agent == "none"` in the normal way.
 
 **HomeLight is exempt from that arm**, same reason it is exempt from the
 under-$500K gate: it withholds the lead's phone and email until a claim
@@ -482,6 +502,13 @@ dropped even when named explicitly, members with no phone are dropped (this
 leg is SMS only), and two roster rows sharing a number get one message. A send
 that fails is logged per member so one dead number does not cost the others
 theirs. Amy is left on the `owner` default; the capability is what shipped.
+
+On `both`, a member whose number is the owner's alert number is dropped from
+the employee leg: they already got this booking as the owner alert. **That is
+Amy specifically**: she is an active row on her own roster carrying the same
+mobile number her `notification_preferences.phone_number` holds, so without
+the rule she would get two texts per booking. On `employees` no owner alert
+goes out, so the same person IS texted.
 
 **Her AI still cannot book.** `calendar_book_appointment` is enabled only for
 `agent_key = "dashboard"` and is FALSE for sms, voice, webchat and email, so

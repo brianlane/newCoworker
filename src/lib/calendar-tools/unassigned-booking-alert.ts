@@ -46,6 +46,7 @@ import {
   type BookingOwnerAlertState,
   type BookingOwnerAlertSurface
 } from "@/lib/email/templates/booking-owner-alert";
+import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { logger } from "@/lib/logger";
 
 export type UnassignedBookingAlertInput = {
@@ -193,7 +194,7 @@ async function textEmployees(
   db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
   businessId: string,
   audience: ReturnType<typeof parseBookingAlertAudience>,
-  prefs: { booking_alert_member_ids?: string[] | null } | null,
+  prefs: { booking_alert_member_ids?: string[] | null; phone_number?: string | null } | null,
   input: {
     attendeeName: string;
     startLocal: string;
@@ -210,7 +211,10 @@ async function textEmployees(
   const { members } = resolveBookingAlertRecipients(
     audience,
     prefs?.booking_alert_member_ids ?? null,
-    roster
+    roster,
+    // Coerced the same way the dispatcher coerces it, so "6026951142" on the
+    // prefs row and "+16026951142" on the roster compare equal.
+    coerceOwnerPhoneToE164(prefs?.phone_number ?? null)
   );
   if (members.length === 0) return 0;
 
