@@ -20,7 +20,7 @@ export function DedicatedSupportCard({ contact }: { contact: EnterpriseSupportCo
         <Badge variant="success">Priority — always on</Badge>
       </div>
       <p className="text-xs text-parchment/40 mb-4">
-        Your Enterprise plan includes a permanent priority call &amp; video support line and
+        Your Enterprise plan includes a permanent priority phone &amp; video support line and
         these response commitments:
       </p>
       <dl className="space-y-2 text-sm mb-4">

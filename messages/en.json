@@ -187,7 +187,7 @@
       "faqUsageCapsQ": "What happens if I use up my included voice minutes or SMS?",
       "faqUsageCapsA": "Your coworker stops placing metered voice calls or sending customer texts once the monthly cap is reached, and you get an alert well before that happens. Caps reset every month, and you can upgrade your plan at any time from the dashboard. You can also buy one-time voice minute, SMS, or AI chat top-up packs from Dashboard → Billing without upgrading, or add discounted recurring packs when you start or change a membership (5% month-to-month, 10% on 12-month, 20% on 24-month; they renew with your plan). Usage packs are non-refundable. Bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later.",
       "faqWhiteGloveQ": "What does white-glove onboarding include?",
-      "faqWhiteGloveA": "Two one-time packages: <b>White-glove setup</b> covers guided setup, number porting, and a live 1:1 training call; <b>White-glove buildout</b> adds everything in setup plus a full custom AiFlow buildout. Both include 30 days of priority call and video support. <link>Tell us you're interested</link> and a specialist will reach out.",
+      "faqWhiteGloveA": "Two one-time packages: <b>White-glove setup</b> covers guided setup, number porting, and a live 1:1 training call; <b>White-glove buildout</b> adds everything in setup plus a full custom AiFlow buildout. Both include 30 days of priority phone and video support. <link>Tell us you're interested</link> and a specialist will reach out.",
       "ctaTitle": "Ready to hire your New Coworker?",
       "ctaSubtitle": "Pick a plan and your coworker is live in minutes.",
       "ctaLabel": "Choose your plan"
@@ -598,8 +598,8 @@
       "keepNumberQ": "Can I keep my existing business number?",
       "keepNumberA": "Yes. Standard and Enterprise plans support bring-your-own-number porting. We handle the port and your coworker answers on your existing number. Every plan also includes a dedicated number that works from day one.",
       "whiteGloveQ": "Can someone set everything up for me?",
-      "whiteGloveA": "Yes. <b>White-glove setup ($750)</b> gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. <b>White-glove buildout ($2,000)</b> adds a full custom workflow buildout. Both include 30 days of priority call and video support. See <link>pricing</link> for details.",
-      "whiteGlovePlain": "Yes. White-glove setup ($750) gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. White-glove buildout ($2,000) adds a full custom workflow buildout. Both include 30 days of priority call and video support.",
+      "whiteGloveA": "Yes. <b>White-glove setup ($750)</b> gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. <b>White-glove buildout ($2,000)</b> adds a full custom workflow buildout. Both include 30 days of priority phone and video support. See <link>pricing</link> for details.",
+      "whiteGlovePlain": "Yes. White-glove setup ($750) gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. White-glove buildout ($2,000) adds a full custom workflow buildout. Both include 30 days of priority phone and video support.",
       "carrierFeeQ": "What is the one-time {carrierFee} carrier registration fee?",
       "carrierFeeA": "US carriers require every business that sends text messages to complete 10DLC registration. We pass this one-time fee through at cost. It is charged at signup and is non-refundable because carriers do not refund it to us.",
       "readyQ": "What do I need to have ready before it can start?",
@@ -678,7 +678,7 @@
       "formBody": "Whether you're evaluating plans, need help with setup or billing, or want a specialist to build everything out with you, use the form and we'll reply as quickly as possible. Most inquiries receive a response within 24 hours.",
       "support": {
         "title": "Support",
-        "description": "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line."
+        "description": "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority phone & video line."
       },
       "enterprise": {
         "title": "Enterprise sales",
@@ -2118,12 +2118,12 @@
       "support": "Support",
       "whiteGloveService": "White-glove service",
       "purchased": "purchased.",
-      "enterprisePriority": "Priority call & video support is always on with your Enterprise plan.",
-      "priorityOpenUntil": "Priority call & video support is open until {date}.",
-      "priorityEnded": "Your priority call & video window has ended; support continues by email.",
+      "enterprisePriority": "Priority phone & video support is always on with your Enterprise plan.",
+      "priorityOpenUntil": "Priority phone & video support is open until {date}.",
+      "priorityEnded": "Your priority phone & video window has ended; support continues by email.",
       "bookSession": "Book a session anytime:",
       "schedulingLink": "scheduling link",
-      "emailSupportUpsell": "Your plan includes email support. Add white-glove onboarding below for live call & video support with a specialist.",
+      "emailSupportUpsell": "Your plan includes email support. Add white-glove onboarding below for live phone & video support with a specialist.",
       "prioritySupport": {
         "title": "Priority support",
         "blurb": "Priority phone & video support with a specialist, on top of the email support your plan includes.",
@@ -2152,7 +2152,7 @@
       "whiteGloveBlurb": "One-time, hands-on onboarding with a specialist. Either package opens a 30-day priority phone & video support line. Tell us you're interested and a specialist will reach out with a quote.",
       "contactUs": "Contact us",
       "customOfferTitle": "Your custom offer",
-      "customOfferBlurb": "Prepared for your business by our team. One-time payment; includes a 30-day priority call & video support line.",
+      "customOfferBlurb": "Prepared for your business by our team. One-time payment; includes a 30-day priority phone & video support line.",
       "autoReload": {
         "title": "Auto-reload",
         "blurb": "Top up automatically before you run out, so calls and texts never stop. We charge the card you authorize, and you set the ceiling.",
@@ -2880,7 +2880,7 @@
       "line1": "Thanks for purchasing {packageName}, a specialist will work with you one-on-one to get your AI coworker fully dialed in.",
       "bookingLine": "Book your onboarding session here: {bookingUrl}",
       "replyLine": "Reply to this email and we'll schedule your onboarding session.",
-      "priorityLine": "Your priority call & video support line is open through {date}.",
+      "priorityLine": "Your priority phone & video support line is open through {date}.",
       "ctaBook": "Book your session"
     },
     "monthlyIntroNudge": {
@@ -2908,7 +2908,7 @@
     "prioritySupportNudge": {
       "subject": "Your priority support is ending soon",
       "line1": "Hi, a quick heads up so nothing catches you by surprise.",
-      "line2": "Your priority call & video support ends on {date}, which is {days} away.",
+      "line2": "Your priority phone & video support ends on {date}, which is {days} away.",
       "line3": "After that, support continues by email at no extra cost. Nothing else about your plan changes.",
       "line4": "Want to keep the priority line open? Restart it for {price}/month from Billing in your dashboard. You can cancel any time.",
       "cta": "Restart priority support",

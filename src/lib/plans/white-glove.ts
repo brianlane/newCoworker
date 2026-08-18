@@ -45,7 +45,7 @@ const PACKAGES: Record<WhiteGlovePackageId, WhiteGlovePackage> = {
       "Guided workspace setup with a specialist",
       "Phone number porting handled for you",
       "Live 1:1 training call",
-      "30 days of priority call & video support"
+      "30 days of priority phone & video support"
     ]
   },
   buildout: {
@@ -58,7 +58,7 @@ const PACKAGES: Record<WhiteGlovePackageId, WhiteGlovePackage> = {
       "Everything in White-glove setup",
       "Full custom AiFlow buildout for your workflows",
       "Dedicated specialist through launch",
-      "30-day priority line (call & video)"
+      "30-day priority line (phone & video)"
     ]
   }
 };
@@ -76,7 +76,7 @@ const PACKAGES_ES: Record<WhiteGlovePackageId, Pick<WhiteGlovePackage, "name" | 
       "Configuración guiada del espacio con un especialista",
       "Portabilidad del número telefónico gestionada por nosotros",
       "Llamada de entrenamiento 1:1 en vivo",
-      "30 días de soporte prioritario por llamada y video"
+      "30 días de soporte prioritario por teléfono y video"
     ]
   },
   buildout: {
@@ -86,7 +86,7 @@ const PACKAGES_ES: Record<WhiteGlovePackageId, Pick<WhiteGlovePackage, "name" | 
       "Todo lo de White-glove setup",
       "Construcción completa de AiFlows a medida para tus flujos",
       "Especialista dedicado hasta el lanzamiento",
-      "Línea prioritaria de 30 días (llamada y video)"
+      "Línea prioritaria de 30 días (teléfono y video)"
     ]
   }
 };
