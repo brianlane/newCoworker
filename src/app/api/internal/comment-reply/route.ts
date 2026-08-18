@@ -135,13 +135,20 @@ export async function POST(request: Request): Promise<Response> {
       });
       // Our app was never granted the permission this call needs. Nothing
       // the owner can do fixes it, and it is NOT a dead token, so it must not
-      // send them off to reconnect. Reported as its own reason so the worker
-      // can say something true and non-alarming.
+      // send them off to reconnect.
       //
-      // Detected from Meta's answer rather than from a hardcoded scope list,
-      // so the day App Review grants the permission this simply starts
-      // working with no code change.
-      if (isMetaPermissionDenied(err)) {
+      // SCOPED TO THE FACEBOOK PUBLIC PATH ON PURPOSE. Meta's permission
+      // codes are not App-Review-specific: Messenger answers 10 for a send
+      // OUTSIDE the allowed window, which is exactly the private-reply case
+      // that must keep reporting Meta's own words. The same codes also mean a
+      // tenant revoked a scope we ARE approved for. The Facebook public reply
+      // is the one path where we know the cause, because
+      // pages_manage_engagement is missing from our app for everyone
+      // (Bugbot, PR #1454).
+      //
+      // Still read from Meta's ANSWER rather than a hardcoded scope list, so
+      // the day App Review grants it this simply starts working.
+      if (body.platform === "facebook" && body.mode === "public" && isMetaPermissionDenied(err)) {
         logger.warn("comment reply refused: app permission not granted", {
           businessId: body.businessId,
           mode: body.mode,

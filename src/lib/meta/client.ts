@@ -90,14 +90,18 @@ export const META_ERROR_CODE_UNKNOWN_OBJECT = 100;
 export const META_ERROR_CODE_BAD_TOKEN = 190;
 
 /**
- * Meta's codes for "your APP was never granted the permission this call
- * needs". Distinct from a dead token (190, the tenant must reconnect) and
- * from a per-object refusal: nothing the owner does fixes these, because the
- * gap is in our App Review approvals.
+ * Meta's permission-denied codes.
  *
- * Worth separating because the honest message is completely different. "Your
- * connection stopped working, reconnect it" would send an owner to redo an
- * OAuth flow that was never the problem.
+ * CAREFUL: these do NOT on their own mean "our app lacks an App Review
+ * approval". Meta reuses them for a tenant-revoked scope, and Messenger
+ * answers 10 for a send outside the allowed messaging window. A caller may
+ * only read them as an approval gap where it independently knows that is the
+ * cause, e.g. the Facebook public comment reply, whose
+ * pages_manage_engagement is missing from our app for every tenant.
+ *
+ * Worth having at all because the honest message differs completely from a
+ * dead token: "your connection stopped working, reconnect it" would send an
+ * owner to redo an OAuth flow that was never the problem.
  */
 export const META_ERROR_CODES_PERMISSION_DENIED = new Set([
   10, // "Application does not have permission for this action"

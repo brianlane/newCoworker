@@ -180,6 +180,29 @@ describe("POST /api/internal/comment-reply", () => {
     expect(vi.mocked(reportMetaCallFailure)).not.toHaveBeenCalled();
   });
 
+  it("does NOT claim an approval gap on the private path, where 10 means the window", async () => {
+    // Messenger answers 10 for a send OUTSIDE the allowed window. Claiming
+    // "we are not approved" there would replace the real reason with a
+    // reassurance that happens to be false.
+    for (const code of [10, 200, 299]) {
+      privateReply.mockRejectedValueOnce(metaError(code));
+      const payload = (await (
+        await POST(req({ ...body, mode: "private", platform: "facebook" }))
+      ).json()) as { data: { reason: string } };
+      expect(payload.data.reason).toBe("refused");
+    }
+  });
+
+  it("does NOT claim an approval gap on Instagram, where we ARE approved", async () => {
+    // The same codes mean a tenant revoked a scope. Reporting Meta's own
+    // words is honest; claiming our app is unapproved is not.
+    for (const code of [10, 200, 299]) {
+      publicReply.mockRejectedValueOnce(metaError(code));
+      const payload = (await (await POST(req(body))).json()) as { data: { reason: string } };
+      expect(payload.data.reason).toBe("refused");
+    }
+  });
+
   it("detects it from Meta's answer, so approval makes it work with no deploy", async () => {
     // Deliberately not a hardcoded scope list: the day App Review grants
     // pages_manage_engagement, the same call simply succeeds.
