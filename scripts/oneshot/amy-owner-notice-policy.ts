@@ -394,6 +394,31 @@ export function addHighDollarTakeover(
     ? { var: "actions_taken", contains: OWNER_IGNORED_MARKER }
     : { var: "claimed_agent", equals: "none" };
 
+  // A grace wait before re-checking, and only for the team-offer shape.
+  //
+  // An ownerDirect flow needs none: its route step does not complete until
+  // the owner replies or the second reminder lapses at 30 minutes, so the
+  // verdict is already final. A TEAM offer is different. The sibling
+  // under-$1M arm sleeps before re-reading claimed_agent precisely so a late
+  // claim can still land, and tagging the moment the offer resolves would
+  // start the AI cadence while a teammate could still be picking it up. So
+  // the high arm copies the sibling's own wait rather than inventing one.
+  const wait: Step[] = [];
+  if (!opts.ownerDirect) {
+    const siblingSleep = allSteps(
+      arms.flatMap((a) => (a.steps as Step[] | undefined) ?? [])
+    ).find((st) => st.type === "sleep" && typeof st.minutes === "number");
+    if (!siblingSleep) {
+      throw new Error(`branch ${branchId} has no sibling sleep to copy the grace wait from`);
+    }
+    wait.push({
+      id: `${armId}_wait`,
+      type: "sleep",
+      when: { var: "claimed_agent", equals: "none" },
+      minutes: siblingSleep.minutes
+    });
+  }
+
   arms.push({
     id: armId,
     label: opts.ownerDirect
@@ -401,6 +426,7 @@ export function addHighDollarTakeover(
       : "$1M+: offered to the team and nobody claimed it",
     condition: { var: "price_under_1m", equals: "no" },
     steps: [
+      ...wait,
       {
         id: `${armId}_check`,
         type: "branch",

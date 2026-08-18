@@ -349,7 +349,7 @@ describe("the $1M+ takeover arm", () => {
     expect(worker).toContain(OWNER_IGNORED_MARKER);
   });
 
-  it("needs no waiting step, because the route step already held the run", () => {
+  it("needs no waiting step on the owner-direct shape", () => {
     // The owner-direct park does not complete until the owner replies or the
     // second reminder lapses at 30 minutes, so the verdict is in
     // actions_taken by the time this branch evaluates.
@@ -367,6 +367,36 @@ describe("the $1M+ takeover arm", () => {
       Record<string, unknown>
     >;
     expect(arms[0].condition).toEqual({ var: "claimed_agent", equals: "none" });
+  });
+
+  it("KEEPS the grace wait on the team-offer shape, matching its sibling arm", () => {
+    // Bugbot's second catch: dropping the sleep is right for ownerDirect,
+    // where the park already held the run, but a team offer needs the same
+    // late-claim grace the under-$1M arm gives. Without it the AI cadence
+    // could start while a teammate is still picking the lead up.
+    const def = fixture("fur");
+    addHighDollarTakeover(def, "fur_team_unclaimed", "fur", [], { ownerDirect: false });
+    const wait = findStepDeep(def.steps, "fur_tu_high_wait")!;
+    expect(wait.type).toBe("sleep");
+    expect(wait.when).toEqual({ var: "claimed_agent", equals: "none" });
+  });
+
+  it("copies the sibling's wait length rather than inventing one", () => {
+    const def = fixture("fur");
+    (findStepDeep(def.steps, "fur_tu_wait") as Step).minutes = 45;
+    addHighDollarTakeover(def, "fur_team_unclaimed", "fur", [], { ownerDirect: false });
+    expect(findStepDeep(def.steps, "fur_tu_high_wait")!.minutes).toBe(45);
+  });
+
+  it("aborts when the team-offer shape has no sibling sleep to copy", () => {
+    const def = fixture("fur");
+    const arm = (findStepDeep(def.steps, "fur_team_unclaimed")!.branches as Array<
+      Record<string, unknown>
+    >)[0];
+    arm.steps = (arm.steps as Step[]).filter((st) => st.type !== "sleep");
+    expect(() =>
+      addHighDollarTakeover(def, "fur_team_unclaimed", "fur", [], { ownerDirect: false })
+    ).toThrow(/no sibling sleep/);
   });
 
   it("hands the lead to the one cadence chokepoint", () => {

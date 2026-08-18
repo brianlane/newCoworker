@@ -461,15 +461,20 @@ to owner and unclaimed by owner". A test pins that literal against the worker
 source, since a copied string that drifts would stop matching with no failure
 anywhere.
 
-That also removes the need for any waiting step: the owner-direct park holds
-the run until she replies or the second reminder lapses at 30 minutes, so the
-verdict is already in `actions_taken` when the branch evaluates. A late "1"
-cannot change it either, because the exhaustion path deletes `step_index` and
-the late-claim matcher then skips the run entirely.
+That also removes the need for any waiting step on the owner-direct flows: the
+park holds the run until she replies or the second reminder lapses at 30
+minutes, so the verdict is already in `actions_taken` when the branch
+evaluates. A late "1" cannot change it either, because the exhaustion path
+deletes `step_index` and the late-claim matcher then skips the run entirely.
 
-**Follow Up Requested is the exception**: it has no `ownerDirectTemplate`, so
-its $1M+ leads really are offered to the team, the exhaustion marker can never
-appear, and its arm gates on `claimed_agent == "none"` in the normal way.
+**Follow Up Requested is the exception, in two ways.** It has no
+`ownerDirectTemplate`, so its $1M+ leads really are offered to the team, the
+exhaustion marker can never appear, and its arm gates on `claimed_agent ==
+"none"` in the normal way. Because it IS a team offer, it also keeps the
+120-minute grace wait its sibling under-$1M arm uses (copied from that arm,
+not hardcoded): the wait is what leaves room for a late claim, and tagging the
+moment the offer resolves would start the AI cadence while a teammate could
+still be picking the lead up.
 
 **HomeLight is exempt from that arm**, same reason it is exempt from the
 under-$500K gate: it withholds the lead's phone and email until a claim
