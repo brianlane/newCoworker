@@ -94,6 +94,62 @@ export const SUBMIT_SELECTORS = [
   '[role="button"]:has-text("Sign in")'
 ];
 
+/**
+ * How long the email-first step waits for the password field to turn up after
+ * the advance click. HomeLight NAVIGATES to a second URL, so this has to
+ * outlast a page load, not just a re-render.
+ */
+export const LOGIN_ADVANCE_TIMEOUT_MS = Number(
+  process.env.AIFLOW_LOGIN_ADVANCE_TIMEOUT_MS ?? 10_000
+);
+/** Gap between re-checks while waiting for the password step to mount. */
+export const LOGIN_ADVANCE_POLL_MS = Number(process.env.AIFLOW_LOGIN_ADVANCE_POLL_MS ?? 250);
+/**
+ * Shortened wait when the advance click itself threw. Long enough to cover a
+ * click that timed out on actionability after already landing, short enough
+ * that a genuinely stuck step fails in a second rather than ten.
+ */
+export const LOGIN_ADVANCE_GRACE_MS = Number(
+  process.env.AIFLOW_LOGIN_ADVANCE_GRACE_MS ?? 1_000
+);
+
+/**
+ * Controls that advance an EMAIL-FIRST login to its password step.
+ *
+ * "Continue" is deliberately excluded from SUBMIT_SELECTORS because it is the
+ * most common label on things that are not a submit control, and resolveSubmit
+ * prefers an enabled candidate, so a live Continue could steal the click from a
+ * validation-disabled real submit. None of that applies here: this list is only
+ * ever consulted when the page has an email field and NO password field, which
+ * is to say when there is no submit control to steal from. The two uses stay
+ * separate on purpose.
+ */
+export const ADVANCE_SELECTORS = [
+  'button:has-text("Continue")',
+  'button:has-text("Next")',
+  '[role="button"]:has-text("Continue")',
+  'button[type="submit"]',
+  'input[type="submit"]'
+];
+
+/**
+ * Username fields specific enough to anchor an email-first login on.
+ *
+ * The looser USERNAME_SELECTORS (`input[name*="user" i]` and friends) exist to
+ * find the field once we already know the page is a login form, because a
+ * password field next to it settles that. On the email-first step there is no
+ * password field to corroborate, so a loose match plus any "Continue" button
+ * would let an ordinary signup or search page be mistaken for a login.
+ */
+export const EMAIL_FIRST_SELECTORS = [
+  'input[type="email"]',
+  'input[autocomplete="email"]',
+  'input[autocomplete="username"]'
+];
+
+/** Words that only appear on a page asking you to authenticate. */
+export const LOGIN_HINT_RE = /sign[\s._-]?in|log[\s._-]?in/i;
+
 /** First selector in `candidates` that matches an element on the page, else null. */
 export async function firstSelector(page, candidates) {
   for (const sel of candidates) {
@@ -104,16 +160,87 @@ export async function firstSelector(page, candidates) {
 }
 
 /**
- * True only when the page looks like an actual login FORM: a password field AND
- * a username/email field. Requiring both avoids treating an authenticated page
- * that merely embeds a stray password input (a "change password" widget) as a
- * logout, which would otherwise trigger a pointless re-login loop.
+ * Does the visible page (or its URL) say it wants you to authenticate?
+ *
+ * Only consulted for the email-first step, where there is no password field to
+ * settle the question. "Sign out" and "Log out" deliberately do not match.
+ * Best-effort: a page that cannot be read is treated as NOT a login, so the
+ * worst case is the old behavior rather than a spurious login attempt.
+ */
+export async function looksLikeLoginPage(page) {
+  try {
+    if (typeof page.url === "function" && LOGIN_HINT_RE.test(String(page.url() ?? ""))) {
+      return true;
+    }
+  } catch {
+    /* fall through to the text check */
+  }
+  try {
+    const text = await page.evaluate?.(() => document.body?.innerText ?? "");
+    return LOGIN_HINT_RE.test(String(text ?? "").slice(0, 4000));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the page looks like a login FORM.
+ *
+ * Two shapes count:
+ *
+ *  1. A password field AND a username/email field, together on one page.
+ *     Requiring both avoids treating an authenticated page that merely embeds a
+ *     stray password input (a "change password" widget) as a logout, which
+ *     would otherwise trigger a pointless re-login loop.
+ *
+ *  2. EMAIL-FIRST: an email field, no password field, an advance control, and a
+ *     page that says it wants you to sign in. Added 2026-08-18 because
+ *     HomeLight is exactly this and the single-page test could not see it:
+ *     `homelight.com/client/sign-in` takes only the email, Continue hands off
+ *     to `homelight.com/users/login?email=...`, and the password field lives
+ *     there. Shape 1 was false on both pages, so no login was ever ATTEMPTED
+ *     and every HomeLight browse returned whatever logged-out page it landed
+ *     on as a successful read. That is worse than a failure: a stale referral
+ *     link fed a marketing funnel straight into extraction.
  */
 export async function looksLikeLogin(page, login) {
-  const passSel = login?.passwordSelector ? [login.passwordSelector] : PASSWORD_SELECTORS;
-  if ((await firstSelector(page, passSel)) === null) return false;
-  const userSel = login?.usernameSelector ? [login.usernameSelector] : USERNAME_SELECTORS;
-  return (await firstSelector(page, userSel)) !== null;
+  const userSel = await firstSelector(
+    page,
+    login?.usernameSelector ? [login.usernameSelector] : USERNAME_SELECTORS
+  );
+  if (!userSel) return false;
+
+  const passSel = await firstSelector(
+    page,
+    login?.passwordSelector ? [login.passwordSelector] : PASSWORD_SELECTORS
+  );
+  if (passSel) return true;
+
+  // Email-first: every gate below has to hold, because there is no password
+  // field corroborating that this is a login at all.
+  const emailSel = await firstSelector(
+    page,
+    login?.usernameSelector ? [login.usernameSelector] : EMAIL_FIRST_SELECTORS
+  );
+  if (!emailSel) return false;
+  if (!(await firstSelector(page, [login?.advanceSelector, ...ADVANCE_SELECTORS]))) return false;
+  return await looksLikeLoginPage(page);
+}
+
+/**
+ * Poll for the password field to appear after the advance click. Returns its
+ * selector, or null on timeout. Polls rather than using `waitForSelector`
+ * because the field can arrive by NAVIGATION or by re-render, and we do not
+ * know which portal does which.
+ */
+export async function waitForPasswordField(page, login, timeoutMs = LOGIN_ADVANCE_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const sel = await firstSelector(page, [login?.passwordSelector, ...PASSWORD_SELECTORS]);
+    if (sel) return sel;
+    if (Date.now() >= deadline) return null;
+    await page.waitForTimeout?.(LOGIN_ADVANCE_POLL_MS);
+  }
 }
 
 /**
@@ -154,15 +281,78 @@ export async function resolveSubmit(page, login) {
  * timeout deserves.
  */
 export async function performLogin(page, creds, login) {
-  const userSel = await firstSelector(page, [
-    login?.usernameSelector,
-    ...USERNAME_SELECTORS,
-    'input[type="text"]'
-  ]);
-  const passSel = await firstSelector(page, [login?.passwordSelector, ...PASSWORD_SELECTORS]);
-  if (!userSel || !passSel) throw new Error("login_form_not_found");
+  const findUser = () =>
+    firstSelector(page, [login?.usernameSelector, ...USERNAME_SELECTORS, 'input[type="text"]']);
 
-  await page.fill(userSel, creds.username);
+  let userSel = await findUser();
+  let passSel = await firstSelector(page, [login?.passwordSelector, ...PASSWORD_SELECTORS]);
+  let advanceSel = null;
+  let advanceError = null;
+
+  // EMAIL-FIRST portals (HomeLight): the password field is on the NEXT page.
+  // Type the email, advance, and wait for it. Only entered when the page has a
+  // username field and no password field, so this can never intercept an
+  // ordinary one-page form.
+  if (userSel && !passSel) {
+    advanceSel = await firstSelector(page, [login?.advanceSelector, ...ADVANCE_SELECTORS]);
+    if (advanceSel) {
+      await page.fill(userSel, creds.username);
+      // Same validate-on-blur reason as the submit below: an email-first
+      // Continue is routinely disabled until the field validates.
+      try {
+        await page.locator(userSel).first().blur();
+      } catch {
+        /* a form with no blur handler is unaffected */
+      }
+      await page.waitForTimeout?.(LOGIN_SETTLE_MS);
+      try {
+        await page.locator(advanceSel).first().click({ timeout: LOGIN_CLICK_TIMEOUT_MS });
+      } catch (e) {
+        // Keep it. A silent failure here looks identical to "this portal has no
+        // password", which is the misreading that cost a day on HomeLight.
+        advanceError = `advance: ${String(e?.message ?? e)}`.slice(0, 200);
+      }
+      // A click that threw almost certainly did not advance the page, so do not
+      // spend the full budget waiting for a step that is not coming. Still wait
+      // briefly: a click can time out on actionability AFTER it has landed.
+      passSel = await waitForPasswordField(
+        page,
+        login,
+        advanceError ? LOGIN_ADVANCE_GRACE_MS : (login?.advanceTimeoutMs ?? LOGIN_ADVANCE_TIMEOUT_MS)
+      );
+      // The second page usually pre-fills the email from the query string, but
+      // re-resolve rather than assume: it may not carry the field at all.
+      userSel = await findUser();
+    }
+  }
+
+  if (!passSel) {
+    if (advanceSel) {
+      // We DID find a login and DID try to advance it; the password step just
+      // never arrived. Returning beats throwing, and the difference is not
+      // cosmetic: the caller maps a throw to `auth_config_error`, which the
+      // worker treats as PERMANENT, with no screenshot and no reason. A slow
+      // Continue would therefore kill the run outright and tell nobody why,
+      // which is exactly what this module's own header warns against. Hand the
+      // reason back instead and let the caller's re-check be the authority: it
+      // re-navigates, still sees a login page, and reports `login_failed` with
+      // the detail, the page text and a screenshot.
+      return {
+        selectors: { user: userSel, pass: null, submit: null, advance: advanceSel },
+        steps: 2,
+        passwordStepReached: false,
+        submitEnabled: null,
+        blurred: false,
+        clickError: advanceError ?? "password step never appeared after the advance click"
+      };
+    }
+    throw new Error("login_form_not_found");
+  }
+  // After an email-first advance the username field is optional (the second
+  // page may carry only the password); on a one-page form it is not.
+  if (!userSel && !advanceSel) throw new Error("login_form_not_found");
+
+  if (userSel) await page.fill(userSel, creds.username);
   await page.fill(passSel, creds.password);
 
   // Blur the last field so validate-on-blur forms actually validate and enable
@@ -184,10 +374,20 @@ export async function performLogin(page, creds, login) {
   // returned to the caller and serialized into `login_failed`, so it carries
   // WHICH field was used and never WHAT was typed into it.
   const diagnostics = {
-    selectors: { user: userSel, pass: passSel, submit: submit?.selector ?? null },
+    selectors: {
+      user: userSel,
+      pass: passSel,
+      submit: submit?.selector ?? null,
+      advance: advanceSel
+    },
+    // 2 means the portal asked for the email first and the password on a second
+    // page. Worth reporting: it is the difference between "wrong password" and
+    // "we never reached the password step".
+    steps: advanceSel ? 2 : 1,
+    passwordStepReached: true,
     submitEnabled: submit?.enabled ?? null,
     blurred,
-    clickError: null
+    clickError: advanceError
   };
 
   if (!submit) {
@@ -196,7 +396,9 @@ export async function performLogin(page, creds, login) {
     try {
       await page.locator(passSel).first().press("Enter");
     } catch (e) {
-      diagnostics.clickError = `enter_fallback: ${String(e?.message ?? e)}`;
+      diagnostics.clickError = [diagnostics.clickError, `enter_fallback: ${String(e?.message ?? e)}`]
+        .filter(Boolean)
+        .join("; ");
     }
   } else {
     try {
@@ -204,7 +406,9 @@ export async function performLogin(page, creds, login) {
     } catch (e) {
       // Keep the reason. This is the line whose `.catch(() => {})` hid the
       // Clever failure for a day.
-      diagnostics.clickError = String(e?.message ?? e).slice(0, 200);
+      diagnostics.clickError = [diagnostics.clickError, String(e?.message ?? e).slice(0, 200)]
+        .filter(Boolean)
+        .join("; ");
       // A disabled-forever button still deserves the native attempt.
       try {
         await page.locator(passSel).first().press("Enter");

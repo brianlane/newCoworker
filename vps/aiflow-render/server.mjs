@@ -797,7 +797,11 @@ app.post("/render", async (req, res) => {
         // already persist a screenshot and page source; login failures used to
         // persist nothing, and that asymmetry was the actual bug.
         const detail = loginDiagnostics
-          ? `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
+          ? (loginDiagnostics.steps === 2
+              ? `steps=2 advance=${loginDiagnostics.selectors.advance ?? "none"} ` +
+                `passwordStep=${loginDiagnostics.passwordStepReached} `
+              : "") +
+            `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
             `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
             (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "")
           : "no login diagnostics";

@@ -23,6 +23,10 @@ export interface LoginOverrides {
   usernameSelector?: string;
   passwordSelector?: string;
   submitSelector?: string;
+  /** Control that advances an email-first login to its password step. */
+  advanceSelector?: string;
+  /** Override the wait for the password step after an advance, in ms. */
+  advanceTimeoutMs?: number;
 }
 
 /**
@@ -36,7 +40,23 @@ export interface LoginDiagnostics {
    * which a generic-password scanner flags as a credential assignment. These
    * are CSS selectors; no credential value is ever carried here.
    */
-  selectors: { user: string; pass: string; submit: string | null };
+  selectors: {
+    /** Null when an email-first second page carried no username field. */
+    user: string | null;
+    /** Null when the email-first advance never reached the password step. */
+    pass: string | null;
+    submit: string | null;
+    /** Non-null only on an email-first login. */
+    advance: string | null;
+  };
+  /** 1 for a one-page form, 2 when the portal asked for the email first. */
+  steps: 1 | 2;
+  /**
+   * False only on an email-first login whose advance never produced a password
+   * field. Reported rather than thrown, so the caller can surface a
+   * `login_failed` with evidence instead of a permanent `auth_config_error`.
+   */
+  passwordStepReached: boolean;
   /** Null when no submit control was found at all. */
   submitEnabled: boolean | null;
   blurred: boolean;
@@ -63,3 +83,24 @@ export function performLogin(
   creds: { username: string; password: string },
   login?: LoginOverrides
 ): Promise<LoginDiagnostics>;
+
+/** How long the email-first step waits for the password field to appear. */
+export const LOGIN_ADVANCE_TIMEOUT_MS: number;
+/** Gap between re-checks while waiting for the password step to mount. */
+export const LOGIN_ADVANCE_POLL_MS: number;
+/** Shortened wait when the advance click itself threw. */
+export const LOGIN_ADVANCE_GRACE_MS: number;
+/** Controls that advance an email-first login to its password step. */
+export const ADVANCE_SELECTORS: string[];
+/** Username fields specific enough to anchor an email-first login on. */
+export const EMAIL_FIRST_SELECTORS: string[];
+/** Matches "sign in" / "log in" and deliberately not "sign out" / "log out". */
+export const LOGIN_HINT_RE: RegExp;
+/** Does the page (or its URL) say it wants you to authenticate? */
+export function looksLikeLoginPage(page: RenderPage): Promise<boolean>;
+/** Poll for the password field after an advance click; null on timeout. */
+export function waitForPasswordField(
+  page: RenderPage,
+  login?: LoginOverrides,
+  timeoutMs?: number
+): Promise<string | null>;
