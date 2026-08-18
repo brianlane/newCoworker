@@ -28,7 +28,10 @@ import {
   savePendingMetaConnection,
   setMetaConnectionActive,
   setMetaConnectionDataset,
-  toPublicMetaConnection
+  toPublicMetaConnection,
+  listMetaConnectionsByMetaUserId,
+  deleteMetaConnectionById,
+  setMetaConnectionUserId
 } from "@/lib/db/meta-connections";
 
 type Chain = {
@@ -38,6 +41,7 @@ type Chain = {
   delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -50,6 +54,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
     is: vi.fn(() => c),
+    limit: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -72,6 +77,7 @@ const PENDING = {
   page_name: null,
   page_token_encrypted: null,
   account_name: "Brian Lane",
+  meta_user_id: null,
   instagram_account_id: null,
   instagram_username: null,
   is_active: true,
@@ -473,6 +479,104 @@ describe("default service client", () => {
     await setMetaConnectionActive(BIZ, true);
     await setMetaConnectionDataset(BIZ, "ds-new");
     await deleteMetaConnection(BIZ);
-    expect(defaultClientSpy).toHaveBeenCalledTimes(10);
+    await listMetaConnectionsByMetaUserId("asid-1");
+    await deleteMetaConnectionById("mc-1");
+    await setMetaConnectionUserId("mc-1", "asid-1");
+    expect(defaultClientSpy).toHaveBeenCalledTimes(13);
+  });
+});
+
+describe("meta_user_id lookups (the deauthorize / data-deletion join key)", () => {
+  const ASID = "122098495527401398";
+
+  it("records the id at connect, and never blanks it on a reconnect", async () => {
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: { id: "mc-1" }, error: null });
+    c.single.mockResolvedValue({ data: ACTIVE, error: null });
+    await savePendingMetaConnection(
+      { businessId: BIZ, userToken: "t", accountName: "Brian", metaUserId: ASID },
+      makeDb(c)
+    );
+    expect(c.update.mock.calls[0][0]).toMatchObject({ meta_user_id: ASID });
+
+    // A reconnect whose /me lookup failed must NOT erase the id the Meta
+    // callbacks depend on, so the field is omitted rather than set to null.
+    const c2 = chain({ error: null });
+    c2.maybeSingle.mockResolvedValue({ data: { id: "mc-1" }, error: null });
+    c2.single.mockResolvedValue({ data: ACTIVE, error: null });
+    await savePendingMetaConnection(
+      { businessId: BIZ, userToken: "t", accountName: "Brian", metaUserId: null },
+      makeDb(c2)
+    );
+    expect(c2.update.mock.calls[0][0]).not.toHaveProperty("meta_user_id");
+  });
+
+  it("finds every connection that person authorized, bounded", async () => {
+    const c = chain({ data: [ACTIVE], error: null });
+    const rows = await listMetaConnectionsByMetaUserId(ASID, makeDb(c));
+    expect(rows).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("meta_user_id", ASID);
+    // An unbounded select silently truncates at PostgREST's 1000 rows.
+    expect(c.limit).toHaveBeenCalledWith(200);
+  });
+
+  it("REFUSES an empty id instead of matching every null row", async () => {
+    // .eq("meta_user_id", "") would match nothing, but a blank id reaching
+    // the query at all is a bug worth stopping at the door: the callers
+    // treat "no rows" as "nothing to delete".
+    const c = chain({ data: [ACTIVE], error: null });
+    expect(await listMetaConnectionsByMetaUserId("", makeDb(c))).toEqual([]);
+    expect(await listMetaConnectionsByMetaUserId("   ", makeDb(c))).toEqual([]);
+    expect(c.eq).not.toHaveBeenCalled();
+  });
+
+  it("coerces null data and throws on error", async () => {
+    expect(
+      await listMetaConnectionsByMetaUserId(ASID, makeDb(chain({ data: null, error: null })))
+    ).toEqual([]);
+    await expect(
+      listMetaConnectionsByMetaUserId(ASID, makeDb(chain({ data: null, error: { message: "x" } })))
+    ).rejects.toThrow(/x/);
+  });
+});
+
+describe("deleteMetaConnectionById", () => {
+  it("DELETES the row rather than blanking it", async () => {
+    // A blanked row keeps status "pending", and the integrations card reads
+    // any pending row as an in-progress Page pick: the owner would see
+    // "Almost there" and then "No Pages found" instead of a clean
+    // disconnected state (Bugbot, PR #1443).
+    const c = chain({ data: [{ id: "mc-1" }], error: null });
+    expect(await deleteMetaConnectionById("mc-1", makeDb(c))).toBe(true);
+    expect(c.delete).toHaveBeenCalled();
+    expect(c.update).not.toHaveBeenCalled();
+    expect(c.eq).toHaveBeenCalledWith("id", "mc-1");
+  });
+
+  it("reports false when the delete matched no row", async () => {
+    // PostgREST returns no error for a delete matching nothing, so the caller
+    // must not count it as a successful sever.
+    expect(await deleteMetaConnectionById("gone", makeDb(chain({ data: [], error: null })))).toBe(
+      false
+    );
+    await expect(
+      deleteMetaConnectionById("mc-1", makeDb(chain({ data: null, error: { message: "e" } })))
+    ).rejects.toThrow(/e/);
+  });
+});
+
+describe("setMetaConnectionUserId", () => {
+  it("stamps the id and reports whether a row took it", async () => {
+    const c = chain({ data: [{ id: "mc-1" }], error: null });
+    expect(await setMetaConnectionUserId("mc-1", " 42 ", makeDb(c))).toBe(true);
+    expect(c.update.mock.calls[0][0]).toMatchObject({ meta_user_id: "42" });
+
+    expect(await setMetaConnectionUserId("mc-1", "", makeDb(c))).toBe(false);
+    expect(
+      await setMetaConnectionUserId("mc-1", "42", makeDb(chain({ data: [], error: null })))
+    ).toBe(false);
+    await expect(
+      setMetaConnectionUserId("mc-1", "42", makeDb(chain({ data: null, error: { message: "u" } })))
+    ).rejects.toThrow(/u/);
   });
 });

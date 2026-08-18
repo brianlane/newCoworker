@@ -32,6 +32,13 @@ type StoredMetaConnectionRow = {
   page_name: string | null;
   page_token_encrypted: string | null;
   account_name: string | null;
+  /**
+   * App-scoped id (ASID) of the Facebook user who authorized this. The only
+   * handle Meta's deauthorize / data-deletion callbacks carry, so it is what
+   * they join on. Null on connections made before we captured it, and on any
+   * the backfill could not reach.
+   */
+  meta_user_id: string | null;
   /** IG professional account linked to the Page (null when none). */
   instagram_account_id: string | null;
   instagram_username: string | null;
@@ -63,7 +70,7 @@ export type PublicMetaConnectionRow = Omit<
 
 const ALL_COLUMNS =
   "id,business_id,status,user_token_encrypted,page_id,page_name," +
-  "page_token_encrypted,account_name,instagram_account_id,instagram_username," +
+  "page_token_encrypted,account_name,meta_user_id,instagram_account_id,instagram_username," +
   "dataset_id,capi_enabled,is_active,created_at,updated_at";
 
 function toDecryptedRow(row: StoredMetaConnectionRow): MetaConnectionRow {
@@ -201,7 +208,13 @@ export class MetaConnectionValidationError extends Error {
  * of it.
  */
 export async function savePendingMetaConnection(
-  input: { businessId: string; userToken: string; accountName: string | null },
+  input: {
+    businessId: string;
+    userToken: string;
+    accountName: string | null;
+    /** ASID from /me; see meta_user_id on the row type. */
+    metaUserId?: string | null;
+  },
   client?: SupabaseClient
 ): Promise<PublicMetaConnectionRow> {
   const token = input.userToken.trim();
@@ -224,6 +237,9 @@ export async function savePendingMetaConnection(
     // the page token always is — a pending row must never be able to send.
     page_token_encrypted: null,
     account_name: input.accountName,
+    // Only ever overwrite with a real value: a reconnect whose /me lookup
+    // failed must not erase the id the callbacks depend on.
+    ...(input.metaUserId ? { meta_user_id: input.metaUserId } : {}),
     instagram_account_id: null,
     instagram_username: null,
     is_active: true
@@ -326,6 +342,87 @@ export async function setMetaConnectionDataset(
     .maybeSingle();
   if (error) throw new Error(`setMetaConnectionDataset: ${error.message}`);
   return data ? toPublicMetaConnection(data as unknown as StoredMetaConnectionRow) : null;
+}
+
+/**
+ * Every connection a given Facebook user authorized. Plural on purpose: one
+ * person can connect several businesses, and a deauthorization or deletion
+ * request from them must reach all of them, not the first one found.
+ */
+export async function listMetaConnectionsByMetaUserId(
+  metaUserId: string,
+  client?: SupabaseClient
+): Promise<PublicMetaConnectionRow[]> {
+  const id = metaUserId.trim();
+  // An empty id would match every row whose column is null. Refuse rather
+  // than sever the whole fleet.
+  if (!id) return [];
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("meta_connections")
+    .select(ALL_COLUMNS)
+    .eq("meta_user_id", id)
+    .limit(200);
+  if (error) throw new Error(`listMetaConnectionsByMetaUserId: ${error.message}`);
+  return ((data ?? []) as unknown as StoredMetaConnectionRow[]).map(toPublicMetaConnection);
+}
+
+/**
+ * Delete one connection outright: both tokens, the account name, and every
+ * Page and Instagram identifier Facebook gave us go with the row.
+ *
+ * DELETED, not blanked. A blanked row keeps `status: "pending"`, and the
+ * integrations card reads any pending row as an in-progress Page pick: it
+ * would show "Almost there", try to list Pages with no user token, and land
+ * the owner on "No Pages found" (Bugbot, PR #1443). Removing the row shows
+ * the honest "not connected" state instead, and it is what actually
+ * happened: the person revoked the app.
+ *
+ * Nothing is lost by deleting. The audit trail lives outside this table, in
+ * meta_data_deletion_requests (which records the app-scoped id and how many
+ * connections were cleared) and in a per-business system log line. For a
+ * data-deletion request in particular, keeping a row that still identifies
+ * the requester would be the wrong instinct.
+ *
+ * SCOPE, deliberately narrow: this erases what FACEBOOK gave us about the
+ * person who authorized the app. It does NOT touch the tenant's contacts,
+ * leads, or conversations: those are the business's own records about its own
+ * customers, kept on a different legal basis, and wiping a company's CRM
+ * because an administrator removed a Facebook app would be both wrong and
+ * unrecoverable.
+ */
+export async function deleteMetaConnectionById(
+  connectionId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("meta_connections")
+    .delete()
+    .eq("id", connectionId)
+    // A delete matching zero rows returns no error in PostgREST, so select
+    // and check rather than assume it landed.
+    .select("id");
+  if (error) throw new Error(`deleteMetaConnectionById: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/** Record the ASID on a connection that predates us capturing it. */
+export async function setMetaConnectionUserId(
+  connectionId: string,
+  metaUserId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const id = metaUserId.trim();
+  if (!id) return false;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("meta_connections")
+    .update({ meta_user_id: id, updated_at: new Date().toISOString() })
+    .eq("id", connectionId)
+    .select("id");
+  if (error) throw new Error(`setMetaConnectionUserId: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
 }
 
 /** Soft-disable / re-enable (webhook deliveries refuse while inactive). */

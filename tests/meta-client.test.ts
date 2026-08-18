@@ -36,6 +36,8 @@ import {
   getInstagramContainerStatus,
   getInstagramMediaPermalink,
   getInstagramMediaState,
+  getTokenUserId,
+  getUserProfile,
   replyToInstagramComment,
   sendInstagramPrivateReply,
   INSTAGRAM_COMMENT_MAX_LENGTH,
@@ -981,5 +983,59 @@ describe("Instagram comment replies", () => {
     expect(err).toBeInstanceOf(MetaApiError);
     expect((err as MetaApiError).metaCode).toBe(10);
     expect((err as MetaApiError).metaSubcode).toBe(2534022);
+  });
+});
+
+describe("getTokenUserId (the backfill path for the Meta callbacks)", () => {
+  it("reads the authorizing person's id out of debug_token", async () => {
+    // The point of this helper: a live connection keeps only its PAGE token,
+    // and /me on a page token answers with the Page. debug_token reports the
+    // Page as profile_id and the person as user_id.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: { type: "PAGE", profile_id: "page-1", user_id: "122098495527401398" }
+      })
+    );
+    await expect(getTokenUserId("page-tok")).resolves.toBe("122098495527401398");
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith("/debug_token")).toBe(true);
+    expect(url.searchParams.get("input_token")).toBe("page-tok");
+    // App-token auth, not the token being inspected.
+    expect(url.searchParams.get("access_token")).toBe(`${APP_ID}|${APP_SECRET}`);
+  });
+
+  it("tolerates a numeric id and returns null when there is none", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: { user_id: 42 } }));
+    await expect(getTokenUserId("t")).resolves.toBe("42");
+
+    for (const body of [{ data: {} }, { data: { user_id: "" } }, {}]) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, body));
+      await expect(getTokenUserId("t")).resolves.toBeNull();
+    }
+  });
+
+  it("returns null instead of throwing, so a backfill finishes the rest", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: { message: "bad", code: 190 } }));
+    await expect(getTokenUserId("expired")).resolves.toBeNull();
+  });
+});
+
+describe("getUserProfile", () => {
+  it("returns the id and name, and nulls each independently", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "asid-1", name: "Brian Lane" }));
+    await expect(getUserProfile("tok")).resolves.toEqual({ id: "asid-1", name: "Brian Lane" });
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("fields")).toBe(
+      "id,name"
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "asid-1" }));
+    await expect(getUserProfile("tok")).resolves.toEqual({ id: "asid-1", name: null });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { name: "Brian" }));
+    await expect(getUserProfile("tok")).resolves.toEqual({ id: null, name: "Brian" });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "", name: "" }));
+    await expect(getUserProfile("tok")).resolves.toEqual({ id: null, name: null });
   });
 });

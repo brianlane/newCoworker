@@ -293,12 +293,57 @@ export type MetaManagedPage = {
 
 /** The authorizing user's display name (shown on the dashboard card). */
 export async function getUserName(userToken: string): Promise<string | null> {
+  return (await getUserProfile(userToken)).name;
+}
+
+/**
+ * The authorizing person's display name AND their app-scoped id (ASID).
+ *
+ * The id is the whole reason this exists: Meta's deauthorize and data-deletion
+ * callbacks identify the person by ASID and nothing else, so a connection that
+ * never recorded one cannot be matched to the person who removed the app. It
+ * is app-scoped, meaning it identifies them on THIS app and nowhere else.
+ */
+export async function getUserProfile(
+  userToken: string
+): Promise<{ id: string | null; name: string | null }> {
   const payload = await graphRequest("/me", {
-    fields: "name",
+    fields: "id,name",
     access_token: userToken
   });
-  const name = (payload as { name?: unknown } | null)?.name;
-  return typeof name === "string" && name.length > 0 ? name : null;
+  const raw = payload as { id?: unknown; name?: unknown } | null;
+  return {
+    id: typeof raw?.id === "string" && raw.id.length > 0 ? raw.id : null,
+    name: typeof raw?.name === "string" && raw.name.length > 0 ? raw.name : null
+  };
+}
+
+/**
+ * The ASID behind ANY token, read from /debug_token.
+ *
+ * This is the backfill path for connections made before we captured the id.
+ * It works on a PAGE token, which matters: a connection drops its user token
+ * the moment it activates, so on every live connection the page token is all
+ * that is left, and /me on a page token answers with the Page rather than the
+ * person. debug_token reports the Page in `profile_id` and the authorizing
+ * person in `user_id`, which is the one we want.
+ *
+ * Returns null rather than throwing: a backfill that cannot reach one
+ * connection must not abandon the rest.
+ */
+export async function getTokenUserId(token: string): Promise<string | null> {
+  try {
+    const payload = await graphRequest("/debug_token", {
+      input_token: token,
+      access_token: `${getMetaAppId()}|${getMetaAppSecret()}`
+    });
+    const data = (payload as { data?: { user_id?: unknown } } | null)?.data;
+    const userId = data?.user_id;
+    if (typeof userId === "string" && userId.length > 0) return userId;
+    return typeof userId === "number" ? String(userId) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Pages the user manages (with their page tokens), for the picker. */

@@ -2413,6 +2413,64 @@ user token holding `ads_management` + `business_management`, and
 privilege list. Without a dataset the stage events simply defer, then expire
 at Meta's 7-day window; nothing errors.
 
+### The two required Meta app callbacks (deauthorize, data deletion)
+
+Meta requires every app that touches user data to answer two POSTs, and we
+answered neither until now: a person removing New Coworker in Facebook
+Settings left a row reading `active` with a live-looking token forever, and a
+Meta-originated deletion request got a 404 and a recorded compliance failure.
+
+Both arrive as a form-encoded **`signed_request`**, not the JSON +
+`X-Hub-Signature-256` shape the main webhook uses. `src/lib/meta/signed-request.ts`
+verifies it: HMAC-SHA256 over the RAW payload segment (not a re-encoding of
+the decoded JSON, which would fail on any key-order difference), timing-safe
+compare, and the `algorithm` field pinned so a future downgrade cannot pass.
+Both routes live under `/api/webhooks/`, which `src/proxy.ts` exempts from
+CSRF, and the signature is their ONLY authentication.
+
+| Callback | Route | Register at |
+| --- | --- | --- |
+| Deauthorize | `POST /api/webhooks/meta/deauthorize` | App Dashboard → Facebook Login → Settings → Deauthorize callback URL |
+| Data Deletion Request | `POST /api/webhooks/meta/data-deletion` | same panel → Data Deletion Request URL |
+
+**They join on an app-scoped id, which we did not store.** The payload names
+the person only by ASID, so `meta_connections.meta_user_id` now records it,
+captured from `/me?fields=id,name` at connect. Existing rows backfill with
+`debug/meta-backfill-user-ids.ts`: a connection drops its user token on
+activation, so `/me` there answers with the Page, but `/debug_token` on the
+page token reports the Page as `profile_id` and the authorizing person as
+`user_id`. Rows that cannot be reached stay unmatchable until the owner
+reconnects, and the script says so rather than reporting success.
+
+**Scope is deliberately narrow, and this is the important part.** A request
+DELETES the connection row: both tokens, the account name, and the Page and
+Instagram identifiers go with it. Deleted rather than blanked, because a
+blanked row keeps `status: "pending"` and the integrations card reads any
+pending row as an in-progress Page pick, showing "Almost there" and then "No
+Pages found" instead of a clean disconnected state. It does NOT touch the tenant's
+contacts, leads, or conversations. Those are the business's own records about
+its own customers, held on a different basis; erasing a company's CRM because
+an administrator removed a Facebook app would be both wrong and
+unrecoverable. Meta's requirement is to delete what Facebook gave us about
+the requester, and the requester is the person who authorized the app, not
+the tenant's customers. The status page says this in plain words.
+
+Deletion additionally records a row in `meta_data_deletion_requests` and
+returns Meta's documented `{ url, confirmation_code }`, pointing at
+`/privacy/data-deletion/status?code=...`.
+
+The status it records is the honesty-critical part. Matching nothing is
+`no_data`, a real and complete answer. Matching N and deleting all N is
+`completed`. Matching N and deleting fewer is **`failed`**, never
+`completed` and never `no_data`: telling someone their data is gone, or that
+we never held any, while it is still here are both lies to a person
+exercising a privacy right, so that case routes them to a human.
+
+Both routes answer **200 on every path**, including a rejected signature.
+Meta retries neither and reads anything else as a broken integration; Meta's
+own docs say a malformed answer can get the callback removed or the app
+disabled. A forged signature severs nothing.
+
 ### Instagram comments: trigger, and reply back
 
 A comment on a connected tenant's Instagram post arrives on the same
