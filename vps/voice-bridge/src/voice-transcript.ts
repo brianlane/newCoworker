@@ -73,11 +73,29 @@ export type TranscriptAdapter = {
     transcriptId: string;
     status: "completed" | "errored";
   }) => Promise<void>;
+  /**
+   * Stamp the turn index from which the AI was interpreting between two
+   * humans. Optional so an adapter written before translator mode still
+   * satisfies the type.
+   */
+  markInterpretedFrom?: (input: {
+    transcriptId: string;
+    fromTurnIndex: number;
+  }) => Promise<void>;
 };
 
 export type TranscriptRecorder = {
   ingest: (message: LiveTranscriptMessage | null | undefined) => Promise<void>;
   finalize: (opts?: { errored?: boolean }) => Promise<void>;
+  /**
+   * Record that interpreting starts HERE, at the next turn to be written.
+   *
+   * Everything before this index came from a call with two parties, where the
+   * caller role is exact. After it there are three, and the two humans share
+   * one undiarized audio stream, so the call view stops attributing those
+   * turns to the caller alone.
+   */
+  markInterpreting: () => Promise<void>;
 };
 
 export type TranscriptRecorderInit = {
@@ -94,8 +112,12 @@ export type TranscriptRecorderInit = {
  * `inputTranscription` / `outputTranscription`, and we don't import from the
  * SDK here (see `LiveTranscriptMessage` above), so we access fields through
  * runtime shape checks.
+ *
+ * Exported because caller-speech.ts parses the same frames for the translator
+ * gate's language judgment. One parser, so the live decision and the stored
+ * transcript can never disagree about what the caller said.
  */
-function extractTranscriptionFrame(message: LiveTranscriptMessage): {
+export function extractTranscriptionFrame(message: LiveTranscriptMessage): {
   callerText: string;
   assistantText: string;
   turnComplete: boolean;
@@ -250,5 +272,27 @@ export function createTranscriptRecorder(
     }
   }
 
-  return { ingest, finalize };
+  /**
+   * Stamp where interpreting began. Fires ONCE: the model can call
+   * transfer_to_owner more than once (it retried three times in ~600ms on the
+   * first live translator test), and the first mark is the true boundary.
+   *
+   * Best-effort like every other write here. Losing the marker costs the call
+   * view a label; throwing would take the media pipe down mid-conversation.
+   */
+  let interpretingMarked = false;
+  async function markInterpreting(): Promise<void> {
+    if (interpretingMarked) return;
+    if (!adapter.markInterpretedFrom) return;
+    interpretingMarked = true;
+    try {
+      const id = await ensureTranscript();
+      if (!id) return;
+      await adapter.markInterpretedFrom({ transcriptId: id, fromTurnIndex: turnIndex });
+    } catch (err) {
+      console.error("voice-transcript: markInterpretedFrom", err);
+    }
+  }
+
+  return { ingest, finalize, markInterpreting };
 }

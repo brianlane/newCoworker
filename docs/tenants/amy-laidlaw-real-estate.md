@@ -63,6 +63,18 @@ Read the live state rather than this table when it matters:
 
 These are mistakes already made on this account. Do not remake them.
 
+- **An interpreter needs someone to interpret FOR.** Call 5634b7f0 (Aug 18
+  2026): an outbound Clever seller call reached an English-speaking lead,
+  transferred him live to Dave, and the AI then stayed on the bridged line and
+  translated Dave's "Hello. Hello." into "Hola. ¿Hola?". Translator mode
+  engaged on the tenant flag alone, with no language known, so the model
+  invented a language pair off one mis-transcribed turn ("¿Tú?"). The call died
+  in 63 seconds and the flow still recorded it as `transferred`, which resolved
+  the goal and ended weeks 3 through 8 of the cadence for that lead. The gate
+  that fixes it is in the README's translator section; the lesson for this
+  account is that a live transfer's outcome ("transferred") is not evidence the
+  conversation went well.
+
 - **A teammate is never a lead.** Dave and Amy have both been filed as
   customers by flows that texted them. The rule and its guard are in the
   README ("A teammate is never a lead, however the step addressed them");
@@ -532,6 +544,14 @@ app + outbound voice profile (both named with the searchable marker
 tier, a per-tenant $25/day spend fuse, the full destination whitelist, and the
 DID re-pointed onto the tenant app. Idempotent (re-runs adopt by marker).
 Whether it has run is in the applied_oneshots ledger.
+
+**Transcript repair (Aug 18 2026):** `repair-clobbered-ai-transcripts.ts`
+restores AI transcript rows that the forwarded-call record overwrote on a warm
+transfer (direction, model, and the stamped `summarized_at` that kept the call
+out of the summary sweep). Fleet-wide by default; both affected rows were this
+tenant's, calls 24c3a49c (Jul 14) and 5634b7f0 (Aug 18). Evidence-only: each
+field comes from the reservation or the call's telemetry, and the Jul 14 row's
+model is unrecoverable because its telemetry has aged out. Idempotent.
 
 Which of these actually ran, and when, is in the ledger, not here:
 `select script, applied_at from applied_oneshots where business_id =

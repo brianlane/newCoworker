@@ -33,8 +33,26 @@ import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { forwardedCallNotice, turnSpeaker } from "@/lib/voice/transcript-badges";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Literal catalog keys, not template strings: the i18n key-usage guard greps
+ * for the keys a surface actually uses, and a built key is invisible to it.
+ */
+const FORWARDED_NOTICE_KEYS = {
+  missed: "callForwardedNoticeMissed",
+  noTranscript: "callForwardedNoticeNoTranscript",
+  transferred: "callForwardedNoticeTransferred",
+  interpreted: "callForwardedNoticeInterpreted"
+} as const;
+
+const TURN_SPEAKER_KEYS = {
+  assistant: "callTurnSpeakerAssistant",
+  caller: "callTurnSpeakerCaller",
+  callerOrTeammate: "callTurnSpeakerCallerOrTeammate"
+} as const;
 
 export default async function CallTranscriptPage({
   params
@@ -97,6 +115,15 @@ export default async function CallTranscriptPage({
       : Promise.resolve(null)
   ]);
   const contact = callerE164 ? contactMap.get(callerE164) : undefined;
+  // What the transferred-call notice is allowed to claim. An interpreted call
+  // keeps transcribing PAST the transfer, so the old single sentence ("only the
+  // conversation before the transfer is below") was false for it.
+  const forwardedNotice = forwardedCallNotice({
+    callKind: transcript.call_kind,
+    status: transcript.status,
+    turnCount: turns.length,
+    interpretedFromTurnIndex: transcript.interpreted_from_turn_index
+  });
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -174,18 +201,14 @@ export default async function CallTranscriptPage({
         </div>
       </div>
 
-      {transcript.call_kind === "forwarded" && (
+      {forwardedNotice && (
         <Card padding="md">
           <p className="text-sm text-parchment/70 leading-relaxed">
-            {transcript.status === "missed"
-              ? "This call was forwarded to a team member but wasn't answered."
-              : turns.length > 0
-                ? "The AI answered and transferred this call to a team member. Only the conversation before the transfer is transcribed below."
-                : "This call was forwarded to a team member and answered; no AI transcript exists for it."}
+            {t(FORWARDED_NOTICE_KEYS[forwardedNotice])}
             {transcript.forwarded_to_e164 && (
               <>
                 {" "}
-                Forwarded to{" "}
+                {t("callForwardedTo")}{" "}
                 <span className="font-mono">{transcript.forwarded_to_e164}</span>.
               </>
             )}
@@ -218,11 +241,16 @@ export default async function CallTranscriptPage({
       ) : (
         <Card padding="md">
           <ul className="space-y-4">
-            {turns.map((t) => {
-              const isCaller = t.role === "caller";
+            {turns.map((turn) => {
+              const isCaller = turn.role === "caller";
+              const speaker = turnSpeaker({
+                role: turn.role,
+                turnIndex: turn.turn_index,
+                interpretedFromTurnIndex: transcript.interpreted_from_turn_index
+              });
               return (
                 <li
-                  key={t.id}
+                  key={turn.id}
                   className={[
                     "flex",
                     isCaller ? "justify-start" : "justify-end"
@@ -237,9 +265,9 @@ export default async function CallTranscriptPage({
                     ].join(" ")}
                   >
                     <div className="text-[10px] uppercase tracking-wide text-parchment/50 mb-1">
-                      {isCaller ? "Caller" : "Assistant"}
+                      {t(TURN_SPEAKER_KEYS[speaker])}
                     </div>
-                    <ChatMarkdown text={t.content} />
+                    <ChatMarkdown text={turn.content} />
                   </div>
                 </li>
               );

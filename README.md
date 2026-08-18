@@ -2989,12 +2989,36 @@ between them, in the first person, both directions.
   `telnyx-voice-call-end` for the AI-takeover and outbound-answered paths.
   `both` is inert until a second leg exists, so an armed call that never
   transfers behaves exactly like any other call.
+- **It engages only when someone actually needs it.** Being armed says the
+  human CAN hear us; a separate gate (`resolveInterpretDecision` in
+  [vps/voice-bridge/src/translator-gate.ts](vps/voice-bridge/src/translator-gate.ts))
+  answers whether anybody needs translating, and BOTH have to pass. The gate
+  takes the caller's language from the contact's stored `preferred_language`,
+  or from what they have actually said on this call (scored by the same
+  `detectCustomerLanguage` the SMS side learns language with, mirrored into the
+  bridge as a lockstep copy). No language difference, no interpreter: the AI
+  detaches exactly as it did before the feature existed, and logs
+  `voice_bridge_translator_mode_skipped` with its reason so a decline is as
+  diagnosable as an entry.
+
+  This was missing until 2026-08-18, and the gap is what call 5634b7f0 was:
+  an armed tenant, an all-English outbound seller call, a warm transfer to a
+  teammate, and an AI that stayed on the line and answered his "Hello. Hello."
+  with "Hola. ¿Hola?". The cue had no languages to name (`caller_language:
+  null` in the entry telemetry) so the model invented a pair, prompted by the
+  one Spanish-looking thing on the call: a mis-transcribed "¿Tú?". The
+  fleet-wide default-on migration had already claimed this gate existed ("the
+  AI already decides to interpret only when someone actually needs it"); now it
+  does.
 - **The persona switch is a coordinator cue**, `translatorModeCue`
   ([vps/voice-bridge/src/system-instruction.ts](vps/voice-bridge/src/system-instruction.ts)),
   delivered through `sendRealtimeInput({ text })` like the wind-down cues. It is
   deliberately absolute: interpret each turn and do nothing else, speak in the
   first person as whoever is talking, never answer a question yourself, no tools,
-  and stay silent between turns. A model that keeps its receptionist reflexes is
+  and stay silent between turns. On the transfer path it NAMES both languages,
+  and its type requires them: the older shape accepted an unknown caller
+  language and fell back to "say what they said in the caller's language", which
+  is the wording that let the model choose for itself. A model that keeps its receptionist reflexes is
   worse than no interpreter, because the human believes they are hearing the
   caller. Tool calls are ALSO refused in code while interpreting, since Gemini
   Live cannot un-declare tools mid-session.
@@ -3006,6 +3030,17 @@ between them, in the first person, both directions.
   keeps running throughout, so an interpreted call is as observable as any other.
 - **Fails safe.** If the cue cannot be delivered the call falls back to today's
   detach, and an unarmed call can never enter the branch at all.
+
+**What the owner sees afterwards.** An interpreted call keeps transcribing past
+the transfer, so the call view says so instead of claiming the transcript stops
+at the handover. From `voice_call_transcripts.interpreted_from_turn_index`
+onward it also stops attributing inbound turns to the caller by name: Telnyx's
+`both_tracks` fork carries both humans into ONE Gemini input stream (the bridge
+reads `media.payload` and ignores `media.track`) and the transcription comes
+back undiarized, so after the bridge a turn is genuinely either party. Labelling
+it "Caller" put the teammate's words in the lead's mouth on call 5634b7f0.
+Telling the two apart would need per-track diarization the platform does not
+have.
 
 **Cost, and it is deliberate: the tenant pays for what they use.** An interpreted
 call meters BOTH legs (the caller leg through AI settlement, the human leg

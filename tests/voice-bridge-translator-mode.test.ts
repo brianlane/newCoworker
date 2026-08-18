@@ -24,54 +24,67 @@ const INBOUND = join(__dirname, "../supabase/functions/telnyx-voice-inbound/inde
 
 describe("translatorModeCue", () => {
   it("tells the model both parties can hear it", () => {
-    expect(translatorModeCue({})).toContain("Both of them can hear you");
+    expect(translatorModeCue({ callerLanguage: "es" })).toContain("Both of them can hear you");
   });
 
-  it("names the languages in each direction when the caller language is known", () => {
+  it("names the languages in each direction", () => {
     const cue = translatorModeCue({ callerLanguage: "es" });
     expect(cue).toContain("say what they said in English");
     expect(cue).toContain("say what they said in Spanish");
   });
 
-  it("falls back to relative wording when the caller language is unknown", () => {
-    const cue = translatorModeCue({});
-    expect(cue).toContain("in the colleague's language");
-    expect(cue).toContain("in the caller's language");
-    expect(cue).not.toContain("in Spanish");
+  it("names the COLLEAGUE's language too, rather than assuming English", () => {
+    // A Spanish-speaking tenant taking an English caller is the mirror image,
+    // and hardcoding English here would have told the model to translate
+    // English into English.
+    const cue = translatorModeCue({ callerLanguage: "en", colleagueLanguage: "es" });
+    expect(cue).toContain("say what they said in Spanish");
+    expect(cue).toContain("say what they said in English");
+  });
+
+  it("cannot be built without a caller language on the transfer path", () => {
+    // The whole Aug 18 defect in one assertion. The relative wording this used
+    // to fall back to ("in the caller's language", with no language named) is
+    // what let the model invent Spanish for two English speakers. The gate now
+    // guarantees a language before the cue is ever built, so the ambiguous
+    // phrasing is gone rather than merely unused.
+    const cue = translatorModeCue({ callerLanguage: "es" });
+    expect(cue).not.toContain("in the caller's language");
+    expect(cue).not.toContain("in the colleague's language");
   });
 
   it("greets the human by name when known", () => {
-    expect(translatorModeCue({ humanName: "Dave" })).toContain("(Dave)");
-    expect(translatorModeCue({})).not.toContain("()");
+    expect(translatorModeCue({ callerLanguage: "es", humanName: "Dave" })).toContain("(Dave)");
+    expect(translatorModeCue({ callerLanguage: "es" })).not.toContain("()");
   });
 
   it("forbids answering on anyone's behalf", () => {
-    const cue = translatorModeCue({});
+    const cue = translatorModeCue({ callerLanguage: "es" });
     expect(cue).toContain("Never answer a question yourself");
     expect(cue).toContain("never add, explain, soften, summarize, or leave anything out");
   });
 
   it("requires first-person interpretation, not reported speech", () => {
-    const cue = translatorModeCue({});
+    const cue = translatorModeCue({ callerLanguage: "es" });
     expect(cue).toContain("FIRST PERSON");
     expect(cue).toContain("Never say things like he says");
   });
 
   it("bans every tool and any hangup once interpreting", () => {
-    const cue = translatorModeCue({});
+    const cue = translatorModeCue({ callerLanguage: "es" });
     expect(cue).toContain("Do not use any tools from here on");
     expect(cue).toContain("do not book, text, email, look anything up, or end the call");
   });
 
   it("requires silence between turns rather than filling pauses", () => {
-    expect(translatorModeCue({})).toContain("never fill a pause");
+    expect(translatorModeCue({ callerLanguage: "es" })).toContain("never fill a pause");
   });
 
   it("discloses itself to the human by default and can be turned off", () => {
-    expect(translatorModeCue({ discloseToHuman: true })).toContain(
+    expect(translatorModeCue({ callerLanguage: "es", discloseToHuman: true })).toContain(
       "say exactly one short line so your colleague knows you are there"
     );
-    expect(translatorModeCue({ discloseToHuman: false })).not.toContain(
+    expect(translatorModeCue({ callerLanguage: "es", discloseToHuman: false })).not.toContain(
       "say exactly one short line"
     );
   });
@@ -89,6 +102,62 @@ describe("the bridge only interprets on a call that was armed at answer time", (
     // default), so staying on would talk over the caller while the human hears
     // nothing. The flag is set from the same tenant column the answer path arms.
     expect(src).toContain("opts.transfer!.translatorMode === true");
+  });
+
+  it("ALSO requires a real language difference, not just the tenant flag", () => {
+    // The Aug 18 defect (call 5634b7f0): being armed was the only condition, so
+    // every warm transfer on an armed tenant became an interpreted call. The
+    // arming check answers "can the human hear us"; this one answers "does
+    // anybody need an interpreter", and both have to pass.
+    const branch = src.slice(src.indexOf("opts.transfer!.translatorMode === true"));
+    const stayOn = branch.slice(0, branch.indexOf("// On a SUCCESSFUL warm"));
+    expect(stayOn).toContain("resolveInterpretDecision");
+    expect(stayOn).toContain("interpret.engage");
+  });
+
+  it("records why it declined, so a skipped interpretation is diagnosable", () => {
+    expect(src).toContain("voice_bridge_translator_mode_skipped");
+    const branch = src.slice(src.indexOf("voice_bridge_translator_mode_skipped"));
+    expect(branch.slice(0, 400)).toContain("reason: interpret.reason");
+  });
+
+  it("passes the DECIDED languages to the cue, never a null one", () => {
+    // Reading the stored preference straight into the cue is what produced
+    // `caller_language: null` on the incident call.
+    const branch = src.slice(src.indexOf("opts.transfer!.translatorMode === true"));
+    const stayOn = branch.slice(0, branch.indexOf("// On a SUCCESSFUL warm"));
+    const cueCall = stayOn.slice(
+      stayOn.indexOf("translatorModeCue({"),
+      stayOn.indexOf("emitDiag(\"voice_bridge_translator_mode_entered\"")
+    );
+    expect(cueCall).toContain("callerLanguage: interpret.callerLanguage");
+    expect(cueCall).toContain("colleagueLanguage: interpret.colleagueLanguage");
+    // The stored preference is an INPUT to the decision, never the value the
+    // cue is built from. Feeding it straight through is what produced
+    // `caller_language: null` on the incident call.
+    expect(cueCall).not.toContain("languagePrefs");
+  });
+
+  it("declining leaves the call on today's detach path", () => {
+    // A declined interpretation must be indistinguishable from translator mode
+    // never having existed: the AI leaves and the two humans talk privately.
+    const branch = src.slice(src.indexOf("opts.transfer!.translatorMode === true"));
+    const stayOn = branch.slice(0, branch.indexOf("// On a SUCCESSFUL warm"));
+    const declineAt = stayOn.indexOf("voice_bridge_translator_mode_skipped");
+    const activateAt = stayOn.indexOf("translatorActive = true;");
+    expect(declineAt).toBeGreaterThan(-1);
+    expect(activateAt).toBeGreaterThan(declineAt);
+  });
+
+  it("feeds the gate what the caller actually said on this call", () => {
+    // Stored preference alone would deny the interpreter to every first-time
+    // Spanish caller, which is the case the feature was built for.
+    expect(src).toContain("createCallerSpeechLog");
+    expect(src).toContain("callerSpeech.ingest(");
+    const branch = src.slice(src.indexOf("opts.transfer!.translatorMode === true"));
+    expect(branch.slice(0, branch.indexOf("// On a SUCCESSFUL warm"))).toContain(
+      "callerTurns: callerSpeech.turns()"
+    );
   });
 
   it("falls back to the normal detach when the cue cannot be delivered", () => {
@@ -498,5 +567,30 @@ describe("arming is off by default and read from the tenant column", () => {
     );
     expect(flip).toContain("alter column translator_mode_enabled set default true");
     expect(flip).toContain("set translator_mode_enabled = true");
+  });
+});
+
+describe("an interpreted call is marked as one, for the owner reading it back", () => {
+  const src = readFileSync(BRIDGE, "utf8");
+
+  it("stamps the transcript from BOTH entry paths", () => {
+    // Whoever a colleague merges in on the staff path arrives on the same
+    // undiarized stream, so that transcript is exactly as ambiguous.
+    const marks = src.match(/void transcriptRecorder\?\.markInterpreting\(\);/g) ?? [];
+    expect(marks.length).toBe(2);
+  });
+
+  it("stamps it only once interpreting is actually committed", () => {
+    // A mark written before the gate ran would claim an interpreted call on
+    // every transfer, which is the labelling half of the same defect.
+    const branch = src.slice(src.indexOf("opts.transfer!.translatorMode === true"));
+    const stayOn = branch.slice(0, branch.indexOf("// On a SUCCESSFUL warm"));
+    const skipAt = stayOn.indexOf("voice_bridge_translator_mode_skipped");
+    const markAt = stayOn.indexOf("markInterpreting()");
+    expect(markAt).toBeGreaterThan(skipAt);
+  });
+
+  it("writes the column the call view reads", () => {
+    expect(readFileSync(INDEX, "utf8")).toContain("interpreted_from_turn_index:");
   });
 });

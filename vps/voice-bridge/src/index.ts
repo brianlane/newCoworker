@@ -416,6 +416,21 @@ function createSupabaseTranscriptAdapter(
       }
       return (data as { id: string }).id;
     },
+    markInterpretedFrom: async (input) => {
+      // The transcript row is the one the bridge created for this call, so a
+      // plain id match is enough; failures are logged and dropped, like every
+      // other transcript write.
+      const { error } = await supabase
+        .from("voice_call_transcripts")
+        .update({
+          interpreted_from_turn_index: input.fromTurnIndex,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", input.transcriptId);
+      if (error) {
+        console.error("voice-transcript: markInterpretedFrom failed", error.message);
+      }
+    },
     insertTurn: async (input) => {
       const { error } = await supabase
         .from("voice_call_transcript_turns")
