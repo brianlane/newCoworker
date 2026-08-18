@@ -18,14 +18,21 @@
  * the app, not the tenant's customers.
  */
 import {
-  clearMetaConnectionData,
+  deleteMetaConnectionById,
   listMetaConnectionsByMetaUserId
 } from "@/lib/db/meta-connections";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
 export type MetaDeauthorizeResult = {
-  /** How many connections were actually cleared. */
+  /**
+   * How many connections the app-scoped id matched. Reported separately from
+   * `cleared` because the two differing is the case that must NOT be told to
+   * the person as "we deleted everything" or "we held nothing": data we hold
+   * is still there. See the data-deletion route.
+   */
+  found: number;
+  /** How many were actually deleted. */
   cleared: number;
   /** Businesses affected, for the audit line. */
   businessIds: string[];
@@ -51,19 +58,19 @@ export async function deauthorizeMetaUser(
   const connections = await listMetaConnectionsByMetaUserId(metaUserId);
   if (connections.length === 0) {
     logger.warn("meta callback matched no connection", { reason });
-    return { cleared: 0, businessIds: [], unmatched: true };
+    return { found: 0, cleared: 0, businessIds: [], unmatched: true };
   }
 
   const businessIds: string[] = [];
   let cleared = 0;
   for (const connection of connections) {
     try {
-      if (await clearMetaConnectionData(connection.id)) {
+      if (await deleteMetaConnectionById(connection.id)) {
         cleared += 1;
         businessIds.push(connection.business_id);
       }
     } catch (err) {
-      logger.error("meta callback failed to clear a connection", {
+      logger.error("meta callback failed to delete a connection", {
         reason,
         connectionId: connection.id,
         businessId: connection.business_id,
@@ -89,5 +96,5 @@ export async function deauthorizeMetaUser(
     });
   }
 
-  return { cleared, businessIds, unmatched: false };
+  return { found: connections.length, cleared, businessIds, unmatched: false };
 }

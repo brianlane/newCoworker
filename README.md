@@ -2443,8 +2443,11 @@ page token reports the Page as `profile_id` and the authorizing person as
 reconnects, and the script says so rather than reporting success.
 
 **Scope is deliberately narrow, and this is the important part.** A request
-destroys the Meta-derived data on the connection: both tokens, the account
-name, and the Page and Instagram identifiers. It does NOT touch the tenant's
+DELETES the connection row: both tokens, the account name, and the Page and
+Instagram identifiers go with it. Deleted rather than blanked, because a
+blanked row keeps `status: "pending"` and the integrations card reads any
+pending row as an in-progress Page pick, showing "Almost there" and then "No
+Pages found" instead of a clean disconnected state. It does NOT touch the tenant's
 contacts, leads, or conversations. Those are the business's own records about
 its own customers, held on a different basis; erasing a company's CRM because
 an administrator removed a Facebook app would be both wrong and
@@ -2454,8 +2457,14 @@ the tenant's customers. The status page says this in plain words.
 
 Deletion additionally records a row in `meta_data_deletion_requests` and
 returns Meta's documented `{ url, confirmation_code }`, pointing at
-`/privacy/data-deletion/status?code=...`, which reports completed / nothing
-to delete / a problem, honestly, including for a request we refused.
+`/privacy/data-deletion/status?code=...`.
+
+The status it records is the honesty-critical part. Matching nothing is
+`no_data`, a real and complete answer. Matching N and deleting all N is
+`completed`. Matching N and deleting fewer is **`failed`**, never
+`completed` and never `no_data`: telling someone their data is gone, or that
+we never held any, while it is still here are both lies to a person
+exercising a privacy right, so that case routes them to a human.
 
 Both routes answer **200 on every path**, including a rejected signature.
 Meta retries neither and reads anything else as a broken integration; Meta's

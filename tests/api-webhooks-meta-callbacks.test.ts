@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.META_APP_SECRET = APP_SECRET;
   process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
-  deauthorize.mockResolvedValue({ cleared: 1, businessIds: ["b-1"], unmatched: false });
+  deauthorize.mockResolvedValue({ found: 1, cleared: 1, businessIds: ["b-1"], unmatched: false });
   insertRequest.mockResolvedValue({} as never);
 });
 
@@ -124,10 +124,35 @@ describe("POST /api/webhooks/meta/data-deletion", () => {
   it("records no_data when the person's id matches nothing we hold", async () => {
     // A complete answer, not a failure: they may have removed the app before
     // we recorded ids, or never finished connecting.
-    deauthorize.mockResolvedValue({ cleared: 0, businessIds: [], unmatched: true });
+    deauthorize.mockResolvedValue({ found: 0, cleared: 0, businessIds: [], unmatched: true });
     await deletionPost(req(DELETE_URL, sign(VALID)));
     expect(insertRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: "no_data", connectionsCleared: 0 })
+    );
+  });
+
+  it("records FAILED when connections matched but deletion did not finish", async () => {
+    // The honesty case. Telling someone "we deleted everything" or "we held
+    // nothing" while their data is still here are both lies to a person
+    // exercising a privacy right, so a partial or total failure routes them
+    // to a human instead.
+    deauthorize.mockResolvedValue({ found: 2, cleared: 0, businessIds: [], unmatched: false });
+    await deletionPost(req(DELETE_URL, sign(VALID)));
+    expect(insertRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        detail: "matched 2 connection(s), deleted 0"
+      })
+    );
+
+    vi.clearAllMocks();
+    deauthorize.mockResolvedValue({ found: 3, cleared: 1, businessIds: ["b-1"], unmatched: false });
+    await deletionPost(req(DELETE_URL, sign(VALID)));
+    expect(insertRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        detail: "matched 3 connection(s), deleted 1"
+      })
     );
   });
 

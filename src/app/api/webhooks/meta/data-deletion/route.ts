@@ -60,10 +60,22 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await deauthorizeMetaUser(payload.user_id, "data_deletion");
     cleared = result.cleared;
-    // "We hold nothing for you" is a real, complete answer, not a failure:
-    // the person may have removed the app before we recorded their id, or
-    // never finished connecting. The status page says so in plain words.
-    status = result.unmatched || result.cleared === 0 ? "no_data" : "completed";
+    if (result.found === 0) {
+      // "We hold nothing for you" is a real, complete answer, not a failure:
+      // the person may have removed the app before we recorded their id, or
+      // never finished connecting. The status page says so in plain words.
+      status = "no_data";
+    } else if (result.cleared === result.found) {
+      status = "completed";
+    } else {
+      // We MATCHED connections and failed to delete some or all of them.
+      // Reporting that as "completed" would tell the person their data is
+      // gone when it is not, and reporting it as "no_data" would tell them we
+      // never held any: both are lies to someone exercising a privacy right,
+      // so it is a failure that routes them to a human (Bugbot, PR #1443).
+      status = "failed";
+      detail = `matched ${result.found} connection(s), deleted ${result.cleared}`;
+    }
   } catch (err) {
     status = "failed";
     detail = err instanceof Error ? err.message : String(err);

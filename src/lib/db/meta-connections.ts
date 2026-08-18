@@ -368,47 +368,42 @@ export async function listMetaConnectionsByMetaUserId(
 }
 
 /**
- * Destroy the Meta-derived data on one connection: both tokens, the account
- * name, and the Page / Instagram identifiers Facebook gave us. The row itself
- * survives, deactivated, so the owner's dashboard can say the connection
- * ended rather than silently showing nothing.
+ * Delete one connection outright: both tokens, the account name, and every
+ * Page and Instagram identifier Facebook gave us go with the row.
  *
- * Scope is deliberate and narrow. This erases what FACEBOOK gave us about the
+ * DELETED, not blanked. A blanked row keeps `status: "pending"`, and the
+ * integrations card reads any pending row as an in-progress Page pick: it
+ * would show "Almost there", try to list Pages with no user token, and land
+ * the owner on "No Pages found" (Bugbot, PR #1443). Removing the row shows
+ * the honest "not connected" state instead, and it is what actually
+ * happened: the person revoked the app.
+ *
+ * Nothing is lost by deleting. The audit trail lives outside this table, in
+ * meta_data_deletion_requests (which records the app-scoped id and how many
+ * connections were cleared) and in a per-business system log line. For a
+ * data-deletion request in particular, keeping a row that still identifies
+ * the requester would be the wrong instinct.
+ *
+ * SCOPE, deliberately narrow: this erases what FACEBOOK gave us about the
  * person who authorized the app. It does NOT touch the tenant's contacts,
  * leads, or conversations: those are the business's own records about its own
  * customers, kept on a different legal basis, and wiping a company's CRM
  * because an administrator removed a Facebook app would be both wrong and
  * unrecoverable.
  */
-export async function clearMetaConnectionData(
+export async function deleteMetaConnectionById(
   connectionId: string,
   client?: SupabaseClient
 ): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("meta_connections")
-    .update({
-      status: "pending",
-      user_token_encrypted: null,
-      page_token_encrypted: null,
-      page_id: null,
-      page_name: null,
-      account_name: null,
-      instagram_account_id: null,
-      instagram_username: null,
-      dataset_id: null,
-      capi_enabled: false,
-      is_active: false,
-      // meta_user_id is KEPT: it is the audit trail tying this row to the
-      // request that cleared it, and it is app-scoped, so it identifies the
-      // person nowhere except inside this app.
-      updated_at: new Date().toISOString()
-    })
+    .delete()
     .eq("id", connectionId)
-    // A write matching zero rows returns no error in PostgREST, so select
+    // A delete matching zero rows returns no error in PostgREST, so select
     // and check rather than assume it landed.
     .select("id");
-  if (error) throw new Error(`clearMetaConnectionData: ${error.message}`);
+  if (error) throw new Error(`deleteMetaConnectionById: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 

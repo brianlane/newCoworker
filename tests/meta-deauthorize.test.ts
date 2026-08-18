@@ -15,13 +15,13 @@ vi.mock("@/lib/logger", () => ({
 }));
 vi.mock("@/lib/db/meta-connections", () => ({
   listMetaConnectionsByMetaUserId: vi.fn(),
-  clearMetaConnectionData: vi.fn()
+  deleteMetaConnectionById: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 
 import { deauthorizeMetaUser } from "@/lib/meta/deauthorize";
 import {
-  clearMetaConnectionData,
+  deleteMetaConnectionById,
   listMetaConnectionsByMetaUserId
 } from "@/lib/db/meta-connections";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -29,7 +29,7 @@ import { generateConfirmationCode } from "@/lib/meta/deletion-requests";
 
 const ASID = "122098495527401398";
 const list = vi.mocked(listMetaConnectionsByMetaUserId);
-const clear = vi.mocked(clearMetaConnectionData);
+const clear = vi.mocked(deleteMetaConnectionById);
 const log = vi.mocked(recordSystemLog);
 
 function connection(id: string, businessId: string) {
@@ -50,14 +50,14 @@ describe("deauthorizeMetaUser", () => {
     list.mockResolvedValue([connection("c-1", "b-1"), connection("c-2", "b-2")]);
 
     const result = await deauthorizeMetaUser(ASID, "deauthorize");
-    expect(result).toEqual({ cleared: 2, businessIds: ["b-1", "b-2"], unmatched: false });
+    expect(result).toEqual({ found: 2, cleared: 2, businessIds: ["b-1", "b-2"], unmatched: false });
     expect(clear).toHaveBeenCalledWith("c-1");
     expect(clear).toHaveBeenCalledWith("c-2");
   });
 
   it("reports unmatched, not an error, when the id matches nothing", async () => {
     const result = await deauthorizeMetaUser(ASID, "data_deletion");
-    expect(result).toEqual({ cleared: 0, businessIds: [], unmatched: true });
+    expect(result).toEqual({ found: 0, cleared: 0, businessIds: [], unmatched: true });
     expect(clear).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
   });
@@ -70,6 +70,7 @@ describe("deauthorizeMetaUser", () => {
     clear.mockResolvedValueOnce(true);
 
     const result = await deauthorizeMetaUser(ASID, "deauthorize");
+    expect(result.found).toBe(2);
     expect(result.cleared).toBe(1);
     expect(result.businessIds).toEqual(["b-2"]);
   });
@@ -87,7 +88,9 @@ describe("deauthorizeMetaUser", () => {
     clear.mockResolvedValue(false);
 
     const result = await deauthorizeMetaUser(ASID, "deauthorize");
-    expect(result).toEqual({ cleared: 0, businessIds: [], unmatched: false });
+    // found 1, cleared 0: the caller MUST be able to tell this apart from
+    // "matched nothing", or it reports a failure as a clean deletion.
+    expect(result).toEqual({ found: 1, cleared: 0, businessIds: [], unmatched: false });
     expect(log).not.toHaveBeenCalled();
   });
 

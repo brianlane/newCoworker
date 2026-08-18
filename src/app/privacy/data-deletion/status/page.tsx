@@ -93,8 +93,9 @@ export default async function DataDeletionStatusPage({
               <p>
                 <strong>Completed.</strong> We deleted everything Facebook gave us about you:
                 the access tokens for your account, your name as Facebook reported it, and the
-                Facebook Page and Instagram account identifiers we stored. This took effect
-                immediately and is not recoverable.
+                Facebook Page and Instagram account identifiers we stored. The connection
+                records themselves were removed, not just emptied. This took effect immediately
+                and is not recoverable.
               </p>
             ) : request.status === "no_data" ? (
               <p>

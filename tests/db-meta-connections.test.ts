@@ -30,7 +30,7 @@ import {
   setMetaConnectionDataset,
   toPublicMetaConnection,
   listMetaConnectionsByMetaUserId,
-  clearMetaConnectionData,
+  deleteMetaConnectionById,
   setMetaConnectionUserId
 } from "@/lib/db/meta-connections";
 
@@ -480,7 +480,7 @@ describe("default service client", () => {
     await setMetaConnectionDataset(BIZ, "ds-new");
     await deleteMetaConnection(BIZ);
     await listMetaConnectionsByMetaUserId("asid-1");
-    await clearMetaConnectionData("mc-1");
+    await deleteMetaConnectionById("mc-1");
     await setMetaConnectionUserId("mc-1", "asid-1");
     expect(defaultClientSpy).toHaveBeenCalledTimes(13);
   });
@@ -540,44 +540,27 @@ describe("meta_user_id lookups (the deauthorize / data-deletion join key)", () =
   });
 });
 
-describe("clearMetaConnectionData", () => {
-  it("destroys the Meta-derived fields and deactivates the row", async () => {
+describe("deleteMetaConnectionById", () => {
+  it("DELETES the row rather than blanking it", async () => {
+    // A blanked row keeps status "pending", and the integrations card reads
+    // any pending row as an in-progress Page pick: the owner would see
+    // "Almost there" and then "No Pages found" instead of a clean
+    // disconnected state (Bugbot, PR #1443).
     const c = chain({ data: [{ id: "mc-1" }], error: null });
-    expect(await clearMetaConnectionData("mc-1", makeDb(c))).toBe(true);
-
-    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
-    // Both tokens, the name Facebook gave us, and every Meta identifier.
-    for (const field of [
-      "user_token_encrypted",
-      "page_token_encrypted",
-      "page_id",
-      "page_name",
-      "account_name",
-      "instagram_account_id",
-      "instagram_username",
-      "dataset_id"
-    ]) {
-      expect(patch[field]).toBeNull();
-    }
-    expect(patch.is_active).toBe(false);
-    expect(patch.capi_enabled).toBe(false);
-    expect(patch.status).toBe("pending");
+    expect(await deleteMetaConnectionById("mc-1", makeDb(c))).toBe(true);
+    expect(c.delete).toHaveBeenCalled();
+    expect(c.update).not.toHaveBeenCalled();
+    expect(c.eq).toHaveBeenCalledWith("id", "mc-1");
   });
 
-  it("KEEPS meta_user_id, the audit trail tying the row to the request", async () => {
-    const c = chain({ data: [{ id: "mc-1" }], error: null });
-    await clearMetaConnectionData("mc-1", makeDb(c));
-    expect(c.update.mock.calls[0][0]).not.toHaveProperty("meta_user_id");
-  });
-
-  it("reports false when the update matched no row", async () => {
-    // PostgREST returns no error for an update matching nothing, so the
-    // caller must not count it as a successful sever.
-    expect(await clearMetaConnectionData("gone", makeDb(chain({ data: [], error: null })))).toBe(
+  it("reports false when the delete matched no row", async () => {
+    // PostgREST returns no error for a delete matching nothing, so the caller
+    // must not count it as a successful sever.
+    expect(await deleteMetaConnectionById("gone", makeDb(chain({ data: [], error: null })))).toBe(
       false
     );
     await expect(
-      clearMetaConnectionData("mc-1", makeDb(chain({ data: null, error: { message: "e" } })))
+      deleteMetaConnectionById("mc-1", makeDb(chain({ data: null, error: { message: "e" } })))
     ).rejects.toThrow(/e/);
   });
 });
