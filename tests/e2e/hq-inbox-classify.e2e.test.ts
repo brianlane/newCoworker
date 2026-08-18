@@ -42,6 +42,7 @@ describe("HQ inbox classify: the categories are wired to the live flow", () => {
       "automated_bulk",
       "automated_important",
       "automated_notice",
+      "automated_review",
       "billing",
       "billing_receipt",
       "sales_lead",
@@ -238,7 +239,23 @@ describe("HQ inbox classify: mail that asks us to act is never binned", () => {
     expect(kind).toBe("automated_important");
   });
 
-  it("reads an app-review decision as important", { retry: 1, timeout: 120_000 }, async () => {
+  /**
+   * The boundary between the two automated tiers that both talk about
+   * platform reviews, pinned from BOTH sides because it has now moved twice.
+   *
+   * `automated_review` (added Aug 17 2026, PR #1433) is SILENT: labelled
+   * HQ/Automated/Review and nothing else. `automated_important` TEXTS. The
+   * first wording of the review tier named the platforms and stopped there,
+   * so the nightly on Aug 18 2026 caught it swallowing this rejection: a
+   * submission that needs changes is a review outcome AND an ask, and it went
+   * quiet at the exact moment two submissions were in flight (the ChatGPT app
+   * and Meta App Review).
+   *
+   * The rule the descriptions now carry: a platform outcome that is finished
+   * and wants nothing is `automated_review`; one that still wants something
+   * from us is `automated_important`, whatever it is about.
+   */
+  it("reads an app-review REJECTION as important, because it asks us to act", { retry: 1, timeout: 120_000 }, async () => {
     const kind = await classify(
       email(
         "Your app submission needs changes",
@@ -246,6 +263,31 @@ describe("HQ inbox classify: mail that asks us to act is never binned", () => {
       )
     );
     expect(kind).toBe("automated_important");
+  });
+
+  it("keeps a FINISHED app review in the silent review tier", { retry: 1, timeout: 120_000 }, async () => {
+    // The other side of the same line. Fixing the rejection must not drag the
+    // whole tier back into texting, which is the state PR #1433 got us out of.
+    const kind = await classify(
+      email(
+        "Your app has been approved",
+        "Your submission passed review and is now live for all users. Nothing further is required."
+      )
+    );
+    expect(kind).toBe("automated_review");
+  });
+
+  it("keeps the Zoom publication notice in the silent review tier", { retry: 1, timeout: 120_000 }, async () => {
+    // The live Aug 17 2026 mail the tier was built for. It has no Gmail thread
+    // history at all (submitted through the Zoom Marketplace portal), so the
+    // category description is the only thing that can place it.
+    const kind = await classify(
+      email(
+        "New Coworker OAuth has been updated and published",
+        "Your app's OAuth update has been reviewed and is now published on the Zoom App Marketplace. No further action is needed."
+      )
+    );
+    expect(kind).toBe("automated_review");
   });
 
   it("still bins mail that genuinely asks nothing", { retry: 1, timeout: 120_000 }, async () => {

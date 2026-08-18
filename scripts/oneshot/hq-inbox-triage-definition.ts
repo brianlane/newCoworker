@@ -231,11 +231,23 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
            * history at all. This description carries the knowledge that signal
            * could not: name the platforms, and the classifier can match on
            * sender and content without needing a thread.
+           *
+           * "DONE and needs no reply" is load-bearing, added Aug 18 2026 after
+           * the nightly caught the other side of the same boundary. The first
+           * wording named the platforms and stopped there, so it read as "any
+           * mail about a review", and "Your app submission needs changes /
+           * Respond with an updated build to continue" classified here: a
+           * REJECTION that asks us to act, routed to the silent tier. The
+           * previous rewrite guarded the neighbour below (hosting renewals
+           * must stay routine) and not the neighbour above. An outcome that
+           * still wants something from us belongs in `automated_important`,
+           * which is the tier that texts; this one is only for the ones that
+           * are finished.
            */
           {
             value: "automated_review",
             description:
-              "A result from a platform we submitted to, where OUR OWN product's live state changed: app review, marketplace publication, OAuth or domain verification, a rate change on a service we run on"
+              "A platform outcome that is DONE and needs no reply: our app review approved or published, a marketplace listing live, OAuth or domain verified, a rate change on a service we run on"
           },
           {
             value: "automated_notice",
