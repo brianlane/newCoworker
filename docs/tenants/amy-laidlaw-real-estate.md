@@ -100,23 +100,49 @@ These are mistakes already made on this account. Do not remake them.
   which carries the password field; signing in lands on
   `agent.homelight.com/dashboard`. `looksLikeLogin` required a password AND a
   username field on the SAME page, so **neither** HomeLight page qualified and
-  no login was ever attempted. Every HomeLight browse step therefore worked
-  only because the `hmlt.co` referral link authenticates itself, and once a link
-  expired the step landed on `/client/sign-in` or the logged-out `/referrals`
-  funnel and **returned that page as a successful read**: no `login_failed`, no
-  `auth_config_error`, a marketing page fed straight into extraction. Fixed by
-  teaching `vps/aiflow-render/login.mjs` the email-first shape (fill, blur,
-  advance, wait for the password step). Do not confuse
-  `homelight.com/users/sign_in`, which redirects to a SALES-side page carrying
-  only an email box, with the agent login above; that redirect is what made this
-  look passwordless.
+  no login was ever attempted. Every HomeLight browse step therefore worked only
+  because the `hmlt.co` referral link authenticates itself, and once a link
+  expired the step landed on a logged-out page and **returned it as a successful
+  read**: no `login_failed`, no `auth_config_error`, a marketing page fed
+  straight into extraction. Fixed in `vps/aiflow-render/login.mjs` (PRs #1462,
+  #1469) and **verified live 2026-08-18**: a credentialed probe of
+  `agent.homelight.com/dashboard` now returns 294KB of authenticated content.
+  Do not confuse `homelight.com/users/sign_in`, which redirects to a SALES-side
+  page carrying only an email box, with the agent login above; that redirect is
+  what first made this look passwordless.
+- **HomeLight's sign-in markup carries almost no attributes**, which is why the
+  first fix shipped green and still did nothing:
+
+  ```html
+  <form class="email-field-form">
+    <input type="text" placeholder="Enter your email" class="email-field-input">
+    <a class="button email-submit">Continue</a>
+  </form>
+  ```
+
+  The email box has no `type=email`, no `name`, no `id` and no `autocomplete`,
+  so the placeholder is the only handle on it, and Continue is an **anchor**
+  with no `href`, `role` or `type`. The password page's submit is
+  `input[type=submit][name=commit]` value "Sign In". Write fixtures from this,
+  not from what a login form usually looks like.
+- **Probing the sign-in page itself gives a FALSE `login_failed`.** The render
+  service judges success by re-navigating to the REQUESTED url and re-checking
+  `looksLikeLogin`. Ask for `homelight.com/client/sign-in` and that re-check
+  lands on a sign-in form no matter how well the login went. The diagnostics
+  told the true story (`steps=2 advance=form a:has-text("Continue")
+  passwordStep=true submit=input[type="submit"] enabled=true blurred=true`);
+  the verdict did not. Probe a page BEHIND the login, e.g.
+  `agent.homelight.com/dashboard`.
 - **The HomeLight agent dashboard is `agent.homelight.com/dashboard`**, not
   `homelight.com/referrals` (which is a logged-out signup funnel). It carries
   the two surfaces a status flow needs: "Provide feedback on N of your recent
   referrals" -> **Submit Feedback**, and per-referral
   "Any updates for <Name>?" with a **Update Referral Stage** button and a
   "Last Update: <stage> (<age>)" line. So HomeLight DOES expose a factual stage
-  control, contrary to the earlier read of the referral page alone.
+  control, contrary to the earlier read of the referral page alone. Both were
+  read live on 2026-08-18 through the credentialed probe: "Provide feedback on 2
+  of your recent referrals" -> `Submit Feedback`, and "Any updates for Jose
+  King? ... Last Update: Listed (a month ago)" -> `Update Referral Stage`.
 - **ReferralExchange's timeline status was always "no interaction yet".**
   `re_update` posts to the referral timeline with a fixed status
   ("No interaction yet" -> "I am still trying to contact <First>"), so the same
