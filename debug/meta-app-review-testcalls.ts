@@ -15,18 +15,30 @@
  * this runs against the live New Coworker Page and Instagram account, and a
  * test post is a real post.
  *
- * Uses the HQ tenant's stored PAGE token (permanent, no refresh flow) rather
- * than META_USER_TEST_TOKEN, which is a short-lived user token that lapses
- * roughly weekly and had already expired when this was written.
+ * Uses a stored PAGE token (permanent, no refresh flow) rather than
+ * META_USER_TEST_TOKEN, which is a short-lived user token that lapses roughly
+ * weekly and had already expired when this was written.
+ *
+ * Whose token does not matter to Meta: the testing panel attributes a call to
+ * the APP that made it, via the token, not to any tenant id of ours.
  */
 import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-/** The New Coworker internal tenant that owns our own Page + IG account. */
-const HQ_BUSINESS_ID = "e2b7a1c4-0000-4000-8000-000000000002";
+/**
+ * "Meta Review Sandbox (internal)" — NOT the New Coworker HQ tenant
+ * (8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d), which despite the name has NO
+ * meta_connections row at all. The sandbox tenant is the only holder of a
+ * Meta connection, and the Page behind it is the real "New Coworker" Page
+ * (1202310049632520) with the real @newcoworker IG account, so these calls
+ * hit live assets and count toward App Review.
+ *
+ * Pointing this at the HQ id would find nothing and silently make zero calls.
+ */
+const SANDBOX_BUSINESS_ID = "e2b7a1c4-0000-4000-8000-000000000002";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const businessId = process.argv.find((a) => UUID_RE.test(a)) ?? HQ_BUSINESS_ID;
+const businessId = process.argv.find((a) => UUID_RE.test(a)) ?? SANDBOX_BUSINESS_ID;
 const probeOnly = process.argv.includes("--probe");
 
 type Call = {
