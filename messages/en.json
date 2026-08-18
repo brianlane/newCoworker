@@ -1626,6 +1626,7 @@
     "signIn": "Sign in",
     "signInFailed": "Sign in failed",
     "noAccountForEmail": "That email does not have a New Coworker account. Ask your admin for an invite, or get started to create one.",
+    "sessionTimedOut": "You were signed out after 30 minutes of inactivity, to protect patient information. Please sign in again.",
     "enterEmailFirst": "Enter your email first",
     "magicLinkSent": "Check your email for a magic link.",
     "resetSent": "Password reset email sent.",
@@ -1765,6 +1766,10 @@
       "accept": "Agree and continue",
       "checkboxRequired": "Please check the box to continue.",
       "failed": "Something went wrong. Please try again."
+    },
+    "idleLogout": {
+      "title": "You will be signed out shortly",
+      "body": "For patient privacy, this dashboard signs out after 30 minutes of inactivity. Signing out in {seconds}s. Move the mouse or press a key to stay."
     },
     "nav": {
       "dashboard": "Dashboard",

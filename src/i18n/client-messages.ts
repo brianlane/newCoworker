@@ -98,6 +98,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.smsComposer",
       "dashboard.tasksData",
       "dashboard.termsGate",
+      "dashboard.idleLogout",
       "dashboard.trackedLinks",
       "marketing.orderSummary"
     ]

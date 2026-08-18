@@ -1626,6 +1626,7 @@
     "signIn": "Iniciar sesión",
     "signInFailed": "Error al iniciar sesión",
     "noAccountForEmail": "Ese correo no tiene una cuenta de New Coworker. Pide una invitación a tu administrador, o comienza para crear una.",
+    "sessionTimedOut": "Cerramos tu sesión tras 30 minutos de inactividad, para proteger la información del paciente. Inicia sesión de nuevo.",
     "enterEmailFirst": "Ingresa tu correo primero",
     "magicLinkSent": "Revisa tu correo para el enlace mágico.",
     "resetSent": "Correo de restablecimiento enviado.",
@@ -1765,6 +1766,10 @@
       "accept": "Aceptar y continuar",
       "checkboxRequired": "Marca la casilla para continuar.",
       "failed": "Algo salió mal. Inténtalo de nuevo."
+    },
+    "idleLogout": {
+      "title": "Se cerrará tu sesión en breve",
+      "body": "Por la privacidad del paciente, este panel cierra la sesión tras 30 minutos de inactividad. Cierre en {seconds}s. Mueve el ratón o pulsa una tecla para continuar."
     },
     "nav": {
       "dashboard": "Panel",

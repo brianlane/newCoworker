@@ -26,6 +26,7 @@ import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 import { latestAcceptanceFor, needsAcceptance } from "@/lib/legal/acceptance";
 import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
 import { SectionMessages } from "@/components/i18n/SectionMessages";
+import { HipaaIdleLogout } from "@/components/dashboard/HipaaIdleLogout";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -82,6 +83,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let businessId: string | null = null;
   let accessible: AccessibleBusiness[] = [];
   let brand: Branding | null = null;
+  let hipaaMode = false;
   let metaConnected = false;
   let whatsappConnected = false;
   if (ownerEmail) {
@@ -140,7 +142,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         // White-label branding (enterprise): read tier + branding for the
         // active business; effectiveBranding gates on tier so a downgraded
         // tenant's stored branding goes dormant automatically.
-        db.from("businesses").select("tier, branding").eq("id", businessId).maybeSingle(),
+        db.from("businesses").select("tier, branding, hipaa_mode").eq("id", businessId).maybeSingle(),
         graceEligible
           ? db
               .from("subscriptions")
@@ -168,6 +170,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
       const brandRow = brandRes.data;
       brand = effectiveBranding(brandRow?.tier as string | undefined, brandRow?.branding);
+      // Automatic logoff (45 CFR 164.312(a)(2)(iii)) arms for this tenant only.
+      // Read from the same row as branding, so it costs no extra round-trip.
+      hipaaMode = (brandRow as { hipaa_mode?: boolean } | null)?.hipaa_mode === true;
 
       const subscription = ((subs ?? []) as EmbeddedSubscriptionRow[])[0] ?? null;
       if (subscription?.grace_ends_at && isCanceledInGrace(subscription)) {
@@ -226,6 +231,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />
           </div>
         )}
+        {hipaaMode && <HipaaIdleLogout />}
         {requireAcceptance && <TermsAcceptanceGate />}
         {children}
       </main>
