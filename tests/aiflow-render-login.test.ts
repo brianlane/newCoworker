@@ -607,8 +607,29 @@ describe("waitForPasswordField", () => {
  * had the tenant's stored username typed into it and the button clicked.
  */
 describe("LOGIN_HINT_RE word boundaries", () => {
-  const matches = ["Sign in with your email", "Sign In", "/client/sign-in", "/users/sign_in", "/users/login?email=x", "Log in to continue"];
-  const rejects = ["signing", "designing", "Redesigning our site", "blog in", "logging in", "Sign out", "Log out", "signature"];
+  const matches = [
+    "Sign in with your email",
+    "Sign In",
+    "/client/sign-in",
+    "/users/sign_in",
+    "/users/login?email=x",
+    "Log in to continue",
+    // "into" is ordinary login phrasing, and a bare \b after "in" rejected it.
+    "Log into your account",
+    "Sign into your account"
+  ];
+  const rejects = [
+    "signing",
+    "designing",
+    "Redesigning our site",
+    "blog in",
+    // The "to" must not re-admit the prose cases either.
+    "blog into the night",
+    "logging in",
+    "Sign out",
+    "Log out",
+    "signature"
+  ];
 
   for (const t of matches) {
     it(`matches ${JSON.stringify(t)}`, () => expect(LOGIN_HINT_RE.test(t)).toBe(true));

@@ -152,11 +152,15 @@ export const EMAIL_FIRST_SELECTORS = [
  *
  * The word boundaries are load-bearing. Without them "signin" matches inside
  * "signing" and "designing", and "log in" matches inside "blog in", so any
- * page carrying that prose would satisfy the wording gate. `\b` after "in"
- * rejects all three while still accepting "sign-in", "sign_in", "login" and
- * "Sign In".
+ * page carrying that prose would satisfy the wording gate.
+ *
+ * The optional "to" is equally load-bearing in the other direction: "Log into
+ * your account" and "Sign into your account" are ordinary login headlines, and
+ * a bare `\b` after "in" rejects both because "into" continues the word. It
+ * cannot re-admit the false positives, since none of "signing", "designing" or
+ * "blog in" contains "into" at that position either.
  */
-export const LOGIN_HINT_RE = /\b(?:sign|log)[\s._-]?in\b/i;
+export const LOGIN_HINT_RE = /\b(?:sign|log)[\s._-]?in(?:to)?\b/i;
 
 /** First selector in `candidates` that matches an element on the page, else null. */
 export async function firstSelector(page, candidates) {
