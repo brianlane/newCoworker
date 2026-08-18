@@ -111,6 +111,35 @@ describe("resolveInterpretDecision", () => {
     expect(decision.reason).toBe("detected_in_call");
   });
 
+  it("declines when a stored Spanish contact is plainly speaking English", () => {
+    // The mirror of the override above, and the same principle: the live call
+    // outranks a row written weeks ago. Without this, a bilingual contact
+    // filed as Spanish gets an interpreter wedged into a conversation both
+    // people are having comfortably in English.
+    const decision = resolveInterpretDecision({
+      established: "es",
+      defaultLang: "en",
+      callerTurns: ["I want to book an appointment for Friday please"]
+    });
+    expect(decision.engage).toBe(false);
+    expect(decision.reason).toBe("same_language");
+  });
+
+  it("still engages when they used both languages on the call", () => {
+    // Someone who switches into Spanish for the substance needs the
+    // interpreter, whatever they opened with.
+    const decision = resolveInterpretDecision({
+      established: null,
+      defaultLang: "en",
+      callerTurns: [
+        "I want to book an appointment for Friday please",
+        "Perdón, necesito hablar con alguien sobre mi casa"
+      ]
+    });
+    expect(decision.engage).toBe(true);
+    expect(decision.callerLanguage).toBe("es");
+  });
+
   it("works in the other direction, for a Spanish-speaking business", () => {
     // The colleague's language is the tenant default, not a hardcoded English.
     const decision = resolveInterpretDecision({

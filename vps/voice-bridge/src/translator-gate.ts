@@ -19,13 +19,14 @@
  * already decides to interpret only when someone actually needs it". This
  * module is that claim, implemented.
  *
- * Two sources of truth, in order:
- *   1. the contact's stored `preferred_language`, which is how a known Spanish
- *      caller gets an interpreter from the first second of the call,
- *   2. what the caller has actually said on THIS call, so a first-time caller
- *      (no contact row, no stored language) still gets one. That is the case
- *      the feature was built for, and a stored-preference-only gate would deny
- *      it exactly when it matters.
+ * Two sources of truth, and the live call outranks the stored one in BOTH
+ * directions:
+ *   1. what the caller has actually said on THIS call. It is the only evidence
+ *      a first-time caller has (no contact row, no stored language), which is
+ *      the case the feature was built for, and it is also what catches a stored
+ *      language that has gone stale.
+ *   2. the contact's stored `preferred_language`, which covers the transfer
+ *      that happens before they have said enough to judge.
  *
  * Deliberately kept dependency-free and separate from the bridge runtime so the
  * repo-root test suite can import it.
@@ -64,19 +65,26 @@ export function resolveInterpretDecision(input: {
   const turns = (input.callerTurns ?? []).filter((t) => t.trim().length > 0);
   const base = { colleagueLanguage, turnsConsidered: turns.length };
 
-  // In-call evidence is weighed FIRST when it is decisive, because a stored
-  // preference can be stale (numbers get reassigned, households share phones)
-  // and what someone is speaking right now cannot be.
+  // In-call evidence outranks the stored preference in BOTH directions,
+  // because a stored language can be stale (numbers get reassigned, households
+  // share phones, people are bilingual) and what someone is speaking right now
+  // cannot be.
+  //
+  // "high" is the detector's own bar for a signal it would persist on first
+  // contact. Anything softer is how a single mis-transcribed token ("¿Tú?",
+  // which scores English with confidence "none") or a stray "hola" gets in.
+  let heardColleagueLanguage = false;
   for (const text of turns) {
     const detected = detectCustomerLanguage({
       text,
       establishedLanguage: established,
       defaultLanguage: colleagueLanguage
     });
-    // "high" is the detector's own bar for a signal it would persist on first
-    // contact. Anything softer is how a single mis-transcribed token ("¿Tú?",
-    // which scores English/none) or a stray "hola" would get through.
-    if (detected.confidence === "high" && detected.language !== colleagueLanguage) {
+    if (detected.confidence !== "high") continue;
+    // Someone who switches into another language for the substance of their
+    // call needs the interpreter, whatever they opened with, so a single
+    // decisive turn wins over any number of same-language ones.
+    if (detected.language !== colleagueLanguage) {
       return {
         ...base,
         engage: true,
@@ -84,6 +92,15 @@ export function resolveInterpretDecision(input: {
         reason: "detected_in_call"
       };
     }
+    heardColleagueLanguage = true;
+  }
+
+  // Heard speaking the colleague's language, clearly, and never anything else:
+  // no interpreter, whatever the contact row says. Without this a bilingual
+  // contact filed as Spanish gets one wedged into a conversation both people
+  // are having comfortably in English.
+  if (heardColleagueLanguage) {
+    return { ...base, engage: false, callerLanguage: null, reason: "same_language" };
   }
 
   if (established && established !== colleagueLanguage) {
