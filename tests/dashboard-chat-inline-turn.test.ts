@@ -690,7 +690,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       },
       // Flow-edit provenance rides the deps on EVERY call, so an edit made
       // in a turn is attributable without the model being asked who it is.
-      { flowEditSource: "ai_edit", flowEditActor: null }
+      { flowEditSource: "ai_edit", flowEditActor: null, flowEditSurfaceKind: "rich" }
     );
     const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
       functionResponse: { name: string; response: { result: { messageId: string } } };

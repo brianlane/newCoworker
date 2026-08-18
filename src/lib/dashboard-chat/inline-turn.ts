@@ -52,6 +52,7 @@ import {
   type AgentOutputFormat
 } from "@/lib/agents/core";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import type { EditSurfaceKind } from "@/lib/ai-flows/edit-flow-tool";
 import {
   actionToolDeclarations,
   executeActionTool,
@@ -645,6 +646,11 @@ export async function runInlineChatTurn(
      */
     flowEditSource?: string;
     flowEditActor?: string | null;
+    /**
+     * "text" where the owner cannot see the automation while deciding (SMS,
+     * email): structural edits refuse there and point at the dashboard.
+     */
+    flowEditSurfaceKind?: EditSurfaceKind;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -657,8 +663,14 @@ export async function runInlineChatTurn(
   // the same for every call in the turn, so it belongs on the bound dep.
   const flowEditSource = args.flowEditSource ?? "ai_edit";
   const flowEditActor = args.flowEditActor ?? null;
+  const flowEditSurfaceKind = args.flowEditSurfaceKind ?? "rich";
   const runActionTool: typeof executeActionTool = (targetBusinessId, call, callDeps) =>
-    baseRunActionTool(targetBusinessId, call, { ...callDeps, flowEditSource, flowEditActor });
+    baseRunActionTool(targetBusinessId, call, {
+      ...callDeps,
+      flowEditSource,
+      flowEditActor,
+      flowEditSurfaceKind
+    });
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };

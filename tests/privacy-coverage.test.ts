@@ -88,6 +88,8 @@ const EXEMPT: Record<string, string> = {
   agent_tool_settings: "per-tenant tool toggles",
   ai_flow_definition_versions:
     "prior versions of the same owner-authored flow definitions ai_flows is exempted for; FK cascades from ai_flows",
+  ai_flow_pending_edits:
+    "AI edits compiled but not yet applied: owner-authored flow definitions awaiting a yes, same content class as ai_flows; rows are single-use and expire",
   ai_flow_library_downloads: "library install ledger",
   ai_flows: "flow definitions authored by the owner",
   aiflow_url_memory: "flow URL fetch cache keyed by URL",

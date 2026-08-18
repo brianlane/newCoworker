@@ -622,6 +622,42 @@ export const CANCELABLE_RUN_STATUSES = [
 ] as const;
 
 /**
+ * The largest `current_step` among this flow's runs that are still in
+ * flight, or null when nothing is parked.
+ *
+ * This is the number that decides whether an edit is safe to apply.
+ * `current_step` is a flat index over the FLATTENED definition (see
+ * _shared/ai_flows/branching.ts), so inserting or removing a step ahead of a
+ * parked run renumbers everything after it and resumes that run on a
+ * different instruction than the one it parked on. Comparing the first
+ * index where two definitions diverge against this value answers "would any
+ * live run move?" without guessing.
+ *
+ * Reuses CANCELABLE_RUN_STATUSES rather than re-listing the non-terminal
+ * states: the two questions ("what can the owner stop?" and "what is still
+ * in flight?") have the same answer, and a state added to one and not the
+ * other would be a silent gap.
+ */
+export async function highestActiveRunStep(
+  businessId: string,
+  flowId: string,
+  client?: SupabaseClient
+): Promise<number | null> {
+  const db = await resolveDb(client);
+  const { data, error } = await db
+    .from("ai_flow_runs")
+    .select("current_step")
+    .eq("business_id", businessId)
+    .eq("flow_id", flowId)
+    .in("status", CANCELABLE_RUN_STATUSES as unknown as string[])
+    .order("current_step", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`highestActiveRunStep: ${error.message}`);
+  const rows = (data ?? []) as Array<{ current_step: number }>;
+  return rows.length > 0 ? rows[0].current_step : null;
+}
+
+/**
  * Owner "Stop this run": flip a non-terminal run to `canceled` so nothing
  * further sends. Status-guarded at the DB (the update matches only cancelable
  * states), so racing a terminal write loses cleanly — the run either cancels
