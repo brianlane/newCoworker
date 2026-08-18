@@ -62,12 +62,25 @@ export class MetaApiError extends Error {
   constructor(
     public readonly code: "request_failed" | "upstream_timeout" | "upstream_unreachable",
     message: string,
-    public readonly status?: number
+    public readonly status?: number,
+    /**
+     * Meta's own `error.code` / `error.error_subcode` from the response body.
+     * The HTTP status alone cannot tell "this object is gone" (code 100) from
+     * "your token expired" (code 190) — both are 400 — and confusing the two
+     * would let one bad token mark a tenant's whole feed as deleted.
+     */
+    public readonly metaCode?: number,
+    public readonly metaSubcode?: number
   ) {
     super(message);
     this.name = "MetaApiError";
   }
 }
+
+/** Meta's error code for "object does not exist / cannot be loaded". */
+export const META_ERROR_CODE_UNKNOWN_OBJECT = 100;
+/** Meta's error code for an expired/invalidated access token. */
+export const META_ERROR_CODE_BAD_TOKEN = 190;
 
 export function getMetaAppId(): string {
   const id = process.env.META_APP_ID;
@@ -205,10 +218,26 @@ async function graphRequest(
       status: res.status,
       body: text.slice(0, 300)
     });
+    // Carry Meta's own codes: callers that must act differently on "gone"
+    // vs "bad token" cannot tell them apart from the HTTP status alone.
+    let metaCode: number | undefined;
+    let metaSubcode: number | undefined;
+    try {
+      const parsed = JSON.parse(text) as { error?: { code?: unknown; error_subcode?: unknown } };
+      if (typeof parsed?.error?.code === "number") metaCode = parsed.error.code;
+      if (typeof parsed?.error?.error_subcode === "number") {
+        metaSubcode = parsed.error.error_subcode;
+      }
+    } catch {
+      // Non-JSON error body (HTML error page, empty): codes stay undefined,
+      // which callers must treat as "unknown", never as a definitive verdict.
+    }
     throw new MetaApiError(
       "request_failed",
       `Meta Graph API ${method} ${path} failed (${res.status})`,
-      res.status
+      res.status,
+      metaCode,
+      metaSubcode
     );
   }
   return res.json().catch(() => null);
@@ -407,6 +436,38 @@ export async function getInstagramMediaPermalink(
     return typeof permalink === "string" && permalink.startsWith("https://") ? permalink : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Does this published Instagram media still exist?
+ *
+ *   "exists"  — Meta returned the media.
+ *   "missing" — Meta says the object is gone (owner deleted the post).
+ *   "unknown" — anything else: timeout, 5xx, rate limit, expired token.
+ *
+ * The three-way answer is the point. A deleted post and an expired page
+ * token BOTH come back as HTTP 400, so a caller that treats every failure
+ * as "deleted" would mark a tenant's entire feed removed the day their
+ * token lapses. Only Meta's own code 100 (unknown object) is a verdict;
+ * code 190 (bad token) and everything unrecognized stay "unknown", which
+ * callers must treat as "check again later".
+ */
+export async function getInstagramMediaState(
+  mediaId: string,
+  pageToken: string
+): Promise<"exists" | "missing" | "unknown"> {
+  try {
+    const payload = await graphRequest(`/${mediaId}`, {
+      fields: "id",
+      access_token: pageToken
+    });
+    const id = (payload as { id?: unknown } | null)?.id;
+    return typeof id === "string" && id.length > 0 ? "exists" : "unknown";
+  } catch (err) {
+    // graphRequest only ever throws MetaApiError.
+    const metaCode = (err as MetaApiError).metaCode;
+    return metaCode === META_ERROR_CODE_UNKNOWN_OBJECT ? "missing" : "unknown";
   }
 }
 

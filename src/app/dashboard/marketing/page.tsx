@@ -69,6 +69,7 @@ type SocialCalendarLabels = {
   fallbackLabel: string;
   published: string;
   publishing: string;
+  removed: string;
   scheduled: string;
 };
 
@@ -87,8 +88,9 @@ function socialCalendarExtras(
       id: p.id,
       label: p.caption.trim() ? p.caption.slice(0, 80) : labels.fallbackLabel,
       at,
-      statusText:
-        p.status === "published"
+      statusText: p.removed_at
+        ? labels.removed
+        : p.status === "published"
           ? labels.published
           : p.status === "publishing"
             ? labels.publishing
@@ -272,6 +274,7 @@ export default async function MarketingPage() {
               fallbackLabel: t("igPostFallback"),
               published: t("igPostPublished"),
               publishing: t("igPostPublishing"),
+              removed: t("igPostRemoved"),
               scheduled: t("igPostScheduled")
             })}
           />

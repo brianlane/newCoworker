@@ -14,6 +14,7 @@ vi.mock("@/lib/social/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/social/db")>()),
   listDueScheduledPosts: vi.fn(),
   listPublishingPosts: vi.fn(),
+  listPublishedPostsToRecheck: vi.fn(),
   patchSocialPost: vi.fn(),
   transitionSocialPost: vi.fn()
 }));
@@ -33,10 +34,12 @@ import {
   CONTAINER_READY_DELAY_MS,
   processSocialPostSweep,
   SOCIAL_PUBLISH_RESUME_GRACE_MINUTES,
-  SOCIAL_PUBLISH_STALE_MINUTES
+  SOCIAL_PUBLISH_STALE_MINUTES,
+  SOCIAL_RECHECK_BATCH
 } from "@/lib/social/publish";
 import {
   listDueScheduledPosts,
+  listPublishedPostsToRecheck,
   listPublishingPosts,
   patchSocialPost,
   transitionSocialPost,
@@ -50,6 +53,7 @@ const NOW = new Date("2026-07-18T18:00:00Z");
 
 const listDue = vi.mocked(listDueScheduledPosts);
 const listInFlight = vi.mocked(listPublishingPosts);
+const listRecheck = vi.mocked(listPublishedPostsToRecheck);
 const patch = vi.mocked(patchSocialPost);
 const transition = vi.mocked(transitionSocialPost);
 
@@ -66,6 +70,7 @@ const createContainer = vi.fn();
 const publishMedia = vi.fn();
 const containerStatus = vi.fn();
 const mediaPermalink = vi.fn();
+const mediaState = vi.fn();
 const loadConnection = vi.fn();
 const sleep = vi.fn(async () => {});
 
@@ -88,6 +93,8 @@ function post(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     ig_creation_id: null,
     ig_media_id: null,
     ig_permalink: null,
+    removed_at: null,
+    removed_check_at: null,
     error_detail: null,
     created_at: "2026-07-17T00:00:00Z",
     updated_at: "2026-07-17T00:00:00Z",
@@ -123,6 +130,7 @@ function deps() {
     publishMedia,
     containerStatus,
     mediaPermalink,
+    mediaState,
     loadConnection,
     sleep,
     now: () => NOW
@@ -145,6 +153,8 @@ beforeEach(() => {
   containerStatus.mockResolvedValue("FINISHED");
   publishMedia.mockResolvedValue("media-9");
   mediaPermalink.mockResolvedValue(PERMALINK);
+  listRecheck.mockResolvedValue([]);
+  mediaState.mockResolvedValue("exists");
 });
 
 describe("processSocialPostSweep — publish", () => {
@@ -893,5 +903,121 @@ describe("processSocialPostSweep — Starter in-flight rows settle truthfully", 
       }),
       db
     );
+  });
+});
+
+describe("processSocialPostSweep — deleted-post re-check", () => {
+  /** A live published row, the shape the re-check pass reads. */
+  function live(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
+    return post({
+      status: "published",
+      ig_media_id: "media-9",
+      ig_permalink: PERMALINK,
+      published_at: "2026-07-18T17:05:00Z",
+      ...overrides
+    });
+  }
+
+  const STAMP = { removed_check_at: NOW.toISOString() };
+
+  it("asks only about rested posts, stalest first, and inside the window", async () => {
+    await processSocialPostSweep(deps());
+    const [sinceIso, checkedBeforeIso, limit] = listRecheck.mock.calls[0];
+    // 45 days back, and rested 6 hours since the last look. NOW is 18:00Z.
+    expect(sinceIso).toBe("2026-06-03T18:00:00.000Z");
+    expect(checkedBeforeIso).toBe("2026-07-18T12:00:00.000Z");
+    expect(limit).toBe(SOCIAL_RECHECK_BATCH);
+  });
+
+  it("marks a post the owner deleted on Instagram, and drops its dead permalink", async () => {
+    listRecheck.mockResolvedValue([live()]);
+    mediaState.mockResolvedValue("missing");
+
+    const result = await processSocialPostSweep(deps());
+    expect(result.removed).toBe(1);
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      { removed_at: NOW.toISOString(), ig_permalink: null, ...STAMP },
+      db
+    );
+  });
+
+  it("leaves a live post alone, but records that it looked", async () => {
+    listRecheck.mockResolvedValue([live()]);
+    mediaState.mockResolvedValue("exists");
+
+    const result = await processSocialPostSweep(deps());
+    expect(result.removed).toBe(0);
+    expect(patch).toHaveBeenCalledWith(BIZ, "p-1", STAMP, db);
+  });
+
+  it("NEVER marks removed on an inconclusive answer (timeout, 5xx, expired token)", async () => {
+    // The safety property: a deleted post and an expired page token both
+    // surface as HTTP 400, so anything short of Meta's unknown-object code
+    // must leave the row alone. A false positive tells a tenant their live
+    // posts were deleted.
+    listRecheck.mockResolvedValue([live()]);
+    mediaState.mockResolvedValue("unknown");
+
+    const result = await processSocialPostSweep(deps());
+    expect(result.removed).toBe(0);
+    expect(patch).toHaveBeenCalledWith(BIZ, "p-1", STAMP, db);
+  });
+
+  it("does not ask (or mark) when the connection is gone or paused", async () => {
+    // Disconnecting Meta is not evidence a post was deleted. The row is
+    // still stamped, so it rotates to the back of the queue instead of
+    // refilling the batch every single minute.
+    listRecheck.mockResolvedValue([live()]);
+    loadConnection.mockResolvedValue(null);
+    expect((await processSocialPostSweep(deps())).removed).toBe(0);
+    expect(mediaState).not.toHaveBeenCalled();
+    expect(patch).toHaveBeenCalledWith(BIZ, "p-1", STAMP, db);
+
+    loadConnection.mockResolvedValue(connection({ is_active: false }));
+    expect((await processSocialPostSweep(deps())).removed).toBe(0);
+    expect(mediaState).not.toHaveBeenCalled();
+
+    loadConnection.mockResolvedValue(connection({ pageToken: "" }));
+    expect((await processSocialPostSweep(deps())).removed).toBe(0);
+    expect(mediaState).not.toHaveBeenCalled();
+  });
+
+  it("reads the tenant's connection once per pass, not once per post", async () => {
+    listRecheck.mockResolvedValue([live(), live({ id: "p-2" }), live({ id: "p-3" })]);
+    mediaState.mockResolvedValue("exists");
+
+    await processSocialPostSweep(deps());
+    expect(loadConnection).toHaveBeenCalledTimes(1);
+    expect(mediaState).toHaveBeenCalledTimes(3);
+  });
+
+  it("records a per-post error and keeps sweeping the rest", async () => {
+    listRecheck.mockResolvedValue([live(), live({ id: "p-2" })]);
+    mediaState.mockRejectedValueOnce(new Error("graph blew up"));
+    mediaState.mockResolvedValueOnce("missing");
+
+    const result = await processSocialPostSweep(deps());
+    expect(result.removed).toBe(1);
+    expect(result.errors).toEqual([{ postId: "p-1", message: "graph blew up" }]);
+  });
+
+  it("stringifies a non-Error throw rather than losing it", async () => {
+    listRecheck.mockResolvedValue([live()]);
+    mediaState.mockRejectedValue("just a string");
+    const result = await processSocialPostSweep(deps());
+    expect(result.errors).toEqual([{ postId: "p-1", message: "just a string" }]);
+  });
+
+  it("survives a failed listing without failing the publish sweep that already ran", async () => {
+    listRecheck.mockRejectedValue(new Error("db down"));
+    const result = await processSocialPostSweep(deps());
+    expect(result.removed).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(mediaState).not.toHaveBeenCalled();
+
+    listRecheck.mockRejectedValue("db down, no Error");
+    expect((await processSocialPostSweep(deps())).errors).toEqual([]);
   });
 });

@@ -26,6 +26,8 @@ export type SocialPostItem = {
   published_at: string | null;
   ig_media_id: string | null;
   ig_permalink: string | null;
+  /** Set once the sweep saw Meta report this media as gone (owner deleted it). */
+  removed_at: string | null;
   error_detail: string | null;
   created_at: string;
 };
@@ -41,6 +43,16 @@ const STATUS_BADGES: Record<SocialPostItem["status"], { text: string; tone: stri
   published: { text: "Published", tone: "text-claw-green border-claw-green/40" },
   failed: { text: "Failed", tone: "text-spark-orange border-spark-orange/40" },
   cancelled: { text: "Cancelled", tone: "text-parchment/40 border-parchment/15" }
+};
+
+/**
+ * A post deleted on Instagram outranks its own status badge: it published,
+ * but it is not there any more, and "Published" beside a dead link is the
+ * thing owners kept reporting as a bug.
+ */
+const REMOVED_BADGE = {
+  text: "Deleted on Instagram",
+  tone: "text-parchment/50 border-parchment/20"
 };
 
 type Props = {
@@ -234,7 +246,7 @@ export function SocialPostsManager({
       ) : (
         <ul className="divide-y divide-parchment/10">
           {posts.map((p) => {
-            const badge = STATUS_BADGES[p.status];
+            const badge = p.removed_at ? REMOVED_BADGE : STATUS_BADGES[p.status];
             return (
               <li key={p.id} className="py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -284,6 +296,12 @@ export function SocialPostsManager({
                 </div>
                 {p.status === "failed" && p.error_detail ? (
                   <p className="mt-1 text-[11px] text-spark-orange/90">{p.error_detail}</p>
+                ) : null}
+                {p.removed_at ? (
+                  <p className="mt-1 text-[11px] text-parchment/40">
+                    No longer on Instagram. Someone deleted it there on{" "}
+                    {new Date(p.removed_at).toLocaleDateString()}.
+                  </p>
                 ) : null}
               </li>
             );

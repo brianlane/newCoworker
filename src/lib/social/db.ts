@@ -34,6 +34,12 @@ export type SocialPostRow = {
   ig_media_id: string | null;
   /** The live post's public URL — fetched best-effort after publishing. */
   ig_permalink: string | null;
+  /**
+   * When the sweep first saw Meta report this media as gone (the owner
+   * deleted the post on Instagram). Null while it is still live.
+   */
+  removed_at: string | null;
+  removed_check_at: string | null;
   error_detail: string | null;
   created_at: string;
   updated_at: string;
@@ -99,6 +105,8 @@ export type SocialPostPatch = Partial<
     | "ig_creation_id"
     | "ig_media_id"
     | "ig_permalink"
+    | "removed_at"
+    | "removed_check_at"
     | "error_detail"
   >
 >;
@@ -198,5 +206,39 @@ export async function listPublishingPosts(client?: SupabaseClient): Promise<Soci
     .order("started_at", { ascending: true })
     .limit(20);
   if (error) throw new Error(`listPublishingPosts: ${error.message}`);
+  return (data ?? []) as SocialPostRow[];
+}
+
+/**
+ * Published posts still believed live, newest first: the re-check pass asks
+ * Meta whether each still exists.
+ *
+ * Bounded on BOTH ends. `publishedSinceIso` keeps the scan on a recent
+ * window rather than re-polling a tenant's entire history every minute, and
+ * the limit keeps one pass small. A post deleted after it falls out of the
+ * window keeps its stale row: the alternative is an unbounded, ever-growing
+ * poll of every post ever published, which costs more than it is worth.
+ */
+export async function listPublishedPostsToRecheck(
+  publishedSinceIso: string,
+  checkedBeforeIso: string,
+  limit: number,
+  client?: SupabaseClient
+): Promise<SocialPostRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("social_posts")
+    .select()
+    .eq("status", "published")
+    .is("removed_at", null)
+    .not("ig_media_id", "is", null)
+    .gte("published_at", publishedSinceIso)
+    // Quote the ISO value: `.` and `:` are reserved in PostgREST's filter
+    // grammar, so the safe form is the quoted one (same convention as
+    // claimAvailableVps in src/lib/db/vps-inventory.ts).
+    .or(`removed_check_at.is.null,removed_check_at.lt."${checkedBeforeIso}"`)
+    .order("removed_check_at", { ascending: true, nullsFirst: true })
+    .limit(limit);
+  if (error) throw new Error(`listPublishedPostsToRecheck: ${error.message}`);
   return (data ?? []) as SocialPostRow[];
 }

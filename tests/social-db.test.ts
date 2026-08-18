@@ -15,6 +15,7 @@ import {
   getSocialPost,
   insertSocialPost,
   listDueScheduledPosts,
+  listPublishedPostsToRecheck,
   listPublishingPosts,
   listSocialPosts,
   patchSocialPost,
@@ -28,7 +29,8 @@ type Chain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<unknown>;
 
 function chain(terminal?: unknown): Chain {
   const c: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "delete", "eq", "neq", "lte", "order", "limit"]) {
+  const methods = ["select", "insert", "update", "delete", "eq", "neq", "lte", "gte", "is", "not", "or", "order", "limit"];
+  for (const m of methods) {
     c[m] = vi.fn(() => c);
   }
   c.single = vi.fn();
@@ -155,6 +157,51 @@ describe("due / in-flight scans", () => {
   });
 });
 
+describe("listPublishedPostsToRecheck", () => {
+  it("scans only live published posts that carry a media id, newest first, bounded", async () => {
+    const c = chain({ data: [{ id: POST }], error: null });
+    expect(
+      await listPublishedPostsToRecheck(
+        "2026-07-01T00:00:00Z",
+        "2026-07-18T11:00:00Z",
+        15,
+        makeDb(c)
+      )
+    ).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("status", "published");
+    // Already-removed rows must not be re-checked forever.
+    expect(c.is).toHaveBeenCalledWith("removed_at", null);
+    // No media id means there is nothing to ask Meta about.
+    expect(c.not).toHaveBeenCalledWith("ig_media_id", "is", null);
+    expect(c.gte).toHaveBeenCalledWith("published_at", "2026-07-01T00:00:00Z");
+    // Rested long enough since the last look, stalest first: this rotation
+    // is what stops one tenant's backlog from filling every batch.
+    expect(c.or).toHaveBeenCalledWith(
+      'removed_check_at.is.null,removed_check_at.lt."2026-07-18T11:00:00Z"'
+    );
+    expect(c.order).toHaveBeenCalledWith("removed_check_at", {
+      ascending: true,
+      nullsFirst: true
+    });
+    // Bounded: an unlimited select silently truncates at PostgREST's 1000 rows.
+    expect(c.limit).toHaveBeenCalledWith(15);
+  });
+
+  it("coerces null data and throws on error", async () => {
+    expect(
+      await listPublishedPostsToRecheck("x", "y", 5, makeDb(chain({ data: null, error: null })))
+    ).toEqual([]);
+    await expect(
+      listPublishedPostsToRecheck(
+        "x",
+        "y",
+        5,
+        makeDb(chain({ data: null, error: { message: "rc" } }))
+      )
+    ).rejects.toThrow(/rc/);
+  });
+});
+
 describe("default-client paths", () => {
   it("every helper resolves the service client when none is injected", async () => {
     const listChain = chain({ data: [], error: null });
@@ -162,6 +209,7 @@ describe("default-client paths", () => {
     await listSocialPosts(BIZ);
     await listDueScheduledPosts("2026-07-18T00:00:00Z");
     await listPublishingPosts();
+    await listPublishedPostsToRecheck("2026-07-18T00:00:00Z", "2026-07-18T11:00:00Z", 15);
     await patchSocialPost(BIZ, POST, { caption: "t" });
     await transitionSocialPost(BIZ, POST, "draft", { status: "cancelled" });
     await deleteSocialPost(BIZ, POST);
