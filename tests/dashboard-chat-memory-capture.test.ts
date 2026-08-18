@@ -234,7 +234,7 @@ describe("captureOwnerRuleInline", () => {
     ).toEqual([]);
   });
 
-  it("never throws — a non-Error toggle failure resolves to a no-op", async () => {
+  it("never throws, a non-Error toggle failure resolves to a no-op", async () => {
     const deps = makeDeps({
       isToolEnabled: vi.fn(async () => {
         throw "settings read blew up";
@@ -270,7 +270,7 @@ describe("captureOwnerRuleInline", () => {
     expect(deps.ingestGraph).not.toHaveBeenCalled();
   });
 
-  it("never throws — an append failure resolves to a no-op", async () => {
+  it("never throws, an append failure resolves to a no-op", async () => {
     const deps = makeDeps({
       append: vi.fn(async () => {
         throw new Error("write failed");

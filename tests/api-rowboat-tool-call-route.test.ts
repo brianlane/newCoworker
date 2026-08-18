@@ -1139,7 +1139,7 @@ describe("POST /api/rowboat/tool-call start_aiflow_for_contact (texting coworker
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
     vi.mocked(startAiFlowForContactTool).mockResolvedValue({
       ok: false,
-      message: 'This customer is already in "Rebook follow-up" — do not enroll them again.'
+      message: 'This customer is already in "Rebook follow-up", do not enroll them again.'
     });
     const content = makeContent("start_aiflow_for_contact", {
       flow: "Rebook follow-up",
@@ -1154,7 +1154,7 @@ describe("POST /api/rowboat/tool-call start_aiflow_for_contact (texting coworker
 });
 
 describe("POST /api/rowboat/tool-call update_notification_preferences (texting coworker, enable-only)", () => {
-  it("dispatches to the shared core with enableOnly — the SMS surface can never silence alerts", async () => {
+  it("dispatches to the shared core with enableOnly, the SMS surface can never silence alerts", async () => {
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
     vi.mocked(applyNotificationPreferenceToggles).mockResolvedValue({
       ok: true,

@@ -402,7 +402,7 @@ describe("listCustomerMemories", () => {
     }
   });
 
-  it("wraps the search pattern in DOUBLE QUOTES per PostgREST spec — fixes comma/dot injection (Bugbot Medium)", async () => {
+  it("wraps the search pattern in DOUBLE QUOTES per PostgREST spec, fixes comma/dot injection (Bugbot Medium)", async () => {
     // The bug being pinned: a search of "Smith, LLC" or "127.0.0.1"
     // would split into multiple .or() conditions because PostgREST
     // treats commas as condition separators and dots as
@@ -492,7 +492,7 @@ describe("recordInteractionAndIncrement", () => {
     expect(rpcCalls[0]?.args).toMatchObject({ p_display_name: null, p_channel: "voice" });
   });
 
-  it("unwraps the RPC's array return shape OR a single-row return — Postgres functions returning SETOF can do either", async () => {
+  it("unwraps the RPC's array return shape OR a single-row return, Postgres functions returning SETOF can do either", async () => {
     const row = memory();
     const arrClient = makeClient({ rpcResult: { data: [row], error: null } });
     expect(await recordInteractionAndIncrement(BIZ, CUSTOMER, "sms", {}, arrClient.client)).toEqual(
@@ -796,18 +796,18 @@ describe("normalizeContactTags", () => {
 });
 
 describe("updateCustomerOwnerFields", () => {
-  it("only patches the fields the owner provided — never touches summary_md/counters/last_*", async () => {
+  it("only patches the fields the owner provided, never touches summary_md/counters/last_*", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
     await updateCustomerOwnerFields(
       BIZ,
       CUSTOMER,
-      { displayName: "Joe Plumber", pinnedMd: "VIP — wife is allergic to nuts." },
+      { displayName: "Joe Plumber", pinnedMd: "VIP, wife is allergic to nuts." },
       client
     );
     const updateCall = fromCalls[0]!.calls.find((c) => c.name === "update");
     const patch = updateCall?.args[0] as Record<string, unknown>;
     expect(patch.display_name).toBe("Joe Plumber");
-    expect(patch.pinned_md).toBe("VIP — wife is allergic to nuts.");
+    expect(patch.pinned_md).toBe("VIP, wife is allergic to nuts.");
     expect(patch.updated_at).toBeTruthy();
     expect(patch).not.toHaveProperty("summary_md");
     expect(patch).not.toHaveProperty("interaction_count");
@@ -1213,7 +1213,7 @@ describe("setContactSmsReplyMode", () => {
 });
 
 describe("deleteCustomerMemory", () => {
-  it("DELETEs scoped to (business_id, customer_e164) — never an unscoped delete", async () => {
+  it("DELETEs scoped to (business_id, customer_e164), never an unscoped delete", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
     await deleteCustomerMemory(BIZ, CUSTOMER, client);
     const fr = fromCalls[0]!;

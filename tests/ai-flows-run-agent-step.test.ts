@@ -44,7 +44,7 @@ function runAgentDef(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
-describe("run_agent — schema + scope rules", () => {
+describe("run_agent, schema + scope rules", () => {
   it("parses a valid step and exposes saveAs to later steps", () => {
     const def = parseAiFlowDefinition(runAgentDef());
     expect(def.steps[0]).toMatchObject({ type: "run_agent", agentId: AGENT_ID });
@@ -77,10 +77,10 @@ describe("run_agent — schema + scope rules", () => {
 
   it("saveDocument parses and its title template is scope-checked", () => {
     const def = parseAiFlowDefinition(
-      runAgentDef({ saveDocument: { titleTemplate: "Comparison — {{trigger.document_name}}" } })
+      runAgentDef({ saveDocument: { titleTemplate: "Comparison, {{trigger.document_name}}" } })
     );
     expect(def.steps[0]).toMatchObject({
-      saveDocument: { titleTemplate: "Comparison — {{trigger.document_name}}" }
+      saveDocument: { titleTemplate: "Comparison, {{trigger.document_name}}" }
     });
     const bad = aiFlowDefinitionSchema.parse(
       runAgentDef({ saveDocument: { titleTemplate: "{{vars.never_produced}}" } })
@@ -130,7 +130,7 @@ describe("run_agent — schema + scope rules", () => {
   });
 });
 
-describe("run_agent — library scrub", () => {
+describe("run_agent, library scrub", () => {
   it("blanks the tenant-specific agent binding to the nil uuid", () => {
     const def = parseAiFlowDefinition(runAgentDef());
     const scrubbed = scrubDefinition(def) as { steps: Array<Record<string, unknown>> };
@@ -139,7 +139,7 @@ describe("run_agent — library scrub", () => {
   });
 });
 
-describe("run_agent — compile prompt awareness", () => {
+describe("run_agent, compile prompt awareness", () => {
   it("the system prompt teaches the step with the NEVER-invent contract", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"run_agent"');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("AVAILABLE AGENTS");
@@ -174,7 +174,7 @@ describe("run_agent — compile prompt awareness", () => {
   });
 });
 
-describe("run_agent — planner (planStep)", () => {
+describe("run_agent, planner (planStep)", () => {
   const step: FlowStep = {
     id: "s1",
     type: "run_agent",
@@ -292,7 +292,7 @@ describe("run_agent — planner (planStep)", () => {
   it("saveDocument renders the filing title (blank render keeps filing intent)", () => {
     const withSave: FlowStep = {
       ...step,
-      saveDocument: { titleTemplate: "Comparison — {{vars.customer}}" }
+      saveDocument: { titleTemplate: "Comparison, {{vars.customer}}" }
     };
     const rendered = planStep(withSave, {
       vars: { lead_notes: "x", customer: "Pat" },
@@ -300,7 +300,7 @@ describe("run_agent — planner (planStep)", () => {
     });
     expect(rendered.ok).toBe(true);
     if (rendered.ok && rendered.action.kind === "run_agent") {
-      expect(rendered.action.saveTitle).toBe("Comparison — Pat");
+      expect(rendered.action.saveTitle).toBe("Comparison, Pat");
     }
 
     const blankTitle = planStep(
@@ -333,7 +333,7 @@ describe("run_agent — planner (planStep)", () => {
   });
 });
 
-describe("run_agent — test-mode simulation", () => {
+describe("run_agent, test-mode simulation", () => {
   it("simulates without a model call and stamps a visible placeholder", () => {
     const scope = { vars: {} as Record<string, unknown> };
     const simulated = simulateTestAction(

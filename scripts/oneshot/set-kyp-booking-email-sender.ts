@@ -273,7 +273,7 @@ while (Date.now() < deadline) {
   break;
 }
 if (finalStatus === "queued" || finalStatus === "running") {
-  console.error("\n[oneshot] verification timed out — check the run manually:", runRow.id);
+  console.error("\n[oneshot] verification timed out, check the run manually:", runRow.id);
   process.exit(1);
 }
 
@@ -301,7 +301,7 @@ console.log(
 const fromOk = sent.source === "owner_mailbox";
 console.log(
   fromOk
-    ? `[oneshot] VERIFIED — sent through the connected mailbox (check ${VERIFY_RECIPIENT}'s inbox to confirm the visible sender is ${SENDER_EMAIL}).`
-    : "[oneshot] MISMATCH — email did NOT go through the connected mailbox; investigate before telling the owner."
+    ? `[oneshot] VERIFIED, sent through the connected mailbox (check ${VERIFY_RECIPIENT}'s inbox to confirm the visible sender is ${SENDER_EMAIL}).`
+    : "[oneshot] MISMATCH, email did NOT go through the connected mailbox; investigate before telling the owner."
 );
 process.exit(fromOk ? 0 : 1);

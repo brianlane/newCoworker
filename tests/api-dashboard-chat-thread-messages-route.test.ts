@@ -117,7 +117,7 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
     expect(getThreadById).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the thread is unknown — does NOT leak existence via 403", async () => {
+  it("returns 404 when the thread is unknown, does NOT leak existence via 403", async () => {
     // Returning 403 here would let a caller distinguish 'this thread
     // exists but isn't yours' from 'this thread doesn't exist'. Both
     // collapse to 404 to deny that side-channel.

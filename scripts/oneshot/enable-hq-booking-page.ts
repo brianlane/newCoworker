@@ -136,8 +136,8 @@ for (const flow of flows) {
   const patch = buildPatch(flow, validationUrl);
   console.log(
     patch
-      ? `[oneshot] patch  "${flow.name}" (enabled=${flow.enabled}) — validated`
-      : `[oneshot] noop   "${flow.name}" — link already present`
+      ? `[oneshot] patch  "${flow.name}" (enabled=${flow.enabled}), validated`
+      : `[oneshot] noop   "${flow.name}", link already present`
   );
 }
 
@@ -171,7 +171,7 @@ const patchedIds: string[] = [];
 for (const flow of flows) {
   const patch = buildPatch(flow, bookingUrl);
   if (!patch) {
-    console.log(`[oneshot] noop   "${flow.name}" — link already present`);
+    console.log(`[oneshot] noop   "${flow.name}", link already present`);
     continue;
   }
   console.log(`[oneshot] previous bodies for "${flow.name}" (rollback reference):`);

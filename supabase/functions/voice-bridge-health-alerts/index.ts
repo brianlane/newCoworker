@@ -136,7 +136,7 @@ serve(async (req: Request) => {
       source: "voice",
       level: "error",
       event: "voice_bridge_stale",
-      message: `Voice bridge heartbeat stale (last: ${bridge.bridge_last_heartbeat_at ?? "never"}) — inbound calls will fail`,
+      message: `Voice bridge heartbeat stale (last: ${bridge.bridge_last_heartbeat_at ?? "never"}), inbound calls will fail`,
       payload: {
         last_heartbeat_at: bridge.bridge_last_heartbeat_at,
         threshold_seconds: bridgeStaleSeconds

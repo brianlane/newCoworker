@@ -175,7 +175,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         if (libraryCount >= limit) {
           return errorResponse(
             "VALIDATION_ERROR",
-            `Document limit reached for your plan (${limit}). Unlinking would exceed it — delete a library document first.`
+            `Document limit reached for your plan (${limit}). Unlinking would exceed it, delete a library document first.`
           );
         }
       }
@@ -250,7 +250,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         });
         return errorResponse(
           "VALIDATION_ERROR",
-          `Document limit reached for your plan (${limit}). Unlinking would exceed it — delete a library document first.`
+          `Document limit reached for your plan (${limit}). Unlinking would exceed it, delete a library document first.`
         );
       }
     }
@@ -301,7 +301,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (signatureRequests.some((r) => r.status === "signed")) {
       return errorResponse(
         "VALIDATION_ERROR",
-        "This document has completed signatures and can't be deleted — the signed record is retained as evidence. Set an expiration date instead to retire it.",
+        "This document has completed signatures and can't be deleted, the signed record is retained as evidence. Set an expiration date instead to retire it.",
         409
       );
     }

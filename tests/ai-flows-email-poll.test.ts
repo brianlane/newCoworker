@@ -985,7 +985,7 @@ describe("pollEmailTriggers", () => {
             body: { contentType: "HTML", content: "<p>See https://rfrl.to/z</p>" },
             receivedDateTime: "2026-06-09T15:00:00Z"
           },
-          { subject: "no id — dropped" }
+          { subject: "no id, dropped" }
         ]
       }
     } as never);

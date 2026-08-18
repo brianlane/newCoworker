@@ -166,12 +166,12 @@ type GraphDeps = Required<
 type PublishOutcome =
   | { kind: "published" }
   | { kind: "failed"; detail: string }
-  /** A concurrent resolver settled the row first — count nothing. */
+  /** A concurrent resolver settled the row first, count nothing. */
   | { kind: "lost" }
   /**
    * Row stays `publishing` for a later pass: the container is still
    * preparing, or the publish call's outcome is ambiguous (it threw AFTER
-   * Meta may have published — only the container status can say, and
+   * Meta may have published, only the container status can say, and
    * stamping failed here would invite a duplicate re-schedule).
    */
   | { kind: "unsettled" };
@@ -214,19 +214,19 @@ async function publishOne(
     );
     if (!connection || connection.status !== "active" || !connection.is_active) {
       failure =
-        "Facebook connection is missing or paused — reconnect on the Integrations page, then re-schedule.";
+        "Facebook connection is missing or paused, reconnect on the Integrations page, then re-schedule.";
     } else if (!connection.instagram_account_id) {
       failure =
-        "The connected Facebook Page has no linked Instagram professional account — link one in Meta Business Suite, reconnect, then re-schedule.";
+        "The connected Facebook Page has no linked Instagram professional account, link one in Meta Business Suite, reconnect, then re-schedule.";
     } else if (!connection.pageToken) {
       failure =
-        "The Facebook connection is missing its page credential — reconnect on the Integrations page, then re-schedule.";
+        "The Facebook connection is missing its page credential, reconnect on the Integrations page, then re-schedule.";
     } else {
       const imageUrl = await mediaUrlForMeta(db, post);
       if (!imageUrl) {
         // Falls through to the shared failure stamping below.
         throw new Error(
-          "The uploaded image could not be read from storage — re-upload it and re-schedule."
+          "The uploaded image could not be read from storage, re-upload it and re-schedule."
         );
       }
       const creationId = await deps.createContainer(
@@ -248,7 +248,7 @@ async function publishOne(
         if (status !== "IN_PROGRESS" && status !== "") break;
       }
       if (status === "ERROR" || status === "EXPIRED") {
-        failure = `Instagram could not prepare the media (container ${status}) — check that the image URL is a public JPEG/PNG, then re-schedule.`;
+        failure = `Instagram could not prepare the media (container ${status}), check that the image URL is a public JPEG/PNG, then re-schedule.`;
       } else if (status === "FINISHED" || status === "PUBLISHED") {
         // PUBLISHED without our publish call would mean another actor beat
         // us to it — either way the post is (about to be) live.
@@ -393,7 +393,7 @@ async function resolveInFlightPost(
         if (status === "ERROR" || status === "EXPIRED") {
           const won = await stampOutcome(db, post, {
             status: "failed",
-            error_detail: `Instagram could not prepare the media (container ${status}) — check that the image URL is a public JPEG/PNG, then re-schedule.`
+            error_detail: `Instagram could not prepare the media (container ${status}), check that the image URL is a public JPEG/PNG, then re-schedule.`
           });
           return won ? "failed" : "lost";
         }
@@ -402,7 +402,7 @@ async function resolveInFlightPost(
         const won = await stampOutcome(db, post, {
           status: "failed",
           error_detail:
-            "Instagram never finished preparing the media — check that the image URL is a public, reachable JPEG/PNG, then re-schedule."
+            "Instagram never finished preparing the media, check that the image URL is a public, reachable JPEG/PNG, then re-schedule."
         });
         return won ? "failed" : "lost";
       }
@@ -421,7 +421,7 @@ async function resolveInFlightPost(
   const won = await stampOutcome(db, post, {
     status: "failed",
     error_detail:
-      "Publishing was interrupted — check Instagram for a duplicate before re-scheduling."
+      "Publishing was interrupted, check Instagram for a duplicate before re-scheduling."
   });
   return won ? "failed" : "lost";
 }
@@ -500,7 +500,7 @@ export async function processSocialPostSweep(
       if (outcome === "published") result.published += 1;
       else if (outcome === "failed") result.staled += 1;
       else if (outcome === "waiting") result.unsettled += 1;
-      // "lost": a concurrent resolver settled the row — nothing to count.
+      // "lost": a concurrent resolver settled the row, nothing to count.
     } catch (err) {
       result.errors.push({
         postId: post.id,
@@ -555,7 +555,7 @@ export async function processSocialPostSweep(
       } else if (outcome.kind === "unsettled") {
         result.unsettled += 1;
       }
-      // "lost": a concurrent resolver settled the row — nothing to count.
+      // "lost": a concurrent resolver settled the row, nothing to count.
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error("social-post-sweep: post pass failed", { postId: post.id, message });

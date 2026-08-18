@@ -33,11 +33,11 @@ for (const businessId of businessIds) {
   const res = await syncVaultToVps(businessId);
   if (res.ok) {
     console.log(
-      `  [OK  ] ${businessId} — ip=${res.publicIp} project=${res.projectId} instructions=${res.instructionsLength} chars`
+      `  [OK  ] ${businessId}, ip=${res.publicIp} project=${res.projectId} instructions=${res.instructionsLength} chars`
     );
   } else {
     failures++;
-    console.log(`  [FAIL] ${businessId} — ${res.reason}${res.detail ? `: ${res.detail}` : ""}`);
+    console.log(`  [FAIL] ${businessId}, ${res.reason}${res.detail ? `: ${res.detail}` : ""}`);
   }
 }
 

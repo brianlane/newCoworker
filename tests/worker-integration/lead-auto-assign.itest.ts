@@ -42,8 +42,8 @@ function routedFlow(): Record<string, unknown> {
       {
         id: "route",
         type: "route_to_team",
-        offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim.",
-        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}} — back to you.",
+        offerTemplate: "New lead {{vars.lead_phone}}, reply 1 to claim.",
+        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}}, back to you.",
         responseMinutes: 10
       },
       {
@@ -82,7 +82,7 @@ beforeAll(() => {
 });
 
 describe("lead auto-assignment (real worker)", () => {
-  it("the flag ships default OFF on the live schema — existing tenants keep offer-and-claim", async () => {
+  it("the flag ships default OFF on the live schema, existing tenants keep offer-and-claim", async () => {
     const biz = await seedBusiness(db, "IT auto assign default");
     const { data, error } = await db
       .from("businesses")

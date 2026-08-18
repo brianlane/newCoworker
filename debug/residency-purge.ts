@@ -47,7 +47,7 @@ if (!skipParity) {
     { stdio: "inherit" }
   );
   if (gate.status !== 0) {
-    console.error("[purge] ABORT: parity gate failed — purging now would risk data loss");
+    console.error("[purge] ABORT: parity gate failed, purging now would risk data loss");
     process.exit(1);
   }
 }
@@ -92,4 +92,4 @@ for (const row of (data ?? []) as Array<{ table_name: string; purged: number }>)
   total += Number(row.purged);
   console.log(`  ${row.table_name.padEnd(28)} purged ${row.purged}`);
 }
-console.log(`[purge] DONE — ${total} rows removed from central (history now rests on the box)`);
+console.log(`[purge] DONE, ${total} rows removed from central (history now rests on the box)`);

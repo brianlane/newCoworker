@@ -544,7 +544,7 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-ms" } as never);
     vi.mocked(workspaceProxyForBusiness)
-      // Shared view: an event for someone else — no match (bodyPreview-only
+      // Shared view: an event for someone else, no match (bodyPreview-only
       // rows still match when short enough; id-less rows are skipped).
       .mockResolvedValueOnce({
         data: { value: [{ id: "evt-other", bodyPreview: "Phone: +15550000000" }, { bodyPreview: PHONE }] }
@@ -673,7 +673,7 @@ describe("rescheduleCalendarAppointment", () => {
         data: {
           items: [
             { id: "evt-fuzzy", description: "unrelated event that q matched loosely" },
-            { id: "evt-bare" }, // no description at all — also rejected
+            { id: "evt-bare" }, // no description at all, also rejected
             // Stored with the form's original casing; the lowercased marker
             // must still match (case-insensitive verification).
             { id: "evt-mail", description: "Attendee: Joe\nEmail: Joe@Acme.com" }

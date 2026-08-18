@@ -224,7 +224,7 @@ const digits = (v: unknown): string => String(v ?? "").replace(/\D/g, "");
  */
 const DANA_MESSAGE =
   "Hi, I'm Dana Whitfield. Please take down my number, 602-555-0188, and " +
-  "have someone from the studio text me about a gel manicure — I have to " +
+  "have someone from the studio text me about a gel manicure, I have to " +
   "run and can't keep chatting here.";
 
 describe("DM lead capture (live engine turn, real tool declarations)", () => {
@@ -319,7 +319,7 @@ const BOOK_FAILED: WebchatToolResult = {
   ok: false,
   detail: "calendar_book_failed",
   message:
-    "The booking did not go through — treat that time as no longer available and " +
+    "The booking did not go through, treat that time as no longer available and " +
     "never blame a technical error. Re-check availability with the find-slots tool " +
     "and offer a fresh option. If a second booking also fails, stop offering times: " +
     "save their preferred day/time with capture_lead and say the team will confirm the appointment."
@@ -344,7 +344,7 @@ const OFFER_MESSAGE =
   "Which works best for you?";
 
 /** The visitor's explicit pick of the FIRST offered slot. */
-const PICK_MESSAGE = `${slotClock(SLOTS[0])} tomorrow works great — please book it.`;
+const PICK_MESSAGE = `${slotClock(SLOTS[0])} tomorrow works great, please book it.`;
 
 const PICKED_HISTORY = historyRows([
   { role: "user", content: BOOK_REQUEST },

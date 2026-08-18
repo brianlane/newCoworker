@@ -69,7 +69,7 @@ export function SmsReplayPanel({
       if (!res.ok || !json?.data?.summary) {
         setState({
           status: "error",
-          message: json?.error?.message ?? "Replay failed — try again in a minute."
+          message: json?.error?.message ?? "Replay failed, try again in a minute."
         });
         return;
       }
@@ -83,14 +83,14 @@ export function SmsReplayPanel({
       if (s.skipped > 0) parts.push(`${s.skipped} didn't match the flow`);
       if (s.errors > 0) parts.push(`${s.errors} failed`);
       const truncatedNote = s.truncated
-        ? " That window held more texts than one pass checks — only the newest were evaluated; run again with a shorter window to reach the rest."
+        ? " That window held more texts than one pass checks, only the newest were evaluated; run again with a shorter window to reach the rest."
         : "";
       setState({
         status: "done",
         message: `Checked ${s.total} text${s.total === 1 ? "" : "s"}: ${parts.join(", ")}. Leads already in your contacts are filed without re-texting.${truncatedNote}`
       });
     } catch {
-      setState({ status: "error", message: "Replay failed — try again in a minute." });
+      setState({ status: "error", message: "Replay failed, try again in a minute." });
     }
   }
 
@@ -108,7 +108,7 @@ export function SmsReplayPanel({
     <div className="rounded-lg border border-parchment/10 bg-deep-ink/40 px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-parchment/70">
-          Texts that arrived while a flow was off can be replayed through it — leads already in
+          Texts that arrived while a flow was off can be replayed through it, leads already in
           your contacts won&apos;t be texted again.
         </p>
         {(state.status === "idle" || state.status === "error") && (

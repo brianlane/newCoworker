@@ -631,7 +631,7 @@ export function AiFlowRunsManager({
                       {(r.context.trigger as { test_mode?: unknown } | undefined)?.test_mode ===
                         true && (
                         <span
-                          title="Test run: side effects were simulated — nothing was actually sent"
+                          title="Test run: side effects were simulated, nothing was actually sent"
                           className="rounded-full bg-purple-400/15 px-2 py-0.5 text-[10px] font-semibold text-purple-300"
                         >
                           TEST
@@ -657,7 +657,7 @@ export function AiFlowRunsManager({
                   )}
                   {r.status === "awaiting_call" && r.respond_by_at && (
                     <p className="text-xs text-parchment/50">
-                      AI call in progress — the outcome lands when the call ends (by{" "}
+                      AI call in progress, the outcome lands when the call ends (by{" "}
                       {new Date(r.respond_by_at).toLocaleString()} at the latest)
                     </p>
                   )}
@@ -675,8 +675,8 @@ export function AiFlowRunsManager({
                         disabled={busy === r.id}
                         title={
                           r.status === "running"
-                            ? "Stop this run — it finishes the step it's on, then nothing further runs"
-                            : "Stop this run — nothing further will send, and it can't be resumed"
+                            ? "Stop this run, it finishes the step it's on, then nothing further runs"
+                            : "Stop this run, nothing further will send, and it can't be resumed"
                         }
                         className="rounded-md bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/25 disabled:opacity-50"
                       >

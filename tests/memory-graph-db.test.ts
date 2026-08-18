@@ -265,7 +265,7 @@ describe("supersedeMemoryFacts", () => {
   });
 });
 
-describe("effectiveMemoryGraphMode (pure — admin views with a fresh default)", () => {
+describe("effectiveMemoryGraphMode (pure, admin views with a fresh default)", () => {
   it("passes explicit modes through and resolves everything else to the supplied default", () => {
     expect(effectiveMemoryGraphMode("off", "active")).toBe("off");
     expect(effectiveMemoryGraphMode("shadow", "active")).toBe("shadow");

@@ -23,8 +23,8 @@ const SAMPLE_SUBMIT: TendlcCampaignSubmit = {
   optinKeywords: "START,YES",
   optoutKeywords: "STOP",
   helpKeywords: "HELP",
-  sample1: "Sample 1 — STOP to opt out.",
-  sample2: "Sample 2 — STOP to opt out."
+  sample1: "Sample 1, STOP to opt out.",
+  sample2: "Sample 2, STOP to opt out."
 };
 
 describe("TendlcClient constructor", () => {

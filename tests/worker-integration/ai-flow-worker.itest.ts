@@ -269,7 +269,7 @@ describe("group_lead_phone seeding gate (worker executeRun)", () => {
     to: BIZ_DID,
     participants: [SERVICE, BIZ_DID, SELLER],
     group: true,
-    windowText: "New referral — connecting you with a seller in your area."
+    windowText: "New referral, connecting you with a seller in your area."
   });
 
   it("service-sent (sender pinned): seeds the seller as group_lead_phone", async () => {
@@ -336,7 +336,7 @@ describe("test-mode runs", () => {
       flow([
         { id: "text", type: "send_sms", to: "{{vars.lead_phone}}", body: "Hi {{vars.lead_phone}}!" }
       ]),
-      false // disabled — test runs must still execute
+      false // disabled, test runs must still execute
     );
     const runId = await enqueueRun(db, flowId, biz, { ...TRIGGER, test_mode: true });
     await tickWorker();

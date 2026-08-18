@@ -99,7 +99,7 @@ export type WidgetContextFailure =
   | { ok: false; reason: "invalid_key" }
   /** Owner turned the widget off, or tier dropped below Standard. */
   | { ok: false; reason: "widget_disabled" }
-  /** Paused / Safe Mode — widget renders an honest offline notice. */
+  /** Paused / Safe Mode, widget renders an honest offline notice. */
   | { ok: false; reason: "offline" };
 
 export type WidgetContextSuccess = {

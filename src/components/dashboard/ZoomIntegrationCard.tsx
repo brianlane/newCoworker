@@ -122,7 +122,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
           kind: "success",
           message: json.data.summary
             ? `Minutes saved: ${json.data.summary}`
-            : "Transcript imported — minutes are in your Documents.",
+            : "Transcript imported, minutes are in your Documents.",
           docHref: json.data.document.id
             ? `/dashboard/documents/${encodeURIComponent(json.data.document.id)}`
             : null
@@ -134,12 +134,12 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
           kind: "error",
           message: json?.data?.document?.error_detail
             ? `The transcript was saved but minutes generation failed: ${json.data.document.error_detail}`
-            : "The transcript was saved but minutes generation failed — retry from Documents."
+            : "The transcript was saved but minutes generation failed, retry from Documents."
         });
       } else {
         setImportResult({
           kind: "error",
-          message: json?.error?.message ?? "Import failed — try again shortly."
+          message: json?.error?.message ?? "Import failed, try again shortly."
         });
       }
     } finally {
@@ -212,7 +212,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
             {!connection.is_active ? (
               <span className="text-spark-orange">
                 {" "}
-                Access was revoked or expired — reconnect to resume.
+                Access was revoked or expired, reconnect to resume.
               </span>
             ) : null}
           </div>

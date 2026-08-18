@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       if (nextSoul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
         return errorResponse(
           "VALIDATION_ERROR",
-          `The tenant's soul plus this module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters — shorten the module (or the soul)`
+          `The tenant's soul plus this module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters, shorten the module (or the soul)`
         );
       }
       await patchBusinessConfig(body.businessId, { soul_md: nextSoul });

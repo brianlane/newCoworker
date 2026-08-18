@@ -62,7 +62,7 @@ async function main() {
     .maybeSingle();
   // The core THROWS on lookup errors and answers `failed` without sending —
   // the preview must mirror that instead of guessing (Bugbot on PR #829).
-  if (phoneErr) throw new Error(`contact lookup (phone) failed — --apply would not send: ${phoneErr.message}`);
+  if (phoneErr) throw new Error(`contact lookup (phone) failed, --apply would not send: ${phoneErr.message}`);
   let contact = byPhone as { owner_employee_id: string | null } | null;
   if (!contact && email) {
     const { data: byEmail, error: emailErr } = await db
@@ -72,7 +72,7 @@ async function main() {
       .eq("email", email.trim().toLowerCase())
       .limit(1)
       .maybeSingle();
-    if (emailErr) throw new Error(`contact lookup (email) failed — --apply would not send: ${emailErr.message}`);
+    if (emailErr) throw new Error(`contact lookup (email) failed, --apply would not send: ${emailErr.message}`);
     contact = byEmail as { owner_employee_id: string | null } | null;
   }
   const { data: prefs, error: prefsErr } = await db
@@ -81,8 +81,8 @@ async function main() {
     .eq("business_id", businessId!)
     .maybeSingle();
   if (prefsErr) throw new Error(`preferences read failed: ${prefsErr.message}`);
-  console.log("contact:", contact ?? "(none — unowned by definition)");
-  console.log("prefs:", prefs ?? "(no row — defaults, alert enabled)");
+  console.log("contact:", contact ?? "(none, unowned by definition)");
+  console.log("prefs:", prefs ?? "(no row, defaults, alert enabled)");
 
   const wouldSkip = contact?.owner_employee_id
     ? "skipped_owned (contact has an owning teammate)"
@@ -95,7 +95,7 @@ async function main() {
       console.log(`\nDry-run. Would NOT page: ${wouldSkip}`);
     } else {
       console.log(
-        `\nDry-run. Would page the owner:\n  Unassigned booking: ${name} (${phone}) — ${startLocal}`
+        `\nDry-run. Would page the owner:\n  Unassigned booking: ${name} (${phone}), ${startLocal}`
       );
     }
     console.log("Re-run with --apply to send.");
@@ -132,7 +132,7 @@ async function main() {
   console.log("notification rows (this run):");
   for (const r of rows ?? []) {
     console.log(
-      `  ${(r as { delivery_channel: string }).delivery_channel}: ${(r as { status: string }).status} — ${(r as { summary: string }).summary}`
+      `  ${(r as { delivery_channel: string }).delivery_channel}: ${(r as { status: string }).status}, ${(r as { summary: string }).summary}`
     );
   }
 }

@@ -107,7 +107,7 @@ beforeEach(() => {
   vi.mocked(residencyModeFor).mockResolvedValue("supabase");
 });
 
-describe("pruneExpiredContent — central-only tenants", () => {
+describe("pruneExpiredContent, central-only tenants", () => {
   it("prunes every table centrally and reports box: null", async () => {
     const db = makeCentralDb({
       email_log: { data: [{ id: "a" }, { id: "b" }], error: null },
@@ -261,7 +261,7 @@ describe("pruneExpiredContent — central-only tenants", () => {
   });
 });
 
-describe("pruneExpiredContent — residency (dual/vps) tenants", () => {
+describe("pruneExpiredContent, residency (dual/vps) tenants", () => {
   it("also prunes on the box, including the explicit transcript-turns pass", async () => {
     vi.mocked(residencyModeFor).mockResolvedValue("vps");
     const db = makeCentralDb();

@@ -133,7 +133,7 @@ if [ ! -d "$REPO/vps/aiflow-render" ]; then
 fi
 ${INIT_ENV ? buildInitEnvBlock() : ""}
 if [ ! -f "$DEST/.env" ]; then
-  echo "ERROR: $DEST/.env missing — this box never ran deploy-client.sh for render (starter tier?). Re-run with --init-env to seed it for a capability experiment, or use a render-capable tier." >&2
+  echo "ERROR: $DEST/.env missing, this box never ran deploy-client.sh for render (starter tier?). Re-run with --init-env to seed it for a capability experiment, or use a render-capable tier." >&2
   exit 1
 fi
 ${SEED_TOKEN ? buildSeedTokenBlock() : ""}
@@ -149,12 +149,12 @@ if ! grep -q click_text_while_present "$DEST/actions.mjs"; then
   exit 1
 fi
 if ! grep -q 'from "./actions.mjs"' "$DEST/server.mjs"; then
-  echo "ERROR: server.mjs does not import ./actions.mjs — stale build?" >&2
+  echo "ERROR: server.mjs does not import ./actions.mjs, stale build?" >&2
   exit 1
 fi
 echo "click_text_while_present present in actions.mjs, server.mjs imports it"
 echo "== confirm render token (redacted; len=0 means the auth gate is OFF) =="
-awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env — auth gate OFF"}' "$DEST/.env" || true
+awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env, auth gate OFF"}' "$DEST/.env" || true
 echo "== rebuild aiflow-render container only =="
 cd "$DEST" && docker compose up -d --build --force-recreate
 sleep 4

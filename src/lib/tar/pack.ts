@@ -32,7 +32,7 @@ function header(path: string, size: number): Buffer {
   buf.write(octal(0, 8), 108); // uid
   buf.write(octal(0, 8), 116); // gid
   buf.write(octal(size, 12), 124); // size
-  buf.write(octal(0, 12), 136); // mtime (epoch — deterministic output)
+  buf.write(octal(0, 12), 136); // mtime (epoch, deterministic output)
   buf.write("        ", 148); // checksum placeholder (8 spaces)
   buf.write("0", 156); // typeflag: regular file
   buf.write("ustar\0", 257); // magic

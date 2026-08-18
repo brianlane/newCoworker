@@ -194,7 +194,7 @@ export async function POST(request: Request) {
         if (soulMd.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
           return errorResponse(
             "VALIDATION_ERROR",
-            `Soul plus the compliance module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters — shorten the soul text`
+            `Soul plus the compliance module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters, shorten the soul text`
           );
         }
       }

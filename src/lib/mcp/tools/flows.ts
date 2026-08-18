@@ -48,7 +48,7 @@ export async function validateFlowDefinition(
   } catch (err) {
     if (err instanceof AiFlowValidationError) {
       throw new McpToolError(
-        `Invalid flow definition — ${err.message}: ${err.issues.join("; ")}. Call get_flow_schema for the definition format.`
+        `Invalid flow definition, ${err.message}: ${err.issues.join("; ")}. Call get_flow_schema for the definition format.`
       );
     }
     throw err;
@@ -199,7 +199,7 @@ export const createFlowTool = defineMcpTool({
     enabled: z.boolean().optional(),
     definition: z
       .record(z.string(), z.unknown())
-      .describe("The flow definition object — see get_flow_schema.")
+      .describe("The flow definition object, see get_flow_schema.")
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -241,7 +241,7 @@ export const updateFlowTool = defineMcpTool({
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
     await requireMcpBusinessRole(auth, businessId, "manage_aiflows");
     if (args.name === undefined && args.definition === undefined) {
-      throw new McpToolError("Nothing to update — pass name and/or definition.");
+      throw new McpToolError("Nothing to update, pass name and/or definition.");
     }
     if (args.definition !== undefined) {
       await validateFlowDefinition(businessId, args.definition);
@@ -315,10 +315,10 @@ export const triggerFlowTool = defineMcpTool({
       .min(1)
       .max(180)
       .optional()
-      .describe("Idempotency key — redeliveries with the same id never double-enqueue."),
+      .describe("Idempotency key, redeliveries with the same id never double-enqueue."),
     data: z
       .record(z.string(), z.unknown())
-      .describe("The event payload — lead fields as a flat-ish JSON object.")
+      .describe("The event payload, lead fields as a flat-ish JSON object.")
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -328,7 +328,7 @@ export const triggerFlowTool = defineMcpTool({
     }
     const limiter = rateLimit(`mcp-flow-events:${businessId}`, MCP_FLOW_EVENT_RATE);
     if (!limiter.success) {
-      throw new McpToolError("Flow-event rate limit exceeded — retry shortly.");
+      throw new McpToolError("Flow-event rate limit exceeded, retry shortly.");
     }
     const { processWebhookFlowEvent } = await import("@/lib/ai-flows/webhook-events");
     // origin stays the default "external": this tool simulates an external
@@ -383,7 +383,7 @@ export const runFlowTool = defineMcpTool({
     // budget keeps a chatty client from flooding the worker either way.
     const limiter = rateLimit(`mcp-flow-events:${businessId}`, MCP_FLOW_EVENT_RATE);
     if (!limiter.success) {
-      throw new McpToolError("Flow-run rate limit exceeded — retry shortly.");
+      throw new McpToolError("Flow-run rate limit exceeded, retry shortly.");
     }
     // The same shared core the dashboard, owner-SMS, and voice surfaces use,
     // so refusals (unknown, ambiguous, disabled, voice-only) read identically.

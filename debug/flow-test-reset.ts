@@ -45,7 +45,7 @@ const { data: flow, error: flowErr } = await db
   .maybeSingle();
 if (flowErr) throw new Error(`flow lookup: ${flowErr.message}`);
 if (!flow) {
-  console.log("test flow not found — nothing to reset (run flow-test-setup.ts first)");
+  console.log("test flow not found, nothing to reset (run flow-test-setup.ts first)");
   process.exit(0);
 }
 
@@ -59,7 +59,7 @@ const { data, error } = await query.select("id, status");
 if (error) throw new Error(error.message);
 const rows = (data ?? []) as Array<{ id: string; status: string }>;
 console.log(
-  `deleted ${rows.length} test-flow run(s)${ALL ? " (all statuses)" : " (finished only)"} — ` +
+  `deleted ${rows.length} test-flow run(s)${ALL ? " (all statuses)" : " (finished only)"}, ` +
     "next kickoff runs as a fresh lead"
 );
 for (const r of rows) console.log(`  - ${r.id} (${r.status})`);

@@ -132,7 +132,7 @@ describe("computeVelocityBreaches", () => {
       snapshots: [
         snap(BIZ_A, 1_000_000, 119), // oldest in window → baseline
         snap(BIZ_A, 6_000_000, 60),
-        snap(BIZ_A, 500_000, 130) // outside the window — ignored
+        snap(BIZ_A, 500_000, 130) // outside the window, ignored
       ],
       recentAlerts: [],
       config: CONFIG,

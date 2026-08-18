@@ -24,7 +24,7 @@ loadEnv();
 
 const BUSINESS_ID = "056034a7-e84c-444d-8d15-747eeb1fa899";
 const TOKEN = fs.readFileSync("/tmp/kyp-tunnel-token.txt", "utf8").trim();
-if (!TOKEN || TOKEN.length < 100) throw new Error("tunnel token missing/short — refetch it first");
+if (!TOKEN || TOKEN.length < 100) throw new Error("tunnel token missing/short, refetch it first");
 
 const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");

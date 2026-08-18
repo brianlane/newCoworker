@@ -67,11 +67,11 @@ async function main(): Promise<void> {
   console.log(`  Before: ${summarizeDefinition(def)}`);
 
   if (def.trigger.channel !== "calendar") {
-    console.error("  trigger is not a calendar trigger — nothing to rewire");
+    console.error("  trigger is not a calendar trigger, nothing to rewire");
     process.exit(1);
   }
   if (def.trigger.on === "event_end") {
-    console.log("  already on event_end — no change");
+    console.log("  already on event_end, no change");
     return;
   }
 

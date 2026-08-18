@@ -287,11 +287,11 @@ const tenantDidSuffixes = [
   )
 ];
 if (tenantDidSuffixes.length === 0) {
-  console.log(`  [telnyx] WARNING: no Telnyx DIDs found for this business — tenant slices will be empty`);
+  console.log(`  [telnyx] WARNING: no Telnyx DIDs found for this business, tenant slices will be empty`);
 }
 let telnyxError: string | null = null;
 if (!telnyxKey) {
-  telnyxError = "TELNYX_API_KEY not set — skipped";
+  telnyxError = "TELNYX_API_KEY not set, skipped";
 } else {
   // "messaging" = SMS/MMS MDRs, "sip-trunking" = voice call legs.
   for (const recordType of ["messaging", "sip-trunking"] as const) {
@@ -308,7 +308,7 @@ if (!telnyxKey) {
       if (!res.ok) {
         // Record the failure so the JSON output flags the aggregates as
         // partial instead of silently reporting telnyx.error=null.
-        const failure = `${recordType} page ${page}: HTTP ${res.status} ${(await res.text()).slice(0, 300)} — aggregates are partial`;
+        const failure = `${recordType} page ${page}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}, aggregates are partial`;
         console.log(`  [telnyx] ${failure}`);
         telnyxError = telnyxError ? `${telnyxError}; ${failure}` : failure;
         break;

@@ -257,7 +257,7 @@ describe("api/admin/byos/enroll route", () => {
 
   it("provision: a preflight failure surfaces as a 400 and never starts the orchestrator", async () => {
     vi.mocked(runByosPreflight).mockRejectedValue(
-      new ByosEnrollmentError("BYOS preflight failed — os: requires Ubuntu 24.04")
+      new ByosEnrollmentError("BYOS preflight failed, os: requires Ubuntu 24.04")
     );
     const res = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
     expect(res.status).toBe(400);

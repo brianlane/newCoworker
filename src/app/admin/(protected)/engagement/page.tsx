@@ -39,7 +39,7 @@ export default async function AdminEngagementPage() {
       {clipped && (
         <Card className="border-spark-orange/40">
           <p className="text-sm text-spark-orange">
-            Auth directory scan hit its page cap — counts and segments below cover only the
+            Auth directory scan hit its page cap, counts and segments below cover only the
             users collected so far, and uncollected users may show as never signed in.
           </p>
         </Card>

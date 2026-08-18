@@ -94,7 +94,7 @@ export function SpendVelocityAlertSettings({
       </div>
       <p className="text-xs text-parchment/40 mb-4">
         Emails the admin when any business burns more than the amount below within the rolling
-        window — a rate watchdog on the shared Gemini budget, independent of the monthly cap.
+        window, a rate watchdog on the shared Gemini budget, independent of the monthly cap.
         Checked every 10 minutes; at most one alert per business per window.
       </p>
       <div className="flex items-end gap-3">

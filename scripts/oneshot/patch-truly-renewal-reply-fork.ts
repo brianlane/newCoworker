@@ -424,7 +424,7 @@ for (const row of (rows ?? []) as Row[]) {
 for (const { row, next, changed } of targets) {
   console.log(`\n=== ${row.name} (id=${row.id}, enabled=${row.enabled}, tenant=${TRULY ? "TRULY" : "test"}) ===`);
   if (changed.length === 0) {
-    console.log("  already patched — no changes");
+    console.log("  already patched, no changes");
     continue;
   }
   for (const c of changed) console.log(`  - ${c}`);

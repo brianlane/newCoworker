@@ -91,7 +91,7 @@ function makeDeps(
     getSpendSnapshot: vi.fn(async () => SNAPSHOT_UNDER),
     chatStep: vi.fn(async (params: GeminiChatStepParams) => {
       system = params.systemInstruction ?? "";
-      return textStep("Yes — I can see your booking.");
+      return textStep("Yes, I can see your booking.");
     }),
     executeTool: vi.fn(async () => ({ ok: true, data: {} })),
     meter: vi.fn(async () => undefined),
@@ -207,11 +207,11 @@ describe("booking-status line in the DM system instruction", () => {
       },
       deps
     );
-    expect(out.reply).toBe("Yes — I can see your booking.");
+    expect(out.reply).toBe("Yes, I can see your booking.");
     expect(deps.capturedSystem()).not.toContain("Booking status:");
   });
 
-  it("fails OPEN when the lookup throws — reply proceeds without the line", async () => {
+  it("fails OPEN when the lookup throws, reply proceeds without the line", async () => {
     const deps = makeDeps({
       fetchBookingContext: vi.fn(async () => {
         throw new Error("calendly down");
@@ -226,7 +226,7 @@ describe("booking-status line in the DM system instruction", () => {
       },
       deps
     );
-    expect(out.reply).toBe("Yes — I can see your booking.");
+    expect(out.reply).toBe("Yes, I can see your booking.");
     expect(deps.capturedSystem()).not.toContain("Booking status:");
   });
 
@@ -235,7 +235,7 @@ describe("booking-status line in the DM system instruction", () => {
       fetchBookingContext: vi.fn(
         () =>
           new Promise<never>(() => {
-            /* never resolves — the race's timeout arm must win */
+            /* never resolves, the race's timeout arm must win */
           })
       ),
       bookingContextTimeoutMs: 20
@@ -249,7 +249,7 @@ describe("booking-status line in the DM system instruction", () => {
       },
       deps
     );
-    expect(out.reply).toBe("Yes — I can see your booking.");
+    expect(out.reply).toBe("Yes, I can see your booking.");
     expect(deps.capturedSystem()).not.toContain("Booking status:");
   });
 });

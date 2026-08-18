@@ -46,7 +46,7 @@ if (dstErr) throw new Error(`destination row: ${dstErr.message}`);
 // Meta-side subscription keeps delivering events no row routes.
 if (dst?.page_id && dst.page_id !== src.page_id) {
   throw new Error(
-    `destination business already claims page ${dst.page_id} "${dst.page_name ?? ""}" — ` +
+    `destination business already claims page ${dst.page_id} "${dst.page_name ?? ""}", ` +
       `move that claim off first (or disconnect it) instead of overwriting`
   );
 }
@@ -112,9 +112,9 @@ try {
     })
     .eq("business_id", fromBiz);
   if (restoreErr) {
-    console.error("RESTORE FAILED — source claim left released:", restoreErr.message);
+    console.error("RESTORE FAILED, source claim left released:", restoreErr.message);
   } else {
-    console.error("destination claim failed — source claim restored");
+    console.error("destination claim failed, source claim restored");
   }
   throw err;
 }

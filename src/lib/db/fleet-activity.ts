@@ -468,7 +468,7 @@ export async function getFleetRecentActivity(
         : restrict(
               db
                 .from("contacts")
-                // Only real customer profiles count — folded manual contacts
+                // Only real customer profiles count, folded manual contacts
                 // (vendors, testers) are not interactions (same rule as the
                 // owner feed).
                 .select("business_id, display_name, customer_e164, created_at")

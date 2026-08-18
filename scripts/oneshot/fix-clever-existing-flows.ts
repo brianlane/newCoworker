@@ -171,7 +171,7 @@ for (const [row, next] of [
 if (failures.length > 0) {
   console.error(
     `\n${failures.length} flow(s) failed: ${failures.join(", ")}. ` +
-      `The updates are idempotent — re-run with --apply to reapply (already-updated flows are unaffected).`
+      `The updates are idempotent, re-run with --apply to reapply (already-updated flows are unaffected).`
   );
   process.exit(1);
 }

@@ -124,7 +124,7 @@ const RE_SELLER_PITCH =
   "offers and create bidding wars in this market for your home.\n\n" +
   "I'm licensed since 1989. One of the top agents in Arizona. I have an appraiser as " +
   "part of my team to help price your listing with precision from the start as well " +
-  "as keeping buyers from lowballing you — reply with your best number today to claim " +
+  "as keeping buyers from lowballing you, reply with your best number today to claim " +
   "your FREE APPRAISAL!\n\n" +
   "I have a low flexible commission. My goal is to make sure you're happy with your " +
   "bottom line. I have your bottom line 1st in mind!";
@@ -241,7 +241,7 @@ export const FLOW_CONFIGS: FlowConfig[] = [
     leadEmails: [
       {
         id: "bp_email_lead",
-        subject: "Re: Your Clever inquiry — cash offers on your home",
+        subject: "Re: Your Clever inquiry, cash offers on your home",
         body:
           "Hi {{vars.lead_name}},\n\n" +
           "Re: Your recent inquiry about cash offers on your home through Clever.\n\n" +
@@ -320,14 +320,14 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     id: "bp_email_amy",
     type: "send_email",
     to: AMY_EMAIL,
-    subject: `BAD PHONE NUMBER — ${cfg.leadLabel}, ${cfg.flowName}`,
+    subject: `BAD PHONE NUMBER, ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
       "The lead has an email on file, so a follow-up asking for their best " +
       `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
       'shows exactly what went out: "emailed ..." means it was SENT; ' +
       '"skipped email ..." (or no "emailed" line at all) means NOTHING was ' +
-      "sent — the address was unusable, so please get their best number if " +
+      "sent, the address was unusable, so please get their best number if " +
       "they reach out another way.\n\n" +
       "I'm also watching for a bounce: if a delivery-failure notice comes " +
       "back for this follow-up, you'll get a separate EMAIL BOUNCED alert " +
@@ -341,11 +341,11 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     type: "send_email",
     to: AMY_EMAIL,
     when: { var: "lead_email_bounced", equals: "bounced" },
-    subject: `EMAIL BOUNCED TOO — ${cfg.leadLabel}, ${cfg.flowName}`,
+    subject: `EMAIL BOUNCED TOO, ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
       "UPDATE to the bad-phone report you just received: the follow-up email " +
-      "asking for their best phone number BOUNCED — a delivery-failure notice " +
+      "asking for their best phone number BOUNCED, a delivery-failure notice " +
       `for {{vars.lead_email}} came back to ${AMY_EMAIL}, so the EMAIL on ` +
       "file is bad too. There is currently no working way to reach this lead; " +
       "if they resurface through any channel, please capture their best phone " +
@@ -356,11 +356,11 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     id: "bp_email_amy_no_email",
     type: "send_email",
     to: AMY_EMAIL,
-    subject: `BAD PHONE NUMBER, NO EMAIL — ${cfg.leadLabel}, ${cfg.flowName}`,
+    subject: `BAD PHONE NUMBER, NO EMAIL, ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
       "This lead has NO email on file, so NO follow-up email was sent asking " +
-      "for a better number — this report is the only outreach. If the seller " +
+      "for a better number, this report is the only outreach. If the seller " +
       "reaches out another way, please ask them for their best phone number."
   };
   const leadEmails: Step[] = cfg.leadEmails.map((e) => ({
@@ -529,7 +529,7 @@ async function main(): Promise<void> {
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
     const before = JSON.stringify(row.definition);
     if (!addBadPhoneAgentReport(def, cfg)) {
-      console.log(`\n=== ${row.name} (${row.id}) — already patched, skipping`);
+      console.log(`\n=== ${row.name} (${row.id}), already patched, skipping`);
       continue;
     }
 
@@ -537,7 +537,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, skipping:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);

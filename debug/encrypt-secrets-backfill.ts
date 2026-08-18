@@ -83,7 +83,7 @@ let failures = 0;
       // The guard matched zero rows — a concurrent write changed the value
       // between our read and update. Count it as a failure so the operator
       // re-runs (the re-run re-reads the new value and converges).
-      console.error(`vps_ssh_keys ${row.id}: value changed concurrently — re-run to convert`);
+      console.error(`vps_ssh_keys ${row.id}: value changed concurrently, re-run to convert`);
       failures += 1;
     } else {
       console.log(`vps_ssh_keys ${row.id}: encrypted`);
@@ -126,7 +126,7 @@ let failures = 0;
       failures += 1;
     } else if (!Array.isArray(written) || written.length === 0) {
       console.error(
-        `residency_backup_keys ${row.business_id}: value changed concurrently — re-run to convert`
+        `residency_backup_keys ${row.business_id}: value changed concurrently, re-run to convert`
       );
       failures += 1;
     } else {

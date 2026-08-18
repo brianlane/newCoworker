@@ -84,7 +84,7 @@ export default async function AdminBlogPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-parchment/50">
-                    {when ? new Date(when).toLocaleString() : "—"}
+                    {when ? new Date(when).toLocaleString() : "-"}
                   </td>
                   <td className="px-4 py-3 text-right">
                     {post.status === "published" && (

@@ -183,7 +183,7 @@ export function CustomerProfileEditor(props: Props) {
       <label className="block text-xs text-parchment/70 mb-1 mt-4">
         Tags
         <span className="ml-1 text-parchment/40">
-          (your own labels — anything goes; up to {MAX_CONTACT_TAGS})
+          (your own labels, anything goes; up to {MAX_CONTACT_TAGS})
         </span>
       </label>
       <div className="flex flex-wrap items-center gap-1.5">

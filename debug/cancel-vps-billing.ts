@@ -103,7 +103,7 @@ if (vmId !== null) {
     const vm = await hostinger.getVirtualMachine(vmId);
     console.log(`vm ${vmId}: state=${vm.state} plan=${vm.plan ?? "?"} ip=${vm.ipv4?.[0]?.address ?? "?"} hostname=${vm.hostname ?? "?"}`);
   } catch (e) {
-    console.log(`vm ${vmId}: lookup failed (${e instanceof Error ? e.message : e}) — may already be destroyed`);
+    console.log(`vm ${vmId}: lookup failed (${e instanceof Error ? e.message : e}), may already be destroyed`);
   }
 }
 console.log(`billing subscription to stop renewing: ${subscriptionId}`);

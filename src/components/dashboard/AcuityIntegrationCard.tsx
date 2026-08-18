@@ -163,7 +163,7 @@ export function AcuityIntegrationCard({ businessId, initialConnection }: Props) 
       setBanner(
         json.data?.verified
           ? null
-          : "Saved, but Acuity rejected the credentials — double-check the User ID and API Key."
+          : "Saved, but Acuity rejected the credentials, double-check the User ID and API Key."
       );
     } finally {
       setSaving(false);
@@ -222,7 +222,7 @@ export function AcuityIntegrationCard({ businessId, initialConnection }: Props) 
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setBanner("Could not copy — select the URL and copy it manually.");
+      setBanner("Could not copy, select the URL and copy it manually.");
     }
   }
 
@@ -290,7 +290,7 @@ export function AcuityIntegrationCard({ businessId, initialConnection }: Props) 
                 {catalogLoading
                   ? "Loading your Acuity appointment types…"
                   : catalogError
-                    ? "Couldn't load your Acuity appointment types — check the credentials below."
+                    ? "Couldn't load your Acuity appointment types, check the credentials below."
                     : "No bookable one-on-one appointment types found. Classes and series are not bookable by your coworker yet."}
               </p>
             )}
@@ -349,7 +349,7 @@ export function AcuityIntegrationCard({ businessId, initialConnection }: Props) 
           {webhookUrl ? (
             <div>
               <label className="block text-xs text-parchment/50 mb-1">
-                Webhook URL — paste into Acuity → Integrations → Webhooks
+                Webhook URL, paste into Acuity → Integrations → Webhooks
               </label>
               <div className="flex gap-2">
                 <input readOnly value={webhookUrl} className={inputClass} />

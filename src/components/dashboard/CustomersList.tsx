@@ -298,7 +298,7 @@ export function CustomersList({
       {segmentError && <p className="text-xs text-rose-300/90">{segmentError}</p>}
       {clipped && (
         <p className="text-[11px] text-amber-300/80">
-          Large directory — the list and Smart List counts cover the {rows.length.toLocaleString()}{" "}
+          Large directory, the list and Smart List counts cover the {rows.length.toLocaleString()}{" "}
           most recently active contacts.
         </p>
       )}

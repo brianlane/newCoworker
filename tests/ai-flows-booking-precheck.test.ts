@@ -594,7 +594,7 @@ describe("bookingPrecheckForRun phone path", () => {
 });
 
 describe("bookingPrecheckForRun Calendly transport throw", () => {
-  it("propagates a THROWING Calendly transport (unexpected bug — not a refusal)", async () => {
+  it("propagates a THROWING Calendly transport (unexpected bug, not a refusal)", async () => {
     // The production Calendly transport signals trouble by returning null;
     // a throw is a bug that must surface through the route's error
     // handling, exactly as before the shared-module extraction.

@@ -104,7 +104,7 @@ export async function listAiFlowsTool(
       trigger: flowTriggerSummary(f.definition)
     })),
     note:
-      "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run — the owner reviews/enables them at /dashboard/aiflows."
+      "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run, the owner reviews/enables them at /dashboard/aiflows."
   };
 }
 
@@ -129,7 +129,7 @@ export async function runAiFlowTool(
   if (!flow.enabled) {
     return {
       ok: false,
-      message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review — they can enable it at /dashboard/aiflows, then ask again.`
+      message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review, they can enable it at /dashboard/aiflows, then ask again.`
     };
   }
   // Voice flows run on the real-time call path, not the async worker —
@@ -138,7 +138,7 @@ export async function runAiFlowTool(
   if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
     return {
       ok: false,
-      message: `"${flow.name}" is a voice flow — it runs when a call comes in and cannot be started manually. Tell the owner to place a call from the trigger number to test it.`
+      message: `"${flow.name}" is a voice flow, it runs when a call comes in and cannot be started manually. Tell the owner to place a call from the trigger number to test it.`
     };
   }
   const run = await enqueueFlowRun({
@@ -150,12 +150,12 @@ export async function runAiFlowTool(
     dedupeKey: `manual:${crypto.randomUUID()}`
   });
   if (!run) {
-    return { ok: false, message: "The run could not be enqueued — tell the owner to try again." };
+    return { ok: false, message: "The run could not be enqueued, tell the owner to try again." };
   }
   return {
     ok: true,
     runId: run.id,
     flowName: flow.name,
-    note: `Run enqueued — it starts within about a minute. Tell the owner "${flow.name}" is running and they can watch it at /dashboard/aiflows.`
+    note: `Run enqueued, it starts within about a minute. Tell the owner "${flow.name}" is running and they can watch it at /dashboard/aiflows.`
   };
 }

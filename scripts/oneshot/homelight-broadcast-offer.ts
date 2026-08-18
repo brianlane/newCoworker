@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   const routePatched = patchRouteToBroadcast(def, agentName, ownerName);
   const smsPatched = patchToAgentSmsToClaimer(def, agentName);
   if (!routePatched && !smsPatched) {
-    console.log("Flow already patched — nothing to do.");
+    console.log("Flow already patched, nothing to do.");
     return;
   }
 
@@ -238,7 +238,7 @@ async function main(): Promise<void> {
   try {
     parseAiFlowDefinition(def);
   } catch (err) {
-    console.error(`Patched "${flow.name}" would become INVALID — aborting before any write:`);
+    console.error(`Patched "${flow.name}" would become INVALID, aborting before any write:`);
     if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
     else console.error(err);
     process.exit(2);

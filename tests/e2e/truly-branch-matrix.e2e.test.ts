@@ -197,7 +197,7 @@ describe("silent + late-reply arms (the Dawnia incident family)", () => {
     expect(stepOf(w, "classify_late").status).toBe("skipped");
   });
 
-  it("a late info reply is classified and routed (not dropped — the old dead end)", () => {
+  it("a late info reply is classified and routed (not dropped, the old dead end)", () => {
     const w = walks.late_gave_info;
     expect(w.vars.reply_text).toBe(NO_REPLY_SENTINEL);
     expect(w.vars.reply2).toBe("I need Auto and home insurance quote");

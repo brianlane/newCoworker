@@ -32,7 +32,7 @@ const booked = await bookCalendarAppointment(
   {
     startIso: start.toISOString(),
     endIso: end.toISOString(),
-    summary: "Smoke test — safe to ignore",
+    summary: "Smoke test, safe to ignore",
     attendeeName: "Smoke Test",
     attendeePhone: "+15550100000",
     notes: "Automated pre-review smoke test; will self-cancel."
@@ -56,7 +56,7 @@ const moved = await rescheduleCalendarAppointment(
   "+15550100000"
 );
 console.log("reschedule result:", JSON.stringify(moved, null, 2));
-if (!moved.ok) throw new Error("reschedule failed — clean up the event manually");
+if (!moved.ok) throw new Error("reschedule failed, clean up the event manually");
 
 const canceled = await cancelCalendarAppointment(
   BIZ,
@@ -64,6 +64,6 @@ const canceled = await cancelCalendarAppointment(
   "+15550100000"
 );
 console.log("cancel result:", JSON.stringify(canceled, null, 2));
-if (!canceled.ok) throw new Error("cancel failed — clean up the event manually");
+if (!canceled.ok) throw new Error("cancel failed, clean up the event manually");
 
 console.log("SMOKE OK: book + reschedule + cancel round-trip succeeded on", conn.provider);

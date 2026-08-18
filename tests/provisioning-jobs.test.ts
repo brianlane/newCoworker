@@ -224,7 +224,7 @@ describe("heartbeatProvisioningJob", () => {
     expect(builder.in).toHaveBeenCalledWith("status", ["queued", "running"]);
   });
 
-  it("swallows failures — a heartbeat must never fail a progress write", async () => {
+  it("swallows failures, a heartbeat must never fail a progress write", async () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "down" } }));
     await expect(heartbeatProvisioningJob(BIZ, injected)).resolves.toBeUndefined();
 

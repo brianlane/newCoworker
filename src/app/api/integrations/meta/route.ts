@@ -146,7 +146,7 @@ export async function POST(request: Request) {
       // tools, or by looking at the Page in Facebook.
       return errorResponse(
         "VALIDATION_ERROR",
-        `"${page.name}" is already connected to another business. A Facebook Page can send its leads to one business at a time — disconnect it there first, then pick it here.`
+        `"${page.name}" is already connected to another business. A Facebook Page can send its leads to one business at a time, disconnect it there first, then pick it here.`
       );
     }
 
@@ -210,7 +210,7 @@ export async function PATCH(request: Request) {
       if (!row) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Pick the Page that runs your lead ads first — a dataset attaches to a connected Page"
+          "Pick the Page that runs your lead ads first, a dataset attaches to a connected Page"
         );
       }
       return successResponse(row);

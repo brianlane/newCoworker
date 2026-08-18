@@ -101,7 +101,7 @@ describe("api/dashboard/byon/check route", () => {
 
   it("maps ByonValidationError to a 400 with the message", async () => {
     vi.mocked(runPortabilityCheck).mockRejectedValue(
-      new ByonValidationError("Short codes can't be ported — enter a full phone number.")
+      new ByonValidationError("Short codes can't be ported, enter a full phone number.")
     );
     const res = await POST(req({ businessId: BIZ, phone: "12345" }));
     const body = await res.json();

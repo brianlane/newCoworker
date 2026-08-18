@@ -36,7 +36,7 @@ fatal() { echo "[flip-flags] FATAL: $*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-flip-flags.sh — toggle voice rollout kill switches on the VPS
+flip-flags.sh, toggle voice rollout kill switches on the VPS
 
 Commands:
   --gemini-live on|off           Edit $ENV_FILE and restart the bridge container
@@ -112,11 +112,11 @@ write_env_value() {
 
 restart_bridge() {
   if ! command -v docker >/dev/null 2>&1; then
-    log "docker not installed — skipping restart"
+    log "docker not installed, skipping restart"
     return 0
   fi
   if [[ ! -f "${COMPOSE_FILE}" ]]; then
-    log "compose file ${COMPOSE_FILE} not found — skipping restart"
+    log "compose file ${COMPOSE_FILE} not found, skipping restart"
     return 0
   fi
   log "restarting voice-bridge container via docker compose…"

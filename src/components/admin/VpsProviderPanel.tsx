@@ -64,7 +64,7 @@ export function VpsProviderPanel({
       <p className="text-xs text-parchment/50">
         Drives which provider the NEXT provision uses. OVH (Beauharnois, Quebec) is the
         platform-owned Canadian data-residency option; BYOS is pinned via the
-        SSH-handover card. {hasBox ? "A box exists — provider switches are blocked until it is torn down." : ""}
+        SSH-handover card. {hasBox ? "A box exists, provider switches are blocked until it is torn down." : ""}
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-xs text-parchment/50">

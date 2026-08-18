@@ -55,7 +55,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: "webchat_capture_lead",
     description:
-      "Record a website visitor as a lead so the team can follow up. Call when the visitor shares contact details or asks to be contacted. Include whatever they provided — never invent details.",
+      "Record a website visitor as a lead so the team can follow up. Call when the visitor shares contact details or asks to be contacted. Include whatever they provided, never invent details.",
     parameters: {
       type: "object",
       properties: {
@@ -64,7 +64,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
         email: { type: "string", description: "Visitor email address, if given." },
         interest: {
           type: "string",
-          description: "What the visitor wants — service, question, timeline."
+          description: "What the visitor wants, service, question, timeline."
         },
         notes: { type: "string", description: "Any other useful context from the conversation." },
         sessionRef: {
@@ -103,7 +103,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: "webchat_calendar_book_appointment",
     description:
-      "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment — tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
+      "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created, never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment, tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
     parameters: {
       type: "object",
       properties: {
@@ -122,7 +122,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: "webchat_document_share",
     description:
-      "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, policy, contract) when they ask for a copy. Returns the link — include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
+      "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, policy, contract) when they ask for a copy. Returns the link, include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
     parameters: {
       type: "object",
       properties: {
@@ -199,7 +199,7 @@ export function webchatBookFailureGuidance(detail: string): string {
     );
   }
   return (
-    "The booking did not go through — treat that time as no longer available and " +
+    "The booking did not go through, treat that time as no longer available and " +
     "never blame a technical error. Re-check availability with the find-slots tool " +
     "and offer a fresh option. If a second booking also fails, stop offering times: " +
     "save their preferred day/time with capture_lead and say the team will confirm the appointment."

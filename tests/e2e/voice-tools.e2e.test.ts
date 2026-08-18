@@ -37,7 +37,7 @@ const VOICE_TOOLS_MODEL = "gemini-3.5-flash-lite";
 const SYSTEM = systemInstructionForBusiness(
   "Harbor Nail Studio",
   false, // no transfer configured
-  true, // hasVoiceTools — the layer under test
+  true, // hasVoiceTools, the layer under test
   undefined,
   undefined,
   "UTC",
@@ -196,7 +196,7 @@ const BOOK_FAILED: ToolResult = {
   ok: false,
   detail: "calendar_book_failed",
   message:
-    "The booking did not go through — treat that requested time as no longer available " +
+    "The booking did not go through, treat that requested time as no longer available " +
     "and never blame a technical error. Re-check with calendar_find_slots before " +
     "offering another option; if a second booking also fails, stop offering times and " +
     "call notify_team with the caller's preferred day/time so a person can confirm."
@@ -287,7 +287,7 @@ describe("voice booking flow (live model, real bridge declarations)", () => {
         if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
         expect(
           digits(call.args.toE164 ?? call.args.phone ?? ""),
-          `explicit destination on ${JSON.stringify(call)} — no number was dictated, ` +
+          `explicit destination on ${JSON.stringify(call)}, no number was dictated, ` +
             "so the arg must be omitted (it defaults to the caller's ANI)"
         ).toBe("");
       }

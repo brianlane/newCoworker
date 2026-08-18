@@ -34,11 +34,11 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
 }
 
 describe("buildDashboardCustomerPreamble", () => {
-  it("returns null on empty input — first-time owner sees no extra system msg", () => {
+  it("returns null on empty input, first-time owner sees no extra system msg", () => {
     expect(buildDashboardCustomerPreamble([])).toBeNull();
   });
 
-  it("returns null when no row has any notable content (all summary_md/pinned_md/total_interaction_count are zero/null) — avoids 'Owner-side context:' headers with empty bodies", () => {
+  it("returns null when no row has any notable content (all summary_md/pinned_md/total_interaction_count are zero/null), avoids 'Owner-side context:' headers with empty bodies", () => {
     expect(
       buildDashboardCustomerPreamble([
         memory({ summary_md: null, pinned_md: null, total_interaction_count: 0 })
@@ -62,7 +62,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out).toContain("Do NOT proactively volunteer customer details");
   });
 
-  it("declares the header-line name AUTHORITATIVE over names inside summary/pinned excerpts — a renamed lead's stale summary name must not win (Truly, July 2026)", () => {
+  it("declares the header-line name AUTHORITATIVE over names inside summary/pinned excerpts, a renamed lead's stale summary name must not win (Truly, July 2026)", () => {
     const out = buildDashboardCustomerPreamble([
       memory({
         display_name: "Juhu",
@@ -74,10 +74,10 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out).toContain("always refer to the customer by the header-line name");
   });
 
-  it("emits pinned notes BEFORE the summary excerpt — owner ground truth wins over LLM-generated summary", () => {
+  it("emits pinned notes BEFORE the summary excerpt, owner ground truth wins over LLM-generated summary", () => {
     const out = buildDashboardCustomerPreamble([
       memory({
-        pinned_md: "VIP — escalate to owner",
+        pinned_md: "VIP, escalate to owner",
         summary_md: "Inquired about pricing",
         total_interaction_count: 2
       })
@@ -90,7 +90,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(pinnedIdx).toBeLessThan(summaryIdx);
   });
 
-  it("caps each customer's summary excerpt at DASHBOARD_PREAMBLE_PER_CUSTOMER_CHARS — keeps total preamble bounded across N customers", () => {
+  it("caps each customer's summary excerpt at DASHBOARD_PREAMBLE_PER_CUSTOMER_CHARS, keeps total preamble bounded across N customers", () => {
     const huge = "x".repeat(DASHBOARD_PREAMBLE_PER_CUSTOMER_CHARS + 200);
     const out = buildDashboardCustomerPreamble([
       memory({ summary_md: huge, total_interaction_count: 1 })
@@ -104,7 +104,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out!).not.toContain("x".repeat(DASHBOARD_PREAMBLE_PER_CUSTOMER_CHARS + 100));
   });
 
-  it("caps the customer list at DASHBOARD_PREAMBLE_MAX_CUSTOMERS — extra rows are dropped to keep prompt budget bounded", () => {
+  it("caps the customer list at DASHBOARD_PREAMBLE_MAX_CUSTOMERS, extra rows are dropped to keep prompt budget bounded", () => {
     const inputs = Array.from({ length: DASHBOARD_PREAMBLE_MAX_CUSTOMERS + 3 }, (_, i) =>
       memory({
         customer_e164: `+1555555${String(i).padStart(4, "0")}`,
@@ -156,13 +156,13 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out!).not.toContain("last seen");
   });
 
-  it("omits 'N prior interactions' when total_interaction_count is 0 (qualifies via pinned_md alone — owner pre-curated a customer who hasn't called yet)", () => {
+  it("omits 'N prior interactions' when total_interaction_count is 0 (qualifies via pinned_md alone, owner pre-curated a customer who hasn't called yet)", () => {
     const out = buildDashboardCustomerPreamble([
       memory({
         last_channel: null,
         last_interaction_at: null,
         total_interaction_count: 0,
-        pinned_md: "VIP — escalate"
+        pinned_md: "VIP, escalate"
       })
     ]);
     expect(out).not.toBeNull();
@@ -171,7 +171,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out!).not.toContain("last seen");
     // No meta means no parens after the header.
     expect(out!).toContain("- +15555550123\n");
-    expect(out!).toContain("Pinned: VIP — escalate");
+    expect(out!).toContain("Pinned: VIP, escalate");
   });
 
   it("qualifies a row via summary_md alone (covers the `summary_md?.trim()` arm of the visible filter)", () => {
@@ -188,7 +188,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out!).toContain("summary only");
   });
 
-  it("renders ONLY pinned_md (no summary_md) when summary_md is null or whitespace — covers the `if (summary)` false arm on line 60", () => {
+  it("renders ONLY pinned_md (no summary_md) when summary_md is null or whitespace, covers the `if (summary)` false arm on line 60", () => {
     for (const summary of [null, "", "   "]) {
       const out = buildDashboardCustomerPreamble([
         memory({
@@ -203,7 +203,7 @@ describe("buildDashboardCustomerPreamble", () => {
     }
   });
 
-  it("omits the customer entirely when display_name is null — the header degrades to bare E.164", () => {
+  it("omits the customer entirely when display_name is null, the header degrades to bare E.164", () => {
     const out = buildDashboardCustomerPreamble([
       memory({
         display_name: null,
@@ -216,7 +216,7 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out!).toContain("- +15555550123 (");
   });
 
-  it("trims display_name whitespace — `Joe   ` should not produce `Joe   +15555550123` with double spaces", () => {
+  it("trims display_name whitespace, `Joe   ` should not produce `Joe   +15555550123` with double spaces", () => {
     // The visible filter uses `m.display_name?.trim()` to decide
     // whether to push the name; assert the trim survived.
     const out = buildDashboardCustomerPreamble([

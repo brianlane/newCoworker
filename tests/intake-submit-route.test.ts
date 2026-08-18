@@ -18,7 +18,7 @@ const TOKEN = "0f0f0f0f-0000-4000-8000-0000000000aa";
 
 const VALID_ANSWERS = {
   business_hours: "Mon–Fri 9am–5pm",
-  team: "Jane Smith — 555-123-4567",
+  team: "Jane Smith, 555-123-4567",
   lead_sources: ["website_form"],
   appointment_length: "30",
   appointment_buffer: "none",

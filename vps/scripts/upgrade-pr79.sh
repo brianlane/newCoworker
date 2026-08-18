@@ -76,7 +76,7 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 if [[ ! -d /opt/rowboat ]]; then
-  log "ERROR: /opt/rowboat does not exist — this script is for VPSes already provisioned with Rowboat. Run vps/scripts/deploy-client.sh for a fresh provision."
+  log "ERROR: /opt/rowboat does not exist, this script is for VPSes already provisioned with Rowboat. Run vps/scripts/deploy-client.sh for a fresh provision."
   exit 1
 fi
 
@@ -127,7 +127,7 @@ if [[ -f /opt/rowboat/docker-compose.yml ]]; then
     exit 2
   }
 else
-  log "WARN: /opt/rowboat/docker-compose.yml missing — skipping rowboat restart. Restart manually after this script finishes."
+  log "WARN: /opt/rowboat/docker-compose.yml missing, skipping rowboat restart. Restart manually after this script finishes."
 fi
 
 # ---------------------------------------------------------------------

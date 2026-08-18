@@ -205,7 +205,7 @@ describe("buildAvailableMailboxesBlock", () => {
   });
 });
 
-describe("FLOW_COMPILE_SYSTEM_PROMPT — name parts", () => {
+describe("FLOW_COMPILE_SYSTEM_PROMPT, name parts", () => {
   it("documents the .first/.last suffix vocabulary", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("{{vars.lead_name.first}}");
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("{{vars.lead_name.last}}");

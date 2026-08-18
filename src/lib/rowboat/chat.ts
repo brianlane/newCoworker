@@ -217,7 +217,7 @@ export type RowboatStreamEvent =
   | { type: "delta"; text: string }
   /**
    * Tool-call invocation surfaced by Rowboat mid-stream. We don't act on
-   * these in v1 — the dashboard chat doesn't render tool calls — but we
+   * these in v1, the dashboard chat doesn't render tool calls, but we
    * yield them so a future caller can without changing the contract.
    * The route ignores them.
    */
@@ -227,7 +227,7 @@ export type RowboatStreamEvent =
    * post-completion metadata Rowboat emits; both may be absent if the
    * server didn't include them. `hasStateKey` mirrors the buffered
    * `parseRowboatChatJson` semantics so callers can distinguish "state
-   * was explicitly null" from "state key never appeared" — important
+   * was explicitly null" from "state key never appeared", important
    * because the route uses that distinction to decide whether to
    * overwrite the stored conversation continuation.
    */
@@ -766,7 +766,7 @@ export async function* callRowboatChatStream(
             lastState = parsed.state;
             lastHadStateKey = true;
           }
-          // Don't return yet — Rowboat sometimes emits both an explicit
+          // Don't return yet, Rowboat sometimes emits both an explicit
           // `[DONE]` AND a final metadata JSON in either order. Keep
           // reading until the stream itself closes; we'll emit our
           // single `done` event at the end. Whether the upstream sent

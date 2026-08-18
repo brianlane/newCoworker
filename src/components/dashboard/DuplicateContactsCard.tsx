@@ -58,7 +58,7 @@ export function DuplicateContactsCard({ businessId, pairs }: Props) {
         const json = (await res.json().catch(() => null)) as {
           error?: { message?: string };
         } | null;
-        setBanner(json?.error?.message ?? "Merge failed — try again from the contact page.");
+        setBanner(json?.error?.message ?? "Merge failed, try again from the contact page.");
         return;
       }
       setDismissed((prev) => new Set(prev).add(pair.fromE164));
@@ -72,7 +72,7 @@ export function DuplicateContactsCard({ businessId, pairs }: Props) {
     <Card>
       <h3 className="text-sm font-semibold text-parchment">Possible duplicates</h3>
       <p className="text-xs text-parchment/50 mt-1">
-        These customers share an email address — likely the same person reached on two
+        These customers share an email address, likely the same person reached on two
         numbers. Merging keeps the more complete profile and makes the other number an
         alias of it.
       </p>

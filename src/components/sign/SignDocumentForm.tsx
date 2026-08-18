@@ -53,7 +53,7 @@ export function SignDocumentForm({
           : json?.detail === "content_changed"
             ? "This document was updated after you opened it. Refresh the page to review the current version before signing."
             : json?.detail === "rate_limited"
-              ? "Too many attempts — wait a minute and try again."
+              ? "Too many attempts, wait a minute and try again."
               : "Signing failed. Refresh the page and try again."
       );
     } catch {

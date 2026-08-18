@@ -22,7 +22,7 @@ export function clearOnboardingStorage(): void {
     localStorage.removeItem(ONBOARD_STORAGE_KEY);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
   } catch {
-    // Storage can be unavailable (private mode, disabled) — the server-side
+    // Storage can be unavailable (private mode, disabled), the server-side
     // checkout guard is the hard stop; this cleanup is best-effort.
   }
 }

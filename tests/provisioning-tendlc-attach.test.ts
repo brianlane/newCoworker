@@ -449,14 +449,14 @@ describe("attachBusinessDidToCampaign", () => {
   it("falls back to readTendlcConfig+real TendlcClient when neither is injected (covers the default branches)", async () => {
     const fetchImpl = vi
       .fn()
-      // First call: getCampaign — return ACTIVE.
+      // First call: getCampaign, return ACTIVE.
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ campaignId: "c-1", status: "ACTIVE" }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         })
       )
-      // Second call: createPhoneNumberCampaign — 200.
+      // Second call: createPhoneNumberCampaign, 200.
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({ phoneNumber: "+15551234567", campaignId: "c-1" }),

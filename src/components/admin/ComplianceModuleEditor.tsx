@@ -108,7 +108,7 @@ export function ComplianceModuleEditor({
         >
           Clear module
         </Button>
-        {saved && <span className="text-xs text-claw-green">Saved — vault re-seed scheduled</span>}
+        {saved && <span className="text-xs text-claw-green">Saved, vault re-seed scheduled</span>}
       </div>
       {error && <p className="text-xs text-spark-orange">{error}</p>}
     </div>

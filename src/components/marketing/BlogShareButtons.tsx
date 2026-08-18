@@ -22,7 +22,7 @@ export function BlogShareButtons({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard unavailable (permissions/http) — leave the label unchanged.
+      // Clipboard unavailable (permissions/http), leave the label unchanged.
     }
   };
 

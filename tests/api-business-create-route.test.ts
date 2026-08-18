@@ -68,7 +68,7 @@ beforeEach(() => {
   } as never);
 });
 
-describe("/api/business/create — anonymous Stripe-first flow", () => {
+describe("/api/business/create, anonymous Stripe-first flow", () => {
   it("creates a pending business and mints an onboardingToken when no row exists", async () => {
     const res = await POST(jsonRequest(baseBody()));
     const body = await res.json();
@@ -147,7 +147,7 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
     expect(createBusiness).not.toHaveBeenCalled();
   });
 
-  it("blank/absent phone stays optional — no phone persisted, no rejection", async () => {
+  it("blank/absent phone stays optional, no phone persisted, no rejection", async () => {
     const res = await POST(jsonRequest(baseBody({ phone: "   " })));
     expect(res.status).toBe(200);
     expect(createBusiness).toHaveBeenCalledWith(
@@ -201,7 +201,7 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
   });
 });
 
-describe("/api/business/create — authenticated path", () => {
+describe("/api/business/create, authenticated path", () => {
   it("uses the session email and skips onboardingToken minting", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com" } as never);
     vi.mocked(createBusiness).mockResolvedValue({
@@ -246,7 +246,7 @@ describe("/api/business/create — authenticated path", () => {
   });
 });
 
-describe("/api/business/create — legacy signupUserId path", () => {
+describe("/api/business/create, legacy signupUserId path", () => {
   it("rejects when signupUserId is provided without ownerEmail", async () => {
     const res = await POST(
       jsonRequest({
@@ -308,7 +308,7 @@ describe("/api/business/create — legacy signupUserId path", () => {
   });
 });
 
-describe("/api/business/create — validation", () => {
+describe("/api/business/create, validation", () => {
   it("rejects non-uuid businessId with 400", async () => {
     const res = await POST(jsonRequest({ businessId: "not-a-uuid", name: "Acme", tier: "starter" }));
     expect(res.status).toBe(400);
@@ -320,7 +320,7 @@ describe("/api/business/create — validation", () => {
   });
 });
 
-describe("/api/business/create — Step 1 dropdown teamSize → integer mapping", () => {
+describe("/api/business/create, Step 1 dropdown teamSize → integer mapping", () => {
   // Regression suite for the codex-flagged bug where the route called
   // `parseInt(body.teamSize, 10)` directly. After the Step 1 form
   // migration, `teamSize` arrives as bucket strings like "Just me",

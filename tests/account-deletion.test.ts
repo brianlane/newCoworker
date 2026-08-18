@@ -256,7 +256,7 @@ describe("resolveAccountDeletionEligibilityForRows", () => {
     expect(resolveAccountDeletionEligibilityForRows([], NOW)).toEqual({ eligible: true });
   });
 
-  it("refuses when ANY row blocks — an active row shadowed by a newer pending row still gates", () => {
+  it("refuses when ANY row blocks, an active row shadowed by a newer pending row still gates", () => {
     expect(
       resolveAccountDeletionEligibilityForRows(
         [

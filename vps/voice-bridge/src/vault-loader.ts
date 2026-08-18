@@ -141,13 +141,13 @@ export function composeVaultPromptSection(snapshot: VaultSnapshot): string {
   }
   if (snapshot.website) {
     sections.push(
-      "=== website.md (summarized public website — may be outdated; prefer live tool lookups when available) ===",
+      "=== website.md (summarized public website, may be outdated; prefer live tool lookups when available) ===",
       snapshot.website
     );
   }
   if (snapshot.documents) {
     sections.push(
-      "=== documents.md (business documents on file — offer to text a link via document_share when the caller wants a copy; answer detail questions via business_knowledge_lookup) ===",
+      "=== documents.md (business documents on file, offer to text a link via document_share when the caller wants a copy; answer detail questions via business_knowledge_lookup) ===",
       snapshot.documents
     );
   }

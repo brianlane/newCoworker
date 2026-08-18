@@ -246,7 +246,7 @@ async function fetchActivity(
       flowRunsQuery.order("created_at", { ascending: false }).limit(25),
       supa
         .from("contacts")
-        // Only real customer profiles are "new customer" digest items — folded
+        // Only real customer profiles are "new customer" digest items, folded
         // manual contacts (other/service/tester) are not new customers.
         .select("display_name, customer_e164")
         .eq("business_id", businessId)
@@ -383,7 +383,7 @@ serve(async (req: Request) => {
     const body = await req.json();
     if (body && body.window === "weekly") window = "weekly";
   } catch {
-    // Empty / non-JSON body — the original daily cron posts '{}'.
+    // Empty / non-JSON body, the original daily cron posts '{}'.
   }
   const digestLabel = window === "weekly" ? "Weekly digest" : "Daily digest";
 

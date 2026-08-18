@@ -254,7 +254,7 @@ export async function selectFeaturePrs(
     try {
       classifiedNumbers = await classify(unlabeled);
     } catch (err) {
-      logger.warn("weekly-digest: feature classification failed — dropping unlabeled PRs", {
+      logger.warn("weekly-digest: feature classification failed, dropping unlabeled PRs", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
@@ -275,7 +275,7 @@ const DIGEST_SYSTEM_INSTRUCTION =
   "New Coworker is an AI coworker for businesses: it answers calls and texts, " +
   "books appointments, and follows up with leads so owners never miss business. " +
   "Audience: busy small-business owners. Write in plain English a 12-year-old could " +
-  "understand — short sentences, zero jargon, benefit first ('your coworker can now…'). " +
+  "understand, short sentences, zero jargon, benefit first ('your coworker can now…'). " +
   "Cover ONLY the features provided; never mention bug fixes, internal work, or PR numbers. " +
   `The content body MUST be under ${DIGEST_MAX_WORDS} words. Group related features under ` +
   "'## ' section headings. The excerpt is 1-2 friendly sentences (it doubles as an " +
@@ -324,7 +324,7 @@ export async function composeDigestWithGemini(
   if (countWords(draft.content) > DIGEST_MAX_WORDS) {
     // One retry with a harder cap nudge, then trim at a section boundary.
     draft = await generateOnce(
-      ` Your previous attempt was too long — keep the content body strictly under ${DIGEST_MAX_WORDS} words this time.`
+      ` Your previous attempt was too long, keep the content body strictly under ${DIGEST_MAX_WORDS} words this time.`
     );
     if (countWords(draft.content) > DIGEST_MAX_WORDS) {
       draft = {
@@ -370,7 +370,7 @@ export async function generateDigestImageToBucket(
     if (error) throw new Error(error.message);
     return path;
   } catch (err) {
-    logger.warn("weekly-digest: featured image generation failed — posting without one", {
+    logger.warn("weekly-digest: featured image generation failed, posting without one", {
       error: err instanceof Error ? err.message : String(err)
     });
     return null;
@@ -401,7 +401,7 @@ export type WeeklyDigestResult = {
     | "already_exists"
     | "below_threshold"
     | "no_features"
-    /** Composed under DIGEST_MIN_WORDS — skipped; rolls into next week. */
+    /** Composed under DIGEST_MIN_WORDS, skipped; rolls into next week. */
     | "too_thin";
   weekKey: string;
   mergedCount: number;
@@ -477,7 +477,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   // A thin week isn't worth a post — skip BEFORE spending on the image;
   // the anchored window above carries these features into next week.
   if (countWords(draft.content) < DIGEST_MIN_WORDS) {
-    logger.info("weekly-digest: composed digest too thin — rolling into next week", {
+    logger.info("weekly-digest: composed digest too thin, rolling into next week", {
       weekKey,
       words: countWords(draft.content),
       featureCount: features.length

@@ -64,7 +64,7 @@ if (!APPLY) {
 }
 
 if (sub.is_auto_renewed) {
-  console.log("auto-renewal already enabled — nothing to do");
+  console.log("auto-renewal already enabled, nothing to do");
 } else {
   await hostinger.enableBillingAutoRenewal(sub.id);
   console.log("auto-renewal ENABLED for", sub.id);

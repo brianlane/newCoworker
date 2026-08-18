@@ -1390,7 +1390,7 @@ serve(async (req: Request) => {
                 continue;
               }
               // Out of retry budget: fall through and close the job out as
-              // suppressed — no owner SMS without a routable prompt.
+              // suppressed, no owner SMS without a routable prompt.
             } else {
               const customerLabel =
                 (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||

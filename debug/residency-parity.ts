@@ -68,7 +68,7 @@ async function centralCount(table: string): Promise<number> {
   const ids = ((parents ?? []) as Array<{ id: string }>).map((p) => p.id);
   if (ids.length > PARENT_SLICE_LIMIT) {
     throw new Error(
-      `central parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
+      `central parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap, cannot prove parity; raise PARENT_SLICE_LIMIT`
     );
   }
   if (ids.length === 0) return 0;
@@ -97,7 +97,7 @@ async function boxCount(table: string): Promise<number> {
     const ids = parents.rows.map((p) => p.id);
     if (ids.length > PARENT_SLICE_LIMIT) {
       throw new Error(
-        `box parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
+        `box parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap, cannot prove parity; raise PARENT_SLICE_LIMIT`
       );
     }
     if (ids.length === 0) return 0;
@@ -143,14 +143,14 @@ if (pendingError || pending === null || pending === undefined) {
   // An unreadable journal is a FAIL, not zero — the gate must never pass on
   // missing evidence.
   console.log(
-    `\n[parity] FAIL — journal depth unreadable: ${pendingError?.message ?? "no count returned"}`
+    `\n[parity] FAIL, journal depth unreadable: ${pendingError?.message ?? "no count returned"}`
   );
   process.exit(1);
 }
 console.log(`\n[parity] pending journal rows: ${pending}`);
 console.log(
   mismatches === 0 && pending === 0
-    ? "[parity] PASS — counts equal, journal drained"
-    : `[parity] FAIL — ${mismatches} table mismatch(es), ${pending} pending journal rows`
+    ? "[parity] PASS, counts equal, journal drained"
+    : `[parity] FAIL, ${mismatches} table mismatch(es), ${pending} pending journal rows`
 );
 process.exit(mismatches === 0 && pending === 0 ? 0 : 1);

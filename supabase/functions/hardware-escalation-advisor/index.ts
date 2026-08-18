@@ -352,7 +352,7 @@ serve(async (req: Request) => {
               level: "warn",
               event: "hardware_escalation_advice",
               message:
-                `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")} — ` +
+                `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")}, ` +
                 (advice.recommendedSize
                   ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
                   : `already on ${advice.currentSize} (largest box)`),

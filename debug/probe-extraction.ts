@@ -51,7 +51,7 @@ const scenarios: Scenario[] = [
     label: "plain behavior rule (should save)",
     expectSave: true,
     ownerMessage: "From now on, never discuss budget with customers.",
-    assistantReply: "Got it — I'll never discuss budget with customers."
+    assistantReply: "Got it, I'll never discuss budget with customers."
   },
   {
     // The 4B model is unreliable at self-suppressing duplicates, so we expect
@@ -62,7 +62,7 @@ const scenarios: Scenario[] = [
     label: "duplicate of an already-saved rule (adapter dedups on write)",
     expectSave: true,
     ownerMessage: "Just to confirm, never discuss budget with customers.",
-    assistantReply: "Confirmed — never discuss budget with customers.",
+    assistantReply: "Confirmed, never discuss budget with customers.",
     existingBullets: ["Never discuss budget with customers"]
   }
 ];
@@ -118,7 +118,7 @@ for (let i = 0; i < results.length; i++) {
   const parsed = parseMemoryExtraction(r.content);
   const ok = parsed.save === expect;
   if (!ok) failures++;
-  console.log(`\n— ${r.label}`);
+  console.log(`\n, ${r.label}`);
   console.log(`  expected save=${expect}  →  got save=${parsed.save}  ${ok ? "PASS" : "FAIL"}`);
   if (parsed.bullets.length) console.log(`  bullets: ${JSON.stringify(parsed.bullets)}`);
   else console.log(`  raw: ${r.content.slice(0, 200)}`);

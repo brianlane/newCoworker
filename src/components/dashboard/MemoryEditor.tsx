@@ -265,7 +265,7 @@ export function MemoryEditor({
           try {
             parsed = JSON.parse(line) as Record<string, unknown>;
           } catch {
-            return; // partial/garbled line — never abort the crawl over it
+            return; // partial/garbled line, never abort the crawl over it
           }
           if (parsed.kind === "progress") {
             setRecrawl((prev) => {

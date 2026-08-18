@@ -40,7 +40,7 @@ export default async function IntakePage({
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-parchment/60">
             About 5 minutes, mostly multiple choice. Your answers become the build plan our
-            team installs from — how your AI assistant greets new leads, follows up, books
+            team installs from, how your AI assistant greets new leads, follows up, books
             appointments, and hands conversations to your team.
           </p>
         </div>
@@ -51,7 +51,7 @@ export default async function IntakePage({
 
         {intake.status === "completed" && (
           <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
-            Thanks — we&apos;ve got everything we need! Our team will review your answers and
+            Thanks, we&apos;ve got everything we need! Our team will review your answers and
             reach out with next steps.
             {intake.recipient_email
               ? " If anything changes, just reply to the email you received."

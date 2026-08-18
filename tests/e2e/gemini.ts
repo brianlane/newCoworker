@@ -41,7 +41,7 @@ export function requireGeminiKey(): string {
   const key = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!key) {
     throw new Error(
-      "e2e requires GOOGLE_API_KEY (or GEMINI_API_KEY) — locally: source .env; CI: repo secret."
+      "e2e requires GOOGLE_API_KEY (or GEMINI_API_KEY), locally: source .env; CI: repo secret."
     );
   }
   return key;

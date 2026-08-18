@@ -46,7 +46,7 @@ export function currentDateTimeLine(now: Date = new Date(), timeZone?: string | 
         `another timezone is explicitly requested.`
       );
     } catch {
-      // Invalid IANA name — fall through to the UTC wording below.
+      // Invalid IANA name, fall through to the UTC wording below.
     }
   }
   const iso = now.toISOString();

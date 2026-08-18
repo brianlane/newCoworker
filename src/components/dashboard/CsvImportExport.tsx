@@ -38,7 +38,7 @@ const DATASETS: { type: CsvType; title: string; blurb: string }[] = [
     type: "documents",
     title: "Contact records",
     blurb:
-      "Policies, leases, contracts, memberships — records linked to a contact with renewal dates. Import your book of business; the contact must exist first."
+      "Policies, leases, contracts, memberships, records linked to a contact with renewal dates. Import your book of business; the contact must exist first."
   }
 ];
 

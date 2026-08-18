@@ -79,12 +79,12 @@ if (flows.length === 0) {
 const patched: Array<{ id: string; name: string; definition: unknown }> = [];
 for (const flow of flows) {
   if (flow.name === KYP_FLOW_NAME) {
-    console.log(`[oneshot] skip   "${flow.name}" — gated per-step by patch-kyp-offer-branch.ts`);
+    console.log(`[oneshot] skip   "${flow.name}", gated per-step by patch-kyp-offer-branch.ts`);
     continue;
   }
   const existing = (flow.definition as { timeWindow?: unknown }).timeWindow;
   if (JSON.stringify(existing) === JSON.stringify(KYP_TIME_WINDOW)) {
-    console.log(`[oneshot] noop   "${flow.name}" — window already set`);
+    console.log(`[oneshot] noop   "${flow.name}", window already set`);
     continue;
   }
   let definition;

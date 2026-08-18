@@ -79,7 +79,7 @@ describe("webhookEventKey", () => {
     expect(webhookEventKey(EVENT)).toBe("lead-123");
     expect(webhookEventKey({ ...EVENT, eventId: `  ${"x".repeat(300)}  ` }).length).toBe(180);
   });
-  it("digests the payload when no event id — identical redeliveries collide, different leads don't", () => {
+  it("digests the payload when no event id, identical redeliveries collide, different leads don't", () => {
     const a = webhookEventKey({ source: "s", data: { a: 1 } });
     expect(a).toBe(webhookEventKey({ source: "s", data: { a: 1 } }));
     expect(a).not.toBe(webhookEventKey({ source: "s", data: { a: 2 } }));

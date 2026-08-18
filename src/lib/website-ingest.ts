@@ -691,7 +691,7 @@ async function fetchWithLimit(
       if (err instanceof Error && (err.message === "private_address" || err.message === "dns_failure")) {
         throw err;
       }
-      // URL parse failures fall through — `response.url` is best-effort.
+      // URL parse failures fall through, `response.url` is best-effort.
     }
 
     const chunks: Uint8Array[] = [];

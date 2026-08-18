@@ -98,7 +98,7 @@ describe("isRenewalDueWithin", () => {
     expect(isRenewalDueWithin(doc({ renewal_date: "not-a-date" }), NOW)).toBe(false);
   });
 
-  it("is due inside the window — including already-past dates", () => {
+  it("is due inside the window, including already-past dates", () => {
     expect(isRenewalDueWithin(doc({ renewal_date: "2026-08-01T00:00:00Z" }), NOW)).toBe(true);
     expect(isRenewalDueWithin(doc({ renewal_date: "2026-07-01T00:00:00Z" }), NOW)).toBe(true);
   });

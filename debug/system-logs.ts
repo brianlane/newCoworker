@@ -147,7 +147,7 @@ function printRow(r: LogRow): void {
   }
   const c = COLOR[r.level] ?? "";
   const biz = businessId ? "" : ` ${r.business_id ? r.business_id.slice(0, 8) : "platform"}`;
-  const msg = r.message && r.message !== r.event ? ` — ${r.message}` : "";
+  const msg = r.message && r.message !== r.event ? `, ${r.message}` : "";
   const extras = Object.keys(r.payload ?? {}).length
     ? ` ${JSON.stringify(r.payload)}`
     : "";

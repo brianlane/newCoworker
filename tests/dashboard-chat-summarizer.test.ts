@@ -84,7 +84,7 @@ afterEach(() => {
   delete process.env.ROWBOAT_DEFAULT_PROJECT_ID;
 });
 
-describe("dashboard-chat summarizer — shouldSummarize gate", () => {
+describe("dashboard-chat summarizer, shouldSummarize gate", () => {
   it("fires once 20+ new messages have accrued since the last summary", () => {
     expect(shouldSummarize({ summary_message_count: 0 }, SUMMARY_INTERVAL)).toBe(true);
     expect(shouldSummarize({ summary_message_count: 0 }, SUMMARY_INTERVAL - 1)).toBe(false);
@@ -106,7 +106,7 @@ describe("dashboard-chat summarizer — shouldSummarize gate", () => {
   });
 });
 
-describe("dashboard-chat summarizer — summarizeThread happy path", () => {
+describe("dashboard-chat summarizer, summarizeThread happy path", () => {
   it("calls Rowboat with a stateless system+user message pair, persists the trimmed reply, and reports the message count it covered", async () => {
     const deps = makeDeps();
     const result = await summarizeThread(BIZ, THREAD_ID, deps);
@@ -155,7 +155,7 @@ describe("dashboard-chat summarizer — summarizeThread happy path", () => {
     expect(transcript).not.toContain("msg 50");
   });
 
-  it("renders messages with [Owner]/[Coworker]/[System] labels — model-friendly format", async () => {
+  it("renders messages with [Owner]/[Coworker]/[System] labels, model-friendly format", async () => {
     // Mix in a system-role message so all three label branches are
     // exercised (real conversations occasionally accrue them via
     // tool/agent transitions).
@@ -220,7 +220,7 @@ describe("dashboard-chat summarizer — summarizeThread happy path", () => {
   });
 });
 
-describe("dashboard-chat summarizer — failure modes (never throws)", () => {
+describe("dashboard-chat summarizer, failure modes (never throws)", () => {
   it("returns thread_not_found and SKIPS Rowboat when the thread row vanished", async () => {
     const deps = makeDeps({
       getThreadById: vi.fn().mockResolvedValue(null)
@@ -241,7 +241,7 @@ describe("dashboard-chat summarizer — failure modes (never throws)", () => {
     expect(deps.callRowboatChat).not.toHaveBeenCalled();
   });
 
-  it("returns db_failed when getBusinessConfig throws — preserves the never-throw contract direct callers depend on", async () => {
+  it("returns db_failed when getBusinessConfig throws, preserves the never-throw contract direct callers depend on", async () => {
     const deps = makeDeps({
       getBusinessConfig: vi.fn().mockRejectedValue(new Error("rls denied"))
     });
@@ -287,7 +287,7 @@ describe("dashboard-chat summarizer — failure modes (never throws)", () => {
     expect(deps.updateThreadSummary).not.toHaveBeenCalled();
   });
 
-  it("returns rowboat_failed when callRowboatChat rejects (timeout, 5xx, etc.) — caller's POST stays alive", async () => {
+  it("returns rowboat_failed when callRowboatChat rejects (timeout, 5xx, etc.), caller's POST stays alive", async () => {
     const deps = makeDeps({
       callRowboatChat: vi.fn().mockRejectedValue(new Error("rowboat_timeout"))
     });
@@ -323,8 +323,8 @@ describe("dashboard-chat summarizer — failure modes (never throws)", () => {
   });
 });
 
-describe("dashboard-chat summarizer — summarizeThreadAndLog wrapper", () => {
-  it("logs structured success — projectId + messageCount + summaryChars for observability", async () => {
+describe("dashboard-chat summarizer, summarizeThreadAndLog wrapper", () => {
+  it("logs structured success, projectId + messageCount + summaryChars for observability", async () => {
     const deps = makeDeps();
     await summarizeThreadAndLog(BIZ, THREAD_ID, deps);
     expect(logger.info).toHaveBeenCalledWith(
@@ -355,7 +355,7 @@ describe("dashboard-chat summarizer — summarizeThreadAndLog wrapper", () => {
     );
   });
 
-  it("never rejects — even when summarizeThread isn't called via the deps surface (no-op env)", async () => {
+  it("never rejects, even when summarizeThread isn't called via the deps surface (no-op env)", async () => {
     // Belt-and-suspenders: invoke with default deps and no env. The
     // wrapper's job is to be safe regardless of caller hygiene.
     await expect(summarizeThreadAndLog(BIZ, THREAD_ID, makeDeps({

@@ -165,7 +165,7 @@ console.log(
 );
 console.log(`[oneshot] pending run(s): ${pendingRuns.length}`);
 for (const r of pendingRuns) {
-  console.log(`[oneshot]   run ${r.id} — ${r.status} (flow ${r.flow_id})`);
+  console.log(`[oneshot]   run ${r.id}, ${r.status} (flow ${r.flow_id})`);
 }
 
 if (!APPLY) {
@@ -223,7 +223,7 @@ for (const run of pendingRuns) {
     canceled.push(run.id);
     console.log(`[oneshot] canceled run ${run.id}`);
   } else {
-    console.log(`[oneshot] run ${run.id} moved on (revision race) — re-run to re-check`);
+    console.log(`[oneshot] run ${run.id} moved on (revision race), re-run to re-check`);
   }
 }
 
@@ -240,7 +240,7 @@ if (contact) {
     // the whole update fail after suppression/cancels already landed. The
     // pinned note still records the declaration.
     if (tags.length >= 25) {
-      console.log("[oneshot] contact already at the 25-tag cap — spam tag skipped (note still written)");
+      console.log("[oneshot] contact already at the 25-tag cap, spam tag skipped (note still written)");
     } else {
       updates.tags = [...tags, SPAM_TAG];
     }
@@ -257,10 +257,10 @@ if (contact) {
     }
     console.log(`[oneshot] contact updated: ${Object.keys(updates).join(", ")}`);
   } else {
-    console.log("[oneshot] contact already tagged + noted — no write needed");
+    console.log("[oneshot] contact already tagged + noted, no write needed");
   }
 } else {
-  console.log("[oneshot] no contact row for this number — tag/note skipped");
+  console.log("[oneshot] no contact row for this number, tag/note skipped");
 }
 
 await recordOneshotApplied(db, {

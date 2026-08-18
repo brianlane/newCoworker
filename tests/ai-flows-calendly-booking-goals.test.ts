@@ -325,7 +325,7 @@ describe("sweepCalendlyBookingGoals", () => {
     expect(d.request).not.toHaveBeenCalled();
   });
 
-  it("logs a per-business failure when the runs check errors — other tenants unaffected", async () => {
+  it("logs a per-business failure when the runs check errors, other tenants unaffected", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1", BIZ), goalFlowRow("f2", BIZ2)] }],
       ai_flow_runs: [{ error: { message: "runs down" } }, { data: [] }],

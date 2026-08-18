@@ -102,7 +102,7 @@ MODEL="${model}"
 case "\$MODEL" in
   gemini-*|gemini_*|gemini.*)
     if [ -z "\$GK" ]; then
-      echo "WARNING: target \$MODEL needs GOOGLE_API_KEY but none in \$RB_ENV — \$AGENT will be set to local \$OLM (keyless)"
+      echo "WARNING: target \$MODEL needs GOOGLE_API_KEY but none in \$RB_ENV, \$AGENT will be set to local \$OLM (keyless)"
       MODEL="\$OLM"
     fi
     ;;
@@ -190,7 +190,7 @@ async function patchOne(key: (typeof keys)[number]): Promise<Outcome> {
 
   console.log(`\n========== ${key.business_id} (vps ${key.hostinger_vps_id} @ ${ip}) ==========`);
   if (DRY_RUN) {
-    console.log(`[reseed] dry-run — would set ${AGENT} -> ${MODEL} (keyless-degraded on a keyless box)`);
+    console.log(`[reseed] dry-run, would set ${AGENT} -> ${MODEL} (keyless-degraded on a keyless box)`);
     return { ...base, ip, ok: true, detail: "dry-run" };
   }
 
@@ -227,7 +227,7 @@ let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;
   console.log(
-    `  [${r.ok ? "OK  " : "FAIL"}] ${r.businessId} (vps ${r.vpsId}${r.ip ? ` @ ${r.ip}` : ""}) — ${r.detail}`
+    `  [${r.ok ? "OK  " : "FAIL"}] ${r.businessId} (vps ${r.vpsId}${r.ip ? ` @ ${r.ip}` : ""}), ${r.detail}`
   );
 }
 console.log(`[reseed] ${results.length - failed}/${results.length} succeeded`);

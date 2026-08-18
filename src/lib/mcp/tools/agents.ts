@@ -44,7 +44,7 @@ export const listAgentsTool = defineMcpTool({
     )
   }),
   description:
-    "List the business's agents — reusable document-processing task templates (instructions run against uploaded files, manually or from run_agent flow steps).",
+    "List the business's agents, reusable document-processing task templates (instructions run against uploaded files, manually or from run_agent flow steps).",
   schema: { business_id: businessIdField },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -95,7 +95,7 @@ export const createAgentTool = defineMcpTool({
     const count = await countBusinessAgents(businessId);
     if (count >= limit) {
       throw new McpToolError(
-        `Agent limit reached (${limit} on this plan) — delete an unused agent first.`
+        `Agent limit reached (${limit} on this plan), delete an unused agent first.`
       );
     }
 
@@ -136,7 +136,7 @@ export const updateAgentTool = defineMcpTool({
       args.enabled === undefined
     ) {
       throw new McpToolError(
-        "Nothing to update — pass name, instructions, output_format, and/or enabled."
+        "Nothing to update, pass name, instructions, output_format, and/or enabled."
       );
     }
     const { getBusinessAgent, patchBusinessAgent } = await import("@/lib/agents/db");

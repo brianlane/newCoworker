@@ -44,7 +44,7 @@ function req(args: unknown = ARGS) {
   });
 }
 
-describe("POST /api/voice/tools/calendar/book — outcome guidance", () => {
+describe("POST /api/voice/tools/calendar/book, outcome guidance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);

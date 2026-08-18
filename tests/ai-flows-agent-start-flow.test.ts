@@ -123,7 +123,7 @@ describe("startAiFlowForContactTool refusal matrix", () => {
     if (!out.ok) expect(out.message).toContain("matches 2");
   });
 
-  it("a disabled flow is INVISIBLE — same generic refusal as an unknown name", async () => {
+  it("a disabled flow is INVISIBLE, same generic refusal as an unknown name", async () => {
     const d = deps({ listFlows: vi.fn().mockResolvedValue([flowRow({ enabled: false })]) });
     const out = await startAiFlowForContactTool(
       BIZ,
@@ -135,7 +135,7 @@ describe("startAiFlowForContactTool refusal matrix", () => {
     if (!out.ok) expect(out.message).toContain("No automation you may start matches");
   });
 
-  it("an unflagged flow is INVISIBLE — refusal text never leaks owner-only names", async () => {
+  it("an unflagged flow is INVISIBLE, refusal text never leaks owner-only names", async () => {
     const d = deps({
       listFlows: vi.fn().mockResolvedValue([
         flowRow({

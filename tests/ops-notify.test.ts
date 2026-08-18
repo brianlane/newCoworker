@@ -468,7 +468,7 @@ describe("sendOpsBillingPostureEmail", () => {
         hostingerBillingSubscriptionId: "hsub-1",
         expiresAt: "2026-08-02T00:00:00Z",
         autoHealed: true,
-        detail: "subscription hsub-1 is non_renewing with auto-renew off — auto-renew re-enabled by posture check"
+        detail: "subscription hsub-1 is non_renewing with auto-renew off, auto-renew re-enabled by posture check"
       }
     ],
     checkedTenantVms: 3,

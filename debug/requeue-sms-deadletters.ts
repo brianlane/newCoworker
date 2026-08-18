@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   }
   if (skippedPermanent.length > 0) {
     console.log(
-      `\n(skipped ${skippedPermanent.length} permanently-invalid rows — target explicitly with --error if intended)`
+      `\n(skipped ${skippedPermanent.length} permanently-invalid rows, target explicitly with --error if intended)`
     );
   }
 
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     }
     requeued += 1;
   }
-  console.log(`\nrequeued ${requeued}/${rows.length} job(s) — the worker cron drains within ~1 min.`);
+  console.log(`\nrequeued ${requeued}/${rows.length} job(s), the worker cron drains within ~1 min.`);
 }
 
 main().catch((e) => {

@@ -86,7 +86,7 @@ export function MarginAlertSettings({
       </div>
       <p className="text-xs text-parchment/50 mb-3">
         Emails ops after the daily cost sync when a PAYING tenant&apos;s actual margin drops below
-        the floor. Idle pilots and pool boxes are excluded — they live in the burn views above.
+        the floor. Idle pilots and pool boxes are excluded, they live in the burn views above.
       </p>
       <div className="flex items-center gap-2">
         <label className="text-xs text-parchment/60" htmlFor="margin-alert-floor">

@@ -68,7 +68,7 @@ async function updateOne(key: (typeof keys)[number]): Promise<Outcome> {
     );
   }
   if (DRY_RUN) {
-    console.log("[update-all] dry-run — skipping SSH");
+    console.log("[update-all] dry-run, skipping SSH");
     return { ...base, ip, ok: true, detail: "dry-run" };
   }
 
@@ -113,7 +113,7 @@ let failed = 0;
 for (const r of results) {
   const status = r.ok ? "OK  " : "FAIL";
   if (!r.ok) failed++;
-  console.log(`  [${status}] ${r.businessId} (vps ${r.vpsId}${r.ip ? ` @ ${r.ip}` : ""}) — ${r.detail}`);
+  console.log(`  [${status}] ${r.businessId} (vps ${r.vpsId}${r.ip ? ` @ ${r.ip}` : ""}), ${r.detail}`);
 }
 console.log(`[update-all] ${results.length - failed}/${results.length} succeeded`);
 process.exit(failed === 0 ? 0 : 1);

@@ -165,13 +165,13 @@ function buildDefinition(opts: {
           {
             name: "lead_phone",
             description:
-              "The seller's mobile phone from the contact card in E.164 if possible — NOT Clever support (614-363-2845)"
+              "The seller's mobile phone from the contact card in E.164 if possible, NOT Clever support (614-363-2845)"
           },
           { name: "lead_email", description: "The seller's email address from the contact card, or 'none'" },
           {
             name: "lead_address",
             description:
-              "The property street address from the contact card — the FULL address " +
+              "The property street address from the contact card, the FULL address " +
               "including street, city, state, and ZIP code"
           },
           {
@@ -248,7 +248,7 @@ function buildDefinition(opts: {
         // instead and claim-gated steps skip (claimed_agent="none").
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate:
-          "HIGH-VALUE Clever lead ($1M+) kept for you — not offered to the team.\n" +
+          "HIGH-VALUE Clever lead ($1M+) kept for you, not offered to the team.\n" +
           "{{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)"

@@ -102,7 +102,7 @@ export function buildKypNoShowDefinition(): Record<string, unknown> {
           id: "flag_unknown_event",
           type: "notify_owner",
           message:
-            "No-show for an event type I don't recognize: \"{{vars.event_title}}\" — " +
+            "No-show for an event type I don't recognize: \"{{vars.event_title}}\", " +
             "{{vars.invitee_first_name}} ({{vars.invitee_phone}}). I didn't text them a " +
             "rebooking link (I can't tell which offer they booked); follow up personally."
         }

@@ -266,7 +266,7 @@ describe("display formatting", () => {
     expect(formatVisitorSource(null)).toBeNull();
   });
 
-  it("builds the full display-row set (everything except IP — which is never stored)", () => {
+  it("builds the full display-row set (everything except IP, which is never stored)", () => {
     const rows = visitorMetaDisplayRows(meta);
     expect(rows).toEqual([
       { label: "Location (IP-based, approx.)", value: "Phoenix, AZ, US" },

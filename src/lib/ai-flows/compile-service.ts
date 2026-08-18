@@ -582,7 +582,7 @@ export async function editAiFlowDefinition(
     return {
       ok: false,
       error: "unparseable",
-      message: "AI did not return a usable edited automation — the flow was not changed",
+      message: "AI did not return a usable edited automation, the flow was not changed",
       issues: []
     };
   }

@@ -92,7 +92,7 @@ describe("update_business_profile (MCP)", () => {
     expect(applyBusinessProfileUpdate).not.toHaveBeenCalled();
   });
 
-  it("declares hours and timezone only — no phone fields to fill", () => {
+  it("declares hours and timezone only, no phone fields to fill", () => {
     const keys = Object.keys(updateBusinessProfileTool.schema);
     expect(keys.sort()).toEqual(["business_id", "hours", "timezone"]);
     // The hard negative is a description contract the bridge and connectors

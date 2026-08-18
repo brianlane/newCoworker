@@ -235,7 +235,7 @@ export function bookingContextLine(
   }
   if (status === "rescheduled") {
     return (
-      `This contact has an upcoming booking: ${what} — they RESCHEDULED it from an ` +
+      `This contact has an upcoming booking: ${what}, they RESCHEDULED it from an ` +
       `earlier time, so if they mention having moved or proposed a new time, this is it.`
     );
   }

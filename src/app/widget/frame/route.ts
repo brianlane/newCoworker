@@ -112,7 +112,7 @@ export async function GET(request: Request) {
   * { box-sizing: border-box; }
   /* The gate/msgs/send-form sections toggle via the HTML hidden attribute,
      but their author-level display:flex would override the UA stylesheet's
-     weak [hidden] { display:none } — making "hidden" purely decorative (the
+     weak [hidden] { display:none }, making "hidden" purely decorative (the
      pre-chat form rendered on top of the chat in production). Re-assert it
      with importance so the attribute always wins. */
   [hidden] { display: none !important; }
@@ -195,7 +195,7 @@ export async function GET(request: Request) {
     // place that can see the page URL / referrer / campaign params). Only
     // the direct parent is trusted as a sender; the payload is validated
     // server-side regardless. Later ncw:meta payloads REPLACE the stored
-    // one — the loader re-sends on every open, so a session started on the
+    // one, the loader re-sends on every open, so a session started on the
     // visitor's second page carries that page, not a frozen first snapshot.
     window.addEventListener("message", function (ev) {
       if (ev.source !== window.parent) return;
@@ -270,7 +270,7 @@ export async function GET(request: Request) {
 
     function hydrate() {
       // Returning visitor: re-render the transcript. A 401 means the
-      // session expired server-side — drop it and start over.
+      // session expired server-side, drop it and start over.
       api("/api/widget/poll?key=" + encodeURIComponent(cfg.key) + "&after=0", { method: "GET" })
         .then(function (r) {
           if (r.status === 401) { clearSession(); init(); return; }
@@ -295,7 +295,7 @@ export async function GET(request: Request) {
       function tick() {
         if (!pendingJob) { polling = false; return; }
         if (document.visibilityState !== "visible") {
-          // Paused — visibilitychange resumes us.
+          // Paused, visibilitychange resumes us.
           polling = false;
           return;
         }
@@ -308,7 +308,7 @@ export async function GET(request: Request) {
             "&jobId=" + encodeURIComponent(pendingJob) +
             "&after=" + lastMsgId, { method: "GET" })
           .then(function (r) {
-            if (r.status === 401) { clearSession(); el("sys", "Session expired — please send that again."); finishTurn(); showGateIfNeeded(); return; }
+            if (r.status === 401) { clearSession(); el("sys", "Session expired, please send that again."); finishTurn(); showGateIfNeeded(); return; }
             if (!(r.json && r.json.ok)) { schedule(); return; }
             var d = r.json.data;
             (d.messages || []).forEach(function (m) {
@@ -316,7 +316,7 @@ export async function GET(request: Request) {
               if (m.id > lastMsgId) lastMsgId = m.id;
             });
             if (d.status === "done") { finishTurn(); return; }
-            if (d.status === "error") { el("sys", d.errorMessage || "Something went wrong — please try again."); finishTurn(); return; }
+            if (d.status === "error") { el("sys", d.errorMessage || "Something went wrong, please try again."); finishTurn(); return; }
             schedule();
           })
           .catch(function () { schedule(); });
@@ -355,7 +355,7 @@ export async function GET(request: Request) {
 
     function send(text) {
       // One idempotency key per send. A network-failed POST is retried
-      // once with the SAME id — the server dedupes on it, so a request
+      // once with the SAME id, the server dedupes on it, so a request
       // that actually landed is replayed, never duplicated.
       var clientMessageId = mintId();
       var doSend = function (isRetry) {
@@ -372,7 +372,7 @@ export async function GET(request: Request) {
             clearSession();
             typing.classList.remove("on");
             sendBtn.disabled = false;
-            el("sys", "Session expired — please send that again.");
+            el("sys", "Session expired, please send that again.");
             showGateIfNeeded();
             return;
           }
@@ -399,7 +399,7 @@ export async function GET(request: Request) {
           }
           typing.classList.remove("on");
           sendBtn.disabled = false;
-          el("sys", (r.json && r.json.error && r.json.error.message) || "Could not send — please try again.");
+          el("sys", (r.json && r.json.error && r.json.error.message) || "Could not send, please try again.");
         }).catch(function () {
           if (!isRetry) {
             // Transient network blip: one automatic same-id retry.
@@ -408,7 +408,7 @@ export async function GET(request: Request) {
           }
           typing.classList.remove("on");
           sendBtn.disabled = false;
-          el("sys", "Could not send — please check your connection and try again.");
+          el("sys", "Could not send, please check your connection and try again.");
         });
       };
       if (session) { doSend(false); return; }

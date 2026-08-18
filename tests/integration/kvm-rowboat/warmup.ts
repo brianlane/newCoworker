@@ -39,7 +39,7 @@ export async function warmupOllamaViaHostApi(ollamaHostPort: number, ollamaModel
     const chainSuffix =
       chain && chain !== lastErr && !chain.startsWith(lastErr) ? ` | ${chain}` : "";
     console.warn(
-      `[integration] Ollama warmup ${ollamaModel} attempt ${attempt + 1}/${OLLAMA_HOST_WARMUP_ATTEMPTS} failed — ${lastErr.slice(0, 220)}${chainSuffix}; retry in ${waitMs}ms`
+      `[integration] Ollama warmup ${ollamaModel} attempt ${attempt + 1}/${OLLAMA_HOST_WARMUP_ATTEMPTS} failed, ${lastErr.slice(0, 220)}${chainSuffix}; retry in ${waitMs}ms`
     );
     await new Promise((r) => setTimeout(r, waitMs));
   }

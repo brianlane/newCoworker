@@ -57,7 +57,7 @@ export async function POST(request: Request) {
       retentionDays: body.retentionDays,
       note:
         body.retentionDays === null
-          ? "Retention window cleared — content history is kept forever."
+          ? "Retention window cleared, content history is kept forever."
           : `Content history older than ${body.retentionDays} days is pruned by the daily sweep.`
     });
   } catch (err) {

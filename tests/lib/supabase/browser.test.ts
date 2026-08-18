@@ -228,7 +228,7 @@ describe("clearStaleSupabaseAuthCookies", () => {
       configurable: true,
       get: () => "; sb-bare; sb-abc-auth-token.0=chunk",
       set: () => {
-        // Discard writes — this test only exercises the reader / split logic.
+        // Discard writes, this test only exercises the reader / split logic.
       }
     });
 

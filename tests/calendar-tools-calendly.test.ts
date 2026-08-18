@@ -531,7 +531,7 @@ describe("findCalendlyScheduledEvent", () => {
     const EV2_URI = "https://api.calendly.com/scheduled_events/EV2";
     mockUserAndEvents([{ uri: EVENT_URI }, { uri: EV2_URI }]);
     vi.mocked(calendlyDirectRequest)
-      // EV1 (earlier): the supplied email but a DIFFERENT SMS number — this
+      // EV1 (earlier): the supplied email but a DIFFERENT SMS number, this
       // is someone else's booking under a shared/stale email.
       .mockResolvedValueOnce(
         inviteesResponse([
@@ -584,7 +584,7 @@ describe("findCalendlyScheduledEvent", () => {
       { uri: EVENT_URI }
     ]);
     vi.mocked(calendlyDirectRequest)
-      // OTHER: a canceled matching invitee and a stranger — neither counts.
+      // OTHER: a canceled matching invitee and a stranger, neither counts.
       .mockResolvedValueOnce(
         inviteesResponse([
           { ...MATCHING_INVITEE, status: "canceled" },

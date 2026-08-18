@@ -129,7 +129,7 @@ export function variablesPaletteGroups(args: {
   };
 
   if (args.channels.some((c) => MESSAGE_CHANNELS.has(c))) {
-    push(trigger, entry("{{trigger.from}}", "who set it off — their phone or email"));
+    push(trigger, entry("{{trigger.from}}", "who set it off, their phone or email"));
     push(trigger, entry("{{trigger.windowText}}", "the full trigger message text"));
     push(trigger, entry("{{trigger.url}}", "first link in the message, if any"));
   }

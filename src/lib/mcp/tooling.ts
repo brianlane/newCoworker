@@ -169,6 +169,6 @@ export async function runMcpTool(
       userId: auth.userId,
       error: err instanceof Error ? err.message : String(err)
     });
-    return errorResult(`The ${def.name} tool hit an internal error — try again shortly.`);
+    return errorResult(`The ${def.name} tool hit an internal error, try again shortly.`);
   }
 }

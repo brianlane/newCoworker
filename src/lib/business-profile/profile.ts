@@ -175,7 +175,7 @@ export function renderBusinessProfileMd(facts: BusinessProfileFacts): string {
     if (price) parts.push(price);
     const description = service.description?.trim();
     if (description) parts.push(description);
-    serviceLines.push(`- ${parts.join(" — ")}`);
+    serviceLines.push(`- ${parts.join(", ")}`);
   }
 
   if (lines.length === 0 && hoursLines.length === 0 && serviceLines.length === 0) return "";
@@ -185,7 +185,7 @@ export function renderBusinessProfileMd(facts: BusinessProfileFacts): string {
   if (hoursLines.length > 0) sections.push("### Business hours\n" + hoursLines.join("\n"));
   if (serviceLines.length > 0) {
     sections.push(
-      "### Services (name — duration — price)\nWhen booking an appointment for one of these services, use its listed duration.\n" +
+      "### Services (name, duration, price)\nWhen booking an appointment for one of these services, use its listed duration.\n" +
         serviceLines.join("\n")
     );
   }

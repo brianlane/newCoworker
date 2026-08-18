@@ -105,7 +105,7 @@ export function RequestDocumentsAction({
       }
       setDocs("");
     } catch {
-      setError("Could not send the request — try again.");
+      setError("Could not send the request, try again.");
     } finally {
       setSending(false);
     }
@@ -118,7 +118,7 @@ export function RequestDocumentsAction({
           <h2 className="text-sm font-semibold text-parchment">Request documents</h2>
           <p className="text-xs text-parchment/50 mt-0.5">
             Text this customer a list of documents to email to your AI mailbox
-            {alreadyAwaiting ? " — a request is already outstanding" : ""}
+            {alreadyAwaiting ? ", a request is already outstanding" : ""}
           </p>
         </div>
         <Button type="button" variant="secondary" size="sm" onClick={() => setOpen((v) => !v)}>
@@ -146,7 +146,7 @@ export function RequestDocumentsAction({
             )}
             {sentStatus === "tag_failed" && (
               <span className="text-xs text-spark-orange">
-                Request sent, but tagging failed — add the {AWAITING_DOCUMENTS_TAG} tag manually.
+                Request sent, but tagging failed, add the {AWAITING_DOCUMENTS_TAG} tag manually.
               </span>
             )}
           </div>

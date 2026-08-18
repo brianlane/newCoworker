@@ -110,7 +110,7 @@ export function WhiteGloveIntakeForm({
       }
       setDone(true);
     } catch {
-      setError("Network error — please check your connection and try again.");
+      setError("Network error, please check your connection and try again.");
     } finally {
       setSubmitting(false);
     }
@@ -119,7 +119,7 @@ export function WhiteGloveIntakeForm({
   if (done) {
     return (
       <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
-        Thanks — we&apos;ve got everything we need! Our team will review your answers and
+        Thanks, we&apos;ve got everything we need! Our team will review your answers and
         reach out with next steps.
       </p>
     );
@@ -225,7 +225,7 @@ export function WhiteGloveIntakeForm({
         {submitting ? "Sending…" : "Send my answers"}
       </button>
       <p className="text-center text-[11px] text-parchment/40">
-        You can leave the optional fields blank — we&apos;ll use sensible defaults and
+        You can leave the optional fields blank, we&apos;ll use sensible defaults and
         confirm everything with you before going live.
       </p>
     </div>

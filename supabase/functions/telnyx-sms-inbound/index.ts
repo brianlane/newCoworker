@@ -2794,7 +2794,7 @@ serve(async (req: Request) => {
           smsFromE164
         });
         if (handled) return handled;
-        // No claimed lead for this teammate — fall through to the normal path
+        // No claimed lead for this teammate, fall through to the normal path
         // so a stray "86" is still handled like any other inbound text.
       }
 
@@ -3900,7 +3900,7 @@ serve(async (req: Request) => {
         const parsed = JSON.parse(send.body) as { data?: { id?: string } };
         relayMessageId = parsed.data?.id ?? null;
       } catch {
-        // Non-JSON success body — id stays null.
+        // Non-JSON success body, id stays null.
       }
       await supabase
         .from("sms_owner_reply_prompts")
@@ -4147,7 +4147,7 @@ serve(async (req: Request) => {
           has_profile: Boolean(fwdProfile),
           has_forward_to: Boolean(gate.forwardToE164)
         });
-        // Fallthrough — enqueue below.
+        // Fallthrough, enqueue below.
       }
     }
 

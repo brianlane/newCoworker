@@ -74,15 +74,15 @@ console.log("\n[check] VPS Mongo agent instructions:");
 console.log(buf.trim());
 
 if (res.exitCode !== 0) {
-  console.log("\n[check] ERROR — could not read the VPS Mongo project (ssh/mongosh failed)");
+  console.log("\n[check] ERROR, could not read the VPS Mongo project (ssh/mongosh failed)");
   process.exit(2);
 }
 if (buf.includes("NO_PROJECT")) {
-  console.log("\n[check] ERROR — no Rowboat project on the VPS for this id");
+  console.log("\n[check] ERROR, no Rowboat project on the VPS for this id");
   process.exit(2);
 }
 if (probe.length === 0) {
-  console.log("\n[check] no saved memory bullets to probe — nothing to verify");
+  console.log("\n[check] no saved memory bullets to probe, nothing to verify");
   process.exit(0);
 }
 
@@ -94,5 +94,5 @@ const liveLines = buf
   .map((l) => l.trim())
   .filter((l) => l.startsWith("LIVE agent="));
 const inSync = liveLines.length > 0 && liveLines.every((l) => l.includes("hasProbe=true"));
-console.log(`\n[check] ${inSync ? "IN SYNC" : "DRIFT — agent prompt is stale; run debug/resync-vault.ts"}`);
+console.log(`\n[check] ${inSync ? "IN SYNC" : "DRIFT, agent prompt is stale; run debug/resync-vault.ts"}`);
 process.exit(inSync ? 0 : 1);

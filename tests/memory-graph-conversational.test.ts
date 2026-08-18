@@ -115,7 +115,7 @@ describe("extractConversationGraph", () => {
     expect((off as { generate: ReturnType<typeof vi.fn> }).generate).not.toHaveBeenCalled();
   });
 
-  it("defers on the daily cap — counted via the ledger, generation never invoked", async () => {
+  it("defers on the daily cap, counted via the ledger, generation never invoked", async () => {
     const deps = makeDeps({ countToday: vi.fn(async () => 200) });
     const out = await extractConversationGraph(BIZ, input, deps);
     expect(out).toEqual({ ran: false, reason: "daily_cap" });

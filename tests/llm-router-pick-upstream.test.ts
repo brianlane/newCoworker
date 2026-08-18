@@ -47,13 +47,13 @@ describe("llm-router isAiBudgetModel", () => {
     expect(isAiBudgetModel(" GEMINI-3.1-FLASH ")).toBe(true); // trim + case
   });
 
-  it("still excludes live (real-time audio) models — the voice-bridge meters those separately", () => {
+  it("still excludes live (real-time audio) models, the voice-bridge meters those separately", () => {
     // Gemini Live never routes through this sidecar; the guard is defensive so
     // a stray Live completion here could never double-count the bridge's meter.
     expect(isAiBudgetModel("gemini-3.1-flash-live-preview")).toBe(false);
   });
 
-  it("never meters non-gemini (ollama) traffic — it's $0", () => {
+  it("never meters non-gemini (ollama) traffic, it's $0", () => {
     expect(isAiBudgetModel("qwen3:4b-instruct")).toBe(false);
     expect(isAiBudgetModel("llama3.2:3b")).toBe(false);
   });

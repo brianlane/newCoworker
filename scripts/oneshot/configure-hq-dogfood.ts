@@ -57,7 +57,7 @@ const { data: biz, error: bizErr } = await db
   .eq("id", HQ_BUSINESS_ID)
   .maybeSingle();
 if (bizErr || !biz) {
-  console.error("[config] HQ business not found — aborting", bizErr?.message ?? "");
+  console.error("[config] HQ business not found, aborting", bizErr?.message ?? "");
   process.exit(1);
 }
 const currentSink = await getContactFormSinkBusinessId(db);
@@ -74,8 +74,8 @@ console.log("[config] notification_preferences:", prefs
       phone_number: prefs.phone_number,
       alert_email: prefs.alert_email
     }
-  : "(missing — will create with defaults + Brian's contacts)");
-console.log("[config] telnyx forward_to_e164:", telnyx?.forward_to_e164 ?? "(empty — will set)");
+  : "(missing, will create with defaults + Brian's contacts)");
+console.log("[config] telnyx forward_to_e164:", telnyx?.forward_to_e164 ?? "(empty, will set)");
 
 if (!APPLY) {
   console.log("[config] dry run complete. Re-run with --apply to write.");
@@ -93,7 +93,7 @@ if (!telnyx?.forward_to_e164) {
   );
   console.log("[config] forward_to_e164 =", BRIAN_E164);
 } else {
-  console.log("[config] forward_to_e164 already set — leaving", telnyx.forward_to_e164);
+  console.log("[config] forward_to_e164 already set, leaving", telnyx.forward_to_e164);
 }
 
 // ---------------------------------------------------------------- 2. owner alerts

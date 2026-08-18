@@ -78,7 +78,7 @@ export async function clearStaleSupabaseAuthCookies(): Promise<void> {
     const supabase = getSupabaseBrowserClient();
     await supabase.auth.signOut({ scope: "local" });
   } catch {
-    // SDK unavailable / env vars missing / no session — fall through to the
+    // SDK unavailable / env vars missing / no session, fall through to the
     // manual scrub which handles cookies the SDK didn't own anyway.
   }
 

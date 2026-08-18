@@ -46,7 +46,7 @@ function request(body: unknown): Request {
 
 const ORIGINAL_ENV = process.env;
 
-describe("POST /api/admin/telnyx/order-did — platform-defaults assertion guard", () => {
+describe("POST /api/admin/telnyx/order-did, platform-defaults assertion guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = {
@@ -86,7 +86,7 @@ describe("POST /api/admin/telnyx/order-did — platform-defaults assertion guard
     );
   });
 
-  it("returns 400 VALIDATION_ERROR when TELNYX_CONNECTION_ID is missing — admin clicked 'Buy' before the env was deployed", async () => {
+  it("returns 400 VALIDATION_ERROR when TELNYX_CONNECTION_ID is missing, admin clicked 'Buy' before the env was deployed", async () => {
     delete process.env.TELNYX_CONNECTION_ID;
     const res = await POST(request({ businessId: BIZ, areaCode: "602" }));
     expect(res.status).toBe(400);
@@ -98,7 +98,7 @@ describe("POST /api/admin/telnyx/order-did — platform-defaults assertion guard
     expect(orderAndAssignDidForBusiness).not.toHaveBeenCalled();
   });
 
-  it("returns 400 VALIDATION_ERROR when TELNYX_MESSAGING_PROFILE_ID is missing — SMS would be unwired", async () => {
+  it("returns 400 VALIDATION_ERROR when TELNYX_MESSAGING_PROFILE_ID is missing, SMS would be unwired", async () => {
     delete process.env.TELNYX_MESSAGING_PROFILE_ID;
     const res = await POST(request({ businessId: BIZ, areaCode: "602" }));
     expect(res.status).toBe(400);
@@ -107,7 +107,7 @@ describe("POST /api/admin/telnyx/order-did — platform-defaults assertion guard
     expect(orderAndAssignDidForBusiness).not.toHaveBeenCalled();
   });
 
-  it("still returns 400 (not 200) when Telnyx returns an OrderAndAssignError — the error path is mapped to CONFLICT", async () => {
+  it("still returns 400 (not 200) when Telnyx returns an OrderAndAssignError, the error path is mapped to CONFLICT", async () => {
     const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
     vi.mocked(orderAndAssignDidForBusiness).mockRejectedValueOnce(
       new OrderAndAssignError("no_numbers_available", "no numbers")
@@ -116,14 +116,14 @@ describe("POST /api/admin/telnyx/order-did — platform-defaults assertion guard
     expect(res.status).toBe(409);
   });
 
-  it("returns 404 when business is not found — guard runs before assertion", async () => {
+  it("returns 404 when business is not found, guard runs before assertion", async () => {
     vi.mocked(getBusiness).mockResolvedValueOnce(null);
     const res = await POST(request({ businessId: BIZ }));
     expect(res.status).toBe(404);
     expect(orderAndAssignDidForBusiness).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when TELNYX_API_KEY is missing — runs before assertion since it's the more obvious config gap", async () => {
+  it("returns 400 when TELNYX_API_KEY is missing, runs before assertion since it's the more obvious config gap", async () => {
     delete process.env.TELNYX_API_KEY;
     const res = await POST(request({ businessId: BIZ }));
     expect(res.status).toBe(400);

@@ -68,7 +68,7 @@ describe("stripeMonthlyFeeCents", () => {
   });
 });
 
-describe("computeBusinessMargin — revenue", () => {
+describe("computeBusinessMargin, revenue", () => {
   it("prices an active Stripe-backed subscription at the day-current rate", () => {
     const result = computeBusinessMargin(input(), NOW);
     expect(result.revenueSource).toBe("subscription");
@@ -142,7 +142,7 @@ describe("computeBusinessMargin — revenue", () => {
   });
 });
 
-describe("computeBusinessMargin — cost lines", () => {
+describe("computeBusinessMargin, cost lines", () => {
   it("uses the synced Hostinger price when present, the SKU table otherwise", () => {
     const synced = computeBusinessMargin(input({ hostingerMonthlyPriceCents: 1499 }), NOW);
     expect(line(synced, "hosting")).toMatchObject({ cents: 1499, source: "actual" });
@@ -215,7 +215,7 @@ describe("computeBusinessMargin — cost lines", () => {
     });
   });
 
-  it("meters Gemini as ONE actuals line — no rate-estimated Live-voice duplicate", () => {
+  it("meters Gemini as ONE actuals line, no rate-estimated Live-voice duplicate", () => {
     // owner_chat_model_spend already includes Gemini Live audio (settled at
     // call teardown), so a separate settled-minutes × rate line would
     // double-count the voice component.

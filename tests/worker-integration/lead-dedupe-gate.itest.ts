@@ -99,7 +99,7 @@ describe("post-extraction lead-dedupe gate (real worker)", () => {
     expect((logs ?? []).length).toBe(1);
   });
 
-  it("a FAILED prior run never blocks — the repeat inquiry is the recovery path", async () => {
+  it("a FAILED prior run never blocks, the repeat inquiry is the recovery path", async () => {
     const biz = await seedBusiness(db, "IT lead dedupe failed prior");
     const flowId = await createFlow(db, biz, dedupeFlow());
 

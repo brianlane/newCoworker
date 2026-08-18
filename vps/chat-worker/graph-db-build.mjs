@@ -69,7 +69,7 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
           existing.close();
         }
       } catch {
-        // Unreadable/corrupt/pre-meta db — rebuild it.
+        // Unreadable/corrupt/pre-meta db, rebuild it.
       }
     }
 

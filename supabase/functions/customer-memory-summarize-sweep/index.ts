@@ -105,7 +105,7 @@ serve(async (req: Request) => {
       JSON.stringify({
         ok: false,
         error:
-          "missing PLATFORM_PUBLIC_BASE_URL or INTERNAL_CRON_SECRET — set them on the Edge function"
+          "missing PLATFORM_PUBLIC_BASE_URL or INTERNAL_CRON_SECRET, set them on the Edge function"
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
@@ -198,7 +198,7 @@ serve(async (req: Request) => {
     succeeded,
     failed,
     deferred: rows.length - eligible.length,
-    failures: failures.slice(0, 10) // first 10 only — telemetry payload cap
+    failures: failures.slice(0, 10) // first 10 only, telemetry payload cap
   };
   await telemetryRecord(supabase, "customer_memory_summarize_sweep", summary);
 

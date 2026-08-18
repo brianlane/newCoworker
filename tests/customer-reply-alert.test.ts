@@ -133,7 +133,7 @@ describe("sendCustomerReplyAlert", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("a job-dedupe lookup error logs and still alerts — a retry whose first page failed must not go silent", async () => {
+  it("a job-dedupe lookup error logs and still alerts, a retry whose first page failed must not go silent", async () => {
     const fetchFn = okFetch();
     const { db } = makeDb([
       OPTED_IN,
@@ -164,7 +164,7 @@ describe("sendCustomerReplyAlert", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("forward_owner contacts never alert — the owner already receives those texts verbatim", async () => {
+  it("forward_owner contacts never alert, the owner already receives those texts verbatim", async () => {
     const fetchFn = okFetch();
     const { db } = makeDb([
       OPTED_IN,

@@ -75,14 +75,14 @@ if [ ! -d "$REPO/vps/voice-bridge" ]; then
   exit 1
 fi
 if [ ! -f "$DEST/.env" ]; then
-  echo "ERROR: $DEST/.env missing — this box never provisioned the voice-bridge. Aborting so we don't deploy the bridge without its secrets." >&2
+  echo "ERROR: $DEST/.env missing, this box never provisioned the voice-bridge. Aborting so we don't deploy the bridge without its secrets." >&2
   exit 1
 fi
 echo "== rsync voice-bridge (preserve .env + node_modules + dist) =="
 rsync -a --delete --exclude .env --exclude node_modules --exclude dist "$REPO/vps/voice-bridge/" "$DEST/"
 echo "== verify contacts-aware bridge code landed =="
 if ! grep -q 'from("contacts")' "$DEST/src/index.ts"; then
-  echo "ERROR: bridge source does not read the unified contacts table — wrong/old code synced" >&2
+  echo "ERROR: bridge source does not read the unified contacts table, wrong/old code synced" >&2
   exit 1
 fi
 echo "contacts-aware bridge code present"
@@ -94,7 +94,7 @@ sleep 5
 echo "== voice-bridge logs (tail) =="
 docker compose logs --no-color --tail 25 voice-bridge 2>&1 | tail -25
 echo "== voice-bridge health =="
-# Fail the redeploy (exit 1) if the bridge never serves 200 — a swallowed probe
+# Fail the redeploy (exit 1) if the bridge never serves 200, a swallowed probe
 # would contradict the "exit 0 on a clean rebuild, 1 otherwise" contract and let
 # a dead bridge look deployed. Retry across the container's start_period (~15s in
 # docker-compose.yml) so a slow warmup isn't a false negative.

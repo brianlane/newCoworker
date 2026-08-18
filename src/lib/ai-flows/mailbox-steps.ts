@@ -84,14 +84,14 @@ export async function validateMailboxConnectionSteps(
     if (!conn) {
       issues.push(
         ref.use === "email_organize"
-          ? `Step "${ref.stepId}" organizes a mailbox that is no longer connected — pick a connected mailbox (or leave it as your AI coworker's mailbox), reconnecting under Settings → Integrations if needed.`
-          : `Step "${ref.stepId}" sends email from a mailbox that is no longer connected — pick a connected mailbox in the step's From field (or leave it as your AI coworker's email), reconnecting under Settings → Integrations if needed.`
+          ? `Step "${ref.stepId}" organizes a mailbox that is no longer connected, pick a connected mailbox (or leave it as your AI coworker's mailbox), reconnecting under Settings → Integrations if needed.`
+          : `Step "${ref.stepId}" sends email from a mailbox that is no longer connected, pick a connected mailbox in the step's From field (or leave it as your AI coworker's email), reconnecting under Settings → Integrations if needed.`
       );
       continue;
     }
     if (!isEmailProviderConfigKey(conn.provider_config_key)) {
       issues.push(
-        `Step "${ref.stepId}" uses the "${conn.provider_config_key}" connection, which is not an email mailbox — pick a connected Gmail/Outlook mailbox instead.`
+        `Step "${ref.stepId}" uses the "${conn.provider_config_key}" connection, which is not an email mailbox, pick a connected Gmail/Outlook mailbox instead.`
       );
     }
   }

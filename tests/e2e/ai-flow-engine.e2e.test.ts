@@ -371,7 +371,7 @@ const LEAD_INTAKE_FLOW = {
               when: { var: "reply3", equals: "no_reply" },
               to: "{{vars.lead_phone}}",
               body:
-                "Hi {{vars.lead_name}}, we'll leave you be for now — if you'd ever like a no-pressure review, just reply here."
+                "Hi {{vars.lead_name}}, we'll leave you be for now, if you'd ever like a no-pressure review, just reply here."
             },
             {
               id: "tag_inactive",
@@ -468,7 +468,7 @@ describe("AiFlow engine e2e (live Gemini decisions)", () => {
   );
 
   it(
-    "a fully silent lead closes out: nudges, final touch, Inactive tag — and no classify call",
+    "a fully silent lead closes out: nudges, final touch, Inactive tag, and no classify call",
     { retry: 1, timeout: 120_000 },
     async () => {
       let modelCalls = 0;
@@ -538,7 +538,7 @@ describe("AiFlow engine e2e (live Gemini decisions)", () => {
     async () => {
       const result = await walkFlow(flowSteps(), {
         trigger: TRIGGER,
-        replies: [null, "No thanks, I'm all set with my current provider — please stop texting"],
+        replies: [null, "No thanks, I'm all set with my current provider, please stop texting"],
         ai: { json: geminiJson }
       });
       expect(result.vars.late_intent).toBe("not_interested");

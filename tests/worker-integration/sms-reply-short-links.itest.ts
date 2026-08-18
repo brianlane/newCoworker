@@ -147,14 +147,14 @@ describe("AI-reply short links (real worker, fake Rowboat + fake Telnyx)", () =>
 
   it("a reply with no shortenable URLs sends unchanged and mints no link rows", async () => {
     const biz = await seedSendableBusiness("IT no-links reply");
-    rowboat.scriptReply("Sounds good — see you at 1:00 PM Eastern!");
+    rowboat.scriptReply("Sounds good, see you at 1:00 PM Eastern!");
     await enqueueSmsJob(db, biz, LEAD, "What time zone is that?");
     const sendsBefore = app.telnyxSends.length;
     await tickSmsWorker();
 
     expect(app.telnyxSends.length).toBe(sendsBefore + 1);
     expect(app.telnyxSends[sendsBefore].body.text).toBe(
-      "Sounds good — see you at 1:00 PM Eastern!"
+      "Sounds good, see you at 1:00 PM Eastern!"
     );
     expect(await smsLinkRows(biz)).toHaveLength(0);
   });
@@ -173,7 +173,7 @@ describe("booking-status preamble (real worker, scripted platform answer)", () =
     const LINE =
       'This contact has an upcoming booking: "KYP Ads Free Strategy Call" starting Thu, Jul 23, 2026, 2:00 PM EDT (they rescheduled it from an earlier time).';
     app.scriptBookingContext(LINE);
-    rowboat.scriptReply("Yes Tim — I see you moved our call to Thursday. See you then!");
+    rowboat.scriptReply("Yes Tim, I see you moved our call to Thursday. See you then!");
     const callsBefore = rowboat.calls.length;
     await enqueueSmsJob(db, biz, LEAD, "I did propose a new time last week. Was that received?");
     await tickSmsWorker();

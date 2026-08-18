@@ -64,7 +64,7 @@ describe("customer memory preamble parity (Next.js ↔ edge)", () => {
         customer_e164: "+15555550111",
         display_name: "Big Customer",
         summary_md: null,
-        pinned_md: "VIP — escalate to owner immediately.",
+        pinned_md: "VIP, escalate to owner immediately.",
         total_interaction_count: 0,
         last_channel: null,
         last_interaction_at: null

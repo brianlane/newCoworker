@@ -94,7 +94,7 @@ export function decryptSecret(
   const key = loadKey(env);
   if (key === null) {
     throw new SecretEncryptionError(
-      "Encountered an encrypted secret but SECRETS_ENCRYPTION_KEY is not set — " +
+      "Encountered an encrypted secret but SECRETS_ENCRYPTION_KEY is not set, " +
         "configure the key in the environment (.env for tooling, Vercel for the app)"
     );
   }
@@ -115,7 +115,7 @@ export function decryptSecret(
     return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
   } catch {
     throw new SecretEncryptionError(
-      "Failed to decrypt stored secret — wrong SECRETS_ENCRYPTION_KEY or corrupted ciphertext"
+      "Failed to decrypt stored secret, wrong SECRETS_ENCRYPTION_KEY or corrupted ciphertext"
     );
   }
 }

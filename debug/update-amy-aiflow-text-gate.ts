@@ -122,7 +122,7 @@ async function main(): Promise<void> {
 
   console.log(`Flow      : ${row.id} (${row.name}, enabled=${row.enabled})`);
   console.log(`Summary   : ${summarizeDefinition(validated)}`);
-  console.log(`Retargeted: ${retargeted.length ? retargeted.join(", ") : "(none — already applied)"}`);
+  console.log(`Retargeted: ${retargeted.length ? retargeted.join(", ") : "(none, already applied)"}`);
 
   if (!apply) {
     console.log("\n[dry-run] Not writing. Re-run with --apply to update.");

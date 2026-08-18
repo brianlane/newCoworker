@@ -531,7 +531,7 @@ export type StepAction =
       teamTag?: string;
     }
   // Arm the business's voice_expected_transfers window (see the FlowStep doc).
-  // toRef passes through UNRESOLVED — the worker resolves the person's CURRENT
+  // toRef passes through UNRESOLVED, the worker resolves the person's CURRENT
   // number at execution time (same late-binding rule as route_to_team.agentRef).
   | {
       kind: "arm_voice_transfer";

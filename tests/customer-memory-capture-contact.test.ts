@@ -306,7 +306,7 @@ describe("ensureCapturedContact", () => {
     );
   });
 
-  it("survives a link failure (Error and non-Error shapes) — event still fires for a new lead", async () => {
+  it("survives a link failure (Error and non-Error shapes), event still fires for a new lead", async () => {
     const { client } = fakeDb({ data: null, error: null });
     mockClientFactory.mockResolvedValue(client);
     mockLink.mockRejectedValueOnce(new Error("link boom"));

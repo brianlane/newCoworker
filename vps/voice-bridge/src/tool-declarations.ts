@@ -73,7 +73,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "calendar_book_appointment",
       description:
-        "Book an appointment on the business calendar. Only call AFTER `calendar_find_slots` confirmed a slot AND the caller has said yes to that ONE specific time out loud — never book while they are still choosing between options, and never book more than one slot per caller. On success, confirm the day and time by reading the result's `startLocal` back to the caller — never work out the day yourself. Mention a calendar invite ONLY if the result's `inviteEmail` is set; when it is null the caller gets NO invite — do not promise one (offer a text confirmation via `send_follow_up_sms` instead). If the result has detail `attendee_already_booked`, this caller ALREADY has an upcoming appointment — tell them its `existingStartLocal` time and follow the result's message (keep it, move it with `calendar_reschedule_appointment`, or cancel it); only retry with `allowAdditional` true after they explicitly confirm they want a separate additional appointment. If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
+        "Book an appointment on the business calendar. Only call AFTER `calendar_find_slots` confirmed a slot AND the caller has said yes to that ONE specific time out loud, never book while they are still choosing between options, and never book more than one slot per caller. On success, confirm the day and time by reading the result's `startLocal` back to the caller, never work out the day yourself. Mention a calendar invite ONLY if the result's `inviteEmail` is set; when it is null the caller gets NO invite, do not promise one (offer a text confirmation via `send_follow_up_sms` instead). If the result has detail `attendee_already_booked`, this caller ALREADY has an upcoming appointment, tell them its `existingStartLocal` time and follow the result's message (keep it, move it with `calendar_reschedule_appointment`, or cancel it); only retry with `allowAdditional` true after they explicitly confirm they want a separate additional appointment. If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet, text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -129,14 +129,14 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "send_follow_up_sms",
       description:
-        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned — no invented details, and no appointment described as scheduled unless it was actually booked. To text the CALLER, OMIT toE164 entirely — it defaults to the number they are calling from, which you cannot see; NEVER fill it with a guessed or placeholder number.",
+        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned, no invented details, and no appointment described as scheduled unless it was actually booked. To text the CALLER, OMIT toE164 entirely, it defaults to the number they are calling from, which you cannot see; NEVER fill it with a guessed or placeholder number.",
       parameters: {
         type: Type.OBJECT,
         properties: {
           toE164: {
             type: Type.STRING,
             description:
-              "Destination phone in E.164 — ONLY when the caller explicitly dictated a different number to you. Omit to text the caller on the line they are calling from."
+              "Destination phone in E.164, ONLY when the caller explicitly dictated a different number to you. Omit to text the caller on the line they are calling from."
           },
           body: { type: Type.STRING, description: "Message body. Plain text." }
         },
@@ -170,7 +170,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "notify_team",
       description:
-        "Relay a caller request to the business owner/team (dashboard alert plus email/SMS per the owner's settings). Call this BEFORE telling the caller you'll check with the team, pass a message along, or have someone get back to them — it is your ONLY channel to the team. Include what the team must do and any deadline the caller mentioned.",
+        "Relay a caller request to the business owner/team (dashboard alert plus email/SMS per the owner's settings). Call this BEFORE telling the caller you'll check with the team, pass a message along, or have someone get back to them, it is your ONLY channel to the team. Include what the team must do and any deadline the caller mentioned.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -191,7 +191,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "document_share",
       description:
-        "Text the caller an expiring link to one of the business's documents (price sheet, policy, contract, brochure) when they ask for a copy. Refer to the document by its title from your documents.md briefing. Internal/staff documents and expired documents are refused server-side — if the tool fails, tell the caller the team will follow up with a copy.",
+        "Text the caller an expiring link to one of the business's documents (price sheet, policy, contract, brochure) when they ask for a copy. Refer to the document by its title from your documents.md briefing. Internal/staff documents and expired documents are refused server-side, if the tool fails, tell the caller the team will follow up with a copy.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -233,11 +233,11 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
           },
           notes: {
             type: Type.STRING,
-            description: "Any other useful context — preferences, urgency, constraints."
+            description: "Any other useful context, preferences, urgency, constraints."
           },
           urgency: {
             type: Type.STRING,
-            description: "'low', 'normal', or 'high' — high escalates to the owner."
+            description: "'low', 'normal', or 'high', high escalates to the owner."
           },
           language: {
             type: Type.STRING,
@@ -272,7 +272,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "customer_lookup_by_phone",
       description:
-        "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a caller's phone. Defaults to the current caller's phone when called without args. Use to recognize repeat callers and continue prior conversations naturally — but never read the summary verbatim, treat it as your own working notes.",
+        "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a caller's phone. Defaults to the current caller's phone when called without args. Use to recognize repeat callers and continue prior conversations naturally, but never read the summary verbatim, treat it as your own working notes.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -309,7 +309,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "customer_append_pinned_note",
       description:
-        "Append a permanent fact to this customer's pinned notes (e.g. 'wife is allergic to nuts', 'closes at 4 every other Friday'). The note survives every future summary and is visible to the owner on the dashboard. Use sparingly — only for facts that should reach the next conversation verbatim.",
+        "Append a permanent fact to this customer's pinned notes (e.g. 'wife is allergic to nuts', 'closes at 4 every other Friday'). The note survives every future summary and is visible to the owner on the dashboard. Use sparingly, only for facts that should reach the next conversation verbatim.",
       parameters: {
         type: Type.OBJECT,
         properties: {

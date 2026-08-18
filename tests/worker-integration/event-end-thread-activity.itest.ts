@@ -201,7 +201,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
       business_id: biz,
       to_e164: lead,
       from_e164: "+14385550000",
-      body: "Hey Tim, just checking if you can still make it — we can rebook.",
+      body: "Hey Tim, just checking if you can still make it, we can rebook.",
       source: "dashboard_chat",
       created_at: minutesAgo(90)
     });

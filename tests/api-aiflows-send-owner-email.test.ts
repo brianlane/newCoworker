@@ -40,7 +40,7 @@ const validBody = {
   connectionId,
   toEmail: "lead@example.com",
   subject: "Following up",
-  bodyText: "Hi — still interested?"
+  bodyText: "Hi, still interested?"
 };
 
 function makeRequest(body: unknown) {
@@ -113,7 +113,7 @@ describe("POST /api/aiflows/send-owner-email", () => {
       {
         toEmail: "lead@example.com",
         subject: "Following up",
-        bodyText: "Hi — still interested?",
+        bodyText: "Hi, still interested?",
         ccEmails: [],
         bccEmails: []
       }

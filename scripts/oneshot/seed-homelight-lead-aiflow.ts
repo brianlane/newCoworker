@@ -198,7 +198,7 @@ function buildDefinition(opts: {
           {
             name: "price_digits",
             description:
-              "The price's leading digits ONLY — no $, commas, K or M. For $429K answer " +
+              "The price's leading digits ONLY, no $, commas, K or M. For $429K answer " +
               "429; for $264,000 answer 264. Used to match this lead against the portal " +
               "alert email, which writes the price in full (e.g. $429,000), so the bare " +
               "leading digits are the token that reliably appears in BOTH."
@@ -245,7 +245,7 @@ function buildDefinition(opts: {
         // "1" claims (live or late); "1, <eta>" claims and states a timeframe;
         // "2" passes (optionally "2, <reason>") — same digits as every flow.
         offerTemplate:
-          "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
+          "New HomeLight referral: {{vars.lead_first_name}}, {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +
           "Tap to claim: {{vars.leadUrl}}\n" +
           "Direct claim button: {{vars.claim_link}}\n" +
@@ -255,7 +255,7 @@ function buildDefinition(opts: {
           'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").',
         ownerFallbackTemplate:
           "Dave didn't claim the HomeLight referral {{vars.lead_first_name}} " +
-          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time — it's back to you.\n" +
+          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time, it's back to you.\n" +
           "Tap to claim: {{vars.leadUrl}}",
         claimedNotifyTemplate:
           "{{agent.name}} claimed the HomeLight referral {{vars.lead_first_name}} " +
@@ -264,8 +264,8 @@ function buildDefinition(opts: {
         // instead and claim-gated steps skip (claimed_agent="none").
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate:
-          "HIGH-VALUE HomeLight referral ($1M+) kept for you — not offered to the team.\n" +
-          "{{vars.lead_first_name}} — {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\n" +
+          "HIGH-VALUE HomeLight referral ($1M+) kept for you, not offered to the team.\n" +
+          "{{vars.lead_first_name}}, {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\n" +
           "Tap to claim: {{vars.leadUrl}}"
       },
       // 5. Re-open the (now claimed) lead link and read the real contact card off
@@ -311,7 +311,7 @@ function buildDefinition(opts: {
           {
             name: "lead_address",
             description:
-              "The property address from the portal contact card — the FULL address " +
+              "The property address from the portal contact card, the FULL address " +
               "including street, city, state, and ZIP code. If the page shows no lead " +
               "contact card, answer 'none'."
           }
@@ -353,7 +353,7 @@ function buildDefinition(opts: {
                   name: "lead_address",
                   description:
                     "The property street address, labeled 'Address' in the HomeLight " +
-                    "email — the FULL address including street, city, state, and ZIP code"
+                    "email, the FULL address including street, city, state, and ZIP code"
                 }
               ]
             }
@@ -450,7 +450,7 @@ function buildDefinition(opts: {
         message:
           "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, " +
           "~{{vars.price}}).\n" +
-          "Not claimed — full details in the portal: {{vars.leadUrl}}\n" +
+          "Not claimed, full details in the portal: {{vars.leadUrl}}\n" +
           "Outcome: {{vars.actions_taken}}.",
         when: { var: "claimed_agent", equals: "none" }
       }

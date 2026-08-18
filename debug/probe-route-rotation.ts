@@ -144,7 +144,7 @@ async function main(): Promise<void> {
     }
     console.log(`  chain: ${picks.join(" -> ")}${sawNone ? " -> none" : ""}`);
     if (!sawNone) {
-      console.log("  WARNING: never returned {\"none\":true} within the lookup budget — owner fallback would rely on the repeat guard.");
+      console.log("  WARNING: never returned {\"none\":true} within the lookup budget, owner fallback would rely on the repeat guard.");
     }
     console.log("");
   }
@@ -165,7 +165,7 @@ async function main(): Promise<void> {
   console.log(
     "\nNOTE: selection calls are stateless and routing outcomes are never written" +
       "\nback to vault memory, so Rowboat cannot know who 'least recently received'" +
-      "\na lead — a skewed distribution here is expected, not a regression."
+      "\na lead, a skewed distribution here is expected, not a regression."
   );
 }
 

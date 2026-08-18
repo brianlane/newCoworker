@@ -117,7 +117,7 @@ describe("normalizeEndUserIdentifier / fingerprintIdentifier", () => {
   });
 });
 
-describe("deleteEndUserData — central-only tenants", () => {
+describe("deleteEndUserData, central-only tenants", () => {
   it("deletes phone-keyed + contact rows for an e164-only request", async () => {
     const db = makeCentralDb({
       // contacts#1 is the linked-number scan (aliases captured pre-delete);
@@ -387,7 +387,7 @@ describe("deleteEndUserData — central-only tenants", () => {
   });
 });
 
-describe("deleteEndUserData — residency (dual/vps) tenants", () => {
+describe("deleteEndUserData, residency (dual/vps) tenants", () => {
   it("also deletes on the box, turns-before-transcripts, and counts both", async () => {
     vi.mocked(residencyModeFor).mockResolvedValue("vps");
     const db = makeCentralDb();
@@ -581,7 +581,7 @@ describe("deleteEndUserData — residency (dual/vps) tenants", () => {
   });
 });
 
-describe("deleteEndUserData — expanded coverage stores", () => {
+describe("deleteEndUserData, expanded coverage stores", () => {
   const ERR = { data: null, error: { message: "boom" } };
 
   it("webchat: matches raw phone spellings + emails across pages, deletes by id", async () => {

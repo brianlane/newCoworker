@@ -59,7 +59,7 @@ export async function POST(request: Request) {
       logger.warn("check-email: soft lookup threw; treating as available", {
         error: err instanceof Error ? err.message : String(err)
       });
-      // Fall through to `available: true` — the security gate at
+      // Fall through to `available: true`, the security gate at
       // /api/checkout uses the strict variant and will catch any
       // false negative we leak from this preflight.
     }

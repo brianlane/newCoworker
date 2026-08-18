@@ -134,7 +134,7 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
       setBanner(
         json.data?.verified
           ? null
-          : "Saved, but Vagaro rejected the credentials — double-check the Client ID and Secret."
+          : "Saved, but Vagaro rejected the credentials, double-check the Client ID and Secret."
       );
     } finally {
       setSaving(false);
@@ -192,7 +192,7 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setBanner("Could not copy — select the URL and copy it manually.");
+      setBanner("Could not copy, select the URL and copy it manually.");
     }
   }
 
@@ -243,7 +243,7 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
                 {servicesLoading
                   ? "Loading your Vagaro services…"
                   : servicesError
-                    ? "Couldn't load your Vagaro services — check the credentials below."
+                    ? "Couldn't load your Vagaro services, check the credentials below."
                     : "No bookable services found on your Vagaro account yet."}
               </p>
             )}
@@ -252,7 +252,7 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
           {webhookUrl ? (
             <div>
               <label className="block text-xs text-parchment/50 mb-1">
-                Webhook URL — paste into Vagaro → Settings → APIs &amp; Webhooks
+                Webhook URL, paste into Vagaro → Settings → APIs &amp; Webhooks
               </label>
               <div className="flex gap-2">
                 <input readOnly value={webhookUrl} className={inputClass} />

@@ -166,7 +166,7 @@ describe("outboundSessionContext", () => {
       captureFields: null,
       transfer: {
         toE164: "+16025245719",
-        preSmsBody: "LIVE TRANSFER incoming — pick up!",
+        preSmsBody: "LIVE TRANSFER incoming, pick up!",
         agentName: "Dave Lane"
       },
       flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
@@ -174,7 +174,7 @@ describe("outboundSessionContext", () => {
     expect(ctx.ai_takeover.context_note).toBe("Their name: Bryan.");
     expect(ctx.transfer).toEqual({
       to_e164: "+16025245719",
-      pre_sms_body: "LIVE TRANSFER incoming — pick up!",
+      pre_sms_body: "LIVE TRANSFER incoming, pick up!",
       agent_name: "Dave Lane"
     });
     expect(ctx.flow_run).toEqual({

@@ -459,7 +459,7 @@ export async function provisionVpsForBusiness(
           // Expected on brand-new accounts. Log + continue; SSH-bootstrap
           // will pick up the slack downstream.
           logger.warn(
-            "Hostinger post-install-scripts attach skipped (account not yet eligible — falling back to SSH-bootstrap)",
+            "Hostinger post-install-scripts attach skipped (account not yet eligible, falling back to SSH-bootstrap)",
             {
               businessId: input.businessId,
               scriptName,
@@ -474,7 +474,7 @@ export async function provisionVpsForBusiness(
           // same end state, so a slow Hostinger API must never kill the
           // provision here.
           if (attempt < 2) {
-            logger.warn("Hostinger post-install-scripts attach timed out — retrying once", {
+            logger.warn("Hostinger post-install-scripts attach timed out, retrying once", {
               businessId: input.businessId,
               scriptName,
               attempt
@@ -482,7 +482,7 @@ export async function provisionVpsForBusiness(
             continue;
           }
           logger.warn(
-            "Hostinger post-install-scripts attach timed out twice — skipping (falling back to SSH-bootstrap)",
+            "Hostinger post-install-scripts attach timed out twice, skipping (falling back to SSH-bootstrap)",
             {
               businessId: input.businessId,
               scriptName,
@@ -720,7 +720,7 @@ ${
   authorizedKey !== null
     ? `
 # Deterministic key attach: Hostinger's setup/recreate/attach endpoints all
-# silently drop public_key_ids on some VMs — write the key ourselves, first
+# silently drop public_key_ids on some VMs, write the key ourselves, first
 # thing, so SSH access never depends on their flaky attach.
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
 grep -qF ${bashSingleQuote(authorizedKey)} /root/.ssh/authorized_keys 2>/dev/null || \\
@@ -737,7 +737,7 @@ chmod 600 /root/.ssh/authorized_keys
 #   * Under PIS: \`runcmd\` is part of cloud-init's stages. \`cloud-init
 #     status --wait\` would block waiting for cloud-init to signal \`done\`,
 #     but cloud-init can't reach \`done\` until \`runcmd\` (i.e. this
-#     script) returns — a hard self-deadlock the \`|| true\` guard cannot
+#     script) returns, a hard self-deadlock the \`|| true\` guard cannot
 #     cover (it only catches non-zero exits, not infinite hangs).
 #   * Under SSH: the orchestrator's \`buildBootstrapSshCommand\` already
 #     prefixes \`cloud-init status --wait\` BEFORE invoking this script,
@@ -759,7 +759,7 @@ wait_for_apt() {
   local deadline=$((SECONDS + 300))
   while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
     if (( SECONDS >= deadline )); then
-      echo "[newcoworker] apt lock still held after 300s — proceeding (apt will retry via DPkg::Lock::Timeout)"
+      echo "[newcoworker] apt lock still held after 300s, proceeding (apt will retry via DPkg::Lock::Timeout)"
       break
     fi
     sleep 5
@@ -773,7 +773,7 @@ wait_for_apt
 apt-get -y -o DPkg::Lock::Timeout=300 install --no-install-recommends git curl ca-certificates
 
 # Stage the newCoworker repo. Values are emitted in single quotes so bash
-# performs NO interpolation on them — this neutralises \`$(...)\`, backticks,
+# performs NO interpolation on them, this neutralises \`$(...)\`, backticks,
 # and \\ even if the JS-side validators ever regress. Do not switch these
 # back to double quotes.
 REPO_URL=${bashSingleQuote(repoUrl)}
@@ -785,12 +785,12 @@ if [[ -d "$REPO_PATH/.git" ]]; then
   git -C "$REPO_PATH" checkout -B "$REPO_REF" "origin/$REPO_REF" || true
 else
   git clone --depth=1 --branch "$REPO_REF" "$REPO_URL" "$REPO_PATH" || \\
-    { echo "[newcoworker] FATAL: repo clone failed — bootstrap cannot proceed"; exit 1; }
+    { echo "[newcoworker] FATAL: repo clone failed, bootstrap cannot proceed"; exit 1; }
 fi
 
 # Install deploy-client.sh into /opt so the orchestrator's SSH exec finds it
 # at a stable path. Done BEFORE running the full bootstrap so a partial
-# bootstrap failure still leaves /opt/deploy-client.sh in place — letting
+# bootstrap failure still leaves /opt/deploy-client.sh in place, letting
 # operators retry deploy-client.sh independently.
 if [[ -f "$REPO_PATH/vps/scripts/deploy-client.sh" ]]; then
   install -m 0755 "$REPO_PATH/vps/scripts/deploy-client.sh" /opt/deploy-client.sh

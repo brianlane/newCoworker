@@ -85,7 +85,7 @@ async function main(): Promise<void> {
     // Reuse the product of the currently-configured per-month price.
     const currentPriceId = process.env[envKey];
     if (!currentPriceId) {
-      console.error(`[term-prices] ${envKey} is not set — cannot resolve the product to attach to`);
+      console.error(`[term-prices] ${envKey} is not set, cannot resolve the product to attach to`);
       process.exit(2);
     }
     const currentPrice = await stripe.prices.retrieve(currentPriceId);
@@ -122,7 +122,7 @@ async function main(): Promise<void> {
 
   console.log("\n[term-prices] set these in Vercel env + local .env:");
   for (const line of envLines) console.log(`  ${line}`);
-  if (!APPLY) console.log("\n[term-prices] dry-run only — re-run with --apply to create the prices.");
+  if (!APPLY) console.log("\n[term-prices] dry-run only, re-run with --apply to create the prices.");
 }
 
 void main().catch((err) => {

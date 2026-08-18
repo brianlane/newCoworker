@@ -133,7 +133,7 @@ function RunLine({
         </button>
       )}
       {state === "error" && (
-        <span className="text-[11px] text-spark-orange">Couldn&apos;t dismiss — try again.</span>
+        <span className="text-[11px] text-spark-orange">Couldn&apos;t dismiss, try again.</span>
       )}
     </div>
   );
@@ -230,7 +230,7 @@ function TaskCard({
               <Flag className="h-3.5 w-3.5 text-rose-300" />
               <span className="font-medium text-rose-200/90">{g.label}</span>
               <span className="text-parchment/50">
-                {g.via === "passed_inline" ? "reached in sequence" : `jumped — ${goalViaText(g.via)}`}
+                {g.via === "passed_inline" ? "reached in sequence" : `jumped, ${goalViaText(g.via)}`}
               </span>
               <span className="text-[10px] text-parchment/35">
                 <LocalDateTime iso={g.at} /> · {g.flowName}
@@ -414,7 +414,7 @@ export function TaskCenter({
         <Card>
           <div className="flex items-center gap-2 py-4 text-sm text-parchment/50">
             <CheckCircle2 className="h-4 w-4 text-claw-green" />
-            Nothing in motion right now — new leads will appear here the moment a
+            Nothing in motion right now, new leads will appear here the moment a
             workflow picks them up.
           </div>
         </Card>

@@ -36,7 +36,7 @@ export type ResidencyBackupCustody = "escrowed" | "customer_held";
 export class CustomerHeldBackupKeyError extends Error {
   constructor(businessId: string) {
     super(
-      `residency backup key for business ${businessId} is customer_held — the platform ` +
+      `residency backup key for business ${businessId} is customer_held, the platform ` +
         "dropped the plaintext (fingerprint only) and cannot decrypt or restore. " +
         "The customer owns DR; flip custody back to 'escrowed' (mints a NEW key) to resume platform-managed backups."
     );

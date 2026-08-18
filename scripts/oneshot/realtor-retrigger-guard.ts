@@ -201,7 +201,7 @@ export function replyForwardDefinition(): Record<string, unknown> {
           {
             name: "lead_name",
             description:
-              'The full name of the person who replied — the name right after "New text reply from"'
+              'The full name of the person who replied, the name right after "New text reply from"'
           }
         ]
       },
@@ -215,7 +215,7 @@ export function replyForwardDefinition(): Record<string, unknown> {
           {
             name: "full_message",
             description:
-              "The complete text of the lead's newest reply message(s) in the conversation — " +
+              "The complete text of the lead's newest reply message(s) in the conversation, " +
               "every message from the lead that the notification was about, in full, not truncated"
           },
           {
@@ -231,7 +231,7 @@ export function replyForwardDefinition(): Record<string, unknown> {
         phoneVar: "lead_phone",
         nameVar: "lead_name",
         message:
-          "Realtor.com: {{vars.lead_name}} replied — full message:\n" +
+          "Realtor.com: {{vars.lead_name}} replied, full message:\n" +
           "{{vars.full_message}}\n" +
           "Respond via realtor.com: {{vars.reply_url}}\n" +
           "Original notification: {{trigger.windowText}}"
@@ -285,7 +285,7 @@ async function main(): Promise<void> {
       parseAiFlowDefinition(def);
     } catch (err) {
       console.error(
-        `\nFlow "${row.name}" (${row.id}) would become INVALID — aborting before any write:`
+        `\nFlow "${row.name}" (${row.id}) would become INVALID, aborting before any write:`
       );
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
@@ -307,7 +307,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(replyDef);
     } catch (err) {
-      console.error("Reply-forward seed definition is INVALID — aborting:");
+      console.error("Reply-forward seed definition is INVALID, aborting:");
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);
@@ -328,7 +328,7 @@ async function main(): Promise<void> {
         console.error(`Update failed for ${p.id}: ${upErr.message}`);
         console.error(
           patched.length > 0
-            ? `Already written before the failure: ${patched.map((x) => x.name).join(", ")} — re-run after fixing; the patcher is idempotent.`
+            ? `Already written before the failure: ${patched.map((x) => x.name).join(", ")}, re-run after fixing; the patcher is idempotent.`
             : "Nothing had been written yet."
         );
         process.exit(1);

@@ -40,7 +40,7 @@ function isFromTrustedOrigin(request: Request): boolean {
     try {
       if (new URL(value).host === trustedHost) return true;
     } catch {
-      // Malformed Origin/Referer — treat as untrusted, fall through
+      // Malformed Origin/Referer, treat as untrusted, fall through
       // to strict robots compliance.
     }
   }

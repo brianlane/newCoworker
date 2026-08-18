@@ -1980,7 +1980,7 @@ async function applyEnterpriseDealFromCheckout(
     // Either way, cancel this fresh Stripe subscription so the customer
     // isn't billed monthly against a dead or duplicate deal; support refunds
     // any captured first invoice out-of-band.
-    logger.error("enterprise_deal not claimable by this session — canceling its subscription", {
+    logger.error("enterprise_deal not claimable by this session, canceling its subscription", {
       eventId,
       sessionId: session.id,
       businessId,
@@ -2302,7 +2302,7 @@ async function applyCustomWhiteGloveOfferFromCheckout(
     // customer was charged twice (two Buy tabs both reached Stripe before
     // the first completion landed). Don't re-credit anything — surface it
     // loudly so support refunds this session's charge.
-    logger.error("white_glove_offer paid by a second session — refund needed", {
+    logger.error("white_glove_offer paid by a second session, refund needed", {
       eventId,
       sessionId: session.id,
       businessId,

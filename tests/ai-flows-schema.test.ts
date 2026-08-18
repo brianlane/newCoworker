@@ -824,7 +824,7 @@ describe("doc_extract step", () => {
         type: "doc_extract",
         sourceTemplate: "{{trigger.document}}",
         fields: [{ name: "renewal_date" }],
-        fileAs: { titleTemplate: "Renewal — {{trigger.document_name}}", audience: "staff" }
+        fileAs: { titleTemplate: "Renewal, {{trigger.document_name}}", audience: "staff" }
       })
     );
     expect(def.steps[0].type).toBe("doc_extract");
@@ -2001,7 +2001,7 @@ describe("trigger channels", () => {
         {
           id: "r",
           type: "route_to_team",
-          offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim.",
+          offerTemplate: "New lead {{vars.lead_phone}}, reply 1 to claim.",
           ownerFallbackTemplate: "Back to you.",
           responseMinutes: 10
         },

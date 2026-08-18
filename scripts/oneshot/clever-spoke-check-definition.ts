@@ -35,10 +35,10 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
   const personaTemplate =
     `Hi, I'm calling with ${opts.officeName}. How are you today? ` +
     "We're following up to discuss the cash offers on your home through " +
-    "Clever — is now a good time to talk?";
+    "Clever, is now a good time to talk?";
 
   const preSmsTemplate =
-    "LIVE TRANSFER coming — pick up the phone!\n" +
+    "LIVE TRANSFER coming, pick up the phone!\n" +
     leadLine +
     "\nThey said now is a good time; connecting them to you.";
 
@@ -133,7 +133,7 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
           {
             name: "lead_address",
             description:
-              "The property street address from the lead page — the FULL address " +
+              "The property street address from the lead page, the FULL address " +
               "including street, city, state, and ZIP code"
           },
           {
@@ -170,7 +170,7 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
         },
         ownerFallbackTemplate:
           "{{vars.lead_name}} hasn't been reached yet (no confirmation from " +
-          `${opts.agentName}) — starting weekly AI follow-up calls.\n` +
+          `${opts.agentName}), starting weekly AI follow-up calls.\n` +
           leadLine,
         claimedNotifyTemplate:
           "{{agent.name}} confirmed they spoke with the " +

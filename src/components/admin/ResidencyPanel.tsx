@@ -38,7 +38,7 @@ const MODE_COPY: Record<Mode, { label: string; hint: string }> = {
   },
   vps: {
     label: "VPS (box is read source)",
-    hint: "Dashboard content reads come from the box — a down box means visible errors, never stale central data. Flip only after the parity gate passes."
+    hint: "Dashboard content reads come from the box, a down box means visible errors, never stale central data. Flip only after the parity gate passes."
   }
 };
 

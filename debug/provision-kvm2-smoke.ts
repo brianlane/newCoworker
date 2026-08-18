@@ -112,7 +112,7 @@ const priceStr = kvm2Price
     (kvm2Price.first_period_price !== undefined
       ? ` (first period $${(kvm2Price.first_period_price / 100).toFixed(2)})`
       : "")
-  : "UNKNOWN — item not in catalog!";
+  : "UNKNOWN, item not in catalog!";
 
 const { data: srcBiz, error: bizErr } = await db
   .from("businesses")
@@ -143,7 +143,7 @@ console.log(
 );
 
 if (fs.existsSync(STATE_FILE)) {
-  console.error(`\nRefusing: ${STATE_FILE} already exists — an experiment box may be live.`);
+  console.error(`\nRefusing: ${STATE_FILE} already exists, an experiment box may be live.`);
   console.error(`Tear it down first (debug/cancel-vps-billing.ts --state --apply) or delete the file.`);
   process.exit(1);
 }
@@ -170,7 +170,7 @@ if (!APPLY) {
 // ---------------------------------------------------------------- clone rows
 const cloneId = randomUUID();
 const cloneName = `KVM2 Smoke (${srcBiz.name} clone)`;
-console.log(`\ncreating clone business ${cloneId} — "${cloneName}"`);
+console.log(`\ncreating clone business ${cloneId}, "${cloneName}"`);
 
 const { error: insBizErr } = await db.from("businesses").insert({
   id: cloneId,
@@ -316,7 +316,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
     const vm = await hostinger.getVirtualMachine(vmId);
     if (vm.state !== preRecreateState) break;
     if (Date.now() > leaveDeadline) {
-      console.log(`  [warn] vm never left state=${preRecreateState} after recreate — continuing on the assumption the transition was missed`);
+      console.log(`  [warn] vm never left state=${preRecreateState} after recreate, continuing on the assumption the transition was missed`);
       break;
     }
     console.log(`  [waiting:recreate-start] state=${vm.state}`);
@@ -407,7 +407,7 @@ fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
 console.log(`\nVPS ready: vm=${result.virtualMachineId} ip=${result.publicIp}`);
 console.log(`billing subscription: ${result.hostingerBillingSubscriptionId ?? "UNKNOWN (look up before teardown!)"}`);
 console.log(`state written to ${STATE_FILE}`);
-console.log(`\nbootstrap.sh (TIER=${CLONE_TIER} VPS_SIZE=kvm2) runs via cloud-init at first boot — tail it with:`);
+console.log(`\nbootstrap.sh (TIER=${CLONE_TIER} VPS_SIZE=kvm2) runs via cloud-init at first boot, tail it with:`);
 console.log(`  npx tsx debug/vps-exec.ts ${cloneId} "tail -50 /post_install.log"`);
 console.log(`then deploy the clone config (no tunnel):`);
 console.log(`  set -a && source .env && set +a`);

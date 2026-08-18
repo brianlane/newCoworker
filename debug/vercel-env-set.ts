@@ -81,7 +81,7 @@ if (matching.length === 0) {
     if (!row.target.every((t) => TARGETS.includes(t))) {
       throw new Error(
         `row ${row.id} spans targets [${row.target.join(", ")}] beyond the requested ` +
-          `[${TARGETS.join(", ")}] — re-run with --targets covering all of them, or split the row in Vercel first`
+          `[${TARGETS.join(", ")}], re-run with --targets covering all of them, or split the row in Vercel first`
       );
     }
     const patchRes = await fetch(`${base}/v9/projects/${projectId}/env/${row.id}${teamQs}`, {
@@ -93,4 +93,4 @@ if (matching.length === 0) {
     console.log("patched row", row.id, "targets", row.target);
   }
 }
-console.log("done — takes effect on the next production deployment (see debug/vercel-redeploy.ts)");
+console.log("done, takes effect on the next production deployment (see debug/vercel-redeploy.ts)");

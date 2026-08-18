@@ -174,7 +174,7 @@ export function DocumentDetail({
       }
       await refreshDoc();
     } catch {
-      setError("Save failed — try again.");
+      setError("Save failed, try again.");
     } finally {
       setSavingDoc(false);
     }
@@ -197,7 +197,7 @@ export function DocumentDetail({
       }
       router.push("/dashboard/documents");
     } catch {
-      setError("Delete failed — try again.");
+      setError("Delete failed, try again.");
     }
   }
 
@@ -209,7 +209,7 @@ export function DocumentDetail({
     }
     const isEmail = recipient.includes("@");
     if (!isEmail && !/^\+[1-9]\d{6,14}$/.test(recipient)) {
-      setError("Phone must be E.164 (e.g. +16025550147) — or use an email address.");
+      setError("Phone must be E.164 (e.g. +16025550147), or use an email address.");
       return;
     }
     setError(null);
@@ -235,7 +235,7 @@ export function DocumentDetail({
       setSigMessage("");
       await refreshSignatureRequests();
     } catch {
-      setError("Could not send the signature request — try again.");
+      setError("Could not send the signature request, try again.");
     } finally {
       setSigSending(false);
     }
@@ -452,7 +452,7 @@ export function DocumentDetail({
           </div>
           <div>
             <label className={labelClass}>
-              Renewal date (reminds ahead — the document stays active)
+              Renewal date (reminds ahead, the document stays active)
             </label>
             <div className="flex gap-2">
               <input
@@ -484,7 +484,7 @@ export function DocumentDetail({
                   void patchDocument({ contactId: e.target.value ? e.target.value : null })
                 }
               >
-                <option value="">— not linked —</option>
+                <option value="">not linked</option>
                 {/* A linked contact beyond the 200-contact picker page keeps
                     its own option so the select never misreports the doc as
                     unlinked. */}
@@ -526,7 +526,7 @@ export function DocumentDetail({
                   })
                 }
               >
-                <option value="">— unassigned —</option>
+                <option value="">unassigned</option>
                 {members.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
@@ -569,7 +569,7 @@ export function DocumentDetail({
               ) : (
                 <span
                   className="inline-flex items-center rounded-md border border-parchment/10 px-3 py-1.5 text-xs text-parchment/40 cursor-not-allowed"
-                  title="Save your content edits first — the export uses saved content"
+                  title="Save your content edits first, the export uses saved content"
                 >
                   Download as PowerPoint (save first)
                 </span>

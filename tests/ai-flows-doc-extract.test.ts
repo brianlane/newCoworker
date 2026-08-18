@@ -379,15 +379,15 @@ describe("docExtract", () => {
   it("fileAs: copies the bytes, inserts the row, condenses, and reports the filing", async () => {
     const { db, uploads } = makeDb({});
     const result = await docExtract(
-      { ...input, fileAs: { title: "Renewal — Acme", audience: "staff" } },
+      { ...input, fileAs: { title: "Renewal, Acme", audience: "staff" } },
       { client: db as never, generate: okGenerate as never }
     );
-    expect(result.ok && result.filed?.title).toBe("Renewal — Acme");
+    expect(result.ok && result.filed?.title).toBe("Renewal, Acme");
     expect(uploads[0].bucket).toBe("business-docs");
     // The index prefix the email worker adds is stripped from the filed name.
     expect(uploads[0].path).toMatch(/\/renewal\.pdf$/);
     expect(insertBusinessDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Renewal — Acme", audience: "staff", category: "filed" }),
+      expect.objectContaining({ title: "Renewal, Acme", audience: "staff", category: "filed" }),
       expect.anything()
     );
     expect(ingestDocument).toHaveBeenCalled();
@@ -525,7 +525,7 @@ describe("docExtract", () => {
   });
 });
 
-describe("docExtract — business-docs source refs", () => {
+describe("docExtract, business-docs source refs", () => {
   const DOC_ID = "44444444-4444-4444-8444-444444444444";
   const input = { businessId: BIZ, sourceRef: `business-docs:${DOC_ID}`, fields: FIELDS };
 
@@ -554,9 +554,9 @@ describe("docExtract — business-docs source refs", () => {
   });
 });
 
-describe("docExtract — record sinks (fileAs extras)", () => {
+describe("docExtract, record sinks (fileAs extras)", () => {
   const input = { businessId: BIZ, sourceRef: PDF_REF, fields: FIELDS };
-  const baseFile = { title: "Quote — Acme", audience: "staff" as const };
+  const baseFile = { title: "Quote, Acme", audience: "staff" as const };
 
   it("links the filed record to the contact by resolved phone (records cap pool)", async () => {
     const { db, contactCalls } = makeDb({});

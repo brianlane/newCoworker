@@ -60,7 +60,7 @@ import { logger } from "@/lib/logger";
 
 /** Same visitor-facing copy as the chat-worker's WEBCHAT_OVER_CAP_REFUSAL. */
 export const WEBCHAT_ENGINE_OVER_CAP_REFUSAL =
-  "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
+  "Sorry, our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
 
 /**
  * Default model matches the box path: WebchatCoworker is seeded with

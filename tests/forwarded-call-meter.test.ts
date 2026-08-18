@@ -249,7 +249,7 @@ describe("meterForwardedCallSeconds", () => {
     });
   });
 
-  it("never throws — a throwing client maps to rpc_error", async () => {
+  it("never throws, a throwing client maps to rpc_error", async () => {
     const supabase = {
       from() {
         throw new Error("kaput");

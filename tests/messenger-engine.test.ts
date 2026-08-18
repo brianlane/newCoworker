@@ -530,7 +530,7 @@ describe("runMessengerGeminiTurn", () => {
     expect(deps.chatStep).toHaveBeenCalledTimes(MESSENGER_ENGINE_MAX_TOOL_ROUNDS + 1);
   });
 
-  it("throws messenger_engine_no_reply on an empty step — after metering", async () => {
+  it("throws messenger_engine_no_reply on an empty step, after metering", async () => {
     const deps = makeDeps({
       chatStep: vi.fn(async () => ({
         text: null,

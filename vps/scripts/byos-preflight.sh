@@ -111,7 +111,7 @@ fi
 if curl -sf --max-time 10 https://www.cloudflare.com/cdn-cgi/trace >/dev/null 2>&1; then
   report egress443 PASS "outbound 443 reachable (cloudflare trace)"
 else
-  report egress443 FAIL "outbound HTTPS (443) blocked — the Cloudflare tunnel cannot connect"
+  report egress443 FAIL "outbound HTTPS (443) blocked, the Cloudflare tunnel cannot connect"
 fi
 
 # ------------------------------------------------------------------ disk encryption
@@ -121,7 +121,7 @@ fi
 if lsblk -rno TYPE 2>/dev/null | grep -q '^crypt$'; then
   report disk_encryption PASS "dm-crypt/LUKS volume detected"
 else
-  report disk_encryption WARN "no dm-crypt/LUKS detected — provider-level encryption-at-rest attestation required"
+  report disk_encryption WARN "no dm-crypt/LUKS detected, provider-level encryption-at-rest attestation required"
 fi
 
 if (( FAILED == 0 )); then

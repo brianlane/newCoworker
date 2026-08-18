@@ -168,7 +168,7 @@ export default async function AdminUsagePage({
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Gemini</p>
           <p className="text-3xl font-bold text-parchment">
-            {fleetGeminiMonthMicros !== null ? money(fleetGeminiMonthMicros / 10_000) : "—"}
+            {fleetGeminiMonthMicros !== null ? money(fleetGeminiMonthMicros / 10_000) : "-"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             <Link href="/admin/gemini" className="hover:text-signal-teal">
@@ -236,7 +236,7 @@ export default async function AdminUsagePage({
                     <td className="py-2 text-right text-parchment/70">{row.callsMade}</td>
                     <td className="py-2 text-right text-parchment/70">{row.peakConcurrentCalls}</td>
                     <td className="py-2 text-right text-parchment/70">
-                      {row.geminiMonthMicros !== null ? money(row.geminiMonthMicros / 10_000) : "—"}
+                      {row.geminiMonthMicros !== null ? money(row.geminiMonthMicros / 10_000) : "-"}
                       {row.aiSpendMicros !== null && (
                         <span className="text-parchment/30">
                           {" "}
@@ -257,7 +257,7 @@ export default async function AdminUsagePage({
                       </span>
                     </td>
                     <td className="py-2 text-right text-parchment/70">
-                      {row.telnyxMicros !== null ? money(row.telnyxMicros / 10_000) : "—"}
+                      {row.telnyxMicros !== null ? money(row.telnyxMicros / 10_000) : "-"}
                     </td>
                     <td className="py-2 text-right">
                       {row.marginCents !== null ? (
@@ -269,7 +269,7 @@ export default async function AdminUsagePage({
                           {money(row.marginCents)}
                         </span>
                       ) : (
-                        <span className="text-parchment/30">—</span>
+                        <span className="text-parchment/30">-</span>
                       )}
                     </td>
                   </tr>
@@ -280,11 +280,11 @@ export default async function AdminUsagePage({
         )}
         <p className="text-xs text-parchment/30 mt-3">
           AI spend is the day-keyed metered ledger summed over {selected} (collecting since the
-          ledger shipped, Jul 2026 — &quot;—&quot; means no ledger rows exist for that window; see
+          ledger shipped, Jul 2026, &quot;, &quot; means no ledger rows exist for that window; see
           /admin/gemini for the daily breakdown); the dimmer &quot;period&quot; figure is the
           current Stripe-period fuse total vs cap. Util % blends
           voice/SMS/AI against the tier&apos;s caps (the tier-economics canvas methodology). Telnyx
-          cost is the synced invoice actual for the month; &quot;—&quot; means the sync has no rows
+          cost is the synced invoice actual for the month; &quot;, &quot; means the sync has no rows
           for that window.
         </p>
       </Card>

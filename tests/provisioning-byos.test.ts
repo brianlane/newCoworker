@@ -266,7 +266,7 @@ const PREFLIGHT_PASS_OUTPUT = [
 
 const PREFLIGHT_WARN_ENCRYPTION_OUTPUT = [
   "PREFLIGHT os PASS ubuntu 24.04",
-  "PREFLIGHT disk_encryption WARN no dm-crypt/LUKS detected — provider-level encryption-at-rest attestation required",
+  "PREFLIGHT disk_encryption WARN no dm-crypt/LUKS detected, provider-level encryption-at-rest attestation required",
   "PREFLIGHT RESULT PASS"
 ].join("\n");
 

@@ -409,7 +409,7 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain("printf %s ''");
   });
 
-  it("uses the EXACT projectId the caller supplies — single source of truth from syncVaultToVps", () => {
+  it("uses the EXACT projectId the caller supplies, single source of truth from syncVaultToVps", () => {
     // Bugbot Low on PR #60: previously this function called
     // `resolveSyncProjectId` internally AND the caller did the same for
     // its return value. Today they agreed because the resolver was pure
@@ -450,7 +450,7 @@ describe("buildSyncVaultCommand", () => {
   });
 });
 
-describe("syncVaultToVps — guards", () => {
+describe("syncVaultToVps, guards", () => {
   it("returns no_business when the businesses lookup misses (orchestrator was called for a deleted/nonexistent biz)", async () => {
     const deps = freshDeps({ fetchBusiness: vi.fn(async () => null) });
     const r = await syncVaultToVps(BIZ, deps);
@@ -509,7 +509,7 @@ describe("syncVaultToVps — guards", () => {
   });
 });
 
-describe("syncVaultToVps — success path", () => {
+describe("syncVaultToVps, success path", () => {
   it("invokes ssh with the resolved IP, the active key's username + private key, and the generated command", async () => {
     const deps = freshDeps();
     const r = await syncVaultToVps(BIZ, deps);
@@ -686,7 +686,7 @@ describe("syncVaultToVps — success path", () => {
   });
 });
 
-describe("syncVaultToVps — ssh failure paths", () => {
+describe("syncVaultToVps, ssh failure paths", () => {
   it("captures a thrown ssh error as ssh_failed with the message tail (no_route_to_host, ETIMEDOUT, etc.)", async () => {
     const deps = freshDeps({
       exec: vi.fn(async () => {
@@ -819,7 +819,7 @@ describe("syncVaultToVpsAndLog", () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
-  it("never throws — even when the underlying syncVaultToVps rejects, the API caller's response must not be affected", async () => {
+  it("never throws, even when the underlying syncVaultToVps rejects, the API caller's response must not be affected", async () => {
     // syncVaultToVps catches its own ssh throws, but if a future
     // refactor adds a synchronous throw above the try/catch, the
     // wrapper here is the safety net for the API route's `void`

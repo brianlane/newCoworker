@@ -86,7 +86,7 @@ export async function POST(
       return errorResponse(
         "CONFLICT",
         "A Stripe subscription is still linked and not canceled (active, past_due, or a paid " +
-          "checkout mid-flight). Cancel it first (or use Force-cancel & wipe) — releasing the " +
+          "checkout mid-flight). Cancel it first (or use Force-cancel & wipe), releasing the " +
           "box would cascade-delete this account on reuse while Stripe keeps charging.",
         409
       );
@@ -116,7 +116,7 @@ export async function POST(
       subscriptionCanceled = await cancelSubscriptionIfStripeless(subscription.id);
       if (!subscriptionCanceled) {
         logger.warn(
-          "admin.release-vps-to-pool: subscription became Stripe-linked mid-release; NOT cancelled — reconcile before reuse",
+          "admin.release-vps-to-pool: subscription became Stripe-linked mid-release; NOT cancelled, reconcile before reuse",
           { businessId, subscriptionId: subscription.id }
         );
       }

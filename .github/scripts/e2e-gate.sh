@@ -82,7 +82,7 @@ while true; do
   status_failed=$(jq -r '
     map(select(.state == "failure" or .state == "error")) | .[] | .context' <<<"$statuses")
   if [ -n "$status_failed" ]; then
-    echo "::error::e2e gate: commit status(es) failed — $(tr '\n' ' ' <<<"$status_failed")"
+    echo "::error::e2e gate: commit status(es) failed, $(tr '\n' ' ' <<<"$status_failed")"
     exit 1
   fi
   status_pending=$(jq -r '
@@ -111,12 +111,12 @@ while true; do
     }' -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length' \
     | jq -s 'add // 0')
   if [ "$unresolved" -gt 0 ]; then
-    echo "::error::e2e gate: ${unresolved} unresolved review thread(s) — fix/resolve them, then re-run this job (threads cannot self-resolve, so polling would not help)."
+    echo "::error::e2e gate: ${unresolved} unresolved review thread(s), fix/resolve them, then re-run this job (threads cannot self-resolve, so polling would not help)."
     exit 1
   fi
 
   if [ -z "$blockers" ]; then
-    echo "e2e gate: every other check is green and all threads are resolved — gate open."
+    echo "e2e gate: every other check is green and all threads are resolved, gate open."
     exit 0
   fi
 
@@ -127,7 +127,7 @@ while true; do
     exit 1
   fi
 
-  echo "e2e gate poll #${attempt} — still waiting on:"
+  echo "e2e gate poll #${attempt}, still waiting on:"
   echo "$blockers"
   sleep "$POLL_SECONDS"
 done

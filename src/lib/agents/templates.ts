@@ -29,22 +29,22 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     id: "quote_comparison",
     name: "Quote comparison",
     description:
-      "Compare provider quotes side by side — prices, inclusions, exclusions — without recommending one.",
+      "Compare provider quotes side by side, prices, inclusions, exclusions, without recommending one.",
     outputFormat: "markdown",
     instructions: [
       "You are comparing quotes/proposals from different providers for the same customer. The attached material contains one or more quotes (they may be pasted together or split across sections).",
       "",
       "Produce, in this exact order:",
       "",
-      "1. **Comparison table** — one column per provider, one row per attribute. Include every attribute that appears in ANY quote: price/premium (with its billing period), deductibles or excess, what is included, optional add-ons/riders, exclusions or limitations, term/duration, payment terms, and stated conditions. Write \"not stated\" when a quote omits an attribute — never guess or fill in typical values.",
+      "1. **Comparison table**, one column per provider, one row per attribute. Include every attribute that appears in ANY quote: price/premium (with its billing period), deductibles or excess, what is included, optional add-ons/riders, exclusions or limitations, term/duration, payment terms, and stated conditions. Write \"not stated\" when a quote omits an attribute, never guess or fill in typical values.",
       "",
-      "2. **Key differences** — short bullets calling out where the quotes genuinely differ: price gaps (with the amounts), scope/coverage differences, exclusions present in one but not another, and add-ons available in only some quotes.",
+      "2. **Key differences**, short bullets calling out where the quotes genuinely differ: price gaps (with the amounts), scope/coverage differences, exclusions present in one but not another, and add-ons available in only some quotes.",
       "",
-      "3. **Questions to clarify** — anything ambiguous, contradictory, or missing that a staff member should confirm with the provider before presenting options.",
+      "3. **Questions to clarify**, anything ambiguous, contradictory, or missing that a staff member should confirm with the provider before presenting options.",
       "",
-      "4. **Customer-friendly summary** — a short plain-language section (no jargon, no table) a customer could read, presenting each option factually.",
+      "4. **Customer-friendly summary**, a short plain-language section (no jargon, no table) a customer could read, presenting each option factually.",
       "",
-      "Rules: present information objectively. Do NOT recommend an option, rank the quotes, or advise which is \"best\" — recommendations and any coverage or purchase advice stay with the business's licensed/qualified staff. Preserve every number exactly as written. Never invent facts."
+      "Rules: present information objectively. Do NOT recommend an option, rank the quotes, or advise which is \"best\", recommendations and any coverage or purchase advice stay with the business's licensed/qualified staff. Preserve every number exactly as written. Never invent facts."
     ].join("\n")
   },
   {
@@ -58,15 +58,15 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
       "",
       "Produce, in this exact order:",
       "",
-      "1. **Meeting summary** — 3-5 sentences: what the meeting was about and what was concluded.",
+      "1. **Meeting summary**, 3-5 sentences: what the meeting was about and what was concluded.",
       "",
-      "2. **Attendees** — every distinct speaker/participant named in the transcript.",
+      "2. **Attendees**, every distinct speaker/participant named in the transcript.",
       "",
-      "3. **Key discussion points** — short bullets per topic, preserving concrete facts (numbers, dates, names, decisions) exactly as stated.",
+      "3. **Key discussion points**, short bullets per topic, preserving concrete facts (numbers, dates, names, decisions) exactly as stated.",
       "",
-      "4. **Decisions made** — each explicit decision, with who made or approved it when stated.",
+      "4. **Decisions made**, each explicit decision, with who made or approved it when stated.",
       "",
-      "5. **Action items** — a `- [ ]` checkbox list: task, owner (if stated), and due date (if stated). Write \"owner not stated\" rather than guessing.",
+      "5. **Action items**, a `- [ ]` checkbox list: task, owner (if stated), and due date (if stated). Write \"owner not stated\" rather than guessing.",
       "",
       "Rules: never invent facts, attendees, decisions, or deadlines that are not in the transcript. Flag anything ambiguous or inaudible instead of resolving it yourself."
     ].join("\n")
@@ -82,17 +82,17 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
       "",
       "Produce, in this exact order:",
       "",
-      "1. **Request details** — the business's reference info found in the material: requesting staff member, date, and any internal reference numbers.",
+      "1. **Request details**, the business's reference info found in the material: requesting staff member, date, and any internal reference numbers.",
       "",
-      "2. **Customer profile** — name, contact details, address, and every identifying detail relevant to a quote (only what actually appears in the material).",
+      "2. **Customer profile**, name, contact details, address, and every identifying detail relevant to a quote (only what actually appears in the material).",
       "",
-      "3. **What's being quoted** — the product/service/coverage requested, with every concrete specification found: amounts, limits, dates, property/vehicle/item details, and the current provider and terms when mentioned.",
+      "3. **What's being quoted**, the product/service/coverage requested, with every concrete specification found: amounts, limits, dates, property/vehicle/item details, and the current provider and terms when mentioned.",
       "",
-      "4. **Current agreement facts** (when present) — existing policy/contract numbers, renewal or expiry dates, current pricing, and known claims or service history.",
+      "4. **Current agreement facts** (when present), existing policy/contract numbers, renewal or expiry dates, current pricing, and known claims or service history.",
       "",
-      "5. **Missing information checklist** — the specific details a provider will likely require that the material does NOT contain, as a `- [ ]` checkbox list staff can work through with the customer.",
+      "5. **Missing information checklist**, the specific details a provider will likely require that the material does NOT contain, as a `- [ ]` checkbox list staff can work through with the customer.",
       "",
-      "Rules: copy facts exactly — never invent, estimate, or fill in typical values. Flag anything illegible or contradictory instead of resolving it yourself. Add no advice or recommendations; this package is for information transfer only."
+      "Rules: copy facts exactly, never invent, estimate, or fill in typical values. Flag anything illegible or contradictory instead of resolving it yourself. Add no advice or recommendations; this package is for information transfer only."
     ].join("\n")
   }
 ];

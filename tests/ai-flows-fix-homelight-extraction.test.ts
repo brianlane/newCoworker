@@ -23,7 +23,7 @@ function homelightDef(): Def {
           { name: "lead_name", description: "The lead's full name from the portal contact card" },
           { name: "lead_phone", description: "The lead's mobile phone from the contact card" },
           { name: "lead_email", description: "The lead's email from the contact card, or 'none'" },
-          { name: "lead_address", description: "The property street address — with ZIP" }
+          { name: "lead_address", description: "The property street address, with ZIP" }
         ]
       },
       {

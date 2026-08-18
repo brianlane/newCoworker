@@ -87,7 +87,7 @@ export default async function EnterpriseOfferPayPage({
         {state === "active" && (
           <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-3 py-2 text-sm text-claw-green">
             {justPaid
-              ? "Payment received — thank you! Your enterprise subscription is now active."
+              ? "Payment received, thank you! Your enterprise subscription is now active."
               : "This plan is already active. Contact us if anything looks off."}
           </p>
         )}

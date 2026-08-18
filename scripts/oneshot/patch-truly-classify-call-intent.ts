@@ -133,7 +133,7 @@ for (const { row, changed } of targets) {
     `\n=== ${row.name} (id=${row.id}, enabled=${row.enabled}, tenant=${TRULY ? "TRULY" : "test"}) ===`
   );
   if (changed.length === 0) {
-    console.log("  already patched — no changes");
+    console.log("  already patched, no changes");
     continue;
   }
   for (const c of changed) console.log(`  - ${c}`);

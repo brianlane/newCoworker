@@ -215,7 +215,7 @@ describe("reconcileOrphanedPurchases", () => {
     expect(args.release).toHaveBeenCalledTimes(1);
   });
 
-  it("skips an initial VM that already has a template applied (setup ran — not fail-but-charge)", async () => {
+  it("skips an initial VM that already has a template applied (setup ran, not fail-but-charge)", async () => {
     const args = makeArgs({
       listVirtualMachines: vi.fn().mockResolvedValue([
         vm({ id: 220, template: { id: 1121, name: "Ubuntu 24.04 with Docker" } })

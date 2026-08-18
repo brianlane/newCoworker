@@ -71,7 +71,7 @@ export default async function OfferPayPage({
         {state === "paid" && (
           <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-3 py-2 text-sm text-claw-green">
             {justPaid
-              ? "Payment received — thank you! Check your email for the confirmation and booking link."
+              ? "Payment received, thank you! Check your email for the confirmation and booking link."
               : "This offer has already been paid. Check your email for the confirmation, or contact us if anything's missing."}
           </p>
         )}

@@ -21,7 +21,7 @@ export type TriggerCondition =
   | { type: "has_url" }
   // Exactly one of value / ref (validated at author time). With `ref`, the
   // sender matches when it contains ANY of the referenced person's LIVE
-  // identity values (phone + aliases + email — resolved by the trigger hook
+  // identity values (phone + aliases + email, resolved by the trigger hook
   // via resolveFromMatchesRefValues just before evaluation).
   | { type: "from_matches"; value?: string; ref?: ContactRef; caseInsensitive?: boolean };
 
@@ -898,7 +898,7 @@ export type FlowStep =
       when?: StepCondition;
     }
   // Text whoever the lead BELONGS to: the contact's owning employee
-  // (contacts.owner_employee_id — set when a teammate claims) when one is on
+  // (contacts.owner_employee_id, set when a teammate claims) when one is on
   // record, else the business owner. phoneVar (preferred) / nameVar locate
   // the contact; unresolvable → business owner (a forward is never dropped).
   | {
@@ -1333,7 +1333,7 @@ export type FlowStep =
         | "multiply"
         | "divide"
         | "round"
-        // "yes" when left < right, "no" otherwise — a deterministic threshold
+        // "yes" when left < right, "no" otherwise, a deterministic threshold
         // gate (price bands), so the comparison is arithmetic rather than a
         // second LLM judgment that can contradict the extracted number.
         | "less_than"

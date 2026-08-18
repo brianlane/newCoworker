@@ -176,7 +176,7 @@ export default async function MarketingPage() {
                 <p className="mt-1 text-sm">
                   {metaActive ? (
                     <span className="text-claw-green">
-                      Connected{metaConnection?.page_name ? ` — ${metaConnection.page_name}` : ""}
+                      Connected{metaConnection?.page_name ? `, ${metaConnection.page_name}` : ""}
                     </span>
                   ) : (
                     <span className="text-parchment/60">Not connected</span>
@@ -216,7 +216,7 @@ export default async function MarketingPage() {
                     </ul>
                     {sourcesClipped ? (
                       <p className="mt-1 text-[11px] text-parchment/45">
-                        Busy week — counting the most recent {WEBHOOK_SCAN_LIMIT} deliveries,
+                        Busy week, counting the most recent {WEBHOOK_SCAN_LIMIT} deliveries,
                         so these are at-least numbers.
                       </p>
                     ) : null}
@@ -245,7 +245,7 @@ export default async function MarketingPage() {
                 </p>
                 {reviewCount > 0 ? (
                   <p className="text-[11px] text-parchment/45">
-                    Scraped prospects — review before any outreach. Find them on the{" "}
+                    Scraped prospects, review before any outreach. Find them on the{" "}
                     <Link
                       href="/dashboard/customers"
                       className="text-signal-teal hover:underline"

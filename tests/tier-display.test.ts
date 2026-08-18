@@ -113,7 +113,7 @@ describe("tier-display", () => {
     });
   });
 
-  describe("getTierCards — biennial", () => {
+  describe("getTierCards, biennial", () => {
     const cards = getTierCards("biennial");
     const [starter, standard, enterprise] = cards;
 
@@ -157,7 +157,7 @@ describe("tier-display", () => {
     });
   });
 
-  describe("getTierCards — annual", () => {
+  describe("getTierCards, annual", () => {
     const [starter] = getTierCards("annual");
 
     it("no Best Value badge off-biennial", () => {
@@ -170,7 +170,7 @@ describe("tier-display", () => {
     });
   });
 
-  describe("getTierCards — monthly", () => {
+  describe("getTierCards, monthly", () => {
     const [starter, standard] = getTierCards("monthly");
 
     it("shows the intro discount with the renewal rate struck through", () => {

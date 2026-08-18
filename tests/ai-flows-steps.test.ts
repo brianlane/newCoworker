@@ -223,11 +223,11 @@ describe("planStep: doc_extract", () => {
 
   it("renders the filing title (audience defaults to staff; blank title falls back)", () => {
     const plan = planStep(
-      { ...base, fileAs: { titleTemplate: "Renewal — {{trigger.document_name}}" } } as FlowStep,
+      { ...base, fileAs: { titleTemplate: "Renewal, {{trigger.document_name}}" } } as FlowStep,
       scopeWithDoc
     );
     expect(plan.ok && plan.action.kind === "doc_extract" ? plan.action : null).toMatchObject({
-      fileTitle: "Renewal — renewal.pdf",
+      fileTitle: "Renewal, renewal.pdf",
       fileAudience: "staff"
     });
 
@@ -307,7 +307,7 @@ describe("planStep: share_document", () => {
         ...base,
         documentTitle: "Price sheet",
         to: "{{vars.lead_phone}}",
-        messageTemplate: "Hi {{vars.lead_name}} — here it is: {{ share_url }}",
+        messageTemplate: "Hi {{vars.lead_name}}, here it is: {{ share_url }}",
         saveAs: "doc_url"
       } as FlowStep,
       { vars: { lead_phone: "(555) 234-5678", lead_name: "Sam" } }
@@ -320,7 +320,7 @@ describe("planStep: share_document", () => {
         documentTitle: "Price sheet",
         via: "sms",
         to: "+15552345678",
-        message: `Hi Sam — here it is: ${SHARE_URL_TOKEN}`,
+        message: `Hi Sam, here it is: ${SHARE_URL_TOKEN}`,
         saveAs: "doc_url"
       }
     });
@@ -646,7 +646,7 @@ describe("planStep: wait_for_reply", () => {
     // A rendered value still respects the 30-day ceiling.
     expect(timeoutOf({ report_wait_minutes: "999999" })).toBe(43200);
   });
-  it("completes only via ITS OWN marker — a stale saveAs from an earlier wait still parks", () => {
+  it("completes only via ITS OWN marker, a stale saveAs from an earlier wait still parks", () => {
     // Marker set (this step's resume/timeout ran) → no-op completion.
     const resolved = planStep(step, {
       vars: { lead_phone: "+16474494244", reply_text: "yes please", __waited_w1: "1" }
@@ -802,7 +802,7 @@ describe("planStep: update_contact", () => {
     });
   });
 
-  it("skips (never fails) when the phone is unusable — tag bookkeeping is auxiliary", () => {
+  it("skips (never fails) when the phone is unusable, tag bookkeeping is auxiliary", () => {
     for (const vars of [{}, { lead_phone: "none" }, { lead_phone: "12345" }]) {
       const plan = planStep(step, { vars });
       expect(plan).toEqual({
@@ -1170,7 +1170,7 @@ describe("planStep: send_sms", () => {
       "unparseable_recipient_phone"
     );
   });
-  it("still HARD-FAILS a literal (non-templated) bad recipient — that's a config bug", () => {
+  it("still HARD-FAILS a literal (non-templated) bad recipient, that's a config bug", () => {
     const literal: FlowStep = { id: "x", type: "send_sms", to: "call the office", body: "hi" };
     expect(planStep(literal, {})).toEqual({
       ok: false,
@@ -2529,7 +2529,7 @@ describe("planStep: upsert_customer", () => {
       false
     );
   });
-  it("SKIPS (never fails) when the phone var is missing — filing is bookkeeping", () => {
+  it("SKIPS (never fails) when the phone var is missing, filing is bookkeeping", () => {
     // A "none"/empty/scrubbed phone slips past a notEquals-"none" when-guard
     // as the empty string; the send steps skip gracefully for that value, so
     // the filing step must too (Bugbot on the Kav calendar-filing PR).

@@ -67,11 +67,11 @@ Key Service Promise: A 24/7 AI employee that answers calls, texts, and emails, b
 `;
 
 const HQ_DEMO_MEMORY_APPENDIX = `
-## Demo line (authoritative — this phone number is New Coworker's own demo)
-- You ARE the product: callers on this line are prospects trying New Coworker's AI coworker for themselves. Be the best possible demonstration — warm, competent, and natural.
+## Demo line (authoritative, this phone number is New Coworker's own demo)
+- You ARE the product: callers on this line are prospects trying New Coworker's AI coworker for themselves. Be the best possible demonstration, warm, competent, and natural.
 - Answer questions about New Coworker (features, pricing, setup, security) using the facts above and the website knowledge.
 - Demo calls are intentionally brief (about five minutes). Showcase what matters, don't pad. If the caller wants to go deeper, invite them to start a plan at newcoworker.com or leave their contact details for the team to follow up.
-- Feel free to demonstrate capabilities when asked (e.g. capture their details, send a follow-up text) — that IS the demo.
+- Feel free to demonstrate capabilities when asked (e.g. capture their details, send a follow-up text), that IS the demo.
 `;
 
 const { createSupabaseServiceClient } = await import("../../src/lib/supabase/server.ts");
@@ -129,11 +129,11 @@ console.log("[oneshot] deploy env:", {
 });
 
 if (!sourceConfig) {
-  console.error("[oneshot] Residency Pilot vault source config missing — aborting");
+  console.error("[oneshot] Residency Pilot vault source config missing, aborting");
   process.exit(1);
 }
 if (!flowTestTelnyx?.telnyx_messaging_profile_id || !flowTestTelnyx?.telnyx_connection_id) {
-  console.error("[oneshot] flow-test Telnyx settings incomplete — cannot move the DID wiring");
+  console.error("[oneshot] flow-test Telnyx settings incomplete, cannot move the DID wiring");
   process.exit(1);
 }
 
@@ -157,7 +157,7 @@ if (!existingBusiness) {
   });
   console.log("[oneshot] business created");
 } else {
-  console.log("[oneshot] business exists — skipping create");
+  console.log("[oneshot] business exists, skipping create");
 }
 
 // ---------------------------------------------------------------- 2. subscription
@@ -179,7 +179,7 @@ if (!existingSub) {
   });
   console.log("[oneshot] synthetic subscription created (period ends", end.toISOString(), ")");
 } else {
-  console.log("[oneshot] subscription exists — skipping create");
+  console.log("[oneshot] subscription exists, skipping create");
 }
 
 // ---------------------------------------------------------------- 3. vault
@@ -194,7 +194,7 @@ if (!existingHqConfig?.soul_md) {
   });
   console.log("[oneshot] vault seeded from webchat persona + demo appendix");
 } else {
-  console.log("[oneshot] business_configs already populated — skipping vault seed");
+  console.log("[oneshot] business_configs already populated, skipping vault seed");
 }
 
 // ---------------------------------------------------------------- 4. inventory
@@ -265,7 +265,7 @@ const result = await orchestrateProvisioning(
     // fails we want a loud abort, never a silent Hostinger purchase.
     vpsProvisioner: async () => {
       throw new Error(
-        "onboard-hq-tenant: refusing to PURCHASE a box — this onboarding is adopt-only (srv1806097). " +
+        "onboard-hq-tenant: refusing to PURCHASE a box, this onboarding is adopt-only (srv1806097). " +
           "If the adopt failed, fix vps_inventory / the VM and re-run."
       );
     },

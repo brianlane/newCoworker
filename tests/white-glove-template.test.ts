@@ -15,7 +15,7 @@ import {
 function fullAnswers(): IntakeAnswers {
   return intakeAnswersSchema.parse({
     business_hours: "Mon–Fri 9am–5pm",
-    team: "Jane Smith — 555-123-4567\nJohn Doe — 555-987-6543",
+    team: "Jane Smith, 555-123-4567\nJohn Doe, 555-987-6543",
     lead_sources: ["facebook_instagram", "referrals", "other"],
     lead_sources_other: "Trade shows",
     greeting: "Hi {name}! Thanks for calling Acme.",
@@ -105,7 +105,7 @@ describe("white-glove template questionnaire", () => {
   it("the schema applies defaults for omitted optional fields", () => {
     const minimal = intakeAnswersSchema.parse({
       business_hours: "By appointment",
-      team: "Ana — 555-000-1111",
+      team: "Ana, 555-000-1111",
       lead_sources: ["website_form"],
       appointment_length: "60",
       appointment_buffer: "none",
@@ -140,15 +140,15 @@ describe("white-glove template questionnaire", () => {
 describe("renderWhiteGloveDocSections", () => {
   it("merges every answer + the admin-supplied meta into the document", () => {
     const doc = renderWhiteGloveDocSections(fullAnswers(), META);
-    expect(doc.title).toBe("White-Glove Build & Installation — Acme Home Services");
+    expect(doc.title).toBe("White-Glove Build & Installation, Acme Home Services");
     expect(doc.intro).toContain("single source of truth");
     const all = doc.sections.flatMap((s) => [s.heading, ...s.lines]).join("\n");
     // About (from META) / hours / team / sources
     expect(all).toContain("Business: Acme Home Services");
     expect(all).toContain("Industry: Home services (HVAC, plumbing, roofing…)");
     expect(all).toContain("Business hours: Mon–Fri 9am–5pm");
-    expect(all).toContain("• Jane Smith — 555-123-4567");
-    expect(all).toContain("• John Doe — 555-987-6543");
+    expect(all).toContain("• Jane Smith, 555-123-4567");
+    expect(all).toContain("• John Doe, 555-987-6543");
     expect(all).toContain("• Facebook / Instagram ads");
     expect(all).toContain("• Referrals");
     // Free-text "other" replaces the raw "other" token.
@@ -220,7 +220,7 @@ describe("renderWhiteGloveDocSections", () => {
     const doc = renderWhiteGloveDocSections(answers, META);
     const all = doc.sections.flatMap((s) => s.lines).join("\n");
     expect(all).toContain("• (none selected)");
-    expect(doc.sections.find((s) => s.heading === "9. Notes")?.lines).toEqual(["—"]);
+    expect(doc.sections.find((s) => s.heading === "9. Notes")?.lines).toEqual(["-"]);
   });
 
   it("keeps a checked 'Other' visible even when its description was left blank", () => {
@@ -259,7 +259,7 @@ describe("renderWhiteGloveDocSections", () => {
 describe("renderWhiteGloveDoc (markdown)", () => {
   it("emits the title, intro, and every section as markdown", () => {
     const md = renderWhiteGloveDoc(fullAnswers(), META);
-    expect(md).toContain("# White-Glove Build & Installation — Acme Home Services");
+    expect(md).toContain("# White-Glove Build & Installation, Acme Home Services");
     const doc = renderWhiteGloveDocSections(fullAnswers(), META);
     for (const section of doc.sections) {
       expect(md).toContain(`## ${section.heading}`);

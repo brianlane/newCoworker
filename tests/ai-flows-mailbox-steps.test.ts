@@ -227,7 +227,7 @@ describe("collectRawWorkspaceConnectionRefs", () => {
       trigger: { channel: "email", connectionId: "trig-1", conditions: [] },
       triggers: [
         { channel: "email", connectionId: "trig-2" },
-        { channel: "webhook" } // no connection — ignored
+        { channel: "webhook" } // no connection, ignored
       ],
       steps: [
         { id: "a", type: "send_email", fromConnectionId: "send-1" },

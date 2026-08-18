@@ -193,7 +193,7 @@ let scanned = 0;
 }
 if (stopTexts.length > 0) {
   console.error(
-    "[oneshot] ABORT: this contact texted a STOP keyword themselves — a genuine customer " +
+    "[oneshot] ABORT: this contact texted a STOP keyword themselves, a genuine customer " +
       "opt-out can only be lifted by the contact texting START:"
   );
   for (const line of stopTexts) console.error(`[oneshot]   ${line}`);
@@ -206,7 +206,7 @@ console.log(`[oneshot] identity set: ${identitySet.join(", ")}`);
 console.log(
   `[oneshot] opt-out row(s): ${optRows.length > 0 ? optRows.map((r) => `${r.sender_e164} kind=${r.kind} set_at=${r.set_at}`).join("; ") : "none"}`
 );
-console.log(`[oneshot] inbound texts scanned: ${scanned} — no STOP keyword found`);
+console.log(`[oneshot] inbound texts scanned: ${scanned}, no STOP keyword found`);
 console.log(`[oneshot] tags: ${JSON.stringify(contact?.tags ?? [])}`);
 console.log(`[oneshot] sms_reply_mode: ${contact?.sms_reply_mode ?? "(no contact)"} → ${REPLY_MODE}`);
 
@@ -249,7 +249,7 @@ if (REPLY_MODE === "suppress") {
     totalCanceled += cancelResult.canceledRuns;
     if (!cancelResult.sweepComplete) {
       console.error(
-        "[oneshot] ABORT: run sweep hit an error — opt-outs left in place so nothing can send. Re-run."
+        "[oneshot] ABORT: run sweep hit an error, opt-outs left in place so nothing can send. Re-run."
       );
       process.exit(1);
     }
@@ -271,7 +271,7 @@ if (REPLY_MODE === "suppress") {
     .or(pendingOr);
   if (remErr || (remaining ?? 0) > 0) {
     console.error(
-      `[oneshot] ABORT: ${remErr ? `verification failed: ${remErr.message}` : `${remaining} pending run(s) still match`} — opt-outs left in place. Re-run.`
+      `[oneshot] ABORT: ${remErr ? `verification failed: ${remErr.message}` : `${remaining} pending run(s) still match`}, opt-outs left in place. Re-run.`
     );
     process.exit(1);
   }
@@ -301,7 +301,7 @@ if (contact) {
   }
   console.log("[oneshot] contact updated: spam tag removed, spam note lines removed");
 } else {
-  console.log("[oneshot] no contact row existed — nothing to clean (mode row created above)");
+  console.log("[oneshot] no contact row existed, nothing to clean (mode row created above)");
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ if (optRows.length > 0) {
     console.log(`[oneshot] opt-out cleared for ${row.sender_e164}: ${JSON.stringify(cleared)}`);
   }
 } else {
-  console.log("[oneshot] no opt-out rows — nothing to clear");
+  console.log("[oneshot] no opt-out rows, nothing to clear");
 }
 
 await recordOneshotApplied(db, {

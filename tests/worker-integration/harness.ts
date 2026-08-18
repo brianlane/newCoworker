@@ -31,7 +31,7 @@ const WORKER_URL = `${SUPABASE_URL}/functions/v1/ai-flow-worker`;
 export function serviceDb(): SupabaseClient {
   if (!SERVICE_ROLE_KEY) {
     throw new Error(
-      "ITEST_SERVICE_ROLE_KEY is not set — run `supabase status` and export the service role key."
+      "ITEST_SERVICE_ROLE_KEY is not set, run `supabase status` and export the service role key."
     );
   }
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {

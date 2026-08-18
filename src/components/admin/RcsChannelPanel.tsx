@@ -104,14 +104,14 @@ export function RcsChannelPanel({
 
       {!tierAllows && (
         <p className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-2 text-xs text-spark-orange">
-          This tenant&apos;s tier is not RCS-eligible (enterprise only) — settings here are
+          This tenant&apos;s tier is not RCS-eligible (enterprise only), settings here are
           saved but sends stay plain SMS until the tier allows it.
         </p>
       )}
 
       {!hasFromNumber && (
         <p className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-2 text-xs text-spark-orange">
-          No SMS from-number is configured (tenant setting or platform default) — RCS-first
+          No SMS from-number is configured (tenant setting or platform default), RCS-first
           requires one for the SMS fallback leg, so sends stay plain SMS until a DID is
           assigned.
         </p>
@@ -154,7 +154,7 @@ export function RcsChannelPanel({
       </div>
       {error && <p className="text-xs text-spark-orange">{error}</p>}
       <p className="text-[11px] text-parchment/35">
-        Takes effect on the tenant&apos;s next send — the gate is read per message. The agent
+        Takes effect on the tenant&apos;s next send, the gate is read per message. The agent
         must have a messaging profile AND webhook_url set on the Telnyx side or inbound RCS
         replies are silently dropped (see PRDs/tier-economics-jul-2026.md).
       </p>

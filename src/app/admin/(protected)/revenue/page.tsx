@@ -126,7 +126,7 @@ export default async function AdminRevenuePage() {
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Net Margin</p>
           {breakdown === null ? (
-            <p className="text-3xl font-bold text-parchment/40">—</p>
+            <p className="text-3xl font-bold text-parchment/40">-</p>
           ) : (
             <>
               <p

@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   console.log(`Actions before: ${before}`);
   console.log(`Actions after : ${after}`);
   if (before === after) {
-    console.log("\n(no change — already applied)");
+    console.log("\n(no change, already applied)");
   }
 
   if (!apply) {

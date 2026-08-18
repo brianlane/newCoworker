@@ -122,7 +122,7 @@ describe("renderMarkdown", () => {
   });
 });
 
-describe("renderMarkdown — strikethrough, autolink, tables", () => {
+describe("renderMarkdown, strikethrough, autolink, tables", () => {
   it("renders strikethrough", () => {
     expect(renderMarkdown("~~gone~~ still here")).toBe("<p><del>gone</del> still here</p>");
   });

@@ -70,7 +70,7 @@ describe("update_notification_preferences (MCP)", () => {
     expect(result.updated).toEqual({ customer_reply_alerts: true });
   });
 
-  it("declares boolean toggles only — recipients are not in the schema", () => {
+  it("declares boolean toggles only, recipients are not in the schema", () => {
     const keys = Object.keys(updateNotificationPreferencesTool.schema);
     expect(keys).toContain("customer_reply_alerts");
     expect(keys).toContain("sms_urgent");

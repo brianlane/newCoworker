@@ -204,7 +204,7 @@ describe("owner delete / admin restore never move the voice budget (self-healing
     expect(snapshot!.committedIncludedSeconds).toBe(SETTLED_SECONDS);
   });
 
-  it("admin restore is a complete reverse cascade — call, turns, activity — budget still unmoved", async () => {
+  it("admin restore is a complete reverse cascade, call, turns, activity, budget still unmoved", async () => {
     // The admin panel lists the deleted call…
     const deleted = await listDeletedItems(businessId);
     const entry = deleted.find((d) => d.type === "call" && d.id === transcriptId);

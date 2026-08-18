@@ -47,7 +47,7 @@ export function integrationKvmStacks(): readonly KvmStack[] {
   }
   if (out.length === 0) {
     throw new Error(
-      "integrationKvmStacks(): no stacks left — do not set INTEGRATION_SKIP_KVM8 and INTEGRATION_SKIP_KVM2 together."
+      "integrationKvmStacks(): no stacks left, do not set INTEGRATION_SKIP_KVM8 and INTEGRATION_SKIP_KVM2 together."
     );
   }
   return out;
@@ -175,7 +175,7 @@ const OLLAMA_CHAT_ATTEMPTS = Math.min(
 
 function ollamaOutOfMemoryHint(responseBody: string): string {
   if (!/more system memory|requires more system memory/i.test(responseBody)) return "";
-  return " — Ollama OOM: raise Docker Desktop / host RAM for the Linux VM, or choose a smaller Ollama tag.";
+  return ", Ollama OOM: raise Docker Desktop / host RAM for the Linux VM, or choose a smaller Ollama tag.";
 }
 
 function ollamaChatRetryDelayMs(attempt: number, lastErr: string): number {
@@ -242,7 +242,7 @@ export function composeServicesLogsTail(
 export function logHostCpuDiagnostic(): void {
   const [a, b, c] = loadavg();
   console.error(
-    `[integration] host loadavg (1m / 5m / 15m): ${a.toFixed(2)} ${b.toFixed(2)} ${c.toFixed(2)} — compare to CPU count; sustained high1m load often means saturation`
+    `[integration] host loadavg (1m / 5m / 15m): ${a.toFixed(2)} ${b.toFixed(2)} ${c.toFixed(2)}, compare to CPU count; sustained high1m load often means saturation`
   );
   console.error(
     `[integration] host process: pid=${process.pid} uptime=${Math.round(process.uptime())}s platform=${process.platform}`
@@ -266,7 +266,7 @@ function logOllamaChatExhaustedDiagnostics(
     return;
   }
   const n = integrationFailureComposeLogTailLines();
-  const tag = ctx.label ? ` — ${ctx.label}` : "";
+  const tag = ctx.label ? `, ${ctx.label}` : "";
   console.error(`[integration] --- Ollama chat exhausted${tag}: docker compose logs --tail ${n} ollama rowboat ---`);
   console.error(composeServicesLogsTail(ctx.composeFile, ctx.ollamaModel, ["ollama", "rowboat"], n));
 }
@@ -285,7 +285,7 @@ export function logIntegrationTierFailureDiagnostics(
   ollamaModel: string,
   stackLabel: string
 ): void {
-  console.error(`[integration] ${stackLabel} tier failure — diagnostics`);
+  console.error(`[integration] ${stackLabel} tier failure, diagnostics`);
   logHostCpuDiagnostic();
   const n = integrationFailureComposeLogTailLines();
   console.error(`[integration] --- docker compose logs --tail ${n} ollama rowboat ---`);

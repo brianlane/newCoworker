@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("resolveFlowDocumentSource — business-docs refs", () => {
+describe("resolveFlowDocumentSource, business-docs refs", () => {
   it("resolves a ready document (tenant-scoped lookup is the ownership gate)", async () => {
     vi.mocked(getBusinessDocument).mockResolvedValue(docRow());
     const { db, downloads } = makeDb();
@@ -138,7 +138,7 @@ describe("resolveFlowDocumentSource — business-docs refs", () => {
   });
 });
 
-describe("resolveFlowDocumentSource — email-attachments refs", () => {
+describe("resolveFlowDocumentSource, email-attachments refs", () => {
   it("resolves an owned attachment via the default service client", async () => {
     const { db, downloads } = makeDb();
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);

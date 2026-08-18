@@ -183,7 +183,7 @@ describe("inviteeMatchesContact", () => {
 describe("bookingContextLine", () => {
   const ev = { name: "Free Strategy Call", startIso: "2026-07-23T18:00:00Z" };
 
-  it("renders the start business-local WITH a named timezone — never a raw UTC ISO (KYP/Ayanna Jul 20 2026)", () => {
+  it("renders the start business-local WITH a named timezone, never a raw UTC ISO (KYP/Ayanna Jul 20 2026)", () => {
     // A raw "2026-07-23T18:00:00Z" invites the model to misconvert silently;
     // timezone-less times are the defect class that no-showed Ayanna.
     expect(bookingContextLine("booked", ev, { timezone: "America/Toronto" })).toBe(
@@ -211,7 +211,7 @@ describe("bookingContextLine", () => {
 });
 
 describe("contactBookingContextForPhone", () => {
-  it("answers none for a non-Calendly (or absent) connection — default deps path", async () => {
+  it("answers none for a non-Calendly (or absent) connection, default deps path", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null);
     expect(await contactBookingContextForPhone(BIZ, PHONE)).toEqual({
       status: "none",
@@ -571,7 +571,7 @@ describe("contactBookingContextForPhone", () => {
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 
-  it("answers none (and warns) when the lookup throws — Error and bare-string shapes", async () => {
+  it("answers none (and warns) when the lookup throws, Error and bare-string shapes", async () => {
     const d = deps({ resolveConnection: vi.fn().mockRejectedValue(new Error("nango down")) });
     const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([]));
     expect(out).toEqual({ status: "none", line: null });

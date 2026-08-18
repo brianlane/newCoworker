@@ -103,7 +103,7 @@ function useUnreadNotificationCount(businessId: string | null): number {
           setCount(json.data.count);
         }
       } catch {
-        // Network errors are non-fatal — we'll retry on the next tick.
+        // Network errors are non-fatal, we'll retry on the next tick.
       }
     };
     void fetchCount();

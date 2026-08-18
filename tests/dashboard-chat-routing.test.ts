@@ -49,7 +49,7 @@ describe("resolveChatTurnRoute", () => {
     ).toEqual({ kind: "refuse", message: ATTACHMENT_NOT_CONFIGURED_MESSAGE });
   });
 
-  it("falls back to the worker over cap (text turns) — the worker owns the local-model degrade", () => {
+  it("falls back to the worker over cap (text turns), the worker owns the local-model degrade", () => {
     expect(
       resolveChatTurnRoute({ hasAttachment: false, apiKeyPresent: true, spend: spend(100, 100) })
     ).toEqual({ kind: "worker" });

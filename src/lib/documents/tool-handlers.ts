@@ -121,7 +121,7 @@ export async function shareDocumentTool(
       detail: resolved.detail,
       message:
         resolved.detail === "document_ambiguous"
-          ? "More than one document matches that name — ask which one they mean."
+          ? "More than one document matches that name, ask which one they mean."
           : "No document with that name is on file. Never invent a link."
     };
   }
@@ -155,7 +155,7 @@ export async function shareDocumentTool(
       detail: minted.detail,
       message:
         minted.detail === "document_expired"
-          ? "That document has expired — tell them the team will follow up with a current copy."
+          ? "That document has expired, tell them the team will follow up with a current copy."
           : minted.detail === "document_not_shareable"
             ? "That document is internal-only and cannot be shared with customers."
             : "That document is not ready to share yet."
@@ -297,7 +297,7 @@ export async function requestDocumentSignatureTool(
       detail: resolved.detail,
       message:
         resolved.detail === "document_ambiguous"
-          ? "More than one document matches that name — ask which one the owner means."
+          ? "More than one document matches that name, ask which one the owner means."
           : "No document with that name is on file."
     };
   }
@@ -330,7 +330,7 @@ export async function requestDocumentSignatureTool(
       detail: minted.detail,
       message:
         minted.detail === "document_expired"
-          ? "That document has expired — extend or replace it before requesting a signature."
+          ? "That document has expired, extend or replace it before requesting a signature."
           : minted.detail === "document_empty"
             ? "That document has no readable content to sign yet."
             : "That document is not ready yet."

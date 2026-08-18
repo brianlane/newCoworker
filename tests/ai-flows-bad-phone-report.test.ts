@@ -68,8 +68,8 @@ function fixtureFor(cfg: FlowConfig): Definition {
       {
         id: "route",
         type: "route_to_team",
-        offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim or 2 to pass.",
-        ownerFallbackTemplate: "No one claimed it — back to you.",
+        offerTemplate: "New lead {{vars.lead_phone}}, reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed it, back to you.",
         responseMinutes: 10
       },
       { id: "notify", type: "notify_owner", message: "Outcome: {{vars.actions_taken}}" }
@@ -96,7 +96,7 @@ describe("buildBadPhoneSteps", () => {
     }
   );
 
-  it("is idempotent — a second apply is a no-op", () => {
+  it("is idempotent, a second apply is a no-op", () => {
     const cfg = FLOW_CONFIGS[0];
     const def = fixtureFor(cfg);
     expect(addBadPhoneAgentReport(def, cfg)).toBe(true);
@@ -192,7 +192,7 @@ describe("buildBadPhoneSteps", () => {
       // check → additive EMAIL BOUNCED alert.
       const [sent, wait, check, bounced] = armSteps.slice(leadEmails.length);
       expect(sent).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
-      expect(sent.when).toBeUndefined(); // unconditional — never blocked
+      expect(sent.when).toBeUndefined(); // unconditional, never blocked
       expect(sent.body).toContain("{{vars.agent_report}}");
       expect(sent.body).toContain("{{vars.claimed_agent}}");
       expect(sent.body).toContain("{{vars.actions_taken}}");

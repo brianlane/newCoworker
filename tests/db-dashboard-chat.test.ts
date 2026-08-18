@@ -88,7 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("db/dashboard-chat — threads", () => {
+describe("db/dashboard-chat, threads", () => {
   it("getActiveThread filters by business_id + is_active and returns the row", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: THREAD, error: null });
@@ -289,7 +289,7 @@ describe("db/dashboard-chat — threads", () => {
   });
 });
 
-describe("db/dashboard-chat — messages", () => {
+describe("db/dashboard-chat, messages", () => {
   it("appendMessage inserts the message and touches the thread updated_at", async () => {
     const msgChain = chain();
     msgChain.single.mockResolvedValue({
@@ -396,7 +396,7 @@ describe("db/dashboard-chat — messages", () => {
   });
 });
 
-describe("db/dashboard-chat — activity heartbeat", () => {
+describe("db/dashboard-chat, activity heartbeat", () => {
   it("touchChatActivity upserts last_user_chat_at keyed by business_id", async () => {
     const c = chain();
     c.upsert.mockResolvedValue({ error: null });
@@ -416,7 +416,7 @@ describe("db/dashboard-chat — activity heartbeat", () => {
   });
 });
 
-describe("db/dashboard-chat — getThreadById", () => {
+describe("db/dashboard-chat, getThreadById", () => {
   it("filters by id and returns the row when present", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: THREAD, error: null });
@@ -441,7 +441,7 @@ describe("db/dashboard-chat — getThreadById", () => {
   });
 });
 
-describe("db/dashboard-chat — listThreadsForBusiness", () => {
+describe("db/dashboard-chat, listThreadsForBusiness", () => {
   function makeRow(overrides: Partial<typeof THREAD> & { count?: number } = {}) {
     const { count, ...rest } = overrides;
     return {
@@ -523,8 +523,8 @@ describe("db/dashboard-chat — listThreadsForBusiness", () => {
   });
 });
 
-describe("db/dashboard-chat — serializeChatMessages", () => {
-  it("renames created_at to createdAt and drops the thread_id column — matches API envelope shape", () => {
+describe("db/dashboard-chat, serializeChatMessages", () => {
+  it("renames created_at to createdAt and drops the thread_id column, matches API envelope shape", () => {
     expect(
       serializeChatMessages([
         {
@@ -549,7 +549,7 @@ describe("db/dashboard-chat — serializeChatMessages", () => {
   });
 });
 
-describe("db/dashboard-chat — reactivateThread", () => {
+describe("db/dashboard-chat, reactivateThread", () => {
   // The helper issues TWO update statements:
   //   Step 1 (deactivate-others): .update(...).eq("business_id", ...)
   //                                .eq("is_active", true).neq("id", target)
@@ -610,7 +610,7 @@ describe("db/dashboard-chat — reactivateThread", () => {
     expect(eqCalls).toContainEqual(["business_id", BIZ]);
   });
 
-  it("throws when the deactivate UPDATE fails — second UPDATE never runs", async () => {
+  it("throws when the deactivate UPDATE fails, second UPDATE never runs", async () => {
     const c = makeReactivateChain({ deactivateError: { message: "deact bad" } });
     await expect(
       reactivateThread(BIZ, "t", makeDb(c) as never)
@@ -621,7 +621,7 @@ describe("db/dashboard-chat — reactivateThread", () => {
     expect(c.update).toHaveBeenCalledTimes(1);
   });
 
-  it("throws when the activate UPDATE fails (deactivate already ran — caller may need recovery)", async () => {
+  it("throws when the activate UPDATE fails (deactivate already ran, caller may need recovery)", async () => {
     const c = makeReactivateChain({ activateError: { message: "act bad" } });
     await expect(
       reactivateThread(BIZ, "t", makeDb(c) as never)
@@ -630,7 +630,7 @@ describe("db/dashboard-chat — reactivateThread", () => {
   });
 });
 
-describe("db/dashboard-chat — updateThreadSummary", () => {
+describe("db/dashboard-chat, updateThreadSummary", () => {
   it("writes summary_md + summary_message_count on the thread row", async () => {
     const c = chain();
     c.lte.mockResolvedValue({ error: null });
@@ -644,7 +644,7 @@ describe("db/dashboard-chat — updateThreadSummary", () => {
     expect(c.eq).toHaveBeenCalledWith("id", "thread-1");
   });
 
-  it("guards against older-snapshot overwrites with .lte('summary_message_count', messageCount) — concurrent summarizer runs only land if their snapshot is fresher than what's stored", async () => {
+  it("guards against older-snapshot overwrites with .lte('summary_message_count', messageCount), concurrent summarizer runs only land if their snapshot is fresher than what's stored", async () => {
     // Two summarizer runs can overlap (fire-and-forget). If the slow
     // run lands second with a STALER snapshot, an unguarded UPDATE
     // would regress summary_message_count and re-open the summarize
@@ -673,7 +673,7 @@ describe("db/dashboard-chat — updateThreadSummary", () => {
   });
 });
 
-describe("db/dashboard-chat — default service client fallback", () => {
+describe("db/dashboard-chat, default service client fallback", () => {
   it("each helper uses createSupabaseServiceClient when no client is passed", async () => {
     // getActiveThread
     {

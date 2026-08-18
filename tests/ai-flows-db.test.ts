@@ -480,7 +480,7 @@ describe("enqueueAiFlowRun", () => {
     );
   });
 
-  it("an EMPTY vars object is omitted — context stays byte-identical to pre-feature", async () => {
+  it("an EMPTY vars object is omitted, context stays byte-identical to pre-feature", async () => {
     const { db, builder } = makeDb({ single: RUN_ROW });
     await enqueueAiFlowRun({ ...input, vars: {} }, db as never);
     expect(builder.insert).toHaveBeenCalledWith(
@@ -705,7 +705,7 @@ describe("enqueueAiFlowRun re-entry gate", () => {
     expect(inserts).toHaveLength(0);
   });
 
-  it("prior TEST runs don't count — the contact still enrolls", async () => {
+  it("prior TEST runs don't count, the contact still enrolls", async () => {
     const { db, inserts } = makeGateDb({
       definition: NO_REENTRY_DEF,
       priorRuns: [

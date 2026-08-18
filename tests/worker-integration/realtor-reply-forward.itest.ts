@@ -58,7 +58,7 @@ function replyForwardFlow(): Record<string, unknown> {
         phoneVar: "lead_phone",
         nameVar: "lead_name",
         message:
-          "Realtor.com: {{vars.lead_name}} replied — full message:\n{{vars.full_message}}\nRespond via realtor.com: {{vars.reply_url}}"
+          "Realtor.com: {{vars.lead_name}} replied, full message:\n{{vars.full_message}}\nRespond via realtor.com: {{vars.reply_url}}"
       }
     ],
     options: { suppressDefaultReply: true }
@@ -96,7 +96,7 @@ async function forwardStep(runId: string) {
   return steps.find((s) => s.step_type === "notify_lead_owner");
 }
 
-describe("notify_lead_owner — forward the reply to whoever holds the lead (real worker)", () => {
+describe("notify_lead_owner, forward the reply to whoever holds the lead (real worker)", () => {
   it("today's case: owner-direct lead (unowned contact, name-only relay) goes to the business owner", async () => {
     const biz = await seedBusiness(db, "IT reply fwd owner-direct");
     // Jennifer's contact exists (created by the lead flow's intro text) but
@@ -144,7 +144,7 @@ describe("notify_lead_owner — forward the reply to whoever holds the lead (rea
     expect(String(run.context.vars?.actions_taken)).toContain("Gabrielle Mota");
   });
 
-  it("an ambiguous name (two contacts) never guesses — the business owner gets it", async () => {
+  it("an ambiguous name (two contacts) never guesses, the business owner gets it", async () => {
     const biz = await seedBusiness(db, "IT reply fwd ambiguous");
     const gabby = await seedMember(biz, "Gabrielle Mota", GABBY_PHONE);
     await seedContact(db, biz, JEN_PHONE, {
@@ -199,12 +199,12 @@ function ownerDirectFlow(): Record<string, unknown> {
       {
         id: "route",
         type: "route_to_team",
-        offerTemplate: "New lead {{vars.lead_name}} — reply 1 to claim.",
+        offerTemplate: "New lead {{vars.lead_name}}, reply 1 to claim.",
         ownerFallbackTemplate: "No one claimed {{vars.lead_name}}.",
         responseMinutes: 10,
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate:
-          "****************\nHIGH-VALUE Realtor.com lead ($1M+) kept for you — not offered to the team.\n{{vars.lead_name}} 480-274-0963\n****************",
+          "****************\nHIGH-VALUE Realtor.com lead ($1M+) kept for you, not offered to the team.\n{{vars.lead_name}} 480-274-0963\n****************",
         ownerDirectNudges: true
       },
       {
@@ -246,7 +246,7 @@ async function getRouting(runId: string): Promise<RoutingState> {
   return ((run.context as Record<string, unknown>).routing ?? {}) as RoutingState;
 }
 
-describe("ownerDirectNudges — 10/30-minute reminders until the owner replies 1 (real worker)", () => {
+describe("ownerDirectNudges, 10/30-minute reminders until the owner replies 1 (real worker)", () => {
   it("parks the alert on the owner's number, nudges at both timeouts, then moves on", async () => {
     const biz = await seedBusiness(db, "IT owner-direct nudges");
     await seedOwnerForward(biz);

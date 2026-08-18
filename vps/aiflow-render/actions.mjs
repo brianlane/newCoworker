@@ -432,7 +432,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
         }
       });
     } catch {
-      break; // page navigated/closed mid-probe — nothing left to dismiss
+      break; // page navigated/closed mid-probe, nothing left to dismiss
     }
     // The topmost overlay is the dialog hosting our target — don't close it.
     if (clicked === "__protected__") break;

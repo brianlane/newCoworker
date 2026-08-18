@@ -478,7 +478,7 @@ export async function runChangePlanFromCheckout(
         "contract-upgrade sweep will align this box once the window closes";
     } else if (oldVmId === null || !oldSub.hostinger_billing_subscription_id) {
       termAlignmentSkipReason =
-        "no VM / Hostinger billing subscription recorded for the old plan — verify the box's billing cycle in hPanel";
+        "no VM / Hostinger billing subscription recorded for the old plan, verify the box's billing cycle in hPanel";
     } else {
       currentCycleMonths = await currentHostingerCycleMonths(
         oldSub.hostinger_billing_subscription_id,
@@ -486,7 +486,7 @@ export async function runChangePlanFromCheckout(
       );
       if (currentCycleMonths === null) {
         termAlignmentSkipReason =
-          "the box's current Hostinger billing cycle could not be verified — check hPanel and change the renewal period manually if it is still monthly";
+          "the box's current Hostinger billing cycle could not be verified, check hPanel and change the renewal period manually if it is still monthly";
       } else if (currentCycleMonths < targetTermMonths) {
         termAlignment = true;
       }
@@ -812,7 +812,7 @@ export async function runChangePlanFromCheckout(
           vmId: oldVmId,
           plan: releasedPlan,
           hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
-          notes: `returned by upgrade_switch of business ${businessId}; auto-renew off — lapses at period end unless adopted`
+          notes: `returned by upgrade_switch of business ${businessId}; auto-renew off, lapses at period end unless adopted`
         });
       } catch (err) {
         logger.warn("changePlan: pool return of old VPS failed (continuing)", {
@@ -836,7 +836,7 @@ export async function runChangePlanFromCheckout(
         oldVmId !== null ? "old plan's VM stopped" : "no VM recorded",
         oldSub.hostinger_billing_subscription_id
           ? "auto-renew disabled"
-          : "no Hostinger billing id — renewal may still be active, check hPanel",
+          : "no Hostinger billing id, renewal may still be active, check hPanel",
         "tenant migrated to a new VPS"
       ].join("; ")
     });
@@ -866,8 +866,8 @@ export async function runChangePlanFromCheckout(
       : termAlignmentSkipReason
         ? `A ${targetTermMonths}-month Hostinger term was wanted but the automation could not act: ${termAlignmentSkipReason}.`
         : targetTermMonths <= 1
-          ? "New contract is month-to-month — the box keeps its current Hostinger billing cycle."
-          : `The box's Hostinger cycle (${currentCycleMonths}mo) already covers the ${targetTermMonths}-month target — nothing to change.`;
+          ? "New contract is month-to-month, the box keeps its current Hostinger billing cycle."
+          : `The box's Hostinger cycle (${currentCycleMonths}mo) already covers the ${targetTermMonths}-month target, nothing to change.`;
     await sendOpsTermAlignmentEmail({
       businessId,
       ownerName: business.owner_name ?? null,

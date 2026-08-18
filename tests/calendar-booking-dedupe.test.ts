@@ -487,7 +487,7 @@ describe("rescheduleBookingClaim", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("a unique-index conflict evicts the rival row at the new slot and retries — the MOVED event stays tracked", async () => {
+  it("a unique-index conflict evicts the rival row at the new slot and retries, the MOVED event stays tracked", async () => {
     // The provider event already moved (the attendee holds its updated
     // invitation), so its claim must win the slot; the displaced event
     // resolves later via provider search (Bugbot on PR #577).

@@ -76,7 +76,7 @@ export type EscalationResult =
   | "notify_failed"
   /**
    * Team-first handoff (businesses.needs_human_team_first): the tag + hooks
-   * enqueued a team-offer flow run, which now OWNS notification — the
+   * enqueued a team-offer flow run, which now OWNS notification, the
    * broadcast offer goes to the roster and the owner is paged only by the
    * flow's timeout fallback. No direct page was sent.
    */
@@ -259,7 +259,7 @@ export async function escalateToHuman(
       // the post-page block below (Bugbot, PR #801): the write may have
       // failed transiently, and without the tag the open/closed dedupe is
       // unarmed. If that retry succeeds and enqueues the flow, the roster
-      // is offered even though the owner was just paged — a one-off double
+      // is offered even though the owner was just paged, a one-off double
       // notification in a rare failure case, preferred over a tag-less
       // escalation.
     }

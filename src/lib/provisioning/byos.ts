@@ -173,12 +173,12 @@ async function requireByosKeyRow(businessId: string): Promise<VpsSshKeyRow & { h
   const row = await getActiveVpsSshKey(byosBoxId(businessId));
   if (!row) {
     throw new ByosEnrollmentError(
-      `No BYOS enrollment found for business ${businessId} — run the prepare step first`
+      `No BYOS enrollment found for business ${businessId}, run the prepare step first`
     );
   }
   if (!row.host) {
     throw new ByosEnrollmentError(
-      `BYOS key row for business ${businessId} has no host — re-run the prepare step`
+      `BYOS key row for business ${businessId} has no host, re-run the prepare step`
     );
   }
   return row as VpsSshKeyRow & { host: string };
@@ -355,12 +355,12 @@ export async function runByosPreflight(
       failed.length > 0
         ? failed.map((c) => `${c.name}: ${c.detail}`).join("; ")
         : `no verdict from the preflight script (exit ${result.exitCode})`;
-    throw new ByosEnrollmentError(`BYOS preflight failed — ${summary}`);
+    throw new ByosEnrollmentError(`BYOS preflight failed, ${summary}`);
   }
   if (report.diskEncryption === "attestation_required" && !opts.attestProviderDiskEncryption) {
     throw new ByosEnrollmentError(
       "No disk encryption detected on the box (dm-crypt/LUKS). Confirm provider-level " +
-        "encryption at rest and re-run with the attestation checkbox checked — PII must " +
+        "encryption at rest and re-run with the attestation checkbox checked, PII must " +
         "not land on an unencrypted disk."
     );
   }

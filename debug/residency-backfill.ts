@@ -53,7 +53,7 @@ if (bizErr || !biz) {
 }
 if (biz.tier !== "enterprise" || (biz.data_residency_mode ?? "supabase") === "supabase") {
   console.error(
-    `refusing: tier=${biz.tier} mode=${biz.data_residency_mode ?? "supabase"} — backfill is for residency-enabled enterprise tenants`
+    `refusing: tier=${biz.tier} mode=${biz.data_residency_mode ?? "supabase"}, backfill is for residency-enabled enterprise tenants`
   );
   process.exit(1);
 }

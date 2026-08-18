@@ -45,9 +45,9 @@ const RUN_ERROR_MESSAGES: Record<string, string> = {
   unsupported_type: "Only PDF, Word (.docx), plain text, markdown, or CSV attachments are supported",
   empty_content: "An attachment has no readable content",
   too_many_files: `A run can carry at most ${AGENT_RUN_MAX_FILES} files`,
-  output_too_large: "The re-typeset result was too large — try a shorter source document",
-  model_unavailable: "The AI service is not configured — try again later",
-  model_failed: "The AI call failed — try again"
+  output_too_large: "The re-typeset result was too large, try a shorter source document",
+  model_unavailable: "The AI service is not configured, try again later",
+  model_failed: "The AI call failed, try again"
 };
 
 type RouteContext = { params: Promise<{ agentId: string }> };
@@ -186,7 +186,7 @@ export async function POST(request: Request, context: RouteContext) {
     const agent = await getBusinessAgent(businessId, agentId);
     if (!agent) return errorResponse("NOT_FOUND", "Agent not found", 404);
     if (!agent.enabled) {
-      return errorResponse("VALIDATION_ERROR", "This agent is disabled — enable it to run");
+      return errorResponse("VALIDATION_ERROR", "This agent is disabled, enable it to run");
     }
 
     const runId = randomUUID();
@@ -275,7 +275,7 @@ export async function POST(request: Request, context: RouteContext) {
     } catch (err) {
       await patchAgentRun(businessId, runId, {
         status: "failed",
-        error_detail: "The run failed unexpectedly — try again",
+        error_detail: "The run failed unexpectedly, try again",
         completed_at: new Date().toISOString()
       }).catch((patchErr) => {
         logger.warn("agents/run: failed-state stamp failed", {
@@ -331,7 +331,7 @@ export async function POST(request: Request, context: RouteContext) {
       } catch (retryErr) {
         await patchAgentRun(businessId, runId, {
           status: "failed",
-          error_detail: "The result could not be saved — run the agent again",
+          error_detail: "The result could not be saved, run the agent again",
           completed_at: new Date().toISOString()
         }).catch((stampErr) => {
           logger.warn("agents/run: failed-state stamp failed", {

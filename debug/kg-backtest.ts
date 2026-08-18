@@ -536,7 +536,7 @@ async function main(): Promise<void> {
               .reverse()
               .map(
                 (m) =>
-                  `${m.direction}: ${m.subject ?? ""} — ${(m.body_preview ?? "").slice(0, 500)}`
+                  `${m.direction}: ${m.subject ?? ""}, ${(m.body_preview ?? "").slice(0, 500)}`
               )
               .join("\n")
           );

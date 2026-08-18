@@ -136,13 +136,13 @@ async function main(): Promise<void> {
   }
   if (!member) {
     console.error(
-      `No roster member named "${agentName}" for business ${businessId} — add them on the Team page first.`
+      `No roster member named "${agentName}" for business ${businessId}, add them on the Team page first.`
     );
     process.exit(2);
   }
   const roster = member as { id: string; name: string; phone_e164: string; active: boolean };
   if (!roster.active) {
-    console.error(`Roster member "${roster.name}" is inactive — activate them first.`);
+    console.error(`Roster member "${roster.name}" is inactive, activate them first.`);
     process.exit(2);
   }
 

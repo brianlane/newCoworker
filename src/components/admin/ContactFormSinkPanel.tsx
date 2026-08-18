@@ -79,7 +79,7 @@ export function ContactFormSinkPanel({
 
       {otherSink && !enabled && (
         <p className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-2 text-xs text-spark-orange">
-          Another business currently holds the designation ({currentSinkBusinessId}) —
+          Another business currently holds the designation ({currentSinkBusinessId}),
           enabling here moves it (one sink fleet-wide).
         </p>
       )}

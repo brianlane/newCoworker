@@ -239,7 +239,7 @@ describe("fetchVagaroCandidateEvents", () => {
         .fn()
         // created window: the appointment still listed as standing.
         .mockResolvedValueOnce([active])
-        // canceled window: the SAME appointment, now canceled — twice, so a
+        // canceled window: the SAME appointment, now canceled, twice, so a
         // canceled duplicate of an already-canceled entry is also exercised.
         .mockResolvedValueOnce([canceled, canceled])
     });

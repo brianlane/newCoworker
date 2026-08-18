@@ -719,7 +719,7 @@ describe("planLifecycleAction: adminForceCancel", () => {
 });
 
 describe("DID retention through non-terminal cancels", () => {
-  it("never releases the DID on grace-window cancels — a reactivating tenant keeps their number", () => {
+  it("never releases the DID on grace-window cancels, a reactivating tenant keeps their number", () => {
     // Every non-terminal action must leave the number rented so the tenant's
     // business line survives the 30-day grace window.
     const didCtx = { didE164: "+16025550100" };
@@ -851,7 +851,7 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
         hostingerBillingSubscriptionId: "hbs-1",
         refundIssued: false,
         cancelReason: "payment_failed",
-        vmState: "grace expired — VM stopped, snapshot deleted, auto-renew disabled"
+        vmState: "grace expired, VM stopped, snapshot deleted, auto-renew disabled"
       })
     );
   });

@@ -74,7 +74,7 @@ export function DeletedItemsPanel({ businessId }: { businessId: string }) {
       setMessage(
         `Restored ${TYPE_LABEL[item.type].toLowerCase()} (${json.data?.restored ?? 0} row${
           (json.data?.restored ?? 0) === 1 ? "" : "s"
-        }) — it's back in the owner's dashboard.`
+        }), it's back in the owner's dashboard.`
       );
       await load();
     } catch {

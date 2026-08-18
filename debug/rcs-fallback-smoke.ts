@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   // about the fallback. Fail fast instead of false-passing.
   if (!config.rcsAgentId || !config.fromE164) {
     throw new Error(
-      "HQ resolved no rcsAgentId/fromE164 — the RCS-first branch would be skipped entirely, " +
+      "HQ resolved no rcsAgentId/fromE164, the RCS-first branch would be skipped entirely, " +
         "so this smoke cannot prove the fallback. Aborting."
     );
   }
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   if (result.channel !== "sms") {
     throw new Error(
       `expected the RCS leg to be rejected and the send to fall back to plain SMS, ` +
-        `but channel=${result.channel} — fallback did NOT happen`
+        `but channel=${result.channel}, fallback did NOT happen`
     );
   }
   console.log("PASS: RCS leg rejected, delivered as plain SMS");

@@ -317,7 +317,7 @@ describe("duplicateLeadRunExists", () => {
     ).toBe(false);
   });
 
-  it("a prior run with NO address can't prove a different property — the person match stands", async () => {
+  it("a prior run with NO address can't prove a different property, the person match stands", async () => {
     const { db } = makeDb({
       contacts: [NO_EXPANSION],
       ai_flow_runs: [SELF, priorRun({ lead_phone: LEAD })]

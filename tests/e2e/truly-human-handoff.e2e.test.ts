@@ -79,7 +79,7 @@ const SCENARIOS: Scenario[] = [
       { role: "user", text: "how much is auto insurance" },
       {
         role: "model",
-        text: "Rates vary by driver and vehicle — a licensed broker can quote you exactly. Want me to set that up?"
+        text: "Rates vary by driver and vehicle, a licensed broker can quote you exactly. Want me to set that up?"
       },
       { role: "user", text: "stop texting me a robot, I need a human" }
     ]
@@ -119,7 +119,7 @@ describe("Truly human-handoff: person-requests must produce an escalation decisi
       ).not.toBeNull();
       expect(
         shouldEscalateToHuman(reasoning!),
-        `${scenario.name}: intent=${reasoning!.intent} handoff=${reasoning!.escalated} — ` +
+        `${scenario.name}: intent=${reasoning!.intent} handoff=${reasoning!.escalated}, ` +
           "a person-request turn produced no escalation decision (the Truly 2026-07-20 gap)"
       ).toBe(true);
     });

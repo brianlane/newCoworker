@@ -166,7 +166,7 @@ describe("getSidebarLayout", () => {
     expect(db.eq).toHaveBeenCalledWith("user_id", USER);
   });
 
-  it("degrades to the default catalog (warn-logged) on read errors — nav must never break", async () => {
+  it("degrades to the default catalog (warn-logged) on read errors, nav must never break", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),

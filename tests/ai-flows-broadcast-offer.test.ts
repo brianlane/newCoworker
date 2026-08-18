@@ -27,8 +27,8 @@ const routed = (route: Record<string, unknown>) => ({
     {
       id: "route",
       type: "route_to_team",
-      offerTemplate: "New lead — reply 1 to claim or 2 to pass",
-      ownerFallbackTemplate: "No one claimed it — back to you",
+      offerTemplate: "New lead, reply 1 to claim or 2 to pass",
+      ownerFallbackTemplate: "No one claimed it, back to you",
       ...route
     }
   ]
@@ -249,7 +249,7 @@ function broadcastRow(extraRouting: Record<string, unknown> = {}): LateClaimCand
   });
 }
 
-describe("matchLateClaimReply — broadcast offers", () => {
+describe("matchLateClaimReply, broadcast offers", () => {
   it("a broadcast offeree's '1' is LIVE (bare or with ETA)", () => {
     const r = broadcastRow();
     expect(matchClaim([r])).toEqual({ kind: "live", row: r, stepIndex: 3 });
@@ -305,7 +305,7 @@ function classify(
   });
 }
 
-describe("classifyStaleOfferReply — broadcast offers", () => {
+describe("classifyStaleOfferReply, broadcast offers", () => {
   const liveBroadcastRouting = {
     offered_all: [DAVE, AMY],
     offered_log: [DAVE, AMY],

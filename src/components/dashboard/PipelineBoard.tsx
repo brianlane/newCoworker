@@ -206,7 +206,7 @@ export function PipelineBoard({
       } catch (e) {
         setTasks(previous);
         setMoveError(
-          e instanceof Error ? e.message : "Couldn't move the lead — try again."
+          e instanceof Error ? e.message : "Couldn't move the lead, try again."
         );
       }
     },
@@ -253,7 +253,7 @@ export function PipelineBoard({
         <div className="space-y-3 py-4 text-center">
           <p className="text-sm text-parchment/60">
             No pipeline yet. A pipeline turns your lead tags into a drag-and-drop
-            board — each column is a stage backed by a tag, so your AiFlows move
+            board, each column is a stage backed by a tag, so your AiFlows move
             leads across it automatically.
           </p>
           {canManage ? (
@@ -453,7 +453,7 @@ export function PipelineBoard({
         <p className="text-xs text-parchment/40">
           {offBoardCount} lead{offBoardCount === 1 ? "" : "s"} in motion{" "}
           {offBoardCount === 1 ? "isn't" : "aren't"} on this pipeline (no matching
-          stage tag) — see the List view for everything.
+          stage tag), see the List view for everything.
         </p>
       )}
     </div>
@@ -627,7 +627,7 @@ function PipelineEditor({
   const deletePipeline = async () => {
     if (
       !window.confirm(
-        `Delete the "${pipeline.name}" pipeline? Leads keep their tags — only the board view goes away.`
+        `Delete the "${pipeline.name}" pipeline? Leads keep their tags, only the board view goes away.`
       )
     ) {
       return;
@@ -683,7 +683,7 @@ function PipelineEditor({
       {/* Stages */}
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-parchment/60">
-          Stages (each stage is a contact tag — renaming a stage re-tags its leads)
+          Stages (each stage is a contact tag, renaming a stage re-tags its leads)
         </p>
         {pipeline.stages.map((stage, i) => {
           const draft = stageNames[stage.id] ?? stage.name;
@@ -810,7 +810,7 @@ function PipelineEditor({
           Create pipeline
         </button>
         <span className="text-[11px] text-parchment/40">
-          starts with one &quot;New&quot; stage — add more above after selecting it
+          starts with one &quot;New&quot; stage, add more above after selecting it
         </span>
       </div>
     </Card>

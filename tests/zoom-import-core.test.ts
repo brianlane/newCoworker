@@ -194,7 +194,7 @@ describe("importZoomTranscriptDocument", () => {
  * topic before ingest) is replaced once the minutes exist and reveal who was
  * on the call and what it was about.
  */
-describe("importZoomTranscriptDocument — derived title", () => {
+describe("importZoomTranscriptDocument, derived title", () => {
   const GUEST_VTT = [
     "WEBVTT",
     "",

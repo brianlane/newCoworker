@@ -68,7 +68,7 @@ export const createContactTool = defineMcpTool({
       });
     } catch (err) {
       if (err instanceof CustomerExistsError) {
-        throw new McpToolError(`A contact already exists for ${phone} — use update_contact.`);
+        throw new McpToolError(`A contact already exists for ${phone}, use update_contact.`);
       }
       throw err;
     }
@@ -143,7 +143,7 @@ export const updateContactTool = defineMcpTool({
     );
     const existing = await getCustomerMemory(businessId, phone);
     if (!existing) {
-      throw new McpToolError(`No contact found for ${phone} — use create_contact.`);
+      throw new McpToolError(`No contact found for ${phone}, use create_contact.`);
     }
 
     // An assigned owner must be one of THIS business's roster members —

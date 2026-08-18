@@ -86,7 +86,7 @@ export function WebchatEnginePanel({
           <span>
             <span className="font-medium text-parchment">VPS chat-worker</span>
             <span className="block text-xs text-parchment/40">
-              Default. Replies come from the Rowboat agent on the tenant&apos;s box — requires a
+              Default. Replies come from the Rowboat agent on the tenant&apos;s box, requires a
               live, provisioned VPS.
             </span>
           </span>

@@ -58,7 +58,7 @@ describe("POST /api/voice/tools/dashboard-email", () => {
     expect(res.status).toBe(401);
   });
 
-  it("refuses caller-attributed envelopes — owner dashboard only", async () => {
+  it("refuses caller-attributed envelopes, owner dashboard only", async () => {
     const res = await POST(
       makeRequest({ businessId, callerE164: "+15555550123", args: validArgs })
     );

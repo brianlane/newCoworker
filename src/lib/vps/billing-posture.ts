@@ -239,10 +239,10 @@ export async function checkVpsBillingPosture(
         expiresAt: sub ? sub.expires_at ?? sub.next_billing_at ?? null : null,
         autoHealed: false,
         detail: renewing
-          ? `box is flagged never_renew but subscription ${subId} is still auto-renewing — disable renewal in hPanel, then migrate this tenant to its correct size (debug/migrate-vps-size.ts) before the period ends`
-          : "live tenant is on a never_renew box that lapses at its paid period end — migrate the tenant to its correct size (debug/migrate-vps-size.ts) before then"
+          ? `box is flagged never_renew but subscription ${subId} is still auto-renewing, disable renewal in hPanel, then migrate this tenant to its correct size (debug/migrate-vps-size.ts) before the period ends`
+          : "live tenant is on a never_renew box that lapses at its paid period end, migrate the tenant to its correct size (debug/migrate-vps-size.ts) before then"
       });
-      logger.warn("vps billing posture: live tenant on a never_renew box — migration needed", {
+      logger.warn("vps billing posture: live tenant on a never_renew box, migration needed", {
         businessId: business.id,
         vmId,
         hostingerBillingSubscriptionId: subId,
@@ -261,7 +261,7 @@ export async function checkVpsBillingPosture(
         expiresAt: null,
         autoHealed: false,
         detail:
-          "No billing subscription resolved for this VM — verify auto-renew in hPanel manually"
+          "No billing subscription resolved for this VM, verify auto-renew in hPanel manually"
       });
       continue;
     }
@@ -282,7 +282,7 @@ export async function checkVpsBillingPosture(
         autoHealed: false,
         detail:
           `subscription ${sub.id} is ${sub.status} with auto-renew off, but this business has ` +
-          "no Stripe payment behind its active subscription (internal/admin-created) — " +
+          "no Stripe payment behind its active subscription (internal/admin-created), " +
           "auto-heal skipped; enable renewal in hPanel if the box must survive, or cancel " +
           "the internal subscription to silence this finding"
       });
@@ -296,12 +296,12 @@ export async function checkVpsBillingPosture(
       try {
         await deps.enableAutoRenewal(sub.id);
         autoHealed = true;
-        detail += " — auto-renew re-enabled by posture check";
+        detail += ", auto-renew re-enabled by posture check";
       } catch (err) {
-        detail += ` — re-enable FAILED (${err instanceof Error ? err.message : String(err)}); fix in hPanel`;
+        detail += `, re-enable FAILED (${err instanceof Error ? err.message : String(err)}); fix in hPanel`;
       }
     } else {
-      detail += " — subscription cancelled upstream; box needs manual replacement before period end";
+      detail += ", subscription cancelled upstream; box needs manual replacement before period end";
     }
     findings.push({
       kind: "tenant_auto_renew_off",
@@ -346,7 +346,7 @@ export async function checkVpsBillingPosture(
       expiresAt: sub.expires_at ?? sub.next_billing_at ?? null,
       autoHealed: false,
       detail:
-        `pooled (available) box is still auto-renewing (${sub.status}) — ` +
+        `pooled (available) box is still auto-renewing (${sub.status}), ` +
         "disable renewal in hPanel unless it is being held for adoption on purpose"
     });
   }

@@ -51,7 +51,7 @@ export function TasksWorkspace({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (stored === "list" || stored === "board" || stored === "data") setView(stored);
     } catch {
-      /* storage unavailable — keep the default */
+      /* storage unavailable, keep the default */
     }
   }, []);
 

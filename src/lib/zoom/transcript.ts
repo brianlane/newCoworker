@@ -26,7 +26,7 @@ export type ZoomTranscriptError =
   | "not_found"
   /** Transcript exists but Zoom refuses the download (restriction reason attached). */
   | "restricted"
-  /** Transport/API failure — retryable. */
+  /** Transport/API failure, retryable. */
   | "request_failed";
 
 export type ZoomTranscriptResult =
@@ -314,7 +314,7 @@ export async function fetchZoomMeetingTranscript(
       ok: false,
       error: "not_found",
       detail:
-        "Could not read that meeting reference — paste the meeting ID, the meeting UUID, or the recording page link from the Zoom portal."
+        "Could not read that meeting reference, paste the meeting ID, the meeting UUID, or the recording page link from the Zoom portal."
     };
   }
 
@@ -329,14 +329,14 @@ export async function fetchZoomMeetingTranscript(
     return {
       ok: false,
       error: "request_failed",
-      detail: "Could not reach Zoom to refresh the connection — try again shortly."
+      detail: "Could not reach Zoom to refresh the connection, try again shortly."
     };
   }
   if (!token) {
     return {
       ok: false,
       error: "not_connected",
-      detail: "No active Zoom connection — connect Zoom on the Integrations page first."
+      detail: "No active Zoom connection, connect Zoom on the Integrations page first."
     };
   }
 
@@ -351,7 +351,7 @@ export async function fetchZoomMeetingTranscript(
     return {
       ok: false,
       error: "request_failed",
-      detail: "Zoom did not respond — try again shortly."
+      detail: "Zoom did not respond, try again shortly."
     };
   }
 
@@ -380,7 +380,7 @@ export async function fetchZoomMeetingTranscript(
       ok: false,
       error: "not_found",
       detail:
-        "Zoom has no transcript under that reference. Make sure the meeting was cloud-recorded with audio transcript on (processing can take a few minutes) — and if it was, paste the recording page LINK from the Zoom portal (Recordings & Transcripts → your meeting) instead of the meeting ID."
+        "Zoom has no transcript under that reference. Make sure the meeting was cloud-recorded with audio transcript on (processing can take a few minutes), and if it was, paste the recording page LINK from the Zoom portal (Recordings & Transcripts → your meeting) instead of the meeting ID."
     };
   }
   if (!metaRes.ok) {
@@ -419,7 +419,7 @@ export async function fetchZoomMeetingTranscript(
     return {
       ok: false,
       error: "request_failed",
-      detail: "The transcript download timed out — try again shortly."
+      detail: "The transcript download timed out, try again shortly."
     };
   }
   if (!dlRes.ok) {
@@ -441,7 +441,7 @@ export async function fetchZoomMeetingTranscript(
     return {
       ok: false,
       error: "request_failed",
-      detail: "Zoom returned something that isn't a VTT transcript — try again shortly."
+      detail: "Zoom returned something that isn't a VTT transcript, try again shortly."
     };
   }
   return { ok: true, vtt };

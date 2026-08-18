@@ -77,7 +77,7 @@ const BASE_LINES = [
  */
 const INTAKE_QUESTIONS = {
   asks_shopping_reason:
-    "Does the message ask AGAIN, in any phrasing, the general opener 'what prompted/made you shop around or reach out today?' — i.e. re-asking their MOTIVE for getting in touch, which they effectively answered by stating what they need? Asking a DEEPER or MORE SPECIFIC follow-up (what kind of policy, new policy vs renewal, coverage details, timing) is false — that is progress, not a re-ask.",
+    "Does the message ask AGAIN, in any phrasing, the general opener 'what prompted/made you shop around or reach out today?', i.e. re-asking their MOTIVE for getting in touch, which they effectively answered by stating what they need? Asking a DEEPER or MORE SPECIFIC follow-up (what kind of policy, new policy vs renewal, coverage details, timing) is false, that is progress, not a re-ask.",
   asks_known_identity:
     "Does the message ask the customer to provide or confirm their own name, phone number, or email (in any phrasing)?"
 };

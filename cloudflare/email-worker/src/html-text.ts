@@ -20,7 +20,7 @@ export function htmlToText(html: string): string {
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\b[^>]*>/gi, " ")
     .replace(/<title\b[^>]*>[\s\S]*?<\/title\b[^>]*>/gi, " ")
     // Keep link destinations: `<a href="U">label</a>` → `label (U)`. Without
-    // this, tag-stripping silently discards every URL — e.g. an "Accept
+    // this, tag-stripping silently discards every URL, e.g. an "Accept
     // invitation" button becomes dead text. http(s) only; tracking-pixel
     // anchors and `href="#"` noise stay dropped.
     .replace(

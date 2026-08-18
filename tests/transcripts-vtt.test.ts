@@ -40,12 +40,12 @@ describe("vttToPlainText", () => {
       "",
       "3",
       "00:00:08.500 --> 00:00:12.000",
-      "Brian Lane: Sounds good — I have the July numbers."
+      "Brian Lane: Sounds good, I have the July numbers."
     ].join("\n");
     expect(vttToPlainText(vtt)).toBe(
       [
         "Dania Shaikh: Thanks for joining, everyone. Let's review the renewal book first.",
-        "Brian Lane: Sounds good — I have the July numbers."
+        "Brian Lane: Sounds good, I have the July numbers."
       ].join("\n")
     );
   });
@@ -72,7 +72,7 @@ describe("vttToPlainText", () => {
     expect(vttToPlainText(vtt)).toBe("just narration");
   });
 
-  it("keeps digits-only cue payload — only block-position numeric cue ids drop", () => {
+  it("keeps digits-only cue payload, only block-position numeric cue ids drop", () => {
     const vtt = [
       "WEBVTT",
       "",
@@ -115,7 +115,7 @@ describe("vttToPlainText", () => {
     expect(vttToPlainText(vtt)).toBe("Dania: Hello");
   });
 
-  it("keeps cue payload lines that START with NOTE — only block-position NOTE/STYLE/REGION skip", () => {
+  it("keeps cue payload lines that START with NOTE, only block-position NOTE/STYLE/REGION skip", () => {
     const vtt = [
       "WEBVTT",
       "",

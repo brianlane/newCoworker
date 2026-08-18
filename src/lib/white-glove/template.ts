@@ -129,7 +129,7 @@ const NEVER_HANDLE_OPTIONS: IntakeChoiceOption[] = [
 
 const CONSENT_OPTIONS: IntakeChoiceOption[] = [
   { value: "yes", label: "Yes, our lead forms include text/call consent wording" },
-  { value: "not_yet", label: "Not yet — we'd like help adding it" }
+  { value: "not_yet", label: "Not yet, we'd like help adding it" }
 ];
 
 // ── Answers schema (server-side validation of the public submission) ───────
@@ -237,7 +237,7 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     id: "business_hours",
     section: "Your availability",
     label: "Business hours",
-    help: "When your team is reachable — appointments and handoffs respect these.",
+    help: "When your team is reachable, appointments and handoffs respect these.",
     type: "text",
     placeholder: "Mon–Fri 9am–5pm",
     required: true,
@@ -249,7 +249,7 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Who should the assistant hand leads to?",
     help: "One person per line: name and mobile number.",
     type: "textarea",
-    placeholder: "Jane Smith — 555-123-4567\nJohn Doe — 555-987-6543",
+    placeholder: "Jane Smith, 555-123-4567\nJohn Doe, 555-987-6543",
     required: true,
     maxLength: 2000
   },
@@ -285,7 +285,7 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     id: "qualification_questions",
     section: "The first message",
     label: "Up to 3 questions the assistant may ask",
-    help: "One per line, 3 at most — fewer questions means fewer leads lost. Leave blank to use our suggestions.",
+    help: "One per line, 3 at most, fewer questions means fewer leads lost. Leave blank to use our suggestions.",
     type: "textarea",
     placeholder: "What can we help you with?\nHow soon are you hoping to get started?",
     required: false,
@@ -488,7 +488,7 @@ export function renderWhiteGloveDocSections(
         `First nudge: ${labelOf(FIRST_FOLLOW_UP_OPTIONS, answers.first_follow_up)}`,
         `Second nudge: ${labelOf(SECOND_FOLLOW_UP_OPTIONS, answers.second_follow_up)}`,
         `Personal-touch flag: ${labelOf(HANDOFF_AFTER_OPTIONS, answers.handoff_after)}`,
-        "Quiet leads are marked inactive, never deleted — if they reply weeks later, the conversation resumes where it left off."
+        "Quiet leads are marked inactive, never deleted, if they reply weeks later, the conversation resumes where it left off."
       ]
     },
     {
@@ -509,7 +509,7 @@ export function renderWhiteGloveDocSections(
     },
     {
       heading: "9. Notes",
-      lines: [answers.notes || "—"]
+      lines: [answers.notes || "-"]
     },
     {
       heading: "10. Installation checklist (completed by our team)",
@@ -540,7 +540,7 @@ export function renderWhiteGloveDocSections(
   ];
 
   return {
-    title: `White-Glove Build & Installation — ${meta.businessName}`,
+    title: `White-Glove Build & Installation, ${meta.businessName}`,
     intro:
       "This document is the single source of truth for your white-glove build. " +
       "It captures how your AI assistant greets leads, books appointments, follows up, " +

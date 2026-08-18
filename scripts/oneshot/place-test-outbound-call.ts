@@ -38,7 +38,7 @@ const TEST_FLOW_NAME = "Outbound test call (dev)";
 const E164 = /^\+[1-9][0-9]{6,14}$/;
 
 const INTAKE_PERSONA =
-  "Hi, this is a quick test call from Amy Laidlaw's office — just confirming our outbound calling works. Can you hear me okay?";
+  "Hi, this is a quick test call from Amy Laidlaw's office, just confirming our outbound calling works. Can you hear me okay?";
 const CAPTURE_FIELDS = ["name", "notes"];
 
 function parseArgs(argv: readonly string[]): Args {

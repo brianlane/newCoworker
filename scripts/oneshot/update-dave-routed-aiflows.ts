@@ -80,7 +80,7 @@ const EMAIL_MATCH_TEMPLATES = ["{{vars.lead_first_name}}", "{{vars.price_digits}
 const PRICE_DIGITS_FIELD = {
   name: "price_digits",
   description:
-    "The price's leading digits ONLY — no $, commas, K or M. For $429K answer 429; " +
+    "The price's leading digits ONLY, no $, commas, K or M. For $429K answer 429; " +
     "for $264,000 answer 264. Used to match this lead against the portal alert email, " +
     "which writes the price in full (e.g. $429,000), so the bare leading digits are " +
     "the token that reliably appears in BOTH."
@@ -252,7 +252,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, skipping:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);

@@ -229,7 +229,7 @@ export async function flagContactSpam(
   const noteParts = [
     suppressionComplete
       ? `this number is now blocked from all texting${identitySet.length > 1 ? ` (their ${identitySet.length - 1} linked number(s) too)` : ""}`
-      : "this number is now blocked from all texting, but one of their linked numbers could not be confirmed as blocked — flag it separately to be safe",
+      : "this number is now blocked from all texting, but one of their linked numbers could not be confirmed as blocked, flag it separately to be safe",
     runsSweepComplete
       ? `${canceledRuns} pending automation run(s) were stopped`
       : "some of their pending automation runs could not be confirmed as stopped (they may still show active on the dashboard, but any text they attempt to this number will be skipped)",

@@ -89,7 +89,7 @@ export function ViewAsBanner({
           </span>
           <span className="ml-2 text-parchment/40 text-xs">
             {selfOwned
-              ? "your own business — changes are enabled"
+              ? "your own business, changes are enabled"
               : "account & billing changes are disabled"}
           </span>
         </span>

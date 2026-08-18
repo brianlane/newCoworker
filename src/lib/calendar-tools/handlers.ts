@@ -847,7 +847,7 @@ export async function bookCalendarAppointment(
         message:
           `This person already has an upcoming appointment: ${existingStartLocal}. Do NOT ` +
           "book another one. Tell them about that existing time and ask what they want: " +
-          "keep it (book nothing), move it (calendar_reschedule_appointment — never book a " +
+          "keep it (book nothing), move it (calendar_reschedule_appointment, never book a " +
           "second slot to move one), or cancel it (calendar_cancel_appointment). Only if " +
           "they explicitly confirm they want an ADDITIONAL separate appointment, call " +
           "calendar_book_appointment again with allowAdditional set to true."

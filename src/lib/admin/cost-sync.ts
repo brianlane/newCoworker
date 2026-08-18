@@ -537,7 +537,7 @@ export async function runPlatformCostSync(
   let telnyxRows = 0;
   let telnyxError: string | null = null;
   if (!deps.telnyxApiKey) {
-    telnyxError = "TELNYX_API_KEY not set — Telnyx sync skipped";
+    telnyxError = "TELNYX_API_KEY not set, Telnyx sync skipped";
   } else {
     try {
       const dids = await deps.listTenantDids();

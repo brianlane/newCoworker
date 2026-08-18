@@ -117,7 +117,7 @@ for (const size of VPS_SIZES) {
 }
 
 if (failures > 0) {
-  console.error(`\n${failures} mapping problem(s) — fix via OVH_PLAN_CODE_KVM* env overrides.`);
+  console.error(`\n${failures} mapping problem(s), fix via OVH_PLAN_CODE_KVM* env overrides.`);
   process.exit(1);
 }
 console.log("\nAll mapped plan codes verified against the live catalog.");

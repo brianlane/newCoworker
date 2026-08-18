@@ -326,7 +326,7 @@ export default async function MemoryGraphAdminPage({
             <p className="text-xs text-parchment/50">
               Extraction spend since {sinceDay(window)} (UTC days):{" "}
               <span className="text-parchment">{microsToMoney(fleetSpend.costMicros)}</span> across{" "}
-              <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls — surface{" "}
+              <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls, surface{" "}
               <code>memory_graph</code>, same ledger as /admin/gemini; the spend roll-up is
               day-grained, so cost covers whole UTC days while lookup stats use the rolling window
             </p>
@@ -340,7 +340,7 @@ export default async function MemoryGraphAdminPage({
         {fleetStatsTruncated && (
           <p className="mb-3 text-xs text-amber-200/80">
             High volume: stats below cover the newest {statsRows.length.toLocaleString()} events
-            fleet-wide in this window, not every lookup — open a tenant&apos;s comparison for its
+            fleet-wide in this window, not every lookup, open a tenant&apos;s comparison for its
             true counts.
           </p>
         )}
@@ -368,7 +368,7 @@ export default async function MemoryGraphAdminPage({
                     {row.setting === "inherit" ? `inherit → ${row.effective}` : row.setting}
                   </td>
                   <td className="py-2 pr-4">{stats?.lookups ?? 0}</td>
-                  <td className="py-2 pr-4">{stats ? `${stats.graphOnlyRate}%` : "—"}</td>
+                  <td className="py-2 pr-4">{stats ? `${stats.graphOnlyRate}%` : "-"}</td>
                   <td className="py-2 pr-4">
                     <KeepChip
                       verdict={kgKeepVerdict(
@@ -408,7 +408,7 @@ export default async function MemoryGraphAdminPage({
       {selectedBusinessId && (
         <Card id="comparison">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
-            Comparison — {businessNames.get(selectedBusinessId) ?? selectedBusinessId} ({window})
+            Comparison, {businessNames.get(selectedBusinessId) ?? selectedBusinessId} ({window})
           </h2>
           <p className="text-sm text-parchment mb-1">{kgVerdictHeadline(selectedStats)}</p>
           {selectedTotal > selected.length && (
@@ -515,7 +515,7 @@ export default async function MemoryGraphAdminPage({
                                 {"\n"}
                               </span>
                             ))
-                          : "(empty — no entity matched this question)"}
+                          : "(empty, no entity matched this question)"}
                       </pre>
                     </div>
                     <div>

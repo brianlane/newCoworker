@@ -39,7 +39,7 @@ RB_ENV=/opt/rowboat/.env
 APP=\$(grep -m1 '^APP_BASE_URL=' "\$RB_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
 TOK=\$(grep -m1 '^ROWBOAT_GATEWAY_TOKEN=' "\$RB_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
 if [ -z "\$APP" ] || [ -z "\$TOK" ]; then
-  echo "ERROR: APP_BASE_URL or ROWBOAT_GATEWAY_TOKEN missing in \$RB_ENV — cannot wire webhook"
+  echo "ERROR: APP_BASE_URL or ROWBOAT_GATEWAY_TOKEN missing in \$RB_ENV, cannot wire webhook"
   exit 1
 fi
 WEBHOOK="\${APP%/}/api/rowboat/tool-call"

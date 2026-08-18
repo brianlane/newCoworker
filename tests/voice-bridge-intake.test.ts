@@ -101,7 +101,7 @@ describe("intakeSystemInstruction", () => {
     expect(defaults).not.toContain("name, phone,");
     // Same for the transfer script's capture-fields mention.
     const transfer = intakeSystemInstruction("Acme", undefined, null, ["phone", "best time"], false, {});
-    expect(transfer).toContain("fields: best time —");
+    expect(transfer).toContain("fields: best time,");
     // A list that is ONLY phone degrades to notes, never an empty list.
     const onlyPhone = intakeSystemInstruction("Acme", undefined, null, ["phone"], false, undefined, true);
     expect(onlyPhone).toContain("confirming as you go: notes.");

@@ -325,7 +325,7 @@ async function settlePage(page) {
       .catch(() => {});
     if (SETTLE_POST_DELAY_MS > 0) await page.waitForTimeout(SETTLE_POST_DELAY_MS);
   } catch {
-    // A settle failure must never break the browse — proceed with whatever
+    // A settle failure must never break the browse, proceed with whatever
     // rendered so text/screenshots still flow.
   }
 }

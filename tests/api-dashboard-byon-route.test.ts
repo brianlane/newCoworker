@@ -169,7 +169,7 @@ describe("api/dashboard/byon route", () => {
     expect((await DELETE(jsonReq("DELETE", `?businessId=${BIZ}&id=nope`))).status).toBe(400);
 
     vi.mocked(cancelByonPortRequest).mockRejectedValueOnce(
-      new ByonValidationError("This number already finished porting — it can't be cancelled.")
+      new ByonValidationError("This number already finished porting, it can't be cancelled.")
     );
     const res = await DELETE(jsonReq("DELETE", `?businessId=${BIZ}&id=${REQ_ID}`));
     expect(res.status).toBe(400);

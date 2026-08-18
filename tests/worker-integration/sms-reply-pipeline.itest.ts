@@ -149,7 +149,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
   it("assembles the full preamble, strips the trailer, and captures reasoning", async () => {
     const { biz } = await seedLeadWithContext("IT sms pipeline");
     rowboat.scriptReply(
-      "Thanks Dwight — I've noted April 17th for your broker.\n" +
+      "Thanks Dwight, I've noted April 17th for your broker.\n" +
         `${REASONING_MARKER}{"intent":"policy_renewal_date","why":"They answered the renewal question.","handoff":false}`
     );
     const jobId = await enqueueSmsJob(db, biz, LEAD, INBOUND_TEXT);
@@ -199,7 +199,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(rows[0].intent).toBe("policy_renewal_date");
     expect(rows[0].escalated).toBe(false);
     expect(rows[0].model).toBe("gemini");
-    expect(rows[0].reply_preview).toBe("Thanks Dwight — I've noted April 17th for your broker.");
+    expect(rows[0].reply_preview).toBe("Thanks Dwight, I've noted April 17th for your broker.");
     expect(rows[0].reply_preview).not.toMatch(/reasoning|\{"intent"/i);
     expect(rows[0].inbound_preview).toBe(INBOUND_TEXT);
 
@@ -228,7 +228,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
   it("strips the mangled-marker trailer (production leak shape) through the real worker", async () => {
     const { biz } = await seedLeadWithContext("IT sms mangled");
     rowboat.scriptReply(
-      "I understand — I'll have your broker reach out to you directly.\n" +
+      "I understand, I'll have your broker reach out to you directly.\n" +
         '\u27E6reasoning}{"intent":"policy_dispute","why":"Mangled marker variant.","handoff":false}\u27E7'
     );
     await enqueueSmsJob(db, biz, LEAD, "I'm tired of insurance refusing to give me insurance");
@@ -238,12 +238,12 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(rows).toHaveLength(1);
     expect(rows[0].intent).toBe("policy_dispute");
     expect(rows[0].reply_preview).toBe(
-      "I understand — I'll have your broker reach out to you directly."
+      "I understand, I'll have your broker reach out to you directly."
     );
     expect(rows[0].reply_preview).not.toMatch(/reasoning|\{"intent"|\u27E6|\u27E7/);
   });
 
-  it("an iMessage tapback gets NO AI reply — logged and counted, never answered", async () => {
+  it("an iMessage tapback gets NO AI reply, logged and counted, never answered", async () => {
     const { biz } = await seedLeadWithContext("IT tapback suppress");
     // The seeded flow message ends in a question, and a reaction to a
     // question is an ANSWER (see the thumbs-down scenario below). This
@@ -394,7 +394,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     if (error) throw new Error(`seedPriorAssistantReply: ${error.message}`);
   }
 
-  it("a bare 'Ok' after a statement gets NO AI reply — logged and counted, never answered (Truly Jul 21)", async () => {
+  it("a bare 'Ok' after a statement gets NO AI reply, logged and counted, never answered (Truly Jul 21)", async () => {
     const { biz } = await seedLeadWithContext("IT ack suppress");
     await seedPriorAssistantReply(
       biz,
@@ -485,7 +485,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(String(dashboard?.payload.summary)).toContain("Dwight Colclough");
   });
 
-  it("a retryable failure below the ceiling does NOT page — the retry owns it", async () => {
+  it("a retryable failure below the ceiling does NOT page, the retry owns it", async () => {
     const { biz } = await seedLeadWithContext("IT retry no-page");
     const { data, error } = await db
       .from("sms_inbound_jobs")
@@ -548,7 +548,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     const trailer =
       `${REASONING_MARKER}{"intent":"policy_dispute","why":"Needs a licensed broker to resolve the refusal.","handoff":true}`;
 
-    rowboat.scriptReply(`I'm sorry — a human on our team needs to take this over.\n${trailer}`);
+    rowboat.scriptReply(`I'm sorry, a human on our team needs to take this over.\n${trailer}`);
     await enqueueSmsJob(db, biz, LEAD, "No one will insure me and I am done talking to a robot");
     await tickSmsWorker();
 
@@ -576,7 +576,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
 
     // A second escalated turn while the tag is still on: already_open — the
     // reply flows normally but the owner is NOT re-paged.
-    rowboat.scriptReply(`Understood — the team has been alerted already.\n${trailer}`);
+    rowboat.scriptReply(`Understood, the team has been alerted already.\n${trailer}`);
     await enqueueSmsJob(db, biz, LEAD, "Hello?? I said I need a person");
     await tickSmsWorker();
 

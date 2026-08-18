@@ -47,7 +47,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       {q.meta === "connected" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
           <p className="text-sm text-claw-green">
-            Facebook connected — open Meta Lead Ads below to pick the Page to watch for
+            Facebook connected, open Meta Lead Ads below to pick the Page to watch for
             leads.
           </p>
         </Card>
@@ -86,7 +86,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               {category === "Lead sources" && (
                 <p className="text-xs text-parchment/45">
                   Using another lead source? Any tool that exports a spreadsheet or calls a
-                  webhook can feed your coworker — see the{" "}
+                  webhook can feed your coworker, see the{" "}
                   <Link
                     href="/dashboard/aiflows/guides/instagram-leads"
                     className="text-signal-teal hover:underline"

@@ -153,7 +153,7 @@ export async function listKgExtractionSpend(
       .gte("day", sinceDay)
       // TOTAL order (the view has one row per day/tenant/model/pricing
       // source): offset paging under a partial sort can drop or duplicate
-      // rows past the cap — same ordering contract as listGeminiSpendDaily.
+      // rows past the cap, same ordering contract as listGeminiSpendDaily.
       .order("day", { ascending: true })
       .order("business_id", { ascending: true })
       .order("model", { ascending: true })
@@ -449,7 +449,7 @@ export function groupKgStatsByBusiness(
 /** One-line human verdict for the banner. */
 export function kgVerdictHeadline(stats: KgStats): string {
   if (stats.lookups === 0) {
-    return "No lookups recorded in this window yet — the comparison fills in as real questions arrive.";
+    return "No lookups recorded in this window yet, the comparison fills in as real questions arrive.";
   }
   return (
     `Graph contributed on ${stats.graphContributionRate}% of ${stats.lookups} lookups; ` +

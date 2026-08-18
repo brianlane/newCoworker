@@ -84,7 +84,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changes: string
     );
     if (detailsIdx < 0) {
       throw new Error(
-        'no browse_extract producing "lead_phone" found — is this the Clever accept flow?'
+        'no browse_extract producing "lead_phone" found, is this the Clever accept flow?'
       );
     }
     const urlVar = (steps[detailsIdx] as Extract<FlowStep, { type: "browse_extract" }>).urlVar;
@@ -107,7 +107,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changes: string
   if (!hasCleverTag) {
     const upsertIdx = steps.findIndex((s) => s.type === "upsert_customer");
     if (upsertIdx < 0) {
-      throw new Error("no upsert_customer step found — is this the Clever accept flow?");
+      throw new Error("no upsert_customer step found, is this the Clever accept flow?");
     }
     steps.splice(upsertIdx + 1, 0, {
       id: "tag_clever",

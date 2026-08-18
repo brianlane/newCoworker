@@ -84,7 +84,7 @@ const priceStr = kvm1Price
     (kvm1Price.first_period_price !== undefined
       ? ` (first period $${(kvm1Price.first_period_price / 100).toFixed(2)})`
       : "")
-  : "UNKNOWN — item not in catalog!";
+  : "UNKNOWN, item not in catalog!";
 
 const { data: srcBiz, error: bizErr } = await db
   .from("businesses")
@@ -108,14 +108,14 @@ if (cfgErr || !srcCfg) {
 console.log(`== KVM1 smoke provision (Phase E) ==`);
 console.log(`source business : ${srcBiz.name} (${SOURCE_BUSINESS_ID}, tier=${srcBiz.tier})`);
 console.log(`item            : ${KVM1_ITEM_ID}  →  ${priceStr}`);
-console.log(`clone tier      : starter (bootstrap profile VPS_SIZE=kvm2 — see header #1)`);
+console.log(`clone tier      : starter (bootstrap profile VPS_SIZE=kvm2, see header #1)`);
 console.log(
   `vault sizes     : soul=${srcCfg.soul_md.length}ch identity=${srcCfg.identity_md.length}ch ` +
     `memory=${srcCfg.memory_md.length}ch website=${srcCfg.website_md.length}ch`
 );
 
 if (fs.existsSync(STATE_FILE)) {
-  console.error(`\nRefusing: ${STATE_FILE} already exists — an experiment box may be live.`);
+  console.error(`\nRefusing: ${STATE_FILE} already exists, an experiment box may be live.`);
   console.error(`Tear it down first (cancel-vps-billing.ts --vm <vmId> --apply) or delete the file.`);
   process.exit(1);
 }
@@ -142,7 +142,7 @@ if (!APPLY) {
 // ---------------------------------------------------------------- clone rows
 const cloneId = randomUUID();
 const cloneName = `KVM1 Smoke (${srcBiz.name} clone)`;
-console.log(`\ncreating clone business ${cloneId} — "${cloneName}"`);
+console.log(`\ncreating clone business ${cloneId}, "${cloneName}"`);
 
 const { error: insBizErr } = await db.from("businesses").insert({
   id: cloneId,
@@ -237,7 +237,7 @@ fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
 console.log(`\nVPS ready: vm=${result.virtualMachineId} ip=${result.publicIp}`);
 console.log(`billing subscription: ${result.hostingerBillingSubscriptionId ?? "UNKNOWN (look up before teardown!)"}`);
 console.log(`state written to ${STATE_FILE}`);
-console.log(`\nbootstrap.sh (TIER=starter VPS_SIZE=kvm2) runs via cloud-init at first boot — tail it:`);
+console.log(`\nbootstrap.sh (TIER=starter VPS_SIZE=kvm2) runs via cloud-init at first boot, tail it:`);
 console.log(`  npx tsx debug/vps-exec.ts ${cloneId} "tail -50 /post_install.log"`);
 console.log(`once bootstrap is quiescent, disable Ollama (Gemini-only shape):`);
 console.log(

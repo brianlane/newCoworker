@@ -226,7 +226,7 @@ export const getSmsThreadTool = defineMcpTool({
     )
   }),
   description:
-    "Read the SMS/RCS conversation with one contact, oldest to newest — inbound texts, the AI coworker's replies, and workflow/manual sends.",
+    "Read the SMS/RCS conversation with one contact, oldest to newest, inbound texts, the AI coworker's replies, and workflow/manual sends.",
   schema: {
     business_id: businessIdField,
     phone: z.string().describe("The contact's phone number (any common format)."),
@@ -377,7 +377,7 @@ export const listTasksTool = defineMcpTool({
     )
   }),
   description:
-    "The business's leads in motion: contacts with active AiFlow workflow runs (with each run's flow and status) plus lead-state tagged contacts — the same data behind the dashboard Task Center.",
+    "The business's leads in motion: contacts with active AiFlow workflow runs (with each run's flow and status) plus lead-state tagged contacts, the same data behind the dashboard Task Center.",
   schema: {
     business_id: businessIdField,
     limit: z.number().int().min(1).max(100).optional()

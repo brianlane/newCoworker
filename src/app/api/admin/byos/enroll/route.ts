@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     if ((business.vps_provider ?? "hostinger") !== "byos") {
       return errorResponse(
         "VALIDATION_ERROR",
-        `Business is pinned to vps_provider='${business.vps_provider ?? "hostinger"}', not 'byos' — run the prepare step first.`
+        `Business is pinned to vps_provider='${business.vps_provider ?? "hostinger"}', not 'byos', run the prepare step first.`
       );
     }
 
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       phase: "byos_preflight",
       percent: 3,
       message:
-        `BYOS preflight passed on ${host} — ` +
+        `BYOS preflight passed on ${host}, ` +
         `disk encryption: ${preflight.diskEncryption}` +
         (body.attestProviderDiskEncryption
           ? " (operator attested provider-level encryption at rest)"
