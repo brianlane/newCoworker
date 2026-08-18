@@ -27,7 +27,11 @@ vi.mock("@/lib/db/notification-preferences", () => ({
   getNotificationPreferences: vi.fn()
 }));
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
-vi.mock("@/lib/db/employees", () => ({ getTeamMember: vi.fn() }));
+vi.mock("@/lib/db/employees", () => ({ getTeamMember: vi.fn(), listTeamMembers: vi.fn() }));
+vi.mock("@/lib/telnyx/messaging", () => ({
+  getTelnyxMessagingForBusiness: vi.fn(),
+  sendTelnyxSms: vi.fn()
+}));
 
 import {
   maybeAlertUnassignedBooking,
@@ -36,7 +40,8 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
-import { getTeamMember } from "@/lib/db/employees";
+import { getTeamMember, listTeamMembers } from "@/lib/db/employees";
+import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -448,5 +453,164 @@ describe("maybeAlertUnassignedBooking: gates and failure", () => {
     expect(out).toBe("sent_solo");
     expect(createSupabaseServiceClient).toHaveBeenCalled();
     expect(getNotificationPreferences).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The employee audience (Amy Laidlaw Real Estate, Aug 17 2026). The owner
+ * half of this alert already fired on every booking; what was impossible was
+ * telling anyone else. `booking_alert_audience` adds that without moving the
+ * default: an untouched tenant stays owner-only and never reads the roster.
+ */
+describe("the employee audience", () => {
+  const ROSTER = [
+    { id: "a", name: "Dave Lane", phone_e164: "+16025245719", active: true },
+    { id: "b", name: "Gabrielle Mota", phone_e164: "+14807202013", active: true }
+  ];
+
+  function prefs(over: Record<string, unknown>) {
+    vi.mocked(getNotificationPreferences).mockResolvedValue(over as never);
+  }
+
+  it("never reads the roster when the audience is the default owner", async () => {
+    prefs({ unassigned_booking_alerts: true });
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn() as never
+    });
+    expect(out).toBe("sent_unowned");
+    expect(listTeamMembers).not.toHaveBeenCalled();
+  });
+
+  it("texts every active member and still alerts the owner on 'both'", async () => {
+    prefs({ booking_alert_audience: "both" });
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
+      sendSms
+    });
+    expect(out).toBe("sent_unowned");
+    expect(dispatchUrgentNotification).toHaveBeenCalled();
+    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+16025245719", "+14807202013"]);
+    expect(String(sendSms.mock.calls[0][2])).toContain("NOT assigned to anyone yet.");
+  });
+
+  it("drops the owner dispatch entirely on 'employees'", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
+      sendSms
+    });
+    expect(out).toBe("sent_employees_only");
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    expect(sendSms).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors a selected-employee list", async () => {
+    prefs({ booking_alert_audience: "employees", booking_alert_member_ids: ["b"] });
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
+      sendSms
+    });
+    expect(sendSms.mock.calls.map((c) => c[1])).toEqual(["+14807202013"]);
+  });
+
+  it("one dead number does not cost the others their message", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    const sendSms = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("40310 invalid destination"))
+      .mockResolvedValue(undefined);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue(ROSTER) as never,
+      sendSms
+    });
+    expect(out).toBe("sent_employees_only");
+    expect(sendSms).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking alert: employee text failed",
+      expect.objectContaining({ memberId: "a" })
+    );
+  });
+
+  it("logs a non-Error rejection as a string", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    const sendSms = vi.fn().mockRejectedValue("telnyx sad");
+    await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue([ROSTER[0]]) as never,
+      sendSms
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking alert: employee text failed",
+      expect.objectContaining({ error: "telnyx sad" })
+    );
+  });
+
+  it("sends nothing when the roster has nobody textable", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    const sendSms = vi.fn();
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockResolvedValue([]) as never,
+      sendSms
+    });
+    expect(out).toBe("sent_employees_only");
+    expect(sendSms).not.toHaveBeenCalled();
+  });
+
+  it("names the holder when the booking is owned", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    vi.mocked(getTeamMember).mockResolvedValue({ name: "Dave Lane" } as never);
+    const sendSms = vi.fn().mockResolvedValue(undefined);
+    await maybeAlertUnassignedBooking(
+      BIZ,
+      { ...INPUT, bookingAssigneeMemberId: "a" },
+      {
+        client: fakeDb({ contacts: NO_CONTACT }),
+        listMembers: vi.fn().mockResolvedValue([ROSTER[1]]) as never,
+        sendSms
+      }
+    );
+    expect(String(sendSms.mock.calls[0][2])).toContain("Assigned to Dave Lane.");
+  });
+
+  it("binds the real roster read and Telnyx send when no deps are injected", async () => {
+    prefs({ booking_alert_audience: "employees" });
+    vi.mocked(listTeamMembers).mockResolvedValue(ROSTER as never);
+    vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({} as never);
+    vi.mocked(sendTelnyxSms).mockResolvedValue({} as never);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT })
+    });
+    expect(out).toBe("sent_employees_only");
+    expect(sendTelnyxSms).toHaveBeenCalledTimes(2);
+    expect(getTelnyxMessagingForBusiness).toHaveBeenCalledWith(BIZ, expect.anything());
+  });
+
+  it("a roster read that throws is caught by the never-throws contract", async () => {
+    prefs({ booking_alert_audience: "both" });
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: vi.fn().mockRejectedValue(new Error("roster down")) as never
+    });
+    expect(out).toBe("failed");
+  });
+
+  it("an unknown stored audience falls back to owner-only", async () => {
+    prefs({ booking_alert_audience: "everyone" });
+    const listMembers = vi.fn();
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ contacts: NO_CONTACT }),
+      listMembers: listMembers as never
+    });
+    expect(out).toBe("sent_unowned");
+    expect(listMembers).not.toHaveBeenCalled();
   });
 });

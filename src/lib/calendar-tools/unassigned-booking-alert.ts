@@ -33,7 +33,14 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
-import { getTeamMember } from "@/lib/db/employees";
+import { getTeamMember, listTeamMembers } from "@/lib/db/employees";
+import {
+  buildBookingAlertSms,
+  parseBookingAlertAudience,
+  resolveBookingAlertRecipients,
+  type BookingAlertMember
+} from "@/lib/calendar-tools/booking-alert-recipients";
+import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import {
   buildBookingOwnerAlert,
   type BookingOwnerAlertState,
@@ -73,6 +80,7 @@ export type UnassignedBookingAlertOutcome =
   | "sent_unowned"
   | "sent_covered"
   | "sent_solo"
+  | "sent_employees_only"
   | "skipped_disabled"
   | "failed";
 
@@ -85,6 +93,10 @@ export type UnassignedBookingAlertDeps = {
   dispatch?: typeof dispatchUrgentNotification;
   /** Injectable roster read (tests). */
   getMember?: typeof getTeamMember;
+  /** Injectable full-roster read, for the employee audience (tests). */
+  listMembers?: typeof listTeamMembers;
+  /** Injectable employee SMS leg (tests). */
+  sendSms?: (businessId: string, toE164: string, body: string) => Promise<void>;
 };
 
 /**
@@ -169,6 +181,69 @@ async function contactOwnerEmployeeId(
   return null;
 }
 
+/**
+ * Text the employee audience. Returns how many messages went out.
+ *
+ * Every failure here is swallowed per member: this is a best-effort alert on
+ * an already-confirmed booking, and one agent with a dead number must not
+ * cost the other three their message (or the owner theirs, since this runs
+ * before the owner dispatch).
+ */
+async function textEmployees(
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  businessId: string,
+  audience: ReturnType<typeof parseBookingAlertAudience>,
+  prefs: { booking_alert_member_ids?: string[] | null } | null,
+  input: {
+    attendeeName: string;
+    startLocal: string;
+    summary: string;
+    assigneeName: string | null;
+    attendeePhone: string | null;
+    listMembers?: typeof listTeamMembers;
+    sendSms?: (businessId: string, toE164: string, body: string) => Promise<void>;
+  }
+): Promise<number> {
+  if (audience === "owner") return 0;
+  const list = input.listMembers ?? listTeamMembers;
+  const roster = (await list(businessId, db)) as unknown as BookingAlertMember[];
+  const { members } = resolveBookingAlertRecipients(
+    audience,
+    prefs?.booking_alert_member_ids ?? null,
+    roster
+  );
+  if (members.length === 0) return 0;
+
+  const body = buildBookingAlertSms({
+    attendeeName: input.attendeeName,
+    startLocal: input.startLocal,
+    summary: input.summary,
+    assigneeName: input.assigneeName,
+    attendeePhone: input.attendeePhone
+  });
+  const send =
+    input.sendSms ??
+    (async (bid: string, to: string, text: string) => {
+      const config = await getTelnyxMessagingForBusiness(bid, db);
+      await sendTelnyxSms(config, to, text, { meterBusinessId: bid });
+    });
+
+  let sent = 0;
+  for (const m of members) {
+    try {
+      await send(businessId, m.phone_e164, body);
+      sent += 1;
+    } catch (err) {
+      logger.warn("booking alert: employee text failed", {
+        businessId,
+        memberId: m.id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  return sent;
+}
+
 export async function maybeAlertUnassignedBooking(
   businessId: string,
   input: UnassignedBookingAlertInput,
@@ -185,6 +260,11 @@ export async function maybeAlertUnassignedBooking(
     // before any other read so a switched-off tenant costs one query.
     const prefs = await getPreferences(businessId, db);
     if (prefs?.unassigned_booking_alerts === false) return "skipped_disabled";
+
+    // Who hears about this. Default "owner" is what every tenant had before
+    // the column existed, so a business that never touched the setting takes
+    // exactly the old path below and pays for no extra reads.
+    const audience = parseBookingAlertAudience(prefs?.booking_alert_audience);
 
     const rostered = await hasActiveRoster(db, businessId);
 
@@ -226,6 +306,27 @@ export async function maybeAlertUnassignedBooking(
     // English for the dashboard row and the SMS: neither resolves a locale,
     // so there is nothing to render them in.
     const base = copyFor(undefined);
+
+    // The employee leg. Runs before the owner dispatch so a roster read that
+    // throws is caught by the same best-effort catch, and never after a
+    // partial owner send.
+    const employeesTexted = await textEmployees(db, businessId, audience, prefs, {
+      attendeeName: input.attendeeName,
+      startLocal: input.startLocal,
+      summary: input.summary,
+      assigneeName,
+      attendeePhone: input.attendeePhone,
+      listMembers: deps.listMembers,
+      sendSms: deps.sendSms
+    });
+
+    // Audience "employees" means the owner asked to be taken off this alert.
+    // The employee texts already went out above, so report that rather than
+    // an ownership state nobody was told about.
+    if (audience === "employees") {
+      logger.info("booking alert: employees only", { businessId, employeesTexted });
+      return "sent_employees_only";
+    }
 
     await dispatch({
       businessId,

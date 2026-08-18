@@ -53,6 +53,17 @@ export type NotificationPreferencesRow = {
    * the type for rows read before 20260819100000.
    */
   unassigned_booking_alerts?: boolean;
+  /**
+   * Who hears about a confirmed booking: the owner (default, and the only
+   * behavior before 20260822180406), the employees, or both. The owner half
+   * is the alert that already existed; the employee half is an SMS.
+   */
+  booking_alert_audience?: "owner" | "employees" | "both";
+  /**
+   * Narrow the employee half to these ai_flow_team_members ids. Null (or
+   * empty) means every active member. Ignored when the audience is "owner".
+   */
+  booking_alert_member_ids?: string[] | null;
   /** Category filter: new-lead captures (see lib/notifications/categories.ts). */
   category_leads: boolean;
   /** Category filter: team-notify pings. */
@@ -167,6 +178,8 @@ export type NotificationPreferencesUpdate = Partial<
     | "aiflow_failure_alerts"
     | "customer_reply_alerts"
     | "unassigned_booking_alerts"
+    | "booking_alert_audience"
+    | "booking_alert_member_ids"
     | "category_leads"
     | "category_team"
     | "category_system"
@@ -194,6 +207,8 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   aiflow_failure_alerts: false,
   customer_reply_alerts: false,
   unassigned_booking_alerts: true,
+  booking_alert_audience: "owner",
+  booking_alert_member_ids: null,
   category_leads: true,
   category_team: true,
   category_system: true,
@@ -302,6 +317,8 @@ export async function updateNotificationPreferences(
     "aiflow_failure_alerts",
     "customer_reply_alerts",
     "unassigned_booking_alerts",
+    "booking_alert_audience",
+    "booking_alert_member_ids",
     "category_leads",
     "category_team",
     "category_system",
@@ -324,9 +341,10 @@ export async function updateNotificationPreferences(
   // clear unsubscribed_at unless they explicitly set it. Without this, an
   // owner who hit "Unsubscribe from all" then re-enabled email_urgent would
   // keep seeing the "you're unsubscribed" banner until a separate save.
-  // digest_customer_facing_only and whatsapp_replaces_sms are deliberately
-  // absent: they narrow or reroute what an already-on channel delivers rather
-  // than turning a channel on, so they never re-subscribe.
+  // digest_customer_facing_only, whatsapp_replaces_sms and the two
+  // booking_alert_* fields are deliberately absent: they narrow or reroute
+  // what an already-on channel delivers rather than turning a channel on, so
+  // they never re-subscribe.
   const reSubscribed =
     update.unsubscribed_at === undefined &&
     (patch.sms_urgent === true ||

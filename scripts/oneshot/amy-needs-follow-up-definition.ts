@@ -109,7 +109,12 @@ function promoteRouteBase(): Record<string, unknown> {
       "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}), the lead the AI " +
       "follow-up promoted after they said: \"{{vars.lead_reply}}\"\n" +
       "The AI has stopped working this lead.",
+    // The leading banner is Amy's "not claimed" marker, applied account-wide
+    // by amy-owner-notice-policy.ts. It lives in the builder too, or the next
+    // re-seed of this flow would silently strip it back off. A test pins the
+    // two literals equal.
     ownerFallbackTemplate:
+      "‼️‼️‼️‼️‼️\n" +
       "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}), who told the AI follow-up " +
       'they are ready: "{{vars.lead_reply}}"\n' +
       "{{vars.lead_intent}} in {{vars.lead_city}}, source {{vars.lead_site}}. It's back to you."
