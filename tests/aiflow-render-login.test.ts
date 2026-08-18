@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   ADVANCE_SELECTORS,
+  EMAIL_FIRST_SELECTORS,
   firstSelector,
   LOGIN_HINT_RE,
   looksLikeLogin,
@@ -128,15 +129,25 @@ function stubPage(
 function homelightPage() {
   return stubPage(
     {
-      'input[type="email"]': { count: 1 },
+      // The REAL markup, read live 2026-08-18. The email box is type="text"
+      // with no name, no id and no autocomplete, and Continue is an ANCHOR:
+      //   <form class="email-field-form">
+      //     <input type="text" placeholder="Enter your email" class="email-field-input">
+      //     <a class="button email-submit">Continue</a>
+      //   </form>
+      // An earlier draft of this fixture used input[type=email] and a <button>,
+      // which is how a green suite still failed against the live portal.
+      'input[type="email"]': { count: 0 },
+      'input[placeholder*="email" i]': { count: 1 },
       'input[type="password"]': { count: 0 },
-      'button:has-text("Continue")': { count: 1 }
+      'button:has-text("Continue")': { count: 0 },
+      'form a:has-text("Continue")': { count: 1 }
     },
     {
       url: "https://homelight.com/client/sign-in",
       text: "Sign in with your email",
       advanceOn: {
-        selector: 'button:has-text("Continue")',
+        selector: 'form a:has-text("Continue")',
         url: "https://homelight.com/users/login?email=amy%40amylaidlaw.com",
         then: {
           'input[type="email"]': { count: 1 },
@@ -395,9 +406,9 @@ describe("email-first login (HomeLight)", () => {
     const page = homelightPage();
     const diag = await performLogin(page, stubCreds(), undefined);
 
-    expect(page.calls.clicked).toContain('button:has-text("Continue")');
+    expect(page.calls.clicked).toContain('form a:has-text("Continue")');
     expect(diag.steps).toBe(2);
-    expect(diag.selectors.advance).toBe('button:has-text("Continue")');
+    expect(diag.selectors.advance).toBe('form a:has-text("Continue")');
     expect(diag.selectors.pass).toBe('input[type="password"]');
     expect(diag.clickError).toBeNull();
   });
@@ -416,17 +427,19 @@ describe("email-first login (HomeLight)", () => {
 
     const byField = new Map(page.calls.filled.map((f) => [f.selector, f.value]));
     expect(byField.get('input[type="password"]')).toBe(stubCreds().password);
+    // Step 1 fills the placeholder-identified box; step 2 fills the real one.
+    expect(byField.get('input[placeholder*="email" i]')).toBe(stubCreds().username);
     expect(byField.get('input[type="email"]')).toBe(stubCreds().username);
     expect(stubCreds().password).not.toBe(stubCreds().username);
     // The email is typed twice on purpose: once to advance, once on the second
     // page, which pre-fills from the query string but is not guaranteed to.
-    expect(page.calls.filled.filter((f) => f.selector === 'input[type="email"]')).toHaveLength(2);
+    expect(page.calls.filled).toHaveLength(3);
   });
 
   it("blurs the email before advancing, since Continue is often validation-gated", async () => {
     const page = homelightPage();
     await performLogin(page, stubCreds(), undefined);
-    expect(page.calls.blurred).toContain('input[type="email"]');
+    expect(page.calls.blurred).toContain('input[placeholder*="email" i]');
   });
 
   it("reports a stalled advance instead of throwing, which would be permanent", async () => {
@@ -724,5 +737,66 @@ describe("server.mjs fails a stalled advance without asking the page", () => {
   it("drops the session, so the next call cannot reuse a logged-out context", () => {
     const guardAt = source.indexOf("const stalledAdvance");
     expect(source.slice(guardAt, guardAt + 200)).toContain("poisoned = true");
+  });
+});
+
+/**
+ * The selectors, pinned against HomeLight's ACTUAL markup.
+ *
+ * The first version of this support shipped green and still did nothing live,
+ * because the fixture was written from what a login form usually looks like
+ * rather than from what HomeLight serves. The live page is:
+ *
+ *   <form class="email-field-form">
+ *     <input type="text" placeholder="Enter your email" class="email-field-input">
+ *     <a class="button email-submit">Continue</a>
+ *   </form>
+ *
+ * so the email box has NO type=email, NO name, NO id and NO autocomplete, and
+ * Continue is an ANCHOR with no href, no role and no type. Every selector list
+ * missed it, `looksLikeLogin` returned false, and the service went on returning
+ * logged-out pages as successful reads. These assertions exist so a future
+ * tidy-up of the lists cannot quietly undo that.
+ */
+describe("selector lists cover markup that carries no useful attributes", () => {
+  it("identifies an email box by its placeholder alone", () => {
+    expect(EMAIL_FIRST_SELECTORS).toContain('input[placeholder*="email" i]');
+    expect(USERNAME_SELECTORS).toContain('input[placeholder*="email" i]');
+  });
+
+  it("can reach an anchor acting as the advance control", () => {
+    expect(ADVANCE_SELECTORS).toContain('form a:has-text("Continue")');
+  });
+
+  it("prefers a form-scoped anchor over a bare one", () => {
+    // An anchor labelled "Continue" is common enough in page furniture that the
+    // unscoped version belongs last, after the native submit controls.
+    expect(ADVANCE_SELECTORS.indexOf('form a:has-text("Continue")')).toBeLessThan(
+      ADVANCE_SELECTORS.indexOf('a:has-text("Continue")')
+    );
+    expect(ADVANCE_SELECTORS.indexOf('button[type="submit"]')).toBeLessThan(
+      ADVANCE_SELECTORS.indexOf('a:has-text("Continue")')
+    );
+  });
+
+  it("still prefers a real button to any anchor", () => {
+    expect(ADVANCE_SELECTORS.indexOf('button:has-text("Continue")')).toBe(0);
+  });
+
+  it("recognizes the live HomeLight page as a login", async () => {
+    // The whole chain, on markup copied from the portal rather than imagined.
+    expect(await looksLikeLogin(homelightPage(), undefined)).toBe(true);
+  });
+
+  it("does not let the placeholder match turn a search box into a login", async () => {
+    const page = stubPage(
+      {
+        'input[placeholder*="email" i]': { count: 1 },
+        'input[type="password"]': { count: 0 },
+        'form a:has-text("Continue")': { count: 1 }
+      },
+      { url: "https://x.example.com/newsletter", text: "Subscribe to our newsletter" }
+    );
+    expect(await looksLikeLogin(page, undefined)).toBe(false);
   });
 });
