@@ -5519,6 +5519,8 @@ async function replyToCommentStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "reply_to_comment" }>
 ): Promise<StepOutcome> {
+  // Every owner-facing line below names the network. A Facebook comment flow
+  // that says "Instagram is not connected" sends the owner to the wrong page.
   const network = action.platform === "facebook" ? "Facebook" : "Instagram";
   const label = action.replyMode === "public" ? "public reply" : "private reply";
   if (action.skipReason) {
@@ -5573,7 +5575,7 @@ async function replyToCommentStep(
     if (reason === "not_connected") {
       appendActionTaken(
         scope,
-        `skipped the ${network} ${label}, Instagram is not connected under Integrations`
+        `skipped the ${network} ${label}, ${network} is not connected under Integrations`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
@@ -5589,7 +5591,9 @@ async function replyToCommentStep(
     if (reason === "no_page_id") {
       appendActionTaken(
         scope,
-        `skipped the ${network} ${label}, no Facebook Page is linked to the Instagram account`
+        action.platform === "facebook"
+          ? `skipped the ${network} ${label}, the connection has no Facebook Page`
+          : `skipped the ${network} ${label}, no Facebook Page is linked to the Instagram account`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
@@ -5599,7 +5603,7 @@ async function replyToCommentStep(
       // only produce the same refusal.
       appendActionTaken(
         scope,
-        `couldn't post the ${network} ${label}: ${result?.detail ?? "Instagram refused it"}`
+        `couldn't post the ${network} ${label}: ${result?.detail ?? `${network} refused it`}`
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }

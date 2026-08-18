@@ -2830,3 +2830,27 @@ describe("planStep: reply_to_comment", () => {
     ).toEqual({ ok: false, error: "reply_to_comment: body is empty after templating" });
   });
 });
+
+describe("reply_to_comment: owner-facing copy names the right network", () => {
+  it("has no hardcoded network name left in the worker's step messages", async () => {
+    // Bugbot caught three appendActionTaken lines still saying "Instagram"
+    // inside a function that had already computed `network`. A Facebook
+    // comment flow reporting "Instagram is not connected" sends the owner to
+    // the wrong integrations page. This pins the whole function rather than
+    // the three lines, so the next one added cannot regress.
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("supabase/functions/ai-flow-worker/index.ts", "utf8");
+    const start = src.indexOf("async function replyToCommentStep(");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\nasync function ", start + 10));
+
+    for (const line of body.split("\n")) {
+      // appendActionTaken and fail messages are what the owner reads.
+      if (!/appendActionTaken|error:/.test(line) && !/^\s*`/.test(line)) continue;
+      // The one legitimate mention: the Instagram-only case where a Page must
+      // be LINKED to an IG account, which has no Facebook equivalent.
+      if (line.includes("no Facebook Page is linked to the Instagram account")) continue;
+      expect(line).not.toMatch(/\bInstagram\b/);
+    }
+  });
+});
