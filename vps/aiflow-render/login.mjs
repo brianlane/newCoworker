@@ -61,7 +61,15 @@ export const USERNAME_SELECTORS = [
   'input[name*="login" i]',
   'input[name*="user" i]',
   'input[id*="email" i]',
-  'input[id*="user" i]'
+  'input[id*="user" i]',
+  // LAST RESORT, and the position is the point. A placeholder is the only
+  // handle on a field that ships with no type, name, id or autocomplete
+  // (HomeLight's email box), but it is also the weakest signal on the list: a
+  // newsletter or search box whose placeholder mentions email would otherwise
+  // outrank a real username field and receive the typed credentials.
+  // `firstSelector` returns the FIRST match, so ordering is the whole guard.
+  // Kept last in EMAIL_FIRST_SELECTORS for the same reason.
+  'input[placeholder*="email" i]'
 ];
 
 export const PASSWORD_SELECTORS = [
@@ -128,8 +136,19 @@ export const ADVANCE_SELECTORS = [
   'button:has-text("Continue")',
   'button:has-text("Next")',
   '[role="button"]:has-text("Continue")',
+  // HomeLight's Continue is an ANCHOR inside the email form, with no href, no
+  // role and no type. Nothing above can reach it:
+  //   <form class="email-field-form">
+  //     <input type="text" placeholder="Enter your email" class="email-field-input">
+  //     <a class="button email-submit">Continue</a>
+  //   </form>
+  // Scoped to a form first, because an anchor labelled "Continue" is common
+  // enough in page furniture that the unscoped version belongs last.
+  'form a:has-text("Continue")',
+  'form a:has-text("Next")',
   'button[type="submit"]',
-  'input[type="submit"]'
+  'input[type="submit"]',
+  'a:has-text("Continue")'
 ];
 
 /**
@@ -144,7 +163,14 @@ export const ADVANCE_SELECTORS = [
 export const EMAIL_FIRST_SELECTORS = [
   'input[type="email"]',
   'input[autocomplete="email"]',
-  'input[autocomplete="username"]'
+  'input[autocomplete="username"]',
+  // HomeLight ships `<input type="text" placeholder="Enter your email">` with
+  // no name, no id and no autocomplete, so the placeholder a person reads is
+  // the ONLY thing identifying the field. Specific enough to belong here: a
+  // box asking for an email is asking for an email. The other three gates (no
+  // password field, an advance control, and a headline that says sign in) are
+  // what stop a newsletter box from qualifying.
+  'input[placeholder*="email" i]'
 ];
 
 /**
