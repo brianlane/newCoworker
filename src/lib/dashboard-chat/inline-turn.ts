@@ -314,6 +314,34 @@ function committedSideEffect(name: ActionToolName, result: unknown): boolean {
 }
 
 /**
+ * How many automations one turn may actually CHANGE. One.
+ *
+ * A turn can make several tool calls, so a single message could otherwise
+ * rewrite three automations before anyone read a word of it. A written-out
+ * multi-part spec ("change these six things across the flows") is a project,
+ * not a message: the first change goes through the normal confirm handshake
+ * and the rest are refused with a pointer, which is also what keeps the
+ * owner's confirmation meaningful (they approved ONE described diff).
+ *
+ * Staging is deliberately not capped: staging writes nothing, and letting
+ * the model describe what it would do to a second automation is useful.
+ */
+const FLOW_CHANGES_PER_TURN = 1;
+
+/**
+ * Whether a call would COMMIT a definition change, as opposed to staging or
+ * reading one. `edit_aiflow` only applies when it carries the token from a
+ * previous staging call; an undo always applies.
+ */
+function isFlowChangeCall(call: { name: string; args: Record<string, unknown> }): boolean {
+  if (call.name === "undo_aiflow_edit") return true;
+  return call.name === "edit_aiflow" && typeof call.args.confirmationToken === "string";
+}
+
+/** Per-turn tally of automations actually changed. */
+type FlowChangeBudget = { spent: number };
+
+/**
  * The owner-facing fact line for one confirmed side effect, used when the
  * wrap-up model step fails or goes silent. Without it the degraded reply
  * would swallow load-bearing values — most critically a Calendly
@@ -434,7 +462,8 @@ async function executeToolCall(
   declaredActionTools: ReadonlySet<string>,
   sideEffects: SideEffectLog,
   extraTools: InlineExtraTools | null,
-  declaredExtraNames: ReadonlySet<string>
+  declaredExtraNames: ReadonlySet<string>,
+  flowChanges: FlowChangeBudget
 ): Promise<unknown> {
   // Action tools (send_sms + calendar lifecycle): only dispatch names that
   // were actually DECLARED this turn — a Settings-disabled tool the model
@@ -443,7 +472,22 @@ async function executeToolCall(
     if (!declaredActionTools.has(call.name)) {
       return { ok: false, message: `unknown tool: ${call.name}` };
     }
+    if (isFlowChangeCall(call) && flowChanges.spent >= FLOW_CHANGES_PER_TURN) {
+      return {
+        ok: false,
+        message:
+          "One automation per message. Another automation was already changed in this turn, so this one was NOT changed. Tell the owner what you did change, and ask them to send the next change as a separate message so they can see each one before it happens."
+      };
+    }
     const result = await runActionTool(businessId, { name: call.name, args: call.args });
+    if (
+      isFlowChangeCall(call) &&
+      typeof result === "object" &&
+      result !== null &&
+      (result as { ok?: unknown }).ok === true
+    ) {
+      flowChanges.spent += 1;
+    }
     // Marked only on a CONFIRMED effect: a cleanly-refused send (opt-out,
     // validation, quota), a failed booking, or an edit that was merely
     // STAGED for confirmation committed nothing, so pinning the turn would
@@ -723,6 +767,8 @@ export async function runInlineChatTurn(
   // rerun the owner's message and duplicate the send/booking). Notes carry
   // the facts a degraded wrap-up must not lose (links, sent bodies).
   const sideEffects: SideEffectLog = { happened: false, notes: [] };
+  // Per turn, not per call: the cap is about how much one message may change.
+  const flowChanges: FlowChangeBudget = { spent: 0 };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
   const deadlineMs =
     typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
@@ -850,7 +896,8 @@ export async function runInlineChatTurn(
           declaredActionTools,
           sideEffects,
           extraTools,
-          declaredExtraNames
+          declaredExtraNames,
+          flowChanges
         )
       });
     }

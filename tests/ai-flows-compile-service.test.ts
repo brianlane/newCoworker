@@ -637,6 +637,35 @@ describe("editAiFlowDefinition — configuration & happy path", () => {
   });
 });
 
+describe("editAiFlowDefinition — the questions envelope", () => {
+  it("returns the questions the model surfaced alongside the definition", async () => {
+    const generate = generateSeq(
+      JSON.stringify({
+        definition: JSON.parse(VALID_DEFINITION_JSON),
+        questions: ["Which teammate should it text?"]
+      })
+    );
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: true, questions: ["Which teammate should it text?"] });
+  });
+
+  it("a BARE definition still works, with no questions", async () => {
+    // The prompt asks for the envelope, but a model that answers with a bare
+    // definition must degrade to "nothing to ask", never to a parse failure.
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: true, questions: [] });
+  });
+
+  it("asks the model for the envelope and for the guesses it made", async () => {
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    const { userText } = generate.mock.calls[0][0];
+    expect(userText).toContain('"questions"');
+    expect(userText).toContain("had to GUESS about");
+  });
+});
+
 describe("editAiFlowDefinition — failure classes", () => {
   it("meters a billed-but-empty first call then rethrows", async () => {
     const generate = vi.fn(async () => {

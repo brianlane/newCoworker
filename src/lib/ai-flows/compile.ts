@@ -503,8 +503,9 @@ export function buildFlowEditUserText(input: {
 }): string {
   return [
     `Edit the business's EXISTING AiFlow automation named "${input.currentName}".`,
-    "Apply ONLY the requested changes below and return the FULL updated JSON",
-    "definition (same schema contract; output only the JSON object). Copy every",
+    "Apply ONLY the requested changes below and build the FULL updated",
+    "definition (same schema contract), which you will return under the",
+    '"definition" key described at the end of this message. Copy every',
     'part the request does not mention VERBATIM: same step "id" values, same',
     "wording, same order. Never drop, rewrite, or renumber untouched steps, and",
     "never invent connection/document/agent uuids that are not in the current",
@@ -520,8 +521,61 @@ export function buildFlowEditUserText(input: {
     buildAvailableMailboxesBlock(input.mailboxes ?? []),
     "",
     "Requested changes:",
-    input.instructions.trim()
+    input.instructions.trim(),
+    "",
+    "Output ONLY a JSON object with exactly these two top-level keys, and",
+    "nothing else. Do not return the definition on its own:",
+    '  "definition": the FULL updated definition object described above.',
+    '  "questions": an array of short plain-English questions.',
+    "",
+    "Put a question in that array for anything the request left genuinely",
+    "ambiguous that you had to GUESS about: which teammate, which of two",
+    "similarly named steps, how long a wait should be, whether a change",
+    "applies to one branch or all of them. Ask about the guess you actually",
+    "made, phrased for the business owner, not about schema details. Return an",
+    "empty array when the request was specific enough that you guessed at",
+    "nothing. Never use a question as a substitute for doing the work: still",
+    "return your best definition alongside it."
   ].join("\n");
+}
+
+/**
+ * Split the edit response envelope `{ definition, questions }` from a bare
+ * definition.
+ *
+ * The edit prompt asks for the envelope, but a model that answers with a
+ * bare definition (or the self-repair retry, whose prompt is about fixing
+ * validation issues) must still work: that degrades to "no questions", never
+ * to a parse failure. Detection is by shape rather than by trusting the key
+ * to exist, since a definition itself never has a `definition` key.
+ */
+export function splitFlowEditEnvelope(candidate: unknown): {
+  definition: unknown;
+  questions: string[];
+} {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { definition: candidate, questions: [] };
+  }
+  const obj = candidate as Record<string, unknown>;
+  const questions = Array.isArray(obj.questions)
+    ? obj.questions
+        .filter((q): q is string => typeof q === "string")
+        .map((q) => q.trim())
+        .filter((q) => q.length > 0)
+    : [];
+
+  if ("definition" in obj) return { definition: obj.definition, questions };
+
+  // A BARE definition that carried its questions alongside the steps. Reading
+  // them here matters more than it looks: silently dropping them would let
+  // Layer 4 fail open, staging a change the model told us it had guessed at.
+  // The key is stripped so the definition still validates as itself.
+  if ("questions" in obj) {
+    const { questions: _dropped, ...definition } = obj;
+    return { definition, questions };
+  }
+
+  return { definition: candidate, questions: [] };
 }
 
 /**

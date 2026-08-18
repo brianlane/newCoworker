@@ -126,7 +126,7 @@ describe("editAiFlowTool: staging (first call)", () => {
   it("hands the model a diff and an explicit do-not-claim-it-happened note", async () => {
     const res = await editAiFlowTool(BIZ, ARGS, happyDeps());
     expect(res.ok).toBe(true);
-    if (res.ok && "staged" in res) {
+    if (res.ok && "confirmationToken" in res) {
       expect(res.summary[0]).toContain('"original"');
       expect(res.summary[0]).toContain('"updated"');
       expect(res.note).toContain("NOTHING HAS CHANGED YET");
@@ -160,7 +160,7 @@ describe("editAiFlowTool: staging (first call)", () => {
     expect(deps.stageEdit).toHaveBeenCalledWith(
       expect.objectContaining({ newName: "Renamed" })
     );
-    if (res.ok && "staged" in res) {
+    if (res.ok && "confirmationToken" in res) {
       expect(res.summary.some((l) => l.includes('Renames the automation to "Renamed"'))).toBe(true);
     }
   });
@@ -171,6 +171,48 @@ describe("editAiFlowTool: staging (first call)", () => {
     expect(deps.stageEdit).toHaveBeenCalledWith(
       expect.objectContaining({ surface: "ai_edit_sms", actor: "+15555550100" })
     );
+  });
+
+  it("open questions block staging entirely: no token, nothing to confirm", async () => {
+    // The point of the layer: the model cannot reach the apply call at all
+    // until the owner has answered, which inverts the default from "act
+    // unless unsure" to "cannot act until resolved".
+    const deps = happyDeps({
+      compileEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: EDITED,
+        warnings: [],
+        questions: ["Which teammate should it text?", "How long should it wait?"]
+      }))
+    });
+    const res = await editAiFlowTool(BIZ, ARGS, deps);
+    expect(res).toMatchObject({ ok: true, staged: false });
+    if (res.ok && "questions" in res) {
+      expect(res.questions).toEqual([
+        "Which teammate should it text?",
+        "How long should it wait?"
+      ]);
+      expect(res.note).toContain("NOTHING HAS CHANGED");
+      expect(res.note).toContain("Do not guess on their behalf");
+      // No token anywhere in the response: there is nothing to confirm yet.
+      expect(JSON.stringify(res)).not.toContain(TOKEN);
+    }
+    expect(deps.stageEdit).not.toHaveBeenCalled();
+    expect(deps.persistUpdate).not.toHaveBeenCalled();
+  });
+
+  it("an empty or absent questions list stages normally", async () => {
+    const withEmpty = happyDeps({
+      compileEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: EDITED,
+        warnings: [],
+        questions: []
+      }))
+    });
+    expect(await editAiFlowTool(BIZ, ARGS, withEmpty)).toMatchObject({ ok: true, staged: true });
+    // Absent entirely (the create path's shape, and any older caller).
+    expect(await editAiFlowTool(BIZ, ARGS, happyDeps())).toMatchObject({ ok: true, staged: true });
   });
 
   it("refuses an instruction that changes nothing instead of staging a no-op", async () => {
@@ -322,7 +364,7 @@ describe("editAiFlowTool: applying (second call)", () => {
       id: FLOW_ID,
       definition: EDITED
     });
-    if (res.ok && !("staged" in res)) {
+    if (res.ok && "applied" in res) {
       expect(res.note).toContain(`/dashboard/aiflows?edit=${FLOW_ID}`);
       expect(res.note).toContain("undo that");
       expect(res.note).not.toContain("still disabled");
@@ -342,7 +384,7 @@ describe("editAiFlowTool: applying (second call)", () => {
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: true, flowName: "Renamed", enabled: false });
-    if (res.ok && !("staged" in res)) expect(res.note).toContain("still disabled");
+    if (res.ok && "applied" in res) expect(res.note).toContain("still disabled");
     expect(deps.persistUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Renamed" })
     );

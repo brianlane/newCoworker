@@ -2315,6 +2315,48 @@ to the end of a flow is only `structural` and inserting at the top with runs
 parked is `in_flight`: an append leaves the old id list as a prefix of the
 new one, so no live index changes meaning.
 
+## Two more limits on AI edits: scope, and unanswered questions
+
+### One automation per turn
+
+A turn can make several tool calls, so one message could otherwise rewrite
+three automations before anyone read a word of it. `FLOW_CHANGES_PER_TURN` is
+1: the first change goes through the normal confirm handshake and any
+further one in the same turn is refused with "one automation per message".
+
+Only calls that COMMIT count. Staging is deliberately uncapped, because
+staging writes nothing and letting the model describe what it would do to a
+second automation is useful. An `edit_aiflow` call counts only when it
+carries a `confirmationToken`; an `undo_aiflow_edit` always counts. A refused
+change does not spend the slot.
+
+This is what makes a written-out multi-part spec ("change these six things
+across the flows") land as a conversation rather than a batch: it is a
+project, not a message, and the owner's confirmation stays meaningful because
+they approved ONE described diff.
+
+### An unanswered question blocks staging outright
+
+The edit compile returns `{ definition, questions }`. `questions` is what the
+model had to GUESS about: which teammate, which of two similarly named steps,
+how long a wait should be, whether a change applies to one branch or all of
+them.
+
+A non-empty list refuses to stage at all. No token is issued, so the apply
+call is unreachable until the owner has answered. That inverts the default
+from "act unless unsure" to "cannot act until resolved".
+
+The model still returns its best definition alongside the questions, so the
+questions never become a way to avoid doing the work. A model that answers
+with a bare definition instead of the envelope degrades to "no questions"
+rather than failing to parse, which is also what the self-repair retry does:
+its prompt is about fixing validation issues, not about intent, so the
+questions from the first pass still stand.
+
+`ai_flow_pending_edits.ambiguities` is therefore always empty by
+construction. It is kept, and re-checked at confirm time, as defense in
+depth: a row that somehow carries one can never be applied.
+
 ## AiFlow team routing: claim notices (SMS + optional email)
 
 `route_to_team` offers a lead to the roster (reply "1" to claim, "2" to pass,

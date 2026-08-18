@@ -33,6 +33,7 @@ import {
   FLOW_COMPILE_SYSTEM_PROMPT,
   buildFlowCompileUserText,
   buildFlowEditUserText,
+  splitFlowEditEnvelope,
   buildFlowRepairUserText,
   extractFlowJson,
   humanizeCompileIssues,
@@ -76,7 +77,19 @@ export type CompileFlowDeps = {
 };
 
 export type CompileFlowResult =
-  | { ok: true; definition: AiFlowDefinition; warnings: string[] }
+  | {
+      ok: true;
+      definition: AiFlowDefinition;
+      warnings: string[];
+      /**
+       * Things the EDIT compile had to guess about, phrased for the owner.
+       * The edit tool refuses to stage a change that still carries any, so
+       * an under-specified instruction becomes a question rather than a
+       * silent guess applied to a live automation. Absent on the create
+       * path, which hands its draft to the builder for review anyway.
+       */
+      questions?: string[];
+    }
   | {
       ok: false;
       error: "not_configured" | "unparseable" | "invalid";
@@ -551,8 +564,8 @@ export async function editAiFlowDefinition(
     outputChars: raw.length
   });
 
-  const candidate = extractFlowJson(raw);
-  if (candidate === null) {
+  const { definition: candidate, questions } = splitFlowEditEnvelope(extractFlowJson(raw));
+  if (candidate === null || candidate === undefined) {
     void recordSystemLog({
       businessId: args.businessId,
       source: "app",
@@ -595,7 +608,7 @@ export async function editAiFlowDefinition(
 
   try {
     const definition = await parseAndValidate(candidate);
-    return { ok: true, definition, warnings: [] };
+    return { ok: true, definition, warnings: [], questions };
   } catch (err) {
     if (!(err instanceof AiFlowValidationError)) throw err;
     void recordSystemLog({
@@ -639,10 +652,16 @@ export async function editAiFlowDefinition(
         inputChars: FLOW_COMPILE_SYSTEM_PROMPT.length + repairText.length,
         outputChars: repairedRaw.length
       });
-      const repairedCandidate = extractFlowJson(repairedRaw);
-      if (repairedCandidate !== null) {
+      // The repair prompt is about fixing validation issues, not about the
+      // owner's intent, so it re-answers with a bare definition. The
+      // questions from the FIRST pass still stand: what the model had to
+      // guess did not become unambiguous by being reformatted.
+      const { definition: repairedCandidate } = splitFlowEditEnvelope(
+        extractFlowJson(repairedRaw)
+      );
+      if (repairedCandidate !== null && repairedCandidate !== undefined) {
         const definition = await parseAndValidate(repairedCandidate);
-        return { ok: true, definition, warnings: [] };
+        return { ok: true, definition, warnings: [], questions };
       }
     } catch (repairErr) {
       if (repairErr instanceof AiFlowValidationError) {
