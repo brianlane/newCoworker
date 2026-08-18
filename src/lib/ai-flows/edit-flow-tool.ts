@@ -80,7 +80,13 @@ export type EditAiFlowToolResult =
     }
   | {
       ok: true;
-      staged?: false;
+      /**
+       * The ONLY shape that wrote to ai_flows. inline-turn keys its
+       * side-effect pin on this rather than on `ok`, because staging also
+       * succeeds while changing nothing, and a degraded wrap-up must never
+       * tell the owner an automation was updated when it was only described.
+       */
+      applied: true;
       flowId: string;
       flowName: string;
       enabled: boolean;
@@ -300,6 +306,7 @@ async function applyStagedEdit(
 
   return {
     ok: true,
+    applied: true,
     flowId: updated.id,
     flowName: updated.name,
     enabled: updated.enabled,

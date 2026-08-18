@@ -126,7 +126,7 @@ describe("editAiFlowTool: staging (first call)", () => {
   it("hands the model a diff and an explicit do-not-claim-it-happened note", async () => {
     const res = await editAiFlowTool(BIZ, ARGS, happyDeps());
     expect(res.ok).toBe(true);
-    if (res.ok && res.staged) {
+    if (res.ok && "staged" in res) {
       expect(res.summary[0]).toContain('"original"');
       expect(res.summary[0]).toContain('"updated"');
       expect(res.note).toContain("NOTHING HAS CHANGED YET");
@@ -160,7 +160,7 @@ describe("editAiFlowTool: staging (first call)", () => {
     expect(deps.stageEdit).toHaveBeenCalledWith(
       expect.objectContaining({ newName: "Renamed" })
     );
-    if (res.ok && res.staged) {
+    if (res.ok && "staged" in res) {
       expect(res.summary.some((l) => l.includes('Renames the automation to "Renamed"'))).toBe(true);
     }
   });
@@ -322,7 +322,7 @@ describe("editAiFlowTool: applying (second call)", () => {
       id: FLOW_ID,
       definition: EDITED
     });
-    if (res.ok && !res.staged) {
+    if (res.ok && !("staged" in res)) {
       expect(res.note).toContain(`/dashboard/aiflows?edit=${FLOW_ID}`);
       expect(res.note).toContain("undo that");
       expect(res.note).not.toContain("still disabled");
@@ -342,7 +342,7 @@ describe("editAiFlowTool: applying (second call)", () => {
     });
     const res = await editAiFlowTool(BIZ, CONFIRM, deps);
     expect(res).toMatchObject({ ok: true, flowName: "Renamed", enabled: false });
-    if (res.ok && !res.staged) expect(res.note).toContain("still disabled");
+    if (res.ok && !("staged" in res)) expect(res.note).toContain("still disabled");
     expect(deps.persistUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Renamed" })
     );
