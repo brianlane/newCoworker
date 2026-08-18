@@ -39,6 +39,7 @@ import {
   type OutboundLogSource
 } from "@/lib/db/sms-history";
 import type {
+  VoiceAnsweringMachineResult,
   VoiceCallKind,
   VoiceCallSentiment,
   VoiceTranscriptDirection,
@@ -96,6 +97,9 @@ export const CALL_SENTIMENT_KEYS: VoiceCallSentiment[] = [
   "negative",
   "mixed"
 ];
+
+/** Every answering-machine verdict the transcript column is allowed to hold. */
+export const AMD_RESULT_KEYS: VoiceAnsweringMachineResult[] = ["human", "machine", "unknown"];
 
 /**
  * Shared transcript-scan filter. Every analytics read of
@@ -265,6 +269,15 @@ export type DayDetailCall = {
   forwardedTo: string | null;
   summary: string | null;
   sentiment: VoiceCallSentiment | null;
+  /**
+   * AMD verdict, or null when detection was not requested. Carried so the
+   * drill-down lists can mark a voicemail exactly like the Call history list
+   * and the transcript page do: without it, an outbound call a machine picked
+   * up reads here as one a person answered.
+   */
+  answeringMachineResult: VoiceAnsweringMachineResult | null;
+  /** True when the assistant actually spoke its message into the voicemail. */
+  voicemailLeft: boolean;
 };
 
 /** Full transcript projection behind every drill-down call list. */
@@ -278,7 +291,9 @@ const DETAIL_CALL_COLUMNS = [
   "call_kind",
   "forwarded_to_e164",
   "summary",
-  "sentiment"
+  "sentiment",
+  "answering_machine_result",
+  "voicemail_left"
 ];
 
 type DetailCallRow = {
@@ -292,6 +307,8 @@ type DetailCallRow = {
   forwarded_to_e164: string | null;
   summary: string | null;
   sentiment: string | null;
+  answering_machine_result: string | null;
+  voicemail_left: boolean | null;
 };
 
 function toDayDetailCall(row: DetailCallRow): DayDetailCall {
@@ -308,7 +325,18 @@ function toDayDetailCall(row: DetailCallRow): DayDetailCall {
     sentiment:
       row.sentiment && (CALL_SENTIMENT_KEYS as string[]).includes(row.sentiment)
         ? (row.sentiment as VoiceCallSentiment)
-        : null
+        : null,
+    // Validated the same way as the sentiment above: an unrecognized stored
+    // verdict becomes "no verdict" rather than being passed through to a
+    // badge that would then claim something detection never said.
+    answeringMachineResult:
+      row.answering_machine_result &&
+      (AMD_RESULT_KEYS as string[]).includes(row.answering_machine_result)
+        ? (row.answering_machine_result as VoiceAnsweringMachineResult)
+        : null,
+    // A row predating the column reads NULL, which must not become "we left
+    // a message".
+    voicemailLeft: row.voicemail_left === true
   };
 }
 

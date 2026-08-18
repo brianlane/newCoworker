@@ -13,6 +13,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
+  AnsweringMachineBadge,
   CallDirectionBadge,
   ForwardedBadge,
   SentimentBadge,
@@ -207,6 +208,13 @@ function CallRowsList({ calls }: { calls: DayDetailCallDisplayRow[] }) {
                 )}
                 {row.callKind === "forwarded" && <ForwardedBadge />}
                 <StatusBadge status={row.status} />
+                {/* Renders only for a machine answer, so an ordinary row
+                    keeps the badges it has today. Same pill as the Call
+                    history list and the transcript page. */}
+                <AnsweringMachineBadge
+                  result={row.answeringMachineResult}
+                  voicemailLeft={row.voicemailLeft}
+                />
                 {row.sentiment && <SentimentBadge sentiment={row.sentiment} />}
               </div>
               <p className="text-xs text-parchment/50 mt-0.5">

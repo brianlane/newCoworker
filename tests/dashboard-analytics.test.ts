@@ -403,10 +403,25 @@ describe("getAnalyticsDayDetail", () => {
             forwarded_to_e164: "+15559998888",
             summary: null,
             // Unknown sentiment strings are dropped rather than rendered.
-            sentiment: "confused"
+            sentiment: "confused",
+            // Reached a machine AND spoke the script into it: the drill-down
+            // has to be able to say "Voicemail" rather than the milder
+            // "No answer, machine".
+            answering_machine_result: "machine",
+            voicemail_left: true
           },
           // In progress — counts as a call, contributes no minutes.
-          { ...CALL, id: "t-3", ended_at: null, sentiment: null }
+          {
+            ...CALL,
+            id: "t-3",
+            ended_at: null,
+            sentiment: null,
+            // Unknown verdict strings are dropped the same way unknown
+            // sentiments are: a badge must not assert something detection
+            // never said.
+            answering_machine_result: "busy",
+            voicemail_left: null
+          }
         ],
         error: null
       },
@@ -432,11 +447,22 @@ describe("getAnalyticsDayDetail", () => {
       callKind: "ai",
       forwardedTo: null,
       summary: "Booked a repair.",
-      sentiment: "positive"
+      sentiment: "positive",
+      // No AMD columns on this row at all: detection was not requested, which
+      // is every inbound call and every call placed before AMD existed.
+      answeringMachineResult: null,
+      voicemailLeft: false
     });
     expect(detail.calls[1].forwardedTo).toBe("+15559998888");
     expect(detail.calls[1].sentiment).toBeNull();
     expect(detail.calls[2].sentiment).toBeNull();
+    // A machine that was actually spoken to survives into the drill-down.
+    expect(detail.calls[1].answeringMachineResult).toBe("machine");
+    expect(detail.calls[1].voicemailLeft).toBe(true);
+    // An unrecognized verdict is dropped, and a NULL voicemail flag (a row
+    // predating the column) must not read as "we left a message".
+    expect(detail.calls[2].answeringMachineResult).toBeNull();
+    expect(detail.calls[2].voicemailLeft).toBe(false);
 
     // The day is sliced [00:00 UTC, next 00:00 UTC) — same bucketing as the series.
     const transcripts = chains.voice_call_transcripts as {
