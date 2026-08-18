@@ -5597,6 +5597,19 @@ async function replyToCommentStep(
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
+    if (reason === "permission_not_granted") {
+      // Our app has not been granted the permission this needs. Nothing the
+      // owner can do about it, so the note says so plainly instead of
+      // implying a broken connection or a rejected comment, and instead of
+      // showing them a raw Graph error.
+      appendActionTaken(
+        scope,
+        `couldn't post the ${network} ${label}: New Coworker isn't approved by ` +
+          `${network} for that yet. Nothing is wrong with your connection, and ` +
+          "you don't need to do anything."
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
     if (reason === "refused") {
       // Permanent for this comment: already answered privately, past the
       // 7-day window, comment deleted, permission not granted. Retrying can

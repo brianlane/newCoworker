@@ -22,6 +22,7 @@ import { getMetaConnection } from "@/lib/db/meta-connections";
 import {
   INSTAGRAM_COMMENT_MAX_LENGTH,
   MetaApiError,
+  isMetaPermissionDenied,
   replyToFacebookComment,
   replyToInstagramComment,
   sendInstagramPrivateReply
@@ -132,6 +133,27 @@ export async function POST(request: Request): Promise<Response> {
         metaSubcode: meta.metaSubcode,
         message: meta.message
       });
+      // Our app was never granted the permission this call needs. Nothing
+      // the owner can do fixes it, and it is NOT a dead token, so it must not
+      // send them off to reconnect. Reported as its own reason so the worker
+      // can say something true and non-alarming.
+      //
+      // Detected from Meta's answer rather than from a hardcoded scope list,
+      // so the day App Review grants the permission this simply starts
+      // working with no code change.
+      if (isMetaPermissionDenied(err)) {
+        logger.warn("comment reply refused: app permission not granted", {
+          businessId: body.businessId,
+          mode: body.mode,
+          platform: body.platform,
+          metaCode: meta.metaCode
+        });
+        return successResponse<CommentReplyResult>({
+          ok: false,
+          reason: "permission_not_granted",
+          detail: meta.message
+        });
+      }
       // A dead token is not a per-comment refusal: every Meta call for this
       // tenant is failing, so it escalates to the owner instead of being
       // reported as "Instagram refused this comment".

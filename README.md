@@ -2745,6 +2745,16 @@ The **`reply_to_comment` step** answers it, in one of two modes:
 The private reply is the SAME call on both: the Messenger Send API on the
 Page node, addressed by `recipient.comment_id`. Only the public edge differs.
 
+**Facebook PUBLIC replies need `pages_manage_engagement`, which our app does
+not hold.** They fail gracefully rather than erroring at anyone: Meta answers
+with a permission code (10 / 200 / 299), the bridge route reports
+`permission_not_granted`, and the step SKIPS with a note saying New Coworker
+is not approved for that yet and that nothing is wrong with their connection.
+Deliberately detected from Meta's answer rather than from a hardcoded scope
+list, so the day App Review grants it the same call simply starts working
+with no deploy. Instagram public replies and private replies on both networks
+are unaffected.
+
 **Which network is derived, never authored.** The step has no `platform`
 field; the planner reads `{{trigger.from}}`, so a run started by
 `facebook_comment` answers on Facebook and anything else on Instagram. An
