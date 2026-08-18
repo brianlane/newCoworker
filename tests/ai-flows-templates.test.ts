@@ -31,7 +31,7 @@ import { containsLikelyPii, templateKeyFromName } from "@/lib/ai-flows/scrub";
 describe("metaLeadFollowUpTemplate", () => {
   it("is a valid definition the install route can persist as-is", () => {
     const tpl = metaLeadFollowUpTemplate();
-    // parseAiFlowDefinition throws on any shape or semantic issue — this is
+    // parseAiFlowDefinition throws on any shape or semantic issue, this is
     // the guard that the one-click install can never 400 on our own template.
     const def = parseAiFlowDefinition(tpl.definition);
     expect(def.trigger.channel).toBe("webhook");
@@ -103,7 +103,7 @@ describe("instagramProspectTemplate", () => {
     });
     const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
     // The webhook channel evaluates from_matches against the caller-supplied
-    // source label — the guide's suggested label matches, others don't.
+    // source label, the guide's suggested label matches, others don't.
     expect(evaluateTriggerConditions(conditions, "any text", "instagram_scraper")).toBe(true);
     expect(evaluateTriggerConditions(conditions, "any text", "facebook_lead_ads")).toBe(false);
   });
@@ -139,8 +139,8 @@ describe("instagramProspectTemplate", () => {
     if (tag.type === "update_contact") {
       expect(tag.when).toEqual({ var: "lead_phone", notEquals: "none" });
     }
-    // The extractor is told the exact sentinel — 'none', never an empty
-    // string — because the when-guards test for it literally.
+    // The extractor is told the exact sentinel, 'none', never an empty
+    // string, because the when-guards test for it literally.
     const extract = def.steps[0];
     if (extract.type === "extract_text") {
       const phoneField = extract.fields.find((f) => f.name === "lead_phone");
@@ -156,7 +156,7 @@ describe("instagramProspectTemplate", () => {
       expect(notify.when).toBeUndefined();
       expect(notify.message).toContain("{{vars.lead_handle}}");
       expect(notify.message).toContain("{{vars.lead_email}}");
-      // The brief must not assert "filed and tagged" — phone-less profiles
+      // The brief must not assert "filed and tagged", phone-less profiles
       // skip those steps (Bugbot 0d7238c4).
       expect(notify.message).not.toMatch(/filed and tagged/i);
       expect(notify.message).toContain("If their profile has a phone number");

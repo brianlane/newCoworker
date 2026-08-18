@@ -2,7 +2,7 @@
  * Owner-facing: change an account's login email.
  *
  * Businesses are keyed by `owner_email` and there is no stable owner_user_id,
- * so we must NOT flip owner_email until the new email is actually confirmed —
+ * so we must NOT flip owner_email until the new email is actually confirmed,
  * otherwise the owner is locked out the instant they request a change. For the
  * owner changing their OWN email:
  *
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
     // email. Ordering matters for lockout-safety: if the confirmation went out
     // first and this insert then failed, the user could confirm with no row for
     // the reconciler to sync, stranding owner_email on the old address. A pending
-    // row written when updateUser later fails is harmless — the reconciler only
+    // row written when updateUser later fails is harmless, the reconciler only
     // acts once the auth email actually moves off old_email (which never happens
     // for a rejected change), and the next attempt upserts over it.
     const { error: pendErr } = await service.from("pending_email_changes").upsert({
@@ -111,7 +111,7 @@ export async function POST(request: Request) {
       return errorResponse("DB_ERROR", "Could not record the email change");
     }
 
-    // Supabase is the source of truth for email uniqueness — updateUser rejects
+    // Supabase is the source of truth for email uniqueness, updateUser rejects
     // a taken address. Performed via the cookie-session client so it runs as the
     // user and triggers the confirmation email; the auth email stays put until
     // the link is clicked.
@@ -126,7 +126,7 @@ export async function POST(request: Request) {
       // error to us yet still have accepted the change and sent the confirmation
       // email; deleting would then strand the confirmed email with no row for the
       // reconciler to sync. A pending row for a genuinely-rejected change is
-      // harmless — the reconciler only acts once the live auth email equals
+      // harmless, the reconciler only acts once the live auth email equals
       // new_email (which never happens for a rejected change), and the next
       // attempt upserts over it.
       return errorResponse("CONFLICT", updErr.message || "Could not start the email change");

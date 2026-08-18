@@ -4,7 +4,7 @@
  * Every page under /dashboard/settings/* resolves the same context: the
  * signed-in user, the admin view-as state, the active business row (one
  * SELECT carrying every column any settings page needs), and the owner flag
- * that gates owner-only cards. Not a route file — the underscore prefix
+ * that gates owner-only cards. Not a route file, the underscore prefix
  * keeps Next from treating this as a segment.
  */
 import Link from "next/link";

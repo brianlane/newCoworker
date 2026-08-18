@@ -324,7 +324,7 @@ describe("resolveVoiceContactRefs", () => {
   it("skips a ref when the hardcoded E164 is already set, and ignores malformed refs", async () => {
     const { db, calls } = stubDb({});
     const def = voiceDef([
-      // toE164 wins — the ref must NOT be queried.
+      // toE164 wins, the ref must NOT be queried.
       { id: "r", type: "ring_handoff", toE164: "+16025551234", toRef: empRef },
       // Malformed refs (wrong source / missing id / non-object) are ignored.
       { id: "t", type: "voice_transfer", toRef: { source: "owner", id: "x" } },

@@ -1,5 +1,5 @@
 /**
- * GET /api/integrations/meta/connect?businessId=… — start the Facebook
+ * GET /api/integrations/meta/connect?businessId=…, start the Facebook
  * Login dance for the direct Meta Lead Ads connection.
  *
  * Auth mirrors the other integration routes (owner/manager session with

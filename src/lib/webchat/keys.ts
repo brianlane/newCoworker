@@ -4,12 +4,12 @@
  * Two distinct tokens, deliberately NOT the secret `nck_` public-API key
  * (src/lib/public-api/keys.ts):
  *
- *   * Widget site key `ncw_pub_<64 hex>` — identifies the tenant. PUBLIC by
+ *   * Widget site key `ncw_pub_<64 hex>`, identifies the tenant. PUBLIC by
  *     design: it ships inside the tenant's website HTML, so it is stored in
  *     plaintext (plus a sha256 lookup column) and grants nothing beyond
- *     "start a widget session for this business" — the restricted tool
+ *     "start a widget session for this business", the restricted tool
  *     surface, origin allowlist, and rate limits are the real controls.
- *   * Session bearer `ncws_<64 hex>` — minted per visitor session, returned
+ *   * Session bearer `ncws_<64 hex>`, minted per visitor session, returned
  *     once by POST /api/widget/session, stored ONLY as a sha256 hash.
  *     Scopes every /api/widget/message + /api/widget/poll call to one
  *     session.
@@ -29,9 +29,9 @@ export function hashWebchatToken(plaintext: string): string {
 }
 
 export type MintedWidgetKey = {
-  /** Full site key — stored in plaintext (it is public by design). */
+  /** Full site key, stored in plaintext (it is public by design). */
   plaintext: string;
-  /** sha256 hex — the O(1) request-time lookup index. */
+  /** sha256 hex, the O(1) request-time lookup index. */
   hash: string;
 };
 
@@ -41,9 +41,9 @@ export function mintWidgetKey(): MintedWidgetKey {
 }
 
 export type MintedSessionToken = {
-  /** Full bearer — returned to the widget once, never stored. */
+  /** Full bearer, returned to the widget once, never stored. */
   plaintext: string;
-  /** sha256 hex — the only thing persisted (webchat_sessions.session_token_sha256). */
+  /** sha256 hex, the only thing persisted (webchat_sessions.session_token_sha256). */
   hash: string;
 };
 

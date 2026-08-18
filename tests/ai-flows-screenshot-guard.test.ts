@@ -5,7 +5,7 @@ import { tenantScreenshotPath } from "../supabase/functions/_shared/ai_flows/scr
  * screenshot_path tenant guard: the var is worker-written in the normal
  * case, but it shares scope.vars with extraction outputs (whose VALUES
  * inbound text controls), so the consuming sinks accept only paths under
- * the run's own business prefix — a crafted value naming another tenant's
+ * the run's own business prefix, a crafted value naming another tenant's
  * `businessId/runId/step-N.jpg` reads as "no screenshot".
  */
 

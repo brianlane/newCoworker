@@ -43,7 +43,7 @@ export function wantsImmediateStart(defs: readonly KickCandidate[]): boolean {
 export type KickDeps = {
   /** Supabase project URL; the worker lives at /functions/v1/ai-flow-worker. */
   supabaseUrl: string;
-  /** INTERNAL_CRON_SECRET — the worker's bearer. NOT the service-role key. */
+  /** INTERNAL_CRON_SECRET, the worker's bearer. NOT the service-role key. */
   cronSecret: string;
   fetchImpl?: typeof fetch;
   /** Injected for tests; defaults to a real timer. */

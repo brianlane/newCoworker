@@ -1,25 +1,25 @@
 /**
- * patch-kyp-calendar-contact-filing.ts — make KYP Ads' two calendar flows
+ * patch-kyp-calendar-contact-filing.ts, make KYP Ads' two calendar flows
  * FILE the Calendly booker as a contact before texting them.
  *
  * Incident (Kav, Jul 24 2026): the "Pre-call reminder (1hr before)" flow
- * texted a Calendly booker by name, but nothing filed them — the Texts
+ * texted a Calendly booker by name, but nothing filed them, the Texts
  * thread showed a bare number with "Set contact" while the lead's name sat
  * on a junk-number orphan row from the original Facebook form. Two patches,
  * both idempotent:
  *
  *   1. Pre-call reminder flow (matched by name prefix, calendar/event_start):
- *      surgical patch of the LIVE definition — add an `invitee_email`
+ *      surgical patch of the LIVE definition, add an `invitee_email`
  *      extraction field and insert a guarded `upsert_customer` step
  *      (phoneVar invitee_phone, nameVar invitee_first_name) right after the
  *      extraction, leaving every other step byte-identical.
  *   2. No-show recovery flow: re-apply the canonical definition
- *      (kyp-noshow-definition.ts, which now carries the same filing step —
+ *      (kyp-noshow-definition.ts, which now carries the same filing step,
  *      pinned by tests/oneshot-kyp-noshow-definition.test.ts).
  *
  * Both flows' ENABLED state is deliberately untouched.
  *
- * Usage (business id from --business or KYP_BUSINESS_ID — never hard-coded,
+ * Usage (business id from --business or KYP_BUSINESS_ID, never hard-coded,
  * per scripts/oneshot/README.md):
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/patch-kyp-calendar-contact-filing.ts --business <uuid>          # dry-run

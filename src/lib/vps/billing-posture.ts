@@ -4,39 +4,39 @@
  * should not be silently renewing.
  *
  * Why this exists: pooled boxes are parked with auto-renew OFF and the adopt
- * path re-enables it best-effort — if that re-enable fails (or no billing
+ * path re-enables it best-effort, if that re-enable fails (or no billing
  * subscription resolves), the only artifact is an error log, and Hostinger
  * deletes the VM out from under the tenant at the paid period's end. The
  * Jul 8 2026 fleet audit found exactly this state in production (srv1800985
  * hosting a live tenant on a non-renewing subscription expiring Aug 2).
  *
  * Direction 1 (tenant safety, AUTO-HEALED): for every business with a LIVE
- * PAYING relationship — non-wiped AND a NewCoworker subscription in
- * `active`/`past_due` that is BACKED BY A STRIPE PAYMENT — resolve the VM's
+ * PAYING relationship, non-wiped AND a NewCoworker subscription in
+ * `active`/`past_due` that is BACKED BY A STRIPE PAYMENT, resolve the VM's
  * billing subscription; if auto-renew is off, re-enable it right here and
  * report the finding either way. Healing is safe for exactly this
- * population: the tenant is paying, so renewing is always the correct state
- * — and if they cancel later, the cancel/wipe lifecycle disables auto-renew
+ * population: the tenant is paying, so renewing is always the correct state,
+ * and if they cancel later, the cancel/wipe lifecycle disables auto-renew
  * again as part of its plan (verified: `disable_billing_auto_renewal` op).
  * Cancel-at-period-end tenants are OUT of this heal: their Hostinger
  * renewal was already disabled on purpose at cancel time (so Hostinger
  * cannot charge before the Stripe period-end webhook), and healing them
  * would re-open the "future eating" gap. Stripe-LESS live rows (internal
  * pilots, admin-created enterprise accounts) are checked but surfaced
- * REPORT-ONLY — an "active" flag with no payment behind it must never
+ * REPORT-ONLY, an "active" flag with no payment behind it must never
  * trigger automatic platform spend. Businesses whose subscription is
- * `canceled` (grace window — lifecycle just parked the box on purpose),
+ * `canceled` (grace window, lifecycle just parked the box on purpose),
  * `pending` (never paid), or missing (smoke/test rows) are deliberately
  * OUT of scope; their boxes surface via the pool direction once released.
  * Boxes flagged `never_renew` in vps_inventory are NEVER healed even for
- * paying tenants — they must lapse at period end by design (sunk-cost
+ * paying tenants, they must lapse at period end by design (sunk-cost
  * hardware whose renewal costs more than the tenant pays), so the check
  * instead emits a migration-needed finding every run until ops moves the
  * tenant to its correct size.
  *
  * Direction 2 (money leak, REPORT-ONLY): pool boxes in state `available`
  * whose subscription is still auto-renewing cost money while serving nobody.
- * Not auto-disabled — an adopt could have claimed the box between our
+ * Not auto-disabled, an adopt could have claimed the box between our
  * inventory read and the write, and turning renewal off under a
  * just-adopted tenant is the exact failure this module exists to prevent.
  *
@@ -67,7 +67,7 @@ export type BillingPostureFinding = {
   businessId: string | null;
   businessName: string | null;
   hostingerBillingSubscriptionId: string | null;
-  /** Paid-period end, when known — the deadline the finding is racing. */
+  /** Paid-period end, when known, the deadline the finding is racing. */
   expiresAt: string | null;
   /** True when this run already fixed the problem (tenant direction only). */
   autoHealed: boolean;
@@ -174,14 +174,14 @@ export async function checkVpsBillingPosture(
   // Live-tenant gate: only a REAL STRIPE PAYMENT justifies auto-spending
   // platform money by re-enabling Hostinger billing. A canceled-in-grace
   // business still points at its VM until the wipe, and the lifecycle just
-  // disabled that box's renewal ON PURPOSE — healing it would re-charge the
+  // disabled that box's renewal ON PURPOSE, healing it would re-charge the
   // platform for a box whose tenant already left (Bugbot High on this PR).
   // Cancel-at-period-end is the same deliberate disable, just earlier: the
   // cancel planner turns Hostinger renew off so a colliding renewal date
   // cannot charge before Stripe period end. Pending (never paid) and
   // subscription-less (smoke/test) rows are equally out of scope.
   // Stripe-LESS live rows (internal pilots like the Residency Pilot,
-  // admin-created enterprise accounts) are checked but NEVER auto-healed —
+  // admin-created enterprise accounts) are checked but NEVER auto-healed,
   // an "active" flag someone typed into the DB is not a payment, and the
   // Jul 9 run proved the failure mode: the pilot's box was deliberately
   // parked non-renewing and the check flipped it back on. The helper uses
@@ -218,7 +218,7 @@ export async function checkVpsBillingPosture(
     const sub =
       typeof vm.subscription_id === "string" ? subsById.get(vm.subscription_id) ?? null : null;
 
-    // A never_renew box must lapse at its paid period end NO MATTER WHAT —
+    // A never_renew box must lapse at its paid period end NO MATTER WHAT,
     // the sunk-cost hardware (e.g. KVM8 srv1632631 pooled under the kvm2
     // label) costs more to renew than the tenant pays. Auto-heal is
     // therefore WRONG here: instead of re-enabling renewal, nag ops every
@@ -328,7 +328,7 @@ export async function checkVpsBillingPosture(
   // keeps this pass from emailing ops to disable renewal on a VM that now
   // serves a paying tenant (Bugbot Medium: stale snapshot TOCTOU). The
   // remaining millisecond-scale window is acceptable because this
-  // direction is report-only — the email asks for a manual hPanel review,
+  // direction is report-only, the email asks for a manual hPanel review,
   // it never flips billing itself.
   const inventory = await deps.listInventory();
   const availableBoxes = inventory.filter((row) => row.state === "available");

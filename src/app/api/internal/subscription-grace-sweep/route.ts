@@ -5,19 +5,19 @@
  * Call chain: pg_cron → edge fn `subscription-grace-sweep` → this route.
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
- * Per-row behavior (idempotent — safe to re-run if any prior step failed
+ * Per-row behavior (idempotent, safe to re-run if any prior step failed
  * mid-way):
  *   1. Load `LifecycleContext` for the business (falls back to `listUsers`
  *      to resolve `ownerAuthUserId` from owner_email).
- *   2. `planLifecycleAction({ type: "graceExpiredWipe" })` — yields a plan
+ *   2. `planLifecycleAction({ type: "graceExpiredWipe" })`, yields a plan
  *      with Hostinger snapshot-delete, Storage backup-delete, subscription
  *      `wiped_at` stamp, business `status='wiped'`, and optional
  *      `auth.admin.deleteUser`.
- *   3. `executeLifecyclePlan(...)` — runs the plan. Missing VM/snapshot is
+ *   3. `executeLifecyclePlan(...)`, runs the plan. Missing VM/snapshot is
  *      treated as benign (prior runs likely already tore them down).
  *
  * Each row is processed individually (no batching). Errors on individual
- * rows are captured and the sweep continues on the next row — one broken
+ * rows are captured and the sweep continues on the next row, one broken
  * tenant can't block the rest.
  *
  * Response: `{ ok: true, processed, wiped, skipped, errors: [...] }`.
@@ -47,7 +47,7 @@ const PER_INVOCATION_ROW_CEILING = Number.MAX_SAFE_INTEGER;
 // fast DB writes plus a handful of idempotent Hostinger API calls
 // (`stop_vm`, `disable_billing_auto_renewal`, `delete_snapshot`). A
 // pathological backlog could still push past the platform default, so we
-// pin the ceiling to 300s as a safety net — anything over that gets
+// pin the ceiling to 300s as a safety net, anything over that gets
 // re-driven on the next cron tick because each row is idempotent. Mirrors
 // the `/api/billing/cancel` + admin-route pattern.
 // 150 matches the chain's reachable budget: Supabase 504s the Edge bridge
@@ -100,7 +100,7 @@ async function runSweep(request: Request): Promise<Response> {
       }
 
       // Resolve the owner's Supabase auth user id from their email. Falls
-      // back to null — the planner's `graceExpiredWipe` only emits the
+      // back to null, the planner's `graceExpiredWipe` only emits the
       // delete_auth_user op when we actually have an id, so a missing
       // lookup just means we skip that single op on this row.
       const ownerAuthUserId = business.owner_email

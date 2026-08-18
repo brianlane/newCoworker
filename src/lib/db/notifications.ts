@@ -97,8 +97,8 @@ export async function getNotifications(
  * Only counts `status='sent'` rows. The dispatcher writes audit rows for
  * every channel attempted (`skipped` when a toggle is off / no recipient,
  * `failed` when the upstream provider errors). Including those in the
- * unread count would inflate the bell badge — an unsubscribed owner would
- * see +3 every urgent event despite having opted out — so the badge tracks
+ * unread count would inflate the bell badge, an unsubscribed owner would
+ * see +3 every urgent event despite having opted out, so the badge tracks
  * "things actually delivered to you" only. The full list view still shows
  * every row regardless of status so the dashboard is the audit source of
  * truth.
@@ -248,9 +248,9 @@ export async function markAllNotificationsRead(
 
 /**
  * Owner-facing delete: SOFT (deleted_at stamp, residency-aware, admin-
- * restorable) but indistinguishable from a hard delete in the dashboard —
+ * restorable) but indistinguishable from a hard delete in the dashboard,
  * every read above filters the stamp. Returns the stamped-row count
- * (0 when the id is unknown/already deleted — idempotent retries are fine).
+ * (0 when the id is unknown/already deleted, idempotent retries are fine).
  */
 export async function softDeleteNotification(
   businessId: string,

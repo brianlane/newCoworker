@@ -419,7 +419,7 @@ describe("renderTemplate", () => {
   });
   it("collapseEmpty handles the comma greeting shape the HQ flows actually use", () => {
     // The live "Demo caller follow-up (HQ)" body is "Hi {{vars.lead_name}},
-    // thanks for calling..." — a comma, not the "!" the round-4 fix was
+    // thanks for calling...", a comma, not the "!" the round-4 fix was
     // written against. This is why the extractor never needed a 'there'
     // placeholder: an empty name already reads naturally.
     const body = "Hi {{vars.lead_name}}, thanks for calling the New Coworker demo line!";
@@ -546,7 +546,7 @@ describe("sanitizeExtractedPhone", () => {
   });
 
   it("drops a model-invented '+' on bare junk digits (KYP '+492046781', Telnyx 40306)", () => {
-    // The form said `phone_number: 492046781` — no `+` anywhere. The
+    // The form said `phone_number: 492046781`, no `+` anywhere. The
     // extractor E.164-ified it into a German-looking number and the send
     // dead-lettered at the carrier.
     const source =
@@ -637,7 +637,7 @@ describe("senderPinnedByFromMatches", () => {
     expect(senderPinnedByFromMatches(triggers, "+13144708990")).toBe(true);
   });
   it("does NOT pin when the sender differs from every from_matches value", () => {
-    // The bug shape: the LEAD sent the matched message — their number is not
+    // The bug shape: the LEAD sent the matched message, their number is not
     // the pinned service number, so the var must not be seeded.
     const triggers = [smsTrigger([{ type: "from_matches", value: "3144708990" }])];
     expect(senderPinnedByFromMatches(triggers, "+16025551234")).toBe(false);
@@ -795,7 +795,7 @@ describe("isPhoneFieldName", () => {
       "excellent_reason",
       "telemetry_id",
       "intelligence",
-      // A bare number/no token is NOT a phone field — contact must precede it,
+      // A bare number/no token is NOT a phone field, contact must precede it,
       // or these enrichment IDs would soak up a stray phone (bug-hunt round 4).
       "account_number",
       "policy_number",
@@ -918,7 +918,7 @@ describe("buildExtractionPrompt", () => {
   });
   it("clips long text from the MIDDLE, keeping the head and the tail", () => {
     // Head-only clipping dropped the newest content of a trigger's
-    // windowText — a fresh lead block at the end of a long forwarded thread
+    // windowText, a fresh lead block at the end of a long forwarded thread
     // vanished from the prompt (bug-hunt round 3).
     const text = "HEAD-" + "x".repeat(50) + "-TAIL";
     const p = buildExtractionPrompt([{ name: "a" }], text, 20);
@@ -1423,7 +1423,7 @@ describe("parseHmToMinutes", () => {
 
 describe("localClock", () => {
   // 2026-06-11T06:23:00Z is a Thursday in UTC but still Wednesday night in
-  // Phoenix (UTC-7, no DST) — the exact cross-midnight case time-off and
+  // Phoenix (UTC-7, no DST), the exact cross-midnight case time-off and
   // schedule checks must get right.
   const instant = new Date("2026-06-11T06:23:00Z");
 

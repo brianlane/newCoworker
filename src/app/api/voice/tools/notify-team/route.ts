@@ -15,20 +15,20 @@ import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { truncateAtWord } from "../../../../../../supabase/functions/_shared/text_truncate";
 
 /**
- * `notify_team` — relays a caller request to the owner/team through the
+ * `notify_team`, relays a caller request to the owner/team through the
  * shared notifications dispatcher (dashboard row + email/SMS per the owner's
  * notification preferences).
  *
  * This exists because the voice assistant kept telling callers "let me check
  * with the team and get back to you" while having NO channel to the team at
- * all — the promise died with the call. The system prompt now requires the
+ * all, the promise died with the call. The system prompt now requires the
  * model to call this tool before making any check-with-the-team statement,
  * so the promise is backed by a real owner notification the moment it is
  * spoken.
  *
  * Deliberately NOT metered against the tenant's monthly SMS pool: the owner
  * notification is platform/owner traffic, never customer-facing (same
- * exemption as `dispatchUrgentNotification`'s other callers — see the
+ * exemption as `dispatchUrgentNotification`'s other callers, see the
  * "Budget enforcement" section of the README).
  */
 
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
       callControlId: envelope.callControlId ?? null
     };
     // `urgent_alert` (not `success`) so the request surfaces in the
-    // dashboard alerts feed — a caller was promised a follow-up, and the
+    // dashboard alerts feed, a caller was promised a follow-up, and the
     // team acting on it is the whole point of this tool.
     await insertCoworkerLog({
       id: logId,
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       ok: true,
       data: {
         logId,
-        // notified=false means "logged to the dashboard only" — the model is
+        // notified=false means "logged to the dashboard only", the model is
         // instructed to promise a follow-up, not claim the team already saw it.
         notified
       }

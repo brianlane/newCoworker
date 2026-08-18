@@ -59,7 +59,7 @@ import {
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
-/** Serialized payload ceiling — mirrors the Vagaro receiver. */
+/** Serialized payload ceiling, mirrors the Vagaro receiver. */
 export const ACUITY_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 
 export type AcuityWebhookEvent = {
@@ -278,7 +278,7 @@ export async function processAcuityAppointmentEvent(
   const gone = appt.canceled || event.action === "canceled";
   const created = event.action === "scheduled";
 
-  // OBSERVATION SHADOW — written with the DELIVERY moment, so the webhook
+  // OBSERVATION SHADOW, written with the DELIVERY moment, so the webhook
   // and the poller agree about when this change happened.
   let updatedIso: string | null = null;
   try {
@@ -296,7 +296,7 @@ export async function processAcuityAppointmentEvent(
     });
   }
 
-  // GOALS — a new, still-standing appointment means "this person booked";
+  // GOALS, a new, still-standing appointment means "this person booked";
   // stop nurturing them.
   if (created && !gone && (appt.customerPhone || appt.customerEmail)) {
     try {
@@ -325,7 +325,7 @@ export async function processAcuityAppointmentEvent(
     }
   }
 
-  // CALENDAR TRIGGERS — through the poller's own enqueue core, so the
+  // CALENDAR TRIGGERS, through the poller's own enqueue core, so the
   // shared `cal:` dedupe keys make poll/webhook double-observation a no-op.
   try {
     // `updatedIso ?? nowIso` guarantees a modification moment, which is what
@@ -350,7 +350,7 @@ export async function processAcuityAppointmentEvent(
     });
   }
 
-  // LEDGER — keeps reschedule/cancel resolution working for bookings made
+  // LEDGER, keeps reschedule/cancel resolution working for bookings made
   // off-platform, on the merchant's own Acuity page.
   let vacatedStarts: string[] = [];
   try {
@@ -392,7 +392,7 @@ export async function processAcuityAppointmentEvent(
     });
   }
 
-  // WAITLIST — cancels and moves free slots in real time, idempotent with
+  // WAITLIST, cancels and moves free slots in real time, idempotent with
   // the poller observing the same change. The customer whose appointment
   // changed is never offered the slot they just gave up.
   const attendee = {
@@ -426,7 +426,7 @@ export async function processAcuityAppointmentEvent(
     });
   }
 
-  // CONTACTS — Acuity has no customer event, so this is the only way a
+  // CONTACTS, Acuity has no customer event, so this is the only way a
   // walk-in booked on the merchant's own page becomes a contact.
   if (!gone) {
     result.contactSynced = await syncContact(businessId, appt);

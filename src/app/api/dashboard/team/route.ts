@@ -6,12 +6,12 @@
  *        membership row, then delivers the invite: a brand-new address gets
  *        Supabase's auth invite (password-set link IS the invitation, the
  *        bizblasts mechanic); an existing login gets a branded
- *        "you've been added" email. Email delivery is best-effort — the
+ *        "you've been added" email. Email delivery is best-effort, the
  *        grant is the row, and the response reports how it was delivered.
  * PATCH  { businessId, memberId, role }           → change a member's role
  * DELETE { businessId, memberId }                 → revoke access
  *
- * Auth: requireBusinessRole(businessId, "manage_team") — owner or manager
+ * Auth: requireBusinessRole(businessId, "manage_team"), owner or manager
  * (platform admin passes). Inviting/role-changing is enterprise-gated
  * server-side; revoke + list work on any tier so downgraded businesses can
  * shed members. Admin view-as is full access: every write below takes an

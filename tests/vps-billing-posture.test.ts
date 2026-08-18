@@ -360,7 +360,7 @@ describe("checkVpsBillingPosture, tenant direction", () => {
 
     const result = await checkVpsBillingPosture(deps);
 
-    // Only the live (past_due counts — still a billing relationship) tenant
+    // Only the live (past_due counts, still a billing relationship) tenant
     // was checked and healed; the VM detail endpoint was never called for
     // the grace/pending/no-sub rows.
     expect(result.checkedTenantVms).toBe(1);
@@ -404,7 +404,7 @@ describe("checkVpsBillingPosture, tenant direction", () => {
 
   it("never heals a never_renew box, reports migration-needed instead (lapsing sub)", async () => {
     // srv1632631 case: KVM8 hardware pooled under the kvm2 label. A paying
-    // tenant adopted it, but its $73.99/mo renewal must never be paid — the
+    // tenant adopted it, but its $73.99/mo renewal must never be paid, the
     // cron nags ops to migrate the tenant, it does NOT re-enable renewal.
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1", hostinger_vps_id: "1632631" })]),

@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/contact-form-sink — the operator toggle behind the admin
+ * POST /api/admin/contact-form-sink, the operator toggle behind the admin
  * "Contact form (platform)" card.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

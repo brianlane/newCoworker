@@ -10,7 +10,7 @@ import { geminiChatReply, type ChatTurn } from "./gemini";
 /**
  * The Truly Insurance human-handoff test (2026-07-20, replayed live): their
  * tester texted "I would like to speak to a representative" six times and
- * the escalation shipped in PR #534 never fired — every turn came back
+ * the escalation shipped in PR #534 never fired, every turn came back
  * intent=request_human_agent with handoff:false because the model judged
  * its "schedule a call with a broker" offer to have handled the request.
  *
@@ -19,7 +19,7 @@ import { geminiChatReply, type ChatTurn } from "./gemini";
  * (shouldEscalateToHuman over the parsed trailer) is true for every
  * person-request scenario. The decision is what production acts on: it
  * passes when the sharpened instruction makes the model say handoff:true,
- * AND when the model still says false but names the human-request intent —
+ * AND when the model still says false but names the human-request intent,
  * the deterministic backstop that closes the live gap. A run only fails
  * when a person-request turn yields a decision a human would call wrong.
  */
@@ -91,7 +91,7 @@ describe("Truly human-handoff: person-requests must produce an escalation decisi
 
   beforeAll(async () => {
     // Serial: one live call at a time (rate-limit footprint). A draw with
-    // no parseable trailer is re-rolled bounded — the suite's standard
+    // no parseable trailer is re-rolled bounded, the suite's standard
     // flake treatment (a test-level { retry } cannot re-run this beforeAll,
     // so the retry lives on the call itself). The escalation CONTRACT is
     // still asserted on the final draw; only the trailer-omitted shape
@@ -111,7 +111,7 @@ describe("Truly human-handoff: person-requests must produce an escalation decisi
   for (const scenario of SCENARIOS) {
     it(`escalates: ${scenario.name}`, () => {
       const reasoning = results.get(scenario.name)!;
-      // The trailer itself must be present on a single-topic turn like these —
+      // The trailer itself must be present on a single-topic turn like these,
       // without it the worker can neither store a decision nor escalate.
       expect(
         reasoning,

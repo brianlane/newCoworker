@@ -18,7 +18,7 @@ const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffec
  * `anchorBottom` keeps the pane pinned to the newest content for oldest-first
  * conversations (SMS threads): it positions at the bottom before first paint,
  * and re-pins when the list grows (e.g. after a send triggers `router.refresh()`
- * and this wrapper re-renders with an extra bubble) — but only while the user is
+ * and this wrapper re-renders with an extra bubble), but only while the user is
  * already near the bottom, so scrolling up to read history is never yanked back.
  * Newest-first lists (e.g. the email inbox) leave it off so the top row stays in
  * view. We set `scrollTop` on the container itself rather than calling

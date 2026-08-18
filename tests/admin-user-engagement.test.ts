@@ -179,7 +179,7 @@ describe("summarizeUserEngagement", () => {
   });
 
   it("active-today is a calendar-day match, not a rolling 24h window", () => {
-    // NOW is 2026-07-11T12:00Z; a sign-in 18h earlier lands on Jul 10 —
+    // NOW is 2026-07-11T12:00Z; a sign-in 18h earlier lands on Jul 10,
     // inside a rolling 24h window but NOT today.
     const summary = summarizeUserEngagement(
       [user("evening@x.com", { last_sign_in_at: daysAgo(0.75) })],

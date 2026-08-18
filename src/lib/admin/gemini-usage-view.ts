@@ -35,7 +35,7 @@ function ymd(ms: number): string {
 
 /**
  * UTC calendar-day window for a range key. Rolling ranges end tomorrow
- * (exclusive) so today's partial day is included — same convention as AI
+ * (exclusive) so today's partial day is included, same convention as AI
  * Studio's rightmost bar.
  */
 export function geminiRangeWindow(range: GeminiRangeKey, now: Date): GeminiRangeWindow {
@@ -179,9 +179,9 @@ export function buildGeminiTenantBreakdown(
 /**
  * businessId → summed metered cost (micro-USD) for rows inside [start, end).
  * `hasRows` distinguishes "the ledger has data for this window and this
- * tenant spent $0" from "no ledger data at all" (pre-ledger months) — same
+ * tenant spent $0" from "no ledger data at all" (pre-ledger months), same
  * shape as telnyxMicrosByBusinessInWindow, so the Usage page can render
- * "—" instead of a misleading $0.00.
+ * ", " instead of a misleading $0.00.
  */
 export function geminiMicrosByBusinessInWindow(
   rows: GeminiSpendDailyRow[],
@@ -213,7 +213,7 @@ export type GeminiReconciliation = {
 /**
  * Compare the metered ledger to Google's synced billed rows over the same
  * window. Billed data lags up to ~24h, so the metered side is clipped to
- * days that billed data actually covers — otherwise today's metered spend
+ * days that billed data actually covers, otherwise today's metered spend
  * would always read as a negative "leak".
  */
 export function buildGeminiReconciliation(

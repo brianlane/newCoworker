@@ -1,12 +1,12 @@
 /**
- * configure-hq-dogfood.ts — one-shot: point the platform's own lead surfaces
+ * configure-hq-dogfood.ts, one-shot: point the platform's own lead surfaces
  * at the HQ tenant and make owner alerting real (the "HQ works for New
  * Coworker" dogfooding plan, config half):
  *
  *   1. business_telnyx_settings.forward_to_e164 → Brian's cell when empty
  *      (notify_owner texts this number; voice transfer_to_owner rings it).
  *      FIRST deliberately: the sink below starts feeding flows whose
- *      notify_owner step reads this — enabling the sink before the forward
+ *      notify_owner step reads this, enabling the sink before the forward
  *      number exists would let a run finish with no owner text.
  *   2. notification_preferences upsert: urgent SMS + email to Brian
  *      (+1 602 686 6672 / newcoworkerteam@gmail.com), and
@@ -15,7 +15,7 @@
  *      harness had turned it off; the default posture protects staff rows.
  *      flow-test-setup.ts re-disables it when the harness needs to).
  *   4. businesses.contact_form_sink → TRUE for HQ (public /contact
- *      submissions also enqueue webhook flow events; PR #773) — LAST, once
+ *      submissions also enqueue webhook flow events; PR #773), LAST, once
  *      every downstream notification target is in place. Audit-logged to
  *      coworker_logs exactly like the admin card's route.
  *
@@ -84,7 +84,7 @@ if (!APPLY) {
 
 // ---------------------------------------------------------------- 1. forward number
 // FIRST: notify_owner (the triage flows' owner text) sends ONLY to
-// business_telnyx_settings.forward_to_e164 — this must exist before the sink
+// business_telnyx_settings.forward_to_e164, this must exist before the sink
 // starts feeding runs, or an early run finishes with no owner text.
 if (!telnyx?.forward_to_e164) {
   await upsertBusinessTelnyxSettings(

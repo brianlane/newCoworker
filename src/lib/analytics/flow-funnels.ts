@@ -1,23 +1,23 @@
 /**
- * Per-flow conversion funnels — BizBlasts' MarketingPerformanceService /
+ * Per-flow conversion funnels, BizBlasts' MarketingPerformanceService /
  * ConversionAttributionService mapped onto AiFlows (a flow IS the campaign):
  *
  *   runs started → texts sent → tracked-link clicks → goals reached
  *
  * Sources, all already written by the engine:
- *   - `ai_flow_runs`      — runs per flow (central engine table); a context
+ *   - `ai_flow_runs`, runs per flow (central engine table); a context
  *     var starting `__goal_` marks a run an external milestone
  *     fast-forwarded to a goal step (goal_events.ts), i.e. a CONVERSION.
- *   - `sms_outbound_log`  — flow-attributed sends (source 'ai_flow').
- *   - `sms_links`         — tracked short links minted for flow sends
- *     (central by design — see residency/tables.ts); click_count > 0 = the
+ *   - `sms_outbound_log`, flow-attributed sends (source 'ai_flow').
+ *   - `sms_links`, tracked short links minted for flow sends
+ *     (central by design, see residency/tables.ts); click_count > 0 = the
  *     lead actually tapped through.
  *
- * Residency: `ai_flows` and `sms_outbound_log` are MOVED tables — vps-mode
+ * Residency: `ai_flows` and `sms_outbound_log` are MOVED tables, vps-mode
  * tenants read them from their box (same routing as the analytics cards).
  *
  * No ROI column on purpose: flows carry no cost, and newCoworker holds no
- * tenant revenue — rates between funnel stages are the honest signal.
+ * tenant revenue, rates between funnel stages are the honest signal.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -43,16 +43,16 @@ export type FlowFunnelRow = {
 export type FlowFunnels = {
   /** Busiest first, capped at FLOW_FUNNEL_FLOW_LIMIT. */
   rows: FlowFunnelRow[];
-  /** True when any source scan hit its cap — counts may be low. */
+  /** True when any source scan hit its cap, counts may be low. */
   clipped: boolean;
 };
 
 export const FLOW_FUNNEL_WINDOW_DAYS = 30;
-/** Flows listed on the card (busiest first — NOT newest first). */
+/** Flows listed on the card (busiest first, NOT newest first). */
 export const FLOW_FUNNEL_FLOW_LIMIT = 25;
 /** Flows considered for ranking; far above any tenant's flow count. */
 export const FLOW_FUNNEL_CANDIDATE_LIMIT = 200;
-/** Row caps per source scan — far above current per-tenant volumes. */
+/** Row caps per source scan, far above current per-tenant volumes. */
 export const FLOW_FUNNEL_SCAN_LIMIT = 5000;
 
 /** True when the run's context carries a reached-goal marker. */
@@ -107,7 +107,7 @@ export async function getFlowFunnels(
     return ((data as FlowRow[] | null) ?? []);
   };
   // `scanned` is the RAW row count before any client-side filtering, so the
-  // clipped flag reflects what the scan actually consumed — on the vps path
+  // clipped flag reflects what the scan actually consumed, on the vps path
   // the cap applies before null flow_ids are dropped.
   const fetchSends = async (): Promise<{ rows: SendRow[]; scanned: number }> => {
     if (vpsReadMode) {
@@ -208,7 +208,7 @@ export async function getFlowFunnels(
   return {
     rows: rows.slice(0, FLOW_FUNNEL_FLOW_LIMIT),
     // Activity-scan caps only: a business with 200+ FLOWS but modest volume
-    // has accurate counts for every listed flow — the candidate cap trims
+    // has accurate counts for every listed flow, the candidate cap trims
     // which flows are ranked, not their numbers, so it must not trigger the
     // "counts are partial" warning.
     clipped:

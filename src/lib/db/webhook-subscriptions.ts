@@ -1,5 +1,5 @@
 /**
- * Persistence for `webhook_subscriptions` — Zapier-style REST hooks. The
+ * Persistence for `webhook_subscriptions`, Zapier-style REST hooks. The
  * webhook-dispatcher Edge cron reads/advances these rows; this module is
  * the management surface used by /api/public/v1/hooks.
  */
@@ -23,7 +23,7 @@ export type WebhookSubscriptionRow = {
   created_at: string;
 };
 
-/** Cap per business — Zapier makes one hook per Zap; 25 is generous. */
+/** Cap per business, Zapier makes one hook per Zap; 25 is generous. */
 export const MAX_HOOKS_PER_BUSINESS = 25;
 
 export async function createWebhookSubscription(

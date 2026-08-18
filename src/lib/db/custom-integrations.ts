@@ -9,7 +9,7 @@
  *
  * Secrets are AES-256-GCM via `@/lib/integrations/secrets` (same crypto
  * the existing `integrations` table uses). The decrypted secret never
- * leaves a server-side function — the dashboard listing/edit UI gets a
+ * leaves a server-side function, the dashboard listing/edit UI gets a
  * masked stub, and the agent gets the integration metadata only.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -34,7 +34,7 @@ export type CustomIntegrationAuthScheme = (typeof CUSTOM_AUTH_SCHEMES)[number];
 export const CUSTOM_LABEL_MAX = 80;
 export const CUSTOM_DESCRIPTION_MAX = 500;
 export const CUSTOM_HEADER_NAME_MAX = 128;
-/** RFC 7230 token (`tchar`) — strict header-name validation. */
+/** RFC 7230 token (`tchar`), strict header-name validation. */
 export const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 
 type StoredCustomIntegrationRow = {
@@ -53,7 +53,7 @@ type StoredCustomIntegrationRow = {
 
 /**
  * Internal row shape with the decrypted secret in place. Only ever
- * leaves a server-side function — the dashboard / agent never sees this
+ * leaves a server-side function, the dashboard / agent never sees this
  * object directly. Use `toPublicCustomIntegration` before returning to a
  * client.
  */
@@ -137,7 +137,7 @@ function escapeLikeLiteral(value: string): string {
 
 /**
  * Resolve a label to a single decrypted row for the proxy/tool path.
- * Case-insensitive — matches the unique index on `lower(label)` in the
+ * Case-insensitive, matches the unique index on `lower(label)` in the
  * migration; the wildcard chars are escaped so an agent cannot use
  * `%`/`_` as a fishing pattern across the business's integrations.
  *
@@ -233,7 +233,7 @@ export class CustomIntegrationValidationError extends Error {
  * depth: a row written before this guard existed must still be blocked).
  *
  * IPv4 / IPv6 range classification is delegated to
- * `@/lib/net/ip-classification` — same module `website-ingest` uses,
+ * `@/lib/net/ip-classification`, same module `website-ingest` uses,
  * so the two layers of defense can never drift on multicast / reserved
  * range coverage.
  */
@@ -243,13 +243,13 @@ export class CustomIntegrationValidationError extends Error {
  * conservatively classifies "anything that doesn't parse as four
  * 0–255 octets" as private. That conservative behavior is correct
  * for `website-ingest`'s post-DNS-lookup check, but here we feed in
- * arbitrary user-supplied hostnames — `api.acme.com` would be
+ * arbitrary user-supplied hostnames, `api.acme.com` would be
  * misclassified without this regex gate.
  *
  * `256.256.256.256` and similar invalid-octet inputs DO match this
  * shape regex but the shared helper still classifies them as
  * private (defensive); that's the right answer at registration time
- * too — refusing nonsense addresses costs nothing and removes a
+ * too, refusing nonsense addresses costs nothing and removes a
  * potential obfuscation vector.
  */
 function looksLikeIpv4Literal(host: string): boolean {
@@ -264,7 +264,7 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   // them too, so we MUST refuse them at registration.
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (looksLikeIpv4Literal(h) && isPrivateIpv4(h)) return true;
-  // IPv6 literals — note that `URL.hostname` strips brackets, so we see
+  // IPv6 literals, note that `URL.hostname` strips brackets, so we see
   // e.g. "::1" not "[::1]".
   if (h.includes(":") && isPrivateIpv6(h)) return true;
   // Common cloud-metadata hostnames worth blocking explicitly.
@@ -281,7 +281,7 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
 /**
  * Returns true when the host literal is a bare IP address (v4 or v6).
  * The proxy's call-time `assertSafeHostname` rejects ALL bare IPs, so
- * we must reject them at registration time too — otherwise an owner
+ * we must reject them at registration time too, otherwise an owner
  * can register a row that simply never works at call time. Real REST
  * APIs are vhosted and reachable by hostname; if you really need to
  * point at an IP, do it via DNS.
@@ -423,7 +423,7 @@ export function validateUpsertInput(input: UpsertCustomIntegrationInput): void {
   }
   // On create (no id), require a secret unless scheme is "none". On update
   // (id present) we let `secret === undefined` mean "leave existing value
-  // alone", so we cannot detect "never had one" here — that's enforced
+  // alone", so we cannot detect "never had one" here, that's enforced
   // by the DB row's existing state, plus the route layer fetches the
   // current row and refuses to flip scheme→bearer/header/basic/query
   // without supplying a secret.
@@ -546,7 +546,7 @@ function computeSecretPatch(
  *
  * A missing row (cross-tenant id, RLS denial, race) is surfaced as
  * `exists=false` so the caller can refuse with `secret_required` even
- * when nominally a same-scheme update — there's no row to inherit a
+ * when nominally a same-scheme update, there's no row to inherit a
  * scheme from.
  */
 async function loadRowAuthState(
@@ -596,7 +596,7 @@ async function loadRowAuthState(
  *      if it were `user:pass`).
  *
  * Same-scheme updates with a stored secret on file are still allowed
- * to omit the secret — that's the legitimate "edit the label / URL /
+ * to omit the secret, that's the legitimate "edit the label / URL /
  * description without rotating credentials" flow.
  */
 async function assertCredentialedSchemeHasSecret(

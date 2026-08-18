@@ -1,11 +1,11 @@
 /**
- * fix-kyp-tunnel.ts — one-shot: repoint cloudflared on KYP Ads' adopted box
+ * fix-kyp-tunnel.ts, one-shot: repoint cloudflared on KYP Ads' adopted box
  * (vm 1800985, ex-pilot KVM1) at KYP's OWN tunnel.
  *
  * Root cause (Jul 15 2026): the box came from the adoption pool with a
  * cloudflared unit left over from its previous tenant. deploy-client.sh
  * deliberately treats an existing unit as "restart, don't reinstall", so the
- * OLD tunnel token survived adoption — the box kept serving the previous
+ * OLD tunnel token survived adoption, the box kept serving the previous
  * tenant's tunnel while KYP's hostnames (056034a7-….newcoworker.com and
  * voice-056034a7-…) pointed at tunnel e75b5473-9827-4e60-861a-93e4cff40877,
  * which had no connector → every request 530'd and James's first SMS

@@ -62,7 +62,7 @@ import {
 import { logger } from "@/lib/logger";
 
 /**
- * Rowboat project tool webhook — makes the Rowboat-mediated coworkers'
+ * Rowboat project tool webhook, makes the Rowboat-mediated coworkers'
  * tools REAL.
  *
  * Every per-tenant Rowboat project is seeded (vps/scripts/deploy-client.sh)
@@ -74,14 +74,14 @@ import { logger } from "@/lib/logger";
  * JSON we return is fed back to the model as the tool result.
  *
  * Before this endpoint existed those tools were Rowboat "placeholder"
- * tools — the model received LLM-mocked results and nothing actually
+ * tools, the model received LLM-mocked results and nothing actually
  * persisted. Now each call is fulfilled by the same cores the voice bridge
  * adapters use, and enforced against Settings → Coworker tools
  * (`agent_tool_settings`) per call.
  *
  * Agent attribution: Rowboat's webhook payload carries the project + tool
  * but NOT which agent invoked it, so the workflow gives each surface its
- * own tool names — the texting coworker declares `customer_*` and the
+ * own tool names, the texting coworker declares `customer_*` and the
  * dashboard coworker declares `dashboard_customer_*` + `send_sms`. That
  * keeps the Settings toggles per-surface AND records customer interactions
  * under the right channel. The voice path never crosses this endpoint (the
@@ -165,7 +165,7 @@ const smsGenerateImageArgsSchema = z.object({
   inputImageRef: z.string().max(300).optional()
 });
 const bookAppointmentArgsSchema = z.object({
-  // offset:true — the tool description tells the model "ISO 8601 with
+  // offset:true, the tool description tells the model "ISO 8601 with
   // timezone offset"; the bare .datetime() only accepted trailing-Z UTC, so
   // a model following its own instructions had every booking rejected.
   startIso: z.string().datetime({ offset: true }),
@@ -251,7 +251,7 @@ type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: stri
 /**
  * Model-facing guidance attached to a failed booking (their persona says
  * nothing about failure handling, and without this the model either blames
- * "a system error" or retry-loops — Truly's lead was offered four failing
+ * "a system error" or retry-loops, Truly's lead was offered four failing
  * times in a row until he gave up). Attributed to availability, per-surface
  * escalation: the texting coworker escalates via notify_team, the website
  * widget saves the request via capture_lead, and dashboard chat just tells
@@ -278,11 +278,11 @@ function bookFailureGuidance(toolName: string, detail: string): string {
 }
 
 /**
- * Model-facing guidance for failed reschedule/cancel calls — same rationale
+ * Model-facing guidance for failed reschedule/cancel calls, same rationale
  * as bookFailureGuidance: without it the model blames "a system error" or,
  * worse, books a SECOND event to fake a reschedule (the exact lifecycle
  * failure this tool exists to prevent). Null for details that need no
- * extra steering (e.g. invalid_window — a plain arg fix).
+ * extra steering (e.g. invalid_window, a plain arg fix).
  */
 function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel"): string | null {
   if (detail === "booking_not_found") {
@@ -385,7 +385,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
     case "document_list": {
       return listDocumentsTool(businessId);
     }
-    // Run-automations tools (dashboard_ names only — see TOOL_GATES): the
+    // Run-automations tools (dashboard_ names only, see TOOL_GATES): the
     // SAME cores as the inline dashboard path, so the Rowboat fallback path
     // resolves flows, refuses disabled/voice flows, and enqueues manual runs
     // byte-identically.
@@ -399,7 +399,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       return await runAiFlowTool(businessId, parsed.data);
     }
-    // The texting coworker's ONLY automation tool (bare sms name — see the
+    // The texting coworker's ONLY automation tool (bare sms name, see the
     // TOOL_GATES comment): enrolls the CURRENT texter into a flow the owner
     // flagged options.agentInvocable. The core refuses everything else.
     case "start_aiflow_for_contact": {
@@ -409,7 +409,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       return await startAiFlowForContactTool(businessId, parsed.data);
     }
-    // Notification toggles from the texting surface — ENABLE-ONLY here: the
+    // Notification toggles from the texting surface, ENABLE-ONLY here: the
     // SMS Coworker serves customers and staff with the same agent, so a
     // prompt-injected customer must never be able to silence the owner's
     // alerts (see rowboat-gates.ts). The shared core owns the whitelist and
@@ -505,14 +505,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      // No caller context on the webhook path — the model must supply any
+      // No caller context on the webhook path, the model must supply any
       // attendee phone explicitly. Guidance is scoped to the two details
       // where availability/escalation framing is TRUE: a generic book
       // failure and a missing calendar. Other failures (invalid_window,
-      // Calendly link modes, ...) are not slot conflicts — telling the model
+      // Calendly link modes, ...) are not slot conflicts, telling the model
       // "the time was taken" would send it retry-looping the same mistake.
       // The unassigned-booking owner alert fires only from CUSTOMER-facing
-      // surfaces (texting/webchat twins) — a dashboard_ booking is the
+      // surfaces (texting/webchat twins), a dashboard_ booking is the
       // owner's own action.
       const bookSurface = toolSurface(name);
       const booked = await bookCalendarAppointment(
@@ -775,9 +775,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         );
         // Best-effort durable log so the text renders in the dashboard Text
         // history like every other outbound path. These sends used to be
-        // invisible platform-side (metered but never logged) — diagnosing the
+        // invisible platform-side (metered but never logged), diagnosing the
         // KYP Ads "didn't receive anything" test texts required the Telnyx
-        // portal. A failed insert must not fail the tool call — the SMS
+        // portal. A failed insert must not fail the tool call, the SMS
         // already went out.
         try {
           const db = await createSupabaseServiceClient();

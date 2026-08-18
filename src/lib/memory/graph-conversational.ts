@@ -1,20 +1,20 @@
 /**
  * Conversational knowledge-graph extraction (PR 4 of the KG plan): LLM
- * extraction over CUSTOMER conversation windows — voice/SMS/email via the
+ * extraction over CUSTOMER conversation windows, voice/SMS/email via the
  * customer-memory summarizer boundary, cold inbound email via the mailbox
- * hook — under the customer-source prompt (statements are claims; the
+ * hook, under the customer-source prompt (statements are claims; the
  * assistant's own turns are never extracted) and the per-source trust
  * model.
  *
  * COST FUSE: every extraction is metered on the `memory_graph` surface, and
  * a per-tenant DAILY cap (MEMORY_GRAPH_DAILY_EXTRACTION_CAP, default 200)
- * is enforced by reading today's call count back from the spend ledger — a
+ * is enforced by reading today's call count back from the spend ledger, a
  * viral webchat day can't run up a Gemini bill. Over-cap windows are
  * logged (counted, not silent) and simply extract in a later window: the
  * summarizer re-assembles the same history next interaction, so nothing is
  * permanently lost.
  *
- * NEVER throws — every hook site piggybacks a write the caller must not
+ * NEVER throws, every hook site piggybacks a write the caller must not
  * lose.
  */
 
@@ -58,7 +58,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /**
  * Today's (UTC) metered memory_graph call count for one tenant, read back
- * from the gemini_spend_daily roll-up — the same ledger the admin Gemini
+ * from the gemini_spend_daily roll-up, the same ledger the admin Gemini
  * page bills against, so the fuse and the bill can never disagree.
  */
 export async function countKgExtractionsToday(
@@ -109,7 +109,7 @@ export type ConversationExtractDeps = {
 export type ConversationExtractInput = {
   /** The conversation window (customer + assistant turns, labeled). */
   transcript: string;
-  /** Registry source key — decides the stored trust tier. */
+  /** Registry source key, decides the stored trust tier. */
   source: KgSource;
   /** Who the customer is (E.164, email address, or platform id). */
   attributedTo: string | null;
@@ -146,7 +146,7 @@ export async function extractConversationGraph(
     const mode = await getMode(businessId);
     if (mode === "off") return { ran: false, reason: "mode_off" };
 
-    // Cost fuse — counted, never silent; the next window re-covers this
+    // Cost fuse, counted, never silent; the next window re-covers this
     // history (the summarizer window is rolling, the email hook is per-mail).
     const cap = dailyExtractionCap();
     const usedToday = await countToday(businessId);

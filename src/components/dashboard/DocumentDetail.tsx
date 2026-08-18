@@ -7,7 +7,7 @@
  * rename / move-to-folder, audience, expiration + renewal dates, linked
  * contact and renewal handler, workflow record fields, the editable
  * agent-facing content (+ PowerPoint export), signature requests, and share
- * links — plus Open in browser (inline signed URL), Download, and Delete
+ * links, plus Open in browser (inline signed URL), Download, and Delete
  * (which navigates back to the list).
  */
 
@@ -128,7 +128,7 @@ export function DocumentDetail({
       }
       await refreshSignatureRequests();
       try {
-        // 200 is MAX_LIST_LIMIT on the customers API — a larger value fails
+        // 200 is MAX_LIST_LIMIT on the customers API, a larger value fails
         // validation and would hide the picker entirely.
         const res = await fetch(
           `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=200`,
@@ -554,7 +554,7 @@ export function DocumentDetail({
             >
               Save content
             </Button>
-            {/* The export builds from SAVED, ready content — the route rejects
+            {/* The export builds from SAVED, ready content, the route rejects
                 processing/failed/empty docs, and with unsaved edits the link
                 would silently ship an older deck, so both gate the control. */}
             {doc.status === "ready" && (doc.content_md ?? "").trim().length > 0 ? (

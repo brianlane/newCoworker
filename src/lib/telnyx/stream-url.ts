@@ -35,7 +35,7 @@ function b64url(buf: Buffer): string {
     .replace(/=+$/, "");
 }
 
-// Key order is the security contract — keep it byte-identical with the Deno
+// Key order is the security contract, keep it byte-identical with the Deno
 // signer and the bridge verifier. from_e164 sits between to_e164 and exp in v2.
 function canonicalJson(payload: StreamUrlPayload): string {
   if (payload.v === 2) {

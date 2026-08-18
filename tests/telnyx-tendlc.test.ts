@@ -301,7 +301,7 @@ describe("TendlcClient.createPhoneNumberCampaign", () => {
       jsonResponse(200, {
         phoneNumber: "+15551234567",
         campaignId: "c-1",
-        // Numeric timestamps — Telnyx is inconsistent across endpoints.
+        // Numeric timestamps, Telnyx is inconsistent across endpoints.
         createdAt: 1700000000,
         updatedAt: 1700000001
       })

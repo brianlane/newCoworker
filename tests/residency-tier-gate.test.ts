@@ -86,7 +86,7 @@ describe("residency tier gate", () => {
 
   it("always allows flipping back to the supabase default (no DB read)", async () => {
     // A downgraded tenant must never be wedged in a residency mode its plan
-    // no longer supports — the rollback path skips the tier lookup entirely.
+    // no longer supports, the rollback path skips the tier lookup entirely.
     const { db, from } = tierDb({ data: { tier: "starter" }, error: null });
     await expect(assertResidencyModeAllowed(BIZ, "supabase", db)).resolves.toBeUndefined();
     expect(from).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe("residency moved-table inventory", () => {
     // tables are drained by Edge workers; customer_profiles is the
     // platform's abuse/billing identity of the OWNER (not tenant content);
     // customer_memories and contact_overrides no longer exist as tables
-    // (contacts_unify merged them into contacts — the former survives only
+    // (contacts_unify merged them into contacts, the former survives only
     // as a compat view, which is not replicated).
     for (const central of [
       "sms_opt_outs",

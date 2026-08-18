@@ -4,13 +4,13 @@
  * Repoints the inbound-SMS `Coworker` agent off local Qwen onto Gemini and adds
  * the `CoworkerLocal` spend-cap fallback twin (identical instructions/tools, but
  * pinned to the local Ollama model). Surgically patches the Mongo
- * liveWorkflow + draftWorkflow agents arrays in place — no container churn, no
+ * liveWorkflow + draftWorkflow agents arrays in place, no container churn, no
  * .env regeneration (unlike a full deploy-client.sh re-provision).
  *
  * Idempotent: re-running keeps Coworker on the resolved model and keeps
  * CoworkerLocal's model in sync; it never duplicates the twin.
  *
- * Keyless safety: mirrors deploy-client.sh — a gemini-* target needs
+ * Keyless safety: mirrors deploy-client.sh, a gemini-* target needs
  * GOOGLE_API_KEY in /opt/rowboat/.env (the llm-router 503s gemini-* without a
  * key), so on a keyless host Coworker degrades to the local model and the script
  * warns. CoworkerLocal is always the local model.

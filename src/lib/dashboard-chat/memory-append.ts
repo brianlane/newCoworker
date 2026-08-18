@@ -1,5 +1,5 @@
 /**
- * Owner business-memory append — the single write path for dashboard-chat
+ * Owner business-memory append, the single write path for dashboard-chat
  * rule capture.
  *
  * Factored out of /api/voice/tools/owner-append-business-memory (which the
@@ -12,7 +12,7 @@
  * Overflow is ARCHIVED, never destroyed: when active memory would exceed
  * the 14KB cap, the oldest whole sections move to
  * business_configs.memory_archive_md (where ranked retrieval can still
- * answer from them) instead of being sliced off and lost — the pre-Jul-2026
+ * answer from them) instead of being sliced off and lost, the pre-Jul-2026
  * behavior silently destroyed a long-running tenant's earliest rules.
  * Finally schedules a VPS vault sync.
  */
@@ -25,7 +25,7 @@ export const MEMORY_MD_MAX_CHARS = 14_000;
 
 /**
  * Cap on the archive document (~14x the active window). The archive is never
- * injected into a static prompt — only ranked retrieval reads it — so it can
+ * injected into a static prompt, only ranked retrieval reads it, so it can
  * be generous. On overflow the OLDEST archive content is dropped; at this
  * size that is years of capture history for a typical tenant.
  */
@@ -76,7 +76,7 @@ export function existingMemoryKeys(memoryMd: string): Set<string> {
  * horizontal-rule separator line (the capture path writes
  * `\n---\n\n### Owner chat (date)\n…` blocks). Content before the first
  * boundary is its own leading section, so hand-written preamble is moved as
- * one unit. Splitting only ever happens on line boundaries — a bullet is
+ * one unit. Splitting only ever happens on line boundaries, a bullet is
  * never cut in half.
  */
 export function splitMemorySections(md: string): string[] {
@@ -95,7 +95,7 @@ export function splitMemorySections(md: string): string[] {
       sawContent = !/^---\s*$/.test(line.trim());
     } else {
       current.push(line);
-      // A bare `---` is a separator, not content — without this exception a
+      // A bare `---` is a separator, not content, without this exception a
       // document-LEADING separator would count as content and split away
       // from its own following heading.
       if (line.trim().length > 0 && !/^---\s*$/.test(line.trim())) sawContent = true;
@@ -153,7 +153,7 @@ export type NextMemoryBuild = {
 /**
  * Append bullet lines under a dated heading. On overflow, move the OLDEST
  * whole sections of the prior memory into the archive until the active
- * document fits the cap — nothing is ever destroyed. If the archive itself
+ * document fits the cap, nothing is ever destroyed. If the archive itself
  * overflows its (much larger) cap, its oldest content is dropped.
  */
 export function buildNextMemory(
@@ -202,7 +202,7 @@ export function buildNextMemory(
   if (evictedText) {
     nextArchive = priorArchive.trim() ? `${priorArchive.trimEnd()}\n\n${evictedText}` : evictedText;
     if (nextArchive.length > MEMORY_ARCHIVE_MD_MAX_CHARS) {
-      // The archive drops from its HEAD (oldest first) — but only at ~200KB,
+      // The archive drops from its HEAD (oldest first), but only at ~200KB,
       // which is ~14x the active window.
       nextArchive = nextArchive.slice(nextArchive.length - MEMORY_ARCHIVE_MD_MAX_CHARS);
     }
@@ -221,7 +221,7 @@ export type AppendMemoryDeps = {
 
 export type AppendMemoryResult = {
   appended: boolean;
-  /** Lines actually written (post-dedupe) — what an honest confirmation may cite. */
+  /** Lines actually written (post-dedupe), what an honest confirmation may cite. */
   savedBullets: string[];
   skippedDuplicates: number;
   memoryChars: number;
@@ -276,7 +276,7 @@ export async function appendOwnerMemoryBullets(
   }
 
   // Brand-new lines (absent from prior) always get appended. "Restated"
-  // lines already exist in prior, so normally we skip them — BUT appending
+  // lines already exist in prior, so normally we skip them, BUT appending
   // a block can push memory over the cap and archive old sections; if a
   // restated line's only ACTIVE copy would be archived away, we re-append it
   // so the rule the owner just confirmed stays in the active prompt window.

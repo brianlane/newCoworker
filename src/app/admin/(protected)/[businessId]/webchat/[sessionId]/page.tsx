@@ -2,7 +2,7 @@
  * Admin read-only transcript for one website-chat-widget session.
  *
  * Same rendering as the owner-facing /dashboard/webchat/[sessionId] view.
- * IDOR guard: the session must belong to the businessId in the URL — a
+ * IDOR guard: the session must belong to the businessId in the URL, a
  * guessed session UUID under the wrong business renders the same
  * not-found state as a missing row.
  */

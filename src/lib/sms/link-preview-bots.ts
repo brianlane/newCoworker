@@ -10,12 +10,12 @@
  * Pure and dependency-free so the matcher sits under the lib coverage gate.
  */
 
-// Known preview/scanner user-agent fragments. Deliberately targeted — a
+// Known preview/scanner user-agent fragments. Deliberately targeted, a
 // broad /bot/ match would also catch legitimate in-app browsers that embed
 // odd tokens. Case-insensitive.
 const PREVIEW_BOT_RE = new RegExp(
   [
-    // Meta family — also what iMessage and WhatsApp previews impersonate
+    // Meta family, also what iMessage and WhatsApp previews impersonate
     // ("facebookexternalhit/1.1 Facebot Twitterbot/1.0").
     "facebookexternalhit",
     "facebot",

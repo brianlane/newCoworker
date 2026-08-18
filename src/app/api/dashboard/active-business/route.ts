@@ -1,9 +1,9 @@
 /**
- * POST /api/dashboard/active-business — switch which business the dashboard
+ * POST /api/dashboard/active-business, switch which business the dashboard
  * shows (agency/multi-business logins). Validates the target against the
  * caller's accessible set (owned + memberships) before setting the httpOnly
  * cookie, so the cookie can never point at a business the login has no role
- * on — and every later read re-validates anyway (resolveActiveBusinessContext).
+ * on, and every later read re-validates anyway (resolveActiveBusinessContext).
  *
  * DELETE clears the cookie (falls back to the newest owned business).
  */

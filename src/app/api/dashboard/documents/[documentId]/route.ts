@@ -1,5 +1,5 @@
 /**
- * Business Documents — single-document management.
+ * Business Documents, single-document management.
  *
  *   GET    /api/dashboard/documents/:documentId  → one row (view page refresh)
  *   PATCH  /api/dashboard/documents/:documentId  → edit metadata / content
@@ -103,7 +103,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (body.data.summary !== undefined) patch.summary = body.data.summary.trim();
     if (body.data.contentMd !== undefined) {
       patch.content_md = body.data.contentMd;
-      // A manual content edit makes a previously failed ingest usable —
+      // A manual content edit makes a previously failed ingest usable,
       // and clears its stale failure text.
       if (body.data.contentMd.trim()) {
         patch.status = "ready";
@@ -121,7 +121,7 @@ export async function PATCH(request: Request, context: RouteContext) {
           return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
         }
       }
-      // Only a CHANGED date re-arms the sweep's reminders — re-submitting
+      // Only a CHANGED date re-arms the sweep's reminders, re-submitting
       // the same date (the UI sends the field on every save) must not
       // trigger duplicate notifications.
       if (nextExpires !== existing.expires_at) {
@@ -155,7 +155,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (body.data.contactId !== undefined) {
       // Linking/unlinking moves the document BETWEEN cap pools (per-tier
       // knowledge-library cap vs the flat contact-records cap), so the
-      // destination pool is checked exactly like POST upload / CSV import —
+      // destination pool is checked exactly like POST upload / CSV import,
       // otherwise PATCH would be a cap bypass.
       const movingToLinked = body.data.contactId !== null && existing.contact_id === null;
       const movingToUnlinked = body.data.contactId === null && existing.contact_id !== null;
@@ -199,7 +199,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
         patch.contact_id = body.data.contactId;
         // Linking makes this a person's record: unless the same request
-        // explicitly sets an audience, snap to internal-only — a policy or
+        // explicitly sets an audience, snap to internal-only, a policy or
         // contract must never stay reachable from customer channels by
         // default (same posture as linked uploads and the CSV importer).
         // The owner can widen it deliberately afterward.
@@ -282,14 +282,14 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!existing) return errorResponse("NOT_FOUND", "Document not found", 404);
 
     // Signed signature requests are retained legal evidence: deleting the
-    // document would cascade them away. Refuse instead — the owner keeps
+    // document would cascade them away. Refuse instead, the owner keeps
     // the audit trail (and the document its certificate references).
     //
     // Race-safe ordering: FIRST void every still-signable request (the
     // signing write is conditional on status sent/viewed, so after this
     // sweep no concurrent signer can complete), THEN re-check for signed
     // rows. A signature that landed before the void survives the void
-    // untouched and is caught by the re-check — so a signed row can never
+    // untouched and is caught by the re-check, so a signed row can never
     // slip through into the cascade.
     const signedBefore = (await listDocumentSignatureRequests(businessId.data, documentId)).some(
       (r) => r.status === "signed"
@@ -306,7 +306,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       );
     }
 
-    // Row first (cascades shares), then the stored original — a leftover
+    // Row first (cascades shares), then the stored original, a leftover
     // object with no row is invisible garbage, the reverse would be a live
     // row pointing at nothing.
     await deleteBusinessDocument(businessId.data, documentId);

@@ -2,13 +2,13 @@
  * POST /api/webhooks/vagaro?business=<uuid>&token=<verification-token>
  *
  * Direct Vagaro → platform webhook receiver (no Zapier hop). The owner
- * pastes this tenant-specific URL — surfaced on the dashboard's Vagaro card
- * — into Vagaro's APIs & Webhooks settings. Auth is possession of the URL:
+ * pastes this tenant-specific URL, surfaced on the dashboard's Vagaro card,
+ * into Vagaro's APIs & Webhooks settings. Auth is possession of the URL:
  * the embedded token is compared timing-safe against the connection row
  * (same model as Vagaro's own "endpoint URL + verification token" setup).
  *
  * Each delivery starts matching webhook-triggered AiFlows (source "vagaro",
- * idempotent per Vagaro event id) and syncs customer events into contacts —
+ * idempotent per Vagaro event id) and syncs customer events into contacts,
  * see src/lib/vagaro/webhook.ts. Always answers 200 on success within
  * Vagaro's 20-second window; non-2xx makes Vagaro retry (up to 5 times over
  * 15 minutes), which the event-id dedupe absorbs.

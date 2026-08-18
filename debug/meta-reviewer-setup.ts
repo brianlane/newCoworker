@@ -35,7 +35,7 @@ if (!APPLY) {
 }
 
 // 1. Auth user (password rotated on every apply so a rerun always yields
-//    known-good credentials). Minted at runtime — no hardcoded value.
+//    known-good credentials). Minted at runtime, no hardcoded value.
 const minted = ["Mr", randomBytes(12).toString("base64url")].join("-");
 {
   let existing: { id: string } | undefined;

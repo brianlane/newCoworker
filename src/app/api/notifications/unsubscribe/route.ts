@@ -31,7 +31,7 @@ import { escapeHtml } from "@/lib/email/branded-html";
  * which is the business UUID. UUID v4 has 122 bits of entropy and isn't
  * brute-forceable; if a particular UUID ever leaks (logs, support tickets,
  * forwarded email, etc.) the worst an attacker can do is unsubscribe that
- * one business — a flag the owner can re-enable in the dashboard with one
+ * one business, a flag the owner can re-enable in the dashboard with one
  * click. That tradeoff matches what most mainstream ESPs ship.
  *
  * Both shapes are idempotent: re-hitting the endpoint with the same `bid`

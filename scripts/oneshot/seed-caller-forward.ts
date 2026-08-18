@@ -3,9 +3,9 @@
  * One-shot: label an inbound caller AND forward their calls straight to a human.
  *
  * Two writes, both keyed by (business_id, from_e164), both idempotent upserts:
- *   1. contacts — gives the caller a display name everywhere their
+ *   1. contacts, gives the caller a display name everywhere their
  *      number appears in the dashboard (calls, texts, contacts).
- *   2. voice_caller_transfer_rules — when that number calls the business DID,
+ *   2. voice_caller_transfer_rules, when that number calls the business DID,
  *      telnyx-voice-inbound answers and bridges the caller straight to `--to`
  *      with no AI conversation and without billing voice minutes (runs before
  *      the kill switch / reserve / Stripe / bridge checks). An optional

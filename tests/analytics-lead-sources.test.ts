@@ -157,7 +157,7 @@ describe("getLeadSourceOverview", () => {
     expect(calls.some((c) => c.name === "eq" && c.args[0] === "type" && c.args[1] === "customer")).toBe(
       true
     );
-    // UTC day-aligned window start — the same boundary every other analytics
+    // UTC day-aligned window start, the same boundary every other analytics
     // card on the page uses.
     const gte = calls.find((c) => c.name === "gte")!;
     expect(gte.args[0]).toBe("created_at");

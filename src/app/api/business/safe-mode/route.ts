@@ -1,8 +1,8 @@
 /**
  * Safe Mode toggle.
  *
- * Refuses to enable when `business_telnyx_settings.forward_to_e164` is missing
- * — Safe Mode *forwards* customer SMS/voice to the owner's cell, so without a
+ * Refuses to enable when `business_telnyx_settings.forward_to_e164` is missing,
+ * Safe Mode *forwards* customer SMS/voice to the owner's cell, so without a
  * number there is nowhere to forward. The dashboard UI enforces the same
  * precondition client-side; this is the belt-and-suspenders server gate.
  */

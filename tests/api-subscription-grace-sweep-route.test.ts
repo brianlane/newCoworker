@@ -1,5 +1,5 @@
 /**
- * Tests the /api/internal/subscription-grace-sweep endpoint — the wipe step
+ * Tests the /api/internal/subscription-grace-sweep endpoint, the wipe step
  * for canceled subscriptions past their grace deadline. Exercises:
  *   - bearer auth (no secret → 403)
  *   - single-row happy path (planner + executor are invoked)

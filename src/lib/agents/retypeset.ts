@@ -1,12 +1,12 @@
 /**
- * Re-typeset mode (`pdf_retypeset`) — layout-preserving PDF output.
+ * Re-typeset mode (`pdf_retypeset`), layout-preserving PDF output.
  *
  * The model reads the source PDF/Word document natively and replies with ONE
  * self-contained styled-HTML document that visually mirrors the source's
  * design with the agent's instructions applied; the tenant's VPS render
  * sidecar (headless Chromium, POST /pdf) prints it to PDF at save/download
  * time. This module owns the HTML side: the artifact sanitizer (defense in
- * depth — the sidecar also disables JS and denies all network), the
+ * depth, the sidecar also disables JS and denies all network), the
  * document-shape guarantee renderers sniff on, and the text rendition used
  * for `content_md` so knowledge lookup still reads the filed copy.
  */
@@ -38,10 +38,10 @@ const RETYPESET_ALLOWED_TAGS = [
 ];
 
 /**
- * Sanitize model-produced HTML with a real HTML parser (sanitize-html —
+ * Sanitize model-produced HTML with a real HTML parser (sanitize-html,
  * never regex): scripts/embeds/event handlers are dropped, and src/href
  * survive only as `data:` URIs or same-document anchors, so nothing in the
- * document can reach the network. Belt-and-suspenders — the sidecar also
+ * document can reach the network. Belt-and-suspenders, the sidecar also
  * renders with JavaScript disabled and every request aborted. A CSS
  * post-pass neutralizes the stylesheet escape hatches (url(), @import).
  */
@@ -76,7 +76,7 @@ export function sanitizeRetypesetHtml(html: string): string {
 export function ensureHtmlDocument(html: string): string {
   const head = html.trimStart().slice(0, 200).toLowerCase();
   if (head.startsWith("<!doctype")) return html;
-  // The sanitizer drops the doctype but keeps the <html> shell — restore it
+  // The sanitizer drops the doctype but keeps the <html> shell, restore it
   // so Chromium prints in standards mode and renderers sniff reliably.
   if (head.startsWith("<html")) return `<!DOCTYPE html>\n${html}`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>\n${html}\n</body></html>`;
@@ -91,7 +91,7 @@ export function ensureHtmlDocument(html: string): string {
  */
 export function htmlArtifactToText(html: string): string {
   // Every block-ish tag becomes <br> in the parser pass, so the only markup
-  // left in the output is the literal void tag we swap for a newline — no
+  // left in the output is the literal void tag we swap for a newline, no
   // regex ever touches raw HTML.
   const blockTags = ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "table"];
   const withBreaks = sanitizeHtmlLib(html, {

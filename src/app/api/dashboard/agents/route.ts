@@ -1,12 +1,12 @@
 /**
- * Agents — dashboard management API.
+ * Agents, dashboard management API.
  *
  *   GET  /api/dashboard/agents?businessId=…   → list agents
  *   POST /api/dashboard/agents                → create an agent
  *
  * An agent is a reusable attachment→output task template (name +
  * instructions + output format). Creation is manager-gated
- * (`manage_aiflows` — agents are automation definitions, same trust level
+ * (`manage_aiflows`, agents are automation definitions, same trust level
  * as flows) and tier-capped like documents.
  */
 
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
 
     const business = await getBusiness(body.data.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
-    // Re-typeset renders on the tenant's VPS render sidecar — a
+    // Re-typeset renders on the tenant's VPS render sidecar, a
     // Standard/Enterprise entitlement (Starter boxes have no sidecar).
     if (body.data.outputFormat === "pdf_retypeset" && !retypesetAvailableForTier(business.tier)) {
       return errorResponse(

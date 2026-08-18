@@ -1,22 +1,22 @@
 /**
- * `send_email` (dashboard chat) — sends an email from the owner's connected
+ * `send_email` (dashboard chat), sends an email from the owner's connected
  * mailbox on behalf of the **owner Dashboard chat**. Called by the VPS
  * chat-worker after it parses a structured EMAIL_SEND block out of the
  * assistant reply (vps/chat-worker/email-tool.mjs).
  *
  * Lives under /api/voice/tools/ because that prefix is the established home
  * for ALL gateway-token-authenticated platform tool adapters (CSRF-exempt in
- * src/proxy.ts) — the chat-worker's owner-append-business-memory adapter
+ * src/proxy.ts), the chat-worker's owner-append-business-memory adapter
  * already lives here for the same reason.
  *
  * Authorization layers:
- *   1. Gateway-token bearer bound to this businessId (gatewayBusinessGuard) —
+ *   1. Gateway-token bearer bound to this businessId (gatewayBusinessGuard),
  *      only the tenant's own VPS/Rowboat can call (per-tenant token, or the
  *      shared ROWBOAT_GATEWAY_TOKEN fallback during the transition).
  *   2. The owner's Settings → Coworker tools toggle (`dashboard.send_email`,
  *      default OFF). Checked here authoritatively so a stale worker or a
  *      hallucinated block can never send mail the owner didn't opt into.
- *   3. Defense in depth: refuse envelopes carrying `callerE164` — this tool
+ *   3. Defense in depth: refuse envelopes carrying `callerE164`, this tool
  *      is owner-dashboard-only, never a customer voice/SMS surface.
  */
 

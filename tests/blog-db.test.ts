@@ -1,7 +1,7 @@
 /**
  * Blog DB access (src/lib/blog/db.ts): success + error paths for every
  * helper, the guarded lifecycle transition, the single-row settings
- * defaults, and the public image URL builder — mirrors the social-db
+ * defaults, and the public image URL builder, mirrors the social-db
  * suite.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

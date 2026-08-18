@@ -17,7 +17,7 @@ const KEY_PREFIX_DISPLAY_CHARS = 12;
 export const API_KEY_REGEX = /^nck_[0-9a-f]{64}$/;
 
 export type MintedApiKey = {
-  /** The full plaintext credential — shown once, never stored. */
+  /** The full plaintext credential, shown once, never stored. */
   plaintext: string;
   /** SHA-256 hex of the plaintext; the only thing the DB keeps. */
   hash: string;
@@ -40,7 +40,7 @@ export function mintApiKey(): MintedApiKey {
 
 /**
  * Extract a syntactically valid API key from an Authorization header.
- * Returns null for anything else — the caller answers 401 without a DB
+ * Returns null for anything else, the caller answers 401 without a DB
  * round-trip for garbage tokens.
  */
 export function apiKeyFromAuthorizationHeader(header: string | null): string | null {

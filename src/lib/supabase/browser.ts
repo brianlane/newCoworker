@@ -55,7 +55,7 @@ export function resetSupabaseBrowserClientCache(): void {
  *   `.2`, …) from a prior or abandoned session are still present, the
  *   total request headers can exceed Vercel's edge limit (~32 KB). Vercel
  *   responds 494 REQUEST_HEADER_TOO_LARGE BEFORE our middleware or route
- *   handler runs, so we cannot recover server-side — by the time any of
+ *   handler runs, so we cannot recover server-side, by the time any of
  *   our code runs, the user has already seen a Vercel error page.
  * - The only reliable defense is to ensure stale cookies don't ride into
  *   the new auth flow. Calling this immediately before the SDK call that
@@ -63,7 +63,7 @@ export function resetSupabaseBrowserClientCache(): void {
  *   most a fresh PKCE code-verifier (≈250 B) plus whatever Supabase sets
  *   on the callback response.
  *
- * Safe to call in any context — no-ops on the server, swallows SDK errors
+ * Safe to call in any context, no-ops on the server, swallows SDK errors
  * (e.g. anonymous users where `signOut` has nothing to do), and falls
  * through to a manual `document.cookie` scrub for any orphaned chunks the
  * SDK doesn't own (different project ref, dangling chunks left by an

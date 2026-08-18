@@ -7,7 +7,7 @@
  * tier cap + concurrency, refreshes the Stripe billing period when stale, and
  * calls the `voice_reserve_for_call` RPC (the single source of truth for
  * concurrency + remaining-minutes accounting). A non-`ok` result means the call
- * must NOT use the AI bridge — the caller decides how to degrade (speak a
+ * must NOT use the AI bridge, the caller decides how to degrade (speak a
  * message and hang up for inbound; abort the takeover for the handoff chain).
  *
  * Centralizing this here keeps metering a system-level invariant rather than a
@@ -162,7 +162,7 @@ export type VoiceReserveResult =
  * Resolve tier + Stripe period and atomically reserve voice minutes for a call.
  * Idempotent per `callControlId` (the RPC returns `duplicate` for a repeat).
  * Emits the §4.2 JIT telemetry internally so every voice path reports it
- * consistently. Never throws — failures map to a `VoiceReserveBlockReason`.
+ * consistently. Never throws, failures map to a `VoiceReserveBlockReason`.
  */
 export async function reserveVoiceBudget(
   supabase: ReserveSupabase,
@@ -355,12 +355,12 @@ export async function reserveVoiceBudget(
 /**
  * Result of a pre-dial availability probe.
  *   - ok: a reservation of at least minGrantSeconds could be granted now.
- *   - blocked: definitively over budget / at the concurrency cap — the caller
+ *   - blocked: definitively over budget / at the concurrency cap, the caller
  *     should NOT dial (don't ring the callee for an over-budget tenant).
  *   - indeterminate: we couldn't decide cheaply (no/stale cached billing
  *     period, missing rows, RPC error). The caller should proceed to dial and
  *     rely on the authoritative post-dial reserveVoiceBudget (which performs the
- *     JIT Stripe refresh) as the real gate — failing OPEN here only risks one
+ *     JIT Stripe refresh) as the real gate, failing OPEN here only risks one
  *     wasted pre-answer dial, never billed minutes.
  */
 export type VoiceAvailability =
@@ -376,7 +376,7 @@ export type VoiceAvailability =
 
 /**
  * READ-ONLY pre-dial budget gate for outbound voice. Resolves the tenant's
- * tier cap + concurrency and the CACHED Stripe period (no JIT refresh — the
+ * tier cap + concurrency and the CACHED Stripe period (no JIT refresh, the
  * post-dial reserve owns that), then calls the read-only
  * `voice_check_availability` RPC. Never throws: anything it can't resolve maps
  * to `indeterminate` so origination falls through to the authoritative reserve.
@@ -459,7 +459,7 @@ export async function checkVoiceBudgetAvailable(
     return { status: "indeterminate", reason: "period_stale" };
   }
 
-  // Same month-window quota key as reserveVoiceBudget — the two must agree or
+  // Same month-window quota key as reserveVoiceBudget, the two must agree or
   // the pre-dial probe would read a different usage row than the reserve writes.
   const periodStart = new Date(
     deriveMonthlyQuotaWindow(periodStartRaw, Date.now()).startIso

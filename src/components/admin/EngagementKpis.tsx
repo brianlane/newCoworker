@@ -20,7 +20,7 @@ function useHydrated(): boolean {
 
 /**
  * The DAU/WAU/MAU KPI row, computed client-side so "Active Today" means the
- * VIEWER's calendar day — the server's UTC midnight would count a late-
+ * VIEWER's calendar day, the server's UTC midnight would count a late-
  * evening local sign-in as "today" the next morning. Pre-hydration renders
  * pin the day boundary to UTC so server and first client markup match; the
  * hydration flip re-computes in the local zone.

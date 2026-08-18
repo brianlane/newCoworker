@@ -1,4 +1,4 @@
-# Real stack for integration tests — starter (KVM 2) resource profile.
+# Real stack for integration tests, starter (KVM 2) resource profile.
 # Rowboat: build from public GitHub at ref pinned in rowboat-git-ref (not floating main).
 # + Ollama + Mongo + Redis (same logical probes as heartbeat.sh).
 

@@ -3,8 +3,8 @@
  * used by the tenant `PhoneNumberCard` and the admin `AssignDidPanel` so the
  * two UIs stay in sync if/when we extend formatting (e.g. other countries).
  *
- * Non-NANP / malformed input is returned as-is so callers never have to guard
- * — printing the raw E.164 is strictly better than throwing in the UI.
+ * Non-NANP / malformed input is returned as-is so callers never have to guard,
+ * printing the raw E.164 is strictly better than throwing in the UI.
  */
 
 const NANP_RE = /^\+1(\d{3})(\d{3})(\d{4})$/;
@@ -92,8 +92,8 @@ export function normalizeContactNumber(
 
 /**
  * Like {@link normalizeContactNumber} but for numbers that must be dialable
- * (employee roster, SMS offer targets): the same forgiving parsing — bare
- * 10-digit US numbers get `+1` — with two extra refusals:
+ * (employee roster, SMS offer targets): the same forgiving parsing, bare
+ * 10-digit US numbers get `+1`, with two extra refusals:
  *  - short codes (can't receive calls or route_to_team offers), and
  *  - extension text. `normalizeContactNumber` silently strips non-digits, so
  *    `"+1 (602) 555-1234 x99"` would otherwise store `+1602555123499` and SMS

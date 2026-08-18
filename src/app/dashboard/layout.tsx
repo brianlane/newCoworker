@@ -51,7 +51,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Orphan view-as cookie (impersonated business deleted, or a garbled
   // value): the proxy only gates the admin→/dashboard redirect on the
   // cookie's PRESENCE, so without this the admin would land here
-  // unimpersonated — no banner, no exit. Send them back to the admin panel;
+  // unimpersonated, no banner, no exit. Send them back to the admin panel;
   // the leftover cookie is inert (every consumer keys off this resolution)
   // and is overwritten by the next "View as tenant" or expires on its own.
   if (user.isAdmin && !viewAs) redirect("/admin/dashboard");
@@ -59,7 +59,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Per-user nav customization (order + visibility). Keyed to the SIGNED-IN
   // user (not the tenant), so an admin in view-as sees their own layout.
   // Degrades to the default catalog on any read hiccup inside the helper.
-  // Kicked off FIRST so it overlaps every tenant-scoped read below — it only
+  // Kicked off FIRST so it overlaps every tenant-scoped read below, it only
   // depends on the user id, never on the resolved business.
   const sidebarLayoutPromise = getSidebarLayout(user.userId);
 
@@ -88,7 +88,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
     // DB round-trips per page render (businesses lookup + subscriptions
-    // lookup) for every signed-in user — even on pages unrelated to
+    // lookup) for every signed-in user, even on pages unrelated to
     // billing (soul editor, voice usage, etc.). Fold both lookups into
     // one PostgREST query that selects the most recent business by
     // owner_email and embeds the subscriptions for that business in the
@@ -98,14 +98,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // If the owner just confirmed an account-email change (possibly on another
     // device, or via a plain password sign-in that never hit /api/auth/callback),
     // mirror the new email onto their business BEFORE the owner_email lookup
-    // below — otherwise that lookup would miss and the dashboard would render as
+    // below, otherwise that lookup would miss and the dashboard would render as
     // if they had no business. No-op (one cheap PK read) when nothing is
     // pending. Skipped during view-as: the admin's pending email change (if
     // any) must not be reconciled onto the impersonated tenant's business.
     if (!viewAs && user.email) {
       // First-login binding for team invites: flip INVITED business_members
       // rows addressed to this email to active with the auth user id stamped.
-      // Same layout-render-write precedent as reconcilePendingEmailChange —
+      // Same layout-render-write precedent as reconcilePendingEmailChange,
       // a cheap indexed no-op for everyone without a pending invite. Best-
       // effort: a hiccup here must never take down the dashboard. The two
       // writes touch different tables and don't depend on each other, so
@@ -127,13 +127,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
     accessible = ctx.accessible;
     if (businessId) {
       // The four reads below are independent of each other (branding row,
-      // newest subscription, Meta connection, WhatsApp connection) — they
+      // newest subscription, Meta connection, WhatsApp connection), they
       // used to run as four sequential round-trips on EVERY dashboard
       // navigation; one Promise.all collapses them to the slowest single
       // read. The grace lookup is gated up front: its CTA is
-      // /api/billing/reactivate (manage_billing, owner-only) — don't dangle
+      // /api/billing/reactivate (manage_billing, owner-only), don't dangle
       // it in front of managers/staff whose click would just 403. The
-      // connection reads degrade to "not connected" on error — a read
+      // connection reads degrade to "not connected" on error, a read
       // hiccup hides the Messenger/WhatsApp nav rather than breaking it.
       const graceEligible = !!ctx.role && can(ctx.role, "manage_billing");
       const [brandRes, subs, metaConnection, whatsappConnection] = await Promise.all([
@@ -185,7 +185,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   // Conditional items (Messenger inbox) only render for businesses with an
-  // ACTIVE Meta connection — a read hiccup hides rather than breaks nav.
+  // ACTIVE Meta connection, a read hiccup hides rather than breaks nav.
   const sidebarLayout = filterSidebarItemsForBusiness(await sidebarLayoutPromise, {
     metaConnected,
     whatsappConnected

@@ -1,5 +1,5 @@
 /**
- * patch-kyp-noshow-links.ts — KYP Ads no-show recovery link routing.
+ * patch-kyp-noshow-links.ts, KYP Ads no-show recovery link routing.
  *
  * Incident (Jul 20 2026, Tim Tsai): the "No-show recovery text" flow
  * hardcoded the $200 booking link (kyp-ads-free-strategy-2) for every
@@ -13,7 +13,7 @@
  * Jul 20 after the duplicate-text incident and stays off until James
  * approves it (its name still says "awaiting approval").
  *
- * Usage (business id from --business or KYP_BUSINESS_ID — never hard-coded,
+ * Usage (business id from --business or KYP_BUSINESS_ID, never hard-coded,
  * per scripts/oneshot/README.md):
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/patch-kyp-noshow-links.ts --business <uuid>          # dry-run

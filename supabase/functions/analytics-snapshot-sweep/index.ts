@@ -5,12 +5,12 @@
  * daily with `Authorization: Bearer <INTERNAL_CRON_SECRET>`; we validate the
  * bearer and forward to the Next.js internal endpoint that holds the actual
  * aggregation logic (residency-routed transcript reads need the Node
- * runtime's data-api client) — same indirection as the retention-sweep and
+ * runtime's data-api client), same indirection as the retention-sweep and
  * grace-sweep bridges.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  *
  * Response: forwards the Next.js body and status. On any bridge-level
  * failure returns 502 so the pg_cron audit log captures something useful.

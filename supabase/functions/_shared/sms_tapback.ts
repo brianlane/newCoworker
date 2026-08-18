@@ -46,11 +46,11 @@
  */
 const ZERO_WIDTH_RE = /[\u200B\u2060\uFEFF]/g;
 
-/** `Liked “…”` / `Loved "…"` … — the six classic tapback verbs. */
+/** `Liked “…”` / `Loved "…"` …, the six classic tapback verbs. */
 const TAPBACK_VERB_RE =
   /^(liked|loved|disliked|laughed at|emphasized|emphasised|questioned)\s+[“"]([\s\S]+)[”"]$/iu;
 
-/** `Removed a like from “…”` … — classic tapback removals. */
+/** `Removed a like from “…”` …, classic tapback removals. */
 const TAPBACK_REMOVAL_RE =
   /^removed\s+(an?\s+(?:like|heart|dislike|laugh|exclamation(?:\s+point)?|question mark))\s+from\s+[“"]([\s\S]+)[”"]$/iu;
 
@@ -61,7 +61,7 @@ const TAPBACK_EMOJI_RE =
 /** Verbless renderers: `❤️ to “…”` / `❤️ from “…”`. */
 const TAPBACK_VERBLESS_RE = /^(\S{1,16})\s+(to|from)\s+[“"]([\s\S]+)[”"]$/iu;
 
-/** ❓ and ❔ — the emoji spelling of the "Questioned" tapback. */
+/** ❓ and ❔, the emoji spelling of the "Questioned" tapback. */
 const QUESTION_GLYPH_RE = /[\u2753\u2754]/u;
 
 /** Longest quoted body we repeat back to the model in a note. */

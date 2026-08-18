@@ -1,18 +1,18 @@
 /**
- * provision-kvm2-smoke.ts — EXPERIMENT: buy + bootstrap a KVM2 (starter-tier)
+ * provision-kvm2-smoke.ts, EXPERIMENT: buy + bootstrap a KVM2 (starter-tier)
  * VPS through the exact Hostinger API path production provisioning uses, and
  * point it at a scratch CLONE of a real business's config so the starter
  * hardware can be smoke-tested against real tenant data with zero risk to the
  * production box.
  *
- * How production deploys a VPS (mirrored 1:1 here — see
+ * How production deploys a VPS (mirrored 1:1 here, see
  * src/lib/hostinger/provision.ts `provisionVpsForBusiness`):
  *   1. Generate an ed25519 keypair (comment = business id).
- *   2. POST /api/vps/v1/public-keys                — upload the public half.
- *   3. POST /api/vps/v1/post-install-scripts       — register the slim
+ *   2. POST /api/vps/v1/public-keys, upload the public half.
+ *   3. POST /api/vps/v1/post-install-scripts, register the slim
  *      bootstrap loader (buildDefaultPostInstallScript, TIER=starter) so
  *      cloud-init runs vps/scripts/bootstrap.sh at first boot.
- *   4. POST /api/vps/v1/virtual-machines           — PURCHASE. item_id
+ *   4. POST /api/vps/v1/virtual-machines, PURCHASE. item_id
  *      `hostingercom-vps-kvm2-usd-1m` (starter) vs `...kvm8...` (standard),
  *      Ubuntu-24.04-with-Docker template (1121), Boston-2 DC (24), the
  *      public key + post-install script attached via `setup`.
@@ -22,7 +22,7 @@
  *   7. Persist the private key in `vps_ssh_keys` (service-role only).
  *   8. Capture the Hostinger BILLING SUBSCRIPTION id from the purchase
  *      response (`vm.subscription_id`, fallback GET /api/billing/v1/
- *      subscriptions matched on resource_id) — this is what the lifecycle
+ *      subscriptions matched on resource_id), this is what the lifecycle
  *      engine later cancels to stop paying (see cancel-vps-billing.ts).
  *
  * What this script adds around that:
@@ -33,7 +33,7 @@
  *     rest of the debug tooling (vps-exec.ts, rowboat-logs.ts, …).
  *   - Records everything needed for teardown in debug/.kvm2-smoke.json.
  *
- * After it completes, run the deploy phase (no Cloudflare tunnel — probes go
+ * After it completes, run the deploy phase (no Cloudflare tunnel, probes go
  * over SSH so the experiment never publishes hostnames):
  *   set -a && source .env && set +a
  *   CLOUDFLARE_TUNNEL_TOKEN= npx tsx scripts/redeploy-deploy-client.ts --business <cloneId>
@@ -57,8 +57,8 @@
  * Tier flag (post vps_size decoupling): `--tier standard` creates the clone
  * as a STANDARD-tier tenant pinned to kvm2 hardware (businesses.vps_size =
  * 'kvm2', bootstrap runs TIER=standard VPS_SIZE=kvm2). This is the
- * "standard-on-KVM2" validation shape: full standard entitlements — render
- * sidecar included — on the small box. Default remains `starter`.
+ * "standard-on-KVM2" validation shape: full standard entitlements, render
+ * sidecar included, on the small box. Default remains `starter`.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -177,7 +177,7 @@ const { error: insBizErr } = await db.from("businesses").insert({
   name: cloneName,
   // NOT the source owner's email: businesses are keyed by owner_email (see
   // listBusinessIdsByOwnerEmail / auth.ts), so a clone sharing it hijacks the
-  // owner's dashboard session onto the offline scratch tenant — which is
+  // owner's dashboard session onto the offline scratch tenant, which is
   // exactly what happened to Amy on 2026-07-02. Synthetic, undeliverable.
   owner_email: `kvm2-smoke+${cloneId}@invalid.newcoworker.com`,
   tier: CLONE_TIER,
@@ -230,12 +230,12 @@ type ProvisionResultLike = {
  * the purchase, with two Hostinger quirks found empirically (July 2026,
  * VM 1798257):
  *
- *   1. The standalone setup endpoint validates `hostname` as an FQDN — a
+ *   1. The standalone setup endpoint validates `hostname` as an FQDN, a
  *      bare label like `nc-<uuid12>` (what purchase-embedded setup accepts)
  *      422s with "[VPS:2004] Wrong hostname FQDN format".
  *   2. Standalone setup IGNORES `public_key_ids` (and the retroactive
  *      `POST /public-keys/attach/{vmId}` returns an empty zero-id action and
- *      does nothing) — the box comes up with no authorized key and every SSH
+ *      does nothing), the box comes up with no authorized key and every SSH
  *      attempt fails USERAUTH_FAILURE. `recreate` with the identical payload
  *      DOES honor `public_key_ids`. So: setup once to leave `initial`, then
  *      recreate to actually land the key + post-install script.
@@ -268,7 +268,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   // same 15-min budget; error/suspended/stopped are terminal). During the
   // post-recreate wait `stopped` must be tolerated: on a re-adopt the API can
   // keep reporting the stale pre-recreate `stopped` past the leave-loop's
-  // budget, and the rebuild also boots through a transient stopped — the
+  // budget, and the rebuild also boots through a transient stopped, the
   // 15-min deadline is the backstop there instead.
   const waitRunning = async (
     phase: string,
@@ -308,7 +308,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   await hostinger.recreateVirtualMachine(vmId, setupPayload);
   // The VM may still report the PRE-recreate state (`running`, or `stopped`
   // on a re-adopt) for a few polls, so wait for it to LEAVE that state
-  // (enter `recreating`) before waiting for it to come back — otherwise
+  // (enter `recreating`) before waiting for it to come back, otherwise
   // adopt can mark a mid-rebuild box as ready, or waitRunning can misread
   // the stale `stopped` as terminal.
   const leaveDeadline = Date.now() + 3 * 60 * 1000;
@@ -391,7 +391,7 @@ await db
 
 const state = {
   createdAt: new Date().toISOString(),
-  // Adopted boxes were purchased earlier — teardown still cancels their
+  // Adopted boxes were purchased earlier, teardown still cancels their
   // billing subscription the same way, this flag is just provenance.
   adoptedExistingVm: ADOPT_VM_ID !== null,
   sourceBusinessId: SOURCE_BUSINESS_ID,

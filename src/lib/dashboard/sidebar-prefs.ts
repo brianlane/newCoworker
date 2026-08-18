@@ -7,7 +7,7 @@
  *     items) are dropped silently.
  *   - Catalog items MISSING from the stored set are INSERTED at their
  *     default spot (after the nearest preceding catalog neighbor present
- *     in the layout), visible — so a newly shipped page lands where the
+ *     in the layout), visible, so a newly shipped page lands where the
  *     catalog intends (Bookings directly below Employees) instead of
  *     dangling at the bottom of every stale saved layout (the Jul 2026
  *     Bookings rollout bug).
@@ -30,7 +30,7 @@ export type StoredSidebarItem = {
 
 export type SidebarLayoutItem = SidebarItemDef & { visible: boolean };
 
-/** Pure merge of stored rows over the catalog — see module doc. */
+/** Pure merge of stored rows over the catalog, see module doc. */
 export function mergeSidebarLayout(stored: StoredSidebarItem[]): SidebarLayoutItem[] {
   const byKey = new Map(SIDEBAR_ITEMS.map((item) => [item.key, item]));
   const out: SidebarLayoutItem[] = [];
@@ -61,7 +61,7 @@ export function mergeSidebarLayout(stored: StoredSidebarItem[]): SidebarLayoutIt
 
 /**
  * The user's resolved sidebar layout. Read failures degrade to the default
- * catalog (warn-logged) — nav must never break over a prefs table hiccup.
+ * catalog (warn-logged), nav must never break over a prefs table hiccup.
  */
 export async function getSidebarLayout(
   userId: string,
@@ -127,7 +127,7 @@ export async function saveSidebarLayout(
 
 /**
  * Reset the user's sidebar to the default catalog by deleting their stored
- * rows — a true reset: with no rows, future catalog additions render in
+ * rows, a true reset: with no rows, future catalog additions render in
  * default position instead of being appended after a stale saved order.
  */
 export async function deleteSidebarLayout(userId: string, client?: SupabaseClient): Promise<void> {

@@ -3,7 +3,7 @@
  * the summarizer needs.
  *
  * Service-role only: every read/write goes through createSupabaseServiceClient.
- * Owner authorization is the caller's responsibility — these helpers
+ * Owner authorization is the caller's responsibility, these helpers
  * trust the (business_id, customer_e164) pair they're given. API routes
  * MUST call requireOwner() before invoking anything here, exactly like
  * the dashboard chat module.
@@ -78,7 +78,7 @@ export type CreateCustomerInput = {
   type?: ContactType;
 };
 
-/** Postgres unique-violation SQLSTATE — a profile already exists for this number. */
+/** Postgres unique-violation SQLSTATE, a profile already exists for this number. */
 export const PG_UNIQUE_VIOLATION = "23505";
 
 export class CustomerExistsError extends Error {
@@ -90,7 +90,7 @@ export class CustomerExistsError extends Error {
 
 /**
  * Owner-driven manual customer creation (customers page "Add customer").
- * Unlike recordInteractionAndIncrement this does NOT fake an interaction —
+ * Unlike recordInteractionAndIncrement this does NOT fake an interaction,
  * counters start at 0 and last_channel stays null until the customer actually
  * texts/calls. Throws CustomerExistsError when a profile already exists for the
  * (business, number) pair so the caller can surface a friendly 409.
@@ -117,7 +117,7 @@ export async function createCustomerMemory(
       display_name: trimmedName,
       // Owner-driven "Add customer": a name typed here is a deliberate label, so
       // it wins over the read-time owner/employee overlay (name_source='manual').
-      // A nameless add stays 'auto' (the DB default) — nothing to protect yet.
+      // A nameless add stays 'auto' (the DB default), nothing to protect yet.
       ...(trimmedName ? { name_source: "manual" satisfies ContactNameSource } : {}),
       email: email || null,
       pinned_md: input.pinnedMd?.trim() || null,
@@ -308,7 +308,7 @@ export async function findCustomerByEmail(
  * Precedence: never clobber an address the OWNER already set on the profile.
  * We only fill an empty `email`; if the row already has one (owner edit, lead
  * backfill, an earlier capture), we leave it untouched. Creates a minimal
- * profile when none exists yet — counters/last_channel stay at their defaults
+ * profile when none exists yet, counters/last_channel stay at their defaults
  * (the inbound recorder owns those), so this can't fake an interaction.
  */
 export async function linkCustomerEmail(
@@ -353,7 +353,7 @@ export async function linkCustomerEmail(
     throw new Error(`linkCustomerEmail: ${insErr.message}`);
   }
   // Unique violation: a concurrent writer (e.g. record_customer_interaction)
-  // created the profile between our SELECT and INSERT — almost certainly with
+  // created the profile between our SELECT and INSERT, almost certainly with
   // a null email. Don't drop the captured address: fill it now, alias-aware,
   // but only while still empty so we never clobber an owner-set value.
   const raceUpdate = db
@@ -419,18 +419,18 @@ export async function listCustomerMemories(
     // sequence inside double-quoted values to `<char>` BEFORE the
     // value reaches Postgres LIKE, so the single backslash that step 1
     // injects in front of `%` / `_` would otherwise be eaten by
-    // PostgREST and never reach LIKE — turning a search for `100%`
+    // PostgREST and never reach LIKE, turning a search for `100%`
     // back into a wildcard match. Doubling the backslash here means
     // PostgREST collapses `\\` → `\` and LIKE receives the escape it
     // needs (verified end-to-end against the live REST surface; an
     // earlier "only escape quote" fix regressed `100%` to also match
     // `100abc`, see commit history). CodeQL flags this as
     // "incomplete-string-escaping" precisely because BOTH chars need
-    // covering — we keep the `["\\]` class deliberately.
+    // covering, we keep the `["\\]` class deliberately.
     const escapedForLike = search.replace(/[%_]/g, (m) => `\\${m}`);
     const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
     const pattern = `"%${escapedForPostgrest}%"`;
-    // Match either the display name or the raw E.164 — owners often
+    // Match either the display name or the raw E.164, owners often
     // remember "Joe" but not the +1555… number, and vice versa.
     query = query.or(`display_name.ilike.${pattern},customer_e164.ilike.${pattern}`);
   }
@@ -481,7 +481,7 @@ export async function recordInteractionAndIncrement(
 
 export type UpdateSummaryInput = {
   summaryMd: string;
-  /** Reset interaction_count to 0 — required when the summary just absorbed everything. */
+  /** Reset interaction_count to 0, required when the summary just absorbed everything. */
   resetCounter: true;
 };
 
@@ -508,7 +508,7 @@ export async function updateCustomerSummary(
 /**
  * Stamp last_summarized_at WITHOUT writing a summary or resetting the
  * interaction counter. Used when the summarizer looked and decided there is
- * nothing to summarize (e.g. no customer-authored content yet) — the stamp
+ * nothing to summarize (e.g. no customer-authored content yet), the stamp
  * rotates the contact to the back of the nightly sweep's oldest-first queue
  * so permanent skips can't starve other contacts of their sweep slot.
  */
@@ -610,8 +610,8 @@ export async function updateCustomerOwnerFields(
 
   // Knowledge graph: only identity-bearing edits touch it (this helper also
   // carries high-frequency knobs like tags/reply-mode that say nothing
-  // entity-shaped). The graph gets the row's FULL post-update identity —
-  // read back after the write — never just the edited fields: an email-only
+  // entity-shaped). The graph gets the row's FULL post-update identity,
+  // read back after the write, never just the edited fields: an email-only
   // save must still carry the stored name, and a name-only save must still
   // carry the stored email (Bugbot #874, both directions). A nameless
   // contact ingests as a number-named node (booking/lead convention).
@@ -623,7 +623,7 @@ export async function updateCustomerOwnerFields(
       .eq("customer_e164", customerE164)
       .maybeSingle();
     const row = data as { display_name?: string | null; email?: string | null } | null;
-    // A failed/rowless read-back falls back to the values just WRITTEN —
+    // A failed/rowless read-back falls back to the values just WRITTEN,
     // an edit the DB accepted must never be dropped from the graph because
     // a follow-up read blipped.
     await ingestContact(businessId, {
@@ -650,8 +650,8 @@ export async function updateCustomerOwnerFields(
 /**
  * Set a contact's SMS reply mode, creating a minimal contact row when none
  * exists yet. The SMS-thread page offers the toggle for any number with
- * message history — including senders that never got an auto-created profile
- * (e.g. AiFlow-suppressed lead sources) — so this must not 404 on a missing
+ * message history, including senders that never got an auto-created profile
+ * (e.g. AiFlow-suppressed lead sources), so this must not 404 on a missing
  * row. Alias-aware on the update path, mirroring getCustomerMemory.
  */
 export async function setContactSmsReplyMode(
@@ -681,7 +681,7 @@ export async function setContactSmsReplyMode(
     throw new Error(`setContactSmsReplyMode: ${insErr.message}`);
   }
   if (insErr) {
-    // Raced by a concurrent profile create — apply the mode to the winner.
+    // Raced by a concurrent profile create, apply the mode to the winner.
     const raceUpdate = db
       .from("contacts")
       .update({ sms_reply_mode: mode, updated_at: new Date().toISOString() })
@@ -720,7 +720,7 @@ export type SmsHistoryEntry = {
   receivedAt: string;
   /**
    * Set for worker-initiated sends from `sms_outbound_log` (AiFlow lead
-   * intros, voice-call follow-up texts etc.) — those rows have no inbound
+   * intros, voice-call follow-up texts etc.), those rows have no inbound
    * side; `assistantReply` carries the outbound body. Values mirror the
    * `sms_outbound_log_source_check` constraint.
    */
@@ -754,7 +754,7 @@ export async function listSmsHistoryForCustomer(
     .limit(limit);
   if (error) throw new Error(`listSmsHistoryForCustomer: ${error.message}`);
   // Worker-initiated sends (AiFlow lead intros, offers) live in
-  // `sms_outbound_log` with no inbound job — without them a lead the flow
+  // `sms_outbound_log` with no inbound job, without them a lead the flow
   // texted first shows "No SMS history" on the profile even though the
   // thread page renders the message.
   const { data: outboundData, error: outboundError } = await db
@@ -824,7 +824,7 @@ function extractInboundText(payload: Record<string, unknown>): string {
   if (typeof b === "string") return b;
   // RCS inbound nests content under a body OBJECT: `body.text` for typed
   // messages, `body.suggestion_response.text` for tapped suggested replies.
-  // Mirrors inboundTextFromPayload in src/lib/db/sms-history.ts — without
+  // Mirrors inboundTextFromPayload in src/lib/db/sms-history.ts, without
   // this, an RCS-only customer read as "no customer content" and the
   // summarizer skipped (and the summary prompt dropped their messages).
   if (b && typeof b === "object" && !Array.isArray(b)) {

@@ -5,7 +5,7 @@ import { PlanCards } from "@/components/pricing/PlanCards";
 /**
  * Plan-selection step of onboarding. The actual tier cards / period toggle
  * live in the shared `PlanCards` component, which the public /pricing page
- * renders too — one definition, no copy drift.
+ * renders too, one definition, no copy drift.
  */
 export default function OnboardPage() {
   const t = useTranslations("marketing.onboard");

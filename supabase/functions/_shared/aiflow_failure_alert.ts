@@ -1,13 +1,13 @@
 /**
  * Opt-in owner alert for permanently failed (dead-lettered) lead-intake
- * AiFlow runs — Truly Insurance feedback, 2026-07-13.
+ * AiFlow runs, Truly Insurance feedback, 2026-07-13.
  *
  * A failed `tenant_email` / `email` / `webhook` run means a lead reached us and
  * the automation died: previously the only trace was an error-level system log
  * nobody watches (PR #558 gave dead-lettered customer TEXTS an owner page;
  * flow runs never got the same treatment). This module notifies the owner
  * through the notifications Edge function (SMS / email / dashboard per
- * their channel preferences) — but ONLY when the business explicitly opted
+ * their channel preferences), but ONLY when the business explicitly opted
  * in via `notification_preferences.aiflow_failure_alerts` (default false).
  *
  * Guard rails, in order:
@@ -112,7 +112,7 @@ export async function sendAiflowFailureAlert(
       return "test_mode";
     }
 
-    // Opt-in gate — FAILS CLOSED. Default-false column; a read error or a
+    // Opt-in gate, FAILS CLOSED. Default-false column; a read error or a
     // business that never opened the notifications page means no alert.
     const { data: prefs, error: prefsErr } = await supabase
       .from("notification_preferences")
@@ -129,7 +129,7 @@ export async function sendAiflowFailureAlert(
 
     // Per-run dedupe: a DELIVERED page for this run means the owner already
     // knows (skipped/failed channel rows must not suppress a retry that
-    // could actually reach them — same rule as _shared/needs_human.ts).
+    // could actually reach them, same rule as _shared/needs_human.ts).
     const { data: prior, error: priorErr } = await supabase
       .from("notifications")
       .select("id")

@@ -6,12 +6,12 @@
  * pg_cron hits this Edge function every minute with
  *   Authorization: Bearer <INTERNAL_CRON_SECRET>.
  * We validate the bearer, then forward to the Next.js internal endpoint
- * which contains the actual Telnyx + DB logic — same indirection as the
+ * which contains the actual Telnyx + DB logic, same indirection as the
  * grace-sweep bridge so all 10DLC business rules live in one Node runtime.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  *
  * Response: forwards the Next.js body and status. On any bridge-level
  * failure returns 502 so the pg_cron audit log captures something useful.

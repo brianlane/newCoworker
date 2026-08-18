@@ -3,7 +3,7 @@
  * (src/lib/db/acuity-appointment-state.ts).
  *
  * This table exists because Acuity exposes no last-modified timestamp, so
- * `CalendarEventInput.updatedIso` — which `eventCanceledDue` gates on — has
+ * `CalendarEventInput.updatedIso`, which `eventCanceledDue` gates on, has
  * no provider source. We synthesize it from our own first sighting.
  *
  * The property that matters most, and the one that is easy to get wrong, is

@@ -65,7 +65,7 @@ updates:
       minor-and-patch:
         update-types: ["minor", "patch"]
     # No @google/genai major-version pin: the bridge now runs on the 2.x line.
-    # The 2.0 breaking changes were Interactions-API only — the Gemini Live API
+    # The 2.0 breaking changes were Interactions-API only, the Gemini Live API
     # (ai.live.connect / sendRealtimeInput) and generateContent are unaffected
     # per the v2.0.0 changelog, and the bridge builds + runs against 2.x. (The
     # "calls die after the greeting" outage was the odd-length PCM bug, #259,

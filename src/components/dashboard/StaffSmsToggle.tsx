@@ -5,9 +5,9 @@
  *
  * Controls what happens when the OWNER or a roster team member texts the
  * business number (detected by the same numbers Safe Mode uses):
- *   - "Reply as assistant" — the assistant answers them in internal-assistant
+ *   - "Reply as assistant", the assistant answers them in internal-assistant
  *     mode (no lead intake, no customer profile), like the dashboard chat.
- *   - "Forward to owner" — also relay the text to the owner's cell.
+ *   - "Forward to owner", also relay the text to the owner's cell.
  *
  * Both persist to business_telnyx_settings via /api/business/staff-sms.
  */
@@ -44,7 +44,7 @@ export function StaffSmsToggle({
     setSaving(field);
     // Optimistic: reflect the click immediately, roll back on failure.
     // Snapshot the PRE-CLICK values so a failed save reverts ONLY the toggle
-    // we touched — back to its current value (which already includes any
+    // we touched, back to its current value (which already includes any
     // earlier successful save this session), never the stale page-load props.
     const prevAssistant = assistantReply;
     const prevForward = forwardToOwner;

@@ -1,5 +1,5 @@
 /**
- * Minimal ustar (POSIX tar) packer — dependency-free.
+ * Minimal ustar (POSIX tar) packer, dependency-free.
  *
  * Why hand-rolled: the vault sync ships the knowledge-graph projection
  * (dozens of small markdown notes + graph.jsonl) to each tenant box over
@@ -10,7 +10,7 @@
  * `base64 -d | tar -x -C <dir>`.
  *
  * Scope: regular files only, paths ≤ 100 bytes (enforced), UTF-8 contents.
- * That is exactly the projection's shape — entity note names are capped
+ * That is exactly the projection's shape, entity note names are capped
  * well below the limit upstream.
  */
 

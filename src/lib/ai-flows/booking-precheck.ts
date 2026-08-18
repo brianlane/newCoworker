@@ -230,7 +230,7 @@ export async function bookingPrecheckForRun(
 
   // Fire the standard goal machinery with the run's own lead identity: it
   // fans out over the matched contact row's numbers and jumps every OTHER
-  // parked run for this lead (the claimed run is `running` — the worker
+  // parked run for this lead (the claimed run is `running`, the worker
   // jumps it in-process on this result).
   const fired = await fireGoals(db, businessId, [
     {

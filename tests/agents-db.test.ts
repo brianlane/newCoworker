@@ -220,7 +220,7 @@ describe("listAgentRunInputPaths", () => {
     const c = chain({
       data: [
         {
-          // Multi-file run: the scalar mirrors the first file — the merged
+          // Multi-file run: the scalar mirrors the first file, the merged
           // result must not duplicate it.
           input_storage_path: "b/agent-inputs/r1/0-a.txt",
           input_files: [

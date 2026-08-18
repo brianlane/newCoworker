@@ -48,7 +48,7 @@ async function buildEvents(
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso),
-      // Exact totals (head counts) — mirror the live function.
+      // Exact totals (head counts), mirror the live function.
       db
         .from("sms_inbound_jobs")
         .select("id", { count: "exact", head: true })

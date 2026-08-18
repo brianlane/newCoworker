@@ -135,7 +135,7 @@ describe("listDeletedItems (central mode)", () => {
       sms_inbound_jobs: chain("limit", {
         data: [
           { id: "j1", customer_e164: "+1555", deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" },
-          // Legacy row without the denormalized column — folded via its
+          // Legacy row without the denormalized column, folded via its
           // payload, the same identification the reader and delete use.
           {
             id: "j2",
@@ -144,7 +144,7 @@ describe("listDeletedItems (central mode)", () => {
             deleted_at: "2026-07-07T00:00:00Z",
             deleted_by: "u1"
           },
-          // Unparseable legacy row (no payload) — nothing to fold it into.
+          // Unparseable legacy row (no payload), nothing to fold it into.
           { id: "j3", customer_e164: null, deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" }
         ],
         error: null

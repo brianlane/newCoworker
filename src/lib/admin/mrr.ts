@@ -8,7 +8,7 @@
  * rolled onto month-to-month after the term (per `isCommitmentElapsed`, the
  * same signal the billing page and change-plan use) → the higher renewal
  * rate. Rows with no Stripe subscription behind them (internal pilots,
- * admin-created accounts) are excluded — nobody is being charged.
+ * admin-created accounts) are excluded, nobody is being charged.
  * Enterprise is priced from its ACTIVE `enterprise_deals` row (the real
  * quoted monthly price) instead of the $0 tier-table placeholder.
  *
@@ -17,14 +17,14 @@
  * monthly SKU for every provisioned box, one Telnyx DID per live tenant,
  * this calendar month's metered SMS/voice usage at TELNYX-ONLY per-unit
  * rates, and the Gemini spend actuals (which already include Gemini Live
- * voice, settled into `owner_chat_model_spend` at call teardown — pricing
+ * voice, settled into `owner_chat_model_spend` at call teardown, pricing
  * voice all-in here would double-count it). BYOS boxes cost the platform
  * no hosting (the customer owns the hardware) but still carry a DID.
  *
  * Known best-effort drift, deliberately not modeled: grandfathered starter
  * renewal prices (pre-Jul-2026 schedules), the monthly intro coupon, and
  * the Canadian and Mexican messaging surcharge add-ons. Nothing bills from
- * these numbers — they are an operator-facing health metric.
+ * these numbers, they are an operator-facing health metric.
  */
 
 import { getCommitmentMonths, getPeriodPricing } from "@/lib/plans/tier";
@@ -56,7 +56,7 @@ export type MrrSubscriptionInput = {
   created_at: string;
   /**
    * True when the owner's 30-day money-back window is still open and unused
-   * AND the placement is self-serve refundable — this subscription's revenue
+   * AND the placement is self-serve refundable, this subscription's revenue
    * could still be clawed back in full. Stamped by the admin-page loader
    * (`stampRefundExposure` in src/lib/admin/mrr-exposure.ts); omitted/false →
    * counted as committed revenue.
@@ -81,11 +81,11 @@ export type DayCurrentMrr = {
   countedSubscriptions: number;
   /**
    * Portion of `totalCents` from refund-exposed subscriptions (owner still
-   * inside the unused 30-day money-back window — they can refund instead of
+   * inside the unused 30-day money-back window, they can refund instead of
    * merely not renewing). Enterprise deals never count here.
    */
   refundExposedCents: number;
-  /** `totalCents` minus `refundExposedCents` — MRR excluding first-month refund risk. */
+  /** `totalCents` minus `refundExposedCents`, MRR excluding first-month refund risk. */
   committedCents: number;
 };
 
@@ -95,7 +95,7 @@ export type DayCurrentMrr = {
  * Term (12/24-month) plans use the codebase's canonical rollover signal,
  * {@link isCommitmentElapsed}: a past `renewal_at` alone is NOT enough,
  * because with auto-renew ON the subscription renews for another FULL
- * prepaid term while `renewal_at` is never advanced — the cached Stripe
+ * prepaid term while `renewal_at` is never advanced, the cached Stripe
  * period being monthly-length is what distinguishes "rolling month-to-month
  * at the renewal rate" from "inside a (possibly renewed) contract at the
  * contract rate". Missing period cache fails toward "still committed"
@@ -104,7 +104,7 @@ export type DayCurrentMrr = {
  * Monthly plans have no commitment: the intro month bills the contract rate,
  * everything after it the ongoing renewal rate. The intro-month end prefers
  * `renewal_at` (stamped at checkout as start + 1 month) and falls back to
- * `created_at` plus one CLAMPED month (`addUtcMonthsClamped` — the same
+ * `created_at` plus one CLAMPED month (`addUtcMonthsClamped`, the same
  * day-clamping checkout's renewal-date math uses, so a Jan 31 signup ends
  * its intro month on Feb 28, not rolled into March).
  */

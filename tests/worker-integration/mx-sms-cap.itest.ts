@@ -7,7 +7,7 @@ import { businessDefaultPhoneCountry } from "../../supabase/functions/_shared/bu
  * The Mexican SMS cap, against REAL Postgres (mx_sms_cap migration):
  *
  * 1. business_phone_country (SQL) must agree with
- *    businessDefaultPhoneCountry (TS) across the fixture matrix — the SQL
+ *    businessDefaultPhoneCountry (TS) across the fixture matrix, the SQL
  *    copy exists because try_reserve_sms_outbound_slot classifies inside
  *    the row lock, and a silent drift between the two would let the shown
  *    allowance and the enforced one disagree.

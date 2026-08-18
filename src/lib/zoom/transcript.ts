@@ -16,7 +16,7 @@ import { logger } from "@/lib/logger";
 import { getZoomAccessToken } from "@/lib/zoom/client";
 import { ZOOM_API_BASE_URL } from "@/lib/zoom/oauth";
 
-/** Outbound budget per call — fail fast on a stuck upstream. */
+/** Outbound budget per call, fail fast on a stuck upstream. */
 export const ZOOM_TRANSCRIPT_TIMEOUT_MS = 20_000;
 
 export type ZoomTranscriptError =

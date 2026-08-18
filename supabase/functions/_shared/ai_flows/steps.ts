@@ -34,8 +34,8 @@ import type {
 
 /**
  * What a place_ai_call step's saveAs var holds when the callee's phone is
- * missing/unusable or origination refused before dialing. A named sentinel —
- * not "" — so when/branch conditions can test it.
+ * missing/unusable or origination refused before dialing. A named sentinel,
+ * not "", so when/branch conditions can test it.
  */
 export const CALL_NOT_PLACED_SENTINEL = "not_placed";
 
@@ -122,7 +122,7 @@ const SHARE_URL_SENTINEL = "\u0000SHARE_URL\u0000";
 
 /**
  * What a math step saves when an operand doesn't parse (or a divide hits
- * zero). A named sentinel — not "" — so when/branch conditions can test it.
+ * zero). A named sentinel, not "", so when/branch conditions can test it.
  */
 export const MATH_NOT_A_NUMBER = "not_a_number";
 
@@ -147,8 +147,8 @@ function formatNumber(n: number): string {
 
 /**
  * Compute a math step's result from its RENDERED operands. Pure; every
- * unusable input lands on the MATH_NOT_A_NUMBER sentinel instead of throwing
- * — a data gap is not a flow bug, and branches can test the sentinel.
+ * unusable input lands on the MATH_NOT_A_NUMBER sentinel instead of throwing,
+ * a data gap is not a flow bug, and branches can test the sentinel.
  */
 export function computeMath(
   operation:
@@ -209,7 +209,7 @@ export function computeMath(
 
 /**
  * What a wait_for_reply step's saveAs var holds when the lead never texted
- * back (timeout, or no usable phone to wait on). A named sentinel — not "" —
+ * back (timeout, or no usable phone to wait on). A named sentinel, not "",
  * because when-conditions (equals/notEquals) require a non-empty value.
  * Must match the SQL literal in resume_overdue_reply_waits().
  */
@@ -231,7 +231,7 @@ export type StepAction =
       /**
        * Date-anchored wake instant (untilDateTemplate / relativeToTemplate
        * already rendered + offset applied by the planner). `null` = the
-       * template rendered to something unparseable — the worker skips with a
+       * template rendered to something unparseable, the worker skips with a
        * note instead of failing (fail-open, like a bad timezone).
        */
       untilIso?: string | null;
@@ -242,7 +242,7 @@ export type StepAction =
        * Park the run until `from` texts back or the timeout lapses. The
        * planner resolves the phone; the worker persists the awaiting_reply
        * state. `marker` is the per-STEP resolution flag (stamped by the
-       * resume/timeout paths alongside `saveAs`) — resolution is tracked per
+       * resume/timeout paths alongside `saveAs`), resolution is tracked per
        * step, not per saveAs var, so two waits sharing a var both park.
        * A marker already set → the planner returns set_vars {} instead, so
        * this action always means "park now".
@@ -266,13 +266,13 @@ export type StepAction =
        * Terminal-state marker: when the fetched page contains this
        * (case-insensitive) text, the worker ends the run gracefully (step
        * "skipped", run "done") instead of extracting from a page that has
-       * nothing to read — see FlowStep (browse_extract).skipWhenText.
+       * nothing to read, see FlowStep (browse_extract).skipWhenText.
        */
       skipWhenText?: string;
       /**
        * Already-satisfied marker: same trigger, but the worker records the step
-       * "skipped" and CARRIES ON with the rest of the run instead of ending it
-       * — see FlowStep (browse_extract).continueWhenText. skipWhenText wins when
+       * "skipped" and CARRIES ON with the rest of the run instead of ending it,
+       * see FlowStep (browse_extract).continueWhenText. skipWhenText wins when
        * both match.
        */
       continueWhenText?: string;
@@ -303,7 +303,7 @@ export type StepAction =
       // (rendered sourceTemplate, default {{trigger.document}}) and the
       // filing title; the worker proxies the read + Gemini extraction (+
       // optional Business Documents filing) to the platform. A trigger with
-      // no document plans a skip (skipReason) — all-text emails must not
+      // no document plans a skip (skipReason), all-text emails must not
       // fail the flow.
       kind: "doc_extract";
       /** Rendered document ref (email-attachments:<path> / business-docs:<id>); "" = skip. */
@@ -361,7 +361,7 @@ export type StepAction =
        * Set when a TEMPLATED recipient resolved to nothing usable (the lead
        * had no phone, or the self-number scrub cleared a bogus extraction).
        * The worker skips the send with an actions_taken note instead of
-       * failing the run — a lead-data gap is not a flow-config bug.
+       * failing the run, a lead-data gap is not a flow-config bug.
        */
       skipReason?: string;
     }
@@ -414,7 +414,7 @@ export type StepAction =
        */
       kind: "share_document";
       documentId: string;
-      /** Editor display hint — the owner-notice fallback title when the doc row is gone. */
+      /** Editor display hint, the owner-notice fallback title when the doc row is gone. */
       documentTitle?: string;
       /** Rendered recipient: E.164-ish for "sms", email address for "email". */
       to: string;
@@ -437,7 +437,7 @@ export type StepAction =
       attachScreenshot: boolean;
       /**
        * Rendered `business-docs:<documentId>` ref to attach (Resend path
-       * only). Absent when the template rendered blank — the send goes out
+       * only). Absent when the template rendered blank, the send goes out
        * without an attachment.
        */
       attachDocumentRef?: string;
@@ -496,7 +496,7 @@ export type StepAction =
        */
       kind: "run_agent";
       agentId: string;
-      /** Editor display hint — used in failure notes when the agent row is gone. */
+      /** Editor display hint, used in failure notes when the agent row is gone. */
       agentName?: string;
       /** Rendered input text ("" in document mode). */
       input: string;
@@ -653,7 +653,7 @@ export type StepAction =
       screenshot: boolean;
       /**
        * Var name whose (phone) value the worker normalizes and persists the
-       * final URL under — resolved AFTER any same-pass extraction, so a phone
+       * final URL under, resolved AFTER any same-pass extraction, so a phone
        * this step itself extracts can be the key.
        */
       rememberKeyVar?: string;
@@ -672,19 +672,19 @@ export type StepAction =
       /**
        * Terminal-state marker: when an action fails and the page contains this
        * (case-insensitive) text, the worker ends the run gracefully (step
-       * "skipped", run "done") instead of failing — see FlowStep.skipWhenText.
+       * "skipped", run "done") instead of failing, see FlowStep.skipWhenText.
        */
       skipWhenText?: string;
       /**
        * Already-satisfied marker: same trigger, but the worker records the step
-       * "skipped" and CARRIES ON with the rest of the run instead of ending it
-       * — see FlowStep.continueWhenText. skipWhenText wins when both match.
+       * "skipped" and CARRIES ON with the rest of the run instead of ending it,
+       * see FlowStep.continueWhenText. skipWhenText wins when both match.
        */
       continueWhenText?: string;
       /**
        * Postcondition the render service holds the page to AFTER the actions:
        * visible text must show this marker or the step fails like an action
-       * failure (and the markers above classify it) — see FlowStep.expectText.
+       * failure (and the markers above classify it), see FlowStep.expectText.
        */
       expectText?: string;
     }
@@ -732,7 +732,7 @@ export type StepAction =
        * writes a junk language.
        */
       language?: string;
-      /** Set when the phone var was missing/unusable — skip, never fail. */
+      /** Set when the phone var was missing/unusable, skip, never fail. */
       skipReason?: string;
     }
   | {
@@ -748,13 +748,13 @@ export type StepAction =
       question?: string;
       categories: { value: string; description?: string }[];
       saveAs: string;
-      /** Set when no model call is needed (empty text) — the decided value. */
+      /** Set when no model call is needed (empty text), the decided value. */
       resolved?: string;
     }
   | {
       /**
        * Maintain the contact's lead-state tags. The planner resolves the
-       * phone; `skipReason` set means the phone was unusable — the worker
+       * phone; `skipReason` set means the phone was unusable, the worker
        * notes the skip instead of failing (a lead-data gap is not a flow
        * bug), mirroring send_sms's templated-recipient behavior.
        */
@@ -785,7 +785,7 @@ export type StepAction =
        * notify/transfer refs pass through UNRESOLVED (only the worker can
        * reach the roster/contacts tables). `marker` is the per-step
        * resolution flag (stamped by the resume paths alongside `saveAs`).
-       * `skipReason` set means the callee phone was unusable — the worker
+       * `skipReason` set means the callee phone was unusable, the worker
        * stamps the not_placed sentinel and skips instead of failing (a
        * lead-data gap is not a flow bug), mirroring send_sms.
        */
@@ -950,7 +950,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "doc_extract": {
       // Default source: the triggering email's document attachment. A blank
       // ref (no attachment on this trigger, or an upstream var that never
-      // filled) plans a SKIP, not a failure — an all-text email arriving on
+      // filled) plans a SKIP, not a failure, an all-text email arriving on
       // a doc-intake flow is normal traffic.
       const sourceRef = renderTemplate(step.sourceTemplate ?? "{{trigger.document}}", scope).trim();
       if (!sourceRef) {
@@ -969,7 +969,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         : "";
       // Contact-link source: when contactPhoneVar names one of THIS step's
       // extracted fields, only the platform can resolve it (extraction
-      // happens there) — pass the field NAME. Otherwise resolve the var
+      // happens there), pass the field NAME. Otherwise resolve the var
       // from scope now; an empty value still rides along so the platform
       // reports the "no phone value" note instead of silently unlinking.
       const contactVar = step.fileAs?.contactPhoneVar;
@@ -1008,7 +1008,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // The body-match terms narrow the inbox read to THIS lead's email; render
       // them now (the worker does only IO) and drop any that render blank (e.g. a
       // city var that wasn't captured) so a missing optional term never blocks the
-      // match. No terms means "no body filter" — fromContains + recency still
+      // match. No terms means "no body filter", fromContains + recency still
       // scope the read.
       const bodyContains = (step.matchTemplates ?? [])
         .map((t) => renderTemplate(t, scope).trim())
@@ -1032,7 +1032,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "send_sms": {
       // MMS attachment: resolve the image URL var an earlier generate_image
       // step produced. Anything that is not an http(s) URL (empty var, failed
-      // generation prose) degrades to a plain text send — the message itself
+      // generation prose) degrades to a plain text send, the message itself
       // must never be blocked by an image hiccup.
       let mediaUrl: string | undefined;
       if (step.mediaUrlVar) {
@@ -1045,7 +1045,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         const q = step.quietHours;
         const emailRaw = q.emailFallbackVar ? scope.vars?.[q.emailFallbackVar] : "";
         // The fallback address comes from page EXTRACTION, which answers "none"
-        // (or other prose) when the lead has no email — only an @-bearing value
+        // (or other prose) when the lead has no email, only an @-bearing value
         // may select the email-instead branch; anything else means defer.
         const emailTo = typeof emailRaw === "string" ? emailRaw.trim() : "";
         quiet = {
@@ -1172,8 +1172,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         }
         return { ok: false, error: "send_sms: recipient is empty after templating" };
       }
-      // Telnyx only accepts E.164. Extracted phones arrive in page formatting —
-      // "(840) 275-3158", "840.275.3158" — so coerce NANP shapes to +1XXXXXXXXXX
+      // Telnyx only accepts E.164. Extracted phones arrive in page formatting,
+      // "(840) 275-3158", "840.275.3158", so coerce NANP shapes to +1XXXXXXXXXX
       // and fail fast (no retries) on anything unparseable instead of burning
       // MAX_ATTEMPTS on a guaranteed Telnyx 40310 "Invalid 'to' address".
       const to = coerceDialableE164(toRaw, { defaultCountry: scope.phoneCountry });
@@ -1315,7 +1315,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // Unlike SMS (Telnyx, NANP-biased), WhatsApp recipients are wa_ids:
       // plus-less INTERNATIONAL digit runs round-trip straight from
       // inbound webhooks and lead vars (e.g. UK "447911123456"). Accept
-      // E.164, NANP shapes, and any 8-15 digit non-zero-leading run —
+      // E.164, NANP shapes, and any 8-15 digit non-zero-leading run,
       // mirroring the deliver helper's toWaId.
       const waDigits = waToRaw.replace(/\D/g, "");
       const waToLoose = isE164(waToRaw)
@@ -1429,7 +1429,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // Document mode: the ref template (default {{trigger.document}})
       // resolves to an email-attachments:/business-docs: ref. A blank ref
       // (no attachment on this trigger, or an upstream var that never
-      // filled) plans a SKIP, not a failure — an all-text email arriving on
+      // filled) plans a SKIP, not a failure, an all-text email arriving on
       // a document flow is normal traffic.
       if (step.documentTemplate !== undefined || step.input === undefined) {
         const documentRef = renderTemplate(
@@ -1490,7 +1490,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!subject) return { ok: false, error: "send_email: subject is empty after templating" };
       if (!body) return { ok: false, error: "send_email: body is empty after templating" };
       // Render + normalize cc/bcc (validate, split lists, lowercase, de-dup,
-      // cap) so the platform and owner-mailbox paths — and the email_log —
+      // cap) so the platform and owner-mailbox paths, and the email_log,
       // all carry the exact addresses that get delivered.
       const cc = normalizeFlowRecipients(step.cc, scope);
       const bcc = normalizeFlowRecipients(step.bcc, scope);
@@ -1680,7 +1680,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const claimed = step.claimedNotifyTemplate?.trim();
       // Claim-outcome email recipient: rendered NOW (it never references
       // {{agent.*}}/{{offer.*}}) and dropped when it doesn't resolve to a
-      // deliverable address — a bad template degrades to SMS-only, never
+      // deliverable address, a bad template degrades to SMS-only, never
       // fails the route step after a successful claim.
       const claimedEmail = step.claimedNotifyEmail
         ? renderTemplate(step.claimedNotifyEmail, scope).trim().toLowerCase()
@@ -1752,8 +1752,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }));
       // Resolve the forEachLink name filter: split the var's value on
       // commas/newlines/semicolons, trim, drop empties, dedupe. When the author
-      // requested a filter (forEachLinkMatchVar set) we ALWAYS attach the list —
-      // even when it resolves to EMPTY — so the render service updates NOTHING
+      // requested a filter (forEachLinkMatchVar set) we ALWAYS attach the list,
+      // even when it resolves to EMPTY, so the render service updates NOTHING
       // rather than silently falling back to acting on every row. An empty list
       // is reported by the worker as "found no matching list items".
       let forEachMatch: string[] | undefined;
@@ -1833,7 +1833,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       // Date-anchored modes resolve HERE (the planner has the scope): render
       // the template, parse, apply the offset. An unparseable render passes
-      // `untilIso: null` so the worker fails OPEN (skip with a note) — a
+      // `untilIso: null` so the worker fails OPEN (skip with a note), a
       // lead-data gap must not brick the run.
       let untilIso: string | null | undefined;
       const dateTemplate = step.untilDateTemplate ?? step.relativeToTemplate;
@@ -1969,7 +1969,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "branch": {
       // Evaluate the arms top to bottom (first match wins, else on no match)
       // and record the choice as an engine var. The worker's flat loop then
-      // skips every step on an untaken arm via isOnActivePath — the branch
+      // skips every step on an untaken arm via isOnActivePath, the branch
       // step itself is just this one var write.
       const chosen = chooseBranchArm(step, scope);
       const label =
@@ -2005,7 +2005,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const emailKey = e164 ? null : emailContactKey(leadEmail);
       const contactKey = e164 ?? emailKey;
       if (!contactKey) {
-        // Skip (with a note), never fail — mirroring update_contact and the
+        // Skip (with a note), never fail, mirroring update_contact and the
         // send steps. A "none"/empty/scrubbed phone slips past a
         // `notEquals: "none"` when-guard as the empty string, and filing is
         // auxiliary bookkeeping: a phoneless lead must not kill a run whose
@@ -2055,7 +2055,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const raw = step.textVar ? scope.vars?.[step.textVar] : triggerString(scope, "windowText");
       const text = typeof raw === "string" ? raw.trim() : "";
       // The engine's no-reply/customer-called sentinels are already decisive
-      // categories in their own right — don't ask a model to re-read them.
+      // categories in their own right, don't ask a model to re-read them.
       const sentinel = text === "no_reply" || text === "customer_called" || text === "";
       return {
         ok: true,
@@ -2075,7 +2075,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return { ok: false, error: "generate_image: prompt is empty after templating" };
       }
       // Editing mode: an empty render means the triggering message simply
-      // carried no photo — generate from scratch. A non-empty render is
+      // carried no photo, generate from scratch. A non-empty render is
       // validated/fetched by the worker against its platform-source allowlist.
       const inputImage = step.inputImageTemplate
         ? renderTemplate(step.inputImageTemplate, scope).trim()
@@ -2130,7 +2130,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     }
     case "math": {
       // Pure compute: render the operands, do the arithmetic, save the
-      // result — the worker just applies set_vars.
+      // result, the worker just applies set_vars.
       const left = renderTemplate(step.left, scope).trim();
       const right = renderTemplate(step.right ?? "", scope).trim();
       return {
@@ -2219,7 +2219,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
     }
     // Voice steps execute on the real-time Telnyx call path (telnyx-voice-inbound),
-    // never on the async worker — they are only valid under a voice trigger, which
+    // never on the async worker, they are only valid under a voice trigger, which
     // the batch enqueue paths skip and the worker rejects via isExecutableDefinition.
     // If one somehow reaches here, fail the step rather than silently no-op.
     case "ring_handoff":

@@ -185,7 +185,7 @@ describe("scheduled SMS dispatch", () => {
 
     const result = await processDueScheduledSms(supabase, { ...baseOpts, fetchFn });
     expect(result.outcomes[0]).toEqual({ id: "sched-1", status: "sent" });
-    // No second metered slot, no second Telnyx call — just re-mark sent.
+    // No second metered slot, no second Telnyx call, just re-mark sent.
     expect(rpc).not.toHaveBeenCalledWith("try_reserve_sms_outbound_slot", expect.anything());
     expect(fetchFn).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledWith(

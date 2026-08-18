@@ -134,7 +134,7 @@ describe("buildActivityFeed", () => {
   });
 
   it("treats a stamped flow_id as flow origin regardless of source", () => {
-    // Group/agent-offer texts carry a transport source but a flow_id — the
+    // Group/agent-offer texts carry a transport source but a flow_id, the
     // flow_id is the authoritative origin signal.
     const items = buildActivityFeed(
       emptyInput({
@@ -1030,7 +1030,7 @@ describe("getActivityFeedPage, filters", () => {
         "2026-05-02T00:00:00.000Z"
       );
 
-      // Starter tier: an oversized value clamps DOWN to the 7-day window —
+      // Starter tier: an oversized value clamps DOWN to the 7-day window,
       // a crafted URL can't widen the view past the tier.
       const clamped = mockDbByTable(ALL_EMPTY);
       await getActivityFeedPage(
@@ -1162,7 +1162,7 @@ describe("paginateFullActivityFeed", () => {
   });
 
   it("cuts the chunk at the newest capped source's fetch depth so no source is skipped", () => {
-    // Chat is CHATTY: it hit its 3-row cap at 2026-02-03 — there may be more
+    // Chat is CHATTY: it hit its 3-row cap at 2026-02-03, there may be more
     // chat rows between 02-03 and the email from 02-01. The merged chunk must
     // therefore stop at the chat boundary and NOT show the older email yet.
     const page = paginateFullActivityFeed(
@@ -1251,7 +1251,7 @@ describe("paginateFullActivityFeed", () => {
 
   it("falls back to the newest parseable timestamp when a boundary row is malformed", () => {
     // Defensive: a capped source with a non-string timestamp on its oldest
-    // row still counts as CAPPED — its boundary walks up to the first
+    // row still counts as CAPPED, its boundary walks up to the first
     // parseable row so paging can't end early and reopen the merge gap.
     const page = paginateFullActivityFeed(
       input({

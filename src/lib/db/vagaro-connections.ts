@@ -8,7 +8,7 @@
  *
  * Service-role only: RLS is on with no policies, so every access goes
  * through these helpers after the caller's own auth checks. The decrypted
- * secret never leaves a server-side function — the dashboard gets
+ * secret never leaves a server-side function, the dashboard gets
  * `toPublicVagaroConnection` (has_secret flag, no ciphertext).
  */
 import { randomBytes } from "node:crypto";
@@ -36,7 +36,7 @@ type StoredVagaroConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (token exchange, API calls). */
+/** Decrypted row, server-side use only (token exchange, API calls). */
 export type VagaroConnectionRow = Omit<
   StoredVagaroConnectionRow,
   "client_secret_encrypted"
@@ -46,7 +46,7 @@ export type VagaroConnectionRow = Omit<
 
 /**
  * Dashboard-facing shape: no secret material at all. The webhook token IS
- * included — the owner must paste the webhook URL (which embeds it) into
+ * included, the owner must paste the webhook URL (which embeds it) into
  * Vagaro's settings, so the card needs it; it only authenticates inbound
  * event deliveries, never API access.
  */
@@ -66,7 +66,7 @@ function toDecryptedRow(row: StoredVagaroConnectionRow): VagaroConnectionRow {
   const { client_secret_encrypted: encrypted, ...rest } = row;
   const secret = decryptIntegrationSecret(encrypted);
   if (secret === null) {
-    // NOT NULL column, so this only happens on a truly empty stored value —
+    // NOT NULL column, so this only happens on a truly empty stored value,
     // fail closed rather than exchanging an empty secret.
     throw new Error("vagaro connection has no stored client secret");
   }
@@ -96,7 +96,7 @@ export async function getVagaroConnection(
   return toDecryptedRow(data as unknown as StoredVagaroConnectionRow);
 }
 
-/** Active connection only — the calendar-tool and webhook gate. */
+/** Active connection only, the calendar-tool and webhook gate. */
 export async function getActiveVagaroConnection(
   businessId: string,
   client?: SupabaseClient
@@ -124,7 +124,7 @@ export async function getActiveVagaroConnectionId(
   return (data as { id: string } | null)?.id ?? null;
 }
 
-/** Dashboard listing shape (no decrypt — masked). Null when not connected. */
+/** Dashboard listing shape (no decrypt, masked). Null when not connected. */
 export async function getPublicVagaroConnection(
   businessId: string,
   client?: SupabaseClient
@@ -175,7 +175,7 @@ export type UpsertVagaroConnectionInput = {
   clientSecret?: string;
   /**
    * Regional API host. Defaults to the US host on create; `undefined` on
-   * update keeps the stored value (same semantics as `clientSecret` — a
+   * update keeps the stored value (same semantics as `clientSecret`, a
    * credentials-only save must never reset a merchant's regional URL).
    */
   apiBaseUrl?: string;

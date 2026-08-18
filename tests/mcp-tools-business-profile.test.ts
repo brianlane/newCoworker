@@ -21,7 +21,7 @@ import { runTool } from "./helpers/run-mcp-tool";
 /**
  * update_business_profile: manage_settings-gated hours/timezone edits
  * through the shared Settings core. The description's hard negative (no
- * phone changes) is part of the contract — the model must be told, not
+ * phone changes) is part of the contract, the model must be told, not
  * trusted to guess.
  */
 

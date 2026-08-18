@@ -176,7 +176,7 @@ export async function verifyFreedSlotOpen(
       // The business timezone, NOT a hardcoded UTC. This is load-bearing for
       // Acuity: its availability is keyed by LOCAL CALENDAR DATE, so asking
       // in the wrong zone asks about the wrong day for any merchant outside
-      // UTC, the freed slot never appears, and the check fails closed —
+      // UTC, the freed slot never appears, and the check fails closed,
       // silently swallowing a waitlist offer that should have gone out.
       // Cosmetic for Vagaro (range-scoped search, the zone only labels the
       // response), but both paths agreeing with findCalendarSlots is the
@@ -435,7 +435,7 @@ export async function offerFreedSlot(
 /**
  * One OBSERVED off-platform cancellation (the calendar poll's canceled
  * scan): treat the canceled customer exactly like the platform cancel core
- * does — their own live entries drop FIRST, and the freed slot is offered
+ * does, their own live entries drop FIRST, and the freed slot is offered
  * with them excluded, so a poll-observed cancel can never text the person
  * who freed the slot (Bugbot Medium on PR #903). With no derivable
  * identity the offer simply runs unexcluded. Never throws.

@@ -4,13 +4,13 @@
  * GET /api/dashboard/leads-data?businessId=<uuid>&scope=mine|all
  *   → { rows: LeadDataRow[], columns: string[], employees, myEmployeeId }
  *
- * One row per lead: the newest lead_submissions rows (webhook lead events —
+ * One row per lead: the newest lead_submissions rows (webhook lead events,
  * Meta Lead Ads direct, the bridges, backlog imports) folded onto contacts
  * by phone/email, plus tagged contacts with no stored submission. `columns`
  * is the dynamic field-column set (union of submission answer keys). All
  * shaping is pure (src/lib/leads/data-view.ts); this route only fetches.
  *
- * Auth: requireBusinessRole(businessId, "view_dashboard") — staff can see
+ * Auth: requireBusinessRole(businessId, "view_dashboard"), staff can see
  * it. scope=mine filters to contacts OWNED by the caller's linked roster
  * member, matching /api/dashboard/tasks semantics.
  */
@@ -155,7 +155,7 @@ export async function GET(request: Request) {
     // 2b) Supplemental submissions for the contacts themselves: a pipeline
     //     lead whose stored submission is OLDER than the newest-300 window
     //     must still show its answers, so fetch the freshest rows matching
-    //     any contact identifier too (duplicates are fine — the fold keeps
+    //     any contact identifier too (duplicates are fine, the fold keeps
     //     the newest per lead).
     const contactPhones = [
       ...new Set(
@@ -212,7 +212,7 @@ export async function GET(request: Request) {
     ).catch(() => new Map<string, ContactName>());
 
     // Scope BEFORE the row cap (inside the builder), matching Board/List:
-    // "mine" with no linked roster member is empty by design — the client
+    // "mine" with no linked roster member is empty by design, the client
     // explains the linkage instead of showing everyone's leads.
     const rows = buildLeadDataRows({
       submissions,

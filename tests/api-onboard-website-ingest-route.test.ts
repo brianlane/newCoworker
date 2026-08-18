@@ -165,7 +165,7 @@ describe("api/onboard/website-ingest route", () => {
       "<html><body>Acme sells anvils</body></html>",
       expect.objectContaining({ businessName: "Acme" })
     );
-    // No crawl when source is pasted — the site is known to block us.
+    // No crawl when source is pasted, the site is known to block us.
     expect(ingestWebsite).not.toHaveBeenCalled();
     // Pasted ingests persist exactly like crawled ones.
     expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
@@ -249,7 +249,7 @@ describe("api/onboard/website-ingest route", () => {
 
   it("returns FORBIDDEN (not 500) when the business row has a null owner_email", async () => {
     // `BusinessRow.owner_email` is typed as `string` but the column is nullable
-    // in the DB. A null value used to crash `.toLowerCase()` — this test locks
+    // in the DB. A null value used to crash `.toLowerCase()`, this test locks
     // in a clean 403 response instead of the old 500.
     vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
     vi.mocked(getBusiness).mockResolvedValue({ owner_email: null } as never);

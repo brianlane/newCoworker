@@ -77,7 +77,7 @@ export default async function DashboardMessagesPage() {
 
   // Scheduled + template SMS (Standard+ perk): fetch the composer picker data
   // and the tools panel contents for entitled tenants. Pending scheduled rows
-  // are ALWAYS fetched — after a tier downgrade an owner must still see and
+  // are ALWAYS fetched, after a tier downgrade an owner must still see and
   // cancel what they queued while on Standard (the sweep would fail those
   // rows at dispatch time, but silently hiding them here would be worse).
   const smsToolsEnabled = smsToolsAllowedForTier(
@@ -88,13 +88,13 @@ export default async function DashboardMessagesPage() {
   // replaces what used to be ~5 sequential round-trips:
   // - conversations: the thread list itself.
   // - rcsEnabled: RCS-first tenants (Enterprise, approved agent, concrete
-  //   from-number for the SMS fallback — the same precondition sendTelnyxSms
+  //   from-number for the SMS fallback, the same precondition sendTelnyxSms
   //   checks) get a softened emoji hint in the composer: the rich message
   //   delivers as typed, only the SMS fallback copy is capped.
-  // - rawFlows: replay targets ("Replay missed texts") — best-effort: no
+  // - rawFlows: replay targets ("Replay missed texts"), best-effort: no
   //   flows just hides the panel.
   // - templates / pending / history: pending rows soonest-first (so an owner
-  //   with a deep queue always sees — and can cancel — what dispatches
+  //   with a deep queue always sees, and can cancel, what dispatches
   //   next), plus a short tail of recent dispatched/canceled rows for
   //   context (entitled tenants only).
   const [
@@ -138,7 +138,7 @@ export default async function DashboardMessagesPage() {
     conversations.map((c) => c.customerE164)
   ).catch(() => new Map<string, ContactName>());
 
-  // Enabled SMS-triggered flows that file the lead before any outreach — the
+  // Enabled SMS-triggered flows that file the lead before any outreach, the
   // same gate as the replay route, mirroring the Emails page.
   const replayFlows = rawFlows
     .filter(

@@ -34,7 +34,7 @@ function formatMoney(cents: number): string {
 export default async function AdminDashboardPage() {
   const t = await getTranslations("admin.pages");
   // Per-business admin mutes (flipped on each business's admin page) filter
-  // the fleet-wide feeds below — fetched first so a muted tenant can't eat
+  // the fleet-wide feeds below, fetched first so a muted tenant can't eat
   // the feed row limits.
   const muted = await getAdminMutedBusinessIds();
   const [businesses, alerts, recentActivity, systemErrors, vpsInventory, enterpriseDeals, fleetCost] =
@@ -44,10 +44,10 @@ export default async function AdminDashboardPage() {
       // same fixed-height scroll region, so extra rows scroll in place.
       getRecentAlertsAll(15, undefined, { excludeBusinessIds: muted.alerts }),
       // Fleet-wide activity across the REAL activity tables (calls, texts,
-      // emails, AiFlow runs, new customers, completed coworker work) — not
+      // emails, AiFlow runs, new customers, completed coworker work), not
       // just coworker_logs, which sits stale between provisions. Alerting
       // rows stay in the Recent Alerts card. 15 (vs the alerts card's 10)
-      // because activity rows are single-line — this keeps the two bottom
+      // because activity rows are single-line, this keeps the two bottom
       // columns visually balanced.
       getFleetRecentActivity(15, { excludeBusinessIds: muted.activity }),
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
@@ -70,7 +70,7 @@ export default async function AdminDashboardPage() {
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const subscriptions = Array.from(subscriptionMap.values());
 
-  // Business names for the alert/activity feeds — the list is already
+  // Business names for the alert/activity feeds, the list is already
   // fetched above, so the cards can say "Scar Fairy" instead of "856034a7…".
   const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
   const alertCounts = summarizeAlertCounts(alerts);
@@ -83,7 +83,7 @@ export default async function AdminDashboardPage() {
 
   // Day-current best-effort MRR (renewal-aware, Stripe-backed only, real
   // enterprise deal prices) and the estimated monthly platform spend against
-  // it — see src/lib/admin/mrr.ts. Refund-exposure stamping (which splits
+  // it, see src/lib/admin/mrr.ts. Refund-exposure stamping (which splits
   // out revenue still inside an open 30-day money-back window) is best
   // effort: a profile-read failure degrades to "everything committed"
   // instead of erroring the whole dashboard.
@@ -383,7 +383,7 @@ export default async function AdminDashboardPage() {
           Both cards pin their list to the SAME fixed-height scroll region, so
           the two components always end at the same edge regardless of how
           tall each feed's rows render (alert rows wrap to two lines, activity
-          rows don't) — longer feeds scroll in place instead of stretching the
+          rows don't), longer feeds scroll in place instead of stretching the
           row, shorter ones can't leave one card with a stub of dead space. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Alerts */}

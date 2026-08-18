@@ -139,7 +139,7 @@ describe("POST /api/voice/tools/email", () => {
     expect(call[2]).toMatchObject({ endpoint: "/gmail/v1/users/me/messages/send", method: "POST" });
     const payload = call[2] as { data: { raw: string } };
     expect(typeof payload.data.raw).toBe("string");
-    // base64url — no '+' or '/' or '=' padding
+    // base64url, no '+' or '/' or '=' padding
     expect(payload.data.raw).not.toMatch(/[+/=]/);
     const decoded = Buffer.from(payload.data.raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
     expect(decoded).toMatch(/To: lead@example.com/);

@@ -51,7 +51,7 @@ const bodySchema = z.discriminatedUnion("action", [
  *
  * `action: "provision"` runs a fast synchronous SSH probe (immediate
  * operator feedback), then kicks off the standard provisioning orchestrator
- * in the background with the BYOS provisioner injected — progress lands in
+ * in the background with the BYOS provisioner injected, progress lands in
  * the same coworker_logs rows the admin page already renders. The enterprise
  * tier gate is enforced inside prepare (updateBusinessVpsProvider) and again
  * by the orchestrator's own provider gate.
@@ -75,7 +75,7 @@ export async function POST(request: Request) {
 
     // action === "provision"
     // Provider-pin guard: the orchestrator resolves the provider from the
-    // BUSINESS ROW, not from the injected provisioner — if the row were
+    // BUSINESS ROW, not from the injected provisioner, if the row were
     // still 'hostinger' (prepare never ran, or the pin was reverted) while
     // a stale BYOS key exists, the pool-adopt path could land the tenant on
     // a Hostinger box before the injected BYOS provisioner ever ran.

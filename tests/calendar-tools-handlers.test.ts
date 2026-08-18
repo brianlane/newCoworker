@@ -144,19 +144,19 @@ beforeEach(() => {
   // Default: nothing mirrored, so the ledger confirm carries a null handle.
   vi.mocked(mirrorBookingToSharedCalendar).mockResolvedValue(null);
   vi.mocked(ensureSharedCalendar).mockResolvedValue(null);
-  // Default: dedupe ledger unavailable (fail-open) — bookings proceed exactly
+  // Default: dedupe ledger unavailable (fail-open), bookings proceed exactly
   // as before the idempotency guard, which is what the pre-guard tests pin.
   vi.mocked(bookingAttendeeKey).mockReturnValue("key-under-test");
   vi.mocked(claimBookingDedupe).mockResolvedValue(null);
-  // Default: the attendee holds no other upcoming booking — the duplicate
+  // Default: the attendee holds no other upcoming booking, the duplicate
   // guard passes through and bookings behave exactly as the pre-guard
   // tests pin.
   vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
   vi.mocked(maybeAlertUnassignedBooking).mockResolvedValue("sent_unowned");
-  // Default: no stored contact — the model-supplied attendeeName is used, as
+  // Default: no stored contact, the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
-  // Default: no Zoom connection — bookings behave exactly as pre-Zoom tests pin.
+  // Default: no Zoom connection, bookings behave exactly as pre-Zoom tests pin.
   vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
 });
 
@@ -978,7 +978,7 @@ describe("bookCalendarAppointment", () => {
     // Deep equality, not identity: the success path re-wraps the result so a
     // Zoom join link can be merged into the data when one exists. CalDAV
     // events email nobody, so inviteEmail is pinned null. Every confirmed
-    // booking carries startLocal — the human-readable start the model must
+    // booking carries startLocal, the human-readable start the model must
     // read back verbatim (Truly mislabeled-day incident, Jul 21 2026).
     expect(result).toStrictEqual({
       ok: true,
@@ -1204,7 +1204,7 @@ describe("bookCalendarAppointment", () => {
     // Never creates provider events or the shared calendar.
     expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
-    // A scheduling LINK is not a booking — no goal event.
+    // A scheduling LINK is not a booking, no goal event.
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
 
@@ -1542,7 +1542,7 @@ describe("bookCalendarAppointment, retry idempotency guard (2026-07-13 quadruple
     );
     expect(explicit.data).toMatchObject({ inviteEmail: "spoken@x.co" });
 
-    // Backfilled from the stored contact — the same merge the original
+    // Backfilled from the stored contact, the same merge the original
     // create ran, so it reflects what actually rode the event.
     vi.mocked(getCustomerMemory).mockResolvedValue({
       display_name: "Joe",
@@ -1667,7 +1667,7 @@ describe("bookCalendarAppointment, Zoom decorator", () => {
   it("deletes the meeting and drops the join link when the create confirms no event id", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
-    // Truthy proxy response, but no event id — not a confirmed booking.
+    // Truthy proxy response, but no event id, not a confirmed booking.
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: {} } as never);
 
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");

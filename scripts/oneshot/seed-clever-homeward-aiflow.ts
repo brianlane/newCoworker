@@ -27,7 +27,7 @@
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
  *   AIFLOW_CLEVER_HOMEWARD_FROM    (default "4702212279")
- *   AIFLOW_CLEVER_AGENT_NAME       (default "Dave Lane" — must match a roster name)
+ *   AIFLOW_CLEVER_AGENT_NAME       (default "Dave Lane", must match a roster name)
  *   AIFLOW_CLEVER_HOMEWARD_PREAMBLE (default below)
  */
 import { createClient } from "@supabase/supabase-js";

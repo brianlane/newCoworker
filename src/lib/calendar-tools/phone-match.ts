@@ -1,8 +1,8 @@
 /**
  * Format- and country-code-tolerant phone comparison, shared by the
  * appointment-lifecycle lookups (Calendly invitee matching, booking-ledger
- * fallback). Phones reach us in mixed shapes — E.164 from the SMS surface,
- * national/pretty-printed from the model or a provider — and strict string
+ * fallback). Phones reach us in mixed shapes, E.164 from the SMS surface,
+ * national/pretty-printed from the model or a provider, and strict string
  * equality misses real matches (Bugbot on PR #584).
  */
 

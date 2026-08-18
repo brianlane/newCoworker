@@ -4,7 +4,7 @@
  *
  * The TCR/carrier fees we pay per new SMS campaign (brand registration,
  * vetting, three months of campaign fees upfront) are non-refundable to us,
- * so they are passed through at signup as a one-time checkout line item —
+ * so they are passed through at signup as a one-time checkout line item,
  * mirroring what competitors charge (Quo: $19.50).
  *
  * NON-REFUNDABLE: the 30-day money-back refund carves this amount out (see

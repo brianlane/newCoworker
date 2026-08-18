@@ -6,12 +6,12 @@
  * end it).
  *
  * Caller id must be an account-owned DID. TELNYX_SMS_FROM_E164 is blank in
- * the platform env, so set TEST_CALL_FROM_E164 (any owned tenant DID works —
+ * the platform env, so set TEST_CALL_FROM_E164 (any owned tenant DID works,
  * it is used purely as caller id).
  *
  * Requires TELNYX_API_KEY + TELNYX_CONNECTION_ID in the repo-root .env.
  * ⚠️ Places a real PSTN call and starts a real Gemini Live session on the
- * target tenant — keep it pointed at the HQ demo line.
+ * target tenant, keep it pointed at the HQ demo line.
  *
  * Usage: tsx debug/demo-testcall.ts [--to +1XXXXXXXXXX]
  */

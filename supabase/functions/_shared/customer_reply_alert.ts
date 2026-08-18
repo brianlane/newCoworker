@@ -1,25 +1,25 @@
 /**
- * Opt-in "client replied" owner alert — KYP feedback, Jul 20 2026: James,
+ * Opt-in "client replied" owner alert, KYP feedback, Jul 20 2026: James,
  * working a live thread, missed Tim Tsai's replies ("You need to let me
  * know when clients text back i didnt see his texts"); the AI promised
  * immediate alerts, but no per-client-reply owner notification existed.
  *
  * DETERMINISTIC pipeline code, not a model tool: the sms-inbound-worker
  * calls this the moment a claimed job is identified as a CUSTOMER inbound,
- * BEFORE the reply branches — so flow-suppressed inbounds, tapbacks, and
+ * BEFORE the reply branches, so flow-suppressed inbounds, tapbacks, and
  * bare "1" confirmation replies alert too. A model-invoked tool would fire
  * only when the model chose to call it (the same unreliability that
  * produced the Jul 16 notify_team misfire).
  *
  * Guard rails, in order:
  *   1. the toggle READS FAIL CLOSED: `customer_reply_alerts` is opt-in
- *      (default false) — a DB blip or missing prefs row means no alert;
- *   2. forward_owner contacts are skipped — the owner already receives
+ *      (default false), a DB blip or missing prefs row means no alert;
+ *   2. forward_owner contacts are skipped, the owner already receives
  *      those texts verbatim through the relay;
  *   3. per-JOB dedupe against the notifications history (payload->>jobId,
  *      DELIVERED rows only): a retried job whose first claim already paged
  *      never re-pages, while a retry whose first claim FAILED to page
- *      (notify POST down, worker crash) still alerts — an attempt-count
+ *      (notify POST down, worker crash) still alerts, an attempt-count
  *      gate here would silently drop those (Bugbot Medium on PR #802);
  *   4. per-contact coalescing (payload->>contactE164, DELIVERED rows only),
  *      so a multi-part text or a rapid back-and-forth is ONE page, not a
@@ -46,7 +46,7 @@ export type CustomerReplyAlertInput = {
   contactE164: string;
   /** The inbound message (clipped here). */
   inboundPreview: string;
-  /** The sms_inbound_jobs id — the per-job dedupe key across retry claims. */
+  /** The sms_inbound_jobs id, the per-job dedupe key across retry claims. */
   jobId: string;
   /** `${SUPABASE_URL}/functions/v1/notifications` */
   notifyUrl: string;
@@ -72,7 +72,7 @@ export async function sendCustomerReplyAlert(
   input: CustomerReplyAlertInput
 ): Promise<CustomerReplyAlertResult> {
   try {
-    // Opt-in gate — FAILS CLOSED. Default-false column; a read error or a
+    // Opt-in gate, FAILS CLOSED. Default-false column; a read error or a
     // business that never opened the notifications page means no alert.
     const { data: prefs, error: prefsErr } = await supabase
       .from("notification_preferences")
@@ -89,7 +89,7 @@ export async function sendCustomerReplyAlert(
 
     // Contact label + forward_owner gate, alias-aware (a merged number
     // resolves to the surviving row). A read failure degrades to the bare
-    // number label — silence is the worse failure.
+    // number label, silence is the worse failure.
     const { data: contactRow, error: contactErr } = await supabase
       .from("contacts")
       .select("display_name, sms_reply_mode")
@@ -107,10 +107,10 @@ export async function sendCustomerReplyAlert(
     const label = contact?.display_name?.trim() || input.contactE164;
 
     // Per-JOB dedupe: a DELIVERED page for this exact inbound means a retry
-    // claim must not re-page — but a retry whose FIRST claim never managed
+    // claim must not re-page, but a retry whose FIRST claim never managed
     // to page (notify POST down, worker crash) still alerts. An
     // attempt-count gate would silently drop those (Bugbot Medium, PR #802).
-    // A lookup error logs and still alerts — the coalesce below still
+    // A lookup error logs and still alerts, the coalesce below still
     // bounds any duplicate to one per window.
     const { data: priorForJob, error: priorErr } = await supabase
       .from("notifications")
@@ -128,7 +128,7 @@ export async function sendCustomerReplyAlert(
 
     // Coalesce: a DELIVERED page for this contact inside the window means
     // this burst already alerted (skipped/failed channel rows must not
-    // suppress a retry that could actually reach the owner — same rule as
+    // suppress a retry that could actually reach the owner, same rule as
     // _shared/needs_human.ts). A lookup error logs and still alerts.
     const sinceIso = new Date(
       Date.now() - CUSTOMER_REPLY_COALESCE_MINUTES * 60_000

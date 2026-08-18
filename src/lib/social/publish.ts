@@ -1,17 +1,17 @@
 /**
- * Instagram post publishing — the engine behind the per-minute
+ * Instagram post publishing, the engine behind the per-minute
  * social-post-sweep (pg_cron → Edge → /api/internal/social-post-sweep →
  * here).
  *
  * One pass:
- *   1. Promote due scheduled posts to `publishing` (guarded transition —
+ *   1. Promote due scheduled posts to `publishing` (guarded transition,
  *      an owner cancel racing the promotion wins cleanly).
  *   2. Publish each through the Instagram Graph API two-step (media
  *      container → media_publish) with the tenant's meta_connections page
  *      token and linked IG professional account; stamp `published` +
  *      `ig_media_id`, or `failed` + a human-readable error.
  *   3. Resolve every in-flight `publishing` row older than a short grace
- *      period (one cron beat — the pass that claimed it has finished its
+ *      period (one cron beat, the pass that claimed it has finished its
  *      attempt by then). The container id was persisted BEFORE the publish
  *      call, so the sweep asks Meta for the container's status_code:
  *      PUBLISHED → live, stamp `published`; FINISHED → publish it NOW (a
@@ -20,12 +20,12 @@
  *      still preparing → wait, unless the stale window has passed. Rows
  *      that can't be verified at all (no container id, no connection)
  *      dead-letter at the stale window with a duplicate-check warning.
- *      Never blind-retried — a duplicate feed post is worse than the owner
+ *      Never blind-retried, a duplicate feed post is worse than the owner
  *      re-scheduling by hand.
  *
  * A missing/paused Meta connection (or a Page with no linked IG
  * professional account) fails the post with plain-words guidance instead
- * of throwing — config gaps are the owner's to fix, not transient errors.
+ * of throwing, config gaps are the owner's to fix, not transient errors.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -77,13 +77,13 @@ export const SOCIAL_RECHECK_BATCH = 15;
  * In-flight rows younger than this are left alone: the pass that claimed
  * them is still (or was just) working, and its per-post attempt is bounded
  * well under one cron beat. After the grace, container status makes any
- * touch safe — a container publishes at most once.
+ * touch safe, a container publishes at most once.
  */
 export const SOCIAL_PUBLISH_RESUME_GRACE_MINUTES = 2;
 
 /**
  * Container readiness polling: Meta downloads `image_url` asynchronously,
- * so a fresh container is often IN_PROGRESS — publishing then fails even
+ * so a fresh container is often IN_PROGRESS, publishing then fails even
  * with a valid image. Poll status_code a few times before media_publish;
  * a container still preparing after the last check stays `publishing` and
  * the stale pass completes it (FINISHED → publish then, see below).
@@ -93,7 +93,7 @@ export const CONTAINER_READY_DELAY_MS = 4000;
 
 /**
  * Signed-URL lifetime for UPLOADED post images. Meta downloads the image
- * while the container prepares — minutes, not hours — but a slow fetch
+ * while the container prepares, minutes, not hours, but a slow fetch
  * retried across a couple of sweep beats must not outlive the link.
  */
 export const UPLOADED_MEDIA_SIGNED_URL_TTL_S = 60 * 60;
@@ -180,7 +180,7 @@ type PublishOutcome =
  * Stamp a promoted post's outcome, guarded on it still being `publishing`:
  * overlapping sweeps (a pass outrunning the cron interval) can both try to
  * settle the same row, and last-write-wins could flip a live post back to
- * failed — the guard makes exactly one resolver win.
+ * failed, the guard makes exactly one resolver win.
  */
 async function stampOutcome(
   db: SupabaseClient,
@@ -191,7 +191,7 @@ async function stampOutcome(
 }
 
 /**
- * Publish one promoted post. Never throws for Graph/config problems — the
+ * Publish one promoted post. Never throws for Graph/config problems, the
  * outcome is stamped on the row either way. A DB failure writing the
  * outcome DOES propagate: the row stays `publishing` with its container id
  * persisted, and the stale sweep resolves it truthfully next pass via the
@@ -239,7 +239,7 @@ async function publishOne(
       // point is interrupted (crash, failed outcome write), the stale sweep
       // can ask Meta whether the container went live instead of guessing.
       await patchSocialPost(post.business_id, post.id, { ig_creation_id: creationId }, db);
-      // Meta downloads the image asynchronously — publish only once the
+      // Meta downloads the image asynchronously, publish only once the
       // container reports FINISHED, polling briefly.
       let status = "";
       for (let attempt = 0; attempt < CONTAINER_READY_ATTEMPTS; attempt++) {
@@ -251,7 +251,7 @@ async function publishOne(
         failure = `Instagram could not prepare the media (container ${status}), check that the image URL is a public JPEG/PNG, then re-schedule.`;
       } else if (status === "FINISHED" || status === "PUBLISHED") {
         // PUBLISHED without our publish call would mean another actor beat
-        // us to it — either way the post is (about to be) live.
+        // us to it, either way the post is (about to be) live.
         if (status === "FINISHED") {
           try {
             igMediaId = await deps.publishMedia(
@@ -265,7 +265,7 @@ async function publishOne(
           } catch (err) {
             // AMBIGUOUS: the error may have surfaced after Meta published
             // (timeout, dropped response). Stamping failed here would invite
-            // a duplicate re-schedule — leave the row `publishing` and let
+            // a duplicate re-schedule, leave the row `publishing` and let
             // in-flight resolution read the container's status_code, which
             // knows the truth.
             logger.warn(
@@ -280,7 +280,7 @@ async function publishOne(
         }
       } else {
         // Still IN_PROGRESS after the poll budget: leave the row
-        // `publishing` — a later pass completes the FINISHED container.
+        // `publishing`, a later pass completes the FINISHED container.
         unsettled = true;
       }
     }
@@ -313,9 +313,9 @@ async function publishOne(
 /**
  * Resolve one in-flight `publishing` row (already past the resume grace).
  * When its container id is on file and the connection can be reached,
- * Meta's container status_code answers "did this go live?" — PUBLISHED
+ * Meta's container status_code answers "did this go live?", PUBLISHED
  * stamps `published`; FINISHED (prepared but never published, e.g. a slow
- * image download outlived the original pass) is safely publishable NOW —
+ * image download outlived the original pass) is safely publishable NOW,
  * a container publishes at most once, so a racing resolver can't create a
  * duplicate; ERROR/EXPIRED stamps `failed` with an image hint. A container
  * still preparing keeps waiting until the STALE window, after which it (or
@@ -367,7 +367,7 @@ async function resolveInFlightPost(
             );
           } catch (err) {
             // AMBIGUOUS, same as the live path: the throw may have surfaced
-            // after Meta published. Keep waiting — the next pass re-reads
+            // after Meta published. Keep waiting, the next pass re-reads
             // status_code (PUBLISHED → stamp; FINISHED → retry), and a
             // never-publishing container expires within Meta's 24h window,
             // dead-lettering through the ERROR/EXPIRED path.
@@ -407,7 +407,7 @@ async function resolveInFlightPost(
         return won ? "failed" : "lost";
       }
     } catch (err) {
-      // Fall through to the stale rules — an unverifiable container is
+      // Fall through to the stale rules, an unverifiable container is
       // treated as not-live, with the duplicate-check warning intact.
       logger.warn("social-post-sweep: in-flight container check failed", {
         postId: post.id,
@@ -467,7 +467,7 @@ export async function processSocialPostSweep(
 
   const nowIso = now().toISOString();
 
-  // Resolve in-flight rows first — BEFORE promoting new posts, so rows this
+  // Resolve in-flight rows first, BEFORE promoting new posts, so rows this
   // pass claims aren't in the list. Anything younger than the resume grace
   // is skipped (its owning pass may still be working); past the grace the
   // container check settles it as soon as Meta finishes preparing, so a
@@ -476,13 +476,13 @@ export async function processSocialPostSweep(
   const staleCutoffMs = now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000;
   for (const post of await listPublishingPosts(db)) {
     try {
-      // A null business lookup is a transient blip — leave the row alone.
+      // A null business lookup is a transient blip, leave the row alone.
       const business = await getBusiness(post.business_id, db);
       if (!business) continue;
       // Downgrade-safe WITHOUT blind-failing: a `publishing` row may have
       // already had its publish call land (that is why this resolver
       // exists), and marking it failed invites the owner to re-post after
-      // upgrading — a duplicate feed post, the worse outcome per the module
+      // upgrading, a duplicate feed post, the worse outcome per the module
       // header. Resolve with Meta as the authority; allowPublish=false only
       // refuses the half that would put NEW content live.
       const tierAllowed = marketingAutomationAllowedForTier(business.tier);
@@ -533,7 +533,7 @@ export async function processSocialPostSweep(
         continue;
       }
 
-      // Claim first (single publisher): the guarded transition is the lock —
+      // Claim first (single publisher): the guarded transition is the lock,
       // an overlapping sweep on a stale due-list loses it before any Graph
       // call, and an owner cancel that landed first wins.
       const claimed = await transitionSocialPost(
@@ -621,7 +621,7 @@ async function recheckPublishedPosts(
         connections.set(post.business_id, await graph.loadConnection(post.business_id, db));
       }
       const connection = connections.get(post.business_id) ?? null;
-      // No usable connection is not evidence of deletion — it is evidence we
+      // No usable connection is not evidence of deletion, it is evidence we
       // cannot ask. Disconnecting Meta must not wipe a tenant's post history.
       const askable = Boolean(connection?.pageToken) && connection?.is_active === true;
       const state = askable

@@ -1,5 +1,5 @@
 /**
- * Printable "White-Glove Build & Installation" document — the completed
+ * Printable "White-Glove Build & Installation" document, the completed
  * intake questionnaire rendered through renderWhiteGloveDocSections.
  *
  * Lives OUTSIDE the admin (protected) route group on purpose: the sidebar

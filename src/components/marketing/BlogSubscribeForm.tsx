@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-/** Email opt-in box on blog pages — POSTs to /api/blog/subscribe. */
+/** Email opt-in box on blog pages, POSTs to /api/blog/subscribe. */
 export function BlogSubscribeForm({
   locale,
   labels

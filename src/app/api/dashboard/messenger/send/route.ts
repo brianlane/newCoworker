@@ -3,7 +3,7 @@
  *
  * POST { businessId, conversationId, text }
  * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages")
- * (admins bypass) — the same capability that gates manual SMS sends.
+ * (admins bypass), the same capability that gates manual SMS sends.
  *
  * Delivery: the SAME 24h-window gate + Send API path the AI worker uses,
  * then the message is appended with role 'owner' so the thread view (and

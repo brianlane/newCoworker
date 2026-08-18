@@ -5,8 +5,8 @@
  * Invoked server-to-server (NOT by Telnyx) from the app's "Place call" action
  * (src/app/api/aiflows/[id]/place-call), from the ai-flow-worker schedule
  * sweep for scheduled outbound flows, AND from the ai-flow-worker's
- * place_ai_call step executor (which sends a fully-resolved `call` payload —
- * callee, persona, notify, transfer config, parked-run link — instead of
+ * place_ai_call step executor (which sends a fully-resolved `call` payload,
+ * callee, persona, notify, transfer config, parked-run link, instead of
  * reading an outbound_call step). It validates the outbound voice flow,
  * runs a READ-ONLY pre-dial budget probe (so an over-budget tenant's callee is
  * never even rung), dials the callee, then RESERVES voice budget under the real
@@ -30,7 +30,7 @@
  * happen AFTER the dial (post-dial budget refusal, lost call id,
  * session_persist_failed) omit `dialed` and must NOT be retried.
  *
- * Auth: Authorization: Bearer <INTERNAL_CRON_SECRET> (assertCronAuth) — the
+ * Auth: Authorization: Bearer <INTERNAL_CRON_SECRET> (assertCronAuth), the
  * shared server-to-server secret. Callers are our own Next.js Place-call route
  * (which already authenticated the owner) and the ai-flow-worker schedule
  * sweep. No public access. (We deliberately do NOT authenticate against
@@ -145,8 +145,8 @@ serve(async (req: Request) => {
   //   - outbound VOICE flow ("Place call" / schedule sweep): the plan is read
   //     from the flow's single outbound_call step;
   //   - batch flow place_ai_call step (ai-flow-worker): the plan arrives fully
-  //     resolved in `body.call` (callee, persona, notify, transfer, run link)
-  //     — the flow row is still checked (exists, this business, enabled) so a
+  //     resolved in `body.call` (callee, persona, notify, transfer, run link),
+  //     the flow row is still checked (exists, this business, enabled) so a
   //     disabled/deleted flow can never keep placing calls.
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
@@ -165,7 +165,7 @@ serve(async (req: Request) => {
   const plan = await (async () => {
     if (body.call !== undefined) {
       // Per-call payload (place_ai_call). A malformed payload is a caller
-      // bug — refuse (dialed:false) rather than dialing a half-read config.
+      // bug, refuse (dialed:false) rather than dialing a half-read config.
       return parsePlaceCallPayload(body.call);
     }
     try {
@@ -230,8 +230,8 @@ serve(async (req: Request) => {
   // only exists once dialing starts; so we probe the read-only availability RPC
   // first and NEVER ring the callee for an over-budget tenant. This is
   // best-effort: an `indeterminate` result (stale/missing cached period, etc.)
-  // falls through to the dial because the post-dial reserve below — which does
-  // the authoritative JIT period refresh — is the real gate, and it hangs the
+  // falls through to the dial because the post-dial reserve below, which does
+  // the authoritative JIT period refresh, is the real gate, and it hangs the
   // leg up before answer so a slip-through is never billed.
   // The granted Telnyx pool lives in admin_platform_settings (it changes as
   // support tickets land); env is only the fallback. Never throws.
@@ -273,7 +273,7 @@ serve(async (req: Request) => {
         dialed: false
       });
     }
-    // dialed:false — the callee was never rung, so a scheduled caller may safely
+    // dialed:false, the callee was never rung, so a scheduled caller may safely
     // retry this occurrence later (budget may free up within its window).
     return json(200, { ok: false, error: "budget", reason: availability.reason, dialed: false });
   }
@@ -281,7 +281,7 @@ serve(async (req: Request) => {
   const sessionId = crypto.randomUUID();
   const clientState = encodeOutboundClientState(businessId, sessionId);
 
-  // Dial first — the originated leg's events (answered/hangup) return to the
+  // Dial first, the originated leg's events (answered/hangup) return to the
   // shared voice webhook and drive the call-control machine.
   const dialRes = await telnyxDialCall(apiKey, {
     connectionId,
@@ -378,7 +378,7 @@ serve(async (req: Request) => {
         dialed: false
       });
     }
-    // dialed:false — Telnyx rejected POST /v2/calls so NO call leg was created
+    // dialed:false, Telnyx rejected POST /v2/calls so NO call leg was created
     // and the callee was not rung; a scheduled caller may safely retry.
     return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status, dialed: false });
   }
@@ -389,7 +389,7 @@ serve(async (req: Request) => {
   if (!callControlId) {
     // Telnyx's POST /v2/calls always returns data.call_control_id on a 2xx, so
     // this is a defensive branch. Without the id we cannot hang up, reserve, or
-    // write a session for this leg directly — but it was dialed with our `vob:`
+    // write a session for this leg directly, but it was dialed with our `vob:`
     // client_state, so if it ever materializes it self-identifies on every
     // webhook: a call.answered hits handleOutboundAnswered, finds no `ai_intake`
     // session (we never wrote one), and hangs the leg up; a no-answer rings out
@@ -406,7 +406,7 @@ serve(async (req: Request) => {
   // reservation is the AUTHORITATIVE budget gate: only after it succeeds do we
   // write the `ai_intake` session that lets call.answered attach the AI bridge.
   // On refusal we never write a session, so a racing call.answered finds no
-  // active intake session and hangs up — the refused call can never be metered
+  // active intake session and hangs up, the refused call can never be metered
   // or bridged behind the UI's back.
   const reserve = await reserveVoiceBudget(supabase, {
     businessId,

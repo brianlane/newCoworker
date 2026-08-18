@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# flip-flags.sh — Idempotent toggler for the voice-bridge rollout env flags.
+# flip-flags.sh, Idempotent toggler for the voice-bridge rollout env flags.
 #
 # The voice rollout has two kill switches, LIVE-IN on opposite sides:
 #
 #   * VOICE_AI_STREAM_ENABLED  (Edge / Supabase secret)
 #       Controls whether telnyx-voice-inbound mints a signed stream URL.
-#       FLIPPED VIA `supabase secrets set` — NOT by this script, because it's
+#       FLIPPED VIA `supabase secrets set`, NOT by this script, because it's
 #       a Supabase-side value, not a VPS-side one. This script PRINTS the
 #       exact command to run. The helper lives here so ops have one place
 #       to go for the whole toggle surface.
@@ -14,7 +14,7 @@
 #       Controls whether the voice-bridge actually pipes audio to Gemini
 #       Live. When false, the media WebSocket still comes up (so Telnyx
 #       sees a healthy WS) and the bridge just stays silent on the AI side.
-#       FLIPPED BY THIS SCRIPT — edits the .env in place, restarts the
+#       FLIPPED BY THIS SCRIPT, edits the .env in place, restarts the
 #       container (if running), logs before/after.
 #
 # Usage (run AS ROOT on the VPS):

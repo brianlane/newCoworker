@@ -29,7 +29,7 @@ const schema = z.object({
   phone: z.string().optional(),
   /**
    * Optional signup-chosen area code for the AI coworker's number. Free-form
-   * (users type "(519)" etc.) — normalized below; anything that doesn't
+   * (users type "(519)" etc.), normalized below; anything that doesn't
    * reduce to a valid 3-digit NPA is silently dropped rather than failing
    * business creation.
    */
@@ -83,14 +83,14 @@ export async function POST(request: Request) {
     // for the anon Stripe-first flow, the user/legacy email for auth
     // paths). Mint a fresh `onboardingToken` for the anonymous case so
     // the client can continue. Different owner_email means another party
-    // owns this UUID — refuse with 409 rather than silently overwrite.
+    // owns this UUID, refuse with 409 rather than silently overwrite.
     const existing = await getBusiness(body.businessId);
     if (existing) {
       if (existing.owner_email === ownerEmail) {
         // A retry can carry the browser timezone the original insert never
         // persisted (e.g. the row was created by a pre-timezone deploy, or
         // the first request raced the client write). Apply it on the
-        // idempotent path too — otherwise the business stays on the UTC
+        // idempotent path too, otherwise the business stays on the UTC
         // fallback until the owner finds the Settings field.
         const tz =
           body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : null;
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
 
     // Normalize the owner phone to E.164 BEFORE it persists. `businesses.phone`
     // feeds the DID search's owner-local area-code tier, the Canada fee/profile
-    // classification, and the forwarding-number default at provisioning — all
+    // classification, and the forwarding-number default at provisioning, all
     // of which silently degrade on a junk value (KYP Ads Jul 14 2026: a
     // 7-digit "5188192" sailed through signup, so the forward default stayed
     // blank and the owner-local DID tier was skipped). Optional field: blank

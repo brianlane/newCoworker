@@ -4,18 +4,18 @@
  * Rowboat the exact same question the ai-flow-worker asks (same preamble, same
  * `{lead, alreadyTried}` payload, same `parseRoutedAgent` parser) and reports:
  *
- *   A) Escalation chain — one synthetic lead, alreadyTried growing after each
+ *   A) Escalation chain, one synthetic lead, alreadyTried growing after each
  *      pick. Verifies every pick is a distinct roster agent in E.164 and that
  *      Rowboat answers {"none":true} once the roster is exhausted (this is
  *      what protects the owner-fallback path from looping).
- *   B) First-pick fairness — N fresh leads with an empty alreadyTried.
+ *   B) First-pick fairness, N fresh leads with an empty alreadyTried.
  *      Reports the distribution of who gets offered first. NOTE: each worker
  *      lookup is a STATELESS chat (conversationId=null) and nothing writes
  *      routing outcomes back to vault memory, so "least recently received a
- *      lead" cannot actually be computed by Rowboat — this section makes that
+ *      lead" cannot actually be computed by Rowboat, this section makes that
  *      bias visible rather than asserting on it.
  *
- * Sends NO SMS/MMS/email and creates no ai_flow_runs — it only talks to the
+ * Sends NO SMS/MMS/email and creates no ai_flow_runs, it only talks to the
  * Rowboat chat endpoint (each call does cost one LLM turn on the tenant box).
  *
  * Usage (reads the repo-root `.env` automatically, like the rest of debug/):
@@ -32,7 +32,7 @@ import { loadEnv } from "./_shared.ts";
 import { callRowboatChatOnce } from "../supabase/functions/_shared/sms_rowboat.ts";
 import { parseRoutedAgent } from "../supabase/functions/_shared/ai_flows/engine.ts";
 
-// Default: New Coworker (HQ, internal) — each probe costs an LLM turn on the
+// Default: New Coworker (HQ, internal), each probe costs an LLM turn on the
 // tenant box, so it burns our own budget by default (roster = the tester,
 // seeded by flow-test-setup.ts).
 const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";

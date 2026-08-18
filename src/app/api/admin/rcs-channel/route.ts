@@ -15,7 +15,7 @@ const bodySchema = z.object({
 });
 
 /**
- * Admin toggle for a tenant's RCS channel (`business_channel_settings`) —
+ * Admin toggle for a tenant's RCS channel (`business_channel_settings`),
  * the operator console behind the "Messaging channel (RCS)" card on the
  * admin business page. Replaces the raw-SQL enable/disable path used during
  * the Jul 2026 testing phase.
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
         }
       });
     } catch (err) {
-      // Audit logging is best-effort — the settings row is already updated.
+      // Audit logging is best-effort, the settings row is already updated.
       logger.warn("rcs-channel: audit log insert failed", {
         businessId: body.businessId,
         error: err instanceof Error ? err.message : String(err)

@@ -7,14 +7,14 @@ import { geminiChatReply } from "./gemini";
  * Voice persona against the LIVE model: the bridge's REAL system
  * instruction (production builder, production flow-context formatter), a
  * realistic first exchange, and the behavioral invariants the instruction
- * exists to enforce. Gemini Live's audio channel can't run in CI — this is
+ * exists to enforce. Gemini Live's audio channel can't run in CI, this is
  * the text-mode stand-in using the identical instruction string, so a
  * prompt edit that breaks the persona contract fails here before it ships
  * to the fleet.
  *
  * Assertions are the instruction's HARD rules only (never self-identify as
  * an AI; never re-ask for the number they're calling from; use the flow
- * context instead of restarting intake) — not phrasing, which is model
+ * context instead of restarting intake), not phrasing, which is model
  * freedom.
  */
 

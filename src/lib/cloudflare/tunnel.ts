@@ -13,14 +13,14 @@
 //     stays easy to mock.
 //
 // Zone topology assumed: a CF-managed zone (e.g. newcoworker.com) hosting the
-// apex. We publish per-tenant hostnames at `<businessId>.<zone>` — ONE level
-// under the zone — so Cloudflare's free Universal SSL cert
+// apex. We publish per-tenant hostnames at `<businessId>.<zone>`, ONE level
+// under the zone, so Cloudflare's free Universal SSL cert
 // (covers apex + `*.<zone>`) handles edge TLS for every tenant without paid
 // Total TLS / Advanced Certificate Manager.
 //
 // Going deeper than one level (e.g. `<biz>.tunnel.<zone>`) is supported via
 // `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX`, but only if the operator has upgraded
-// to a paid plan and enabled Total TLS — Universal SSL's wildcard does not
+// to a paid plan and enabled Total TLS, Universal SSL's wildcard does not
 // span more than one level.
 
 import { logger } from "@/lib/logger";
@@ -34,14 +34,14 @@ export type ProvisionedTunnel = {
   voiceHostname: string;
   /**
    * Public hostname forwarding to `renderServiceUrl` (AiFlow render service on
-   * :8080). Only present when `renderEnabled` was passed for this tenant — the
+   * :8080). Only present when `renderEnabled` was passed for this tenant, the
    * render sidecar is gated to larger tiers (NOT the starter/KVM2 box), so the
    * ingress rule + CNAME are created only where the container actually runs.
    */
   renderHostname?: string;
   /**
    * Public hostname forwarding to `dataServiceUrl` (the residency data API on
-   * :8091). Only present when `dataEnabled` was passed — the data-api stack is
+   * :8091). Only present when `dataEnabled` was passed, the data-api stack is
    * deployed exclusively for enterprise tenants with data residency switched
    * on, so the hostname exists only where the container actually runs.
    */
@@ -60,7 +60,7 @@ export type CloudflareTunnelProvisioner = (input: {
   /**
    * Whether to publish the residency data-API hostname for this tenant.
    * Deployed exclusively for enterprise tenants whose `data_residency_mode`
-   * is past 'supabase' — everyone else gets no hostname and no backend.
+   * is past 'supabase', everyone else gets no hostname and no backend.
    */
   dataEnabled?: boolean;
 }) => Promise<ProvisionedTunnel>;
@@ -86,7 +86,7 @@ export type CloudflareTunnelConfig = {
   zoneName: string;
   /**
    * Suffix appended to `businessId` to form the public hostname. Defaults to
-   * `zoneName` itself, producing `<businessId>.<zone>` (one wildcard level —
+   * `zoneName` itself, producing `<businessId>.<zone>` (one wildcard level,
    * covered by free Universal SSL). Override only if you've upgraded to a
    * paid plan with Total TLS and need a deeper namespace, e.g. zoneName
    * "newcoworker.com" + hostnameSuffix "tunnel.newcoworker.com" produces
@@ -98,14 +98,14 @@ export type CloudflareTunnelConfig = {
   /**
    * Local voice-bridge service URL (default "http://127.0.0.1:8090"). The
    * tunnel publishes this behind a separate public hostname so Telnyx can
-   * reach the media WebSocket with a CF-issued cert — no per-VPS Caddy/TLS
+   * reach the media WebSocket with a CF-issued cert, no per-VPS Caddy/TLS
    * work required.
    */
   voiceServiceUrl?: string;
   /**
    * Hostname prefix for the voice bridge public URL. The resulting public
    * hostname is `${voiceHostnamePrefix}${businessId}.${hostnameSuffix}`
-   * (default "voice-"). Using a prefix — rather than a separate subdomain —
+   * (default "voice-"). Using a prefix, rather than a separate subdomain,
    * keeps everything inside the existing delegated zone so only one CF API
    * token is ever needed.
    */
@@ -114,7 +114,7 @@ export type CloudflareTunnelConfig = {
    * Local AiFlow render-service URL (default "http://127.0.0.1:8080"). When a
    * tenant has the render sidecar (non-starter tiers), the tunnel publishes it
    * behind a dedicated public hostname so Supabase Edge (the ai-flow-worker)
-   * can reach it with a CF-issued cert — same pattern as the voice bridge.
+   * can reach it with a CF-issued cert, same pattern as the voice bridge.
    */
   renderServiceUrl?: string;
   /**
@@ -128,13 +128,13 @@ export type CloudflareTunnelConfig = {
    * Local residency data-API URL (default "http://127.0.0.1:8091"). When an
    * enterprise tenant has residency enabled, the tunnel publishes it behind a
    * dedicated public hostname so the dashboard + Supabase Edge can reach the
-   * box datastore with a CF-issued cert — same pattern as voice/render.
+   * box datastore with a CF-issued cert, same pattern as voice/render.
    */
   dataServiceUrl?: string;
   /**
    * Hostname prefix for the data-API public URL. The resulting public
    * hostname is `${dataHostnamePrefix}${businessId}.${hostnameSuffix}`
-   * (default "data-") — one wildcard level, covered by free Universal SSL.
+   * (default "data-"), one wildcard level, covered by free Universal SSL.
    */
   dataHostnamePrefix?: string;
   /**
@@ -197,7 +197,7 @@ export function createCloudflareTunnelProvisioner(
     typeof rawHostnameSuffix === "string" && rawHostnameSuffix.trim().length > 0
       ? rawHostnameSuffix.trim()
       : zoneName;
-  // Same empty-string coercion pattern as hostnameSuffix above — `.env`
+  // Same empty-string coercion pattern as hostnameSuffix above, `.env`
   // parsing can turn an unset key into "" instead of `undefined`, which would
   // otherwise bypass the intended defaults and produce an invalid ingress
   // service URL (`http://127.0.0.1:`) or a bare-dot hostname (`.<suffix>`).
@@ -233,7 +233,7 @@ export function createCloudflareTunnelProvisioner(
    * call sites (notably `ensureZoneTotalTls`) reach for a more privileged
    * token than the default tunnel-scoped one without exposing that token
    * to every other call. Any path that doesn't pass `tokenOverride`
-   * uses `apiToken` (the tunnel/DNS scope) — preserving the principle
+   * uses `apiToken` (the tunnel/DNS scope), preserving the principle
    * of least privilege on every request.
    */
   async function api<T>(
@@ -306,7 +306,7 @@ export function createCloudflareTunnelProvisioner(
    * hostnames deeper than one level under the zone (i.e.
    * `hostnameSuffix !== zoneName`, via
    * `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=tunnel.newcoworker.com`, which
-   * produces `<biz>.tunnel.<root>` — two levels deep — and would hit
+   * produces `<biz>.tunnel.<root>`, two levels deep, and would hit
    * `sslv3 alert handshake failure` without per-hostname certs). The
    * default `<businessId>.<zoneName>` pattern is ONE level under the
    * zone, which free Universal SSL covers automatically on every plan,
@@ -314,7 +314,7 @@ export function createCloudflareTunnelProvisioner(
    *
    * Total TLS itself ships as part of Advanced Certificate Manager
    * ($10/mo/zone on Pro+) and lazily issues a Let's Encrypt cert per
-   * hostname as soon as a CNAME for it is created in the zone — exactly
+   * hostname as soon as a CNAME for it is created in the zone, exactly
    * when our `ensureCnameRecord` runs below.
    *
    * The PATCH is idempotent: re-enabling on a zone that already has it
@@ -350,7 +350,7 @@ export function createCloudflareTunnelProvisioner(
       );
       logger.info("cloudflare Total TLS enabled", { businessId, zoneId });
     } catch (err) {
-      // `api()` only ever throws Error subclasses (see line 153 — `throw new
+      // `api()` only ever throws Error subclasses (see line 153, `throw new
       // Error(...)`), so `instanceof Error` is always true here. The
       // `: String(err)` branch is a defensive narrowing aid for a
       // hypothetical future caller that throws a non-Error value, and
@@ -410,7 +410,7 @@ export function createCloudflareTunnelProvisioner(
       throw new Error(`Cloudflare returned empty tunnel token for ${tunnelId}`);
     }
 
-    // 3. Write the ingress rules. Two public hostnames on the same tunnel —
+    // 3. Write the ingress rules. Two public hostnames on the same tunnel,
     //    one for Rowboat (app surface), one for the voice bridge (Telnyx media
     //    WebSocket). cloudflared on the VPS routes incoming requests to the
     //    right loopback port based on the incoming Host header. The catch-all
@@ -479,16 +479,16 @@ export function createCloudflareTunnelProvisioner(
       });
     }
 
-    // 5. Best-effort Total TLS opt-in — ONLY when hostnames are nested
+    // 5. Best-effort Total TLS opt-in, ONLY when hostnames are nested
     //    deeper than one level under the zone (operator set
     //    `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX` to something other than the
     //    zone itself). With the default one-wildcard-level pattern
     //    (`<biz>.<zone>`), free Universal SSL already covers every
     //    freshly-CNAMEd hostname, Total TLS buys nothing, and the PATCH
     //    just spams a `10405 Method not allowed` warning on every
-    //    provision/redeploy when the token lacks Zone:SSL:Edit — so we
+    //    provision/redeploy when the token lacks Zone:SSL:Edit, so we
     //    skip the call entirely. Deep-nested setups need it to succeed
-    //    (paid plan + ACM required). Idempotent + non-fatal — see
+    //    (paid plan + ACM required). Idempotent + non-fatal, see
     //    `ensureZoneTotalTls` for why we swallow API errors there.
     if (hostnameSuffix !== zoneName) {
       await ensureZoneTotalTls(zoneId, businessId);
@@ -502,7 +502,7 @@ export function cloudflareTunnelProvisionerFromEnv(
   env: Record<string, string | undefined> = process.env
 ): CloudflareTunnelProvisioner | null {
   // `dotenv` (and Vercel env pulls) returns the empty string "" for blank lines
-  // like `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=` — which is exactly how .env.example
+  // like `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=`, which is exactly how .env.example
   // documents the optional keys. Coerce blank/whitespace strings to `undefined`
   // so the downstream `??` fallbacks and destructuring defaults actually fire.
   const blankToUndefined = (v: string | undefined): string | undefined => {
@@ -518,7 +518,7 @@ export function cloudflareTunnelProvisionerFromEnv(
     apiToken,
     // Optional separately-scoped token for `Zone:SSL and Certificates:Edit`
     // (Total TLS PATCH). When unset, `ensureZoneTotalTls` falls back to
-    // `apiToken` — which is fine if that token already grants SSL scope,
+    // `apiToken`, which is fine if that token already grants SSL scope,
     // and silently no-ops (logs a warn) when it doesn't. The split exists
     // so operators can keep the tunnel/DNS token narrowly-scoped while
     // still letting the provisioner enable Total TLS without manual

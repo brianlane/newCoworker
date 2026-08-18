@@ -55,8 +55,8 @@ function SignupForm() {
   const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
   // Default deep-link back into the questionnaire keeps users on the review step (where
   // the persisted onboarding data lands them anyway). The "Change it" email link below
-  // appends `&step=1` so the user actually arrives on the step that owns the email field
-  // — otherwise the questionnaire's hydration logic drops them on step 3 (review), which
+  // appends `&step=1` so the user actually arrives on the step that owns the email field,
+  // otherwise the questionnaire's hydration logic drops them on step 3 (review), which
   // has no email input and turns the link into a dead-end.
   const questionnaireBaseHref = `/onboard/questionnaire?tier=${encodeURIComponent(tier ?? "starter")}&period=${encodeURIComponent(period ?? "biennial")}`;
   const questionnaireEditEmailHref = `${questionnaireBaseHref}&step=1`;
@@ -104,7 +104,7 @@ function SignupForm() {
     // confirmation email) carries at most a fresh PKCE code-verifier. Without
     // this, accumulated chunked auth-token cookies from prior abandoned
     // sessions can blow past Vercel's ~32 KB header limit and trigger a 494
-    // REQUEST_HEADER_TOO_LARGE at the edge — which we can't recover from
+    // REQUEST_HEADER_TOO_LARGE at the edge, which we can't recover from
     // server-side because Vercel rejects the request before middleware runs.
     await clearStaleSupabaseAuthCookies();
 

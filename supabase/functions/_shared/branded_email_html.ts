@@ -35,7 +35,7 @@ export type BrandedEmailHtmlInput = {
   unsubscribeUrl?: string | null;
   /**
    * When false, omit the platform team signature block. Set false for mail
-   * sent under a TENANT identity — the platform's name/phone must not appear
+   * sent under a TENANT identity, the platform's name/phone must not appear
    * under a business's From header. Defaults to true (platform-sent mail).
    */
   platformSignature?: boolean;
@@ -110,7 +110,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
       : "";
 
   // Platform signature (Truly-style: logo left, stacked details right). The
-  // phone line is the HQ number — answered by our own AI coworker (the demo).
+  // phone line is the HQ number, answered by our own AI coworker (the demo).
   // Deliberately no physical address. Mirrors docs/email-signatures.html.
   const signatureBlock =
     input.platformSignature === false

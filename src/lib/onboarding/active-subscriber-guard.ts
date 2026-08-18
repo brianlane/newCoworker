@@ -7,8 +7,8 @@
  * its active subscription with a stray `pending` row (the "Amy reset"
  * incident). Plan changes and reactivation live on /dashboard/billing.
  *
- * This is the UX half of the guard — the hard stop is the 409 in
- * /api/checkout — so a transient DB read error FAILS OPEN (returns false)
+ * This is the UX half of the guard, the hard stop is the 409 in
+ * /api/checkout, so a transient DB read error FAILS OPEN (returns false)
  * rather than locking brand-new signups out of onboarding.
  */
 import { getAuthUser } from "@/lib/auth";

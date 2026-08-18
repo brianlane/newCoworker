@@ -2,7 +2,7 @@
  * The embeddable website chat widget is a STANDARD+ feature.
  *
  * The gate lives server-side so both the owner-facing settings writes AND
- * every public widget call enforce it regardless of what any UI shows —
+ * every public widget call enforce it regardless of what any UI shows,
  * same pattern as the team gate (src/lib/team/tier-gate.ts). A tenant that
  * downgrades to starter keeps its stored settings but the widget stops
  * answering (and settings writes are refused) until they upgrade again.

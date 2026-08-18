@@ -5,7 +5,7 @@
  * billing period cache added in migration `20260420100000_voice_telnyx_platform`.
  *
  * The Stripe webhook refreshes these columns on every subscription lifecycle
- * event, so over time the backfill becomes unnecessary — but until each
+ * event, so over time the backfill becomes unnecessary, but until each
  * business has had at least one such event since the cache column existed,
  * voice quota gating (`voice_reserve_for_call` etc.) will fall back to
  * degraded pathways or deny calls outright. Run this script once after
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     if (page.length < PAGE_SIZE) break;
   }
 
-  // In verify mode we want EVERY sub with a stripe_subscription_id — the
+  // In verify mode we want EVERY sub with a stripe_subscription_id, the
   // staleness/missing filter is a write-path optimization and would hide
   // drift on freshly cached rows that are nevertheless wrong.
   const targets = rows.filter((r) => {
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
     // Drift tolerance is tiny on purpose; webhook races might set the cache
     // a few seconds off from Stripe's canonical `current_period_end` but
     // anything > 2s is almost certainly a missed/stale webhook worth
-    // surfacing. `rawStart` is not checked — Stripe never mutates the start
+    // surfacing. `rawStart` is not checked, Stripe never mutates the start
     // of an active period, so an end-only check catches drift reliably.
     if (args.verifyOnly) {
       if (row.stripe_current_period_end == null) {

@@ -6,7 +6,7 @@
  * VPS worker to process it, then verifies business_configs.memory_md gained the
  * rule.
  *
- * NOTE: capture is now SILENT and FULLY DECOUPLED — it runs on a background
+ * NOTE: capture is now SILENT and FULLY DECOUPLED, it runs on a background
  * queue AFTER the job is marked 'done', and it no longer appends any
  * confirmation to the reply. So job status='done' does NOT mean capture has
  * finished; we poll memory_md for a while AFTER 'done' for the rule to land.
@@ -20,7 +20,7 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-// Default: New Coworker (HQ, internal) — smokes write test rules into
+// Default: New Coworker (HQ, internal), smokes write test rules into
 // memory_md, so they must land on our own tenant, never a customer's.
 const BUSINESS_ID = process.argv[2] ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const STAMP = new Date().toISOString().replace(/[^0-9]/g, "").slice(8, 14); // HHMMSS

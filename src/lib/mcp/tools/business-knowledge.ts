@@ -1,12 +1,12 @@
 /**
  * Business knowledge tools: read and section-splice the coworker's
- * identity document (`business_configs.identity_md`) — services, pricing,
+ * identity document (`business_configs.identity_md`), services, pricing,
  * greetings, policies. The one-shot class this makes self-serve is the
  * Scar Fairy repair: a broken greeting or a missing price fixed by editing
  * ONE section, never by rewriting the document.
  *
  * OWNER-ONLY, twice over: the handler requires the caller's role to be
- * literally `owner` (manage_settings is not enough — this document IS the
+ * literally `owner` (manage_settings is not enough, this document IS the
  * coworker's voice), and the splice core refuses whole-document rewrites
  * structurally. Writes ride the identity editor's exact pipeline
  * (patchBusinessConfig + KG extract + vault sync), so chat edits and

@@ -1,7 +1,7 @@
 /**
  * Memory-graph write logic (src/lib/memory/graph-write.ts): deterministic
  * entity resolution (identity evidence only), alias/phone/email merging onto
- * existing nodes, and fact supersedence — a changed value replaces the old
+ * existing nodes, and fact supersedence, a changed value replaces the old
  * fact instead of accumulating a contradiction.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -102,7 +102,7 @@ describe("resolveEntity", () => {
       phones: ["602-695-1142"],
       emails: ["amy@example.com"]
     };
-    // The person row shares both the phone and the email — still no match.
+    // The person row shares both the phone and the email, still no match.
     expect(resolveEntity(orgWithSharedContact, index)).toBeNull();
   });
 
@@ -609,7 +609,7 @@ describe("applyGraphExtraction", () => {
       row,
       1
     );
-    // No aliases/phones/emails merge at trust 1 — claims live as facts.
+    // No aliases/phones/emails merge at trust 1, claims live as facts.
     expect(lowTrustPatch).toEqual({});
 
     // A higher-trust touch bumps the recorded trust (and may merge).

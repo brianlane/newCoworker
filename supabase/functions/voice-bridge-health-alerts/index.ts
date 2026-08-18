@@ -74,7 +74,7 @@ serve(async (req: Request) => {
     return new Response("select failed", { status: 500 });
   }
 
-  // Unfinalized settlements only — RLS is service-role so no further filter needed.
+  // Unfinalized settlements only, RLS is service-role so no further filter needed.
   const { data: settleRows, error: settleErr } = await supabase
     .from("voice_settlements")
     .select("call_control_id, business_id, first_signal_at, finalized_at")
@@ -175,7 +175,7 @@ serve(async (req: Request) => {
     }
   }
 
-  // Keep webhook error details out of the HTTP response — they may contain
+  // Keep webhook error details out of the HTTP response, they may contain
   // upstream provider messages (Slack/Discord) or caught exception strings
   // which CodeQL flags as potential information exposure. The full
   // `webhookResult` (including `error`) is already captured server-side via

@@ -6,7 +6,7 @@
  * last-modified timestamp, and the appointment object has no `canceled`
  * boolean at all (cancellation is signalled by which listing a row came
  * from). The AiFlow calendar poller's `event_canceled` mode gates on the
- * moment a change happened — `CalendarEventInput.updatedIso` — so on Acuity
+ * moment a change happened, `CalendarEventInput.updatedIso`, so on Acuity
  * there is simply nothing to gate on.
  *
  * Rather than accept degraded cancellation and reschedule triggers, we

@@ -61,7 +61,7 @@ describe("parseTelnyxFrame", () => {
     // surrounding try-catch, so that throw would propagate through
     // `ws.on("message", …)` as an unhandled exception and tear the call
     // down. Lock the defensive behavior in for every non-object JSON
-    // value (null + primitives + arrays — none of which are valid Telnyx
+    // value (null + primitives + arrays, none of which are valid Telnyx
     // media frames).
     expect(() => parseTelnyxFrame("null")).not.toThrow();
     expect(parseTelnyxFrame("null").kind).toBe("unparseable");

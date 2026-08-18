@@ -90,7 +90,7 @@ export async function countKgRetrievalEvents(
 }
 
 /**
- * Compact rows for fleet-wide aggregation (no context/question text —
+ * Compact rows for fleet-wide aggregation (no context/question text,
  * stats only), bounded so one hot tenant can't blow the admin page.
  */
 export async function listKgRetrievalStatsRows(
@@ -131,11 +131,11 @@ export type KgExtractionSpend = { calls: number; costMicros: number };
 
 /**
  * Per-business graph-extraction spend since `sinceDay` (YYYY-MM-DD, UTC),
- * read from the same roll-up the admin Gemini page bills against — the
+ * read from the same roll-up the admin Gemini page bills against, the
  * dashboard's cost tiles and the daily fuse can never disagree with the
  * bill. NOTE: the roll-up is UTC-DAY grained, so callers comparing against
  * a rolling event window must label the cost as covering whole UTC
- * calendar days. Paged in 1000-row chunks — PostgREST silently caps a
+ * calendar days. Paged in 1000-row chunks, PostgREST silently caps a
  * single request at 1000 rows (same trap listGeminiSpendDaily guards).
  */
 export async function listKgExtractionSpend(
@@ -247,12 +247,12 @@ type VerdictInput = Pick<
 
 /**
  * Classify one lookup:
- *   graph_won   — the graph had relevant facts while ranked memory either
+ *   graph_won, the graph had relevant facts while ranked memory either
  *                 found nothing question-relevant (fallback filler) or was
  *                 empty: the graph was the only relevant source.
- *   both        — graph facts AND question-ranked memory both contributed.
- *   memory_only — ranked memory answered; the graph had nothing.
- *   neither     — no graph match and no question-relevant memory.
+ *   both, graph facts AND question-ranked memory both contributed.
+ *   memory_only, ranked memory answered; the graph had nothing.
+ *   neither, no graph match and no question-relevant memory.
  */
 export function classifyKgVerdict(event: VerdictInput): KgVerdict {
   const graphHit = event.graph_context_chars > 0;
@@ -265,7 +265,7 @@ export function classifyKgVerdict(event: VerdictInput): KgVerdict {
 
 /**
  * A trust <= 1 fact renders with this marker (graph-retrieval.ts +
- * graph-projection.ts share the contract) — the deterministic hook the
+ * graph-projection.ts share the contract), the deterministic hook the
  * claim flagging and the keep-verdict's quality qualifier both key on.
  */
 const UNVERIFIED_CLAIM_MARKER = "(unverified)";
@@ -300,7 +300,7 @@ export type KgStats = {
   avgGraphMs: number | null;
   /**
    * % of graph-contributing lookups whose graph context leaned on
-   * attributed unverified claims — the keep-verdict's quality qualifier.
+   * attributed unverified claims, the keep-verdict's quality qualifier.
    * null when the graph contributed nothing (no basis to judge).
    */
   claimReliance: number | null;
@@ -406,12 +406,12 @@ export const KG_KEEP_LABELS: Record<KgKeepVerdict, string> = {
 /**
  * Is the graph layer earning its keep for this tenant/window?
  *
- * Quantity: the graph-won rate — lookups where ranked memory fell back to
+ * Quantity: the graph-won rate, lookups where ranked memory fell back to
  * filler while the graph matched real facts, i.e. answers that would have
  * been materially better with the graph active.
  * Quality (one-way DOWNGRADE only): an 'earning' verdict whose wins lean
  * mostly on attributed unverified claims (claimReliance) drops to
- * 'earning_on_claims' — hearsay-built win rates never show clean green.
+ * 'earning_on_claims', hearsay-built win rates never show clean green.
  * What no classifier can see: WRONG plain facts parse identically to right
  * ones, so correctness spot-checks in the side-by-side stay human.
  */

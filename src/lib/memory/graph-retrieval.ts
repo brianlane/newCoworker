@@ -3,16 +3,16 @@
  * entities → 1-hop fact neighborhood → compact fact lines for the
  * knowledge-lookup prompt.
  *
- * Deterministic and cheap (no model round-trip — the voice adapter runs
+ * Deterministic and cheap (no model round-trip, the voice adapter runs
  * under a 3s deadline): entities match on term overlap with the question
  * (name/alias hits) or on the caller's phone number; the context carries
  * every ACTIVE fact touching a matched entity, plus the identity line of
  * each entity pulled in through an edge (the 1-hop neighborhood).
  *
  * Used two ways by lookupBusinessKnowledge (memory_graph_mode):
- *   shadow — computed and logged alongside the live answer path, which
+ *   shadow, computed and logged alongside the live answer path, which
  *            stays byte-identical;
- *   active — replaces the ranked-markdown memory context (which remains
+ *   active, replaces the ranked-markdown memory context (which remains
  *            the fallback when the graph has nothing relevant).
  */
 
@@ -24,7 +24,7 @@ import {
 } from "./graph-db";
 import { normalizePhone } from "./graph-write";
 
-/** Graph share of the lookup prompt — same ballpark as ranked memory. */
+/** Graph share of the lookup prompt, same ballpark as ranked memory. */
 export const GRAPH_CONTEXT_MAX_CHARS = 2_500;
 
 /** Tokenize into lowercase word stems for the overlap match (doc parity). */
@@ -40,7 +40,7 @@ function questionTerms(question: string): string[] {
  * equal to a whole WORD of the canonical name or an alias, or a
  * normalized-phone match on callerE164. Whole-word (not substring)
  * matching, because everyday three-letter terms live inside unrelated
- * names — "the" ⊂ "Theresa", "are" ⊂ "Warehouse" — and a false seed drags
+ * names, "the" ⊂ "Theresa", "are" ⊂ "Warehouse", and a false seed drags
  * its entire 1-hop neighborhood into the prompt.
  */
 export function matchGraphEntities(
@@ -65,10 +65,10 @@ export function matchGraphEntities(
 }
 
 export type GraphRetrieval = {
-  /** Rendered fact lines — "" when nothing matched (or nothing fit). */
+  /** Rendered fact lines, "" when nothing matched (or nothing fit). */
   context: string;
   /**
-   * Matched (seed) entities — real match count even when the budget fit
+   * Matched (seed) entities, real match count even when the budget fit
    * nothing, so shadow telemetry can tell "no match" from "no room".
    */
   matchedEntities: number;
@@ -82,13 +82,13 @@ function entityLine(entity: MemoryEntityRow): string {
   if (entity.aliases.length > 0) bits.push(`aka ${entity.aliases.join(", ")}`);
   if (entity.phones.length > 0) bits.push(`phone ${entity.phones.join(", ")}`);
   if (entity.emails.length > 0) bits.push(`email ${entity.emails.join(", ")}`);
-  const detail = bits.length > 0 ? ` — ${bits.join("; ")}` : "";
+  const detail = bits.length > 0 ? `, ${bits.join("; ")}` : "";
   return `- ${entity.canonical_name} (${entity.kind})${detail}`;
 }
 
 /**
  * Retrieve the graph context for one question. Returns an empty context
- * (never throws upward — errors log and degrade) so callers can treat "no
+ * (never throws upward, errors log and degrade) so callers can treat "no
  * graph" and "graph empty" identically.
  */
 export async function retrieveGraphContext(
@@ -138,7 +138,7 @@ export async function retrieveGraphContext(
     // with their attribution, so the answering model always knows gospel
     // from hearsay. Facts pack higher-trust-first when the budget is tight.
     const claimSuffix = (f: { trust: number; attributed_to: string | null; source: string }) =>
-      f.trust <= 1 ? ` — claimed by ${f.attributed_to ?? f.source} (unverified)` : "";
+      f.trust <= 1 ? `, claimed by ${f.attributed_to ?? f.source} (unverified)` : "";
 
     const lines: Array<{ text: string; isFact: boolean; trust: number }> = [];
     for (const id of mentioned) {

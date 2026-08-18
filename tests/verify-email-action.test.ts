@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // tests/customer-profiles-email-verification.test.ts.
 //
 // `vi.hoisted` is required because `vi.mock` is hoisted above all
-// imports — referencing a top-level `const fn = vi.fn()` would crash
+// imports, referencing a top-level `const fn = vi.fn()` would crash
 // with a TDZ error. `vi.hoisted` lets us share a single mock instance
 // between the module mock and the test bodies.
 const { markEmailVerifiedByEmailMock } = vi.hoisted(() => ({

@@ -107,13 +107,13 @@ export async function getCalendarMonthUsageTotals(
  *
  * - SMS from `daily_usage.sms_sent` (live writer: the `increment_usage`
  *   RPC on every metered send).
- * - Voice minutes from `voice_settlements.billable_seconds` — the settled
+ * - Voice minutes from `voice_settlements.billable_seconds`, the settled
  *   Telnyx ground truth. `daily_usage.voice_minutes_used` is deliberately
  *   NOT used: it has no live production writer (voice quota moved to the
  *   Stripe-period Telnyx pool), so summing it would report ~zero voice
  *   cost forever.
  *
- * Both reads page in 1000-row chunks — PostgREST silently caps a single
+ * Both reads page in 1000-row chunks, PostgREST silently caps a single
  * request at 1000 rows, which would otherwise under-report usage without
  * any error as the fleet grows. Orderings (`id`; `created_at` +
  * `call_control_id`, the settlements PK) keep `.range()` page boundaries
@@ -213,7 +213,7 @@ export function peakConcurrentFromIntervals(
  * `window` for a historical month. Sources:
  *
  * - SMS from `daily_usage.sms_sent` (live writer: the SMS reserve RPCs).
- * - Voice minutes AND call counts from `voice_settlements` — each row is
+ * - Voice minutes AND call counts from `voice_settlements`, each row is
  *   one settled call. `daily_usage.calls_made` is deliberately NOT used:
  *   like `voice_minutes_used`, it has no live production writer (the SMS
  *   reserve path inserts it as zero), so reading it rendered permanent
@@ -224,7 +224,7 @@ export function peakConcurrentFromIntervals(
  *   as `calls_made`). Rows without `ended_at` (in-progress or stuck) are
  *   skipped rather than treated as open forever. Central read only: a
  *   vps-residency tenant's purged transcript history can undercount its
- *   peak — acceptable for this operator-facing health metric.
+ *   peak, acceptable for this operator-facing health metric.
  */
 export async function getFleetCalendarMonthUsageByBusiness(
   client?: SupabaseClient,

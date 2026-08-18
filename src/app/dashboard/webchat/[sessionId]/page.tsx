@@ -2,7 +2,7 @@
  * Read-only transcript view for one website-chat-widget session.
  *
  * IDOR guard: the session row is resolved by id and then verified against
- * the caller's ACTIVE business before any message read — a guessed UUID
+ * the caller's ACTIVE business before any message read, a guessed UUID
  * renders the same not-found state as a missing row.
  */
 

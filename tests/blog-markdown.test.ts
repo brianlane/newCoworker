@@ -160,12 +160,12 @@ describe("renderMarkdown, strikethrough, autolink, tables", () => {
   });
 
   it("never autolinks inside emitted link text or image alt attributes", () => {
-    // A bare URL in link text stays plain — no nested anchor.
+    // A bare URL in link text stays plain, no nested anchor.
     const inLinkText = renderMarkdown("[go to https://a.dev now](https://b.dev)");
     expect(inLinkText).toBe(
       '<p><a href="https://b.dev" target="_blank" rel="noopener noreferrer">go to https://a.dev now</a></p>'
     );
-    // A bare URL in an alt attribute stays plain — the img tag survives.
+    // A bare URL in an alt attribute stays plain, the img tag survives.
     const inAlt = renderMarkdown("![see https://a.dev here](https://b.dev/i.png)");
     expect(inAlt).toBe(
       '<p><img src="https://b.dev/i.png" alt="see https://a.dev here" loading="lazy" /></p>'

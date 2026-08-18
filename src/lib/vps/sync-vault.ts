@@ -8,7 +8,7 @@
  *   every agent's `instructions` in `db.projects.{draft,live}Workflow`
  *   ONCE at provision time. After that, any owner-driven memory edits via the
  *   dashboard's `/api/business/config` POST or any post-onboarding
- *   `/api/onboard/website-ingest` re-crawl would only land in Supabase —
+ *   `/api/onboard/website-ingest` re-crawl would only land in Supabase,
  *   the VPS-side vault and the MongoDB agent prompt would stay frozen at
  *   the provision-time snapshot. As a result, the agent never reflected
  *   the edits in chat or voice/SMS replies.
@@ -30,7 +30,7 @@
  * Failure mode:
  *   This is invoked from API routes as a fire-and-forget side-effect after
  *   the canonical Supabase write has already succeeded. Callers must
- *   `.catch()` rejections — a slow VPS or a missing key MUST NOT block the
+ *   `.catch()` rejections, a slow VPS or a missing key MUST NOT block the
  *   API response. Callers should log non-`ok` results so a quiet drift
  *   (e.g. lost SSH key, stopped VPS) surfaces in monitoring rather than
  *   silently breaking the agent.
@@ -112,7 +112,7 @@ export type VaultSyncDeps = {
 };
 
 /**
- * Default fallback used when ALL four vault files are blank — keeps the
+ * Default fallback used when ALL four vault files are blank, keeps the
  * agent operational with a baseline persona instead of a literally empty
  * system prompt (Rowboat's runtime tolerates empty `instructions` but the
  * agent then has no grounding at all). Mirrors the same fallback in
@@ -128,16 +128,16 @@ export const DEFAULT_AGENT_INSTRUCTIONS_FALLBACK =
  * output never has stray double-newlines.
  *
  * `profile_md` is the rendered Business-profile block (hours / address /
- * contact) derived from the businesses row — see
+ * contact) derived from the businesses row, see
  * src/lib/business-profile/profile.ts. It sits right after identity so the
  * structured facts read as part of "who the business is".
  *
  * `documentsMd` is the client-audience documents digest (titles+summaries
- * only — see buildDocumentsDigestMd). Provision-time vaults have no
+ * only, see buildDocumentsDigestMd). Provision-time vaults have no
  * documents yet, so deploy-client.sh needs no change; the digest lands on
  * the first post-upload sync.
  *
- * Exported for test parity — the same composition runs both at provision
+ * Exported for test parity, the same composition runs both at provision
  * time (in bash) and on every dashboard save (here in TS), and a
  * regression in either path silently breaks the agent's grounding.
  */
@@ -166,7 +166,7 @@ export function buildAgentInstructions(
  * a fresh provision).
  *
  * Splitting this out lets tests inject a deterministic IP without forcing
- * a Hostinger API mock at the call site — the contract is just
+ * a Hostinger API mock at the call site, the contract is just
  * `(vpsId) => string | null`.
  */
 /* c8 ignore start -- network roundtrip; covered by integration tests, not unit tests */
@@ -198,7 +198,7 @@ async function defaultResolveIp(hostingerVpsId: string): Promise<string | null> 
  *
  * Without this alignment, the sync path would silently update the wrong
  * (or no) project document on tenants where `rowboat_project_id` was
- * manually re-pointed to a hand-seeded project — `matchedCount` would be
+ * manually re-pointed to a hand-seeded project, `matchedCount` would be
  * zero but `mongosh` reports a clean exit, so the orchestrator would
  * report `ok: true` while the live agent kept serving the stale prompt.
  *
@@ -208,7 +208,7 @@ async function defaultResolveIp(hostingerVpsId: string): Promise<string | null> 
  * fallback exactly matches the on-VPS reality for the >99% case.
  *
  * The runtime chat route ALSO falls through to
- * `process.env.ROWBOAT_DEFAULT_PROJECT_ID` after the businessId path —
+ * `process.env.ROWBOAT_DEFAULT_PROJECT_ID` after the businessId path,
  * that env var is a multi-tenant shared-default for the platform-side
  * gateway, NOT a per-VPS project id, so it's deliberately omitted here.
  * A per-tenant Mongo only has the tenant's own project; targeting a
@@ -225,7 +225,7 @@ export function resolveSyncProjectId(
 
 /**
  * Build the bash command run over SSH. Vault contents are passed as
- * base64 to dodge shell-quoting hazards — markdown frequently contains
+ * base64 to dodge shell-quoting hazards, markdown frequently contains
  * single quotes, dollar signs, and backticks that would break a heredoc
  * or `printf %s` literal.
  *
@@ -245,7 +245,7 @@ export function resolveSyncProjectId(
  * on-VPS Mongo, or someone wiped the project document manually). The
  * surrounding `set -euo pipefail` then fails the whole command.
  *
- * The `projectId` parameter is the already-resolved Mongo target — single
+ * The `projectId` parameter is the already-resolved Mongo target, single
  * source of truth from {@link syncVaultToVps}. Bugbot Low on PR #60
  * called out that the previous version re-ran `resolveSyncProjectId`
  * internally AND the caller did the same for its return value: today
@@ -255,7 +255,7 @@ export function resolveSyncProjectId(
  * the actual targeted document. Threading the resolved id in as a
  * parameter eliminates that class of bug entirely.
  *
- * Exported for tests — the unit suite asserts on key substrings of the
+ * Exported for tests, the unit suite asserts on key substrings of the
  * generated command (e.g. base64 contents, mongo update path, exit
  * sentinel) without needing to spin a real SSH listener.
  */
@@ -288,13 +288,13 @@ export function buildSyncVaultCommand(
   documentsMd: string = "",
   /**
    * Knowledge-graph projection for `/opt/rowboat/memory/`:
-   *   { mode: "off" }               — tenant not on the graph (or the graph
+   *   { mode: "off" }, tenant not on the graph (or the graph
    *     read failed): command stays byte-identical to pre-projection
    *     behavior, memory folders untouched.
-   *   { mode: "ship", tarB64 }      — stage-unpack the ustar bundle (entity
+   *   { mode: "ship", tarB64 }, stage-unpack the ustar bundle (entity
    *     notes + graph.jsonl) into a temp dir FIRST, then wipe-and-swap, so
    *     a failed decode/extract aborts before anything is deleted.
-   *   { mode: "wipe" }              — graph tenant whose graph is now
+   *   { mode: "wipe" }, graph tenant whose graph is now
    *     EMPTY: clear the managed notes + graph.jsonl/graph.db so the box
    *     never serves stale deleted data.
    */
@@ -325,19 +325,19 @@ export function buildSyncVaultCommand(
   const nowIso = now.toISOString();
 
   // Knowledge-graph projection. The managed note folders were dead
-  // scaffolding before the projection — nothing else writes them. Shipping
+  // scaffolding before the projection, nothing else writes them. Shipping
   // is staged so no failure can leave the box worse than stale:
   //   1. decode + extract into a temp dir (a truncated bundle aborts under
   //      `set -e` before anything live is touched),
   //   2. move each managed folder to `<dir>.new` NEXT TO the live one (the
   //      cross-filesystem copy risk lands here, live data still intact),
-  //   3. same-filesystem rename over the live folder — the only "destroy"
+  //   3. same-filesystem rename over the live folder, the only "destroy"
   //      step is an rm immediately followed by a rename(2) of an
   //      already-materialized sibling.
   // The bind-mounted /opt/rowboat/memory dir itself is never replaced
   // (that would detach the chat-worker's mount); only its children swap.
   // The final chown hands the tree to uid 1000 so the worker (runs as
-  // `node`) can compile graph.jsonl into graph.db — chown failure is LOUD
+  // `node`) can compile graph.jsonl into graph.db, chown failure is LOUD
   // (fails the sync) because a root-owned tree silently breaks that build.
   const wipeLines = [
     "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects",
@@ -384,7 +384,7 @@ export function buildSyncVaultCommand(
     // for the owner dashboard), both seeded with identical instructions by
     // deploy-client.sh. The old `agents.0.instructions` hardcode only
     // refreshed Coworker, so owner-dashboard memory edits never reached the
-    // OwnerCoworker prompt the owner actually talks to — a "saved" rule
+    // OwnerCoworker prompt the owner actually talks to, a "saved" rule
     // silently failed to take effect on re-test. The aggregation pipeline
     // ($map + $mergeObjects) rewrites only the instructions field of each
     // agent and preserves the rest of every agent doc.
@@ -404,7 +404,7 @@ export function buildSyncVaultCommand(
     `  } } ]`,
     `);`,
     `print("matched=" + r.matchedCount + " modified=" + r.modifiedCount + " inst.length=" + inst.length);`,
-    // Hard fail when the target project doesn't exist on this VPS — see
+    // Hard fail when the target project doesn't exist on this VPS, see
     // the function-level comment for why silent zero-matches are dangerous.
     `if (r.matchedCount === 0) { print("vault_sync_target_missing _id=" + ${projectIdJson}); quit(1); }`,
     `MONGOSH_EOF`,
@@ -419,8 +419,8 @@ export function buildSyncVaultCommand(
 
 /**
  * Push the latest `business_configs` vault to the live VPS and refresh the
- * MongoDB project's agent prompt. See module header for the full rationale
- * — TL;DR: dashboard memory edits previously never reached the agent; this
+ * MongoDB project's agent prompt. See module header for the full rationale,
+ * TL;DR: dashboard memory edits previously never reached the agent; this
  * closes that loop. Idempotent.
  */
 export async function syncVaultToVps(
@@ -452,7 +452,7 @@ export async function syncVaultToVps(
     fetchBusiness(businessId),
     fetchConfig(businessId),
     fetchSshKey(businessId),
-    // Documents must never block a vault sync — a table/read failure just
+    // Documents must never block a vault sync, a table/read failure just
     // syncs the vault without the digest.
     fetchDocuments(businessId).catch((err: unknown) => {
       logger.warn("syncVaultToVps: document list failed; syncing without digest", {
@@ -470,7 +470,7 @@ export async function syncVaultToVps(
 
   // The default IP resolver short-circuits to `null` when
   // HOSTINGER_API_TOKEN is missing. Treat that as a distinct failure
-  // mode so dev environments don't appear "broken" — they just can't
+  // mode so dev environments don't appear "broken", they just can't
   // reach the live VPS, which is fine.
   if (!process.env.HOSTINGER_API_TOKEN && deps.resolveIp === undefined) {
     return { ok: false, reason: "no_hostinger_token" };
@@ -482,12 +482,12 @@ export async function syncVaultToVps(
   const documentsMd = buildDocumentsDigestMd(documents, now);
   const instructions = buildAgentInstructions(config, documentsMd);
 
-  // On-box knowledge-graph projection (graph tenants only — mode off keeps
+  // On-box knowledge-graph projection (graph tenants only, mode off keeps
   // the command byte-identical). A graph read failure must never block the
-  // vault sync — the projection skips this round (stale is better than a
+  // vault sync, the projection skips this round (stale is better than a
   // blind wipe on a transient read error) and lands on the next sync. An
   // EMPTY graph on a graph tenant ships a wipe so the box never serves
-  // stale deleted data — and an OFF-mode tenant ships a wipe too, so an
+  // stale deleted data, and an OFF-mode tenant ships a wipe too, so an
   // admin turn-off actually REMOVES previously shipped projection files
   // from the box instead of leaving them behind (Bugbot #860). Wiping on
   // every off-tenant sync is idempotent and cheap (three rm/find lines).
@@ -571,7 +571,7 @@ export async function syncVaultToVps(
 
 /**
  * Fire-and-forget convenience wrapper for API routes. Logs the outcome
- * and never throws — the caller's primary write to Supabase is the
+ * and never throws, the caller's primary write to Supabase is the
  * source of truth and must NOT be reverted because the VPS is
  * unreachable.
  *
@@ -592,7 +592,7 @@ export async function syncVaultToVpsAndLog(
         projectId: result.projectId,
         // Drift signal: when this is true, the tenant's
         // `business_configs.rowboat_project_id` points at a project
-        // whose id ISN'T the businessId — typically a manually-seeded
+        // whose id ISN'T the businessId, typically a manually-seeded
         // project. Worth surfacing in logs so we can spot tenants who
         // are off the standard provisioning path.
         projectIdDriftedFromBusinessId: result.projectId !== businessId,

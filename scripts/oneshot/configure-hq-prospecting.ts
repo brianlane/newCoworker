@@ -1,5 +1,5 @@
 /**
- * configure-hq-prospecting.ts — make HQ tenant zero for Prospecting.
+ * configure-hq-prospecting.ts, make HQ tenant zero for Prospecting.
  *
  * Prospecting ships off for everyone. This switches it on for our own tenant
  * first, which is the point of dogfooding: New Coworker's outbound outreach

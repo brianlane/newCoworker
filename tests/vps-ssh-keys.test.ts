@@ -471,7 +471,7 @@ describe("vps_ssh_keys DB layer", () => {
       const insertArg = chain.insert.mock.calls[0][0];
       expect(insertArg.private_key_pem).toMatch(/^enc:v1:/);
       expect(insertArg.private_key_pem).not.toContain("SECRET-PEM");
-      // The orchestrator SSHes with the returned row directly — it must
+      // The orchestrator SSHes with the returned row directly, it must
       // carry the plaintext, not the stored ciphertext.
       expect(res.private_key_pem).toBe("SECRET-PEM");
     });
@@ -543,8 +543,8 @@ describe("vps_ssh_keys DB layer", () => {
      * (PKCS#8 key migration not wired into production read paths):
      * legacy `vps_ssh_keys` rows persisted before generateSshKeypair()
      * switched its private-key export to OpenSSH-format ("openssh-key-v1")
-     * remain on disk in PKCS#8 form. ssh2 1.17 — backing every
-     * production sshExec — rejects PKCS#8 ed25519 PEMs with
+     * remain on disk in PKCS#8 form. ssh2 1.17, backing every
+     * production sshExec, rejects PKCS#8 ed25519 PEMs with
      * "Cannot parse privateKey: Unsupported key format". Without
      * read-path migration, every legacy business would fail SSH
      * (backup/restore, change-plan, admin re-bootstrap).
@@ -573,7 +573,7 @@ describe("vps_ssh_keys DB layer", () => {
       expect(row).not.toBeNull();
       expect(row!.private_key_pem).toContain("BEGIN OPENSSH PRIVATE KEY");
       expect(row!.private_key_pem).not.toContain("BEGIN PRIVATE KEY\n");
-      // The migrated PEM must be parseable by ssh2 — the whole point of
+      // The migrated PEM must be parseable by ssh2, the whole point of
       // wiring the migration into the read path.
       const parsed = ssh2Utils.parseKey(row!.private_key_pem);
       expect(parsed instanceof Error ? parsed.message : (parsed as { type: string }).type).toBe(
@@ -596,7 +596,7 @@ describe("vps_ssh_keys DB layer", () => {
       // the read migration leaves it byte-identical. This guards against
       // a regression where someone accidentally drops the
       // `if (includes("BEGIN OPENSSH"))` short-circuit in
-      // convertPkcs8Ed25519PemToOpenssh — turning every read into a
+      // convertPkcs8Ed25519PemToOpenssh, turning every read into a
       // re-encode that randomises the openssh `checkint` and quietly
       // breaks deterministic comparisons elsewhere.
       const { generateSshKeypair } = await import("@/lib/hostinger/keypair");
@@ -614,7 +614,7 @@ describe("vps_ssh_keys DB layer", () => {
       // by node:crypto is broken beyond what this migration can fix.
       // We surface the row unchanged so the downstream sshExec fails
       // with the specific "Cannot parse privateKey" error rather than
-      // the read itself bombing — an operator debugging a malformed
+      // the read itself bombing, an operator debugging a malformed
       // row needs visibility into what's actually wrong, not a
       // generic "convertPkcs8Ed25519PemToOpenssh failed" wrapper.
       const chain = makeChain();
@@ -625,7 +625,7 @@ describe("vps_ssh_keys DB layer", () => {
     });
 
     it("read path is a no-op when private_key_pem is empty", async () => {
-      // Treat empty string as "nothing to migrate" — same shape the
+      // Treat empty string as "nothing to migrate", same shape the
       // existing default-client tests already pass through.
       const chain = makeChain();
       chain.maybeSingle.mockResolvedValue({ data: { ...sample, private_key_pem: "" }, error: null });

@@ -3,8 +3,8 @@
  *
  * Calendly tenants (e.g. agencies whose whole book lives on Calendly links)
  * had NO working calendar triggers: the poller's fetchers speak Google/Graph
- * only, so `event_start` reminder flows — "text the invitee 2-3 hours before
- * our call" (KYP Ads' top ask) — were impossible. This module lists the
+ * only, so `event_start` reminder flows, "text the invitee 2-3 hours before
+ * our call" (KYP Ads' top ask), were impossible. This module lists the
  * connected account's scheduled events over the poller's mode windows and
  * normalizes them into the same `CalendarEventInput` shape the Google/Graph
  * fetchers produce, so due-checks, conditions, dedupe keys, and enqueueing
@@ -16,16 +16,16 @@
  *   - The scheduled-events listing carries no invitee details, so due events
  *     are ENRICHED with a per-event invitees call (name, email, SMS-reminder
  *     phone, TIMEZONE, invitee-local start time, reschedule/cancel links,
- *     and lead-form Q&A) — that context lands in the event description, so
+ *     and lead-form Q&A), that context lands in the event description, so
  *     trigger conditions AND flow steps ({{trigger.windowText}} →
  *     extract_text) can use it. The invitee timezone matters because a
  *     "confirm our call at [time] today" text must quote the INVITEE's local
  *     time, not the business's. An event whose enrichment failed is deferred
- *     to the next tick instead of fired bare — the per-occurrence dedupe key
+ *     to the next tick instead of fired bare, the per-occurrence dedupe key
  *     means a bare firing would lock the flow out of invitee context forever.
  *   - `event_created` has no server-side created-at filter, so the fetcher
  *     scans upcoming events (bounded window) and the poller's
- *     `eventCreatedDue` lookback does the actual gating — identical to how
+ *     `eventCreatedDue` lookback does the actual gating, identical to how
  *     Google's `updatedMin` over-listing is narrowed downstream.
  */
 
@@ -41,13 +41,13 @@ import {
 import type { CalendarEventInput } from "@/lib/ai-flows/trigger-eval";
 import { logger } from "@/lib/logger";
 
-/** Calendly's max page size — a full page flags the poll as overflowed. */
+/** Calendly's max page size, a full page flags the poll as overflowed. */
 export const CALENDLY_POLL_PAGE_COUNT = 100;
 
 /**
  * Cap on per-tick invitee-enrichment calls per business. Due events are few
  * in practice (a start window is a few hours; created/canceled lookbacks are
- * minutes), so this only bites on pathological calendars — flagged as
+ * minutes), so this only bites on pathological calendars, flagged as
  * overflow rather than silently dropped.
  */
 export const CALENDLY_INVITEE_FETCH_CAP = 25;
@@ -56,7 +56,7 @@ export const CALENDLY_INVITEE_FETCH_CAP = 25;
  * event_created scans this many days of UPCOMING events (Calendly cannot
  * filter by creation time server-side; `eventCreatedDue` narrows to the
  * real lookback). An event created for a start beyond the scan window fires
- * late or not at all — acceptable: creation-triggered flows act on fresh
+ * late or not at all, acceptable: creation-triggered flows act on fresh
  * bookings, which overwhelmingly start within days.
  */
 export const CALENDLY_CREATED_SCAN_DAYS = 30;
@@ -64,7 +64,7 @@ export const CALENDLY_CREATED_SCAN_DAYS = 30;
 /**
  * event_created also reaches this far BACK: a booking made moments ago for
  * a start time already in the past (retro bookings, "book me in for the
- * slot that just started") would otherwise never enter the candidate set —
+ * slot that just started") would otherwise never enter the candidate set,
  * Google's updatedMin listing catches those, so this keeps parity. The
  * created-lookback due gate still decides what actually fires.
  */
@@ -82,7 +82,7 @@ export const CALENDLY_END_MAX_EVENT_MINUTES = 6 * 60;
  * time (no modified-since filter, unlike Google's updatedMin), so the poll
  * scans canceled events whose start falls in [-back, +forward] and lets
  * `eventCanceledDue` gate on the cancellation moment (updated_at). The
- * forward horizon covers Calendly's own scheduling reality — event types
+ * forward horizon covers Calendly's own scheduling reality, event types
  * cap their booking window (60/90 days typical), so a cancellation on an
  * event starting beyond it is vanishingly rare; one that still happens is
  * missed, a documented Calendly API limitation rather than a bug.
@@ -115,7 +115,7 @@ type RawInvitee = {
    * Set (an object with uri/created_at) when the HOST marked this invitee a
    * no-show in Calendly; null/absent otherwise. Surfaced as an
    * "invitee no-show: yes" context line so an event_end flow can gate a
-   * recovery text on it ("sorry we missed each other…" — KYP Ads' brief).
+   * recovery text on it ("sorry we missed each other…", KYP Ads' brief).
    */
   no_show?: { uri?: string; created_at?: string } | null;
   questions_and_answers?: Array<{ question?: string; answer?: string }>;
@@ -151,7 +151,7 @@ export function normalizeCalendlyEvent(raw: RawScheduledEvent): CalendarEventInp
     // Kept (not dropped) so the event_canceled mode can fire; every other
     // due-check skips cancelled events explicitly (poller parity).
     cancelled: raw.status === "canceled",
-    // Calendly has no shared-calendar concept — everything is "primary".
+    // Calendly has no shared-calendar concept, everything is "primary".
     calendar: "primary"
   };
 }
@@ -159,7 +159,7 @@ export function normalizeCalendlyEvent(raw: RawScheduledEvent): CalendarEventInp
 /**
  * The invitee's local wall-clock start ("2:00 PM on Thursday, July 16,
  * 2026"), so reminder texts quote THEIR time. Null when the start or the
- * timezone is unusable — callers omit the line rather than lying.
+ * timezone is unusable, callers omit the line rather than lying.
  */
 export function formatInviteeLocalTime(
   startIso: string | undefined,
@@ -320,7 +320,7 @@ export type CalendlyPollDeps = {
 /**
  * List + normalize + due-filter + invitee-enrich this business's Calendly
  * candidate events for one poll tick. Throws `calendly_token_rejected` when
- * the transport refuses — Calendly answered 401/403 for a connection we
+ * the transport refuses, Calendly answered 401/403 for a connection we
  * RESOLVED moments earlier, which is a rejected token (possibly a transient
  * upstream blip), not a missing connection; the caller's per-business
  * isolation turns that into a system log with escalation semantics.
@@ -332,7 +332,7 @@ export type CalendlyPollDeps = {
  * "not connected" admin error.
  *
  * `dueFilter` is the poller's own due logic (mode windows over the flow
- * group) so enrichment — one invitees call per event — is spent on events
+ * group) so enrichment, one invitees call per event, is spent on events
  * that can actually fire, not the whole scan.
  */
 export async function fetchCalendlyCandidateEvents(
@@ -352,7 +352,7 @@ export async function fetchCalendlyCandidateEvents(
   const { businessId, conn, nowMs, windows } = args;
 
   // The cache lives on the dashboard-PAT row (calendly_connections), keyed
-  // by conn.connectionId — a business can link several Calendly accounts,
+  // by conn.connectionId, a business can link several Calendly accounts,
   // each caching its own URI. A conn carrying any other key (only possible
   // via injected deps) has no row to cache on.
   const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY && conn.connectionId.length > 0;
@@ -424,7 +424,7 @@ export async function fetchCalendlyCandidateEvents(
   };
 
   // Per-window isolation (workspace-path parity): one window's failure must
-  // not drop the events earlier windows already collected — log and keep
+  // not drop the events earlier windows already collected, log and keep
   // going; dedupe keys make the retry on the next tick benign. Only when
   // EVERY window failed and nothing was collected does the failure propagate
   // (with its specific detail), so the poller's business-level log says why.
@@ -481,7 +481,7 @@ export async function fetchCalendlyCandidateEvents(
   // Soonest-starting first: the enrichment cap below walks this order, and
   // an event_start reminder about to leave its firing window (the event
   // begins) must never be starved behind a burst of created-due events that
-  // stay due — and keep re-occupying cap slots — for their whole lookback.
+  // stay due, and keep re-occupying cap slots, for their whole lookback.
   // Missing/unparseable starts sort last.
   const due = collected
     .filter(args.dueFilter)
@@ -497,7 +497,7 @@ export async function fetchCalendlyCandidateEvents(
   // enrichment was skipped (cap) or failed is WITHHELD from this tick
   // rather than fired bare: the run dedupe key is per (event, occurrence),
   // so firing once without invitee phone/timezone would permanently lock
-  // the flow out of that context — the next tick (~1 min) retries while
+  // the flow out of that context, the next tick (~1 min) retries while
   // the event is still due. A successful invitees call with zero invitees
   // is a legitimate enrichment (the event simply has none) and fires.
   const ready: CalendarEventInput[] = [];

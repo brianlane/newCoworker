@@ -6,7 +6,7 @@
  * one library entry per template. Runs in the Node runtime so the scrub/refresh
  * logic stays in src/lib (under the coverage gate).
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape and secret
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape and secret
  * as the other /api/internal/* endpoints.
  */
 import { assertCronAuth } from "@/lib/cron-auth";

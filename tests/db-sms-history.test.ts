@@ -168,7 +168,7 @@ describe("inboundTextFromPayload", () => {
     expect(inboundTextFromPayload(envelope({}))).toBe("");
     expect(inboundTextFromPayload(null)).toBe("");
     expect(inboundTextFromPayload(undefined)).toBe("");
-    // Defensively reject numeric body — Telnyx never returns this, but
+    // Defensively reject numeric body, Telnyx never returns this, but
     // a future schema drift shouldn't crash the dashboard.
     expect(
       inboundTextFromPayload({
@@ -342,7 +342,7 @@ describe("listConversationsForBusiness", () => {
 
   it("falls back to messageCount=1 when neither side parses (defensive: never let the row vanish from the index)", async () => {
     // Two rows from the same customer with NEITHER inbound text NOR
-    // outbound reply (pathological — Telnyx schema drift, partial
+    // outbound reply (pathological, Telnyx schema drift, partial
     // failure mid-write). Index must still surface the conversation
     // with a stable count rather than dropping it.
     const c = chain();
@@ -427,7 +427,7 @@ describe("listConversationsForBusiness", () => {
           created_at: "2026-05-05T00:01:00Z",
           updated_at: "2026-05-05T00:01:01Z"
         },
-        // Reply only (rare — admin-replied with no inbound text) → 1 message
+        // Reply only (rare, admin-replied with no inbound text) → 1 message
         {
           id: "j-out",
           business_id: "biz",
@@ -505,7 +505,7 @@ describe("listConversationsForBusiness", () => {
         {
           id: "junk",
           business_id: "biz",
-          // No `from` at all — must be filtered.
+          // No `from` at all, must be filtered.
           payload: { data: { payload: { text: "stray" } } },
           status: "done",
           rowboat_reply_cached: null,
@@ -650,7 +650,7 @@ describe("listConversationsForBusiness", () => {
 describe("listMessagesForCustomer", () => {
   it("expands each row into inbound + outbound messages, in chronological order", async () => {
     const c = chain();
-    // Supabase returns DESC (newest first) per the query — the helper
+    // Supabase returns DESC (newest first) per the query, the helper
     // must reverse internally so the UI sees oldest→newest.
     c.limit.mockResolvedValue({
       data: [

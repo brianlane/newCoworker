@@ -10,7 +10,7 @@
  *
  * The gateway substitutes only the visible from-number. Metering, the
  * destination gate, cost multipliers, and logging all stay keyed to the
- * TENANT — a Hong Kong alert still reserves the tenant's units with the
+ * TENANT, a Hong Kong alert still reserves the tenant's units with the
  * destination's multiplier applied.
  *
  * Configured via TELNYX_INTL_GATEWAY_E164; unset means no gateway (sends

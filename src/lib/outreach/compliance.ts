@@ -1,5 +1,5 @@
 /**
- * Prospecting — the compliance gates, in code rather than in policy.
+ * Prospecting, the compliance gates, in code rather than in policy.
  *
  * Cold commercial email is CAN-SPAM territory: an accurate From, a
  * non-deceptive subject, a working opt-out, and a physical postal address.
@@ -113,7 +113,7 @@ export function isWithinSendWindow(
   return hour >= startHour && hour < endHour;
 }
 
-/** Start of the current UTC day — the daily cap's window. */
+/** Start of the current UTC day, the daily cap's window. */
 export function utcDayStartIso(now: Date): string {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())

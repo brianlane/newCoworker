@@ -1,5 +1,5 @@
 /**
- * Presentational report cards for /dashboard/analytics — the operational
+ * Presentational report cards for /dashboard/analytics, the operational
  * reporting suite (renewal pipeline, response times, retention, monthly
  * summary). Pure server-renderable markup, matching AnalyticsCards.tsx:
  * no client JS, tiny datasets, CSS-only visuals. Data shaping lives in
@@ -125,7 +125,7 @@ export function ResponseTimeCard({ stats }: { stats: ResponseTimeStats }) {
       {stats.repliedCount === 0 ? (
         <>
           <p className="text-xs text-parchment/40">No replied texts in the window yet.</p>
-          {/* Dead-letters matter MOST when nothing got a reply — never hide
+          {/* Dead-letters matter MOST when nothing got a reply, never hide
               them behind the replied-count branch. */}
           {stats.deadLetterCount > 0 && (
             <p className="text-[11px] text-spark-orange mt-2">

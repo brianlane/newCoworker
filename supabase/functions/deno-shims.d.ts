@@ -5,12 +5,12 @@
  * (tsc, the IDE TS server) is Node-based and cannot resolve remote URL imports
  * or the `Deno` global. The sibling `tsconfig.json` makes this folder its own
  * TS project and this file declares just enough of the runtime surface for the
- * code to typecheck — it has zero effect at deploy time (the Supabase CLI
+ * code to typecheck, it has zero effect at deploy time (the Supabase CLI
  * bundles with the real Deno toolchain).
  *
  * Keep the URL declarations in sync with the import pins used by the
  * functions (std@0.208.0, supabase-js@2.45.0). supabase-js rides an `npm:`
- * specifier (not esm.sh) since the Jul 2026 CDN 522 deploy failures — the
+ * specifier (not esm.sh) since the Jul 2026 CDN 522 deploy failures, the
  * declare below must match that exact specifier string.
  */
 

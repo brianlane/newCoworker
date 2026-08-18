@@ -129,7 +129,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
         });
       } else if (res.ok) {
         // 200 with a failed document: the transcript stored but the minutes
-        // condensation failed — same contract as the Documents upload route.
+        // condensation failed, same contract as the Documents upload route.
         setImportResult({
           kind: "error",
           message: json?.data?.document?.error_detail

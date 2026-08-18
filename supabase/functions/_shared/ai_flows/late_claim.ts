@@ -5,7 +5,7 @@
  *
  * The webhook (telnyx-sms-inbound tryLateClaim) pre-fetches the candidate
  * rows and EXECUTES the decision this function returns; all of the business
- * logic — eligibility, bucket precedence, the bare-"1"-only yank rule — lives
+ * logic, eligibility, bucket precedence, the bare-"1"-only yank rule, lives
  * here where vitest can pin it down. Same pattern as stale_offer.ts.
  *
  * This path also honors a NAMED claim ("1, Aurora Anthony"). The live-offer
@@ -41,12 +41,12 @@ export type LateClaimCandidate = {
 
 export type LateClaimMatch = {
   /**
-   * live — the sender's own active offer (any "1" form claims);
-   * late — a lapsed offer whose post-route steps already ran (re-open,
+   * live, the sender's own active offer (any "1" form claims);
+   * late, a lapsed offer whose post-route steps already ran (re-open,
    *        claim/notify only, no step replay);
-   * yank — first-to-claim: an offer live with ANOTHER teammate that this
+   * yank, first-to-claim: an offer live with ANOTHER teammate that this
    *        sender was texted earlier; bare "1" only;
-   * mine — the sender already holds this lead (idempotent re-ack).
+   * mine, the sender already holds this lead (idempotent re-ack).
    */
   kind: "live" | "late" | "yank" | "mine";
   row: LateClaimCandidate;
@@ -125,7 +125,7 @@ function classifyCandidate(args: {
   // offered_all (routing.offered stays unset until a claim is consumed).
   const offeredAll = routing.offered_all ?? [];
   // offered_log covers the gap between a broadcast pass (webhook removes the
-  // passer from offered_all) and the worker retiring them into tried —
+  // passer from offered_all) and the worker retiring them into tried,
   // everyone actually TEXTED an offer stays eligible here.
   const offeredLog = routing.offered_log ?? [];
   const tried = routing.tried ?? [];
@@ -252,7 +252,7 @@ function collapseByLead(matches: readonly LateClaimMatch[]): LateClaimMatch[] {
  * through (stale-offer ack → normal inbound path).
  *
  * Rules pinned here (see tests):
- * - Only digit "1" ever matches — the universal claim digit.
+ * - Only digit "1" ever matches, the universal claim digit.
  * - A run claimed by someone else never matches; claimed by the sender is
  *   the "mine" re-ack.
  * - A fresh claim needs routing.step_index (the worker's rewind stamp).
@@ -261,7 +261,7 @@ function collapseByLead(matches: readonly LateClaimMatch[]): LateClaimMatch[] {
  * - late: post-route steps already ran (status done, or current_step moved
  *   past the route step) and the sender was ever offered the lead.
  * - yank: the offer is live with another teammate; the sender is in
- *   routing.offered_log (actually TEXTED an offer — `tried` also collects
+ *   routing.offered_log (actually TEXTED an offer, `tried` also collects
  *   skips); the flow didn't opt out (routing.first_to_claim === false); and
  *   the reply carries no ETA. A NAMED reply may yank, because the guard is
  *   about ETAs ("not right now") and naming a lead is the opposite: it says

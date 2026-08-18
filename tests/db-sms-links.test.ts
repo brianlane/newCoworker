@@ -437,7 +437,7 @@ describe("getSmsLinkStats", () => {
     const stats = await getSmsLinkStats("biz-1", { client: db as never });
     expect(stats.clipped).toBe(true);
     expect(stats.links).toHaveLength(1);
-    // Exports only need aggregates — no per-link click query without opt-in.
+    // Exports only need aggregates, no per-link click query without opt-in.
     expect(clicks.eq).not.toHaveBeenCalled();
     expect(stats.links[0].clicks).toEqual([]);
   });

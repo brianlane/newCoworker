@@ -1,6 +1,6 @@
 /**
  * Supabase access for contact segments (Smart Lists). Service-role only;
- * authorization is the API route's job via requireBusinessRole — same trust
+ * authorization is the API route's job via requireBusinessRole, same trust
  * model as the pipelines/customers db modules.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -147,7 +147,7 @@ export async function updateContactSegment(
   return toSegment(data as SegmentRow);
 }
 
-/** Delete a segment (a saved view only — contacts are untouched). */
+/** Delete a segment (a saved view only, contacts are untouched). */
 export async function deleteContactSegment(
   businessId: string,
   segmentId: string,

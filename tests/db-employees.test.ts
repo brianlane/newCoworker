@@ -9,7 +9,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 /**
- * Coverage for src/lib/db/employees.ts — the Employees page data layer.
+ * Coverage for src/lib/db/employees.ts, the Employees page data layer.
  *
  * Same philosophy as tests/customer-memory-db.test.ts: pin the wire-level
  * shape sent to PostgREST (tables, column lists, filters) with a chainable
@@ -562,7 +562,7 @@ describe("aggregateRoutingStats", () => {
         context: { routing: { tried: [OTHER], claimed_by: PHONE } }
       }
     ]);
-    // Run 1: PHONE rejected (tried). Run 2: PHONE claimed (claimed_by only —
+    // Run 1: PHONE rejected (tried). Run 2: PHONE claimed (claimed_by only,
     // a claim never lands in tried[], which is exactly why it must still
     // count as an offer).
     expect(stats[PHONE]).toEqual({

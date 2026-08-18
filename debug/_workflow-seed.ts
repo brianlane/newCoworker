@@ -5,7 +5,7 @@
  *
  * Instead of duplicating the agent tool lists + tool declarations (the
  * "keep in lockstep" comments that have drifted before), this module pulls
- * the jq program out of the deploy script's text and EXECUTES it with jq —
+ * the jq program out of the deploy script's text and EXECUTES it with jq,
  * so the reseed script (debug/reseed-agent-tool-parity.ts) and the CI
  * parity test (tests/agent-tool-seed-parity.test.ts) both read the exact
  * workflow a fresh provision would seed, and running it at all proves the
@@ -51,7 +51,7 @@ export const DEPLOY_CLIENT_SH = "vps/scripts/deploy-client.sh";
 
 /**
  * Pull the jq program out of the deploy script text. Throws when the block
- * can't be located — a refactor that moves it must update this extractor.
+ * can't be located, a refactor that moves it must update this extractor.
  */
 export function extractWorkflowJqProgram(deployScriptText: string): string {
   const anchor = "WORKFLOW_JSON=$(jq -nc";
@@ -68,7 +68,7 @@ export function extractWorkflowJqProgram(deployScriptText: string): string {
     throw new Error("could not find the jq program's closing quote");
   }
   const program = deployScriptText.slice(openQuote + 1, closeQuote);
-  // The program must end at the block's closing `')` — if the next
+  // The program must end at the block's closing `')`, if the next
   // characters aren't `)`, an apostrophe crept into the program (which
   // would ALSO break the real deploy, since bash would close the quote
   // there too).
@@ -83,7 +83,7 @@ export function extractWorkflowJqProgram(deployScriptText: string): string {
 /**
  * Render the canonical workflow by executing the extracted jq program with
  * representative args (webhookUrl set ⇒ isWebhook tools, hasLocal=true ⇒
- * Local twins enabled — matching a standard-tier provision).
+ * Local twins enabled, matching a standard-tier provision).
  */
 export function renderWorkflowSeed(repoRoot?: string): SeedWorkflow {
   const root = repoRoot ?? process.cwd();

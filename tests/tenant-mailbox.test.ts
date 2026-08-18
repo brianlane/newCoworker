@@ -27,7 +27,7 @@ import {
 
 /**
  * A fake Supabase client whose terminal calls (maybeSingle/single) drain a
- * queue of results in call order, regardless of which builder method fires —
+ * queue of results in call order, regardless of which builder method fires,
  * so multi-query helpers (e.g. ensureTenantMailbox) can script each step.
  */
 function fakeDb(results: Array<{ data: unknown; error: unknown }>) {

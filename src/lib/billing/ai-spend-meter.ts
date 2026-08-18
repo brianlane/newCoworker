@@ -3,13 +3,13 @@
  *
  * Background: the "AI chat budget" the billing page shows is the
  * `owner_chat_model_spend` pool. The workers meter chat turns, SMS replies,
- * and AiFlow extraction — but the platform's own Gemini calls (AiFlow
+ * and AiFlow extraction, but the platform's own Gemini calls (AiFlow
  * compile, website ingest, knowledge lookups) were never metered, and they
  * run on pricier models than the flash-lite chat path. The dashboard said
- * $0.01 while Google billed $0.07 — this module closes that gap.
+ * $0.01 while Google billed $0.07, this module closes that gap.
  *
  * Cost is computed from the response's billed token counts when available
- * (exact — includes thinking tokens), falling back to a chars/4 estimate.
+ * (exact, includes thinking tokens), falling back to a chars/4 estimate.
  * Prices are per-model Google list prices; unknown models use the priciest
  * tier we deploy so the fuse never undercounts.
  */
@@ -29,7 +29,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
  * caller's speech in and the assistant's speech out are billed per audio token
  * at these higher rates, while the small text remainder (system instruction,
  * coordinator cues, tool JSON) stays on `in`/`out`. Omit the audio fields for
- * text-only models — everything then prices at `in`/`out`.
+ * text-only models, everything then prices at `in`/`out`.
  */
 export type GeminiPricePer1M = { in: number; out: number; audioIn?: number; audioOut?: number };
 
@@ -46,7 +46,7 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   // Voice `voice_task` model (Rowboat text turns through the llm-router). Now
   // metered into the shared AI budget like every other gemini-* text call.
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
-  // Gemini Live (native audio-to-audio) — the voice-bridge holds this session
+  // Gemini Live (native audio-to-audio), the voice-bridge holds this session
   // and meters it from the exact usageMetadata it sees. Priced modality-aware:
   // text in $0.75 / out $4.50, audio in $3.00 / out $12.00 per 1M tokens
   // (audio ≈ 25 tokens/sec). Nearly all of a call's tokens are audio.
@@ -55,7 +55,7 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   // a medium/high reasoning compile is billed entirely at this rate.
   "gemini-3.5-flash": { in: 1.5, out: 9.0 },
   // Gemini 3.5 Flash-Lite (GA Jul 21 2026): the tenant chat + mid-tier
-  // default after the 3.6 migration — same list price as gemini-2.5-flash,
+  // default after the 3.6 migration, same list price as gemini-2.5-flash,
   // far stronger model. Thinking tokens bill as output here too.
   "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
   // Gemini 3.6 Flash (GA Jul 21 2026): replaces 3.5-flash as the flagship
@@ -85,7 +85,7 @@ export function geminiPriceFor(model: string): GeminiPricePer1M {
  * When `usage` carries an audio split (Gemini Live), the audio portion of the
  * prompt/output tokens is priced at the model's audio rate and the remaining
  * (text) portion at the text rate. For text-only surfaces the audio fields are
- * absent/0 and everything prices at `in`/`out` — identical to the old math.
+ * absent/0 and everything prices at `in`/`out`, identical to the old math.
  * Audio counts are clamped to their respective totals so a malformed payload
  * can never over- or under-count.
  *
@@ -95,7 +95,7 @@ export function geminiPriceFor(model: string): GeminiPricePer1M {
  * differently), pricing the full counts at the cheaper TEXT rate would ~4x
  * under-record spend and weaken the shared AI-budget hard stop. So for those
  * models we treat the untagged remainder as audio (the dominant, pricier
- * modality) rather than text — conservative, never undercounts. When Gemini DID
+ * modality) rather than text, conservative, never undercounts. When Gemini DID
  * report a positive audio split we honor it exactly (audio at audio rate, the
  * genuine text remainder at text rate).
  */
@@ -154,7 +154,7 @@ export type MeterGeminiSpendArgs = {
   outputChars?: number;
   /**
    * Flat cost (micro-USD) that bypasses token math entirely. Image models
-   * bill per generated image, not per text token — the token-rate tables
+   * bill per generated image, not per text token, the token-rate tables
    * above would badly misprice them, so image surfaces pass the per-image
    * list price here.
    */

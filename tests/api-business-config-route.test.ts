@@ -184,7 +184,7 @@ describe("api/business/config, websiteUrl persistence", () => {
     const res = await POST(jsonRequest(baseBody({ websiteUrl: "  https://example.com/  " })));
     expect(res.status).toBe(200);
     // The dashboard now fixes the regression where plain Save discarded URL
-    // edits — confirm the URL made it to the businesses row, normalized.
+    // edits, confirm the URL made it to the businesses row, normalized.
     expect(updateBusinessWebsiteUrl).toHaveBeenCalledWith(BIZ, "https://example.com/");
     expect(patchBusinessConfig).toHaveBeenCalledWith(
       BIZ,
@@ -278,7 +278,7 @@ describe("api/business/config, vault markdown limits", () => {
 });
 
 describe("api/business/config, VPS vault sync", () => {
-  // The dashboard's Save button used to land in Supabase ONLY — the per-tenant
+  // The dashboard's Save button used to land in Supabase ONLY, the per-tenant
   // Rowboat vault on the VPS and the MongoDB agent.instructions field stayed
   // frozen at the provision-time snapshot. Owner edits never reached chat /
   // SMS / voice. These tests pin the new contract: every successful save

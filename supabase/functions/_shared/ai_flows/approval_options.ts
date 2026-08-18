@@ -9,11 +9,11 @@
  *
  *   - "approve" is always first (reply 1) and "cancel" is ALWAYS LAST, so its
  *     digit shifts as optional decisions (e.g. bypass quiet hours) are added
- *     in between — never re-numbering approve, and never letting a stale
+ *     in between, never re-numbering approve, and never letting a stale
  *     muscle-memory "last digit" approve something destructive.
  *   - The inbound webhook maps a digit against the options STORED on the run
  *     (what the owner was actually offered), not against whatever list the
- *     current code would build — so a deploy mid-approval can't reinterpret
+ *     current code would build, so a deploy mid-approval can't reinterpret
  *     a reply.
  *
  * Used by ai-flow-worker (build + prompt), telnyx-sms-inbound (parse), and
@@ -103,7 +103,7 @@ export function approvalSmsInstruction(
 /**
  * Parse the option list stored on a run's `context.approval.options`. Unknown
  * or malformed entries invalidate the whole list (falls back to the legacy
- * 1/2/3 offer) — a half-parsed list would silently renumber the digits the
+ * 1/2/3 offer), a half-parsed list would silently renumber the digits the
  * owner was shown.
  */
 export function parseStoredApprovalOptions(raw: unknown): ApprovalGateOption[] {

@@ -4,9 +4,9 @@
  * OpenAI-compatible HTTP router that sits between Rowboat and two upstream
  * LLM providers:
  *
- *   - Ollama (local, for the `dispatcher` SMS agent — llama / qwen models)
+ *   - Ollama (local, for the `dispatcher` SMS agent, llama / qwen models)
  *   - Gemini via its OpenAI-compatible endpoint (for the `voice_task` voice
- *     agent — gemini-* models)
+ *     agent, gemini-* models)
  *
  * Rowboat is configured with a single `PROVIDER_BASE_URL` pointing at this
  * service. We inspect the `model` field on each `/v1/chat/completions` or
@@ -14,11 +14,11 @@
  * the correct auth. Streaming is passed through verbatim.
  *
  * Environment:
- *   LLM_ROUTER_PORT       — listen port (default 11435)
- *   OLLAMA_URL            — e.g. http://host.docker.internal:11434
+ *   LLM_ROUTER_PORT, listen port (default 11435)
+ *   OLLAMA_URL, e.g. http://host.docker.internal:11434
  *                           (default http://127.0.0.1:11434)
- *   GOOGLE_API_KEY        — required to serve gemini-* models
- *   GEMINI_BASE_URL       — override for testing (default Google's public
+ *   GOOGLE_API_KEY, required to serve gemini-* models
+ *   GEMINI_BASE_URL, override for testing (default Google's public
  *                           OpenAI-compat endpoint)
  *
  * Deliberate non-goals:
@@ -49,7 +49,7 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
 //
 // All three come from /opt/rowboat/.env (env_file on this service) which
 // deploy-client.sh already writes. When any is absent we silently skip
-// metering — a misconfigured box must never break model proxying.
+// metering, a misconfigured box must never break model proxying.
 const BUSINESS_ID = process.env.BUSINESS_ID || "";
 const APP_BASE_URL = (process.env.APP_BASE_URL || "").replace(/\/+$/, "");
 const GATEWAY_TOKEN = process.env.ROWBOAT_GATEWAY_TOKEN || "";
@@ -57,7 +57,7 @@ const METER_ENABLED = Boolean(BUSINESS_ID && APP_BASE_URL && GATEWAY_TOKEN);
 
 /**
  * Fire-and-forget: report one exact Gemini turn's billed tokens to the
- * platform meter endpoint. Never awaited and never throws — the model reply
+ * platform meter endpoint. Never awaited and never throws, the model reply
  * already streamed to Rowboat, so a metering hiccup may only under-count the
  * fuse, never fail a turn. (The app endpoint is idempotent-safe per call: each
  * proxied completion is a distinct spend event.)
@@ -121,7 +121,7 @@ export {
 // Gemini 3.x thought-signature LRU (see routing.js). Process-lifetime by
 // design: the router container is long-lived and every Rowboat turn for this
 // box flows through it, so a conversation's harvest and re-inject hit the
-// same Map. A restart only costs quality, not correctness — signature-less
+// same Map. A restart only costs quality, not correctness, signature-less
 // tool calls fall back to the validator placeholder.
 const thoughtSignatureCache = createSignatureCache();
 
@@ -189,7 +189,7 @@ async function handleRoutedRequest(req, res) {
   const upstream = pickUpstream(parsed?.model);
   const requestPath = req.url?.split("?")[0] ?? "/v1/chat/completions";
   // Meter this turn's exact tokens into the shared AI budget for every gemini-*
-  // model (see isAiBudgetModel) — owner chat / SMS / summarizers AND the voice
+  // model (see isAiBudgetModel), owner chat / SMS / summarizers AND the voice
   // `voice_task` agent. Scoped to /v1/chat/completions: all those agentic
   // surfaces run there; /v1/embeddings and /v1/completions are a different cost
   // line and stay out of this budget. Decided pre-fetch so we know whether to
@@ -201,14 +201,14 @@ async function handleRoutedRequest(req, res) {
     isAiBudgetModel(parsed?.model);
 
   // Gemini 3.x tool-calling repair: harvest signatures from responses and
-  // re-inject them on requests (Rowboat drops them — see routing.js).
+  // re-inject them on requests (Rowboat drops them, see routing.js).
   const shimThoughtSignatures =
     upstream === "gemini" &&
     requestPath === "/v1/chat/completions" &&
     needsThoughtSignatures(parsed?.model);
 
   // Build the outgoing body once, applying three rewrites where needed:
-  //  1) Collapse multiple system messages — Gemini's OpenAI-compat keeps only
+  //  1) Collapse multiple system messages, Gemini's OpenAI-compat keeps only
   //     the LAST, which silently dropped Rowboat's vault-grounded agent
   //     instructions when a second system message was present (see routing.js).
   //  2) On a metered streamed turn, ask for `stream_options.include_usage` so
@@ -276,7 +276,7 @@ async function handleRoutedRequest(req, res) {
 
   const forwardOpts = { meterGemini, shimThoughtSignatures, model: parsed?.model };
 
-  // Empty-completion retry (gemini chat only — see routing.js): a stuck
+  // Empty-completion retry (gemini chat only, see routing.js): a stuck
   // Gemini can return a 200 completion with no content, no tool calls, and
   // zero output tokens. Forwarding it makes Rowboat's agent loop burn a turn
   // per empty response. Retry the upstream ONCE; a second empty response
@@ -320,7 +320,7 @@ async function handleRoutedRequest(req, res) {
  * index normalizer, usage metering, and thought-signature harvesting.
  *
  * With `holdUntilOutput` (empty-completion retry, attempt 1 only) nothing is
- * written to `res` — not even headers — until the response demonstrably
+ * written to `res`, not even headers, until the response demonstrably
  * carries model output (content / tool calls / refusal). If the response
  * completes without any output, returns `{ empty: true, finishReason, usage }`
  * with `res` untouched so the caller can retry. In every other case the
@@ -364,7 +364,7 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
     } catch {
       json = null;
     }
-    // Unparseable bodies pass through untouched (never retried) — upstream
+    // Unparseable bodies pass through untouched (never retried), upstream
     // error shapes must reach the client verbatim.
     if (json && !chatCompletionHasOutput(json)) {
       const finishReason = Array.isArray(json.choices)
@@ -436,7 +436,7 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
   const reader = upstreamResp.body.getReader();
   // When the held stream turns out to be a fully-empty completion we must
   // return WITHOUT touching res (no headers, no end) so the caller's retry
-  // can forward its own response on the same socket — the finally below
+  // can forward its own response on the same socket, the finally below
   // therefore only ends the response when this attempt actually owned it.
   let returningEmpty = false;
   try {
@@ -479,7 +479,7 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
       }
     }
     if (signatureHarvester) signatureHarvester.flush();
-    // Stream completed cleanly — parse the buffered JSON body once for both
+    // Stream completed cleanly, parse the buffered JSON body once for both
     // consumers (usage metering + signature harvest), then report usage.
     let jsonParsed = null;
     if (jsonBuf !== null) {

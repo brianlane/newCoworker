@@ -13,7 +13,7 @@
  *   tsx debug/rowboat-logs.ts 621a5b0d-... "conv_abc123|error" --since=1h
  *
  * --raw skips the grep filter entirely and dumps the last ~200KB of the window
- * uncolored — IMPORTANT when you don't yet know what string to grep for (e.g.
+ * uncolored, IMPORTANT when you don't yet know what string to grep for (e.g.
  * an unexplained 500 where the relevant line matches no known keyword).
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";

@@ -5,7 +5,7 @@
  * module maps it onto OVH plan codes the order cart accepts. Purchases go
  * through the OVHcloud US entity (the platform's business is US-based),
  * whose catalog sells the `-ca` suffixed codes with the Beauharnois (BHS)
- * datacenter — verified against the live `api.us.ovhcloud.com` catalog,
+ * datacenter, verified against the live `api.us.ovhcloud.com` catalog,
  * Jul 2026. OVH renames SKUs across catalog generations (like Hostinger
  * does), so:
  *
@@ -18,14 +18,14 @@
  *     catalog rename is an env change, not a deploy.
  *   - `debug/ovh-catalog.ts` audits the live catalog and reports whether
  *     each mapped code (default or override) exists, offers BHS + Ubuntu
- *     24.04, and what it costs — run it BEFORE the first real purchase and
+ *     24.04, and what it costs, run it BEFORE the first real purchase and
  *     after any OVH catalog announcement.
  */
 
 import type { VpsSize } from "@/lib/vps/size";
 
 /**
- * Beauharnois — OVH's Quebec DC; the whole point of the Canada option.
+ * Beauharnois, OVH's Quebec DC; the whole point of the Canada option.
  * Uppercase to match the catalog's `vps_datacenter` configuration values
  * on the US endpoint ("BHS"); compare case-insensitively when auditing.
  */
@@ -55,7 +55,7 @@ export const OVH_UBUNTU_IMAGE_MATCH = "ubuntu 24.04";
 
 /**
  * Default plan codes per hardware size. Verify with debug/ovh-catalog.ts
- * against the live OVHcloud US catalog before first purchase — see module doc.
+ * against the live OVHcloud US catalog before first purchase, see module doc.
  */
 const DEFAULT_PLAN_CODES: Record<VpsSize, string> = {
   // RAM floors must satisfy the profile the box will run (and the BYOS

@@ -115,7 +115,7 @@ describe("readMovedRows", () => {
 
   it("constructs the default DataApiClient when no factory is injected", async () => {
     // Stub global fetch so the default client fails deterministically with
-    // NO network egress — the wrapped transport error proves the default
+    // NO network egress, the wrapped transport error proves the default
     // construction path ran end-to-end.
     vi.stubGlobal("fetch", async () => {
       throw new Error("no network in tests");

@@ -2321,7 +2321,7 @@ describe("trigger channels", () => {
         steps
       })
     ).toThrow(AiFlowValidationError);
-    // Zero would make the [start - lead, start) due window empty — dead flow.
+    // Zero would make the [start - lead, start) due window empty, dead flow.
     expect(() =>
       parseAiFlowDefinition({
         version: 1,

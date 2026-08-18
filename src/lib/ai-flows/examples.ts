@@ -1,7 +1,7 @@
 /**
  * Per-business-type example/placeholder copy for the AiFlows builder UI.
  *
- * These strings only seed NEW-step defaults and input placeholders — they never
+ * These strings only seed NEW-step defaults and input placeholders, they never
  * touch stored flow definitions or existing variable names. Real estate keeps
  * the original literals verbatim (zero diff for existing tenants); every other
  * industry gets neutral, industry-agnostic equivalents.
@@ -47,7 +47,7 @@ const DEFAULT_COPY: AiFlowExampleCopy = {
 
 /**
  * Real estate keeps its original builder copy verbatim. (Mortgage and other
- * industries get the neutral default — the ReferralExchange/seller phrasing is
+ * industries get the neutral default, the ReferralExchange/seller phrasing is
  * specific to real-estate agents, unlike the FHA compliance guardrail which
  * also applies to mortgage lending.)
  */

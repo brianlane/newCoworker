@@ -1,9 +1,9 @@
 /**
- * Agents — run executor.
+ * Agents, run executor.
  *
  * One agent run = one Gemini transformation: the agent's saved instructions
  * applied to one or MORE attachments (decoded text for txt/md/csv, native
- * inlineData for PDFs — same split as documents/ingest.ts). Multi-file runs
+ * inlineData for PDFs, same split as documents/ingest.ts). Multi-file runs
  * exist for side-by-side work ("compare these carrier quotes"): every text
  * file becomes a labeled prompt section and every PDF an inlineData part,
  * all in one model call. Caller-agnostic by design: the dashboard run route
@@ -44,7 +44,7 @@ export const AGENT_TEXT_MIME_TYPES = [
   "text/markdown",
   "text/csv",
   // Meeting transcripts (Zoom/Meet/Teams). Converted to "Speaker: sentence"
-  // lines before prompting — see transcripts/vtt.ts.
+  // lines before prompting, see transcripts/vtt.ts.
   VTT_MIME_TYPE
 ] as const;
 export const AGENT_PDF_MIME_TYPE = "application/pdf";
@@ -80,7 +80,7 @@ export type AgentRunInput = {
     instructions: string;
     output_format: AgentOutputFormat;
   };
-  /** First (primary) filename — drives prompts + the artifact filename. */
+  /** First (primary) filename, drives prompts + the artifact filename. */
   inputFilename: string;
   inputMime: string;
   /** Raw attachment bytes (text formats are decoded; PDFs attach inline). */
@@ -114,7 +114,7 @@ export type AgentRunResult =
     };
 
 /**
- * Execute one agent run. Never throws for expected failures — the caller
+ * Execute one agent run. Never throws for expected failures, the caller
  * persists the result (ok or not) onto the `agent_runs` row.
  */
 export async function executeAgentRun(
@@ -134,7 +134,7 @@ export async function executeAgentRun(
 
   // Re-typeset mode reconstructs ONE source document's design, so it takes
   // exactly one PDF/Word input (Word decodes to text, so fidelity is
-  // reduced — the model rebuilds layout from styling cues).
+  // reduced, the model rebuilds layout from styling cues).
   const isRetypeset = input.agent.output_format === "pdf_retypeset";
   if (isRetypeset) {
     if (files.length > 1) {
@@ -155,7 +155,7 @@ export async function executeAgentRun(
   }
 
   // Classify + decode every attachment before any model work: one bad file
-  // fails the run up front (predictable — same contract as single-file).
+  // fails the run up front (predictable, same contract as single-file).
   const textSections: AgentPromptTextSection[] = [];
   const pdfParts: NonNullable<GeminiGenerateTextParams["inlineParts"]> = [];
   const pdfNames: string[] = [];
@@ -180,7 +180,7 @@ export async function executeAgentRun(
     }
     let asText: string;
     if (isDocx) {
-      // Locally decoded — an unreadable/blank Word file is an input problem.
+      // Locally decoded, an unreadable/blank Word file is an input problem.
       asText = (await decodeDocxToText(file.data)) ?? "";
     } else {
       const decoded = file.data.toString("utf8").replace(/\u0000/g, "");
@@ -244,7 +244,7 @@ export async function executeAgentRun(
     if (isRetypeset) {
       // HTML must never be hard-clipped (a mid-tag cut renders a broken
       // PDF with no visible failure): an over-cap reply is an explicit
-      // error instead. Then sanitize (scripts/external refs stripped — the
+      // error instead. Then sanitize (scripts/external refs stripped, the
       // sidecar also disables JS and denies network) and guarantee a full
       // HTML document so the byte renderers can sniff it.
       const unclipped = stripWholeReplyFence(text);
@@ -270,7 +270,7 @@ export async function executeAgentRun(
     };
   } catch (err) {
     if (err instanceof GeminiEmptyError) {
-      // Billed even when empty (thinking-only output) — meter before failing.
+      // Billed even when empty (thinking-only output), meter before failing.
       await meterGeminiSpendForBusiness({
         businessId: input.businessId,
         model,

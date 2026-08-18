@@ -7,7 +7,7 @@
  * the worker. A pass is a cheap no-op for every business that owns no
  * active email thread.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape and
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape and
  * secret as the other /api/internal/* endpoints.
  *
  * Self-healing: the seen ledger makes repeat passes idempotent, and the

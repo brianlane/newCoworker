@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# keep-warm.sh — Ping Ollama periodically so the owner's /dashboard/chat stays
+# keep-warm.sh, Ping Ollama periodically so the owner's /dashboard/chat stays
 # instant (Llama 3.2 / Qwen3 cold-load is 20-40s on KVM 2 and blocks the UI).
 #
 # Fires from ollama-keep-warm.timer every ~5 minutes. Stands down while the

@@ -1,5 +1,5 @@
 /**
- * Typeset agent artifacts — deterministic markdown → PDF / DOCX rendering.
+ * Typeset agent artifacts, deterministic markdown → PDF / DOCX rendering.
  *
  * The model always produces markdown (the run's `output_md` source of
  * truth); when an agent's output format is `pdf` or `docx` the artifact is
@@ -7,8 +7,8 @@
  * (marked lexer → block model → pdf-lib / docx renderers): serverless-safe,
  * no headless browser, works on every tier.
  *
- * The block model is intentionally small — headings, paragraphs, lists,
- * simple tables, code, rules — because the input is our own model's
+ * The block model is intentionally small, headings, paragraphs, lists,
+ * simple tables, code, rules, because the input is our own model's
  * markdown, not arbitrary documents. Unknown markdown constructs degrade to
  * plain paragraphs rather than failing the run.
  */
@@ -46,7 +46,7 @@ export type TypesetBlock =
   | { kind: "hr" };
 
 /**
- * Strip tags from an inline/block HTML fragment — keep the visible text.
+ * Strip tags from an inline/block HTML fragment, keep the visible text.
  * Parsed with sanitize-html (never regex) so malformed markup can't leak
  * tag fragments into the typeset text.
  */
@@ -204,7 +204,7 @@ export function parseMarkdownBlocks(markdown: string): TypesetBlock[] {
 
 /**
  * WinAnsi printable extras beyond Latin-1 (0x80–0x9F code points). The
- * standard PDF fonts can encode exactly WinAnsi — anything else is replaced
+ * standard PDF fonts can encode exactly WinAnsi, anything else is replaced
  * with "?" rather than throwing mid-render.
  */
 const WINANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
@@ -375,7 +375,7 @@ function drawTable(cursor: PdfCursor, fonts: PdfFonts, rows: InlineRun[][][]): v
   const cellTextWidth = colWidth - cellPad * 2;
   const lineHeight = TABLE_SIZE * 1.35;
   // A row is placed with ONE ensureRoom, so it must always fit a single
-  // page: clamp each cell's line count (ellipsis on truncation) — a
+  // page: clamp each cell's line count (ellipsis on truncation), a
   // mid-cell page break would strand sibling cells on the previous page.
   const maxRowLines = Math.floor((PAGE_HEIGHT - MARGIN * 2 - cellPad * 2) / lineHeight);
   rows.forEach((row, rowIndex) => {
@@ -490,7 +490,7 @@ export async function renderMarkdownToPdf(markdown: string): Promise<Buffer> {
           ensureRoom(cursor, BODY_SIZE * 1.4);
           // Pin the PAGE along with the y: ensureRoom guaranteed the first
           // line fits here, but a long item can wrap onto later pages and
-          // move cursor.page — the prefix must stay beside line one.
+          // move cursor.page, the prefix must stay beside line one.
           const itemTop = cursor.y;
           const itemPage = cursor.page;
           drawRunsBlock(cursor, fonts, item, {

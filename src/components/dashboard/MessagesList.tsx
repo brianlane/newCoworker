@@ -87,7 +87,7 @@ export function MessagesList({ rows }: { rows: MessageListRow[] }) {
                   <div className="min-w-0 flex-1">
                     {/* flex-wrap (as in CustomersList): the name is the only
                         shrinkable item, so without wrapping it absorbed all the
-                        squeeze on phones — "Brian" rendered as "Bri…" while the
+                        squeeze on phones, "Brian" rendered as "Bri…" while the
                         E.164 and badges kept full width. */}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span className="text-sm font-semibold text-parchment truncate" title={c.name}>

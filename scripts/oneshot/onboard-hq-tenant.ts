@@ -1,9 +1,9 @@
 /**
- * onboard-hq-tenant.ts — one-shot: onboard "New Coworker (HQ, internal)" as a
+ * onboard-hq-tenant.ts, one-shot: onboard "New Coworker (HQ, internal)" as a
  * real tenant on the reserved KVM1 (srv1806097) with the +1 (602) 313-1823
  * DID, so the homepage demo voice line, site webchat, and SMS all run through
  * the standard tenant stack. No Stripe: the subscription row is synthetic
- * (active, 24-month period bounds, no stripe id — the voice reserve gate only
+ * (active, 24-month period bounds, no stripe id, the voice reserve gate only
  * needs cached bounds, and included quotas still reset monthly via
  * deriveMonthlyQuotaWindow).
  *
@@ -22,7 +22,7 @@
  *      claim resolves the pre-assigned box), bootstrap, per-tenant tunnel +
  *      gateway token, full deploy with GEMINI_LIVE_SESSION_MAX_MS=300000 (the
  *      5-minute demo call cap) and voice transcription on. Purchasing a new
- *      box is hard-refused — adopt-only.
+ *      box is hard-refused, adopt-only.
  *
  * Usage:
  *   npx tsx scripts/oneshot/onboard-hq-tenant.ts          # dry-run summary
@@ -222,7 +222,7 @@ await upsertBusinessTelnyxSettings({
   telnyxConnectionId: flowTestTelnyx.telnyx_connection_id,
   bridgeMediaWssOrigin: BRIDGE_MEDIA_WSS_ORIGIN
 });
-// The DID is already attached to the registered 10DLC campaign at Telnyx —
+// The DID is already attached to the registered 10DLC campaign at Telnyx,
 // copy the campaign bookkeeping so the tendlc retry cron doesn't re-attach.
 {
   const { error } = await db

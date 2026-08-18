@@ -8,7 +8,7 @@
  *
  * Defaults to the New Coworker (HQ, internal) tenant so all test traffic
  * burns our own budget. `teardown` only disables the test flow (HQ is
- * long-lived — nothing is deleted).
+ * long-lived, nothing is deleted).
  *
  * ⚠️ `kickoff` runs a real flow (route_to_team SMS to the tester's phone,
  * real Gemini classify, real emails to the owner address).
@@ -50,7 +50,7 @@ const db = createClient(
 const cmd = process.argv[2] ?? "status";
 
 /**
- * Positional args after the subcommand, with flags AND their values removed —
+ * Positional args after the subcommand, with flags AND their values removed,
  * `report bad number --run <uuid>` must never leak the UUID into the text.
  */
 function positionalArgs(): string[] {
@@ -274,7 +274,7 @@ if (cmd === "setup") {
   const routing = (run.context?.routing ?? {}) as Record<string, unknown>;
   // Mirror the webhook's offer guard (it resolves the run via
   // context->routing->>offered = from): only a run actually offered to the
-  // tester is claimable — never a queued run whose offer isn't live yet.
+  // tester is claimable, never a queued run whose offer isn't live yet.
   if (routing.offered !== TESTER) {
     throw new Error(
       `run isn't offered to the tester yet (offered: ${JSON.stringify(routing.offered ?? null)}), ` +

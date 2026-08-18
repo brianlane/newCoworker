@@ -2,7 +2,7 @@
  * Pure digest-model builder for the notifications-digest Edge function.
  *
  * Why this exists: the original digest counted only `coworker_logs`, a table
- * that nothing but voice captures writes to — so every digest skipped with
+ * that nothing but voice captures writes to, so every digest skipped with
  * "no_activity" while the business had chats, texts, and AiFlow runs. The
  * IO shell (../notifications-digest/index.ts) now aggregates the REAL
  * activity tables and hands plain rows to these helpers, which decide
@@ -24,7 +24,7 @@ export type DigestAiFlowRun = {
   flowName: string;
   status: string;
   created_at: string;
-  /** ai_flow_runs.context — { vars: {...}, routing: {...}, ... } */
+  /** ai_flow_runs.context, { vars: {...}, routing: {...}, ... } */
   context: Record<string, unknown>;
 };
 
@@ -145,7 +145,7 @@ export const AI_FLOW_RECAP_MAX_RUNS = 10;
 const ACTIONS_TAKEN_MAX_CHARS = 220;
 
 /**
- * One-line routing summary from a run's context.routing — who was offered
+ * One-line routing summary from a run's context.routing, who was offered
  * the lead and who (if anyone) claimed it. Mirrors
  * src/lib/ai-flows/run-stats.ts (the owner runs page), ported here because
  * the Edge runtime cannot import from src/.
@@ -350,8 +350,8 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
   const hasUnlinkedTexts =
     activity.smsInbound > parsedInbound || activity.smsOutbound > parsedOutbound;
 
-  // Common case: every text maps to a thread AND everything fits under the cap
-  // — emit the per-conversation deep links with no redundant index roll-up.
+  // Common case: every text maps to a thread AND everything fits under the cap,
+  // emit the per-conversation deep links with no redundant index roll-up.
   if (
     hasTexts &&
     !hasUnlinkedTexts &&

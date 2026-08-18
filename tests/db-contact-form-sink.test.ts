@@ -1,5 +1,5 @@
 /**
- * src/lib/db/contact-form-sink.ts — the platform contact-form sink
+ * src/lib/db/contact-form-sink.ts, the platform contact-form sink
  * designation behind the admin "Contact form (platform)" card.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -29,7 +29,7 @@ function makeDb(
   const eqArgs: Array<[string, unknown]> = [];
   const neqArgs: Array<[string, unknown]> = [];
   // The clear pass chains `.eq("contact_form_sink", true).neq("id", …)`; the
-  // designation write awaits `.eq("id", …)` directly — so `.eq()` returns a
+  // designation write awaits `.eq("id", …)` directly, so `.eq()` returns a
   // REAL promise (resolving the designation result) that also carries `.neq`
   // (resolving the clear result). Real promises keep v8 coverage's async
   // block accounting honest, unlike a synchronous custom thenable.

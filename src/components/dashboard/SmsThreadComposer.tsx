@@ -7,7 +7,7 @@ import { SmsSegmentHint } from "./SmsSegmentHint";
 
 type Props = {
   businessId: string;
-  /** The thread's customer number / short code — the send destination. */
+  /** The thread's customer number / short code, the send destination. */
   toE164: string;
   /** True when this tenant's sends go RCS-first (softens the emoji hint). */
   rcsEnabled?: boolean;

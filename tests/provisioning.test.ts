@@ -61,7 +61,7 @@ vi.mock("@/lib/db/businesses", () => ({
 // runs with a fixed persisted value.
 vi.mock("@/lib/residency/backup-keys", () => ({
   // Escrow resolve hits the DB only on the residency path; deterministic
-  // here ("" would mean customer_held custody — see the dedicated test).
+  // here ("" would mean customer_held custody, see the dedicated test).
   resolveResidencyBackupPassphraseForDeploy: vi.fn(async () => "escrowed-backup-pass")
 }));
 
@@ -129,7 +129,7 @@ vi.mock("@/lib/db/vps-inventory", () => ({
   releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
   retireVps: vi.fn().mockResolvedValue(undefined),
   // Consumed only by the default orphanReconciler closure (never invoked in
-  // tests — every reconciliation test injects its own reconciler).
+  // tests, every reconciliation test injects its own reconciler).
   listVpsInventory: vi.fn().mockResolvedValue([])
 }));
 
@@ -143,12 +143,12 @@ vi.mock("@/lib/provisioning/stale-tenant-cleanup", () => ({
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
   // The provisioning-live SMS sends from the tenant's OWN DID only (no
-  // shared env sender exists) — default a from-number so the legacy
+  // shared env sender exists), default a from-number so the legacy
   // send-path tests keep exercising the send.
   getBusinessTelnyxSettings: vi
     .fn()
     .mockResolvedValue({ telnyx_sms_from_e164: "+15559990000" }),
-  // tendlc-attach.ts persists per-business 10DLC status via this helper —
+  // tendlc-attach.ts persists per-business 10DLC status via this helper,
   // the orchestrator dynamically imports tendlc-attach.ts after a successful
   // DID assign, so we have to provide a stub or every did-assign test path
   // throws "is not a function" inside the success branch.
@@ -230,8 +230,8 @@ function okExec(): SshExecResult {
 
 /**
  * The orchestrator now makes TWO SSH calls per successful provision:
- *   call 0 — bootstrap (`buildDefaultPostInstallScript()` over SSH)
- *   call 1 — deploy (`/opt/deploy-client.sh` over SSH)
+ *   call 0, bootstrap (`buildDefaultPostInstallScript()` over SSH)
+ *   call 1, deploy (`/opt/deploy-client.sh` over SSH)
  *
  * Tests that inspect "the deploy command" used to index `mock.calls[0][0]`.
  * Use this helper so the intent (deploy-call inspection) survives a future
@@ -640,7 +640,7 @@ describe("provisioning/orchestrate", () => {
       { vpsProvisioner, remoteExec }
     );
     expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-1", "kvm1");
-    // Pin write must come AFTER updateBusinessStatus("offline", newVpsId) —
+    // Pin write must come AFTER updateBusinessStatus("offline", newVpsId),
     // never while hostinger_vps_id still references the previous box.
     const statusOrder = vi.mocked(updateBusinessStatus).mock.invocationCallOrder[0];
     const pinOrder = vi.mocked(updateBusinessVpsSize).mock.invocationCallOrder[0];
@@ -703,7 +703,7 @@ describe("provisioning/orchestrate", () => {
     expect(call.soul_md).toContain("CUSTOM_COMPLIANCE_MODULE_START");
     expect(call.soul_md).toContain("Never quote settlement amounts on any channel.");
     expect(call.soul_md).toContain("- merger");
-    // Platform guardrail still present — the module is additive.
+    // Platform guardrail still present, the module is additive.
     expect(call.soul_md).toContain("## Compliance");
   });
 
@@ -929,7 +929,7 @@ describe("provisioning/orchestrate", () => {
 
   it("skips the live SMS when the tenant has no DID to send from (no env fallback by design)", async () => {
     // The env-fallback sender once pointed at ANOTHER tenant's business
-    // number (Jul 14 2026) — a tenant without their own DID must skip, not
+    // number (Jul 14 2026), a tenant without their own DID must skip, not
     // borrow a sender.
     const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
     vi.mocked(sendTelnyxSms).mockClear();
@@ -1782,7 +1782,7 @@ describe("provisioning/orchestrate", () => {
 
   it("prepends the deploy token to DATA_API_TOKENS when the DB list lacks it", async () => {
     // Covers the rotation race where this deploy just minted a token the
-    // list read predates — the data-api must still accept it.
+    // list read predates, the data-api must still accept it.
     vi.mocked(getBusiness).mockResolvedValueOnce({
       business_type: "real_estate",
       tier: "enterprise",
@@ -1828,7 +1828,7 @@ describe("provisioning/orchestrate", () => {
     });
     const offCmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(offCmd, "DATA_RESIDENCY_ENABLED", "");
-    // No escrow mint for non-residency deploys — the passphrase stays empty.
+    // No escrow mint for non-residency deploys, the passphrase stays empty.
     expectDeployHasEnv(offCmd, "RESIDENCY_BACKUP_PASSPHRASE", "");
   });
 
@@ -2458,7 +2458,7 @@ describe("provisioning/orchestrate", () => {
         areaCode: "519"
       });
       // Retry must not reuse the US-centric 212/NY defaults against a CA
-      // country search — broaden to any Canadian number.
+      // country search, broaden to any Canadian number.
       expect(didProvisioner.mock.calls[1][0].search.countryCode).toBe("CA");
       expect(didProvisioner.mock.calls[1][0].search.areaCode).toBeUndefined();
       expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBeUndefined();
@@ -2652,9 +2652,9 @@ describe("provisioning/orchestrate", () => {
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
       // US owner phone (602 = Phoenix): the tenant is NOT Canadian, so the
-      // default-country tiers stay US — but the REQUESTED 519 tier is still
+      // default-country tiers stay US, but the REQUESTED 519 tier is still
       // CA-scoped by its NPA. (A Canadian-phone tenant never falls back to
-      // US tiers at all — see the Canadian cascade tests above.)
+      // US tiers at all, see the Canadian cascade tests above.)
       const biz = {
         business_type: "insurance_agency",
         phone: "(602) 555-0100",
@@ -2700,7 +2700,7 @@ describe("provisioning/orchestrate", () => {
         administrativeArea: undefined
       });
       expect(result.vpsId).toBe("42");
-      // The number came from the any-tier — no locality claims.
+      // The number came from the any-tier, no locality claims.
       const didAssigned = vi
         .mocked(recordProvisioningProgress)
         .mock.calls.map((c) => c[0])
@@ -2733,7 +2733,7 @@ describe("provisioning/orchestrate", () => {
         }
       );
       // 602 tried ONCE (as `requested`), then straight to the platform
-      // default — no duplicate owner-tier search of the same NPA.
+      // default, no duplicate owner-tier search of the same NPA.
       expect(didProvisioner).toHaveBeenCalledTimes(2);
       expect(didProvisioner.mock.calls[0][0].search.areaCode).toBe("602");
       expect(didProvisioner.mock.calls[1][0].search.areaCode).toBe("212");
@@ -2824,7 +2824,7 @@ describe("provisioning/orchestrate", () => {
     });
 
     it("survives a thrown 10DLC attach (catch path: log warn + record `thinking` progress, don't fail orchestrator)", async () => {
-      // Force the attach helper's internal DB write to throw — the
+      // Force the attach helper's internal DB write to throw, the
       // orchestrator catch block at orchestrate.ts:727-740 must absorb
       // it, log a warning, record the "Will retry" progress message, and
       // proceed to subsequent phases. If the catch path regressed, this
@@ -2853,7 +2853,7 @@ describe("provisioning/orchestrate", () => {
       ).resolves.not.toThrow();
       // Reset to the default mock so subsequent tests aren't poisoned.
       // mockResolvedValue is type-checked against the original signature,
-      // so cast through `any` — we only need the test mock to not throw.
+      // so cast through `any`, we only need the test mock to not throw.
       vi.mocked(setBusinessMessagingCampaignStatus).mockResolvedValue(
         undefined as never
       );
@@ -3028,7 +3028,7 @@ describe("provisioning/orchestrate", () => {
       expect(result.vpsId).toBe("42");
       expect(remoteExec).toHaveBeenCalled();
       // And the DID provisioner itself was NOT called, because the failure
-      // happened before we got that far — the phase logs "failed, assign
+      // happened before we got that far, the phase logs "failed, assign
       // manually" and moves on.
       expect(didProvisioner).not.toHaveBeenCalled();
     });
@@ -3075,7 +3075,7 @@ describe("provisioning/orchestrate", () => {
       // Critical: the provisioner was NEVER called, so we didn't pay
       // Telnyx for an unwired number.
       expect(didProvisioner).not.toHaveBeenCalled();
-      // Deploy still completes — the assertion is a soft-fail at the
+      // Deploy still completes, the assertion is a soft-fail at the
       // DID phase, same shape as OrderAndAssignError handling.
       expect(result.vpsId).toBe("42");
       expect(remoteExec).toHaveBeenCalled();
@@ -3104,7 +3104,7 @@ describe("provisioning/orchestrate", () => {
      * preferred bootstrap path because it runs concurrently with cloud-init
      * and saves the orchestrator from waiting on sshd. But the endpoint
      * returns `403 [VPS:2000] Unauthorized` until the account already owns
-     * at least one VPS — a chicken-and-egg that can't be resolved at the
+     * at least one VPS, a chicken-and-egg that can't be resolved at the
      * purchase call for brand-new accounts. The orchestrator handles BOTH
      * cases by ALWAYS running an SSH-bootstrap pass after the VPS hits
      * `running`: it re-executes the same idempotent script content, so on
@@ -3435,7 +3435,7 @@ describe("provisioning/orchestrate", () => {
           vmId: 123,
           plan: "kvm2",
           businessId: "biz-pool-2",
-          // The purchased Hostinger term is recorded for pool triage — no
+          // The purchased Hostinger term is recorded for pool triage, no
           // billingPeriod on the input means the monthly SKU was bought.
           notes: "purchased for biz-pool-2 (1m term)"
         })
@@ -3513,7 +3513,7 @@ describe("provisioning/orchestrate", () => {
 
     it("skipPoolAdopt forces a term purchase past an available pooled box (change-plan term alignment)", async () => {
       // A pooled same-size box IS available, but the caller (the change-plan
-      // term-alignment migration) must land on a term-priced PURCHASE — a
+      // term-alignment migration) must land on a term-priced PURCHASE, a
       // pooled monthly lapser would defeat the point of the move. The term
       // is now named EXPLICITLY by that caller: since Aug 2026 the purchase
       // default is monthly, so relying on billingPeriod alone would have
@@ -3873,7 +3873,7 @@ describe("provisioning/orchestrate", () => {
       expect(vpsAdopter).toHaveBeenCalledWith(
         expect.objectContaining({ virtualMachineId: 1815606 })
       );
-      // Only ONE purchase attempt — the whole point is not buying twice.
+      // Only ONE purchase attempt, the whole point is not buying twice.
       expect(vpsProvisioner).toHaveBeenCalledTimes(1);
     });
 
@@ -3913,7 +3913,7 @@ describe("provisioning/orchestrate", () => {
       });
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
-      // Orphan is a kvm8; the starter provision needs kvm1 — no adopt.
+      // Orphan is a kvm8; the starter provision needs kvm1, no adopt.
       const orphanReconciler = vi
         .fn()
         .mockResolvedValue([{ vmId: 999, plan: "kvm8", createdAtMs: 0 }]);
@@ -3975,7 +3975,7 @@ describe("provisioning/orchestrate", () => {
 
     it("skipPoolAdopt: adopts the SPECIFIC term orphan (not an arbitrary pooled box)", async () => {
       // Change-plan term alignment must land on the term-bought box. After a
-      // fail-but-charge, that box IS the reconciled orphan — claim + adopt it
+      // fail-but-charge, that box IS the reconciled orphan, claim + adopt it
       // by id rather than aborting or claiming an unrelated monthly lapser.
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
@@ -4477,7 +4477,7 @@ describe("provisioning/orchestrate", () => {
      * returned 403 on `POST /api/vps/v1/post-install-scripts` (token missing
      * the post-install-scripts scope). The orchestrator's vpsProvisioner
      * call was unprotected, so the throw bubbled up to the webhook caller
-     * and the dashboard — which polls the latest `coworker_logs` row —
+     * and the dashboard, which polls the latest `coworker_logs` row,
      * never saw a terminal failure. The fix wraps the orchestrator body
      * in a top-level try/catch that records a `phase: "failed"` row with
      * `status: "error"` so `shouldMountProvisioningWidget` flips into its
@@ -4504,7 +4504,7 @@ describe("provisioning/orchestrate", () => {
       expect(failed?.status).toBe("error");
       expect(failed?.businessId).toBe("biz-fail-1");
       expect(failed?.message).toMatch(/kapow/);
-      // The first row recorded is still the `started` row at 5% — the
+      // The first row recorded is still the `started` row at 5%, the
       // catch block doesn't suppress the upfront recording, only adds
       // a terminal `failed` row after.
       expect(recordMock.mock.calls[0][0].phase).toBe("started");
@@ -4517,7 +4517,7 @@ describe("provisioning/orchestrate", () => {
       // We don't import HostingerApiError directly to keep this test
       // decoupled from the client module shape. The orchestrator's
       // `describeProvisioningError` checks `err.name === "HostingerApiError"`
-      // duck-typed for the same reason — see the docstring there.
+      // duck-typed for the same reason, see the docstring there.
       class FakeHostingerApiError extends Error {
         readonly endpoint = "/api/vps/v1/post-install-scripts";
         readonly status = 403;
@@ -4554,7 +4554,7 @@ describe("provisioning/orchestrate", () => {
 
       // First call (the upfront `started` row) succeeds, second call (the
       // catch-block `failed` row) blows up. The orchestrator must still
-      // surface the *original* error to the caller — losing the original
+      // surface the *original* error to the caller, losing the original
       // error to a logging-time failure is the bug we're guarding against.
       recordMock.mockResolvedValueOnce({} as never);
       recordMock.mockRejectedValueOnce(new Error("supabase down"));

@@ -55,7 +55,7 @@ interface CrawlProgress {
   lastUrl: string | null;
   sitemapCount: number | null;
   /**
-   * Page count from the server's `summarizing` event — the number of pages
+   * Page count from the server's `summarizing` event, the number of pages
    * actually feeding the summary, which can differ from `fetched` (textless
    * fetches don't summarize; the pasted-source path summarizes without
    * fetching). Null until the summarize phase starts.
@@ -77,7 +77,7 @@ const EMPTY_PROGRESS: CrawlProgress = {
   summarizingPages: null
 };
 
-/** Show just the path of a crawled URL — the origin is the owner's own site. */
+/** Show just the path of a crawled URL, the origin is the owner's own site. */
 function crawlPathLabel(url: string): string {
   try {
     const u = new URL(url);
@@ -195,13 +195,13 @@ export function MemoryEditor({
         message: websiteIngestErrorMessage(inner.error, inner.detail)
       });
       // A failed crawl is exactly when the paste-source escape hatch is
-      // needed — surface it without another click.
+      // needed, surface it without another click.
       setPasteOpen(true);
       return;
     }
     if (typeof inner.websiteMd === "string") {
       setWebsiteMd(inner.websiteMd);
-      // The ingest endpoint persisted this server-side already — reflect
+      // The ingest endpoint persisted this server-side already, reflect
       // that in the baseline so a successful re-crawl isn't flagged as an
       // unsaved change. The input state is normalized to the same trimmed
       // value, otherwise stray whitespace would keep `dirty` latched on.
@@ -222,7 +222,7 @@ export function MemoryEditor({
       pages: inner.pagesCrawled ?? 0,
       preview: inner.websiteMdPreview ?? ""
     });
-    // Any success — crawled or pasted — means the escape hatch is no
+    // Any success, crawled or pasted, means the escape hatch is no
     // longer needed; don't leave a stale paste panel open.
     setPasteOpen(false);
     setPastedHtml("");
@@ -326,7 +326,7 @@ export function MemoryEditor({
         handleLine(buffer);
 
         // Read through a cast: `terminal` is mutated inside the handleLine
-        // closure, which TS's control-flow narrowing can't see — it still
+        // closure, which TS's control-flow narrowing can't see, it still
         // believes the variable holds its initial null.
         const terminalLine = terminal as Record<string, unknown> | null;
         if (!terminalLine) throw new Error("Re-crawl failed");

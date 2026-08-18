@@ -11,13 +11,13 @@
  *     sidebar needs the same UX for archived threads without changing
  *     the active-thread-or-create-one contract on POST.
  *   - Keeping read-only history in a distinct route lets us skip the
- *     write-side rate limit and Rowboat-readiness checks — neither is
+ *     write-side rate limit and Rowboat-readiness checks, neither is
  *     relevant when the model isn't being invoked.
  *
  * Auth: getAuthUser + requireBusinessRole(thread.business_id, "operate_messages"). Anti-IDOR: we
  * MUST resolve the thread first, then enforce ownership against
  * `thread.business_id` rather than trusting any caller-supplied
- * businessId in the URL — otherwise an authenticated owner could page
+ * businessId in the URL, otherwise an authenticated owner could page
  * through another tenant's threads by guessing UUIDs.
  */
 

@@ -2,7 +2,7 @@
  * `customer_append_pinned_note` voice tool (Phase 5).
  *
  * The agent calls this when the caller (or owner via the call) shares
- * a fact worth persisting outside the rolling LLM summary —
+ * a fact worth persisting outside the rolling LLM summary,
  * e.g. "my wife is allergic to nuts", "we close at 4 every other
  * Friday", or anything else that should reach the next conversation
  * verbatim.
@@ -29,7 +29,7 @@
  *     can't fill the field). Older notes get truncated from the
  *     bottom (oldest-first) when capacity is exceeded.
  *   - When the new note alone exceeds the cap, refuses with a
- *     "note_too_long" — better the agent re-summarize than commit
+ *     "note_too_long", better the agent re-summarize than commit
  *     a single note that crowds out everything else.
  */
 

@@ -47,9 +47,9 @@ export type BusinessRow = {
   customer_channels_enabled?: boolean;
   /** Enterprise tier only: partial TierLimits JSON; merged with defaults in app + Edge. */
   enterprise_limits?: Record<string, unknown> | null;
-  /** Lifetime abuse-tracking profile — null for pre-lifecycle businesses. */
+  /** Lifetime abuse-tracking profile, null for pre-lifecycle businesses. */
   customer_profile_id?: string | null;
-  /** Admin dashboard mutes — hide this business from the fleet-wide feeds
+  /** Admin dashboard mutes, hide this business from the fleet-wide feeds
    *  (Recent Activity / System Errors / Recent Alerts). Managed via
    *  src/lib/db/admin-mutes.ts. */
   admin_mute_activity?: boolean;
@@ -65,7 +65,7 @@ export type BusinessRow = {
   business_type?: string | null;
   /**
    * Owner phone number captured during onboarding. May be free-form (no
-   * country code, formatting characters) — coerce via
+   * country code, formatting characters), coerce via
    * `coerceOwnerPhoneToE164` before persisting downstream.
    */
   phone?: string | null;
@@ -94,7 +94,7 @@ export type BusinessRow = {
   google_meet_enabled?: boolean;
   /**
    * Per-day open/close windows (Settings → Business profile). Shape is
-   * validated app-side — see src/lib/business-profile/profile.ts. Rendered
+   * validated app-side, see src/lib/business-profile/profile.ts. Rendered
    * into business_configs.profile_md for prompt composition.
    */
   business_hours?: Record<string, unknown> | null;
@@ -119,7 +119,7 @@ export type BusinessRow = {
   /**
    * Where encrypted residency dumps go (default 'central'): 'central' =
    * ciphertext to central Supabase Storage; 'onbox' = dumps stay on the
-   * tenant box (in-region even for ciphertext — Canadian/insurance deals).
+   * tenant box (in-region even for ciphertext, Canadian/insurance deals).
    */
   residency_backup_destination?: "central" | "onbox" | null;
   /**
@@ -166,7 +166,7 @@ export type BusinessRow = {
 
 /**
  * True when `tz` is an IANA timezone name the runtime can actually format
- * with — the only validation that matters, since `Intl.DateTimeFormat` is
+ * with, the only validation that matters, since `Intl.DateTimeFormat` is
  * exactly what consumes the value downstream.
  */
 export function isValidIanaTimezone(tz: string): boolean {
@@ -187,7 +187,7 @@ export async function createBusiness(
     businessType?: string;
     ownerName?: string;
     phone?: string;
-    /** Normalized 3-digit NPA or omitted — callers validate via `normalizePreferredAreaCode`. */
+    /** Normalized 3-digit NPA or omitted, callers validate via `normalizePreferredAreaCode`. */
     preferredAreaCode?: string | null;
     websiteUrl?: string;
     serviceArea?: string;
@@ -244,7 +244,7 @@ export async function createBusiness(
   // A prospect who paid a custom white-glove offer BEFORE signing up gets it
   // attached to the new business automatically (and their priority-support
   // window opened). Best-effort: a hiccup here must never fail account
-  // creation — the offer stays attachable by re-running the attach.
+  // creation, the offer stays attachable by re-running the attach.
   try {
     await attachProspectWhiteGloveOffersToBusiness(business.id, data.ownerEmail, db);
   } catch (err) {
@@ -335,7 +335,7 @@ export async function getBusiness(id: string, client?: SupabaseClient): Promise<
 /**
  * Strict existence check for a business row. Unlike `getBusiness` (which
  * collapses every error into `null`), a query error here THROWS so security
- * gates can fail closed — the onboarding-draft first-claim gate must not
+ * gates can fail closed, the onboarding-draft first-claim gate must not
  * treat "the lookup errored" as "the business does not exist", or a
  * transient DB failure would reopen the unauthenticated pre-claim window
  * it guards (audit 2026-07, finding L3).
@@ -355,7 +355,7 @@ export async function businessExists(id: string, client?: SupabaseClient): Promi
 /**
  * Ids of every business owned by `ownerEmail` (newest first). Businesses are
  * keyed by `owner_email` (no stable owner_user_id), so this is the canonical
- * "businesses of the signed-in user" lookup. Throws on a query error — the
+ * "businesses of the signed-in user" lookup. Throws on a query error, the
  * checkout guard that calls this must fail closed, not open.
  */
 export async function listBusinessIdsByOwnerEmail(
@@ -374,7 +374,7 @@ export async function listBusinessIdsByOwnerEmail(
 
 /**
  * Backfill the signup-requested DID area code on an existing row (the
- * idempotent business.create retry path — mirrors the timezone backfill).
+ * idempotent business.create retry path, mirrors the timezone backfill).
  * Callers pass a value already normalized by `normalizePreferredAreaCode`.
  */
 export async function updateBusinessPreferredAreaCode(
@@ -399,7 +399,7 @@ export async function deleteBusiness(id: string, client?: SupabaseClient): Promi
 /**
  * Every business row currently pointing at a Hostinger VM id. Normally zero
  * or one row; more than one (or a row for a box someone else now owns) means
- * stale linkage — e.g. an admin released the box to the `vps_inventory` pool
+ * stale linkage, e.g. an admin released the box to the `vps_inventory` pool
  * while the old account still referenced it. Consumed by the adopt-time
  * stale-tenant cleanup (src/lib/provisioning/stale-tenant-cleanup.ts).
  */
@@ -477,7 +477,7 @@ export async function setCustomerChannelsEnabled(
 /**
  * Pin (or unpin, with null) the hardware size for a business. Takes effect on
  * the NEXT provisioning run (plan change, resubscribe, or an explicit
- * migration via debug/migrate-vps-size.ts) — it does not move a live VPS.
+ * migration via debug/migrate-vps-size.ts), it does not move a live VPS.
  */
 export async function updateBusinessVpsSize(
   id: string,
@@ -491,7 +491,7 @@ export async function updateBusinessVpsSize(
 
 /**
  * Pin (or revert) the provider/region axis for a business. Non-hostinger
- * providers are enterprise-only — the gate runs server-side here so every
+ * providers are enterprise-only, the gate runs server-side here so every
  * caller (admin route, future flows) is covered, same pattern as
  * updateDataResidencyMode. Reverting to 'hostinger' is always allowed so a
  * downgraded tenant can never be wedged on a provider its plan no longer
@@ -703,7 +703,7 @@ async function assertOnboxDestinationAllowed(
   }
 }
 
-/** Floor for the retention window — mirrors the DB check constraint. */
+/** Floor for the retention window, mirrors the DB check constraint. */
 export const MIN_DATA_RETENTION_DAYS = 30;
 
 /**
@@ -734,7 +734,7 @@ export async function updateDataRetentionDays(
 }
 
 /**
- * Businesses with a retention window configured — the data-retention-sweep's
+ * Businesses with a retention window configured, the data-retention-sweep's
  * work list.
  */
 export async function listBusinessesWithRetention(
@@ -959,7 +959,7 @@ export async function updateBusinessOwnerEmailIfPending(
 
   // Stripe-first onboarding creates the row with a pending sentinel email, so
   // createBusiness's prospect white-glove attach found nothing; the REAL email
-  // just landed — re-run the attach now. Best-effort, mirroring createBusiness.
+  // just landed, re-run the attach now. Best-effort, mirroring createBusiness.
   try {
     await attachProspectWhiteGloveOffersToBusiness(id, ownerEmail, db);
   } catch (err) {

@@ -25,7 +25,7 @@ const CONTACT_EMAIL_SCAN_LIMIT = 2000;
 /**
  * Map lowercase email address → contact link for every address that matches a
  * contact's stored email. Unmatched addresses are simply absent. Values in
- * `addresses` may be raw header strings — `Name <addr>` and comma-separated
+ * `addresses` may be raw header strings, `Name <addr>` and comma-separated
  * recipient lists (Cc) are both handled.
  */
 export async function findContactsByEmails(
@@ -41,7 +41,7 @@ export async function findContactsByEmails(
   if (wanted.size === 0) return out;
 
   const db = client ?? (await createSupabaseServiceClient());
-  // One scan of the business's emailed contacts, matched in JS — exact
+  // One scan of the business's emailed contacts, matched in JS, exact
   // case-insensitive equality, so an ILIKE wildcard false-positive is
   // impossible and no LIKE-escaping is needed.
   const { data, error } = await db

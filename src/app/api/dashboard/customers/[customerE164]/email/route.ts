@@ -9,7 +9,7 @@
  * linked on the customer profile, then logs it so it rolls up under the
  * profile's Email history. Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages");
  * admins bypass. Requires the profile to have a linked email and the owner to
- * have connected a mailbox (Integrations) — otherwise a clear 4xx.
+ * have connected a mailbox (Integrations), otherwise a clear 4xx.
  */
 
 import { z } from "zod";

@@ -19,7 +19,7 @@ export function firstUrlInText(text: string): string | null {
   return m[0].replace(/[.,;:!?]+$/, "");
 }
 
-/** Safe regex test — an invalid pattern never throws, it just fails to match. */
+/** Safe regex test, an invalid pattern never throws, it just fails to match. */
 export function safeRegexTest(pattern: string, value: string, caseInsensitive?: boolean): boolean {
   let re: RegExp;
   try {
@@ -41,7 +41,7 @@ function textContains(haystack: string, needle: string, caseInsensitive?: boolea
  * (for email triggers, the sender address). Empty list matches everything.
  * `refValues` carries pre-resolved identity values (phones/emails) for any
  * `from_matches` contact refs, keyed `${source}:${id}` (see
- * resolveFromMatchesRefValues) — a ref with no entry fails closed.
+ * resolveFromMatchesRefValues), a ref with no entry fails closed.
  */
 export function evaluateTriggerConditions(
   conditions: TriggerCondition[],
@@ -73,9 +73,9 @@ export function evaluateTriggerConditions(
 /**
  * Collapse an HTML email body to readable text. Twin of the Cloudflare email
  * worker's `cloudflare/email-worker/src/html-text.ts` (keep in sync): drops
- * the CONTENTS of comments/head/script/style/title too — a naive tag strip
+ * the CONTENTS of comments/head/script/style/title too, a naive tag strip
  * leaks whole stylesheets and unrendered `*|MC:SUBJECT|*` merge tags into the
- * "text" — keeps http(s) link destinations as `label (url)` so buttons stay
+ * "text", keeps http(s) link destinations as `label (url)` so buttons stay
  * actionable, decodes common entities, and squeezes whitespace.
  */
 export function htmlToText(html: string): string {
@@ -103,7 +103,7 @@ export function htmlToText(html: string): string {
 
 /**
  * True when a message's "plain text" part is really tag-stripped template
- * source rather than prose (twin of the email worker's copy — keep in sync).
+ * source rather than prose (twin of the email worker's copy, keep in sync).
  * Some senders generate the text/plain alternative by naively flattening the
  * HTML, leaving the stylesheet and unrendered merge tags in the "text".
  * Signals: a Mailchimp-style merge tag anywhere, or 3+ CSS rule blocks.
@@ -238,7 +238,7 @@ export const EMAIL_ATTACHMENT_NAMES_MAX = 500;
 /**
  * Marker prefixing the appended attachment-names line. Bracketed and
  * guaranteed to sit at the very END of windowText, so receipt flows can
- * anchor on `\n\[inbound attachments\] .+$` — prose that merely mentions
+ * anchor on `\n\[inbound attachments\] .+$`, prose that merely mentions
  * attachments can't false-positive (only a body deliberately ENDING with
  * this exact bracketed line could, and the worst case is a courteous
  * confirmation email).
@@ -310,7 +310,7 @@ export function tenantEmailTriggerScope(
     imageRef?: string;
     /**
      * First DOCUMENT attachment (pdf/docx/txt/md/csv) on the mail, as an
-     * `email-attachments:<path>` ref. Exposed as {{trigger.document}} — the
+     * `email-attachments:<path>` ref. Exposed as {{trigger.document}}, the
      * doc_extract step's default source. `documentName` is its display
      * filename ({{trigger.document_name}}).
      */
@@ -319,7 +319,7 @@ export function tenantEmailTriggerScope(
     /**
      * Filenames of every attachment on the mail. Appended to windowText as
      * an `attachments: …` line (AFTER the body slice, so a long body can't
-     * truncate it away) and exposed as {{trigger.attachments}} — this is
+     * truncate it away) and exposed as {{trigger.attachments}}, this is
      * what document-receipt flows condition on and confirm back.
      */
     attachmentNames?: string[];
@@ -374,7 +374,7 @@ export function flattenWebhookPayload(
     if (value === null || value === undefined) return;
     if (Array.isArray(value)) {
       // The root is always an object (Record), so an array is always reached
-      // under a key — `path` is never empty here.
+      // under a key, `path` is never empty here.
       value.forEach((v, i) => walk(v, `${path}.${i}`, depth + 1));
       return;
     }
@@ -413,7 +413,7 @@ export type CalendarEventInput = {
   allDay?: boolean;
   /**
    * Cancelled/deleted event: only the event_canceled mode fires for it (the
-   * other modes skip — a cancelled event neither starts nor ends).
+   * other modes skip, a cancelled event neither starts nor ends).
    */
   cancelled?: boolean;
   /** Which watched calendar the event came from. */

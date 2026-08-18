@@ -21,7 +21,7 @@ const PRICING: Record<PlanTier, PlanPricing> = {
       // Biennial renewal bumped $16.99 → $19.99 in the Jul 2026 tier relaunch
       // (starter margin rescue). Existing subscribers are grandfathered: their
       // Stripe commitment schedules were created at the old renewal price and
-      // are not rewritten — this constant only prices NEW checkouts/schedules.
+      // are not rewritten, this constant only prices NEW checkouts/schedules.
       biennial: { monthlyCents: 999, renewalMonthlyCents: 1999 },
       annual: { monthlyCents: 1099, renewalMonthlyCents: 1899 },
       monthly: { monthlyCents: 1599, renewalMonthlyCents: 2699 }

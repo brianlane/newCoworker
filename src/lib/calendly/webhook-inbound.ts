@@ -10,7 +10,7 @@
  *
  * Signature: Calendly signs `t.rawBody` with the per-subscription signing
  * key (HMAC-SHA256, hex) and sends `Calendly-Webhook-Signature:
- * t=<unix>,v1=<hex>` — the Stripe header shape. Verification is timing-safe
+ * t=<unix>,v1=<hex>`, the Stripe header shape. Verification is timing-safe
  * and replay-bounded by the timestamp tolerance.
  */
 import { createHmac, timingSafeEqual } from "crypto";
@@ -37,7 +37,7 @@ export const CALENDLY_WEBHOOK_SIGNATURE_HEADER = "calendly-webhook-signature";
 /**
  * Verify `Calendly-Webhook-Signature: t=...,v1=...` against the raw body.
  * False on any malformed header, stale/future timestamp, or digest
- * mismatch — never throws.
+ * mismatch, never throws.
  */
 export function verifyCalendlyWebhookSignature(
   rawBody: string,
@@ -79,14 +79,14 @@ export type CalendlyWebhookHandleDeps = BookingGoalFireDeps & {
 
 /**
  * Handle one verified webhook body. Only `invitee.created` does anything;
- * other events (or a business whose calendar no longer resolves to Calendly
- * — a stale subscription outliving a disconnect) are acknowledged and
+ * other events (or a business whose calendar no longer resolves to Calendly,
+ * a stale subscription outliving a disconnect) are acknowledged and
  * ignored so Calendly does not retry them.
  *
  * `subscription` is the row whose signing key just verified this delivery.
  * A row created by a DIFFERENT connection than the business's current one
  * belongs to a possibly-switched Calendly account (the sweep replaces it on
- * its next tick — see webhook-subscriptions.ts); its deliveries are ignored
+ * its next tick, see webhook-subscriptions.ts); its deliveries are ignored
  * rather than firing goals off the previous account's bookings.
  */
 export async function handleCalendlyWebhookEvent(
@@ -114,7 +114,7 @@ export async function handleCalendlyWebhookEvent(
     return { handled: false, reason: "stale_subscription" };
   }
 
-  // The invitee.created payload IS the invitee resource — same fields the
+  // The invitee.created payload IS the invitee resource, same fields the
   // sweep's invitees listing returns, so no API round-trip is needed.
   const invitee = ((body as { payload?: CalendlyBookingInvitee }).payload ??
     {}) as CalendlyBookingInvitee;

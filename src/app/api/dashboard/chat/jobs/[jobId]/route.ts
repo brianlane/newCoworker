@@ -3,11 +3,11 @@
  *
  * GET    serialize the requested dashboard_chat_jobs row (status,
  *        assistantMessageId, errorCode, ...). Used by the client to
- *        observe when the VPS chat-worker has finished generating —
+ *        observe when the VPS chat-worker has finished generating,
  *        the path that replaces the Vercel-side NDJSON stream we
  *        deleted in PR #79.
  *
- * Polling alongside Realtime — why both:
+ * Polling alongside Realtime, why both:
  *   The browser primary path is Supabase Realtime on
  *   dashboard_chat_messages (gated by the SELECT policy added in
  *   migration 20260508000003). This polling endpoint is the
@@ -15,7 +15,7 @@
  *   deliver:
  *     - corporate proxies or mobile networks that block websockets,
  *     - the rare INSERT event drop on the way to the client,
- *     - worker error states (status='error') — Realtime fires only
+ *     - worker error states (status='error'), Realtime fires only
  *       on assistant-message INSERT, not on a job's error transition,
  *     - the small race window where the user message INSERT lands
  *       before the subscription handshake completes.
@@ -23,7 +23,7 @@
  *   wins. Per-poll cost is one indexed PK lookup, dwarfed by the
  *   prior streaming path's per-turn open Vercel function.
  *
- * Wire shape (data envelope only — error envelope is the standard
+ * Wire shape (data envelope only, error envelope is the standard
  * { ok:false, error:{ code, message } } shape):
  *   {
  *     "id": "uuid",
@@ -38,7 +38,7 @@
  *     "completedAt": "..." | null
  *   }
  *
- * Auth: getAuthUser + requireBusinessRole(job.business_id, "operate_messages"). IDOR-safe — same
+ * Auth: getAuthUser + requireBusinessRole(job.business_id, "operate_messages"). IDOR-safe, same
  * pattern as the per-thread messages route: resolve the row, then
  * gate ownership against the row's tenant.
  */

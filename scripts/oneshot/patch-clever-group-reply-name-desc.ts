@@ -5,13 +5,13 @@
  *
  * Clever's group intro mentions the AGENT ("Amy Laidlaw") four times and the
  * seller only twice ("Hi Pamela 👋 … Amy, when is the earliest you'll be able
- * to give Pamela a call?"). Starting Jul 22 the old one-line description —
- * "The seller's first name from the Clever intro message" — extracted "Amy",
+ * to give Pamela a call?"). Starting Jul 22 the old one-line description,
+ * "The seller's first name from the Clever intro message", extracted "Amy",
  * so the canned seller reply greeted three sellers with our own agent's name
  * (8/8 correct Jul 13–21, 0/3 after). The break lined up with the Jul 21
  * extraction-model migration (PR #809, 2.5-flash-lite → 3.5-flash-lite), but
  * Jul 23 incident probing showed CURRENT 2.5-flash-lite failing the same
- * prompt 4/4 — the model version isn't the durable variable; the description
+ * prompt 4/4, the model version isn't the durable variable; the description
  * below probes correct 8/8 on BOTH models even with the pre-fix worker
  * prompt, which is why this patch (applied Jul 23 17:07 UTC) was the
  * immediate mitigation.
@@ -39,7 +39,7 @@
  *
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
- * Optional: AIFLOW_CLEVER_AGENT_DISPLAY (default "Amy Laidlaw") — the agent
+ * Optional: AIFLOW_CLEVER_AGENT_DISPLAY (default "Amy Laidlaw"), the agent
  *           name the description rules out.
  */
 import { loadEnv } from "../../debug/_shared.ts";

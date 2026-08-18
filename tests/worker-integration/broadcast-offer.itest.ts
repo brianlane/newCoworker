@@ -16,7 +16,7 @@ import {
 
 /**
  * BROADCAST route_to_team offers (agentNames): every listed roster member is
- * texted at once and shares one claim deadline — first "1" wins, a "2"
+ * texted at once and shares one claim deadline, first "1" wins, a "2"
  * retires just the passer, everyone passing (or the deadline lapsing) falls
  * back to the owner. Pinned here against the REAL worker + Postgres:
  * fan-out park state, the claim resume (webhook-mirrored), the
@@ -24,7 +24,7 @@ import {
  *
  * Offer/courtesy SMS cannot leave this harness (no Telnyx env): those sends
  * are caught per recipient by design (the park/claim is the durable fact),
- * so every scenario still completes — which doubles as coverage for exactly
+ * so every scenario still completes, which doubles as coverage for exactly
  * that failure path.
  */
 
@@ -88,7 +88,7 @@ function routingOf(run: Awaited<ReturnType<typeof getRun>>): Routing {
 /**
  * Consume a broadcast CLAIM the way telnyx-sms-inbound's live path does.
  * MIRROR of the bare-"1" broadcast branch in
- * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync) — the webhook
+ * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync), the webhook
  * itself can't be invoked here because it verifies Telnyx's Ed25519
  * signature, which a test cannot forge by design.
  */
@@ -229,7 +229,7 @@ describe("broadcast route_to_team offers (real worker)", () => {
     expect(routing.tried).toEqual([DAVE]);
     expect(routing.pass_reasons).toEqual(["Dave Lane: showing a house"]);
 
-    // Amy passes too: nobody is left — owner fallback, claim-gated steps skip.
+    // Amy passes too: nobody is left, owner fallback, claim-gated steps skip.
     await broadcastPassLikeWebhook(runId, AMY);
     await tickWorker();
 
@@ -250,7 +250,7 @@ describe("broadcast route_to_team offers (real worker)", () => {
 
     // Amy claims, then passes BEFORE the worker consumes the claim. The pass
     // rides the single-offer webhook path (her claim stamped routing.offered),
-    // which does NOT touch offered_all — mirror that exact shape.
+    // which does NOT touch offered_all, mirror that exact shape.
     await broadcastClaimLikeWebhook(runId, AMY);
     {
       const run = await getRun(db, runId);
@@ -278,7 +278,7 @@ describe("broadcast route_to_team offers (real worker)", () => {
     await tickWorker();
 
     // The broadcast re-parks for Dave alone, and Amy's stale claim pointer is
-    // gone — routing.offered must never survive a broadcast reject, or she
+    // gone, routing.offered must never survive a broadcast reject, or she
     // could live-claim the lead she just passed on.
     const run = await getRun(db, runId);
     expect(run.status).toBe("awaiting_agent");

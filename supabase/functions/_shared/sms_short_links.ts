@@ -1,14 +1,14 @@
 /**
  * Tracked SMS short links (concept ported from BizBlasts' SmsLinkShortener).
  *
- * Outbound lead-facing texts rewrite long URLs — scheme-prefixed http(s)
- * ones AND bare-domain ones like "calendly.com/james/intro" — to
+ * Outbound lead-facing texts rewrite long URLs, scheme-prefixed http(s)
+ * ones AND bare-domain ones like "calendly.com/james/intro", to
  * `<app>/s/<code>` redirects backed by the `sms_links` table, so link
  * engagement is
  * measurable per business / flow / run (the flow-funnel analytics read the
  * click counts). Shortening is strictly fail-safe: any insert error, missing
  * base URL, or URL that would not actually get shorter leaves the original
- * text untouched — a tracking problem must never block or corrupt a send.
+ * text untouched, a tracking problem must never block or corrupt a send.
  *
  * Dependency-free (caller injects the supabase client and, in tests, the
  * randomness source) so this is unit-tested from vitest under the shared
@@ -19,11 +19,11 @@
 export const SHORT_CODE_LENGTH = 8;
 
 // Exactly 32 symbols so a random byte maps to an index with a power-of-two
-// mask (`byte & 31`) — uniform by construction, with no modulo bias on the
+// mask (`byte & 31`), uniform by construction, with no modulo bias on the
 // CSPRNG output (CodeQL js/biased-cryptographic-random).
 const SHORT_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
-/** Postgres unique-violation SQLSTATE — short-code collision, retry. */
+/** Postgres unique-violation SQLSTATE, short-code collision, retry. */
 const UNIQUE_VIOLATION = "23505";
 
 /** Attempts per URL before giving up and leaving it unshortened. */
@@ -73,7 +73,7 @@ export function shortLinkUrl(baseUrl: string, code: string): string {
 // punctuation is stripped below so "…see https://x.com/a." drops the period):
 //   1. scheme-prefixed http(s) URLs;
 //   2. bare-domain URLs the way owners actually type them into flow bodies
-//      ("calendly.com/james/intro-call") — dotted labels ending in an
+//      ("calendly.com/james/intro-call"), dotted labels ending in an
 //      alphabetic TLD, then a REQUIRED "/path" (so plain "example.com" in
 //      prose, filenames, and version numbers like "1.2.3" never match). The
 //      lookbehind keeps it off email tails ("john@x.com/…"), the middle of
@@ -102,7 +102,7 @@ function isOwnShortLink(url: string, base: string): boolean {
 /**
  * Trim sentence punctuation from a matched URL's tail without mutilating
  * URLs that legitimately end in ")": a closing paren is only stripped while
- * the URL holds more ")" than "(" — so "(see https://x.com/a)" loses the
+ * the URL holds more ")" than "(", so "(see https://x.com/a)" loses the
  * wrapper paren but a Wikipedia-style ".../Foo_(bar)" keeps its own.
  */
 export function trimTrailingUrlPunctuation(raw: string): string {
@@ -223,7 +223,7 @@ async function insertShortLink(
 
 /**
  * Best-effort removal of tracked links whose send never went out (carrier
- * rejection, quota release, transport error) — otherwise the rows would sit
+ * rejection, quota release, transport error), otherwise the rows would sit
  * as live /s/<code> redirects for messages nobody received. Never throws:
  * cleanup is strictly subordinate to the caller's own error handling.
  */
@@ -253,7 +253,7 @@ export async function deleteShortLinks(
  *
  * Fail-safe by design: a missing/non-http base URL, a body with no
  * shortenable URLs, or any insert failure returns the text unchanged (in
- * whole or for that URL) — never throws, never blocks the send.
+ * whole or for that URL), never throws, never blocks the send.
  */
 export async function shortenSmsBodyUrls(
   db: ShortLinkSupabase,

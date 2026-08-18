@@ -38,7 +38,7 @@ export function LanguageSwitcher({ persist = false, className = "" }: Props) {
       // Signed-in visitors switching from a marketing page: also persist
       // best-effort, because the saved account preference wins over the
       // cookie at resolve time and would otherwise revert the switch on the
-      // next load. Signed-out visitors just get a 401 here — ignored.
+      // next load. Signed-out visitors just get a 401 here, ignored.
       // keepalive survives the navigation below.
       void fetch("/api/account/locale", {
         method: "POST",

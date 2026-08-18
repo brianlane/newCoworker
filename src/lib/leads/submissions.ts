@@ -3,7 +3,7 @@
  *
  * Every inbound webhook flow event (direct Meta Lead Ads, the Zapier /
  * Make / Privyr bridges, lead-backlog imports) is persisted here at
- * delivery time by processWebhookFlowEvent — BEFORE any flow runs — so the
+ * delivery time by processWebhookFlowEvent, BEFORE any flow runs, so the
  * Tasks page's Data view has one row per lead with the submitted answers,
  * and the Meta Conversions API feedback loop can resolve a contact back to
  * its `leadgen_id`.
@@ -24,7 +24,7 @@ import {
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Bounds on the stored `fields` map — hostile payloads can't bloat rows. */
+/** Bounds on the stored `fields` map, hostile payloads can't bloat rows. */
 export const MAX_SUBMISSION_FIELDS = 60;
 export const MAX_SUBMISSION_KEY_LENGTH = 80;
 export const MAX_SUBMISSION_VALUE_LENGTH = 500;
@@ -42,7 +42,7 @@ function isEmailFieldName(name: string): boolean {
 }
 
 /**
- * Flatten a webhook payload into a bounded `{key: value}` map for storage —
+ * Flatten a webhook payload into a bounded `{key: value}` map for storage,
  * the Data view's dynamic columns render straight from these keys. Nested
  * objects flatten with dotted keys, arrays with indices (same shape as the
  * trigger windowText flattener, kept as a map instead of lines).
@@ -86,7 +86,7 @@ export type SubmissionIdentifiers = {
  * Best-effort phone/email extraction from the flattened answers.
  *
  * Phone is deliberately conservative: only values under a phone-NAMED key
- * qualify (`phone_number`, `mobile`, `contact_no`, ... — isPhoneFieldName's
+ * qualify (`phone_number`, `mobile`, `contact_no`, ..., isPhoneFieldName's
  * token rules), so an office line in a notes field never becomes the lead's
  * identifier. Email accepts an email-named key first, then any value that
  * looks like an address (addresses are unambiguous in a way numbers aren't).
@@ -146,13 +146,13 @@ export type LeadSubmissionInput = {
   source: string;
   /** The parsed event payload. */
   data: Record<string, unknown>;
-  /** The event's idempotency key (webhookEventKey) — unique per business. */
+  /** The event's idempotency key (webhookEventKey), unique per business. */
   eventKey: string;
 };
 
 /**
  * Persist one submission. Exactly-once per (business, eventKey): a
- * redelivery's insert is an ignore-duplicates no-op. Never throws — losing
+ * redelivery's insert is an ignore-duplicates no-op. Never throws, losing
  * a Data-view row must never fail the webhook delivery that carried it.
  */
 export async function recordLeadSubmission(

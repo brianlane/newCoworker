@@ -1,19 +1,19 @@
 /**
  * Admin CRUD for custom white-glove offers.
  *
- * POST   — create a bespoke offer (name + custom amount) for one business,
- *          OR for a PROSPECT (recipientEmail instead of businessId — payable
+ * POST, create a bespoke offer (name + custom amount) for one business,
+ *          OR for a PROSPECT (recipientEmail instead of businessId, payable
  *          via the public /offer/<pay_token> link before any account exists).
  *          The stored row is the pricing source of truth for Stripe Checkout;
  *          the client never supplies an amount at pay time. The offer is
  *          EMAILED to its recipient (explicit recipientEmail, else the
- *          business owner) with the payment link — best-effort: an email
+ *          business owner) with the payment link, best-effort: an email
  *          hiccup never fails the creation, and the response reports
  *          `emailedTo` (or null) so the admin knows whether to send the link
  *          manually. The payUrl is always returned.
- * GET    — list offers: ?businessId=<uuid> for a business's panel, or
+ * GET, list offers: ?businessId=<uuid> for a business's panel, or
  *          ?prospect=1 for pre-account offers.
- * DELETE — revoke an OPEN offer (a paid offer can't be revoked; refunds are
+ * DELETE, revoke an OPEN offer (a paid offer can't be revoked; refunds are
  *          handled through the existing force-refund tooling).
  */
 import { z } from "zod";
@@ -65,7 +65,7 @@ async function emailOfferToRecipient(
       siteUrl,
       locale: await resolveOwnerUiLocaleForEmail(recipientEmail)
     });
-    // Resend can reject WITHOUT throwing (returns no message id) — treat that
+    // Resend can reject WITHOUT throwing (returns no message id), treat that
     // as a failed send so the admin is told to copy the link manually instead
     // of the notice claiming an email that never went out.
     const messageId = await sendOwnerEmail(apiKey, recipientEmail, subject, { text, html });

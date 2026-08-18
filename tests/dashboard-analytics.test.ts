@@ -38,7 +38,7 @@ type QueryResult = { data?: unknown; count?: number | null; error: { message: st
 
 /**
  * Builder-style chain: every method returns the chain, and awaiting the chain
- * resolves the injected result — matches how supabase-js PostgrestFilterBuilder
+ * resolves the injected result, matches how supabase-js PostgrestFilterBuilder
  * is consumed by the lib (thenable at any chain depth).
  */
 function makeChain(result: QueryResult) {
@@ -118,8 +118,8 @@ describe("getPreviousPeriodTotals", () => {
       },
       voice_call_transcripts: {
         data: [
-          // Two 90s calls on DIFFERENT days: per-day rounding (2 + 2) — the
-          // series-total aggregation — not round(180/60) = 3.
+          // Two 90s calls on DIFFERENT days: per-day rounding (2 + 2), the
+          // series-total aggregation, not round(180/60) = 3.
           {
             started_at: "2026-06-10T10:00:00Z",
             ended_at: "2026-06-10T10:01:30Z",
@@ -196,7 +196,7 @@ describe("getPreviousPeriodTotals", () => {
       now: NOW
     });
     expect(cappedTotals.clipped).toBe(true);
-    // A capped scan undercounts answered while missed stays exact — the
+    // A capped scan undercounts answered while missed stays exact, the
     // rate is suppressed rather than skewed.
     expect(cappedTotals.answerRate).toBeNull();
   });
@@ -410,7 +410,7 @@ describe("getAnalyticsDayDetail", () => {
             answering_machine_result: "machine",
             voicemail_left: true
           },
-          // In progress — counts as a call, contributes no minutes.
+          // In progress, counts as a call, contributes no minutes.
           {
             ...CALL,
             id: "t-3",
@@ -464,7 +464,7 @@ describe("getAnalyticsDayDetail", () => {
     expect(detail.calls[2].answeringMachineResult).toBeNull();
     expect(detail.calls[2].voicemailLeft).toBe(false);
 
-    // The day is sliced [00:00 UTC, next 00:00 UTC) — same bucketing as the series.
+    // The day is sliced [00:00 UTC, next 00:00 UTC), same bucketing as the series.
     const transcripts = chains.voice_call_transcripts as {
       gte: ReturnType<typeof vi.fn>;
       lt: ReturnType<typeof vi.fn>;
@@ -502,7 +502,7 @@ describe("getAnalyticsDayDetail", () => {
             created_at: "2026-07-03T09:00:00Z",
             updated_at: "2026-07-03T09:00:30Z"
           },
-          // Job created the PREVIOUS day whose reply landed inside the day —
+          // Job created the PREVIOUS day whose reply landed inside the day,
           // only the outbound message is attributed to this day.
           {
             id: "j-2",
@@ -515,7 +515,7 @@ describe("getAnalyticsDayDetail", () => {
             created_at: "2026-07-02T23:50:00Z",
             updated_at: "2026-07-03T00:10:00Z"
           },
-          // Unparseable envelope with no reply — contributes nothing.
+          // Unparseable envelope with no reply, contributes nothing.
           {
             id: "j-3",
             payload: {},
@@ -527,7 +527,7 @@ describe("getAnalyticsDayDetail", () => {
             created_at: "2026-07-03T11:00:00Z",
             updated_at: null
           },
-          // Unparseable envelope WITH a reply — the outbound renders with no
+          // Unparseable envelope WITH a reply, the outbound renders with no
           // linkable customer number.
           {
             id: "j-4",
@@ -540,7 +540,7 @@ describe("getAnalyticsDayDetail", () => {
             created_at: "2026-07-03T11:30:00Z",
             updated_at: "2026-07-03T11:30:05Z"
           },
-          // Created inside the day but replied AFTER it — only the inbound
+          // Created inside the day but replied AFTER it, only the inbound
           // side belongs to this day.
           {
             id: "j-5",
@@ -657,7 +657,7 @@ describe("getAnalyticsDayDetail", () => {
   });
 
   it("flags texts clipped when the inbound-jobs scan fills its row cap", async () => {
-    // 1000 rows hit the scan cap even though none expand into messages —
+    // 1000 rows hit the scan cap even though none expand into messages,
     // same-day messages may exist beyond the scan, so the flag must be set.
     const jobs = Array.from({ length: ANALYTICS_DAY_TEXT_SCAN_LIMIT }, (_, i) => ({
       id: `j-${i}`,
@@ -923,16 +923,16 @@ describe("getHourCallsDetail", () => {
     const { client } = makeClient({
       voice_call_transcripts: {
         data: [
-          // 19:30 UTC = 12:30 in Phoenix — matches hour 12.
+          // 19:30 UTC = 12:30 in Phoenix, matches hour 12.
           call("t-1", "2026-07-04T19:30:00Z"),
-          // 20:30 UTC = 13:30 in Phoenix — does not match.
+          // 20:30 UTC = 13:30 in Phoenix, does not match.
           call("t-2", "2026-07-04T20:30:00Z")
         ],
         error: null
       },
       system_logs: {
         data: [
-          // 19:50 UTC = 12:50 Phoenix — a turned-away attempt in the hour.
+          // 19:50 UTC = 12:50 Phoenix, a turned-away attempt in the hour.
           { created_at: "2026-07-04T19:50:00Z" },
           { created_at: "2026-07-04T08:00:00Z" }
         ],
@@ -1044,7 +1044,7 @@ describe("getInboundCallStats", () => {
         ],
         error: null
       },
-      // Turned-away attempts land in the histogram too — a rush of refusals
+      // Turned-away attempts land in the histogram too, a rush of refusals
       // is the peak-hours signal that matters most.
       system_logs: {
         data: [{ created_at: "2026-07-04T09:50:00Z" }, { created_at: "2026-07-02T08:00:00Z" }],
@@ -1074,7 +1074,7 @@ describe("getInboundCallStats", () => {
     };
     expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
     // Missed forwarded calls live on the voice_call_blocked side of the
-    // histogram — the transcript scan must exclude them or they'd count twice.
+    // histogram, the transcript scan must exclude them or they'd count twice.
     expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
     expect(logs.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
     // Same day-aligned boundary as the volume series (30 inclusive UTC days).

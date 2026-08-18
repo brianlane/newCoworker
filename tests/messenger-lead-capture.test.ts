@@ -122,7 +122,7 @@ describe("captureMessengerLead", () => {
       sessionRef: CONV_ID
     });
     expect(res.ok).toBe(true);
-    // Contact promotion still runs — its own failures are swallowed inside
+    // Contact promotion still runs, its own failures are swallowed inside
     // ensureCapturedContact, so the capture surface never needs a guard.
     expect(ensureCapturedContactMock).toHaveBeenCalledTimes(1);
 

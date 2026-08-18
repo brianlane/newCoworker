@@ -3,7 +3,7 @@
  *
  * Why this exists: checkout-triggered provisioning runs inside the Stripe
  * webhook's Vercel function, and the runtime keeps that function alive
- * only up to its maxDuration — twice (Truly Insurance Jul 8 2026, KYP Ads
+ * only up to its maxDuration, twice (Truly Insurance Jul 8 2026, KYP Ads
  * Jul 14 2026) a real signup's orchestrator was torn down mid-provision,
  * leaving the tenant stuck at "Provisioning started 5%" with no error, no
  * retry, and a human doing the recovery by hand. The same kill also hit
@@ -14,8 +14,8 @@
  *   * callers ENQUEUE a job row, then still run the orchestrator inline;
  *   * every recordProvisioningProgress write bumps the job's heartbeat;
  *   * a pg_cron watchdog (Edge `provisioning-watchdog` →
- *     /api/internal/provisioning-retry) claims ONE stalled job per tick —
- *     queued-but-never-started, or running with a stale heartbeat — and
+ *     /api/internal/provisioning-retry) claims ONE stalled job per tick,
+ *     queued-but-never-started, or running with a stale heartbeat, and
  *     re-runs the orchestrator, which is idempotent end to end (pool
  *     claims, SSH keys, gateway tokens, deploy).
  *
@@ -219,11 +219,11 @@ export async function markProvisioningJobOutcome(
 /**
  * Liveness bump, called from recordProvisioningProgress on every progress
  * write (orchestrator phases AND the in-deploy VPS callbacks). Never
- * throws — a heartbeat failure must not fail the progress write.
+ * throws, a heartbeat failure must not fail the progress write.
  *
  * Covers 'queued' rows as well as 'running' ones (Bugbot High on PR #598):
  * when the inline runner's best-effort markRunning write fails, the row
- * stays 'queued' while the orchestrator is very much alive — heartbeating
+ * stays 'queued' while the orchestrator is very much alive, heartbeating
  * it anyway is what stops the watchdog's queued-never-started claim from
  * starting a SECOND provision in parallel (the claim treats a fresh
  * heartbeat as liveness regardless of status).
@@ -266,7 +266,7 @@ export async function claimStalledProvisioningJob(
  * Flip attempts-exhausted, heartbeat-stale jobs to 'failed' (Bugbot Medium
  * on PR #598: they otherwise sit 'running' forever once the watchdog stops
  * claiming them). Returns the settled business ids so the watchdog tick
- * can surface them in telemetry — an exhausted job is a tenant a human
+ * can surface them in telemetry, an exhausted job is a tenant a human
  * must now look at.
  */
 export async function settleExhaustedProvisioningJobs(
@@ -442,8 +442,8 @@ export type RetryStalledProvisioningResult = (
  *
  * The already-online guard is load-bearing for SIGNUP jobs: the orchestrator
  * has no internal "tenant already serving" check (its callers guard), so a
- * stale signup whose provision actually finished — or that an operator
- * completed by hand — must resolve to 'succeeded' without re-provisioning
+ * stale signup whose provision actually finished, or that an operator
+ * completed by hand, must resolve to 'succeeded' without re-provisioning
  * live hardware.
  *
  * Background migrations (purpose migrate_size / term_renewal) take the

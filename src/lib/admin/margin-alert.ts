@@ -1,10 +1,10 @@
 /**
- * Margin alert — the ops watchdog for tenants whose ACTUAL monthly margin
+ * Margin alert, the ops watchdog for tenants whose ACTUAL monthly margin
  * (src/lib/admin/margin.ts, vendor actuals where synced) drops below a
  * configurable floor. Runs piggybacked on the daily platform cost sync
  * (the moment the freshest vendor numbers exist), emails the ops inbox a
  * digest, and is configured from the Costs page through
- * POST /api/admin/margin-alert — same admin_platform_settings pattern as
+ * POST /api/admin/margin-alert, same admin_platform_settings pattern as
  * the Gemini spend-velocity watchdog.
  *
  * Only PAYING tenants alert (revenueSource !== "none"): idle pilots and

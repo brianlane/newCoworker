@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeHeader, parseCsv, serializeCsv } from "../src/lib/csv/csv";
 
 /**
- * Coverage for src/lib/csv/csv.ts — the dependency-free RFC-4180 dialect
+ * Coverage for src/lib/csv/csv.ts, the dependency-free RFC-4180 dialect
  * (comma, `"` quoting with `""` escapes, \n / \r\n endings, UTF-8 BOM).
  */
 
@@ -72,7 +72,7 @@ describe("parseCsv", () => {
   });
 
   it("treats a quote mid-field per RFC (quote starts quoted section)", () => {
-    // `a"b",c` — the quote after `a` opens a quoted run containing `b`.
+    // `a"b",c`, the quote after `a` opens a quoted run containing `b`.
     const res = parseCsv('h1,h2\na"b",c');
     expect(res.ok).toBe(true);
     if (!res.ok) return;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — sidecar is plain JS without types; importing the pure
+// @ts-expect-error, sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-// prettier-ignore — single line so the ts-expect-error covers the untyped import
+// prettier-ignore, single line so the ts-expect-error covers the untyped import
 import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer, isAiBudgetModel, extractOpenAiUsage, createSseUsageCollector } from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
@@ -26,7 +26,7 @@ describe("llm-router pickUpstream", () => {
   });
 
   it("does NOT match models whose name only CONTAINS 'gemini' elsewhere (avoid false positives)", () => {
-    // `my-gemini-custom` should stay on Ollama — the router is deliberately
+    // `my-gemini-custom` should stay on Ollama, the router is deliberately
     // anchored at the start of the name so mis-tagged models don't jump
     // providers.
     expect(pickUpstream("my-gemini-custom")).toBe("ollama");

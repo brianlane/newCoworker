@@ -1,5 +1,5 @@
 /**
- * Section-splice editing of `business_configs.identity_md` — the shared
+ * Section-splice editing of `business_configs.identity_md`, the shared
  * core behind the get/update_business_knowledge coworker tools.
  *
  * Why splice-only: the one-shot history's hardest lesson on knowledge edits
@@ -11,7 +11,7 @@
  *
  * The write path is EXACTLY the identity editor's (/api/business/config):
  * patchBusinessConfig, then the knowledge-graph long-form extract (source
- * "identity", trust 3, no attribution), then the vault sync — so an edit
+ * "identity", trust 3, no attribution), then the vault sync, so an edit
  * made from chat can never diverge from one made in the dashboard editor.
  */
 
@@ -86,7 +86,7 @@ function describeSections(sections: IdentitySection[]): string {
  * The prefix of a section up to and including its heading line. A
  * whitespace-only document leader gets folded INTO the first heading
  * section by the splitter, so the heading line is not necessarily the
- * section's first line — taking lines[0] blindly discarded the "## X" line
+ * section's first line, taking lines[0] blindly discarded the "## X" line
  * whenever a leader was folded (Bugbot Medium on PR #1379).
  */
 function sectionHeadingPrefix(section: IdentitySection): string[] {
@@ -146,7 +146,7 @@ export function replaceIdentitySection(
   }
 
   // The documented flow reads sections (whose bodies the get tool returns)
-  // and writes a body back — but a model that re-includes the section's own
+  // and writes a body back, but a model that re-includes the section's own
   // heading line must not produce "## X" twice (Bugbot Medium on PR #1379).
   // Strip exactly one leading duplicate of THIS section's heading.
   let body = content;
@@ -227,7 +227,7 @@ export type IdentityReadResult = { exists: boolean; identityMd: string };
 /**
  * Strict identity read: THROWS on a failed query; `exists: false` only on a
  * confirmed missing row. Deliberately not getBusinessConfig, which collapses
- * read errors and no-row into one null — this module must never mistake a
+ * read errors and no-row into one null, this module must never mistake a
  * transient failure for an empty document, because an append against that
  * misread would overwrite the whole identity with a single section (Bugbot
  * High on PR #1379).

@@ -88,7 +88,7 @@ export default async function DashboardCallsPage() {
       forwardedTo: row.forwarded_to_e164,
       startedAt: row.started_at,
       endedAt: row.ended_at,
-      // AI digest (Standard+ perk). Rendered whenever present — after a
+      // AI digest (Standard+ perk). Rendered whenever present, after a
       // downgrade existing summaries stay readable; the sweep just stops
       // generating new ones.
       summary: row.summary ?? null,

@@ -41,7 +41,7 @@ type OrderSummaryCardProps = {
   preferFirstMonthLabel?: boolean;
   /**
    * Signup country: drives the labeled monthly messaging surcharge line (CA
-   * or MX, folded into "due today" at the plan's cadence — × term months on
+   * or MX, folded into "due today" at the plan's cadence, × term months on
    * prepaid plans) and, for MX, hides the US carrier-registration fee that
    * /api/checkout skips. ONE prop instead of per-country booleans so the
    * preview can never show two fees or a fee/carrier combination the

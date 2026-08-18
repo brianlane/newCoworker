@@ -2,7 +2,7 @@
 
 /**
  * Structural checks on the app definition (node --test; no Zapier login
- * needed). `zapier validate` does the full schema pass at deploy time —
+ * needed). `zapier validate` does the full schema pass at deploy time,
  * these tests catch the cheap mistakes early: a trigger key drifting from
  * its object key, a sample payload losing the fields the editor maps.
  */

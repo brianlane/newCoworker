@@ -253,7 +253,7 @@ describe("billingSubCycleMonths", () => {
    * PURCHASE date, not the current cycle start, so a monthly box bought
    * seven months ago measured as a seven-month cycle, its single-month
    * renewal price divided by seven, and cents-per-month came out 7x too
-   * low — failing the savings gate for exactly the long-standing monthly
+   * low, failing the savings gate for exactly the long-standing monthly
    * tenants this sweep exists to move onto term hardware.
    */
   it("reads an OLD monthly box as a 1-month cycle, not the span since purchase", () => {

@@ -1,7 +1,7 @@
 /**
  * Pure view-model builders for the admin Costs page (/admin/costs): vendor
  * KPI roll-ups, the monthly Telnyx trend, the renewal calendar (Hostinger
- * box renewals + Stripe term rollovers — both money moments), and the
+ * box renewals + Stripe term rollovers, both money moments), and the
  * idle-pool burn table. All inputs are prefetched rows; nothing here
  * touches the network or bills anyone.
  */
@@ -400,11 +400,11 @@ export type RenewalCalendarSubscription = {
 
 /**
  * Upcoming money moments within `horizonDays`, soonest first:
- * - Hostinger box renewals (spend continues) and lapses (box disappears —
+ * - Hostinger box renewals (spend continues) and lapses (box disappears,
  *   a problem if a tenant is on it, the plan if it's pooled).
  * - Stripe term rollovers: an active 12/24-month contract passing
  *   `renewal_at` rolls to the HIGHER month-to-month renewal rate unless
- *   auto-renew re-commits — revenue upside either way, worth watching.
+ *   auto-renew re-commits, revenue upside either way, worth watching.
  */
 export function buildRenewalCalendar(params: {
   hostingerRows: HostingerVpsCostRow[];
@@ -515,7 +515,7 @@ export function buildPoolBoxBurn(params: {
       (box.hostinger_billing_subscription_id !== null
         ? (bySubscription.get(box.hostinger_billing_subscription_id) ?? null)
         : null);
-    // A cancelled billing subscription recurs nothing — the box is sunk
+    // A cancelled billing subscription recurs nothing, the box is sunk
     // cost until it lapses, not monthly burn (same rule as the fleet KPI,
     // which excludes cancelled rows). Only a missing billing row falls
     // back to the SKU estimate.

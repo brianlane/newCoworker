@@ -1,5 +1,5 @@
 /**
- * AiFlow `doc_extract` — the platform side (Node): download the referenced
+ * AiFlow `doc_extract`, the platform side (Node): download the referenced
  * document, run Gemini's native document understanding to pull the flow's
  * typed fields out of it, and optionally FILE it into Business Documents
  * (condensed through the same ingest pipeline as dashboard uploads, so the
@@ -7,14 +7,14 @@
  * share_document).
  *
  * Called by /api/internal/aiflow-doc-extract (gateway-guarded) on behalf of
- * the ai-flow-worker — the worker can't reach Gemini's document pipeline or
+ * the ai-flow-worker, the worker can't reach Gemini's document pipeline or
  * the documents store from the edge runtime, mirroring the email_extract
  * mailbox proxy.
  *
  * Failure taxonomy (drives the worker's retry decision):
  *   - ok:false errors are PERMANENT input problems (bad ref, unsupported
- *     type, oversized, unreadable) — the worker fails the step, no retry;
- *   - thrown errors are transient (storage/model transport) — the route 500s
+ *     type, oversized, unreadable), the worker fails the step, no retry;
+ *   - thrown errors are transient (storage/model transport), the route 500s
  *     and the worker retries;
  *   - a FILING failure is non-fatal (`fileError`): the extraction the flow
  *     branches on already succeeded, and the owner can re-file by hand.
@@ -65,7 +65,7 @@ export type DocExtractInput = {
   businessId: string;
   /**
    * Document ref: `email-attachments:<path>` (the trigger.document value)
-   * or `business-docs:<documentId>` (a document already in the library —
+   * or `business-docs:<documentId>` (a document already in the library,
    * including agent artifacts).
    */
   sourceRef: string;
@@ -237,7 +237,7 @@ export async function docExtract(
     });
   } catch (err) {
     if (err instanceof GeminiEmptyError) {
-      // Billed even when empty (thinking-only output) — meter before failing.
+      // Billed even when empty (thinking-only output), meter before failing.
       await meterGeminiSpendForBusiness({
         businessId: input.businessId,
         model,
@@ -248,7 +248,7 @@ export async function docExtract(
       });
       return { ok: false, error: "extraction_failed", detail: "empty model reply" };
     }
-    // Transport/model faults are transient — throw so the route 500s and the
+    // Transport/model faults are transient, throw so the route 500s and the
     // worker retries.
     throw err;
   }
@@ -273,7 +273,7 @@ export async function docExtract(
     // ── Record sinks: resolve the structured extras BEFORE the insert so a
     // filed document lands complete (contact link, fields, renewal date).
     // Every sink is best-effort: a miss files the document anyway and
-    // reports a note — the extraction the flow branches on already
+    // reports a note, the extraction the flow branches on already
     // succeeded, and an unlinked filed copy beats no copy.
     let contactId: string | null = null;
     let contactE164: string | null = null;
@@ -290,7 +290,7 @@ export async function docExtract(
         if (!normalized.ok) {
           fileNotes.push(`contact link skipped: ${normalized.reason}`);
         } else {
-          // Primary number OR merged-away alias — same match the records
+          // Primary number OR merged-away alias, same match the records
           // CSV importer uses.
           const { data: contact, error: contactErr } = await db
             .from("contacts")
@@ -421,7 +421,7 @@ export async function docExtract(
 
     // Same condense pipeline as dashboard uploads, so the filed copy answers
     // knowledge lookups. From here on the document EXISTS (row + bytes), so
-    // any condense/patch failure still reports `filed` — downstream steps
+    // any condense/patch failure still reports `filed`, downstream steps
     // can reference the copy while the owner re-ingests from the dashboard.
     try {
       const ingested = await ingestDocument(

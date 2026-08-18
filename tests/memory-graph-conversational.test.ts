@@ -1,7 +1,7 @@
 /**
  * Conversational KG extraction (src/lib/memory/graph-conversational.ts):
  * the mode gate, the daily cost fuse, metering, the customer-source
- * provenance, and the never-throws contract — plus the pure helpers
+ * provenance, and the never-throws contract, plus the pure helpers
  * (dominant source, cap parsing, today-count wire shape).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

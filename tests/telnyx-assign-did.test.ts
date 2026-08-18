@@ -248,7 +248,7 @@ describe("resolveDefaultForwardToE164", () => {
   });
 
   it("uses the caller-supplied null existing row and skips the settings fetch", async () => {
-    // `null` is distinct from `undefined` here — passing `null` means
+    // `null` is distinct from `undefined` here, passing `null` means
     // "I checked and there's no row", so we should NOT re-fetch.
     mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
     const r = await resolveDefaultForwardToE164("biz", {} as never, null);

@@ -12,7 +12,7 @@
  *
  * Why we don't accept the Rowboat gateway token here: this surface is
  * for management of the credential vault. The agent never lists or
- * mutates rows — it only invokes the proxy at `./call/route.ts` with a
+ * mutates rows, it only invokes the proxy at `./call/route.ts` with a
  * label, and the proxy decrypts the matching row. Keeping write-paths
  * owner-only means even a compromised gateway token can't enumerate or
  * exfiltrate the stored credentials.
@@ -39,7 +39,7 @@ const createSchema = z.object({
   baseUrl: z.string().url(),
   authScheme: z.enum(CUSTOM_AUTH_SCHEMES),
   headerName: z.string().min(1).max(128).optional().nullable(),
-  // Cleartext on the wire (TLS) — encrypted before write. Length-bounded
+  // Cleartext on the wire (TLS), encrypted before write. Length-bounded
   // so a runaway client can't OOM the encrypter; 4 KB covers every API
   // key / basic credential we've actually seen.
   secret: z.string().max(4096).optional().nullable(),

@@ -73,7 +73,7 @@ function makeDb(overrides: {
     })),
     // `.update().eq()` is awaited directly by the plain marks (empty
     // transcript, failure bookkeeping, final persist) AND continues into
-    // `.is().eq().select()` for the optimistic claim — the returned object is
+    // `.is().eq().select()` for the optimistic claim, the returned object is
     // both thenable and chainable, like the real PostgrestFilterBuilder.
     update: vi.fn((values: Record<string, unknown>) => ({
       eq: vi.fn(() => ({

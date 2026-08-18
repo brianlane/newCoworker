@@ -1,5 +1,5 @@
 /**
- * Business Documents — dashboard management API.
+ * Business Documents, dashboard management API.
  *
  *   GET  /api/dashboard/documents?businessId=…   → list documents
  *   POST /api/dashboard/documents (multipart)    → upload + ingest one document
@@ -104,7 +104,7 @@ export async function POST(request: Request) {
     let expiresAt: string | null = null;
     if (expiresRaw) {
       // Date-only inputs mean "usable through that day" (end-of-day), not
-      // the preceding UTC midnight — see parseExpirationInput.
+      // the preceding UTC midnight, see parseExpirationInput.
       expiresAt = parseExpirationInput(expiresRaw);
       if (!expiresAt) return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
     }

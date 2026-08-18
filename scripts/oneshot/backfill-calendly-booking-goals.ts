@@ -1,5 +1,5 @@
 /**
- * backfill-calendly-booking-goals.ts — one-time appointment_booked catch-up
+ * backfill-calendly-booking-goals.ts, one-time appointment_booked catch-up
  * for Calendly bookings that predate the booking-goal observers.
  *
  * The 1/min sweep (PR #742) and the invitee.created webhook (PR #746) only
@@ -73,7 +73,7 @@ type RawInvitee = { status?: string; email?: string; text_reminder_number?: stri
 
 // Active bookings with a FUTURE start (an appointment that already happened
 // must not silently skip a live nurture run), listed regardless of when the
-// booking was CREATED — that is exactly the gap the sweep's lookback leaves.
+// booking was CREATED, that is exactly the gap the sweep's lookback leaves.
 const listRes = await calendlyRequest(BUSINESS_ID, conn, {
   endpoint: "/scheduled_events",
   method: "GET",

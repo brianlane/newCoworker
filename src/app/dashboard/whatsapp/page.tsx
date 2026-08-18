@@ -1,5 +1,5 @@
 /**
- * Owner-facing WhatsApp conversation index — the platform-filtered twin of
+ * Owner-facing WhatsApp conversation index, the platform-filtered twin of
  * /dashboard/messenger (threads open in the shared conversation view).
  * Reached via a sidebar item that only renders once the business has an
  * ACTIVE WhatsApp connection; direct URL access without one gets a

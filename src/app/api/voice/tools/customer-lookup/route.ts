@@ -5,7 +5,7 @@
  * caller (or another phone the caller mentions, e.g. "look up my
  * husband, his number is …"). Returns a compact summary the model
  * can speak aloud or condition its next response on. Never returns
- * pinned_md verbatim — that's owner-private context the agent uses
+ * pinned_md verbatim, that's owner-private context the agent uses
  * for steering, not for read-back.
  *
  * Auth: ROWBOAT_GATEWAY_TOKEN bearer (same as every other

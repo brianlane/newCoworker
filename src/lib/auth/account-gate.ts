@@ -21,7 +21,7 @@
  *
  * An OAuth-only user matching none of those has no account, so the sign-in is
  * rejected. When that row was minted seconds ago by the very sign-in we are
- * rejecting, it is deleted too — otherwise we would still be accumulating the
+ * rejecting, it is deleted too, otherwise we would still be accumulating the
  * empty accounts this module exists to prevent.
  *
  * Fail-open by design: this runs on the login path, so an unexpected shape or

@@ -31,7 +31,7 @@ import {
 import { runTool } from "./helpers/run-mcp-tool";
 
 /**
- * get/update_business_knowledge: OWNER-ONLY twice over — the handler
+ * get/update_business_knowledge: OWNER-ONLY twice over, the handler
  * requires the literal owner role on top of manage_settings, because the
  * identity document is the coworker's voice, and a manager editing it is a
  * different decision than the owner making their own coworker say things.

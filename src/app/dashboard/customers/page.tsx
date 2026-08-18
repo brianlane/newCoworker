@@ -78,11 +78,11 @@ export default async function DashboardCustomersPage() {
 
   // Four independent reads, one round-trip wall-clock (previously
   // sequential):
-  // - contacts: one unified list — every contact (customers + manual
+  // - contacts: one unified list, every contact (customers + manual
   //   contacts) lives on the contacts table now, so a single query is the
   //   whole directory. The full directory (up to the cap) so Smart List
   //   chip counts evaluate over every contact, not just the recently
-  //   active — an overdue/never-contacted list is exactly the rows a
+  //   active, an overdue/never-contacted list is exactly the rows a
   //   recency-ordered page would drop.
   // - duplicatePairs: same-email duplicate suggestions (owner-confirmed
   //   merges). Best-effort: a detection failure must never take down the

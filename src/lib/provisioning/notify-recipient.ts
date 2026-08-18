@@ -2,7 +2,7 @@
  * Resolve the owner-facing provisioning notification email.
  *
  * Mirrors the phone path in orchestrate.ts: input override first, then the
- * stored business row — but never ADMIN_EMAIL (that address is for admin
+ * stored business row, but never ADMIN_EMAIL (that address is for admin
  * login / ops alerts, not customer-facing "your coworker is live" mail).
  */
 

@@ -9,7 +9,7 @@
  * webhook (`src/app/api/webhooks/stripe/route.ts`). Bonus texts are consumed
  * by `try_reserve_sms_outbound_slot` only AFTER the plan's monthly cap is
  * exhausted. Expiry is `max(period_end, purchased_at + 30d)` and
- * packs are non-refundable to customers (admin clawback remains) — all mirroring
+ * packs are non-refundable to customers (admin clawback remains), all mirroring
  * `src/lib/billing/voice-bonus-packs.ts`, including the pricing contract:
  *
  *   1. Explicit per-pack cents override (`STRIPE_SMS_BONUS_<N>_CENTS`).
@@ -17,7 +17,7 @@
  *   3. The documented $0.02/text default when neither is set.
  *
  * A pack is available only when its `STRIPE_SMS_BONUS_<N>_PRICE_ID` env var
- * is set — missing IDs fail closed (hidden from the UI, rejected by the API).
+ * is set, missing IDs fail closed (hidden from the UI, rejected by the API).
  */
 
 export const SMS_BONUS_PACK_IDS = ["texts_500", "texts_2000", "texts_10000"] as const;

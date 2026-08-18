@@ -1,7 +1,7 @@
 /**
  * Voice-bridge booking-status fetch (vps/voice-bridge/src/booking-context.ts):
  * the bridge asks the platform for the caller's Calendly state
- * (POST /api/internal/contact-booking-context, per-tenant gateway bearer —
+ * (POST /api/internal/contact-booking-context, per-tenant gateway bearer,
  * the same auth pattern as meter-gemini-spend) and appends the answered
  * line to the call's system instruction. Everything fails OPEN to null: a
  * platform hiccup must never delay or degrade call setup beyond a missing

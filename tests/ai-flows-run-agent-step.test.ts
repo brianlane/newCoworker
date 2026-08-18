@@ -1,5 +1,5 @@
 /**
- * run_agent AiFlow step — schema, scope rules, planner, test-mode
+ * run_agent AiFlow step, schema, scope rules, planner, test-mode
  * simulation, library scrub, and compile-prompt awareness. One suite so
  * the whole step contract (authoring → validation → execution planning)
  * is pinned in one place.
@@ -367,7 +367,7 @@ describe("run_agent, test-mode simulation", () => {
     );
     expect(simulated).toEqual({ simulated: "run_agent", skipped: "no_input" });
     // The live skip path sets {{vars.agent_output}} = "" (and the filed-doc
-    // linkage vars) — the simulation must match so when-guards behave
+    // linkage vars), the simulation must match so when-guards behave
     // identically in test and production.
     expect(scope.vars.agent_output).toBe("");
     expect(scope.vars.agent_output_document_id).toBe("");

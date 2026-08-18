@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Business Documents — Drive-style file manager (Dashboard → Documents).
+ * Business Documents, Drive-style file manager (Dashboard → Documents).
  *
  * Categories act as FOLDERS you navigate into (?folder=<category>, linkable
  * and back-button friendly), not collapsible sections: the root shows folder
- * tiles, a folder shows its files as cards (grid) or table rows (list view —
+ * tiles, a folder shows its files as cards (grid) or table rows (list view,
  * toggle persisted per browser). Each file carries a kebab menu (Open, Open
  * in browser, Download, Rename, Move to folder, Delete); clicking the card
  * itself opens the document's own page (/dashboard/documents/<id>) where the
@@ -527,7 +527,7 @@ export function DocumentsManager({
             </div>
           )
         ) : visibleDocs.length === 0 ? (
-          // The audience filter can empty a folder that still has files —
+          // The audience filter can empty a folder that still has files,
           // say so instead of claiming the folder itself is empty.
           audienceFilter !== "all" &&
           documents.some((d) => documentFolder(d) === folder) ? (

@@ -2,7 +2,7 @@
 
 /**
  * Admin "delete account completely" button (the BizBlasts users-admin
- * delete). Two-step confirm with a typed-email gate — this hard-deletes the
+ * delete). Two-step confirm with a typed-email gate, this hard-deletes the
  * auth user, every owned business (content cascades with the rows), and the
  * email's membership grants. The API refuses accounts with live Stripe
  * billing, so a paying tenant can't be nuked this way by accident.

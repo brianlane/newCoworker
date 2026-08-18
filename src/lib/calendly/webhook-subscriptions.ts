@@ -4,7 +4,7 @@
  * Webhook subscriptions are a PAID Calendly feature created via
  * POST /webhook_subscriptions; the platform mints its own per-subscription
  * `signing_key` and supplies it IN the create request (Calendly signs
- * deliveries with the shared secret — it does not return one).
+ * deliveries with the shared secret, it does not return one).
  * `ensureCalendlyWebhookSubscription` is called
  * lazily from the booking-goal sweep for businesses that actually have
  * jumpable runs on booking-goal flows, so:
@@ -12,7 +12,7 @@
  *     appointment_booked goal events (receiver: /api/webhooks/calendly);
  *   - free-plan tenants get one refused attempt recorded as 'unsupported'
  *     and are re-tried only on a long cooldown (in case they upgrade);
- *   - the polling sweep keeps running for EVERYONE — the webhook only cuts
+ *   - the polling sweep keeps running for EVERYONE, the webhook only cuts
  *     latency, so a missed/failed delivery is healed within ~1-2 minutes.
  *
  * Subscriptions are user-scoped (scope "user" + the connected account's
@@ -21,14 +21,14 @@
  *
  * A 409 conflict ("hook with this url already exists") means an earlier
  * subscription survived a lost row (signing keys are unrecoverable after
- * creation) — recovery lists the subscriptions, deletes the one pointing at
+ * creation), recovery lists the subscriptions, deletes the one pointing at
  * our callback, and retries the create once.
  *
  * Account-switch safety (Bugbot on PR #746): every row records WHICH
  * platform connection created it (`<providerConfigKey>:<connectionId>`) and
  * WHICH Calendly user it observes. An active row only short-circuits while
  * the connection key still matches; when the connection changed, one
- * /users/me call re-validates the account — same user just refreshes the
+ * /users/me call re-validates the account, same user just refreshes the
  * stored key, a different user replaces the subscription (best-effort
  * remote delete of the old one first), so the receiver can never keep
  * firing goals off a previous Calendly account's bookings. A refused
@@ -100,7 +100,7 @@ type SubscriptionListing = { collection?: Array<{ uri?: string; callback_url?: s
 
 /**
  * Make sure this business has a live webhook subscription if its Calendly
- * plan allows one, respecting the retry cooldown. Never throws — the sweep
+ * plan allows one, respecting the retry cooldown. Never throws, the sweep
  * that calls this must keep polling regardless.
  */
 export async function ensureCalendlyWebhookSubscription(
@@ -160,7 +160,7 @@ export async function ensureCalendlyWebhookSubscription(
     ) {
       // Token refused or identity incomplete: transient from the webhook
       // path's perspective (the connection layer owns token health). An
-      // ACTIVE row is left untouched — a flaky identity probe must not
+      // ACTIVE row is left untouched, a flaky identity probe must not
       // destroy a working subscription; the mismatched connection key just
       // re-checks next tick.
       if (row?.status === "active") return { status: "error", attempted: true };
@@ -171,7 +171,7 @@ export async function ensureCalendlyWebhookSubscription(
     // account behind it.
     if (row?.status === "active") {
       if (row.user_uri === userUri && row.subscription_uri && row.signingKey) {
-        // Same Calendly account, new connection (e.g. a re-pasted PAT) —
+        // Same Calendly account, new connection (e.g. a re-pasted PAT),
         // the subscription is still right; just re-stamp the key.
         return await record("active", row.subscription_uri, row.signingKey, userUri);
       }
@@ -199,7 +199,7 @@ export async function ensureCalendlyWebhookSubscription(
     const callbackUrl = calendlyWebhookCallbackUrl(businessId);
     // The signing key is CLIENT-supplied: Calendly's create accepts an
     // optional `signing_key` and does NOT return one in the response
-    // resource (verified against the live API on 2026-07-18 — the shipped
+    // resource (verified against the live API on 2026-07-18, the shipped
     // wait-for-it-in-the-response contract left an orphaned hook we could
     // never verify). Mint our own high-entropy secret, send it, store it.
     const signingKey = randomBytes(32).toString("base64url");
@@ -224,7 +224,7 @@ export async function ensureCalendlyWebhookSubscription(
         const status = httpStatusOf(err);
         if (status === 409) return "conflict";
         // Plan gating: Calendly refuses webhook creation with 402 on plans
-        // without the feature. (The direct transport maps 403 to null —
+        // without the feature. (The direct transport maps 403 to null,
         // handled below; the thrown-403 arm went with the Nango proxy.)
         if (status === 402) return record("unsupported");
         logger.warn("calendly webhook subscribe failed", {
@@ -242,7 +242,7 @@ export async function ensureCalendlyWebhookSubscription(
       const sub = (res.data as SubscriptionResource | undefined)?.resource;
       if (typeof sub?.uri !== "string" || sub.uri.length === 0) {
         // A creation response without the resource URI leaves an unmanaged
-        // hook we cannot reference — record the failure (the next attempt's
+        // hook we cannot reference, record the failure (the next attempt's
         // 409 recovery reaps it by callback URL).
         return record("error");
       }
@@ -253,9 +253,9 @@ export async function ensureCalendlyWebhookSubscription(
     if (first !== "conflict") return first;
 
     // Conflict: an earlier subscription for this callback still exists but
-    // its signing key is unrecoverable — delete it and re-create once. The
+    // its signing key is unrecoverable, delete it and re-create once. The
     // stale hook may belong to a PREVIOUS Calendly user in the same
-    // organization (account switch — Bugbot on PR #746), so when the
+    // organization (account switch, Bugbot on PR #746), so when the
     // user-scoped listing misses, fall back to the organization-scoped one;
     // that lookup (and the delete after it) is permission-dependent, so a
     // refusal degrades to the recorded error and the polling sweep.
@@ -292,7 +292,7 @@ export async function ensureCalendlyWebhookSubscription(
       });
     } catch (err) {
       // Record the failed attempt so last_attempt_at advances and the
-      // cooldown applies — otherwise the sweep would repeat the whole
+      // cooldown applies, otherwise the sweep would repeat the whole
       // subscribe/conflict cycle every tick (Bugbot on PR #746).
       logger.warn("calendly webhook conflict delete failed", {
         businessId,
@@ -320,7 +320,7 @@ export type CalendlyWebhookTeardownDeps = {
 /**
  * Best-effort teardown when the owner disconnects or disables ONE Calendly
  * connection: delete the remote subscription (while we still can, through
- * THAT connection's own token — the primary's token cannot manage another
+ * THAT connection's own token, the primary's token cannot manage another
  * account's hooks) and drop the row so the receiver stops accepting its
  * deliveries. Never throws.
  */

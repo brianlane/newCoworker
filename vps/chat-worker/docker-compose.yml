@@ -29,7 +29,7 @@ services:
     # The sync chowns the dir to uid 1000 (`node`) so this write works.
     volumes:
       - /opt/rowboat/memory:/opt/rowboat/memory
-    # Keep logs bounded — structured JSON, ~150 bytes/line, but a busy
+    # Keep logs bounded, structured JSON, ~150 bytes/line, but a busy
     # tenant could otherwise fill disk inside a year.
     logging:
       driver: json-file

@@ -35,7 +35,7 @@ type RowVerdict = "us" | "them" | "tie";
  * GoHighLevel figures reflect their published pricing and plan docs as of
  * July 2026 (gohighlevel.com pricing + HighLevel support portal: $97/$297/
  * $497 base plans; AI Employee Unlimited $97/mo per location; SMS, email,
- * voice, and premium AI usage billed separately). Keep sourced and current —
+ * voice, and premium AI usage billed separately). Keep sourced and current,
  * an inaccurate competitor claim hurts more than it helps. Copy lives under
  * marketing.compareGhl.row1..row10 in the message catalogs.
  */

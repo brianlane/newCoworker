@@ -158,7 +158,7 @@ describe("voice settlement: zero-turn no-bill guard", () => {
 
 describe("voice settlement: per-minute carrier rounding", () => {
   it("rounds wall-clock elapsed UP to the next 60-second increment", () => {
-    // ceil(elapsed / 60.0) * 60 — this is what the Telnyx CDR
+    // ceil(elapsed / 60.0) * 60, this is what the Telnyx CDR
     // `Billable time` column does, and what every PSTN carrier bills on.
     expect(perMinuteRoundingMigration).toMatch(
       /wall_cap := \(ceil\(elapsed \/ 60\.0\)\)::int \* 60/
@@ -167,7 +167,7 @@ describe("voice settlement: per-minute carrier rounding", () => {
 
   it("special-cases elapsed=0 to 0 instead of paying for an unanswered call", () => {
     // Without this guard, ceil(0/60)*60 also = 0, so the explicit guard
-    // looks redundant — but it's there for clarity and so a future change
+    // looks redundant, but it's there for clarity and so a future change
     // to the rounding kernel doesn't accidentally start charging 60s for
     // call.initiated → immediate hangup events.
     expect(perMinuteRoundingMigration).toMatch(
@@ -257,7 +257,7 @@ describe("voice_meter_forwarded_call migration (contract)", () => {
 
   it("commits to the same pool the reserve gate reads, unconditionally (never refuses)", () => {
     // Same usage-row bootstrap as voice_reserve_for_call, then an
-    // unconditional commit — a call that already happened is never refused;
+    // unconditional commit, a call that already happened is never refused;
     // over the cap it lands as visible overage and the NEXT call is refused
     // by the reserve gate / safe-mode pre-check instead.
     expect(forwardedMeterMigration).toMatch(
@@ -306,7 +306,7 @@ describe("voice_active_sessions: ended-row reaper and un-wedgeable zombie sweep"
 
   it("zombie sweep contains per-row failures instead of aborting the whole loop", () => {
     // One unsettleable call used to abort the function, so nothing was swept
-    // and every later row stayed `ended_at is null` forever — the exact shape
+    // and every later row stayed `ended_at is null` forever, the exact shape
     // that wedges the redeploy safety check into skipping a tenant with no
     // error to look at.
     expect(reapEndedSessionsMigration).toMatch(

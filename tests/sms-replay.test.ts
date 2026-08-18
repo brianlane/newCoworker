@@ -101,7 +101,7 @@ function job(
   };
 }
 
-/** A flow whose single SMS trigger has no conditions — matches every text. */
+/** A flow whose single SMS trigger has no conditions, matches every text. */
 const FLOW = {
   id: "flow-1",
   definition: { trigger: { channel: "sms", conditions: [] } }
@@ -262,7 +262,7 @@ describe("replayInboundSms", () => {
 
   it("combines a sender's earlier texts inside the correlation window", async () => {
     // Two texts 2 minutes apart: the newer one alone lacks "quote", but the
-    // combined window text carries it — exactly how the live path matched.
+    // combined window text carries it, exactly how the live path matched.
     const { db } = replayDb({
       jobs: {
         data: [

@@ -15,7 +15,7 @@
  *
  *   - Username/password is captured as TWO separate fields and
  *     combined into the `user:pass` shape the server expects only at
- *     submit time — owners never have to type the `:` themselves.
+ *     submit time, owners never have to type the `:` themselves.
  *
  *   - The web address is validated client-side with a human-readable
  *     hint before the form ever hits the server, so a stray
@@ -108,7 +108,7 @@ type FormState = {
    * The auth_scheme this row was loaded with on edit. `null` on
    * create. Used to detect a scheme change (e.g. switching from
    * "API key" to "Username and password") so we can require a fresh
-   * credential — silently inheriting the stored ciphertext across a
+   * credential, silently inheriting the stored ciphertext across a
    * scheme change leaves the row in an unusable state (the proxy
    * would, e.g., base64-encode a bearer token as `user:pass`).
    */
@@ -157,7 +157,7 @@ function isProbableHttpsUrl(value: string): boolean {
     if (url.protocol !== "https:") return false;
     if (!url.hostname) return false;
     // Reject single-token "hostnames" like `localhost` written without
-    // a TLD or `intranet` — they're either bogus or LAN-local. Real
+    // a TLD or `intranet`, they're either bogus or LAN-local. Real
     // public APIs always have a dot in the host.
     if (!url.hostname.includes(".")) return false;
     return true;
@@ -322,7 +322,7 @@ export function CustomIntegrationsCard({ businessId, initialIntegrations }: Prop
 
     // When editing, switching login type (e.g. from API key to
     // username/password) and leaving the credential field blank used
-    // to silently inherit the stored secret under the new scheme —
+    // to silently inherit the stored secret under the new scheme,
     // which the server can't honor (Bugbot: "Auth scheme change
     // silently keeps incompatible stored secret"). The server now
     // refuses such transitions; mirror the check here so the owner

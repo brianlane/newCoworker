@@ -484,7 +484,7 @@ describe("remaining lifecycle DB/auth helpers", () => {
     } as never);
     await expect(findAuthUserIdByEmail("denied@example.com")).resolves.toBeNull();
     expect(rpc).toHaveBeenCalled();
-    // Must NOT fall through to listUsers on a real DB error — that would
+    // Must NOT fall through to listUsers on a real DB error, that would
     // mask a misconfigured permission as a silent "not found".
     expect(listUsers).not.toHaveBeenCalled();
   });
@@ -492,7 +492,7 @@ describe("remaining lifecycle DB/auth helpers", () => {
   it("returns null without fallback when RPC succeeds with null (genuine miss)", async () => {
     // The SQL is `select id from auth.users ... limit 1`, so PostgREST
     // surfaces a true miss as `{ data: null, error: null }`. That is a
-    // definitive answer from an indexed lookup — falling through to the
+    // definitive answer from an indexed lookup, falling through to the
     // listUsers paginated scan would burn up to 2,000 admin API calls
     // per nonexistent email, exactly the regression the RPC was added
     // to close.

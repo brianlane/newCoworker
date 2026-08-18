@@ -4,7 +4,7 @@
  * One merged, capped, oldest-first view of everything the platform recently
  * exchanged with ONE contact, regardless of channel or author:
  *
- *   - inbound SMS (sms_inbound_jobs payload text — INCLUDING rows a flow
+ *   - inbound SMS (sms_inbound_jobs payload text, INCLUDING rows a flow
  *     consumed/suppressed, which carry no assistant_reply_text and were
  *     invisible to the older sms_transcript loader),
  *   - outbound SMS (sms_outbound_log, ALL sources: AI replies, AiFlow
@@ -13,24 +13,24 @@
  *     has run; a placeholder line when it hasn't).
  *
  * Why: the 2026-07-14 Truly incident class. Mid-conversation, the
- * cross-channel rollup (contacts.summary_md) is EMPTY — the summarize
- * sweep hasn't run yet — exactly when a freshly-rooted model turn needs to
+ * cross-channel rollup (contacts.summary_md) is EMPTY, the summarize
+ * sweep hasn't run yet, exactly when a freshly-rooted model turn needs to
  * know what was just said. The rollup stays the long-term memory; this
  * timeline covers the recent window raw.
  *
  * Consumers:
  *   - sms-inbound-worker: injected into the system preamble on FRESH
  *     Rowboat threads (a continued thread already holds its own SMS
- *     history server-side — re-sending it every turn would bloat and
+ *     history server-side, re-sending it every turn would bloat and
  *     contradict it; voice/flow context on continued threads flows through
  *     customer_lookup_by_phone below).
  *   - customer_lookup_by_phone (src/lib/customer-tools/handlers.ts): the
  *     tool every agent surface (SMS, voice, dashboard) is instructed to
- *     call — `recentInteractions` gives ANY surface the cross-channel
+ *     call, `recentInteractions` gives ANY surface the cross-channel
  *     window on demand.
  *
  * Formatting is pure and unit-tested; the loader is a thin best-effort IO
- * wrapper — a context failure must never break a reply path. Same module
+ * wrapper, a context failure must never break a reply path. Same module
  * conventions as ai_flows/run_context.ts (importable from Deno edge AND
  * the Next runtime).
  */
@@ -42,7 +42,7 @@ export const CONTACT_TIMELINE_LOOKBACK_HOURS = 72;
 /** Most timeline lines included (newest kept when over). */
 export const TIMELINE_MAX_EVENTS = 14;
 
-/** Per-line excerpt cap — keeps one chatty message from dominating. */
+/** Per-line excerpt cap, keeps one chatty message from dominating. */
 export const TIMELINE_MAX_LINE_CHARS = 260;
 
 export type ContactTimelineEvent = {
@@ -129,7 +129,7 @@ export const TIMELINE_MAX_NUMBERS = 6;
  * Every number this contact's history may live under: the queried number
  * plus the profile's surviving primary and merged-away aliases
  * (merge_customer_memories moves the PROFILE, not the per-number message
- * logs — so a merged contact's SMS/call rows stay keyed on the old
+ * logs, so a merged contact's SMS/call rows stay keyed on the old
  * number). Best-effort: on any failure the queried number alone is used.
  */
 export async function resolveContactNumbers(
@@ -166,7 +166,7 @@ export async function resolveContactNumbers(
  * failures degrade to that source missing (never the whole block).
  *
  * @param excludeInboundJobId the job being processed right now, when called
- *   from the SMS worker — its inbound line is already the current user
+ *   from the SMS worker, its inbound line is already the current user
  *   message and must not appear twice.
  */
 export async function loadContactTimeline(
@@ -183,11 +183,11 @@ export async function loadContactTimeline(
     // Merged-alias awareness: a contact whose old number was merged into
     // another profile keeps its message/call rows keyed on the OLD number,
     // so the timeline must query every number the profile spans (Bugbot on
-    // PR #608 — the surfaced number alone missed the primary's history).
+    // PR #608, the surfaced number alone missed the primary's history).
     const numbers = await resolveContactNumbers(supabase, businessId, contactE164);
     const events: ContactTimelineEvent[] = [];
 
-    // Inbound SMS — every stored job for this contact, including rows an
+    // Inbound SMS, every stored job for this contact, including rows an
     // AiFlow consumed (suppress_reply) whose text never got an AI reply.
     let inboundQuery = supabase
       .from("sms_inbound_jobs")
@@ -215,7 +215,7 @@ export async function loadContactTimeline(
       }
     }
 
-    // Outbound SMS — every source (AI reply, AiFlow send, scheduled): the
+    // Outbound SMS, every source (AI reply, AiFlow send, scheduled): the
     // contact experienced them all as one thread.
     const outbound = await supabase
       .from("sms_outbound_log")
@@ -238,7 +238,7 @@ export async function loadContactTimeline(
       }
     }
 
-    // Voice — the call summarizer's one-paragraph summaries; a call that
+    // Voice, the call summarizer's one-paragraph summaries; a call that
     // ended but isn't summarized yet still shows up as a placeholder so the
     // model knows a conversation happened.
     const calls = await supabase

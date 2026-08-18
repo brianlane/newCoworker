@@ -10,7 +10,7 @@ import {
  * Recent-thread transcript for the stateless Rowboat retry: when the worker
  * drops a continuation, the freshly-rooted conversation must still know what
  * was already said, or the model restarts lead intake mid-thread (the Truly
- * Insurance 2026-07-13 incident — "what prompted you to shop around?" asked
+ * Insurance 2026-07-13 incident, "what prompted you to shop around?" asked
  * three times).
  */
 

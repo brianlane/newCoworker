@@ -397,7 +397,7 @@ describe("telnyx-routes DB layer", () => {
             to_e164: "+15551111111",
             created_at: "2026-05-04T00:00:00Z"
           },
-          // Older route for biz1 — must be ignored.
+          // Older route for biz1, must be ignored.
           {
             business_id: "biz1",
             to_e164: "+15550000000",

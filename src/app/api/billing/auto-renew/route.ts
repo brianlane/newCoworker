@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const payload = bodySchema.parse(await request.json());
 
     const db = await createSupabaseServiceClient();
-    // Latest owned business — same ordering as /dashboard/billing and
+    // Latest owned business, same ordering as /dashboard/billing and
     // /api/billing/cancel so the toggle acts on the row the page renders.
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db

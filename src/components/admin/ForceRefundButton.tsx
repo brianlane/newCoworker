@@ -6,7 +6,7 @@
  * support can honor disputes / accidents. Identical downstream behavior
  * to a self-serve cancel & refund (grace window still opens, auth stays
  * enabled until the sweep fires), but does NOT touch Supabase Auth on
- * its own — operators use the separate Force-cancel button for
+ * its own, operators use the separate Force-cancel button for
  * immediate wipes.
  */
 

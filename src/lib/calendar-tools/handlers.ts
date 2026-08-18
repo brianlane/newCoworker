@@ -63,7 +63,7 @@ import { logger } from "@/lib/logger";
  * Vagaro (vagaro.ts) and Acuity (acuity.ts) connections support REAL
  * booking: availability search + appointment creation on the merchant's own
  * book via each provider's direct API (per-tenant credentials in
- * vagaro_connections / acuity_connections — no Nango involved). Acuity's
+ * vagaro_connections / acuity_connections, no Nango involved). Acuity's
  * availability is DATE-scoped rather than range-scoped, so its slot search
  * fans out day by day; see that module for how the fan-out is bounded.
  */
@@ -106,7 +106,7 @@ export type BookAppointmentArgs = {
    * Without it, booking an attendee who already holds a different upcoming
    * slot refuses with `attendee_already_booked` (Truly, Jul 21 2026: the
    * model disowned a valid booking it had just made and created a second
-   * one — the broker ended up double-booked).
+   * one, the broker ended up double-booked).
    */
   allowAdditional?: boolean;
 };
@@ -128,7 +128,7 @@ function isValidTimeZone(tz: string): boolean {
  * first, then the business timezone, then UTC. Each candidate is validated
  * against Intl (models occasionally send abbreviations like "EDT" that are
  * not IANA zones) so downstream wall-clock conversion can never throw on a
- * bad zone. Looked up per call (single indexed read) and never fatal — a
+ * bad zone. Looked up per call (single indexed read) and never fatal, a
  * lookup error degrades to UTC, exactly the pre-timezone behavior.
  */
 export async function resolveToolTimezone(
@@ -149,7 +149,7 @@ export async function resolveToolTimezone(
  * A booking start rendered for HUMANS (and the model to read back
  * verbatim): "Wednesday, July 22, 2026, 9:00 AM EDT". The Truly incident of
  * Jul 21 2026 was the model booking the right instant but narrating the
- * wrong DAY ("today") and then disowning its own valid booking — so
+ * wrong DAY ("today") and then disowning its own valid booking, so
  * successful bookings and the duplicate guard both carry this string, and
  * the prompts tell the model to quote it instead of deriving the day
  * itself. Falls back to the raw ISO rather than ever throwing.
@@ -172,7 +172,7 @@ export function formatBookingStartLocal(startIso: string, timeZone: string): str
 }
 
 /**
- * "YYYY-MM-DDTHH:mm:ss" wall-clock time of an instant in a timezone — the
+ * "YYYY-MM-DDTHH:mm:ss" wall-clock time of an instant in a timezone, the
  * format Microsoft Graph's dateTimeTimeZone expects (naive local time plus
  * a separate timeZone field). The caller guarantees a valid IANA zone via
  * resolveToolTimezone.
@@ -223,14 +223,14 @@ function minuteInZone(instant: Date, timeZone: string): number {
  * First presentable start inside a free gap, or null when nothing fits.
  *
  * Offered times must land on quarter-hour boundaries, preferring :00/:30
- * (in the requester's timezone) over :15/:45 — a lead offered "5:19 PM"
+ * (in the requester's timezone) over :15/:45, a lead offered "5:19 PM"
  * reads it as a glitch, not availability. Every UTC offset in use is a
  * multiple of 15 minutes, so UTC quarter boundaries ARE local quarter
  * boundaries everywhere; only the :00/:30 classification needs the zone
  * (e.g. Kathmandu's +05:45 maps UTC :15 to local :00).
  *
  * Exactly one of the first two quarter boundaries after the gap opens is a
- * :00/:30 — take it when the appointment still fits (at most 15 minutes
+ * :00/:30, take it when the appointment still fits (at most 15 minutes
  * later than the alternative), otherwise the earliest quarter that fits.
  * If neither of the first two fits, no later start can either.
  */
@@ -250,7 +250,7 @@ function alignedGapStart(
   for (const candidate of [first, second]) {
     if (onHourOrHalf(candidate) && fits(candidate)) return candidate;
   }
-  // No :00/:30 fits — fall back to the earliest quarter boundary. Only
+  // No :00/:30 fits, fall back to the earliest quarter boundary. Only
   // `first` needs checking: `second` is later, so it can never fit when
   // `first` doesn't.
   return fits(first) ? first : null;
@@ -294,7 +294,7 @@ export function computeFreeSlots(
 
 /**
  * Raw busy blocks for a Google/Microsoft workspace connection across the
- * primary AND shared "NewCoworker" calendars — the exact fetch
+ * primary AND shared "NewCoworker" calendars, the exact fetch
  * findCalendarSlots always ran, extracted so the public booking page can
  * compute its own slot grid over the same free/busy truth. Returns null
  * when the Nango proxy yields nothing (treat as calendar_not_connected).
@@ -701,7 +701,7 @@ export async function findCalendarSlots(
 /**
  * Stored contact identity (display name + email) for the attendee phone,
  * alias-aware. Best effort: nulls on no contact, blank fields, or any
- * lookup failure — the booking proceeds with the model-supplied values.
+ * lookup failure, the booking proceeds with the model-supplied values.
  */
 async function storedAttendeeContact(
   businessId: string,
@@ -730,7 +730,7 @@ export type BookAppointmentOptions = {
    * fresh booking for a contact no teammate owns fans out the
    * unassigned-booking owner alert (toggle `unassigned_booking_alerts`,
    * on by default). Owner-initiated surfaces (dashboard inline, dashboard_
-   * Rowboat twin, MCP) leave it unset — the owner already knows what they
+   * Rowboat twin, MCP) leave it unset, the owner already knows what they
    * booked. `already_booked` dedupe retries never re-alert.
    */
   alertSurface?: "voice" | "sms" | "webchat";
@@ -757,11 +757,11 @@ export async function bookCalendarAppointment(
 
   // Preferred-name rule (Truly Issue 6): once a contact exists, the stored
   // display name wins over whatever name the model carried in from a lead
-  // form or the conversation — invites stop flip-flopping between "Juhu"
+  // form or the conversation, invites stop flip-flopping between "Juhu"
   // and "Muhammad Fahad Juhu" for the same person.
   //
   // Email backfill (Truly, Jul 15 2026): the voice model rarely collects an
-  // email mid-call, so bookings shipped with no attendee — the provider
+  // email mid-call, so bookings shipped with no attendee, the provider
   // sent NO calendar invite while the assistant promised one. When the
   // stored contact already has an email (lead form, SMS follow-up), use it
   // so the invite is real. The model's explicit attendeeEmail still wins.
@@ -793,7 +793,7 @@ export async function bookCalendarAppointment(
   };
 
   // Attendee duplicate guard (Truly, Jul 21 2026): prompts alone failed
-  // three times in one week — the model books a SECOND slot to "fix" or
+  // three times in one week, the model books a SECOND slot to "fix" or
   // "move" an existing one, and the owner's calendar ends up double-booked.
   // The shared attendee-bookings lookup sees every platform booking (any
   // provider, via the dedupe ledger) plus the connected provider's
@@ -819,7 +819,7 @@ export async function bookCalendarAppointment(
     const nowMs = Date.now();
     // A request that repeats one of the attendee's EXISTING slot times is a
     // retry, not a duplicate: skip the guard entirely so it falls through to
-    // the idempotency ledger's `already_booked` answer — even when the
+    // the idempotency ledger's `already_booked` answer, even when the
     // attendee holds OTHER upcoming slots too (e.g. booked two via
     // allowAdditional; Bugbot Medium on PR #824).
     const repeatsExistingSlot = existing.some((b) => {
@@ -856,12 +856,12 @@ export async function bookCalendarAppointment(
   }
 
   // Idempotency guard (2026-07-13 incident): a worker-retried model turn
-  // re-runs its tool calls, and provider create APIs are not idempotent —
+  // re-runs its tool calls, and provider create APIs are not idempotent,
   // one customer confirmation produced FOUR identical Outlook events. Claim
   // the (business, attendee, start) slot before creating; a repeat attempt
   // inside the window returns the recorded event instead of booking again.
   // Fail-open: a null claim (ledger unavailable) books without dedupe.
-  // Calendly is naturally exempt — its link-mode result never confirms an
+  // Calendly is naturally exempt, its link-mode result never confirms an
   // eventId, so its claims are always released.
   const claim = await claimBookingDedupe(
     businessId,
@@ -876,7 +876,7 @@ export async function bookCalendarAppointment(
         eventId: claim.eventId,
         deduplicated: true,
         // The prompts key invite language off inviteEmail, and a timeout
-        // retry lands here — the original create ran the same email merge
+        // retry lands here, the original create ran the same email merge
         // on the same args, so the merged email IS what rode the event.
         inviteEmail: args.attendeeEmail?.trim() || null
       }
@@ -954,7 +954,7 @@ export async function bookCalendarAppointment(
   }
 
   // Unassigned-booking owner alert (Truly, Jul 21 2026): a customer-facing
-  // AI surface just confirmed a REAL appointment — if no teammate owns this
+  // AI surface just confirmed a REAL appointment, if no teammate owns this
   // contact, tell the owner NOW, or nobody shows up. Fresh confirmed creates
   // only (link-mode and failures carry no event; dedupe retries returned
   // above). Best-effort inside the core: never affects the booking result.
@@ -1033,7 +1033,7 @@ async function bookOnProvider(
     }
 
     if (conn.provider === "calendly") {
-      // Calendly cannot create the booking — hand back a single-use link.
+      // Calendly cannot create the booking, hand back a single-use link.
       return createCalendlyBookingLink(businessId, conn, {
         startIso: args.startIso,
         endIso: args.endIso
@@ -1041,8 +1041,8 @@ async function bookOnProvider(
     }
 
     // Zoom decorator for the REAL-booking calendar providers below (CalDAV,
-    // Google, Microsoft): with a connected Zoom account — first-party
-    // zoom_connections, or a legacy Nango link — the appointment gets a
+    // Google, Microsoft): with a connected Zoom account, first-party
+    // zoom_connections, or a legacy Nango link, the appointment gets a
     // scheduled Zoom meeting whose join link rides the event body and the
     // tool result (so the agent texts/emails it in the confirmation).
     // Best-effort by contract: null means "no video link", never a failed
@@ -1117,7 +1117,7 @@ async function bookOnProvider(
         });
         return {
           ...caldavResult,
-          // CalDAV events carry the attendee in the description only — the
+          // CalDAV events carry the attendee in the description only, the
           // server emails nobody. Explicit null so the model never promises
           // an invite on this provider.
           data: {
@@ -1159,7 +1159,7 @@ async function bookOnProvider(
     // (an unambiguous instant), but the providers want different shapes:
     // Google takes any RFC3339 instant (send UTC; timeZone drives display),
     // while Microsoft Graph's dateTimeTimeZone wants NAIVE local wall time
-    // plus the zone name — an offset-carrying string sent raw is exactly
+    // plus the zone name, an offset-carrying string sent raw is exactly
     // what made every Truly SMS booking attempt fail.
     const startInstant = new Date(args.startIso);
     const endInstant = new Date(args.endIso);
@@ -1194,7 +1194,7 @@ async function bookOnProvider(
         // Asking for the conference is NOT a separate best-effort call: it
         // rides the very request that creates the appointment. Google
         // answers 400 ("Invalid conference type value") when the target
-        // calendar does not allow hangoutsMeet — and secondary calendars,
+        // calendar does not allow hangoutsMeet, and secondary calendars,
         // which is what ensureSharedCalendar creates, do not reliably
         // advertise it, least of all on a personal @gmail account. Sent
         // naively, a tenant whose calendar refuses Meet would lose the
@@ -1312,9 +1312,9 @@ async function bookOnProvider(
 
     // Goal Events: a real booking may fast-forward the lead's parked/queued
     // AiFlow runs to an "appointment booked" goal (skipping follow-up sends
-    // between here and there). Only a CONFIRMED create fires it — a provider
+    // between here and there). Only a CONFIRMED create fires it, a provider
     // response without an event id is not a booking. Best-effort inside
-    // fireGoalEvent; the Calendly path above is exempt — a scheduling LINK is
+    // fireGoalEvent; the Calendly path above is exempt, a scheduling LINK is
     // not a booking.
     if (eventId) {
       await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {

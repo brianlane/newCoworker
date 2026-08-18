@@ -262,7 +262,7 @@ describe("deleteEndUserData, central-only tenants", () => {
 
   it("erases the person's AI reasoning records centrally across every linked number", async () => {
     const db = makeCentralDb({
-      // The pre-delete scan reports a merge alias — reasoning stored under
+      // The pre-delete scan reports a merge alias, reasoning stored under
       // it must be erased too (the .in() spans primary + aliases). Malformed
       // alias payloads (non-array, non-string/empty entries) are tolerated.
       "contacts#1": {
@@ -284,7 +284,7 @@ describe("deleteEndUserData, central-only tenants", () => {
       box: null
     });
     // Tracked short links sent to any linked number are erased too
-    // (central-only by design — see residency/tables.ts).
+    // (central-only by design, see residency/tables.ts).
     expect(byTable.sms_links).toEqual({ table: "sms_links", central: 1, box: null });
     // A notify_owner cooldown keyed on {{vars.lead_phone}} is a row keyed to
     // the person, so it goes with them.

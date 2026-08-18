@@ -5,7 +5,7 @@
  * `release_vps_migration_lock` RPCs (migration 20260731000100). The route
  * claims before dispatching the background migration and refuses with 409
  * when a lease is already held; the background job releases the lease in
- * its terminal path. Leases self-expire (default 30 min — double the
+ * its terminal path. Leases self-expire (default 30 min, double the
  * route's 300s `maxDuration` budget with slack) so a crashed job can never
  * wedge a business permanently.
  */
@@ -48,7 +48,7 @@ export async function tryClaimVpsMigration(
 }
 
 /**
- * Release the lease. Best-effort by design — a failed release only means
+ * Release the lease. Best-effort by design, a failed release only means
  * the next migration for this business waits out the lease expiry.
  */
 export async function releaseVpsMigrationLock(

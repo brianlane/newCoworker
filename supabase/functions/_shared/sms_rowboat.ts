@@ -8,7 +8,7 @@
  * and finally dead-letter the job, silently breaking the SMS thread.
  *
  * Extracted from index.ts so we can vitest the retry logic without
- * Deno globals or Supabase client mocking — the same pattern the
+ * Deno globals or Supabase client mocking, the same pattern the
  * other `_shared/` modules follow.
  */
 
@@ -16,7 +16,7 @@
  * Errors where Rowboat's response strongly suggests the *server-side*
  * conversation referenced by our stored conversationId is gone OR the
  * conversation is otherwise unhealthy. On these we get one stateless
- * retry with the continuation dropped — Rowboat will treat the SMS
+ * retry with the continuation dropped, Rowboat will treat the SMS
  * turn as a fresh thread and produce a reply rooted in just the new
  * user message (plus `statelessContextExtra`, see below).
  *
@@ -39,12 +39,12 @@ export const CONVERSATION_STATE_RETRY_ERRORS = new Set([
  * llm-router's Gemini 503s surface as Rowboat 500s), not a stale
  * continuation. A stateless retry here would throw away the whole
  * conversation history to "fix" a problem that isn't conversation
- * state — production showed the model restarting lead intake ("what
+ * state, production showed the model restarting lead intake ("what
  * prompted you to shop around?") mid-thread during a Gemini outage
  * (Truly Insurance, 2026-07-13).
  *
  * These are stateless-retry-eligible ONLY when the caller opts in via
- * `allowStatelessOnServerErrors` — the SMS worker does so on late
+ * `allowStatelessOnServerErrors`, the SMS worker does so on late
  * attempts, where a persistent 5xx may in fact be a poisoned
  * conversation and the reset is the last resort before dead-letter.
  * Early attempts surface the error to the job-level retry, which
@@ -59,7 +59,7 @@ export const TRANSIENT_SERVER_RETRY_ERRORS = new Set([
 /**
  * First job attempt (attempt_count, incremented at claim) on which a 5xx may
  * trigger the history-dropping stateless retry. Below it, the 5xx surfaces
- * to the job-level retry, which re-runs STATEFUL with the thread intact —
+ * to the job-level retry, which re-runs STATEFUL with the thread intact,
  * a transient Gemini outage must not cost the customer their thread context
  * (2026-07-13 incident). Lives here (not in the worker entrypoint) so the
  * integration suite can pin the exact threshold the worker deploys with.
@@ -67,7 +67,7 @@ export const TRANSIENT_SERVER_RETRY_ERRORS = new Set([
 export const STATELESS_5XX_MIN_ATTEMPT = 3;
 
 /**
- * Union of both classes — the full set of errors that MAY warrant a
+ * Union of both classes, the full set of errors that MAY warrant a
  * stateless retry. Kept exported because the dashboard chat path
  * mirrors this concept (src/app/api/dashboard/chat/route.ts); note the
  * dashboard's stateless input carries the FULL history tail, so a
@@ -86,7 +86,7 @@ export type RowboatChatCallInput = {
   state: unknown | null;
   /**
    * Per-call timeout for a single Rowboat round trip. NOTE: this is
-   * NOT the combined budget across initial + retry — that's
+   * NOT the combined budget across initial + retry, that's
    * `budgetMs` on the fallback wrapper below.
    */
   timeoutMs: number;
@@ -99,15 +99,15 @@ export type RowboatChatCallInput = {
    * behaviour where SMS sends only the new user line.
    *
    * Why this lives on the call input and not on the helper: the
-   * preamble is per-customer, not per-business — it'd be wrong for
+   * preamble is per-customer, not per-business, it'd be wrong for
    * the helper to look it up and apply it indiscriminately.
    */
   customerPreamble?: string | null;
   /**
    * Optional Rowboat agent to enter for this turn (the SMS spend cap passes the
    * local Qwen agent over cap, otherwise the Gemini `Coworker`). NOTE: Rowboat
-   * IGNORES startAgent whenever a conversationId is supplied — it resumes the
-   * agent the thread was bound to — so a startAgent override only takes effect on
+   * IGNORES startAgent whenever a conversationId is supplied, it resumes the
+   * agent the thread was bound to, so a startAgent override only takes effect on
    * a STATELESS call (conversationId = null). The caller is responsible for
    * dropping the continuation when it needs the override honored.
    */
@@ -117,7 +117,7 @@ export type RowboatChatCallInput = {
    * (never a separate system message). Production showed the SMS model
    * ignoring system-preamble context on a fresh thread while honoring the
    * same fact when adjacent to the user turn (Truly "July 23, 2026",
-   * 2026-07-14) — the worker passes formatFlowAnswerNote output here when an
+   * 2026-07-14), the worker passes formatFlowAnswerNote output here when an
    * automation just texted this contact and no conversation exists yet.
    */
   userTurnNote?: string | null;
@@ -126,7 +126,7 @@ export type RowboatChatCallInput = {
 export type StatelessFallbackInput = RowboatChatCallInput & {
   /**
    * Combined wall-clock budget for the initial call AND the optional
-   * stateless retry. When omitted, falls back to `timeoutMs * 2` —
+   * stateless retry. When omitted, falls back to `timeoutMs * 2`,
    * preserves pre-fix behaviour for callers that haven't been
    * updated, but new callers MUST pass an explicit budget aligned
    * with the surrounding cron / Edge function timeout.
@@ -135,7 +135,7 @@ export type StatelessFallbackInput = RowboatChatCallInput & {
    * 90s (see migrations/20260505180000_sms_inbound_worker_cron_timeout.sql).
    * A first call that fails at the 60s `timeoutMs` ceiling plus a
    * fresh-window retry of another 60s would put total Rowboat wall
-   * time at ~120s, well past the cron cap — pg_cron disconnects, the
+   * time at ~120s, well past the cron cap, pg_cron disconnects, the
    * Telnyx outbound never goes out, the job sits at 'processing'
    * until the stale-claim sweep requeues it (Codex P1 / Cursor
    * Bugbot Medium feedback on PR #74). Bounding the retry at
@@ -148,13 +148,13 @@ export type StatelessFallbackInput = RowboatChatCallInput & {
    * chat helper: a Rowboat call that pages in a cold model takes
    * ~5s minimum on a small VPS, so anything below this is almost
    * guaranteed to abort before yielding a reply. Skipping surfaces
-   * the *first* error to the caller — a more honest signal than
+   * the *first* error to the caller, a more honest signal than
    * a self-inflicted "rowboat_timeout" from a doomed retry.
    */
   retryMinBudgetMs?: number;
   /**
    * Opt-in: also allow the stateless retry on
-   * TRANSIENT_SERVER_RETRY_ERRORS (5xx). Default false — a 5xx is
+   * TRANSIENT_SERVER_RETRY_ERRORS (5xx). Default false, a 5xx is
    * usually an upstream model outage, and dropping the continuation
    * for it discards the whole SMS thread; the job-level retry
    * re-runs stateful instead. The SMS worker sets this on late
@@ -167,7 +167,7 @@ export type StatelessFallbackInput = RowboatChatCallInput & {
    * call: a compact transcript of the recent SMS exchange, so a
    * freshly-rooted Rowboat conversation continues the thread instead
    * of restarting intake (the 2026-07-13 "what prompted you to shop
-   * around?" repeat). Never sent on the first (stateful) attempt —
+   * around?" repeat). Never sent on the first (stateful) attempt,
    * Rowboat already holds the history there.
    */
   statelessContextExtra?: string | null;
@@ -187,8 +187,8 @@ export type StatelessFallbackResult = RowboatChatCallResult & {
    * True iff the first call failed with a STATELESS_RETRY_ERRORS code
    * AND we re-issued without conversationId/state. Callers MUST treat
    * the stored rowboat_conversation_id as known-stale when this is
-   * true — even if the retry's response omits a fresh conversationId
-   * — otherwise the next message replays the same fail-then-retry
+   * true, even if the retry's response omits a fresh conversationId,
+   * otherwise the next message replays the same fail-then-retry
    * cycle indefinitely (Bugbot Low pattern from PR #71).
    */
   retriedStateless: boolean;
@@ -224,7 +224,7 @@ export function parseRowboatChatJson(json: unknown): RowboatChatCallResult {
  * one of: "rowboat_timeout", "rowboat_http_<status>",
  * "rowboat_empty_assistant", or a generic fetch error message.
  *
- * Sends only the new SMS turn (plus optional system preamble) —
+ * Sends only the new SMS turn (plus optional system preamble),
  * Rowboat reconstructs prior context from `conversationId` + `state`
  * when supplied, exactly per the §10 SMS contract. NEVER replays raw
  * assistant rows here: Rowboat's Zod input validator rejects plain
@@ -298,7 +298,7 @@ export async function callRowboatChatOnce(
 /**
  * Call Rowboat with the stored continuation, retry once stateless on
  * a STATELESS_RETRY_ERRORS class failure (and only when we actually
- * had a continuation to drop — there's nothing for a retry to undo
+ * had a continuation to drop, there's nothing for a retry to undo
  * otherwise).
  *
  * Why ONLY one retry: if the stateless retry also fails, the problem
@@ -310,7 +310,7 @@ export async function callRowboatChatOnce(
  * capped at (budgetMs − elapsedSinceEntry); the retry is skipped
  * entirely when the remaining budget falls below
  * `retryMinBudgetMs`. This prevents a slow first failure from
- * granting the retry a fresh full window — exactly the race that
+ * granting the retry a fresh full window, exactly the race that
  * blew past the SMS worker's 90s pg_cron cap on PR #74 (Codex P1 /
  * Cursor Bugbot Medium).
  */
@@ -320,7 +320,7 @@ export async function callSmsRowboatWithStatelessFallback(
 ): Promise<StatelessFallbackResult> {
   const hadContinuation =
     typeof input.conversationId === "string" && input.conversationId.trim().length > 0;
-  // Default: pre-fix behaviour — both calls get the full timeoutMs
+  // Default: pre-fix behaviour, both calls get the full timeoutMs
   // independently. Callers SHOULD pass an explicit budgetMs so the
   // sum is bounded by the surrounding cron / Edge timeout.
   const budgetMs = input.budgetMs ?? input.timeoutMs * 2;
@@ -349,7 +349,7 @@ export async function callSmsRowboatWithStatelessFallback(
     }
 
     // A stateless call roots a brand-new Rowboat conversation, so give it
-    // the recent-thread transcript (when the caller supplied one) — without
+    // the recent-thread transcript (when the caller supplied one), without
     // it the model restarts intake mid-conversation.
     const statelessExtra = input.statelessContextExtra?.trim();
     const retryPreamble = [input.customerPreamble?.trim(), statelessExtra]

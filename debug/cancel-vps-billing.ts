@@ -1,5 +1,5 @@
 /**
- * cancel-vps-billing.ts — stop a VPS and disable its Hostinger billing
+ * cancel-vps-billing.ts, stop a VPS and disable its Hostinger billing
  * subscription's auto-renewal, the same teardown production uses (see
  * src/lib/billing/change-plan-orchestrator.ts steps 1+7 and the lifecycle
  * executor's `disable_billing_auto_renewal` op).
@@ -7,14 +7,14 @@
  * Why this is two resources: a Hostinger VPS purchase creates a virtual
  * machine AND a billing subscription. Stopping the VM does NOT stop the
  * charges. Hostinger REMOVED the public cancel-subscription API (DELETE
- * /api/billing/v1/subscriptions/{id} now 404s — verified Jul 2026), so the
+ * /api/billing/v1/subscriptions/{id} now 404s, verified Jul 2026), so the
  * strongest automated stop-payment is disabling auto-renewal; the VM then
  * lapses at the end of the paid period. Actually deleting the VM early is a
  * manual hPanel action (https://hpanel.hostinger.com/paid-invoices).
  * Production order of operations:
- *   1. (optional) POST /virtual-machines/{id}/snapshot      — fast restore point
- *   2. POST /virtual-machines/{id}/stop                     — best-effort poweroff
- *   3. DELETE /billing/v1/subscriptions/{id}/auto-renewal/disable — stop renewal
+ *   1. (optional) POST /virtual-machines/{id}/snapshot, fast restore point
+ *   2. POST /virtual-machines/{id}/stop, best-effort poweroff
+ *   3. DELETE /billing/v1/subscriptions/{id}/auto-renewal/disable, stop renewal
  *   4. ops email → manual hPanel deletion
  *
  * Targets one of:
@@ -72,7 +72,7 @@ if (vmId === null && !subscriptionId) {
 const hostinger = makeHostingerClient();
 
 // Resolve the billing subscription from the VM id when not supplied. The VM
-// detail's subscription_id is the reliable mapping — the subscriptions LIST
+// detail's subscription_id is the reliable mapping, the subscriptions LIST
 // stopped returning resource_id (verified Jul 2026).
 if (!subscriptionId && vmId !== null) {
   try {

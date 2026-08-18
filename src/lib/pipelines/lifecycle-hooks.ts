@@ -6,7 +6,7 @@
  * The Deno worker and inbound webhooks call applyLifecycleStage directly;
  * app-side surfaces (calendar-tool and booking-page bookings) go through
  * this wrapper, which normalizes the lead phone, supplies the service-role
- * client, and stays best-effort — a stage tag must never break the booking
+ * client, and stays best-effort, a stage tag must never break the booking
  * that discovered it. Mirrors src/lib/ai-flows/goal-hooks.ts, which sits
  * beside it at every call site.
  */
@@ -24,7 +24,7 @@ export type { LifecycleEvent, LifecycleStageOutcome };
 /**
  * Advance a lead to the stage this lifecycle event implies. `phone` may be
  * raw user input (E.164 or a loose NANP number); an unusable phone is a
- * silent no-op — a missing lead phone is a data gap, not an error.
+ * silent no-op, a missing lead phone is a data gap, not an error.
  */
 export async function fireLifecycleStage(
   businessId: string,

@@ -4,12 +4,12 @@
 # One-shot upgrade for VPSes provisioned BEFORE PR #79 (the move from
 # in-Vercel chat streaming to a VPS-side chat-worker queue). For
 # VPSes provisioned by the post-PR-#79 vps/scripts/deploy-client.sh
-# this script is a no-op safe to skip — but it's also safe to re-run
+# this script is a no-op safe to skip, but it's also safe to re-run
 # (idempotent) so a fleet-wide rollout can blast it to every box.
 #
 # Two changes this script applies:
 #
-#   (A) Rowboat .env hardening — removes OPENAI_API_KEY and adds
+#   (A) Rowboat .env hardening, removes OPENAI_API_KEY and adds
 #       OPENAI_AGENTS_DISABLE_TRACING=1. The OpenAI Agents SDK that
 #       Rowboat is built on auto-registers a tracing exporter against
 #       platform.openai.com. With our placeholder OPENAI_API_KEY in
@@ -18,7 +18,7 @@
 #       key + disabling the exporter is what got cold-tenant first
 #       turns down from 100s to <5s. See PR #79 conversation.
 #
-#   (B) Provisions /opt/chat-worker — rsyncs the worker source onto
+#   (B) Provisions /opt/chat-worker, rsyncs the worker source onto
 #       the VPS, generates its .env (re-using values pulled from
 #       /opt/rowboat/.env where possible), and brings up the
 #       docker-compose stack on the rowboat_default network.
@@ -26,23 +26,23 @@
 # Inputs (required on first run; safely re-readable from existing
 # files on subsequent runs):
 #
-#   SUPABASE_URL              — full https URL of the Supabase project
-#   SUPABASE_SERVICE_ROLE_KEY — service-role JWT (worker bypasses RLS)
-#   CHAT_WORKER_SRC           — path to vps/chat-worker on this VPS
+#   SUPABASE_URL, full https URL of the Supabase project
+#   SUPABASE_SERVICE_ROLE_KEY, service-role JWT (worker bypasses RLS)
+#   CHAT_WORKER_SRC, path to vps/chat-worker on this VPS
 #                               (default: /opt/newcoworker-repo/vps/chat-worker)
 #
 # Optional inputs (skip both → rolling-summary callbacks disabled,
 # worker logs a warn but processes jobs normally):
-#   WORKER_VERCEL_BASE_URL    — e.g. https://newcoworker.com . Worker
+#   WORKER_VERCEL_BASE_URL, e.g. https://newcoworker.com . Worker
 #                               POSTs the rolling-summary trigger here
 #                               after each successful job.
-#   WORKER_VERCEL_BEARER      — Vercel's INTERNAL_CRON_SECRET (matched
+#   WORKER_VERCEL_BEARER, Vercel's INTERNAL_CRON_SECRET (matched
 #                               by assertCronAuth in src/lib/cron-auth.ts)
 #
 # Inputs read from /opt/rowboat/.env automatically:
-#   BUSINESS_ID               — used as both the worker's BUSINESS_ID
+#   BUSINESS_ID, used as both the worker's BUSINESS_ID
 #                               and ROWBOAT_PROJECT_ID
-#   ROWBOAT_GATEWAY_TOKEN     — service-to-service auth for Rowboat
+#   ROWBOAT_GATEWAY_TOKEN, service-to-service auth for Rowboat
 #
 # Usage (typical):
 #   scp vps/scripts/upgrade-pr79.sh root@<host>:/tmp/upgrade-pr79.sh
@@ -108,7 +108,7 @@ else
   log "  OPENAI_API_KEY already absent"
 fi
 
-# Append OPENAI_AGENTS_DISABLE_TRACING=1 only when missing — repeated
+# Append OPENAI_AGENTS_DISABLE_TRACING=1 only when missing, repeated
 # `>>` would otherwise stack duplicate lines on every re-run.
 if ! grep -qE '^[[:space:]]*OPENAI_AGENTS_DISABLE_TRACING=' "${ROWBOAT_ENV}"; then
   printf '\nOPENAI_AGENTS_DISABLE_TRACING=1\n' >> "${ROWBOAT_ENV}"
@@ -154,12 +154,12 @@ else
 fi
 
 # Required env. SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY have no
-# safe default — fail loudly if the caller forgot them.
+# safe default, fail loudly if the caller forgot them.
 : "${SUPABASE_URL:?SUPABASE_URL must be set in the environment}"
 : "${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY must be set in the environment}"
 
 # Pull BUSINESS_ID + ROWBOAT_GATEWAY_TOKEN from the existing rowboat .env
-# rather than asking the caller — eliminates a class of "deployed worker
+# rather than asking the caller, eliminates a class of "deployed worker
 # pointed at the wrong tenant" bugs.
 BUSINESS_ID=$(grep -E '^[[:space:]]*BUSINESS_ID=' "${ROWBOAT_ENV}" | head -1 | cut -d= -f2- | tr -d '"' || true)
 ROWBOAT_GATEWAY_TOKEN=$(grep -E '^[[:space:]]*ROWBOAT_GATEWAY_TOKEN=' "${ROWBOAT_ENV}" | head -1 | cut -d= -f2- | tr -d '"' || true)

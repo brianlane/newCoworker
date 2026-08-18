@@ -2,7 +2,7 @@
  * Dedicated "NewCoworker" calendar on the owner's connected account.
  *
  * Bookings move off the owner's primary calendar into a calendar the whole
- * team can see — created lazily via the existing Nango proxy (no new auth),
+ * team can see, created lazily via the existing Nango proxy (no new auth),
  * with its id persisted in workspace_oauth_connections.metadata:
  *
  * The HOST is resolved independently of who takes the bookings
@@ -12,8 +12,8 @@
  * failed the Google/Microsoft check. The calendar is a place to SHOW the team
  * what is booked, so any connected Google/Microsoft account will do.
  *
- *   metadata.shared_calendar_id   — provider calendar id
- *   metadata.shared_calendar_acl  — emails already granted read access
+ *   metadata.shared_calendar_id, provider calendar id
+ *   metadata.shared_calendar_acl, emails already granted read access
  *
  * Consumers:
  *   - bookCalendarAppointment  → ensureSharedCalendar (creates on first booking)
@@ -121,7 +121,7 @@ export async function getSharedCalendar(businessId: string): Promise<SharedCalen
 
 /**
  * Get-or-create the shared calendar. Called on first booking and from the
- * Employees page share action. Null on any failure — callers fall back to
+ * Employees page share action. Null on any failure, callers fall back to
  * the primary calendar so a Nango hiccup can't block a live booking.
  */
 export async function ensureSharedCalendar(
@@ -446,7 +446,7 @@ export async function removeSharedCalendarMirror(
  * Push an all-day "out of office" mirror event for a time-off range. Only
  * mirrors when the shared calendar already exists (adding time off should
  * not create calendars). Returns the provider event id, or null when
- * skipped/failed — strictly display-only either way; routing reads the DB.
+ * skipped/failed, strictly display-only either way; routing reads the DB.
  */
 export async function mirrorTimeOffEvent(
   businessId: string,

@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * One-shot CONTAINED smoke test for the AiFlow screenshot pipeline (no SMS,
- * no MMS, no email is sent — nothing touches a real lead or the owner):
+ * no MMS, no email is sent, nothing touches a real lead or the owner):
  *
  *   1. Render service (on the tenant VPS, over localhost so the bearer never
  *      leaves the box): POST /render { url: example.com, screenshot: true }
@@ -30,7 +30,7 @@ import {
   resolveTenantVpsPublicIp
 } from "../scripts/lib/redeploy-tenant-vps.ts";
 
-// Default: New Coworker (HQ, internal) — its box runs the render sidecar
+// Default: New Coworker (HQ, internal), its box runs the render sidecar
 // (standard tier), so the smoke exercises our own hardware by default.
 const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const BUCKET = "aiflow-screenshots";

@@ -16,7 +16,7 @@ type Props = {
   /**
    * Channel this composer will send on. "rcs" (Enterprise tenants with an
    * approved agent) is not bound by GSM/UCS-2 segment limits, so the emoji
-   * warning softens: the RCS message itself delivers as typed — only the
+   * warning softens: the RCS message itself delivers as typed, only the
    * automatic SMS fallback copy (sent to phones without RCS) is affected.
    */
   channel?: "sms" | "rcs";
@@ -42,7 +42,7 @@ type Props = {
  */
 export function SmsSegmentHint({ text, mode, channel = "sms" }: Props) {
   // AiFlow sends run through the worker's gsmSafeSmsText, which normalizes
-  // smart punctuation to ASCII before the encoding check — so only emoji-like
+  // smart punctuation to ASCII before the encoding check, so only emoji-like
   // characters that survive normalization should trigger the aiflow warning.
   // Verbatim sends hit Telnyx as typed: smart quotes really do force UCS-2.
   const info = smsSegmentInfo(text, { normalizeSmartPunctuation: mode === "aiflow" });

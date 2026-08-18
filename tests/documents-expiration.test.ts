@@ -171,7 +171,7 @@ describe("sweepDocumentExpirations", () => {
       client: makeDb([first, second]),
       now: () => NOW
     });
-    // Both docs belong to the same business — one sync, even though the
+    // Both docs belong to the same business, one sync, even though the
     // first doc's notification failed (it retries tomorrow; the digest
     // must not stay stale in the meantime).
     expect(result.vaultSyncsTriggered).toBe(1);

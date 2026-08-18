@@ -363,7 +363,7 @@ describe("rescheduleCalendarAppointment", () => {
       detail: "booking_not_found"
     });
     expect(vi.mocked(rescheduleVagaroAppointment)).not.toHaveBeenCalled();
-    // The tolerant fallback ran (a phone exists) — it just found nothing.
+    // The tolerant fallback ran (a phone exists), it just found nothing.
     expect(vi.mocked(findUpcomingBookingClaimByPhone)).toHaveBeenCalledWith(BIZ, PHONE);
   });
 
@@ -633,7 +633,7 @@ describe("rescheduleCalendarAppointment", () => {
   });
 
   it("a null Microsoft PATCH response is a FAILED MUTATION, never calendar_not_connected", async () => {
-    // The connection resolved moments earlier — misreporting it as missing
+    // The connection resolved moments earlier, misreporting it as missing
     // would steer the model to "you cannot change any appointment".
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
@@ -649,9 +649,9 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(workspaceProxyForBusiness).mockResolvedValueOnce({
       data: {
         value: [
-          // The lead's E.164 as a PREFIX of a longer number — not a match.
+          // The lead's E.164 as a PREFIX of a longer number, not a match.
           { id: "evt-longer", bodyPreview: `Phone: ${PHONE}789` },
-          // The email marker inside a longer address — not a match either.
+          // The email marker inside a longer address, not a match either.
           { id: "evt-wrapped", bodyPreview: "Email: notjoe@acme.com" }
         ]
       }
@@ -1007,7 +1007,7 @@ describe("cancelCalendarAppointment", () => {
       method: string;
     };
     expect(deleteCall).toMatchObject({ endpoint: "/v1.0/me/events/evt-search", method: "DELETE" });
-    // No claim under OUR key, but the event may hold rows under other keys —
+    // No claim under OUR key, but the event may hold rows under other keys,
     // a canceled slot must not survive as "booked" in the ledger.
     expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
     expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
@@ -1096,7 +1096,7 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
   });
 
   it("a provider-search hit recovers the meeting id from the event's row before ledger cleanup (reschedule)", async () => {
-    // No ledger row under the caller's key — the event resolves via Google
+    // No ledger row under the caller's key, the event resolves via Google
     // search, but its row under a DIFFERENT key still holds the meeting id.
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue("zm-7");

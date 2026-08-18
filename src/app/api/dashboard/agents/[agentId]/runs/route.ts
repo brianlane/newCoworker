@@ -1,5 +1,5 @@
 /**
- * Agents — run history.
+ * Agents, run history.
  *
  *   GET /api/dashboard/agents/:agentId/runs?businessId=…&limit=…
  */

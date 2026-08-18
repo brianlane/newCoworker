@@ -3,7 +3,7 @@
  *
  * Why this exists: the admin card historically read only `coworker_logs`, a
  * table that receives little besides provisioning progress and a few tool
- * captures — so the card sat stale while the fleet was busy calling, texting,
+ * captures, so the card sat stale while the fleet was busy calling, texting,
  * emailing, and running AiFlows. This is the fleet-wide counterpart of the
  * owner dashboard's unified feed (src/lib/db/activity.ts, which fixed the
  * same staleness per-business): the same activity tables, queried across all
@@ -35,11 +35,11 @@ export type FleetActivityItem = {
   variant: FleetActivityVariant;
   /** Human one-liner shown in the feed. */
   label: string;
-  /** Owning tenant — the card names it and links to /admin/<id>. */
+  /** Owning tenant, the card names it and links to /admin/<id>. */
   businessId: string;
   /**
    * The item's page in the TENANT dashboard (same per-kind links as the
-   * owner feed) — the admin rows open it under a view-as session for
+   * owner feed), the admin rows open it under a view-as session for
    * `businessId`, landing the admin on the item itself.
    */
   href: string;
@@ -70,9 +70,9 @@ export type FleetSmsReplyRow = {
 export type FleetSmsOutboundRow = {
   business_id: string;
   to_e164: string | null;
-  /** `sms_outbound_log.source` — one origin signal for the AiFlow tag. */
+  /** `sms_outbound_log.source`, one origin signal for the AiFlow tag. */
   source?: string | null;
-  /** `sms_outbound_log.flow_id` — the authoritative flow-origin signal. */
+  /** `sms_outbound_log.flow_id`, the authoritative flow-origin signal. */
   flow_id?: string | null;
   created_at: string;
 };
@@ -83,10 +83,10 @@ export type FleetEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
-  /** `email_log.source` — one origin signal for the AiFlow tag. */
+  /** `email_log.source`, one origin signal for the AiFlow tag. */
   source?: string | null;
   /**
-   * `email_log.flow_id` — the authoritative flow-origin signal: stamped on
+   * `email_log.flow_id`, the authoritative flow-origin signal: stamped on
    * every flow send, while `source` can reflect the transport
    * (`owner_mailbox` / `tenant_mailbox_outbound`).
    */
@@ -95,10 +95,10 @@ export type FleetEmailRow = {
 };
 
 export type FleetFlowRow = {
-  /** The run id — deep-links the item straight to this run's detail. */
+  /** The run id, deep-links the item straight to this run's detail. */
   id: string;
   business_id: string;
-  /** The owning flow id — scopes the runs page so the run is in view. */
+  /** The owning flow id, scopes the runs page so the run is in view. */
   flow_id: string;
   status: string;
   created_at: string;
@@ -133,7 +133,7 @@ export type FleetActivityInput = {
   logs: FleetLogRow[];
   /**
    * businessId → (E.164 → known contact name), from the shared
-   * {@link resolveContactNames} resolver — nested because the fleet feed
+   * {@link resolveContactNames} resolver, nested because the fleet feed
    * spans tenants and the same number can name different people in
    * different businesses. Numbers absent from the map fall back to the raw
    * E.164. Defaults to empty when callers omit it.
@@ -150,7 +150,7 @@ function flowName(join: FleetFlowRow["ai_flows"]): string {
 
 /**
  * Merge every fleet source into one chronological (newest-first) list capped
- * at `limit`. Pure — callers pass already-fetched plain rows.
+ * at `limit`. Pure, callers pass already-fetched plain rows.
  */
 export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivityItem[] {
   const items: FleetActivityItem[] = [];
@@ -187,7 +187,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
     });
   });
 
-  // Reply rows ARE the AI answering an inbound text — tag them as such.
+  // Reply rows ARE the AI answering an inbound text, tag them as such.
   input.smsReplies.forEach((r, i) => {
     const cp = customerE164FromPayload(r.payload);
     if (!cp) return;
@@ -224,7 +224,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
     const inbound = r.direction === "inbound";
     const who = (inbound ? r.from_email : r.to_email) ?? "unknown address";
     const subject = r.subject?.trim() ? `: “${r.subject.trim()}”` : "";
-    // Flow-sent emails get the same green AiFlow tag as flow-sent texts —
+    // Flow-sent emails get the same green AiFlow tag as flow-sent texts,
     // the origin badge applies to any message type a flow can send. flow_id
     // is authoritative: the flow worker stamps it even when sending through
     // the tenant mailbox (source 'owner_mailbox' / 'tenant_mailbox_outbound').
@@ -256,7 +256,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
 
   input.customers.forEach((r, i) => {
     // Prefer a resolver name (owner/employee/override) over the row's own
-    // display_name — same precedence as the owner feed.
+    // display_name, same precedence as the owner feed.
     const resolved = input.contactNames?.get(r.business_id)?.get(r.customer_e164)?.name;
     const name = resolved ?? r.display_name?.trim();
     const who = name ? `${name} (${r.customer_e164})` : r.customer_e164;
@@ -348,16 +348,16 @@ export type FleetActivityOptions = {
   /** Narrow the feed to one tenant (see-all business filter). */
   businessId?: string;
   /**
-   * Look-back in days; tightens — never widens — the
+   * Look-back in days; tightens, never widens, the
    * {@link FLEET_ACTIVITY_WINDOW_DAYS} window.
    */
   sinceDays?: number;
 };
 
 /**
- * Fetch the most-recent activity across every tenant — calls, texts (both
+ * Fetch the most-recent activity across every tenant, calls, texts (both
  * directions), email traffic, AiFlow runs, new customers, and completed
- * coworker_logs work — merged into one chronological feed for the admin
+ * coworker_logs work, merged into one chronological feed for the admin
  * dashboard's Recent Activity card, capped to `limit`.
  */
 export async function getFleetRecentActivity(
@@ -366,7 +366,7 @@ export async function getFleetRecentActivity(
   client?: SupabaseClient
 ): Promise<FleetActivityItem[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  // sinceDays tightens — never widens — the fleet window.
+  // sinceDays tightens, never widens, the fleet window.
   const effectiveDays =
     options?.sinceDays && options.sinceDays > 0
       ? Math.min(options.sinceDays, FLEET_ACTIVITY_WINDOW_DAYS)
@@ -374,7 +374,7 @@ export async function getFleetRecentActivity(
   const since = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000).toISOString();
   const excluded = options?.excludeBusinessIds ?? [];
   const kinds = options?.kinds ?? [];
-  // Empty selection means "everything" — the filter bar treats no chips as all.
+  // Empty selection means "everything", the filter bar treats no chips as all.
   const wants = (k: FleetActivityFilterKind): boolean =>
     kinds.length === 0 || kinds.includes(k);
   // A skipped source resolves to the same shape rowsOf() reads off a query.
@@ -384,7 +384,7 @@ export async function getFleetRecentActivity(
   // PostgREST builder mid-chain, typed `any` because even a structural
   // constraint sends tsc into TS2589 against the real builder generics when
   // the helpers nest (same trade-off as the owner feed's beforeLt in
-  // src/lib/db/activity.ts) — only the chain shape matters here.
+  // src/lib/db/activity.ts), only the chain shape matters here.
   const restrict = (q: any): any => {
     const unmuted =
       excluded.length > 0 ? q.not("business_id", "in", `(${excluded.join(",")})`) : q;
@@ -499,8 +499,8 @@ export async function getFleetRecentActivity(
   const customers = rowsOf<FleetCustomerRow>(custRes);
 
   // Resolve every phone number the feed will show to a known contact name
-  // (owner/employee/customer/override) via the shared resolver, per business
-  // — "Text to Jane Doe" instead of a bare +1602… number. One resolver call
+  // (owner/employee/customer/override) via the shared resolver, per business,
+  // "Text to Jane Doe" instead of a bare +1602… number. One resolver call
   // per distinct tenant in the window (bounded by the per-source row caps).
   // A resolver failure degrades that tenant to raw numbers, never blanks
   // the feed.

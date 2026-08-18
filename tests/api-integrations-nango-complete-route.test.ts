@@ -199,7 +199,7 @@ describe("api/integrations/nango/complete", () => {
       max: 1,
       atCap: true
     });
-    // Tentative row already raced away — the eviction path tolerates it.
+    // Tentative row already raced away, the eviction path tolerates it.
     mockDeleteConnection.mockRejectedValue(new Error("nango down"));
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
@@ -237,7 +237,7 @@ describe("api/integrations/nango/complete", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
     // The row was inserted first (both racers passed the pre-check), so the
-    // upsert DID happen — the settle then rolled this one back.
+    // upsert DID happen, the settle then rolled this one back.
     expect(upsertWorkspaceOAuthConnection).toHaveBeenCalled();
     expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(businessId, "row-evict");
     expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-1");

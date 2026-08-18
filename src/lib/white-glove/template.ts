@@ -8,7 +8,7 @@
  * document the operator works from (and the customer signs off on).
  *
  * DE-DUPLICATION RULE: anything the onboarding interview already collects
- * (Step 1 form + chat — business name, industry/business type, owner, phone,
+ * (Step 1 form + chat, business name, industry/business type, owner, phone,
  * website, service area, team size, CRM, tone) is NOT asked here. The
  * customer should never answer the same question twice. Business name and
  * industry are supplied by the ADMIN when the questionnaire is created
@@ -34,7 +34,7 @@ export type IntakeQuestion = {
   placeholder?: string;
   required: boolean;
   /**
-   * Input cap for text/textarea questions — MUST match the field's
+   * Input cap for text/textarea questions, MUST match the field's
    * intakeAnswersSchema max so the form can never accept input the submit
    * route then rejects (enforced by unit test).
    */
@@ -43,7 +43,7 @@ export type IntakeQuestion = {
 
 /**
  * Row-level context the admin supplies at create time (NOT asked of the
- * prospect — see the de-duplication rule above).
+ * prospect, see the de-duplication rule above).
  */
 export type IntakeMeta = {
   businessName: string;
@@ -396,7 +396,7 @@ function labelOf(options: IntakeChoiceOption[], value: string): string {
 
 /**
  * Map multi-choice values to labels, appending free-text "other" detail.
- * A checked "other" with no description still shows up as "Other" — a
+ * A checked "other" with no description still shows up as "Other", a
  * prospect's selection is never silently dropped from the document.
  */
 function multiLabels(

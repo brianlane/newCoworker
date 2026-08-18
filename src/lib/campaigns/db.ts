@@ -1,10 +1,10 @@
 /**
- * Email campaigns — DB access.
+ * Email campaigns, DB access.
  *
  * `email_campaigns` holds the campaign lifecycle (draft → scheduled →
  * sending → sent, or cancelled); `email_campaign_recipients` holds the
  * audience snapshot taken when sending starts. Both tables are
- * service-role-only (RLS on, no policies) — every access flows through the
+ * service-role-only (RLS on, no policies), every access flows through the
  * Next.js server after its own auth checks, matching business_documents.
  */
 
@@ -49,7 +49,7 @@ export type CampaignRecipientRow = {
   created_at: string;
 };
 
-/** Per-campaign audience cap — abuse-safety, not a product tier. */
+/** Per-campaign audience cap, abuse-safety, not a product tier. */
 export const CAMPAIGN_MAX_RECIPIENTS = 2000;
 
 export async function listEmailCampaigns(
@@ -132,7 +132,7 @@ export async function patchEmailCampaign(
 
 /**
  * Guarded lifecycle transition: applies `patch` only while the campaign is
- * still in `fromStatus`. Returns whether a row actually moved — the sweep's
+ * still in `fromStatus`. Returns whether a row actually moved, the sweep's
  * scheduled→sending promotion and the owner's cancel both race through
  * here, and the loser must see "no rows" instead of clobbering.
  */
@@ -156,7 +156,7 @@ export async function transitionEmailCampaign(
 }
 
 /**
- * Delete a campaign — guarded so a row the sweep just promoted to
+ * Delete a campaign, guarded so a row the sweep just promoted to
  * `sending` survives (deleting it would cascade-drop the recipient
  * snapshot mid-send). Returns whether a row was actually deleted.
  */
@@ -210,7 +210,7 @@ export async function listSendingCampaigns(client?: SupabaseClient): Promise<Ema
 /**
  * Clear a campaign's UNSENT snapshot rows (sent/failed/skipped history is
  * kept). Called before re-snapshotting a still-scheduled campaign so a
- * prior partial snapshot can't leave stale pending rows — contacts who
+ * prior partial snapshot can't leave stale pending rows, contacts who
  * unsubscribed or lost the audience tag since must not be drained later.
  */
 export async function deletePendingRecipients(
@@ -260,7 +260,7 @@ export async function listPendingRecipients(
 /**
  * Atomically claim a pending recipient by optimistically marking it sent
  * (conditional on `status = 'pending'`). Returns whether THIS caller won
- * the claim — overlapping sweeps and post-crash retries lose cleanly, so a
+ * the claim, overlapping sweeps and post-crash retries lose cleanly, so a
  * recipient can never receive the campaign twice. The at-most-once bias is
  * deliberate for marketing mail: a duplicate is a spam complaint, a rare
  * crash-window loss is harmless.

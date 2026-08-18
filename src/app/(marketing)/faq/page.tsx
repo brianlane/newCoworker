@@ -44,7 +44,7 @@ export default async function FaqPage() {
 
   const starterPrice = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
-  // e.g. "250 voice minutes" / "up to 10 concurrent calls" — same helpers as /pricing.
+  // e.g. "250 voice minutes" / "up to 10 concurrent calls", same helpers as /pricing.
   const standardVoice = voiceMinutesLine("standard", undefined, locale);
   const standardConcurrent = concurrentCallsLine(
     TIER_LIMITS.standard.maxConcurrentCalls,

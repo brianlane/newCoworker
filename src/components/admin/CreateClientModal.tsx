@@ -68,7 +68,7 @@ export function CreateClientModal() {
           ownerName,
           phone,
           // Business type is optional here (unlike onboarding), so a bare
-          // "Other" pick with no custom text — the in-flight sentinel —
+          // "Other" pick with no custom text, the in-flight sentinel,
           // must not be persisted as a placeholder industry.
           businessType: isBusinessTypeSelectionComplete(businessType) ? businessType : "",
           // Hardware pin is an enterprise-deal knob; other tiers always

@@ -1,10 +1,10 @@
 /**
- * Direct Calendly API client (Personal Access Token transport) — the ONLY
+ * Direct Calendly API client (Personal Access Token transport), the ONLY
  * Calendly transport since the Nango OAuth path was removed in the 2026-07
  * dead-code sweep. Requests go straight to api.calendly.com with the
  * tenant's PAT as the bearer, returning the `{ data } | null` contract the
  * calendar-tools Calendly cores expect:
- *   - 401/403 → null (revoked/wrong token — "not connected" semantics);
+ *   - 401/403 → null (revoked/wrong token, "not connected" semantics);
  *   - other non-2xx → throw (mapped by handlers.ts to calendar_lookup_failed
  *     / calendar_book_failed);
  *   - timeouts/network failures → throw with a typed code.
@@ -12,7 +12,7 @@
 import { logger } from "@/lib/logger";
 
 export const CALENDLY_API_BASE_URL = "https://api.calendly.com";
-/** Outbound budget per API call — fail fast on a stuck upstream. */
+/** Outbound budget per API call, fail fast on a stuck upstream. */
 export const CALENDLY_REQUEST_TIMEOUT_MS = 15_000;
 
 export class CalendlyApiError extends Error {
@@ -97,7 +97,7 @@ export type CalendlyTokenVerification =
 
 /**
  * Verify a PAT end-to-end (GET /users/me) and capture the connected
- * account's identity for the dashboard card. Never throws — the connect
+ * account's identity for the dashboard card. Never throws, the connect
  * flow reports the outcome instead of 500ing.
  */
 export async function verifyCalendlyToken(
@@ -112,7 +112,7 @@ export async function verifyCalendlyToken(
     const resource = (res.data as {
       resource?: { uri?: string; name?: string; email?: string };
     })?.resource;
-    // The user URI is the account's stable identity — the multi-connection
+    // The user URI is the account's stable identity, the multi-connection
     // dedupe key. A /users/me success without one is not a usable account.
     if (typeof resource?.uri !== "string" || resource.uri.length === 0) {
       return { ok: false, reason: "invalid_token" };

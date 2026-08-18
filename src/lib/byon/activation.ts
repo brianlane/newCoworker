@@ -2,22 +2,22 @@
  * BYON activation: wire a fully ported number into the tenant's platform
  * routing the moment Telnyx reports `ported`.
  *
- * A completed port only moves the number INTO our Telnyx account — nothing
+ * A completed port only moves the number INTO our Telnyx account, nothing
  * points it at the tenant yet. Activation reuses the exact wiring purchased
  * numbers get:
  *
- *   1. `assignExistingDidToBusiness` — PATCH the number onto the platform
+ *   1. `assignExistingDidToBusiness`, PATCH the number onto the platform
  *      Call Control connection + messaging profile, upsert the
  *      `telnyx_voice_routes` row and `business_telnyx_settings` (the ported
  *      number becomes the SMS "from"). The tenant's previously assigned
  *      platform DID keeps its own voice-route row, so it still works as a
- *      secondary route — releasing it is a deliberate, separate step.
- *   2. `attachBusinessDidToCampaign` — 10DLC shared-campaign attach so A2P
+ *      secondary route, releasing it is a deliberate, separate step.
+ *   2. `attachBusinessDidToCampaign`, 10DLC shared-campaign attach so A2P
  *      SMS from the ported number actually delivers. `pending` outcomes are
  *      normal (the periodic retry worker finishes the job); only hard
  *      rejections are surfaced.
  *
- * Trigger semantics: activation keys off durable row state — any webhook
+ * Trigger semantics: activation keys off durable row state, any webhook
  * delivery whose row shows `status = 'ported'` with `activated_at IS NULL`
  * attempts it, NOT just the delivery that claimed the ported alert. A worker
  * dying between the alert claim and the wiring therefore doesn't strand the
@@ -119,7 +119,7 @@ export async function activatePortedNumber(
   // caller's snapshot can LAG the database (e.g. handlePortingStatusChange
   // drops a stale event and returns the pre-ported row it read while a
   // parallel delivery was moving it to ported), so before skipping we
-  // re-check durable state — never the other way around: a snapshot that
+  // re-check durable state, never the other way around: a snapshot that
   // qualifies was just read by the status handler.
   let row = snapshot;
   if (!needsActivation(row)) {
@@ -174,7 +174,7 @@ export async function activatePortedNumber(
         if (claimErr) throw new Error(claimErr.message);
         alertClaimed = ((data ?? []) as unknown[]).length > 0;
       } catch (err) {
-        // Can't tell whether an alert went out — stay quiet (the failure is
+        // Can't tell whether an alert went out, stay quiet (the failure is
         // in the logs and a later delivery can still claim the alert).
         logger.warn("byon: failed to claim activation-failure alert", {
           portRequestId: row.id,
@@ -204,7 +204,7 @@ export async function activatePortedNumber(
           portRequestId: row.id,
           error: errMessage(err)
         });
-        // Release the claim so a later delivery re-attempts the alert —
+        // Release the claim so a later delivery re-attempts the alert,
         // otherwise a dispatch failure here would mute the owner forever.
         try {
           const db = await resolveClient();

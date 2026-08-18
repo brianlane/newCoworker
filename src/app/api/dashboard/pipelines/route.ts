@@ -5,8 +5,8 @@
  *        → { pipelines: Pipeline[] } (stages ordered)
  *
  * POST /api/dashboard/pipelines?businessId=<uuid>
- *        body: { name, stages: [{name, color?}] } — custom pipeline
- *          or  { seedDefault: true }              — the starter "Leads" board
+ *        body: { name, stages: [{name, color?}] }, custom pipeline
+ *          or  { seedDefault: true }, the starter "Leads" board
  *        → { pipeline }
  *
  * Auth: viewing needs view_dashboard (staff work the board); creating needs

@@ -1,5 +1,5 @@
 /**
- * audit-fleet-terms.ts — read-only fleet audit: for every Hostinger billing
+ * audit-fleet-terms.ts, read-only fleet audit: for every Hostinger billing
  * subscription + VM, show the billing cycle we're paying vs the customer's
  * contract (tier / billing_period / commitment) so we can see where term
  * buying would save money. No writes.

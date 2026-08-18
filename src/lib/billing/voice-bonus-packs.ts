@@ -12,7 +12,7 @@
  *
  * ## Pricing contract (single source of truth)
  *
- * Stripe Prices are immutable by id — once created, a Price's `unit_amount`
+ * Stripe Prices are immutable by id, once created, a Price's `unit_amount`
  * never changes. That means the pack's displayed USD price and what Stripe
  * actually charges only diverge if an operator ships a mismatched config:
  * new Price IDs pointing at different amounts than what env implies.
@@ -34,7 +34,7 @@
  * done correctly.
  *
  * A pack is considered available only when its `STRIPE_VOICE_BONUS_<NMIN>MIN_
- * PRICE_ID` env var is set — missing IDs fail closed (pack is hidden from the
+ * PRICE_ID` env var is set, missing IDs fail closed (pack is hidden from the
  * UI and rejected by the API) so a partial rollout never creates a broken
  * purchase button.
  */

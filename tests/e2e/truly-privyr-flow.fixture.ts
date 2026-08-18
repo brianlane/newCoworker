@@ -15,7 +15,7 @@ import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import type { FlowStep } from "../../supabase/functions/_shared/ai_flows/types";
 
 /** The real Privyr alert email that triggered the run (trigger.windowText
- * verbatim, tracking URLs and all — extraction must survive the noise). */
+ * verbatim, tracking URLs and all, extraction must survive the noise). */
 export const PRIVYR_EMAIL = [
   "New Lead: Alex 😁",
   "Congrats! You have new lead fromMuhammad Fahad: Alex. Open in Privyr to " +
@@ -66,7 +66,7 @@ const NY_OFFER_WINDOW = {
  *     parked awaiting_agent when Alex answered).
  *   - patch-truly-renewal-reply-fork: the renewal reply and the post-nudge2
  *     reply are classified (classify_renewal → renewal_fork,
- *     classify_reply3 → reply3_fork) instead of blindly acked — "can
+ *     classify_reply3 → reply3_fork) instead of blindly acked, "can
  *     someone call me right now" works at every wait, "stop texting"
  *     closes out politely.
  *   - patch-truly-classify-call-intent: wants_a_call tightened /

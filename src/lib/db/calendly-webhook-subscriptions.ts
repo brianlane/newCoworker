@@ -1,5 +1,5 @@
 /**
- * Persistence for `calendly_webhook_subscriptions` — the record of the
+ * Persistence for `calendly_webhook_subscriptions`, the record of the
  * Calendly invitee.created webhook fast path.
  *
  * One row per CONNECTION (a business can link several Calendly accounts,
@@ -9,7 +9,7 @@
  * (src/lib/calendly/webhook-subscriptions.ts):
  *   - status 'active' carries the subscription URI plus the signing key
  *     the platform minted and supplied at creation (encrypted at rest, same
- *     crypto as calendly_connections) — the receiver decrypts it to verify
+ *     crypto as calendly_connections), the receiver decrypts it to verify
  *     the Calendly-Webhook-Signature header;
  *   - status 'unsupported' / 'error' records a refused/failed attempt with
  *     its timestamp, so the sweep only re-tries on a long cooldown.
@@ -42,7 +42,7 @@ type StoredRow = {
   last_attempt_at: string;
 };
 
-/** Decrypted row — server-side use only. */
+/** Decrypted row, server-side use only. */
 export type CalendlyWebhookSubscriptionRow = Omit<StoredRow, "signing_key_encrypted"> & {
   /** Cleartext signing key; null unless the subscription is active. */
   signingKey: string | null;
@@ -77,7 +77,7 @@ export async function getCalendlyWebhookSubscription(
 
 /**
  * Every subscription row for the business (decrypted), oldest first. The
- * webhook receiver tries each row's signing key against a delivery — the
+ * webhook receiver tries each row's signing key against a delivery, the
  * URL only carries the business id, so WHICH account delivered is proven
  * by whichever key verifies.
  */

@@ -1,5 +1,5 @@
 /**
- * Platform-user engagement for the admin — the BizBlasts users-admin
+ * Platform-user engagement for the admin, the BizBlasts users-admin
  * "Daily Active Users Analytics" panel (DAU/WAU/MAU + engagement rate +
  * per-user last-sign-in table) ported to newCoworker's shape: Supabase auth
  * `last_sign_in_at` stands in for BizBlasts' Devise `last_sign_in_at`, and
@@ -7,7 +7,7 @@
  * (src/lib/analytics/engagement.ts) so "quiet" means the same thing on both
  * surfaces.
  *
- * Pure — the /admin/engagement page fetches auth users + businesses +
+ * Pure, the /admin/engagement page fetches auth users + businesses +
  * members and passes them in.
  */
 
@@ -54,14 +54,14 @@ export type UserEngagementRow = {
   segment: EngagementSegment;
 };
 
-/** Pagination bounds for the auth-directory scan — far above current fleet size. */
+/** Pagination bounds for the auth-directory scan, far above current fleet size. */
 export const AUTH_USERS_PAGE_CAP = 20;
 export const AUTH_USERS_PER_PAGE = 500;
 
 export type PlatformAuthUsersResult = {
   users: PlatformAuthUser[];
   /**
-   * True when the scan filled its page cap — the directory is PARTIAL and
+   * True when the scan filled its page cap, the directory is PARTIAL and
    * recency data for uncollected users is missing. Callers must degrade
    * (hide churn badges / show a truncation notice) rather than mis-segment
    * users past the cap as never-signed-in.
@@ -72,7 +72,7 @@ export type PlatformAuthUsersResult = {
 /**
  * The whole Supabase auth directory (email + created + last sign-in),
  * paginated up to {@link AUTH_USERS_PAGE_CAP} pages. Email-less users
- * (phone-only rows, if any ever exist) are skipped — engagement is keyed
+ * (phone-only rows, if any ever exist) are skipped, engagement is keyed
  * on email everywhere else.
  */
 export async function listPlatformAuthUsers(
@@ -198,7 +198,7 @@ export function buildUserEngagementRows(
 }
 
 /**
- * Businesses whose OWNER row landed in the quiet band — the churn-risk set
+ * Businesses whose OWNER row landed in the quiet band, the churn-risk set
  * badged on the admin clients table.
  */
 export function quietOwnerBusinessIds(rows: UserEngagementRow[]): Set<string> {

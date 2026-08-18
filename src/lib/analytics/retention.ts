@@ -1,12 +1,12 @@
 /**
- * Customer retention report — who keeps coming back, who slipped away.
+ * Customer retention report, who keeps coming back, who slipped away.
  *
  * Built on the same recency bands as the engagement segments
  * (src/lib/analytics/engagement.ts) but answering the RETENTION question:
  * of the customers the business has actually talked to, how many are still
  * engaged, how many are returning relationships (older than the window yet
  * active inside it), and how many lapsed. Derived entirely from `contacts`
- * recency columns — no per-interaction history needed, so it works even
+ * recency columns, no per-interaction history needed, so it works even
  * after retention pruning ages raw messages out.
  */
 
@@ -25,17 +25,17 @@ export type RetentionOverview = {
   engagedEver: number;
   /** Interacted within the active window (30 days). */
   retained: number;
-  /** 30–90 days silent — the at-risk middle. */
+  /** 30–90 days silent, the at-risk middle. */
   atRisk: number;
-  /** 90+ days silent — lapsed relationships. */
+  /** 90+ days silent, lapsed relationships. */
   lapsed: number;
   /** retained / engagedEver, 0-1; null when nobody has interacted yet. */
   retentionRate: number | null;
-  /** Active in the window AND first seen before it — returning relationships. */
+  /** Active in the window AND first seen before it, returning relationships. */
   returning: number;
   /** Contacts created within the window (new relationships forming). */
   newInWindow: number;
-  /** True when the directory scan filled its cap — counts are partial. */
+  /** True when the directory scan filled its cap, counts are partial. */
   clipped: boolean;
 };
 

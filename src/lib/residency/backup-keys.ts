@@ -25,7 +25,7 @@ import {
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** 256 bits, base64url — safe for env vars and openssl -pass pass:… */
+/** 256 bits, base64url, safe for env vars and openssl -pass pass:… */
 export function generateBackupPassphrase(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -125,7 +125,7 @@ export async function resolveResidencyBackupPassphraseForDeploy(
  * Flip passphrase custody for a deal.
  *
  * → 'customer_held': DROP the plaintext (keep only its SHA-256 fingerprint
- *   for the audit trail). Irreversible for that key — the platform can
+ *   for the audit trail). Irreversible for that key, the platform can
  *   never again decrypt dumps made with it. The next deploy uninstalls the
  *   platform backup timer.
  * → 'escrowed': mint a FRESH key (the old one is gone by design); the next
@@ -143,7 +143,7 @@ export async function setResidencyBackupCustody(
 }
 
 /**
- * Enterprise gate for the customer_held flip — same server-side posture as
+ * Enterprise gate for the customer_held flip, same server-side posture as
  * updateResidencyBackupDestination's onbox gate (custody is a residency-
  * program lever). Reverting to escrow stays ungated so a downgraded tenant
  * can never be wedged.
@@ -187,7 +187,7 @@ async function dropToCustomerHeld(businessId: string, db: SupabaseClient): Promi
   if (upsertError) throw new Error(`setResidencyBackupCustody(write): ${upsertError.message}`);
 }
 
-/** Back to escrow: the dropped key is unrecoverable — mint fresh. */
+/** Back to escrow: the dropped key is unrecoverable, mint fresh. */
 async function remintEscrowed(businessId: string, db: SupabaseClient): Promise<void> {
   const { error: upsertError } = await db.from("residency_backup_keys").upsert({
     business_id: businessId,

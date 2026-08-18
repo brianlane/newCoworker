@@ -6,14 +6,14 @@
  * Generated images live in the private `generated-images` bucket
  * (service-role only, no storage RLS policies). Dashboard chat embeds them
  * with this STABLE URL instead of a signed URL, because chat threads are
- * long-lived history — a 7-day signed URL would rot in a saved thread. The
+ * long-lived history, a 7-day signed URL would rot in a saved thread. The
  * route authenticates the session against the businessId path prefix (same
  * "operate_messages" gate as the chat routes that display the image) and
  * streams the object bytes.
  *
  * DELETE /api/dashboard/images/<businessId>/<file> → { ok: true }
  *
- * Removes the stored object for real — Storage objects can't carry the
+ * Removes the stored object for real, Storage objects can't carry the
  * soft-delete stamp the row-backed items use, so this is the one HARD
  * delete among the owner delete actions (documented exception). Same
  * business-scoped path validation and role gate as the GET; idempotent
@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
 
 const DELETE_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
-// <businessId>/<uuid>.<ext> — the only shape the generator writes. Anything
+// <businessId>/<uuid>.<ext>, the only shape the generator writes. Anything
 // else (traversal attempts, nested paths) is rejected before touching storage.
 const paramsSchema = z.object({
   path: z.tuple([
@@ -62,7 +62,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ path: strin
     return new NextResponse(bytes, {
       headers: {
         "content-type": data.type || "image/png",
-        // Objects are immutable (uuid-named, written once) — cache hard.
+        // Objects are immutable (uuid-named, written once), cache hard.
         "cache-control": "private, max-age=31536000, immutable"
       }
     });

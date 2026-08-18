@@ -1,7 +1,7 @@
 /**
  * Date awareness for the voice surface. Mirrors
  * `supabase/functions/_shared/datetime_line.ts` (the bridge is rsynced to
- * the VPS standalone, so it can't import across the repo) — keep the two in
+ * the VPS standalone, so it can't import across the repo), keep the two in
  * sync (tests/datetime-line.test.ts asserts equality). Without this the
  * model can't resolve "tomorrow at 2pm" into the ISO times the calendar
  * tools require. Business-local when `businesses.timezone` is set; UTC

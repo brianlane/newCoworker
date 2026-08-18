@@ -186,7 +186,7 @@ describe("db/enterprise-deals", () => {
       stripe_subscription_id: "sub_1"
     });
     // The claim predicate: still OPEN, or a retry of the session that
-    // activated it (idempotent only while still active — a revoked/canceled
+    // activated it (idempotent only while still active, a revoked/canceled
     // deal is never resurrected).
     expect(db.or).toHaveBeenCalledWith(
       "status.eq.open,and(status.eq.active,stripe_session_id.eq.cs_1)"

@@ -2,8 +2,8 @@
  * Move a contact between a pipeline's stages (the drag-and-drop endpoint).
  *
  * POST /api/dashboard/pipelines/:pipelineId/move?businessId=<uuid>
- *   body: { contactE164, stageId }        — move into that stage
- *         { contactE164, stageId: null }  — take the contact off the board
+ *   body: { contactE164, stageId }, move into that stage
+ *         { contactE164, stageId: null }, take the contact off the board
  *   → { tags, added, removed, droppedAtCap }
  *
  * Stage = tag, so the move is one tag transition: strip every stage tag of
@@ -12,7 +12,7 @@
  * contact events for adds AND removals), so flows chained on stage tags run
  * whether the lead was moved by an AiFlow or by a human dragging the card.
  *
- * Auth: operate_messages — staff work the board, same bar as editing a
+ * Auth: operate_messages, staff work the board, same bar as editing a
  * contact's tags from its profile page.
  */
 
@@ -105,7 +105,7 @@ export async function POST(
 
     // Same hooks as the dashboard tag editor: goal events may fast-forward
     // parked runs; tag_changed events may start flows watching the change.
-    // Best-effort inside both hooks — a trigger failure never fails the move.
+    // Best-effort inside both hooks, a trigger failure never fails the move.
     const eventStamp = Date.now();
     const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
     for (const tag of delta.added) {

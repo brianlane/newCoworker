@@ -10,15 +10,15 @@
  *
  * Four idempotent edits for one business (default: Amy's):
  *   1. "Realtor.com Lead" trigger: add a regex condition so only genuine
- *      inquiry notifications ("New inquiry:" / "Repeat inquiry:") enroll —
+ *      inquiry notifications ("New inquiry:" / "Repeat inquiry:") enroll,
  *      reply relays no longer start lead runs.
  *   2. "Realtor.com Lead" options: set dedupeLeadRuns=true so a repeat
  *      inquiry for the same person+property with a non-failed prior run is
  *      canceled by the worker before any send (engine support shipped with
- *      this script — deploy the ai-flow-worker BEFORE running --apply).
+ *      this script, deploy the ai-flow-worker BEFORE running --apply).
  *   3. Seed "Realtor.com Reply — forward to lead owner": a flow that opens
  *      the relay's rltr.pro link in a credentialed browser session (the
- *      stored "Realtor.com" integration — the relay SMS always truncates the
+ *      stored "Realtor.com" integration, the relay SMS always truncates the
  *      message), extracts the lead's FULL reply, and forwards it to whoever
  *      the lead belongs to: the teammate who claimed it (contact owner),
  *      else the business owner (Jennifer's $1M+ owner-direct case).
@@ -73,7 +73,7 @@ export const REALTOR_INTEGRATION_LABEL = "Realtor.com";
 /**
  * Only genuine inquiry notifications enroll the lead flow. realtor.com's
  * relay texts open with "New inquiry:" / "Repeat inquiry:" for leads and
- * "New text reply from …" for conversation replies — the latter must never
+ * "New text reply from …" for conversation replies, the latter must never
  * start a lead run (it carries no price/phone, so it re-routes the lead).
  */
 export const INQUIRY_REGEX = "(new|repeat) inquiry:";
@@ -131,7 +131,7 @@ function startsWithStarRow(template: string): boolean {
 
 /**
  * Edit 4: on every route_to_team with a keep-for-owner rule (any nesting
- * depth) — wrap ownerDirectTemplate in a row of '*' above and below, and
+ * depth), wrap ownerDirectTemplate in a row of '*' above and below, and
  * set ownerDirectNudges (the worker's 10/30-minute ALL-CAPS reminders,
  * acked by the owner replying "1"). Idempotent: an already-wrapped template
  * is left byte-identical, so re-runs and later manual tweaks inside the
@@ -174,7 +174,7 @@ export function hardenOwnerDirectAlerts(def: Definition): boolean {
  * realtor.com. The relay ALWAYS truncates the message, so the flow opens
  * the rltr.pro conversation link in a credentialed browser session (the
  * stored "Realtor.com" integration handles login when the page demands it)
- * and reads the lead's complete reply plus their contact details — then
+ * and reads the lead's complete reply plus their contact details, then
  * notify_lead_owner forwards it to whoever the lead BELONGS to: the
  * teammate who claimed it (contacts.owner_employee_id), else the business
  * owner (the $1M+ owner-direct case). suppressDefaultReply keeps the AI

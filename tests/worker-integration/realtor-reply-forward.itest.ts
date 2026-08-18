@@ -19,11 +19,11 @@ import {
  *
  * Covers the two engine pieces the fix added:
  *  - notify_lead_owner: forwards a lead's reply to whoever the lead BELONGS
- *    to — the claiming teammate (contacts.owner_employee_id) in round-robin,
+ *    to, the claiming teammate (contacts.owner_employee_id) in round-robin,
  *    the business owner for owner-direct/unowned leads (Jennifer's case);
  *  - ownerDirectNudges: the $1M+ keep-for-owner alert parks and re-fires as
  *    ALL-CAPS reminders at 10/30 minutes unless the owner replies "1" (an
- *    ack, never a claim — claimed_agent stays "none").
+ *    ack, never a claim, claimed_agent stays "none").
  *
  * Definitions are inserted directly (createFlow does not validate): they
  * reference pre-seeded vars instead of extract steps because the itest stack
@@ -40,7 +40,7 @@ const REPLY_URL = "https://rltr.pro/XKVuC";
 const GABBY_PHONE = "+14807202013";
 const OWNER_FORWARD = "+16025550001";
 
-/** The reply relay trigger — realtor.com's sender never normalizes (from ""). */
+/** The reply relay trigger, realtor.com's sender never normalizes (from ""). */
 const REPLY_TRIGGER = {
   channel: "sms",
   from: "",
@@ -100,7 +100,7 @@ describe("notify_lead_owner, forward the reply to whoever holds the lead (real w
   it("today's case: owner-direct lead (unowned contact, name-only relay) goes to the business owner", async () => {
     const biz = await seedBusiness(db, "IT reply fwd owner-direct");
     // Jennifer's contact exists (created by the lead flow's intro text) but
-    // has NO owning employee — the $1M+ rule kept her from the team.
+    // has NO owning employee, the $1M+ rule kept her from the team.
     await seedContact(db, biz, JEN_PHONE, { display_name: JEN_NAME });
     const flowId = await createFlow(db, biz, replyForwardFlow());
 
@@ -255,7 +255,7 @@ describe("ownerDirectNudges, 10/30-minute reminders until the owner replies 1 (r
     const runId = await enqueueRun(db, flowId, biz, LEAD_TRIGGER, OWNER_DIRECT_VARS);
     await tickWorker();
 
-    // Parked awaiting the owner's ack — NOT offered to any teammate.
+    // Parked awaiting the owner's ack, NOT offered to any teammate.
     let run = await getRun(db, runId);
     expect(run.status).toBe("awaiting_agent");
     expect(run.respond_by_at).not.toBeNull();
@@ -282,7 +282,7 @@ describe("ownerDirectNudges, 10/30-minute reminders until the owner replies 1 (r
     expect(String(run.context.vars?.claimed_agent)).toBe("none");
     expect(String(run.context.vars?.actions_taken)).toContain("did not acknowledge");
 
-    // The claim-gated step stayed closed — the owner's park is not a claim.
+    // The claim-gated step stayed closed, the owner's park is not a claim.
     const steps = await getSteps(db, runId);
     const gated = steps.find((s) => s.step_type === "notify_owner");
     expect(gated?.status).toBe("skipped");

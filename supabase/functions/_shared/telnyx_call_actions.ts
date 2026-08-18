@@ -57,7 +57,7 @@ export async function telnyxAnswerPlain(
  * /actions/streaming_start, May 2026):
  *
  *   - `stream_codec`: codec for the INBOUND fork (caller → bridge). Default
- *     `"default"` means the call's native PSTN codec — almost always
+ *     `"default"` means the call's native PSTN codec, almost always
  *     PCMU 8 kHz µ-law. We force `"L16"` so the bridge gets uncompressed
  *     16-bit PCM and can hand it straight to Gemini Live (which expects
  *     `audio/pcm`).
@@ -69,11 +69,11 @@ export async function telnyxAnswerPlain(
  *   - `stream_bidirectional_codec: "L16"`: outbound payload is L16 PCM.
  *   - `stream_bidirectional_sampling_rate: 16000`: outbound runs at 16 kHz
  *     to match `TELNYX_PCM_RATE` in the bridge. Without this field Telnyx
- *     defaults the OUTBOUND rate to 8 kHz — and the bridge's L16 16 kHz
+ *     defaults the OUTBOUND rate to 8 kHz, and the bridge's L16 16 kHz
  *     frames played back at 8 kHz sound like sped-up chipmunk noise (or,
  *     more often, Telnyx silently discards them because they miss the
  *     expected packet cadence). The legacy `stream_sampling_rate` field
- *     used here previously is NOT in the Telnyx schema and was ignored —
+ *     used here previously is NOT in the Telnyx schema and was ignored,
  *     left in place undetected, it was the root cause of the May 2026
  *     "one ring then silence" outage.
  */
@@ -180,7 +180,7 @@ export type TelnyxTransferOptions = {
   /**
    * Ring timeout (seconds) for the transfer target. When the target does not
    * answer within this window Telnyx hangs up the new (B) leg with a no-answer
-   * cause and leaves the original (A) leg under our control — that is what lets
+   * cause and leaves the original (A) leg under our control, that is what lets
    * the handoff chain fall through to the next step. Omit for an open-ended ring.
    */
   timeoutSecs?: number;
@@ -188,7 +188,7 @@ export type TelnyxTransferOptions = {
    * Answering-machine detection on the TRANSFER'S new (B) leg. Same modes as
    * TelnyxDialOptions. Why here: a step target whose phone is off goes to
    * carrier voicemail in a couple of seconds, well inside any ring window, and
-   * a transfer auto-bridges on answer — so without AMD the caller is connected
+   * a transfer auto-bridges on answer, so without AMD the caller is connected
    * to a teammate's voicemail greeting and the chain never advances past it.
    */
   answeringMachineDetection?: TelnyxDialOptions["answeringMachineDetection"];
@@ -212,7 +212,7 @@ function encodeClientState(raw: string): string {
  * Used by Safe Mode to hand the caller to the owner's forwarding number after
  * a short spoken confirmation, and by the warm-handoff chain to ring each step
  * with a `timeoutSecs` ring window + `clientState` so a no-answer can advance
- * the chain. We do not set `from` explicitly — Telnyx presents the original DID
+ * the chain. We do not set `from` explicitly, Telnyx presents the original DID
  * as the caller ID by default.
  */
 export async function telnyxTransferCall(
@@ -306,7 +306,7 @@ export async function telnyxSendDtmf(
 
 /**
  * Hang up an already-answered call. Used as the Safe Mode recovery step when
- * `/actions/transfer` fails — without this the caller is stranded on a silent
+ * `/actions/transfer` fails, without this the caller is stranded on a silent
  * bridged leg until Telnyx's inactivity timeout fires (~30-60s of silence).
  */
 export async function telnyxHangupCall(
@@ -335,7 +335,7 @@ export type TelnyxDialOptions = {
   connectionId: string;
   /** Callee in E.164. */
   to: string;
-  /** Caller ID presented to the callee — a DID on the connection, in E.164. */
+  /** Caller ID presented to the callee, a DID on the connection, in E.164. */
   from: string;
   /**
    * Ring timeout (seconds) before Telnyx abandons an unanswered callee and
@@ -385,7 +385,7 @@ export type TelnyxDialOptions = {
 /**
  * Originate an OUTBOUND call (POST /v2/calls). Returns the raw Telnyx response;
  * the caller reads `data.call_control_id` from the JSON to drive the leg. We do
- * NOT answer/stream here — the originated leg is answered + bridged by the
+ * NOT answer/stream here, the originated leg is answered + bridged by the
  * call-control state machine when Telnyx delivers call.answered, exactly like an
  * inbound A-leg. Budget MUST already be reserved before calling this (see
  * reserveVoiceBudget); on a no-budget result the caller must not dial.

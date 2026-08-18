@@ -7,7 +7,7 @@
  * the tools it can use, with a toggle per configurable tool. State is
  * server-rendered (resolveAgentTools) and each flip PUTs
  * /api/dashboard/agent-tools, updating optimistically and rolling back on
- * failure. Non-configurable tools render a read-only badge — they're
+ * failure. Non-configurable tools render a read-only badge, they're
  * declared inside the per-tenant agent runtime and have no platform
  * enforcement point, so pretending they're toggleable would be a lie.
  */

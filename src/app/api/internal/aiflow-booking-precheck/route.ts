@@ -11,7 +11,7 @@
  * parked runs; the worker jumps its own claimed run in-process when
  * `booked` comes back true.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape as the
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape as the
  * other /api/internal/* endpoints. Everything inside fails open (booked:
  * false) so a provider hiccup can never block a lead's greeting; on
  * Calendly the young-run booking-goal sweep remains the ~1-min safety net.

@@ -6,13 +6,13 @@
  * pg_cron hits this Edge function with
  *   Authorization: Bearer <INTERNAL_CRON_SECRET>.
  * We validate the bearer, then forward the call to the Next.js internal
- * endpoint which does the actual Stripe/Hostinger/Supabase work — keeping
+ * endpoint which does the actual Stripe/Hostinger/Supabase work, keeping
  * all heavy lifecycle logic in one place (Node runtime) instead of
  * duplicating it into Deno.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  *
  * Response: forwards the Next.js body and status. On any bridge-level
  * failure (missing env, network error, non-2xx from the app) returns 502

@@ -5,7 +5,7 @@
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
  * Promotes due scheduled posts and publishes them through the Instagram
- * Graph API — see src/lib/social/publish.ts.
+ * Graph API, see src/lib/social/publish.ts.
  */
 
 import { assertCronAuth } from "@/lib/cron-auth";

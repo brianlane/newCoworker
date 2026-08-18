@@ -1,8 +1,8 @@
 /**
- * pull-cost-data.ts — read-only data pull feeding the tier-economics canvas
+ * pull-cost-data.ts, read-only data pull feeding the tier-economics canvas
  * (Standard-on-KVM2 plan, Part C). Gathers, for one business (default Amy):
  *
- *   1. Hostinger VPS catalog — every KVM2/KVM8 price entry (all term lengths),
+ *   1. Hostinger VPS catalog, every KVM2/KVM8 price entry (all term lengths),
  *      so the canvas can price monthly vs 12/24-month term buying.
  *   2. The business's real usage from Supabase:
  *        - daily_usage rolled up per calendar month (voice minutes, SMS, calls)
@@ -267,7 +267,7 @@ const telnyxKey = process.env.TELNYX_API_KEY ?? "";
 const telnyxRange = TELNYX_DAYS > 30 ? "last_90_days" : TELNYX_DAYS > 7 ? "last_30_days" : "last_7_days";
 // The tenant's Telnyx DIDs (what appears as cli/cld on MDRs): the messaging
 // from-number plus every routed voice DID. businesses.phone is deliberately
-// NOT used — that's the owner's onboarding cell, not a Telnyx number, and
+// NOT used, that's the owner's onboarding cell, not a Telnyx number, and
 // matching on it would attribute unrelated MDRs to this tenant.
 const { data: telnyxSettings } = await db
   .from("business_telnyx_settings")

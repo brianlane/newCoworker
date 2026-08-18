@@ -56,7 +56,7 @@ function spokeCheckFlow(): Record<string, unknown> {
 
 /**
  * The real spoke-check shape: the same owner_assigned trigger, plus a goal
- * watching `claimed` — which is the same event class that starts it.
+ * watching `claimed`, which is the same event class that starts it.
  */
 function spokeCheckWithClaimedGoal(): Record<string, unknown> {
   const def = {

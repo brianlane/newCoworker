@@ -32,7 +32,7 @@ export type SendFromOption = {
 /**
  * Pull the connected mailbox's address from Nango metadata.
  * `provider_account_email` is the REAL account behind the OAuth grant (probed
- * from the provider after connect — see lib/nango/account-identity). The
+ * from the provider after connect, see lib/nango/account-identity). The
  * `end_user_*` keys are only who was logged into OUR dashboard when the
  * session started (identical across every account the owner connects), so
  * they are last-resort fallbacks for legacy rows.
@@ -57,7 +57,7 @@ function providerLabel(providerConfigKey: string): string {
 /**
  * Build the ordered list of sender options for a business. The coworker mailbox
  * is always first; its address is the reserved local-part (or the UUID default
- * when none is reserved yet — the send path creates the row on first use, so we
+ * when none is reserved yet, the send path creates the row on first use, so we
  * never write during a page render here).
  */
 export async function listSendFromOptions(

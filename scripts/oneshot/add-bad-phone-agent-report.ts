@@ -21,7 +21,7 @@
  * Digit replies never reach the wait: "1"/"2"/"86" (and comma'd forms) are
  * consumed by the offer/unclaim machinery in telnyx-sms-inbound first.
  * Unclaimed / owner-direct / no-phone runs have claimed_agent_phone = "none",
- * which the wait planner resolves straight to the no_reply sentinel — no
+ * which the wait planner resolves straight to the no_reply sentinel, no
  * park, classify and both branch arms skip, flows end exactly as before.
  *
  * Patches the existing rows in place (no re-seed) so manual edits are
@@ -258,12 +258,12 @@ export const FLOW_CONFIGS: FlowConfig[] = [
  *
  * No `when` guards on the math/wait steps: an unclaimed / owner-direct run
  * has claimed_agent_phone = "none", which the wait planner resolves straight
- * to the no_reply sentinel (no park) — and the classify + both branch arms
+ * to the no_reply sentinel (no park), and the classify + both branch arms
  * are themselves gated off no_reply, so nothing fires for those runs.
  */
 export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
   // Two report variants for Amy, split by a nested branch on whether the
-  // lead actually has an email (contains "@" — extractions store the literal
+  // lead actually has an email (contains "@", extractions store the literal
   // "none", or "", when there is no address): the has-email arm states the
   // lead HAS been emailed for a better number; the else arm states NO
   // follow-up email could be sent, so Amy knows the report email is the only
@@ -276,7 +276,7 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     `Lead source: ${cfg.sourceLabel}\n\n`;
   // Bounce check: the lead follow-up sends through Amy's connected mailbox
   // (that's what makes it come from amy@amylaidlaw.com), so Resend never
-  // sees it — but a hard bounce puts a delivery-failure notice (Outlook:
+  // sees it, but a hard bounce puts a delivery-failure notice (Outlook:
   // "Undeliverable" from postmaster/Microsoft Outlook; Gmail:
   // mailer-daemon) back in HER inbox within minutes. After a 20-minute
   // grace, an email_extract reads her mailbox (same connection the send
@@ -285,11 +285,11 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
   // the lead's address AND quote the follow-up's subject (both Gmail and
   // Outlook NDRs include the original subject). The 4h lookback absorbs
   // delayed worker resumes (quiet-hours/window deferrals) without much
-  // staleness risk — an older same-address, same-subject NDR still means
+  // staleness risk, an older same-address, same-subject NDR still means
   // this address bounces this flow's mail.
   //
   // ORDER MATTERS: Amy's primary report goes out BEFORE this check, so a
-  // mailbox read failure here can only ever lose the bounce ADDENDUM —
+  // mailbox read failure here can only ever lose the bounce ADDENDUM,
   // never her bad-phone report.
   const bounceWait: Step = { id: "bp_bounce_wait", type: "sleep", minutes: 20 };
   const bounceCheck: Step = {
@@ -312,8 +312,8 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     ]
   };
   // Primary report: runs immediately AFTER the lead email steps (so
-  // actions_taken already records whether each send actually went out —
-  // "emailed x@y" vs "skipped email ... (no valid address)" — and the
+  // actions_taken already records whether each send actually went out,
+  // "emailed x@y" vs "skipped email ... (no valid address)", and the
   // report never overstates outreach), and BEFORE the bounce check so a
   // mailbox-read failure can never block it.
   const amyEmailEmailed: Step = {

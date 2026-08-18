@@ -1,18 +1,18 @@
 /**
- * apply-kyp-intake.ts — one-shot: apply the completed KYP Ads white-glove
+ * apply-kyp-intake.ts, one-shot: apply the completed KYP Ads white-glove
  * intake (851d0a36-be68-414f-9968-e00fa18685bb) to their live tenant
- * (056034a7-e84c-444d-8d15-747eeb1fa899) via `applyWhiteGloveIntake` — the
+ * (056034a7-e84c-444d-8d15-747eeb1fa899) via `applyWhiteGloveIntake`, the
  * first production use of the intake→tenant pipeline (PR #607).
  *
  * What --apply does, in order:
  *   1. Fix the malformed owner phone ("5188192" from a truncated signup
- *      field) to +15145188192 (James — the number on the intake's team line).
+ *      field) to +15145188192 (James, the number on the intake's team line).
  *   2. Run the apply: white-glove marker blocks into soul/memory, business
  *      hours (11am–6pm → Mon–Fri) merged into the profile, and the
  *      "Lead follow-up (white-glove build)" flow installed DISABLED for
  *      James's wording approval (greeting within seconds, nudges at 2h /
  *      next day, personal-touch flag + Inactive tag after 3 unanswered).
- *   3. Push the vault to the tenant box (syncVaultToVps) — the Next.js
+ *   3. Push the vault to the tenant box (syncVaultToVps), the Next.js
  *      route does this via after(); here we run it inline.
  *   4. Record the run in the applied_oneshots ledger.
  *
@@ -85,7 +85,7 @@ console.log("[oneshot] owner phone updated + profile_md refreshed");
 // 2. The apply itself (same service the admin route calls). Mirror the
 //    route's failure contract: a mid-apply failure may have committed the
 //    vault write centrally, so the box re-seed below runs EVEN when the
-//    apply throws — the live agent must never keep pre-apply grounding
+//    apply throws, the live agent must never keep pre-apply grounding
 //    behind an error.
 const { applyWhiteGloveIntake } = await import("../../src/lib/white-glove/apply-service.ts");
 let result: Awaited<ReturnType<typeof applyWhiteGloveIntake>> | null = null;
@@ -111,7 +111,7 @@ console.log(
     : { ok: false, reason: sync.reason, detail: sync.detail }
 );
 
-// 4. Ledger — recorded only for a successful apply (the ledger marks work
+// 4. Ledger, recorded only for a successful apply (the ledger marks work
 //    as done; a failed run must not look applied).
 if (result) {
   const db = createClient(

@@ -4,7 +4,7 @@
  * Admin hardware escalation control (Infrastructure card).
  *
  * Shows the tenant's effective box size and lets the operator move them to
- * a different size (kvm1/kvm2/kvm4/kvm8) without changing entitlements —
+ * a different size (kvm1/kvm2/kvm4/kvm8) without changing entitlements,
  * the panel replacement for debug/migrate-vps-size.ts. The API answers 202
  * and the migration runs unattended; progress arrives as ops emails
  * (started → completed/failed), so the panel only confirms the kickoff.

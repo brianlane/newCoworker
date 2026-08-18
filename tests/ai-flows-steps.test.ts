@@ -860,7 +860,7 @@ describe("planStep: unknown step types", () => {
     // Runtime version skew: a stored definition can carry a step type newer
     // than the deployed worker. planStep's exhaustive switch falls through to
     // undefined; the worker converts that into a readable run failure telling
-    // ops to redeploy — never a bare TypeError.
+    // ops to redeploy, never a bare TypeError.
     const plan = planStep(
       { id: "x", type: "step_from_the_future" } as unknown as FlowStep,
       { vars: {} }
@@ -1594,7 +1594,7 @@ describe("planStep: send_email", () => {
       {
         ...step,
         // CSV in one slot, an uppercase dup, a missing var (empty), and an
-        // invalid token — only the valid, de-duplicated addresses survive.
+        // invalid token, only the valid, de-duplicated addresses survive.
         cc: ["Manager@x.com, ops@x.com", "MANAGER@x.com", "{{vars.missing}}", "not-an-email"],
         bcc: ["archive@x.com"]
       },

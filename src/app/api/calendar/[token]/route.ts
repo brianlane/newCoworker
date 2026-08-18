@@ -1,5 +1,5 @@
 /**
- * GET /api/calendar/<ncbf_token>.ics — the subscribable booking feed.
+ * GET /api/calendar/<ncbf_token>.ics, the subscribable booking feed.
  *
  * Public by design: the token IS the capability, same posture as the
  * booking page's `ncb_` token, and calendar apps fetch this URL on their
@@ -7,7 +7,7 @@
  * for the same reason the public booking endpoints' is: subscribers poll
  * from Google's and Apple's fetch fleets, not from one IP.
  *
- * Responses carry no phone numbers or emails, only display names — a
+ * Responses carry no phone numbers or emails, only display names, a
  * forwarded calendar link must not become a contact-list leak.
  */
 import {

@@ -80,7 +80,7 @@ export async function POST(
     }
     // The target lookup is alias-aware; if the typed number is an alias of
     // the SOURCE profile (already-merged number), the RPC would fold a row
-    // into itself — reject explicitly.
+    // into itself, reject explicitly.
     if (target.customer_e164 === customerE164) {
       return errorResponse("VALIDATION_ERROR", "That number already belongs to this customer.");
     }
@@ -91,13 +91,13 @@ export async function POST(
     // Both lookups are alias-aware, so a path that is itself a merged ALIAS
     // can resolve to the same profile as the typed target (e.g. viewing an
     // alias URL and typing that profile's primary). The RPC would then fold
-    // the row into itself and error — reject as validation instead.
+    // the row into itself and error, reject as validation instead.
     if (source.customer_e164 === target.customer_e164) {
       return errorResponse("VALIDATION_ERROR", "That number already belongs to this customer.");
     }
     // Merge is "same person, two numbers" and is irreversible. Refuse to fold a
     // non-customer directory row (company short code, vendor, tester,
-    // owner/employee) in either direction — the UI hides the action for these,
+    // owner/employee) in either direction, the UI hides the action for these,
     // this is the authoritative guard.
     if (source.type !== "customer" || target.type !== "customer") {
       return errorResponse(

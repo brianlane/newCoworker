@@ -2,7 +2,7 @@
  * Pure shaping for the Tasks page's Data view (the Airtable-style grid).
  *
  * One row per LEAD: every contact that is on a pipeline (has tags) plus
- * every lead_submissions row, folded together by identifier — a submission
+ * every lead_submissions row, folded together by identifier, a submission
  * whose phone matches a contact's primary/alias (or whose email matches the
  * contact's email) enriches that contact's row instead of adding a second
  * one. Submission answers become DYNAMIC columns: the union of field keys
@@ -55,7 +55,7 @@ export type LeadDataRow = {
   e164: string | null;
   name: string;
   email: string | null;
-  /** Contact tags — the client maps these onto pipeline stages. */
+  /** Contact tags, the client maps these onto pipeline stages. */
   tags: string[];
   ownerEmployeeId: string | null;
   ownerName: string | null;
@@ -75,7 +75,7 @@ export type LeadDataRow = {
 
 /**
  * Plumbing keys the bridges/direct integration attach that the grid's fixed
- * columns or metadata already cover — never worth a dynamic column.
+ * columns or metadata already cover, never worth a dynamic column.
  */
 const DYNAMIC_COLUMN_DENYLIST = new Set([
   "leadgen_id",
@@ -152,7 +152,7 @@ export function buildLeadDataRows(input: {
 
   // Newest submission per lead. Submissions matching a contact key onto the
   // contact's primary; contactless submissions key on their own identifier
-  // (phone, else email, else nothing — those each get their own row).
+  // (phone, else email, else nothing, those each get their own row).
   const newestByLead = new Map<string, LeadSubmissionRow>();
   const contactless: LeadSubmissionRow[] = [];
   const sortedSubs = [...submissions].sort((a, b) =>
@@ -242,7 +242,7 @@ export function buildLeadDataRows(input: {
   }
 
   // Contactless, identifier-less submissions each get a row (rare: a form
-  // with neither phone nor email) — still visible rather than dropped.
+  // with neither phone nor email), still visible rather than dropped.
   for (const sub of contactless) {
     rows.push({
       e164: null,

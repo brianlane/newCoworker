@@ -5,7 +5,7 @@
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
  * Discovers, drafts, sends, and follows up for every business with
- * Prospecting switched on — see src/lib/outreach/sweep.ts.
+ * Prospecting switched on, see src/lib/outreach/sweep.ts.
  */
 
 import { assertCronAuth } from "@/lib/cron-auth";

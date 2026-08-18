@@ -4,7 +4,7 @@
  * `hostinger.executeCommand()` endpoint.
  *
  * Design goals:
- *  - Single `exec()` entry point — connect, run one command, collect output, disconnect.
+ *  - Single `exec()` entry point, connect, run one command, collect output, disconnect.
  *  - Distinguish "SSH connection failed" from "command ran and exited non-zero".
  *  - Optional `onStdout`/`onStderr` callbacks for progress streaming.
  *  - Fully mockable via the `sshClientFactory` dep (tests swap in a fake Client).
@@ -36,7 +36,7 @@ export type SshExecOptions = {
    * command and ship the script here instead.
    */
   stdin?: string;
-  /** Full command timeout — includes connect + exec. Default 15 min (provisioning is slow). */
+  /** Full command timeout, includes connect + exec. Default 15 min (provisioning is slow). */
   timeoutMs?: number;
   /** Connect-only timeout. Default 60s. */
   connectTimeoutMs?: number;
@@ -101,7 +101,7 @@ const defaultFactory: SshClientFactory = () => new Ssh2Client() as unknown as Ss
 /**
  * Connect, run one command, return exit code + captured streams. Rejects when
  * the connection itself fails; resolves (with `exitCode !== 0`) when the
- * command ran but exited non-zero — same contract as `child_process.exec`.
+ * command ran but exited non-zero, same contract as `child_process.exec`.
  */
 export async function sshExec(
   opts: SshExecOptions,
@@ -210,11 +210,11 @@ export async function sshExec(
     // the presented host key and compare it to `expectedHostKeyFingerprint`.
     //
     // NOTE: ssh2's default (when `hostVerifier` is undefined) is *accept any
-    // host key* — the library has no known_hosts integration and logs
+    // host key*, the library has no known_hosts integration and logs
     // "Host accepted by default (no verification)" at the debug level. So
     // `accept-any` intentionally leaves `hostVerifier` unset; do NOT
     // reflexively add `hostVerifier: () => true` thinking ssh2 defaults to
-    // reject, because it doesn't — and re-running under a future major
+    // reject, because it doesn't, and re-running under a future major
     // version that changes that default is covered by the dedicated test
     // in `tests/hostinger-ssh.test.ts`.
     const connectCfg: ConnectConfig = {

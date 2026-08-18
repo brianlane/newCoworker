@@ -168,16 +168,16 @@ export function parseActions(raw) {
 /**
  * Resolve a "click this text" target to an actual control. The whole point is to
  * stop the matcher from latching onto descriptive body copy that merely contains
- * the word — e.g. a "click Accept" action hitting the subtitle "…then accept or
+ * the word, e.g. a "click Accept" action hitting the subtitle "…then accept or
  * reject." or a "Next" wizard loop hitting the sentence "…on the next screen…".
  * (That Accept case is real: an already-claimed Clever Offers page has no Accept
  * button but its description says "…then accept or reject", and a loose
  * substring match happily "clicked" that sentence, so the step succeeded and the
  * worker's skipWhenText already-claimed guard never ran.)
  *
- * Substring matches therefore ONLY ever resolve to a real INTERACTIVE control —
- * by substring accessible name or substring text scoped to interactive elements
- * — so labels with trailing glyphs ("Next →", "Accept ✓") still match while
+ * Substring matches therefore ONLY ever resolve to a real INTERACTIVE control,
+ * by substring accessible name or substring text scoped to interactive elements,
+ * so labels with trailing glyphs ("Next →", "Accept ✓") still match while
  * prose (<p>/<span>) never does. Returns null when no control matches; callers
  * fail the action (single click) or treat it as "step done" (while-present).
  *
@@ -286,7 +286,7 @@ export const CLOSE_ICON_RE = /^(times|xmark|close|x|times-circle|circle-xmark)$/
 /**
  * Interception recovery for ACTION mode: portals (e.g. Clever, July 2026) began
  * stacking full-viewport announcement / scroll-gated agreement modals over lead
- * pages, so every authored click times out — Playwright refuses to click an
+ * pages, so every authored click times out, Playwright refuses to click an
  * element another layer covers ("Provide Update" under a "Clever Offers
  * Program" agreement modal + a "Service Areas" announcement modal).
  *
@@ -307,17 +307,17 @@ export const CLOSE_ICON_RE = /^(times|xmark|close|x|times-circle|circle-xmark)$/
  *     re-picked (Clever's "Scroll to continue" re-renders into an enabled
  *     "Agree and close").
  * Closing is tried before agreeing because closing commits to less.
- * Candidates must be <button>/[role="button"] INSIDE the overlay — never
+ * Candidates must be <button>/[role="button"] INSIDE the overlay, never
  * anchors (navigation) and never consequential labels like "Accept"/"Submit"/
- * "OK" — so a wizard dialog the actions opened on purpose can never be
+ * "OK", so a wizard dialog the actions opened on purpose can never be
  * advanced, only genuinely dismissable layers closed. EXTRACT mode never calls
  * this (reads don't need pointer events). Returns how many layers were
  * dismissed; 0 means "nothing here looked like a blocking modal".
  *
- * `protectTarget` is the CURRENT action's protect hint — the string identifying
+ * `protectTarget` is the CURRENT action's protect hint, the string identifying
  * the control we just failed to click (its text / CSS selector / ARIA name; see
  * performActions). When the topmost overlay CONTAINS that control, the overlay isn't a
- * layer covering our target — it IS the dialog hosting it (e.g. the Clever "We
+ * layer covering our target, it IS the dialog hosting it (e.g. the Clever "We
  * Spoke" update modal whose own datepicker popup briefly intercepted the
  * "Submit Update" click). Closing it would delete the very button we're after
  * and turn a transient interception into a fatal "no matching control", so we
@@ -349,7 +349,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
           if (el === at || el.contains(at)) overlay = el;
         }
         if (!overlay) return "";
-        // Never close the dialog that HOSTS the control we're trying to click —
+        // Never close the dialog that HOSTS the control we're trying to click,
         // dismissing it would remove our target (see docstring).
         if (protect) {
           let hostsTarget = false;
@@ -360,7 +360,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
           }
           if (!hostsTarget) {
             // Interactive controls only (buttons/links plus the ARIA widget
-            // roles click_role targets, e.g. a datepicker's [role="option"]) —
+            // roles click_role targets, e.g. a datepicker's [role="option"]),
             // matching arbitrary prose would over-protect every text-bearing
             // modal.
             const want = protect.trim().toLowerCase();
@@ -434,7 +434,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
     } catch {
       break; // page navigated/closed mid-probe, nothing left to dismiss
     }
-    // The topmost overlay is the dialog hosting our target — don't close it.
+    // The topmost overlay is the dialog hosting our target, don't close it.
     if (clicked === "__protected__") break;
     if (!clicked) break;
     dismissed++;
@@ -454,7 +454,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
  * form settles before the next action targets the new DOM.
  *
  * A failed action gets ONE retry when dismissBlockingOverlays actually closed
- * a full-viewport modal — the failure was then very likely interception, not a
+ * a full-viewport modal, the failure was then very likely interception, not a
  * changed page. A per-kind protect hint (the control's text / selector / ARIA
  * name) is passed through so the dismisser never closes the dialog that HOSTS
  * that control (which would delete the very control we're after). When nothing
@@ -469,7 +469,7 @@ export async function performActions(page, actions) {
         await runAction(page, a);
       } catch (firstErr) {
         // Protect hint: the string that identifies the control inside its host
-        // dialog. For click_role the target is just the ARIA role ("option") —
+        // dialog. For click_role the target is just the ARIA role ("option"),
         // the distinctive string is the accessible NAME in `value` (e.g.
         // "09:00"); every other kind identifies the control by `target` itself
         // (text, CSS selector, or placeholder).
@@ -507,7 +507,7 @@ export async function performActions(page, actions) {
  * pointer events). That gap is the Aug 4 2026 Clever incident: a FINISHED
  * wizard leaves its primary button visible for a beat while disabled or
  * unmounting, the loop clicked it anyway, burned the full ACTION_TIMEOUT_MS,
- * and threw — so a referral that HAD been accepted came back as a dead-lettered
+ * and threw, so a referral that HAD been accepted came back as a dead-lettered
  * run and 19 downstream steps never ran.
  */
 async function probeClickable(page, target) {
@@ -550,7 +550,7 @@ export async function runAction(page, a, opts = {}) {
     // contains the word (e.g. "…on the next screen…").
     //
     // The loop ends on "absent" (page is past the step) or on "blocked" AFTER
-    // at least one click landed — a wizard that advanced and then went inert is
+    // at least one click landed, a wizard that advanced and then went inert is
     // a wizard that FINISHED. "blocked" with zero clicks landed is different:
     // nothing moved, so the page is genuinely stuck and we stay loud rather
     // than letting the next browse_extract read a half-completed page.
@@ -577,7 +577,7 @@ export async function runAction(page, a, opts = {}) {
       throw new Error(`"${a.target}" is on the page but never became clickable`);
     }
     // Hitting the cap while the target is still there means the wizard never
-    // finished — fail so the worker doesn't extract from a half-completed page
+    // finished, fail so the worker doesn't extract from a half-completed page
     // (a changed/looping page is a permanent error).
     if (clicks >= MAX_WHILE_PRESENT_CLICKS && hit.state !== "absent") {
       throw new Error(`still present after ${MAX_WHILE_PRESENT_CLICKS} clicks`);

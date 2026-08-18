@@ -1,5 +1,5 @@
 /**
- * Instagram posts — dashboard management API.
+ * Instagram posts, dashboard management API.
  *
  *   GET  /api/dashboard/social-posts?businessId=…   → list posts
  *   POST /api/dashboard/social-posts                → create (draft or scheduled)

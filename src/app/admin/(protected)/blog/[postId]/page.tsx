@@ -4,7 +4,7 @@ import { BlogPostEditor } from "@/components/admin/BlogPostEditor";
 
 export const dynamic = "force-dynamic";
 
-/** Admin blog editor — `/admin/blog/new` creates, `/admin/blog/<id>` edits. */
+/** Admin blog editor, `/admin/blog/new` creates, `/admin/blog/<id>` edits. */
 export default async function AdminBlogEditorPage({
   params
 }: {

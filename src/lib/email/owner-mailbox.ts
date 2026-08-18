@@ -1,6 +1,6 @@
 /**
  * Send a plain-text email from the owner's connected mailbox (Nango Workspace
- * connection — Gmail or Microsoft 365/Outlook).
+ * connection, Gmail or Microsoft 365/Outlook).
  *
  * Extracted from /api/voice/tools/email so the dashboard-chat email adapter
  * (/api/voice/tools/dashboard-email, called by the VPS chat-worker) and the
@@ -135,7 +135,7 @@ function toGraphRecipients(addresses: string[]) {
 /**
  * Returns `email_not_connected` when there is no usable Nango email
  * connection. Upstream provider failures THROW (callers map them to their
- * own error contract — the tool adapters return `email_send_failed`).
+ * own error contract, the tool adapters return `email_send_failed`).
  */
 export async function sendFromOwnerMailbox(
   businessId: string,
@@ -154,7 +154,7 @@ export type MailboxConnectionRef = {
 
 /**
  * Send from a SPECIFIC connected mailbox (caller already resolved which
- * connection to use — e.g. an AiFlow step pinned to one of several accounts).
+ * connection to use, e.g. an AiFlow step pinned to one of several accounts).
  * `workspaceProxyForBusiness` re-verifies the connection belongs to the business,
  * so a stale/foreign id degrades to `email_not_connected` rather than sending.
  */

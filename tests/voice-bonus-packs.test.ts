@@ -186,7 +186,7 @@ describe("lib/billing/voice-bonus-packs", () => {
 
   it("getVoiceBonusBestUsdPerMinute keeps running min when later packs are more expensive per minute", () => {
     // Rates in ascending order (cheapest first) force the reduce callback to
-    // take its "else" branch on every iteration after the first — this is the
+    // take its "else" branch on every iteration after the first, this is the
     // branch coverage complement to the strictly-decreasing case above.
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
     process.env.STRIPE_VOICE_BONUS_120MIN_PRICE_ID = "price_120";

@@ -235,7 +235,7 @@ describe("api/admin/force-refund route", () => {
   it("retries with a synthetic profile when the refund window has closed", async () => {
     // The route builds the plan twice (validation, then with the usage
     // carve-out); each build first fails on the real profile and then
-    // succeeds on the synthetic one — hence the alternating sequence.
+    // succeeds on the synthetic one, hence the alternating sequence.
     const okPlan = {
       ok: true,
       plan: {
@@ -368,7 +368,7 @@ describe("api/admin/force-refund route", () => {
   it("threads the upserted profile ROW into the usage-window resolution", async () => {
     // The email upsert can merge onto an existing profile whose
     // first_paid_at anchors the carve-out window when the Stripe period
-    // cache is cold — leaving ctx.profile null would fail the refund with
+    // cache is cold, leaving ctx.profile null would fail the refund with
     // a spurious usage_window_unknown.
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ...defaultCtx,
@@ -547,7 +547,7 @@ describe("api/admin/force-refund route", () => {
 
   it("structural planner blockers win over an unresolvable usage window", async () => {
     // The validation build runs first, so a subscription with no Stripe
-    // backing surfaces as no_stripe_subscription — never the shadowing
+    // backing surfaces as no_stripe_subscription, never the shadowing
     // usage_window_unknown.
     vi.mocked(planLifecycleAction).mockReturnValueOnce({
       ok: false,
@@ -643,7 +643,7 @@ describe("api/admin/force-refund route", () => {
     // Regression: this route previously awaited `executeLifecyclePlan`
     // synchronously, which performs Stripe refund + cancel, SSH backup
     // of durable data, Hostinger snapshot/stop/auto-renew-disable, DB
-    // updates, and emails — minutes-long work end-to-end. With no
+    // updates, and emails, minutes-long work end-to-end. With no
     // `maxDuration` export the route fell back to the platform default
     // and was torn down mid-teardown on larger tenants, leaving Stripe
     // refunded but the VPS/Hostinger billing dangling. The fix mirrors
@@ -724,7 +724,7 @@ describe("api/admin/force-refund route", () => {
 
       const response = await POST(makeRequest());
       expect(response.status).toBe(500);
-      // No background work scheduled — DB never flipped to canceled, so
+      // No background work scheduled, DB never flipped to canceled, so
       // the slow phase would be operating on inconsistent state. The
       // operator must be able to retry the whole call.
       expect(afterCallbacks.length).toBe(0);

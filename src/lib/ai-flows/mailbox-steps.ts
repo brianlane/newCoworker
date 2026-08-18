@@ -1,9 +1,9 @@
 /**
- * Write-time validation for mailbox bindings in AiFlow steps —
+ * Write-time validation for mailbox bindings in AiFlow steps,
  * `send_email.fromConnectionId` and the send_sms quiet-hours email fallback's
  * `emailFromConnectionId`.
  *
- * The schema (schema.ts) can only check SHAPE — that the id is a uuid.
+ * The schema (schema.ts) can only check SHAPE, that the id is a uuid.
  * Whether that connection exists for THIS business and is an email provider
  * requires a DB read, so the flows CRUD routes, the MCP tools, and the
  * compile pipeline call this AFTER parseAiFlowDefinition (same layering as

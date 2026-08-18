@@ -12,7 +12,7 @@ import {
  * Dave Lane had claimed texted asking for a callback, and all four
  * notification rows went to the business owner instead.
  *
- * Every negative path must fall DOWN to the business owner, never out — an
+ * Every negative path must fall DOWN to the business owner, never out, an
  * alert that reaches nobody is strictly worse than one that reaches the
  * wrong-but-responsible person.
  */

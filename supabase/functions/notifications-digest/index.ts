@@ -11,9 +11,9 @@
 // (email_digest / email_digest_weekly) is true and a resolvable email exists
 // (preferences.alert_email > businesses.owner_email > ADMIN_EMAIL), build an
 // activity digest and send via Resend. Activity is aggregated from the REAL
-// activity tables — dashboard_chat_jobs, sms_inbound_jobs (inbound + cached
+// activity tables, dashboard_chat_jobs, sms_inbound_jobs (inbound + cached
 // replies), sms_outbound_log, voice_call_transcripts, ai_flow_runs,
-// customer_memories — plus coworker_logs (urgent alerts) and notifications
+// customer_memories, plus coworker_logs (urgent alerts) and notifications
 // (delivered count). The original implementation counted only coworker_logs,
 // which nothing but voice captures writes to, so every digest skipped with
 // "no_activity". One `notifications` row per business (kind=digest,
@@ -83,7 +83,7 @@ type DigestTarget = {
   unsubscribed_at: string | null;
 };
 
-// Plain `?bid=<businessId>` parameter — no HMAC. UUID v4 is unguessable and
+// Plain `?bid=<businessId>` parameter, no HMAC. UUID v4 is unguessable and
 // the unsubscribe action is a one-click flag the owner can re-enable from the
 // dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
 // matching handler / threat-model rationale.
@@ -176,7 +176,7 @@ async function fetchActivity(
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
       // Exact totals (head counts) drive the email subject, summary, roll-up
-      // labels, and hasDigestActivity — these must reflect the FULL window, not
+      // labels, and hasDigestActivity, these must reflect the FULL window, not
       // the capped row sets used for per-thread links below.
       supa
         .from("sms_inbound_jobs")
@@ -190,7 +190,7 @@ async function fetchActivity(
       // sends outside the rolling window.
       //
       // Replies are detected via assistant_reply_text (durable, written at
-      // send time, never cleared) — NOT rowboat_reply_cached, which is a
+      // send time, never cleared), NOT rowboat_reply_cached, which is a
       // transient Telnyx retry buffer nulled after every successful send.
       // The window filters on updated_at because the send-time write bumps
       // it; created_at would miss backlogged jobs received before the window
@@ -306,7 +306,7 @@ async function fetchActivity(
 
   // Build per-conversation threads (best-effort detail capped to the row sets
   // above). Each inbound job is the customer's received text; if that same job
-  // carries an assistant reply it is also one sent text to the same customer —
+  // carries an assistant reply it is also one sent text to the same customer,
   // reading both sides off the one row keeps a thread's tallies self-consistent.
   // The reply is only counted as "sent" when its updated_at falls in the digest
   // window, matching the authoritative smsOutbound head count (a job received
@@ -676,7 +676,7 @@ serve(async (req: Request) => {
       };
 
       // NB: the Resend REST API uses snake_case in the JSON body
-      // (https://resend.com/docs/api-reference/emails/send-email) — `reply_to`,
+      // (https://resend.com/docs/api-reference/emails/send-email), `reply_to`,
       // not `replyTo`. The Resend SDK in src/lib/email/client.ts uses the
       // camelCase form because the SDK transforms it internally; direct REST
       // calls (here + supabase/functions/notifications/index.ts) must stick

@@ -3,7 +3,7 @@
  *
  * DELETE /api/dashboard/messages/schedule/:id  body { businessId }
  *
- * Only 'pending' rows can be canceled — once the sweep claims a row
+ * Only 'pending' rows can be canceled, once the sweep claims a row
  * ('sending') the Telnyx call may already be in flight, and 'sent' is final.
  * The status guard is part of the UPDATE's WHERE clause so a cancel racing
  * the sweep loses cleanly (404) instead of un-sending anything.

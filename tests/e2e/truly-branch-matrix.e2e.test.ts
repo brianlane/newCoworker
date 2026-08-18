@@ -7,14 +7,14 @@ import { walkFlowTimed, type TimedWalkResult } from "./flow-run-replay";
 import { TRIGGER, trulyFlowSteps } from "./truly-privyr-flow.fixture";
 
 /**
- * Full branch matrix for Truly Insurance's VERBATIM production flow — one
+ * Full branch matrix for Truly Insurance's VERBATIM production flow, one
  * timed walk per branch arm, driven by live Gemini decisions, using the
  * lead replies actually RECORDED in the tenant's run history wherever one
  * exists (run ids noted per scenario; synthetic text is called out).
  *
  * The closing meta-assertion is the "every action item covered" guarantee:
  * it unions the DONE steps across every walk and fails if ANY step id in
- * the definition was never executed by some scenario — so when Truly's
+ * the definition was never executed by some scenario, so when Truly's
  * flow gains a step, this suite refuses to stay green until a walk covers
  * it. (The Alex renewal-capture scenario lives in
  * truly-renewal-context.e2e.test.ts; its arm is re-covered here by the
@@ -82,13 +82,13 @@ beforeAll(async () => {
   ]);
   await walkWith("silent", []);
   await walkWith("late_gave_info", [
-    // Shahid's recorded reply, arriving AFTER wait_intro's 120m timeout —
+    // Shahid's recorded reply, arriving AFTER wait_intro's 120m timeout,
     // consumed by wait2 (the nudge follow-up window).
     { text: "I need Auto and home insurance quote", atMinutes: 200 }
   ]);
   await walkWith("late_wants_call", [
     // Dawnia's exact production case (run 5575c2b2): silent through the
-    // intro, then "I would like to book a call " after nudge1 — the
+    // intro, then "I would like to book a call " after nudge1, the
     // pre-patch dead end that got pure silence.
     { text: "I would like to book a call ", atMinutes: 200 }
   ]);
@@ -97,7 +97,7 @@ beforeAll(async () => {
   ]);
   await walkWith("reply_after_second_nudge", [
     // Past wait2's 120+1440m horizon so nudge2 goes out, then the lead
-    // finally answers inside wait3 — the only path that runs late_engaged_2.
+    // finally answers inside wait3, the only path that runs late_engaged_2.
     { text: "Sorry for the delay - yes I'm still interested", atMinutes: 1700 }
   ]);
   await walkWith("reply3_wants_call", [
@@ -236,7 +236,7 @@ describe("silent + late-reply arms (the Dawnia incident family)", () => {
     // and only wants_a_call / not_interested change behavior. "yes I'm
     // still interested" answers no question and shares no detail, so the
     // model legitimately reads it as unclear (gemini-3.5-flash-lite pins
-    // unclear; 2.5-flash-lite already wobbled between the two) — asserting
+    // unclear; 2.5-flash-lite already wobbled between the two), asserting
     // gave_info made the test flaky about a distinction the flow ignores.
     expect(["gave_info", "unclear"]).toContain(w.vars.reply3_intent);
     expect(stepOf(w, "reply3_continue").status).toBe("done");
@@ -278,7 +278,7 @@ describe("every action item in the flow is covered", () => {
     }
     const uncovered = allStepIds.filter((id) => !executed.has(id));
     // A failure here means Truly's flow gained (or renamed) an action no
-    // scenario executes — add a walk for it above.
+    // scenario executes, add a walk for it above.
     expect(uncovered).toEqual([]);
   });
 });

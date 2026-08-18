@@ -9,13 +9,13 @@
  * Why this exists: migration 20260629020000_vps_gateway_tokens.sql moved each
  * tenant's Rowboat onto its OWN api key. Once a box is re-keyed, its Rowboat
  * rejects the shared env token ("Invalid API key" → HTTP 500), so any worker
- * still sending the env bearer dead-letters every job for that tenant — that
+ * still sending the env bearer dead-letters every job for that tenant, that
  * is exactly how customer SMS silently broke after Amy's June 19 redeploy.
  * (Worker → PLATFORM calls are unaffected: the app accepts the shared token
  * as a fallback. This resolver is for worker → tenant-VPS Rowboat calls.)
  *
  * Only the confirmed-deployed token is used (never a pending one) so the
- * worker can't get ahead of a half-finished deploy — the same "confirmed or
+ * worker can't get ahead of a half-finished deploy, the same "confirmed or
  * env fallback" contract as the Next resolver. Fails over to the env value on
  * any DB error: an outage of the token table must not take down SMS for
  * tenants still on the shared secret.
@@ -57,7 +57,7 @@ type TokenSupabase = {
 };
 
 /** The legacy shared platform secret (transition fallback). Runtime-agnostic
- *  (Deno on the edge, Node under Vitest) so the module can be unit-tested —
+ *  (Deno on the edge, Node under Vitest) so the module can be unit-tested,
  *  `Deno` is looked up via globalThis to keep the Node tsc program happy. */
 export function sharedEnvRowboatBearer(): string {
   const g = globalThis as {

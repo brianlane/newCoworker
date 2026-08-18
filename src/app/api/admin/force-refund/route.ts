@@ -4,8 +4,8 @@
  * Operator-initiated cancel-with-refund. Bypasses the customer-lifetime
  * refund eligibility gates (`profile.refund_used_at`,
  * `isWithinLifetimeRefundWindow`) that block the self-serve
- * `/api/billing/cancel` path so support can honor a refund for edge cases
- * — e.g. billing disputes, accidental charges, or a compromised account.
+ * `/api/billing/cancel` path so support can honor a refund for edge cases,
+ * e.g. billing disputes, accidental charges, or a compromised account.
  *
  * Plan source §PR 10: "Add admin force-refund button + endpoint on the
  * per-business admin page".
@@ -23,7 +23,7 @@
  *     previously used their lifetime refund. The DB write
  *     (`markRefundUsed`) is conditional on `refund_used_at IS NULL`, so a
  *     second admin force-refund against the same profile is a no-op on
- *     this column — the timestamp captures "first lifetime allowance
+ *     this column, the timestamp captures "first lifetime allowance
  *     consumption" and is intentionally never re-stamped.
  *
  * Refund-cap semantics (intentional asymmetry):
@@ -109,8 +109,8 @@ export async function POST(request: Request) {
     // profile-upsert + planner pipeline below. The planner's own
     // `subscription_not_active` rejection prevents the actual refund
     // from running, but only AFTER we've eagerly upserted a
-    // customer_profiles row and stamped `business.customer_profile_id`
-    // — wasted writes for pending and idempotency-noise for canceled.
+    // customer_profiles row and stamped `business.customer_profile_id`,
+    // wasted writes for pending and idempotency-noise for canceled.
     // Surface the precondition cleanly here so the UI can branch and
     // the audit log shows a single 409 instead of a tangled 409 chain.
     if (ctxRes.context.subscription.status !== "active") {
@@ -173,7 +173,7 @@ export async function POST(request: Request) {
       // planner's `cancelWithRefund` precondition check sees a profile
       // (and so the rewritten plan stamps `customer_profile_id` on the
       // `subscriptions` row for future self-serve lookups). Also load the
-      // upserted ROW itself — the email upsert can merge onto an existing
+      // upserted ROW itself, the email upsert can merge onto an existing
       // profile whose `first_paid_at` anchors the usage carve-out window
       // below when the Stripe period cache is cold; leaving `profile` null
       // here would fail that refund with a spurious usage_window_unknown.
@@ -203,9 +203,9 @@ export async function POST(request: Request) {
     // admin force-refund withholds the tenant's third-party usage charges
     // (SMS, voice, Gemini spend) at platform cost, scoped to the refunded
     // invoice's period. FAIL CLOSED both on an unknown window (long-lived
-    // subscription with a cold Stripe-period cache — run
+    // subscription with a cold Stripe-period cache, run
     // scripts/backfill-stripe-subscription-periods.ts, then retry) and on
-    // a read error — refunding money already spent on usage cannot be
+    // a read error, refunding money already spent on usage cannot be
     // clawed back.
     const anchor = resolveUsageCarveOutWindow({
       stripeCurrentPeriodStart: effectiveCtx.subscription.stripe_current_period_start,
@@ -260,7 +260,7 @@ export async function POST(request: Request) {
     // snapshot/stop/billing-cancel, owner emails) runs post-response
     // via `next/server` `after()` (Vercel `waitUntil` under the hood)
     // so the serverless runtime keeps the function alive long enough
-    // for minutes-long teardown work — a synchronous `await` here
+    // for minutes-long teardown work, a synchronous `await` here
     // would otherwise time out on real tenants and leave Stripe
     // refunded but the VPS/Hostinger billing dangling. The grace-
     // sweep cron is the backstop for any individual Hostinger step
@@ -315,7 +315,7 @@ export async function POST(request: Request) {
  * for the common "cancel_with_refund is blocked" case, then falling back
  * to the equivalent plan produced by flipping the `profile` into an
  * eligible snapshot just for the planner call. We never persist that
- * synthetic profile — the executor still stamps `refund_used_at` for
+ * synthetic profile, the executor still stamps `refund_used_at` for
  * real, so subsequent self-serve attempts remain blocked as policy
  * requires.
  */
@@ -376,7 +376,7 @@ function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string): Lifecyc
   // `mark_refund_used` always lands on a real row. The module docstring
   // explicitly promises "the executor still stamps `refund_used_at` for
   // real, so subsequent self-serve attempts remain blocked as policy
-  // requires" — silently dropping the op because the profile is missing
+  // requires", silently dropping the op because the profile is missing
   // would violate that guarantee.
   return {
     ...plan,

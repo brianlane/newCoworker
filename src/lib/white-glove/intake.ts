@@ -1,12 +1,12 @@
 /**
- * White-glove client intake questionnaires — DB access layer.
+ * White-glove client intake questionnaires, DB access layer.
  *
  * A row is one questionnaire sent to one prospective white-glove client:
  * the admin enters their email, the system emails the public
  * /intake/<token> link, and the prospect's submitted answers land in
  * `answers` (validated against `intakeAnswersSchema` at the submit route).
  * Lifecycle: sent → completed (prospect submits) or sent → revoked (admin).
- * Completed intakes are immutable — the submit UPDATE only matches
+ * Completed intakes are immutable, the submit UPDATE only matches
  * status='sent'. See migration 20260817000000_white_glove_intakes.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -24,7 +24,7 @@ export type WhiteGloveIntakeRow = {
   id: string;
   /** Unguessable capability behind the public /intake/<token> link. */
   token: string;
-  /** The prospect's business name (admin-supplied — not asked in the form). */
+  /** The prospect's business name (admin-supplied, not asked in the form). */
   business_name: string;
   /** INDUSTRY_OPTIONS value driving the questionnaire's suggested wording. */
   industry: string;
@@ -59,7 +59,7 @@ export async function createWhiteGloveIntake(
   data: {
     businessName: string;
     industry: string;
-    /** Optional — omit to just generate a shareable link (no email sent). */
+    /** Optional, omit to just generate a shareable link (no email sent). */
     recipientEmail?: string | null;
     /** Optional: tie the questionnaire to an existing business. */
     businessId?: string | null;
@@ -127,7 +127,7 @@ export async function getWhiteGloveIntakeByToken(
 }
 
 /**
- * Store the prospect's answers and mark the intake completed — an atomic
+ * Store the prospect's answers and mark the intake completed, an atomic
  * claim guarded on status='sent', so a completed questionnaire can never be
  * overwritten (double-submits and stale tabs lose quietly) and a revoked
  * link can't be submitted. Returns whether the submission landed.
@@ -154,7 +154,7 @@ export async function submitWhiteGloveIntake(
 
 /**
  * Revoke a SENT intake (admin). Guarded on status so a submission that
- * raced the revoke wins — completed answers are never discarded. Returns
+ * raced the revoke wins, completed answers are never discarded. Returns
  * whether a row actually flipped.
  */
 export async function revokeWhiteGloveIntake(
@@ -176,7 +176,7 @@ export async function revokeWhiteGloveIntake(
  * Atomically claim a completed intake for ONE apply run before any tenant
  * writes. The conditional UPDATE succeeds only while the intake is
  * completed, unlinked (or already linked to this same business), AND no
- * other apply holds a fresh lease — so overlapping applies can never both
+ * other apply holds a fresh lease, so overlapping applies can never both
  * run the write phase, whether they target different tenants (cross-write)
  * or the same one (duplicate flow installs from a double-click). The loser
  * sees `false` before it has written anything. Postgres re-evaluates the
@@ -205,7 +205,7 @@ export async function claimWhiteGloveIntakeForBusiness(
 /**
  * Record a successful apply: link the tenant, stamp `applied_at`, and
  * remember the installed flow so the next apply updates it in place.
- * Guarded on status='completed' — only a completed intake can be applied.
+ * Guarded on status='completed', only a completed intake can be applied.
  */
 export async function markWhiteGloveIntakeApplied(
   intakeId: string,
@@ -219,7 +219,7 @@ export async function markWhiteGloveIntakeApplied(
       business_id: data.businessId,
       applied_at: new Date().toISOString(),
       applied_flow_id: data.flowId,
-      // Release the apply lease — the next (re-)apply shouldn't wait it out.
+      // Release the apply lease, the next (re-)apply shouldn't wait it out.
       apply_started_at: null
     })
     .eq("id", intakeId)

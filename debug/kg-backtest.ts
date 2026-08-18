@@ -1,5 +1,5 @@
 /**
- * kg-backtest — replay a tenant's REAL history against the knowledge graph
+ * kg-backtest, replay a tenant's REAL history against the knowledge graph
  * before any live rollout. Read-only by construction:
  *
  *   - Zero Supabase writes: the graph is built in a LOCAL throwaway SQLite
@@ -7,19 +7,19 @@
  *     resolution/supersedence logic production uses
  *     (applyGraphExtraction with injected local IO).
  *   - Zero sends: nothing here touches SMS/email/notification paths.
- *   - Gemini extraction bills the laptop `.env` GOOGLE_API_KEY — the
- *     engineering `internal-ci-debug` key (docs/GEMINI-SPEND.md) — never
+ *   - Gemini extraction bills the laptop `.env` GOOGLE_API_KEY, the
+ *     engineering `internal-ci-debug` key (docs/GEMINI-SPEND.md), never
  *     the tenant's AI budget.
  *
  * Phases:
- *   1. BUILD — the tenant's saved memory bullets (memory_md + archive,
+ *   1. BUILD, the tenant's saved memory bullets (memory_md + archive,
  *      oldest first), optionally their raw owner chat turns
  *      (--replay-chat, runs the capture classifier first), and optionally
- *      their historical CONVERSATION windows (--sources voice,sms,email —
+ *      their historical CONVERSATION windows (--sources voice,sms,email,
  *      per identified customer through the CUSTOMER-source extraction
  *      prompt at trust 1, exactly what the live summarizer hook does) are
  *      extracted into the local graph.
- *   2. REPLAY — real caller questions from voice_call_transcript_turns run
+ *   2. REPLAY, real caller questions from voice_call_transcript_turns run
  *      through BOTH retrieval paths: the ranked-markdown selection
  *      (selectMemoryForQuestion) and graph retrieval over the local store
  *      (retrieveGraphContext with injected IO), caller-scoped when the
@@ -42,7 +42,7 @@ import { loadEnv } from "./_shared.ts";
 loadEnv();
 
 const args = process.argv.slice(2);
-// A flag's value is the next token ONLY when it isn't itself a flag —
+// A flag's value is the next token ONLY when it isn't itself a flag,
 // `--max-turns --replay-chat` must not read "--replay-chat" as the value.
 const flag = (name: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
@@ -70,7 +70,7 @@ const BATCH_SIZE = 15;
 
 /**
  * Local throwaway graph store (in-memory SQLite) implementing the same IO
- * surface the production write/retrieval paths inject — the schema mirrors
+ * surface the production write/retrieval paths inject, the schema mirrors
  * supabase/migrations/20260820100100_memory_graph.sql.
  */
 class LocalGraphStore {
@@ -386,7 +386,7 @@ async function main(): Promise<void> {
   let chatTurnsReplayed = 0;
   if (REPLAY_CHAT) {
     // Owner turns, oldest first, through the same capture classifier the
-    // live paths run — matching production as closely as a replay can:
+    // live paths run, matching production as closely as a replay can:
     // the CAPTURE model env (MEMORY_CAPTURE_MODEL, not the graph model),
     // the following assistant reply as reference-resolution context, and
     // existing memory bullets as the anti-duplication hint. One honest
@@ -444,7 +444,7 @@ async function main(): Promise<void> {
   }
 
   // Optional widened build: historical conversation windows through the
-  // CUSTOMER-source prompt — the same per-identified-customer window shape
+  // CUSTOMER-source prompt, the same per-identified-customer window shape
   // and trust-1 attributed provenance the live summarizer hook uses, so
   // the Phase-2 comparison runs over the graph a widened rollout WOULD
   // have built. Mirrors kg-backfill's --sources replay but lands in the
@@ -483,7 +483,7 @@ async function main(): Promise<void> {
       let smsTurns = 0;
       let emails = 0;
       // Same gate as the live summarizer (hasCustomerContent): only
-      // CUSTOMER-authored material justifies an extraction — an
+      // CUSTOMER-authored material justifies an extraction, an
       // assistant-only window has nothing the customer stated, and running
       // it would both waste a Gemini call and skew the local graph with
       // content the live hook would never have extracted.

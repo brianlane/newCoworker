@@ -5,7 +5,7 @@
  *
  * Pulls, over SSH from the tenant VPS:
  *   - The OwnerCoworker agent's `instructions` from Rowboat's Mongo
- *     (db.projects.liveWorkflow.agents[]) — this is the big system prompt
+ *     (db.projects.liveWorkflow.agents[]), this is the big system prompt
  *     Rowboat injects, and it has the synced memory_md embedded in it.
  *   - Ollama version + installed model tags (so we benchmark the real model).
  *

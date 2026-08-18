@@ -1,7 +1,7 @@
 /**
  * Employees page: the AiFlow team roster, with working info and stats.
  *
- * Same table route_to_team rotates leads through (ai_flow_team_members) —
+ * Same table route_to_team rotates leads through (ai_flow_team_members),
  * previously seeded by scripts only, with no UI. The page server-renders
  * the roster + time off + routing stats and hands everything to the
  * EmployeesManager client island for CRUD.

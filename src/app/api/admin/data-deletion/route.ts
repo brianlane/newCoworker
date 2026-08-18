@@ -13,7 +13,7 @@ const bodySchema = z
     e164: z.string().optional(),
     /** Email of the person to erase. */
     email: z.string().optional(),
-    /** Deletion is unrecoverable — explicit acknowledgment required. */
+    /** Deletion is unrecoverable, explicit acknowledgment required. */
     confirm: z.literal(true)
   })
   .refine((b) => Boolean(b.e164?.trim()) || Boolean(b.email?.trim()), {
@@ -25,7 +25,7 @@ export const maxDuration = 120;
 
 /**
  * Admin end-user erasure (security review G6): deletes one person's rows
- * across the tenant's content tables — central AND the tenant box for
+ * across the tenant's content tables, central AND the tenant box for
  * dual/vps residency tenants. Runs on a verified privacy request (PIPEDA /
  * Law 25 / CCPA erasure). The audit row stores a sha256 FINGERPRINT of the
  * identifier, never the identifier itself.

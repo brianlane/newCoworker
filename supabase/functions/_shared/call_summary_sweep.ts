@@ -4,11 +4,11 @@
  * Every 5 minutes (see 20260727000001_schedule_call_summary_sweep.sql) this
  * scans recently completed, unsummarized voice transcripts for entitled
  * tenants and dispatches each to the Next.js `/api/internal/summarize-call`
- * endpoint — the Gemini call and AI-budget metering live there (Next.js
+ * endpoint, the Gemini call and AI-budget metering live there (Next.js
  * runtime), this Edge layer is just cheap scan-and-dispatch, mirroring
  * `customer-memory-summarize-sweep`.
  *
- * Eligibility (ALL enforced in the scan query — including tier, via an inner
+ * Eligibility (ALL enforced in the scan query, including tier, via an inner
  * join on businesses, so a stream of Starter calls can never crowd entitled
  * rows out of the scan slice):
  *   - status 'completed' with a non-null ended_at
@@ -20,9 +20,9 @@
  *     mass backfill of months-old calls)
  *
  * Sequential dispatch under a wall-clock budget (CALL_SUMMARY_TIME_BUDGET_MS)
- * so the run always finishes inside the pg_net cron timeout — anything left
+ * so the run always finishes inside the pg_net cron timeout, anything left
  * over is reported as `deferred` and picked up by the next 5-minute pass.
- * Per-business cap, errors counted but never re-thrown — one tenant's bad row
+ * Per-business cap, errors counted but never re-thrown, one tenant's bad row
  * must never wedge the batch.
  *
  * Dependency-injected (structural supabase type + fetchFn) so this is
@@ -153,7 +153,7 @@ export async function processCallSummarySweep(
   let failed = 0;
   const failures: Array<{ transcriptId: string; reason: string }> = [];
 
-  // Sequential — one Gemini flash call each; parallelizing would just burst
+  // Sequential, one Gemini flash call each; parallelizing would just burst
   // the platform endpoint for no user-visible latency win.
   const loopStartMs = Date.now();
   for (const row of eligible) {

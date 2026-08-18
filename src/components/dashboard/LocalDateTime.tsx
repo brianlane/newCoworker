@@ -8,7 +8,7 @@ import {
 
 const emptySubscribe = () => () => {};
 
-/** False during SSR/hydration, true after — without an effect/setState pair. */
+/** False during SSR/hydration, true after, without an effect/setState pair. */
 function useHydrated(): boolean {
   return useSyncExternalStore(
     emptySubscribe,
@@ -22,7 +22,7 @@ function useHydrated(): boolean {
  *
  * Why: `formatDateTime` calls `Date.prototype.toLocaleString(undefined, …)`,
  * which on the server (RSC + Vercel build) resolves to the server's
- * locale/timezone — UTC in production. That made 04:50 UTC print as
+ * locale/timezone, UTC in production. That made 04:50 UTC print as
  * "Jun 19, 4:50 AM" on the dashboard even though the owner is in Phoenix
  * (where it should read "Jun 18, 9:50 PM"). Rendering on the client lets the
  * viewer's timezone win.

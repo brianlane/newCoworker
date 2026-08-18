@@ -1,8 +1,8 @@
 /**
  * Campaign audience preview (src/lib/campaigns/audience.ts): the composer's
- * pre-schedule count. Must mirror the sweep's snapshot filters — customer +
+ * pre-schedule count. Must mirror the sweep's snapshot filters, customer +
  * emailable + not-unsubscribed scan, case-insensitive tag match, address
- * de-dupe, recipient cap — and flag instagram-prospect contacts pending
+ * de-dupe, recipient cap, and flag instagram-prospect contacts pending
  * review. Plus the tag-count helper behind the Marketing page counter.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +25,7 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 type ContactRow = { id: string; email: string | null; tags?: string[] | null };
 
 /**
- * Contacts-scan mock — same chain shape as the campaigns-send tests, except
+ * Contacts-scan mock, same chain shape as the campaigns-send tests, except
  * the TERMINAL builder methods (`limit` for the preview scan, `contains` for
  * the tag count) resolve a real promise: awaiting a magic thenable makes v8
  * mis-attribute the awaited chain statement as uncovered.
@@ -111,7 +111,7 @@ describe("previewCampaignAudience", () => {
       { id: "c", email: "c@x.test", tags: ["", "  "] } // blanks dropped
     ]);
     const preview = await previewCampaignAudience(BIZ, "vip", db);
-    // The datalist ignores the audience filter — "Alpha"/"buyer" still offered.
+    // The datalist ignores the audience filter, "Alpha"/"buyer" still offered.
     expect(preview.tags).toEqual(["Alpha", "buyer", "VIP"]);
     expect(preview.recipients).toBe(2);
   });
@@ -125,7 +125,7 @@ describe("previewCampaignAudience", () => {
     const { db } = makeDb(rows);
     const preview = await previewCampaignAudience(BIZ, "", db);
     expect(preview.clipped).toBe(true);
-    // CAMPAIGN_MAX_RECIPIENTS (2000) < scan limit — the count is the mail
+    // CAMPAIGN_MAX_RECIPIENTS (2000) < scan limit, the count is the mail
     // count the sweep would actually snapshot, not the raw match count.
     expect(preview.recipients).toBe(2000);
   });

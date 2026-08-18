@@ -5,12 +5,12 @@
  * leaked service-role key or DB dump exposes plaintext columns. This module
  * adds an application envelope so `vps_ssh_keys.private_key_pem` and
  * `residency_backup_keys.passphrase` are AES-256-GCM ciphertext at rest.
- * (Per-tenant gateway tokens stay plaintext BY DESIGN — the same value is
+ * (Per-tenant gateway tokens stay plaintext BY DESIGN, the same value is
  * the symmetric HMAC secret on the tenant box, see README §per-tenant
  * gateway tokens.)
  *
  * Design:
- *   - Master key: `SECRETS_ENCRYPTION_KEY` env — 32 bytes, base64url
+ *   - Master key: `SECRETS_ENCRYPTION_KEY` env, 32 bytes, base64url
  *     (`openssl rand 32 | basenc --base64url` or the helper in
  *     debug/encrypt-secrets-backfill.ts). Present in Vercel + repo `.env`
  *     (debug/redeploy tooling reads the same secrets there).
@@ -20,7 +20,7 @@
  *     already uses; debug/encrypt-secrets-backfill.ts converts the stock.
  *   - Fail-closed reads: an encrypted row without the key (or with the
  *     wrong key) throws loudly. Nothing downstream can use a garbled
- *     secret anyway — SSH would USERAUTH_FAIL and backups would encrypt
+ *     secret anyway, SSH would USERAUTH_FAIL and backups would encrypt
  *     with the wrong passphrase, which are far worse failure modes.
  *   - Graceful rollout: when the env key is ABSENT, writes stay plaintext
  *     and plaintext reads pass through, so deploys sequence safely
@@ -49,8 +49,8 @@ export function isEncryptedSecret(value: string): boolean {
 function loadKey(env: Record<string, string | undefined>): Buffer | null {
   const raw = env.SECRETS_ENCRYPTION_KEY;
   if (typeof raw !== "string" || raw.trim().length === 0) return null;
-  // Buffer.from(..., "base64url") never throws for string input — invalid
-  // characters are skipped — so the 32-byte length check below is also the
+  // Buffer.from(..., "base64url") never throws for string input, invalid
+  // characters are skipped, so the 32-byte length check below is also the
   // malformed-key check (a garbage value decodes to the wrong length).
   const key = Buffer.from(raw.trim(), "base64url");
   if (key.length !== KEY_BYTES) {
@@ -63,7 +63,7 @@ function loadKey(env: Record<string, string | undefined>): Buffer | null {
 
 /**
  * Encrypt a secret for storage. Pass-through (plaintext) when the master
- * key is not configured — rollout ordering: ship code, then set the key,
+ * key is not configured, rollout ordering: ship code, then set the key,
  * then backfill. Encrypting an already-encrypted value is a no-op so
  * upsert paths can't double-wrap.
  */
@@ -83,7 +83,7 @@ export function encryptSecret(
 
 /**
  * Decrypt a stored secret. Plaintext (legacy) values pass through
- * unchanged; encrypted values REQUIRE the key and a valid GCM tag —
+ * unchanged; encrypted values REQUIRE the key and a valid GCM tag,
  * anything else throws {@link SecretEncryptionError} (fail closed).
  */
 export function decryptSecret(

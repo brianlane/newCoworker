@@ -2,9 +2,9 @@
 
 /**
  * Factory for the four REST-hook triggers (sms.inbound, sms.outbound,
- * call.completed, email.inbound). All four share identical mechanics —
+ * call.completed, email.inbound). All four share identical mechanics,
  * subscribe/unsubscribe against /api/public/v1/hooks, samples from
- * /api/public/v1/events — and differ only in copy and sample payloads,
+ * /api/public/v1/events, and differ only in copy and sample payloads,
  * so one factory keeps them in lockstep with the server's payload shape.
  */
 
@@ -26,7 +26,7 @@ const unsubscribeHook = async (z, bundle) => {
     method: "DELETE",
     skipThrowForStatus: true
   });
-  // 404 = already gone (e.g. deactivated server-side) — fine for Zapier.
+  // 404 = already gone (e.g. deactivated server-side), fine for Zapier.
   if (response.status >= 400 && response.status !== 404) {
     response.throwForStatus();
   }

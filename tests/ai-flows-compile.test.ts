@@ -76,7 +76,7 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     // The Truly Insurance live-demo failure (Jul 2026): the prompt omitted
     // tenant_email and webhook, so "when we receive an email from Privyr"
     // compiled to the `email` channel, whose connectionId the model cannot
-    // know — validation rejected every attempt. These channels are the
+    // know, validation rejected every attempt. These channels are the
     // no-uuid alternatives the model must be able to pick.
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"channel":"tenant_email"');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"channel":"webhook"');

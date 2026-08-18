@@ -1,5 +1,5 @@
 /**
- * Prospecting — owner dashboard API.
+ * Prospecting, owner dashboard API.
  *
  *   GET /api/dashboard/outreach?businessId=…  → settings, funnel, review queue
  *   PUT /api/dashboard/outreach               → save settings (incl. the mode)

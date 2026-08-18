@@ -12,7 +12,7 @@
  *    `notifications` row with `status='skipped'` and a `reason` in `payload`
  *    so the dashboard list still reflects what would have been sent.
  * 3. Always write `notifications` rows (sent / failed / skipped) so the
- *    dashboard "Recent notifications" list is complete — this was the
+ *    dashboard "Recent notifications" list is complete, this was the
  *    biggest gap before: edge-fn alerts were invisible.
  * 4. Email sends include the RFC 8058 `List-Unsubscribe` /
  *    `List-Unsubscribe-Post` headers and a footer link pointing at
@@ -156,7 +156,7 @@ export type ResolvedTargets = {
    * helper for why this one fails closed.
    */
   hipaaMode?: boolean;
-  /** The business owner's login email — the address `ui_locale` is keyed to. */
+  /** The business owner's login email, the address `ui_locale` is keyed to. */
   ownerEmail: string | null;
   /** The first of {@link phones}, kept so single-recipient callers are unchanged. */
   phone: string | null;
@@ -214,12 +214,12 @@ export type ResolvedTargets = {
  *
  * When `contactE164` names the contact the alert is ABOUT, the resolved
  * phone (and the email, when the roster row has one) is redirected to the
- * teammate who owns that contact — see
+ * teammate who owns that contact, see
  * supabase/functions/_shared/contact_owner_target.ts for the ladder and why
  * it ignores the per-employee availability flags. Business-level alerts pass
  * no contact and are unaffected.
  *
- * Falls back gracefully on DB errors — we never want to silently drop an
+ * Falls back gracefully on DB errors, we never want to silently drop an
  * urgent alert because preferences couldn't be read. The caller still gets
  * a result with the operator-level fallbacks active.
  *
@@ -265,7 +265,7 @@ export async function resolveNotificationTargets(
     // before the preferences route validated (observed live: Amy's
     // "6026951142", saved June 2026, failed its first urgent SMS with Telnyx
     // 40310 "Invalid 'to' address" a month later) must still deliver.
-    // NANP coercion only — a bare 10-digit number becomes +1XXXXXXXXXX; an
+    // NANP coercion only, a bare 10-digit number becomes +1XXXXXXXXXX; an
     // ambiguous value we can't safely coerce is treated as no phone (the
     // dispatch writes an honest `skipped: no_phone` row) rather than sent to
     // Telnyx to fail.
@@ -319,7 +319,7 @@ export async function resolveNotificationTargets(
     });
   }
 
-  // "Has this business ever connected WhatsApp?" — the public read, because
+  // "Has this business ever connected WhatsApp?", the public read, because
   // this is an existence check and never needs the encrypted access token.
   // Two verdicts from one lookup, with DELIBERATELY OPPOSITE failure
   // directions: `connected` decides whether to write a row at all (fails
@@ -485,7 +485,7 @@ export async function dispatchUrgentNotification(
     // collapses this dispatch's one-row-per-channel fan-out to one event.
     ...(input.contactE164 ? { about_e164: input.contactE164 } : {}),
     dispatch_id: randomUUID(),
-    // Why this alert reached whoever it reached — mirrors the
+    // Why this alert reached whoever it reached, mirrors the
     // notify_lead_owner step's target/matched_by so run history and the
     // dashboard can both explain a recipient.
     ...(targets.routing
@@ -548,7 +548,7 @@ export async function dispatchUrgentNotification(
   }
 
   // Category gate (BizBlasts-style per-event-type prefs): when the owner
-  // switched this event's category off, no channel fires — but every channel
+  // switched this event's category off, no channel fires, but every channel
   // still gets a `skipped` history row so the dashboard list reflects what
   // was suppressed and why. "general" is never gated. WhatsApp is excluded
   // for a business that never connected it: an unavailable channel has
@@ -569,7 +569,7 @@ export async function dispatchUrgentNotification(
     return { results };
   }
 
-  // 1) Dashboard channel — only suppressed if the toggle is off (or unsubscribed-from-all).
+  // 1) Dashboard channel, only suppressed if the toggle is off (or unsubscribed-from-all).
   if (targets.dashboardEnabled && !targets.unsubscribed) {
     results.push(
       await recordRow(input.businessId, "dashboard", "sent", summary, kind, payload)
@@ -617,7 +617,7 @@ export async function dispatchUrgentNotification(
     const ownerLocale = await resolveOwnerUiLocaleForEmail(targets.email);
     const emailCopy = emailMessagesForLocale(ownerLocale);
     // Build off the app origin (not dashboardUrl, which has /dashboard appended)
-    // so the link resolves to /api/notifications/unsubscribe — the route the
+    // so the link resolves to /api/notifications/unsubscribe, the route the
     // unsubscribe handler is mounted at.
     const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
       input.businessId
@@ -720,7 +720,7 @@ export async function dispatchUrgentNotification(
     // The owner opted to receive this on WhatsApp INSTEAD of SMS. Gated on
     // whatsappDeliverable, NOT whatsappConnected: the latter is true for a
     // row that exists but is inactive or token-lapsed, which deliverWhatsApp
-    // refuses with `connection_inactive` — suppressing SMS on that basis
+    // refuses with `connection_inactive`, suppressing SMS on that basis
     // would leave the owner with NO phone channel (Bugbot f574b3a4). Never
     // applied to an alert redirected to a teammate's phone either: the
     // preference belongs to the owner's number, and a teammate's number may
@@ -879,7 +879,7 @@ export async function dispatchUrgentNotification(
   //
   // The connection check is the OUTERMOST gate on purpose. It used to sit
   // below the no-phone / toggle-off branches, so a never-connected tenant
-  // still collected `no_phone` and `whatsapp_urgent_disabled` rows — the
+  // still collected `no_phone` and `whatsapp_urgent_disabled` rows, the
   // same noise, arriving through a different door.
   if (!targets.whatsappConnected) {
     // Not applicable to this business: no row, no delivery attempt.

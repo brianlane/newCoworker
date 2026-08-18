@@ -1,7 +1,7 @@
 /**
  * Lead auto-assignment preference (Employees page).
  *
- * POST { businessId, leadAutoAssign } — toggle whether route_to_team
+ * POST { businessId, leadAutoAssign }, toggle whether route_to_team
  * hard-assigns each lead to the next roster member in rotation instead of
  * running the offer-and-claim handshake. Default is off (offer-and-claim);
  * see migration 20260713222759_lead_auto_assign.

@@ -5,13 +5,13 @@
  * attendees become entities with edges to the business.
  *
  * Sources and trust (kg-sources.ts):
- *   document — condensed document bodies (price sheets, policies,
+ *   document, condensed document bodies (price sheets, policies,
  *              contracts, SOPs, meeting minutes), trust 2, attributed to
  *              the document title.
- *   website  — website_md on every crawl/re-crawl, trust 2, attributed to
+ *   website, website_md on every crawl/re-crawl, trust 2, attributed to
  *              the site URL (marketing copy is the business's voice, but a
  *              crawl is not the owner speaking).
- *   identity — identity_md on save, trust 3 (owner-authored onboarding).
+ *   identity, identity_md on save, trust 3 (owner-authored onboarding).
  *
  * Shares PR 4's daily cost fuse: every chunk is metered on the
  * memory_graph surface and counted against MEMORY_GRAPH_DAILY_EXTRACTION_CAP,

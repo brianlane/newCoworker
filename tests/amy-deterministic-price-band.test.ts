@@ -25,7 +25,7 @@ import { findStepDeep, type Definition } from "../scripts/oneshot/amy-under-500k
  * true shape rather than a hand-drawn copy.
  *
  * NOTE: the takeover helper now emits the COMPUTED arm for fresh applies, so
- * these fixtures re-point it back at price_band first — that is the state
+ * these fixtures re-point it back at price_band first, that is the state
  * production is in when this script runs.
  */
 

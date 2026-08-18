@@ -1,5 +1,5 @@
 /**
- * Internal WhatsApp delivery endpoint — the bridge the Deno AiFlow worker
+ * Internal WhatsApp delivery endpoint, the bridge the Deno AiFlow worker
  * calls for `send_whatsapp` steps (the Cloud API client, token decryption,
  * 24h-window check, and template fallback all live in src/lib and need
  * the Node runtime).

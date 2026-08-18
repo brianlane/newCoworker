@@ -16,7 +16,7 @@ import { startFakeApp, type FakeApp } from "./fake-app";
 /**
  * KYP noise incident (Jul 20 2026, Tim Tsai): the "No-show recovery text"
  * AiFlow (calendar trigger, on=event_end, followMinutes=120) texted Tim a
- * rebooking link at 19:31 UTC — 2h23m AFTER he had already texted "will have
+ * rebooking link at 19:31 UTC, 2h23m AFTER he had already texted "will have
  * to rebook as mentioned" (17:08) and the AI worker had already answered
  * with a rebooking link. Three senders (owner, AI worker, AiFlows) share one
  * thread with zero coordination, so the flow re-sent what the conversation
@@ -25,7 +25,7 @@ import { startFakeApp, type FakeApp } from "./fake-app";
  * The fix pinned here: before an event_end-triggered run's first
  * customer-facing send, the worker checks the recipient's thread for
  * activity since the calendar event STARTED (Tim's last inbound landed
- * mid-appointment, before the event's end) — an inbound from the contact or
+ * mid-appointment, before the event's end), an inbound from the contact or
  * any outbound to them means the conversation is live, so the canned
  * recovery text is skipped and the run completes with an honest skip note.
  * A silent thread still gets the text (the case the flow exists for).
@@ -57,7 +57,7 @@ function noShowDefinition() {
 
 /**
  * Enqueue an event_end run the way the calendar poller does (Tim's shape),
- * including the poller's `cal:<eventId>:end:<endIso>` dedupe key — the
+ * including the poller's `cal:<eventId>:end:<endIso>` dedupe key, the
  * authoritative marker the gate uses to know WHICH trigger fired.
  * `withDedupeKey: false` models manual replays / older rows (the gate then
  * falls back to the flow definition).
@@ -141,7 +141,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
     const flowId = await createFlow(db, biz, noShowDefinition());
     // Event ran 150→120 minutes ago; Tim texted 8 minutes into it (BEFORE
-    // the event's end — the incident's exact shape) and the run fires now.
+    // the event's end, the incident's exact shape) and the run fires now.
     const startsAt = minutesAgo(150);
     const endsAt = minutesAgo(120);
     await seedInboundActivity(db, biz, lead, minutesAgo(142));
@@ -176,7 +176,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     const flowId = await createFlow(db, biz, noShowDefinition());
     // Event end known, start missing: Tim's text 22 minutes before the end
     // (mid-appointment) must still count as thread activity (Bugbot Medium
-    // on PR #795 — the old ends_at anchor missed exactly this window).
+    // on PR #795, the old ends_at anchor missed exactly this window).
     await seedInboundActivity(db, biz, lead, minutesAgo(142));
     const runId = await enqueueNoShowRun(db, flowId, biz, lead, { endsAt: minutesAgo(120) });
 
@@ -230,7 +230,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     await tickWorker();
 
     // The send was ATTEMPTED: with no Telnyx config in the harness the step
-    // fails with the config error — proof the guard let it through.
+    // fails with the config error, proof the guard let it through.
     const run = await getRun(db, runId);
     expect(run.status).toBe("failed");
     expect(run.last_error).toContain("Telnyx messaging is not configured");
@@ -243,7 +243,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     const flowId = await createFlow(db, biz, noShowDefinition());
     // The lead texted BEFORE the appointment started, but the AI worker's
     // reply (stamped on the job row, not in sms_outbound_log) was delivered
-    // DURING it — the conversation is live (Bugbot Medium on PR #795).
+    // DURING it, the conversation is live (Bugbot Medium on PR #795).
     const { error } = await db.from("sms_inbound_jobs").insert({
       business_id: biz,
       status: "done",
@@ -296,7 +296,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
     // One flow, two calendar triggers: a pre-call reminder (event_start) and
     // the no-show recovery (event_end). The reminder run must send even when
-    // the thread is active — suppressing it would kill legitimate reminders
+    // the thread is active, suppressing it would kill legitimate reminders
     // (Bugbot Medium on PR #795).
     const def = noShowDefinition() as Record<string, unknown> & {
       triggers?: unknown[];
@@ -305,7 +305,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
       { channel: "calendar", on: "event_start", leadMinutes: 150, calendar: "primary", conditions: [] }
     ];
     const flowId = await createFlow(db, biz, def);
-    // The lead texted recently — thread is "active" by the gate's measure.
+    // The lead texted recently, thread is "active" by the gate's measure.
     await seedInboundActivity(db, biz, lead, minutesAgo(30));
     const startsAt = new Date(Date.now() + 60 * 60_000).toISOString();
     const eventId = `EV-${flowId.slice(0, 8)}`;
@@ -342,7 +342,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     const teammate = "+14165550111";
     await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
     // Telnyx configured (fake API) so the teammate heads-up SEND SUCCEEDS
-    // and execution actually reaches the invitee step — the shape Bugbot
+    // and execution actually reaches the invitee step, the shape Bugbot
     // flagged: a run-level marker would be consumed by the teammate send.
     const { error: cfgErr } = await db.from("business_telnyx_settings").insert({
       business_id: biz,
@@ -387,7 +387,7 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     const lead = "+17805550204";
     await seedContact(db, biz, lead, { display_name: "Jasmine N O" });
     const flowId = await createFlow(db, biz, noShowDefinition());
-    // The lead's last text was two days ago — the booking-nudge exchange,
+    // The lead's last text was two days ago, the booking-nudge exchange,
     // long before this appointment's window.
     await seedInboundActivity(db, biz, lead, minutesAgo(2 * 24 * 60));
     const runId = await enqueueNoShowRun(db, flowId, biz, lead, {

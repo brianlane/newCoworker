@@ -376,7 +376,7 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
           rows={16}
           className={`${inputClass} rounded-t-none font-mono`}
         />
-        {/* Live preview — the same renderer the published page uses. */}
+        {/* Live preview, the same renderer the published page uses. */}
         {fields.content.trim().length > 0 && (
           <div className="mt-3">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-parchment/40">

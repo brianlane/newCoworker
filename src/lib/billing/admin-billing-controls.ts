@@ -11,7 +11,7 @@
  * PAUSE uses `pause_collection` with behavior "void": Stripe keeps generating
  * invoices on schedule but voids them, so the tenant is comped and no payment
  * is attempted (no dunning, no `invoice.payment_failed`). Critically,
- * `pause_collection` leaves `subscription.status` alone — the Stripe webhook
+ * `pause_collection` leaves `subscription.status` alone, the Stripe webhook
  * tears a tenant down when the status becomes past_due/unpaid/paused, and a
  * comped tenant must never hit that path.
  *

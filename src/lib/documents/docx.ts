@@ -1,5 +1,5 @@
 /**
- * DOCX support — decode Word documents to plain text.
+ * DOCX support, decode Word documents to plain text.
  *
  * Gemini has native document understanding for PDFs only, so `.docx` inputs
  * are decoded locally (mammoth) before any model call. Shared by document
@@ -14,7 +14,7 @@ export const DOCX_MIME_TYPE =
 
 /**
  * Canonical-mime check for a Word upload: the real DOCX mime, or a blank /
- * octet-stream reported type under a `.docx` filename (browsers do both —
+ * octet-stream reported type under a `.docx` filename (browsers do both,
  * same tolerance the VTT normalization applies).
  */
 export function isDocxUpload(mime: string, filename: string): boolean {
@@ -25,7 +25,7 @@ export function isDocxUpload(mime: string, filename: string): boolean {
 
 /**
  * Decode DOCX bytes to plain text. Returns null when the bytes are not a
- * readable Word document (corrupt zip, wrong format) or carry no text —
+ * readable Word document (corrupt zip, wrong format) or carry no text,
  * a PERMANENT input problem callers report without retrying.
  */
 export async function decodeDocxToText(data: Buffer): Promise<string | null> {

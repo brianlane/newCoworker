@@ -1,13 +1,13 @@
 /**
  * Blog-notification unsubscribe.
  *
- *   GET  /api/blog/unsubscribe?token=… — the email footer link; performs
+ *   GET  /api/blog/unsubscribe?token=…, the email footer link; performs
  *        the unsubscribe and redirects to the human-facing result page.
- *   POST (same query) — the RFC 8058 one-click target Gmail/Apple Mail hit.
+ *   POST (same query), the RFC 8058 one-click target Gmail/Apple Mail hit.
  *
  * Idempotent. A rate-limited or errored attempt is distinguished from an
  * invalid token: the GET redirect shows a "try again" page (not "invalid
- * link"), and the POST answers 429/500 so one-click clients can retry —
+ * link"), and the POST answers 429/500 so one-click clients can retry,
  * a publish-wave of unsubscribes behind one NAT must not eat valid tokens.
  */
 

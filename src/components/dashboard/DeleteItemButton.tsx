@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 /**
  * Generic confirm-then-DELETE affordance for dashboard items rendered by
  * server components (call transcripts, SMS conversations, …). Issues a
- * `DELETE` to `url`, then either navigates to `redirectTo` (detail pages —
+ * `DELETE` to `url`, then either navigates to `redirectTo` (detail pages,
  * the item is gone, so the page 404s) or refreshes the server rows in place
  * (list rows).
  */

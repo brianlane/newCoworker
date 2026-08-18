@@ -62,7 +62,7 @@ describe("captureWebchatLead", () => {
 
   it("refuses a capture with no way to reach the visitor (nothing written, model told nothing was saved)", async () => {
     // The production bug: visitor said "go ahead and capture my details"
-    // without ever sharing any — an interest-only capture succeeded and
+    // without ever sharing any, an interest-only capture succeeded and
     // the assistant claimed success. Now it refuses with guidance.
     const out = await captureWebchatLead(BIZ, {
       interest: "HIPAA compliance discussion",

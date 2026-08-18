@@ -151,7 +151,7 @@ describe("contact-language db", () => {
       makeBuilder({ data: { preferred_language: "en", language_source: "owner_set" }, error: null })
     );
     await persistDetectedContactLanguage(BIZ, E164, "es", injected);
-    // Only the read happened — no update call issued.
+    // Only the read happened, no update call issued.
     expect(supabaseStub.from).toHaveBeenCalledTimes(1);
   });
 

@@ -1,16 +1,16 @@
 /**
- * On-box projection of the memory knowledge graph — the local-first story.
+ * On-box projection of the memory knowledge graph, the local-first story.
  *
  * The graph's source of truth is central Postgres (memory_entities /
  * memory_facts), but every tenant's box gets a human-inspectable copy under
  * `/opt/rowboat/memory/`:
  *
- *   People/…, Organizations/…, Topics/…  — one Obsidian-style markdown note
+ *   People/…, Organizations/…, Topics/…, one Obsidian-style markdown note
  *     per entity, following upstream Rowboat's apps/x conventions
  *     (frontmatter, `## Key facts`, `[[wikilinks]]` as edges). This turns
- *     the folders deploy-client.sh has always seeded — previously read by
- *     nothing — into the real thing.
- *   graph.jsonl — the machine-readable dump the chat-worker compiles into
+ *     the folders deploy-client.sh has always seeded, previously read by
+ *     nothing, into the real thing.
+ *   graph.jsonl, the machine-readable dump the chat-worker compiles into
  *     a queryable SQLite database (graph.db) via node:sqlite.
  *
  * Everything here is pure rendering; sync-vault ships the files over SSH
@@ -30,7 +30,7 @@ export function entityFolder(kind: string): "People" | "Organizations" | "Topics
  * Safe note filename from a canonical name: strips path separators and
  * control/reserved characters, collapses whitespace, and caps the UTF-8
  * BYTE length (tar ustar headers allow 100 bytes for the whole path, and
- * the folder prefix + collision suffix need room too). Never empty — a
+ * the folder prefix + collision suffix need room too). Never empty, a
  * name that sanitizes away entirely falls back to the entity id.
  */
 export function noteFileName(name: string, fallback: string): string {
@@ -45,7 +45,7 @@ export function noteFileName(name: string, fallback: string): string {
 
 function factLine(fact: MemoryFactRow, byId: Map<string, MemoryEntityRow>): string {
   const stated = fact.stated_at.slice(0, 10);
-  // Trust ≤ 1 facts are CLAIMS in the notes too — same rendering contract
+  // Trust ≤ 1 facts are CLAIMS in the notes too, same rendering contract
   // as retrieval, so the human-inspectable copy never launders hearsay.
   const marker =
     fact.trust <= 1
@@ -101,7 +101,7 @@ export function renderEntityNote(
   return `${lines.join("\n")}\n`;
 }
 
-/** One JSONL line per entity and per active fact — the graph.db source. */
+/** One JSONL line per entity and per active fact, the graph.db source. */
 export function buildGraphJsonl(entities: MemoryEntityRow[], facts: MemoryFactRow[]): string {
   const lines: string[] = [];
   for (const e of entities) {
@@ -159,7 +159,7 @@ export function buildGraphProjectionFiles(
     const folder = entityFolder(entity.kind);
     const base = noteFileName(entity.canonical_name, entity.id).replace(/\.md$/, "");
     // Collision handling must terminate on a UNIQUE path: base name, then
-    // an id-prefixed suffix, then a numbered suffix — two colliding
+    // an id-prefixed suffix, then a numbered suffix, two colliding
     // entities whose ids share the 8-char prefix still get distinct notes.
     let path = `${folder}/${base}.md`;
     for (let n = 1; taken.has(path); n += 1) {

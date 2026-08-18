@@ -1,5 +1,5 @@
 /**
- * Revenue analytics for /admin/revenue — the BizBlasts Subscription
+ * Revenue analytics for /admin/revenue, the BizBlasts Subscription
  * Analytics / Reports pages (month-over-month MRR trend, churn rate, ARPU,
  * top businesses by revenue, failed-payments report) computed from the
  * existing `subscriptions` + `enterprise_deals` rows.
@@ -8,7 +8,7 @@
  * as the single pricing source of truth, evaluated at historical month-end
  * anchors for the trend. Historical activity is reconstructed best-effort
  * from `created_at` / `canceled_at` (an `active` row is assumed active since
- * creation) — an operator health metric, not a billing source.
+ * creation), an operator health metric, not a billing source.
  */
 
 import { computeDayCurrentMrr, type MrrSubscriptionInput } from "@/lib/admin/mrr";
@@ -28,7 +28,7 @@ export type RevenueDeal = {
 };
 
 /**
- * Newest row per business — the same "one subscription per tenant" view the
+ * Newest row per business, the same "one subscription per tenant" view the
  * admin dashboard gets from `listSubscriptionsByBusinessIds`. Current-state
  * metrics (MRR, ARPU, top clients, trend anchors, payment problems) must use
  * this so a tenant with historical/overlapping rows can never count twice or
@@ -53,7 +53,7 @@ export function dedupeNewestPerBusiness<
  *
  * Matches `computeDayCurrentMrr`'s revenue definition: only `active` rows
  * count (a `past_due` row isn't collecting money, and the headline Est. MRR
- * excludes it — counting it here would make the current month's trend bar
+ * excludes it, counting it here would make the current month's trend bar
  * disagree with the KPI card). `past_due` is legacy-only anyway: payment
  * failures now flip straight to `canceled`.
  */
@@ -85,7 +85,7 @@ export type MrrTrendPoint = {
 /**
  * MRR evaluated at the end of each of the last `months` calendar months
  * (the current month is evaluated at `now`). Only ACTIVE deals contribute
- * (a canceled deal's end date isn't recorded, so it drops out of history —
+ * (a canceled deal's end date isn't recorded, so it drops out of history,
  * consistent best-effort drift with the rest of this module).
  */
 export function computeMrrTrend(params: {
@@ -144,13 +144,13 @@ export type ChurnStats = {
 };
 
 /**
- * Per-BUSINESS churn (the input is `listAllSubscriptions()` — history
- * included — so multiple cancel rows for one tenant must count once, and a
+ * Per-BUSINESS churn (the input is `listAllSubscriptions()`, history
+ * included, so multiple cancel rows for one tenant must count once, and a
  * tenant that canceled and then resubscribed inside the window didn't
  * churn at all).
  *
- * "Active now" comes from each tenant's NEWEST row — the same view every
- * other metric on the page uses — so a stale older `active` row can never
+ * "Active now" comes from each tenant's NEWEST row, the same view every
+ * other metric on the page uses, so a stale older `active` row can never
  * mask a tenant whose current subscription is canceled. Cancels are scanned
  * across the FULL history (the churned set subtracts newest-row-active
  * businesses, which is what makes a resubscribe a non-churn).
@@ -166,7 +166,7 @@ export function computeChurnStats(params: {
   const activeBusinesses = new Set<string>();
   for (const sub of dedupeNewestPerBusiness(params.subscriptions)) {
     // Rows with no Stripe subscription behind them (internal pilots,
-    // admin-created accounts) never charged anyone — same exclusion as MRR.
+    // admin-created accounts) never charged anyone, same exclusion as MRR.
     if (sub.status === "active" && sub.stripe_subscription_id !== null) {
       activeBusinesses.add(sub.business_id);
     }
@@ -198,7 +198,7 @@ export function computeChurnStats(params: {
 
 /**
  * Average revenue per paying BUSINESS (cents): total per-business revenue ÷
- * unique paying businesses — a tenant with both a subscription and an
+ * unique paying businesses, a tenant with both a subscription and an
  * enterprise deal counts once, matching the Paying Clients KPI (both are
  * derived from the same per-business merge). 0 when nobody pays.
  */
@@ -273,7 +273,7 @@ export type PaymentProblem = {
 /**
  * The failed-payments report: `past_due` rows plus cancels whose recorded
  * reason was a payment failure, newest first. Only each business's NEWEST
- * subscription row is considered — a tenant that recovered onto a newer
+ * subscription row is considered, a tenant that recovered onto a newer
  * active subscription is a resolved problem, not a current one.
  */
 export function listPaymentProblems(subscriptions: RevenueSubscription[]): PaymentProblem[] {

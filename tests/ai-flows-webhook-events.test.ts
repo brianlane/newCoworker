@@ -150,7 +150,7 @@ describe("processWebhookFlowEvent", () => {
     const db = flowsDb({
       data: [
         {
-          // Primary is SMS; the webhook trigger is one of the extras — must fire.
+          // Primary is SMS; the webhook trigger is one of the extras, must fire.
           id: "flow-multi",
           definition: {
             trigger: { channel: "sms", conditions: [] },
@@ -162,7 +162,7 @@ describe("processWebhookFlowEvent", () => {
         },
         {
           // Broad .or() fetch also returns flows with extras but NO webhook
-          // trigger anywhere — they must be skipped, not crash.
+          // trigger anywhere, they must be skipped, not crash.
           id: "flow-no-webhook",
           definition: {
             trigger: { channel: "sms", conditions: [] },
@@ -234,7 +234,7 @@ describe("processWebhookFlowEvent", () => {
 
   it("fails closed when a from_matches contact ref cannot be resolved", async () => {
     // The flows-only db stub has no contacts/roster query support, so ref
-    // resolution throws — the flow must fail closed (no run) without breaking
+    // resolution throws, the flow must fail closed (no run) without breaking
     // the delivery log.
     const db = flowsDb({
       data: [
@@ -347,7 +347,7 @@ describe("processWebhookFlowEvent tier gate", () => {
       origin: "internal"
     });
     expect(res).toEqual({ enqueued: 1, flowsEvaluated: 1, flowsMatched: 1 });
-    // The gate query never ran — internal producers are exempt by design.
+    // The gate query never ran, internal producers are exempt by design.
     expect(vi.mocked(db.from)).not.toHaveBeenCalledWith("businesses");
   });
 

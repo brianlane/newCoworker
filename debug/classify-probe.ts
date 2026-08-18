@@ -5,7 +5,7 @@
  * tightenings (e.g. "wants_a_call" vs "gave_info") before patching tenant
  * flows.
  *
- * Edit CATS/CASES in place for the categories under test — the value of the
+ * Edit CATS/CASES in place for the categories under test, the value of the
  * probe is pinning the exact wording, so the cases live in the file rather
  * than flags.
  *

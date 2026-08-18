@@ -3,7 +3,7 @@
  *
  * Pure scope math (kept out of the component for the coverage gate): given
  * the flow's steps, the selected step, and the trigger channel(s), compute
- * the placeholders the owner may template into that step — trigger fields
+ * the placeholders the owner may template into that step, trigger fields
  * for the channel, vars produced by EARLIER steps (the engine's
  * earlier-steps-only rule), and the always-available engine scope. Entries
  * whose identifier looks like a person's name also carry `.first`/`.last`
@@ -143,7 +143,7 @@ export function variablesPaletteGroups(args: {
 
   // Engine scope that is always filled. The other ENGINE_PROVIDED_VARS
   // (claimed_agent*, group_lead_phone) only fill after specific steps or
-  // trigger shapes — the condition pickers keep offering them, but the
+  // trigger shapes, the condition pickers keep offering them, but the
   // palette sticks to what is reliably usable in any template.
   const always = [
     entry("{{vars.actions_taken}}", "running summary of what this run did so far", "actions_taken"),

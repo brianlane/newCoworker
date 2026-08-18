@@ -16,7 +16,7 @@ import {
 /**
  * Duplicate lead submission guard (Truly Insurance, 2026-07-13): the same
  * lead source re-submitting the same phone within the window must UPDATE the
- * contact and stop — never re-run the introduction. Production showed five
+ * contact and stop, never re-run the introduction. Production showed five
  * intro texts to one number in four minutes (one per Privyr submission).
  *
  * Real worker + real Postgres: the guard lives in the ai-flow-worker's
@@ -63,7 +63,7 @@ describe("duplicate lead submission guard (real worker)", () => {
     const biz = await seedBusiness(db, "IT dup lead guard");
     const flowId = await createFlow(db, biz, leadFlow());
 
-    // First submission: full run — contact filed and tagged.
+    // First submission: full run, contact filed and tagged.
     const firstRun = await enqueueRun(db, flowId, biz, TRIGGER, {}, {
       created_at: minutesAgo(10)
     });
@@ -97,7 +97,7 @@ describe("duplicate lead submission guard (real worker)", () => {
   it("a prior canceled run suppresses ONLY when it actually texted the lead first", async () => {
     const biz = await seedBusiness(db, "IT dup lead canceled");
 
-    // Scenario A — canceled BEFORE outreach: the lead never heard from us,
+    // Scenario A, canceled BEFORE outreach: the lead never heard from us,
     // so a fresh submission must run the full intro.
     const flowA = await createFlow(db, biz, leadFlow());
     const silentCanceled = await enqueueRun(db, flowA, biz, TRIGGER, {}, {
@@ -114,7 +114,7 @@ describe("duplicate lead submission guard (real worker)", () => {
     const upsertA = stepsA.find((s) => s.step_type === "upsert_customer");
     expect((upsertA?.result as { skipped?: string }).skipped).toBeUndefined();
 
-    // Scenario B — canceled AFTER outreach (outbound log row for the run):
+    // Scenario B, canceled AFTER outreach (outbound log row for the run):
     // the lead already got the intro, so a repeat submission is suppressed.
     const flowB = await createFlow(db, biz, leadFlow());
     const textedCanceled = await enqueueRun(db, flowB, biz, TRIGGER, {}, {

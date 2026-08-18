@@ -44,7 +44,7 @@ describe("memoryBlocks", () => {
 
   it("drops an all-blank chunk from an oversized run of whitespace lines", () => {
     // A section padded with thousands of space-only lines chunks into an
-    // entirely-blank middle block — it must not become a scoreable block.
+    // entirely-blank middle block, it must not become a scoreable block.
     const md = `### H\n${"   \n".repeat(1_500)}- tail rule`;
     const blocks = memoryBlocks(md, "");
     expect(blocks.length).toBeGreaterThan(1);
@@ -120,7 +120,7 @@ describe("selectMemoryForQuestion", () => {
     expect(sel.fallback).toBe(true);
     expect(sel.context).toContain("free estimates");
     expect(sel.context).toContain("closed on Sundays");
-    // The archive never rides the fallback — only ranked matches pull it in.
+    // The archive never rides the fallback, only ranked matches pull it in.
     expect(sel.fromArchive).toBe(0);
     expect(sel.context).not.toContain("Escalate urgent");
   });

@@ -5,13 +5,13 @@
  *
  * Jul 21 2026: the Privyr lead email carries the raw full name
  * ("shabir gulamhussein lukmanji"), and the intake flow's templates used
- * `{{vars.lead_name}}` verbatim — so the greeting and every templated nudge
+ * `{{vars.lead_name}}` verbatim, so the greeting and every templated nudge
  * opened with the whole lowercase legal name. The `.first` name part
  * (PR #806) plus its polite casing renders "Shabir" instead.
  *
  * Scope: `send_sms` steps addressed TO THE LEAD only (`to` references
  * `lead_phone` / `trigger.from`). Staff-facing texts (route_to_team offers,
- * owner notices) deliberately keep the full name — brokers want it.
+ * owner notices) deliberately keep the full name, brokers want it.
  *
  * Read-modify-write, validated through parseAiFlowDefinition, idempotent
  * (the replacement token no longer matches once patched). Dry-run by

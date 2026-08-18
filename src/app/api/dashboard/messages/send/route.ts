@@ -10,7 +10,7 @@
  *      lead-source short code).
  *   2. Composing a brand-new message to any number.
  *
- * The body is sent EXACTLY as typed (no templating) — owners expect "CONFIRM"
+ * The body is sent EXACTLY as typed (no templating), owners expect "CONFIRM"
  * to arrive as "CONFIRM". Sends go through the same metered helper as the
  * AiFlow worker / voice tools, so monthly caps and per-second throttles apply,
  * and we log the send to sms_outbound_log (source 'owner_manual') so it renders
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     const db = await createSupabaseServiceClient();
 
     // STOP-list gate (fail closed): a customer who texted STOP must not be
-    // reachable even via a manual owner send — same rule the Edge send
+    // reachable even via a manual owner send, same rule the Edge send
     // paths enforce. A read error refuses the send rather than risking a
     // compliance violation.
     const optOut = await checkSmsOptOut(businessId, toE164, db);
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
     }
 
     // resolveRcs: owner-composed messages are customer-facing, so RCS-eligible
-    // tenants (Enterprise, agent approved) send RCS-first with SMS fallback —
+    // tenants (Enterprise, agent approved) send RCS-first with SMS fallback,
     // unless the owner explicitly forced plain SMS for this message.
     const config = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });
 
@@ -130,7 +130,7 @@ export async function POST(request: Request) {
     }
 
     // Best-effort durable log so the message renders in the thread. A failed
-    // insert must not imply the SMS didn't go out (it did) — log and continue.
+    // insert must not imply the SMS didn't go out (it did), log and continue.
     const { data: logRow, error: logErr } = await db
       .from("sms_outbound_log")
       .insert({
@@ -154,7 +154,7 @@ export async function POST(request: Request) {
     }
 
     // `logged` tells the client whether the message will actually appear in the
-    // thread. The SMS already went out and was billed, so we still return ok —
+    // thread. The SMS already went out and was billed, so we still return ok,
     // but when logging failed (e.g. the owner_manual migration isn't applied
     // yet) the UI must NOT navigate to a thread that would 404 on an empty
     // history, and should tell the owner it sent without being saved.

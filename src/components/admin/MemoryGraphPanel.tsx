@@ -4,12 +4,12 @@
  * Admin knowledge-graph control for one tenant.
  *
  * Mode semantics (matching src/lib/memory/graph-db.ts):
- *   inherit — follow the fleet-wide default (set on /admin/memory-graph).
- *   off     — no graph writes, no graph retrieval, projection wiped from
+ *   inherit, follow the fleet-wide default (set on /admin/memory-graph).
+ *   off, no graph writes, no graph retrieval, projection wiped from
  *             the box on the next sync.
- *   shadow  — graph is built and every lookup logs a graph-vs-memory
+ *   shadow, graph is built and every lookup logs a graph-vs-memory
  *             comparison; live answers are byte-identical.
- *   active  — graph facts ride the knowledge-lookup prompt alongside
+ *   active, graph facts ride the knowledge-lookup prompt alongside
  *             ranked memory.
  *
  * The flip schedules a vault sync so the on-box projection ships/wipes

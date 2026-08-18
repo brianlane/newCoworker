@@ -4,7 +4,7 @@ import { resolveContactPrefill } from "@/lib/marketing/contact-prefill";
 export const runtime = "nodejs";
 
 /**
- * GET /api/contact/prefill — signed-in contact-form defaults.
+ * GET /api/contact/prefill, signed-in contact-form defaults.
  *
  * Anonymous callers get `{}`. The /contact page stays free of getAuthUser /
  * searchParams in the RSC tree so scrapes do not force a Supabase round-trip

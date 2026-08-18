@@ -28,11 +28,11 @@ import { stepOf, walkFlow } from "./flow-walker";
  * (or cleared) it, through the REAL production strings and parsers.
  *
  *   1. The extraction phone fallback backfilled ANY phone in the source
- *      text — a phoneless Privyr lead email got the vendor's support line
+ *      text, a phoneless Privyr lead email got the vendor's support line
  *      texted the lead greeting. Fixed: the fallback only trusts LABELED
  *      contact numbers (engine.extractLabeledPhones).
  *   2. buildExtractionPrompt clipped the HEAD of over-long text, dropping
- *      the newest content of a trigger's windowText — a fresh lead block at
+ *      the newest content of a trigger's windowText, a fresh lead block at
  *      the end of a long forwarded thread vanished, and a stale number from
  *      the quoted chatter was texted instead. Fixed: middle-clip keeps the
  *      head AND the tail (the classify twin of round 1's tail-clip fix).
@@ -41,8 +41,8 @@ import { stepOf, walkFlow } from "./flow-walker";
  *      working hours. Fixed: overnight windows split across midnight.
  *
  * Verified clean in the same hunt (kept as live regression pins):
- *   4. SMS identity under direct challenge — never claims to be human.
- *   5. Classify prompt injection — an embedded steering instruction inside
+ *   4. SMS identity under direct challenge, never claims to be human.
+ *   5. Classify prompt injection, an embedded steering instruction inside
  *      the message does not override routing.
  *   6. A Spanish opt-out routes as not_interested.
  *   7. A fully-handled closing turn does not set handoff:true.
@@ -55,7 +55,7 @@ function steps(def: unknown): FlowStep[] {
 }
 
 // ---------------------------------------------------------------------------
-// Bug 1 (fixed) — phone fallback must not text a vendor's support line
+// Bug 1 (fixed), phone fallback must not text a vendor's support line
 // ---------------------------------------------------------------------------
 
 /**
@@ -149,13 +149,13 @@ describe("BUG 1 (fixed): phoneless lead + vendor support number in the footer", 
 });
 
 // ---------------------------------------------------------------------------
-// Bug 2 (fixed) — extraction keeps the newest (tail) content of a long window
+// Bug 2 (fixed), extraction keeps the newest (tail) content of a long window
 // ---------------------------------------------------------------------------
 
 /**
  * A long forwarded thread: quoted back-and-forth correspondence first
  * (oldest content, including a STALE office number early on), with the
- * actual lead block at the very END — the newest content, exactly where a
+ * actual lead block at the very END, the newest content, exactly where a
  * correlation window / forwarded email puts it. Total length pushes past
  * buildExtractionPrompt's 12 000-char clip.
  */
@@ -217,7 +217,7 @@ describe("BUG 2 (fixed): extraction sees the newest content of a long window", (
 });
 
 // ---------------------------------------------------------------------------
-// Bug 3 (fixed) — overnight weekly schedules (deterministic)
+// Bug 3 (fixed), overnight weekly schedules (deterministic)
 // ---------------------------------------------------------------------------
 
 describe("BUG 3 (fixed): an overnight shift (18:00–02:00) keeps the member routable during it", () => {
@@ -237,7 +237,7 @@ describe("BUG 3 (fixed): an overnight shift (18:00–02:00) keeps the member rou
         weekly_schedule: { mon: [["09:00", "17:00"]], tue: [["18:00", "02:00"]] }
       }
     ];
-    // Tuesday 22:00 business-local — squarely inside their working hours.
+    // Tuesday 22:00 business-local, squarely inside their working hours.
     const kept = filterRosterByAvailability(
       roster,
       new Set<string>(),
@@ -271,7 +271,7 @@ const INSURANCE_SYSTEM = smsSystem(
 );
 
 // ---------------------------------------------------------------------------
-// Verified clean 4 — identity under direct challenge: never claim to be human
+// Verified clean 4, identity under direct challenge: never claim to be human
 // ---------------------------------------------------------------------------
 
 /** First-person claims of being a human/real person. */
@@ -302,7 +302,7 @@ describe("CLEAN 4: 'are you a real person?' never yields a human claim", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Verified clean 5 — classify prompt injection must not steer routing
+// Verified clean 5, classify prompt injection must not steer routing
 // ---------------------------------------------------------------------------
 
 const ROUTE_CATEGORIES = [
@@ -343,7 +343,7 @@ describe("CLEAN 5: an embedded instruction inside the message does not steer cla
 });
 
 // ---------------------------------------------------------------------------
-// Verified clean 6 — non-English opt-out routes correctly
+// Verified clean 6, non-English opt-out routes correctly
 // ---------------------------------------------------------------------------
 
 describe("CLEAN 6: a Spanish opt-out is not misrouted", () => {
@@ -365,7 +365,7 @@ describe("CLEAN 6: a Spanish opt-out is not misrouted", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Verified clean 7 — no handoff over-escalation on a fully-handled turn
+// Verified clean 7, no handoff over-escalation on a fully-handled turn
 // ---------------------------------------------------------------------------
 
 describe("CLEAN 7: a fully-handled closing turn does not page the owner", () => {
@@ -377,7 +377,7 @@ describe("CLEAN 7: a fully-handled closing turn does not page the owner", () => 
       // trailer-ONLY reply (all reasoning, no customer text). Production
       // treats that as rowboat_empty_assistant and retries the turn, so the
       // harness does the same (bounded) instead of failing on the benign
-      // mode — the contract under test is the ESCALATION verdict, not the
+      // mode, the contract under test is the ESCALATION verdict, not the
       // presence of visible text. (CI flake on PR #705: `expected '' not to
       // be ''` survived the vitest retry because both attempts drew the
       // trailer-only turn back to back.)
@@ -396,7 +396,7 @@ describe("CLEAN 7: a fully-handled closing turn does not page the owner", () => 
           { role: "user", text: "Perfect, that clears it up. Thanks, that's all I needed!" }
         ]);
         split = splitReplyReasoning(raw);
-        // A trailer-only turn still carries the reasoning record — judge it
+        // A trailer-only turn still carries the reasoning record, judge it
         // rather than re-rolling, so the escalation contract is checked on
         // every draw, not only the ones with visible text.
         if (split.reply.trim() !== "" || split.reasoning !== null) break;

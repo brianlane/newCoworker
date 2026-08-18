@@ -15,7 +15,7 @@ import { startFakeApp, type FakeApp } from "./fake-app";
  * KYP noise incident (Jul 20 2026, Tim Tsai): the AI worker's SMS replies
  * carried RAW booking URLs ("calendly.com/james-kyp-ads/my-free-scale-plan")
  * while every AiFlow text in the same thread carried tracked
- * newcoworker.com/s/<code> short links — two link shapes for the same action
+ * newcoworker.com/s/<code> short links, two link shapes for the same action
  * in one customer thread, and the AI-reply links were invisible to click
  * analytics. Two fixes pinned here against the REAL served sms-inbound-worker:
  *
@@ -26,7 +26,7 @@ import { startFakeApp, type FakeApp } from "./fake-app";
  *   2. Booking-status preamble: before building the customer preamble, the
  *      worker asks the platform for the texter's calendar state
  *      (POST /api/internal/contact-booking-context, cron-bearer) and injects
- *      the answered line — so "was my reschedule received?" gets an informed
+ *      the answered line, so "was my reschedule received?" gets an informed
  *      answer instead of a confident denial. Fail-open: no answer, no line.
  *
  * The Telnyx hop is REAL here for the first time: the suite points the

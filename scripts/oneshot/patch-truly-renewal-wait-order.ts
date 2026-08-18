@@ -7,7 +7,7 @@
  * then IMMEDIATELY parked on route_to_team's agent-offer window; the
  * wait_renewal step (added after the 2026-07-11 incident) sits AFTER the
  * route step, so it only starts once the offer resolves. Alex answered
- * "July 23, 2026" sixteen seconds after the question — the run was
+ * "July 23, 2026" sixteen seconds after the question, the run was
  * awaiting_agent, no wait was listening, the answer fell to the generic AI
  * path ("I'm sorry, I need a bit more context…"), and wait_renewal later
  * timed out to no_reply. The policy DEADLINE never reached the broker.
@@ -24,15 +24,15 @@
  *  2. wait_renewal timeout becomes 30 minutes (was 240). In its old
  *     position the timeout delayed nothing; ahead of the route it gates
  *     broker outreach, and an SMS answer to a direct question lands within
- *     minutes or not at all — 30 keeps silent-lead broker latency bounded.
+ *     minutes or not at all, 30 keeps silent-lead broker latency bounded.
  *  3. The offer template carries the captured answer
  *     (`Renewal: "{{vars.renewal_timing}}"`) so the broker sees the
  *     deadline before claiming ("no_reply" when the wait timed out).
  *  4. Flows missing wait_renewal entirely (the disabled original) get the
  *     wait + ack inserted in the correct position.
  *
- * Also (apply-time, once): pins the incident's lost fact on Alex's contact
- * — "Policy renews July 23, 2026" — so the broker handling the still-open
+ * Also (apply-time, once): pins the incident's lost fact on Alex's contact,
+ * "Policy renews July 23, 2026", so the broker handling the still-open
  * run 5820f7f0 finally has the deadline the thread dropped.
  *
  * Read-modify-write, validated through parseAiFlowDefinition, idempotent
@@ -64,7 +64,7 @@ const FLOW_NAMES = [
   "Lead intake & follow-up (Privyr)" // disabled original, kept consistent
 ];
 
-/** Alex, the incident lead — the fact the dropped turn should have captured. */
+/** Alex, the incident lead, the fact the dropped turn should have captured. */
 const ALEX_E164 = "+15199560528";
 const ALEX_PINNED_FACT =
   "Auto policy renews July 23, 2026 (their SMS answer on 2026-07-14; " +
@@ -154,7 +154,7 @@ function fixElseArm(elseSteps: AnyStep[]): { next: AnyStep[]; note: string } | n
       ' Renewal: "{{vars.renewal_timing}}". Reply 1 to claim'
     );
     if (!String(offer.offerTemplate).includes("{{vars.renewal_timing}}")) {
-      // Template didn't match the expected claim phrasing — append instead.
+      // Template didn't match the expected claim phrasing, append instead.
       offer.offerTemplate = `${offerTemplate} Renewal: "{{vars.renewal_timing}}".`;
     }
   }

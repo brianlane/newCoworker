@@ -1,6 +1,6 @@
 /**
  * Hand-written declarations for graph-db-build.mjs so the TypeScript test
- * suite (tests/chat-worker-graph-db-build.test.ts) can import it typed —
+ * suite (tests/chat-worker-graph-db-build.test.ts) can import it typed,
  * same pattern as memory-capture.d.mts / email-tool.d.mts.
  */
 

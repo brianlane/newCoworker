@@ -25,7 +25,7 @@ describe("admin dashboard month labels", () => {
   });
 
   it("keeps errors loud but calms owner-alert rows", () => {
-    // urgent_alert = "the tenant's owner was paged" — awareness, not an
+    // urgent_alert = "the tenant's owner was paged", awareness, not an
     // incident, so it gets the outlined style instead of solid orange.
     expect(getLogBadgeVariant("urgent_alert")).toBe("high_load");
     expect(getLogBadgeVariant("error")).toBe("error");

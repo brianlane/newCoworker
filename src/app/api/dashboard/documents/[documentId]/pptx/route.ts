@@ -1,9 +1,9 @@
 /**
- * Documents — PowerPoint export.
+ * Documents, PowerPoint export.
  *
  *   GET /api/dashboard/documents/:documentId/pptx?businessId=…
  *
- * Converts the document's agent-facing markdown (`content_md` — the same
+ * Converts the document's agent-facing markdown (`content_md`, the same
  * text the coworker answers from) into a downloadable .pptx deck. Headings
  * become slides, bullets become bullets; see src/lib/pptx/from-markdown.ts
  * for the model and its caps.

@@ -5,11 +5,11 @@
  * pg_cron hits this with `Authorization: Bearer <INTERNAL_CRON_SECRET>`;
  * we validate the bearer, then forward to the Next.js internal endpoint
  * which holds the sweep logic (notification dispatch needs the Node
- * runtime) — same indirection as data-retention-sweep.
+ * runtime), same indirection as data-retention-sweep.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";

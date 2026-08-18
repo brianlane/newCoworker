@@ -1,5 +1,5 @@
 /**
- * kg-backfill — build a tenant's memory knowledge graph from the memory it
+ * kg-backfill, build a tenant's memory knowledge graph from the memory it
  * already has (`business_configs.memory_md` + `memory_archive_md`).
  *
  *   npx tsx debug/kg-backfill.ts                      # HQ tenant, DRY RUN
@@ -10,7 +10,7 @@
  *
  * --sources replays HISTORICAL conversation windows (voice transcripts, SMS
  * threads, linked-contact email) through the CUSTOMER-source extraction
- * prompt — per identified customer, trust 1, attributed to the customer —
+ * prompt, per identified customer, trust 1, attributed to the customer,
  * exactly what the live summarizer hook does, so the widened graph is fully
  * inspectable offline before any tenant's live traffic feeds it.
  *
@@ -20,13 +20,13 @@
  * known entities resolve instead of duplicating, already-recorded facts
  * skip.
  *
- * Spend: extraction runs on the laptop `.env`'s GOOGLE_API_KEY — the
- * engineering `internal-ci-debug` key per docs/GEMINI-SPEND.md — and is
+ * Spend: extraction runs on the laptop `.env`'s GOOGLE_API_KEY, the
+ * engineering `internal-ci-debug` key per docs/GEMINI-SPEND.md, and is
  * deliberately NOT metered into the tenant's AI budget (this is an
  * operational backfill, not tenant traffic). Nothing here sends any SMS,
  * email, or notification.
  *
- * NOTE: this script does not require memory_graph_mode to be set — backfill
+ * NOTE: this script does not require memory_graph_mode to be set, backfill
  * before flipping a tenant to shadow is the intended order.
  */
 import { loadEnv } from "./_shared.ts";
@@ -90,7 +90,7 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
     let smsTurns = 0;
     let emails = 0;
     // Same gate as the live summarizer (hasCustomerContent): assistant-only
-    // windows have nothing the customer stated — skip them instead of
+    // windows have nothing the customer stated, skip them instead of
     // wasting a Gemini call on content the live hook would never extract.
     let hasCustomerContent = false;
     if (SOURCES.has("voice")) {
@@ -292,7 +292,7 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // kg-source: backfill — historical memory_md replays at owner trust.
+    // kg-source: backfill, historical memory_md replays at owner trust.
     const result = await applyGraphExtraction(BUSINESS_ID, extraction, batch, {}, {
       source: "backfill",
       trust: 3,

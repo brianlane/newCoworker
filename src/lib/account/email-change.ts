@@ -137,7 +137,7 @@ export async function moveBusinessesToNewOwnerEmail(
  * authenticated render, regardless of how the user got there).
  *
  * It only acts once the live auth email actually equals the pending `new_email`,
- * and it deletes the pending row ONLY after the business update succeeds — a
+ * and it deletes the pending row ONLY after the business update succeeds, a
  * failed update keeps the row so a later render can retry rather than stranding
  * the owner on a stale email.
  */
@@ -163,11 +163,11 @@ export async function reconcilePendingEmailChange(
   // user can supersede an earlier change request, yet an earlier confirmation
   // link may still resolve, so the live email may equal a target OTHER than the
   // latest `new_email`. Whichever address they actually confirm, the business
-  // must follow the login — so we act the moment the auth email moves off
+  // must follow the login, so we act the moment the auth email moves off
   // `old_email`, regardless of which new address it landed on.
   if (email.toLowerCase() === pending.old_email.toLowerCase()) return;
 
-  // Move EVERY business that was keyed to the old email — an owner can have more
+  // Move EVERY business that was keyed to the old email, an owner can have more
   // than one `businesses` row under the same `owner_email`, and all of them must
   // follow the login or the extras become inaccessible (and reconciliation never
   // runs again once the pending row is gone). Match on the pre-change `old_email`
@@ -185,7 +185,7 @@ export async function reconcilePendingEmailChange(
   if (!updated || updated.length === 0) {
     // Nothing was still on the old email. Only retire the pending row if the
     // businesses are already on the NEW email (a prior run updated them but
-    // crashed before deleting the row) — that's a genuine, idempotent success.
+    // crashed before deleting the row), that's a genuine, idempotent success.
     // Otherwise KEEP the pending row so a later render can retry rather than
     // clearing it on a silent no-op and stranding owner_email.
     const { data: alreadySynced } = await db
@@ -202,6 +202,6 @@ export async function reconcilePendingEmailChange(
   // Follow-through: point the Stripe customer(s) at the new email so the
   // billing portal / receipts stop referencing the abandoned address. Runs on
   // both success paths (fresh sync above, or a prior run's crash-recovered
-  // sync) and never fails reconciliation — see syncStripeCustomerEmails.
+  // sync) and never fails reconciliation, see syncStripeCustomerEmails.
   await syncStripeCustomerEmails(email, db, stripe);
 }

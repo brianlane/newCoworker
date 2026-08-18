@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 /** Build a chunk URL from its cursor, the trail of prior cursors, whether the
  * client list should open on its LAST page (used when stepping back from an
  * older chunk, so "Previous" lands adjacent to where the reader was), and the
- * active filter — carried on every chunk hop so paging stays inside the
+ * active filter, carried on every chunk hop so paging stays inside the
  * filtered view. */
 function chunkHref(
   before: string | undefined,
@@ -104,7 +104,7 @@ export default async function ActivityPage(props: {
   }
 
   // Next-older chunk: push the current cursor onto the trail. On the newest
-  // chunk (no cursor) the trail is always restarted empty — a stray `trail`
+  // chunk (no cursor) the trail is always restarted empty, a stray `trail`
   // param there would otherwise send "Previous" to the wrong chunk. Next-newer
   // chunk: pop the trail and open that chunk on its last client page.
   const olderHref = page.nextBefore

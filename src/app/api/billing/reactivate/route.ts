@@ -2,10 +2,10 @@
  * POST /api/billing/reactivate
  *
  * Two modes:
- *   * `undoPeriodEnd` — user previously clicked "End at period end"; this
+ *   * `undoPeriodEnd`, user previously clicked "End at period end"; this
  *     reverts Stripe's cancel_at_period_end flag + our DB mirror. Only
  *     valid while the sub is still `active`.
- *   * `resubscribe` — user is in `canceled_in_grace` and wants to come
+ *   * `resubscribe`, user is in `canceled_in_grace` and wants to come
  *     back. We produce a fresh Stripe Checkout URL (tier/period passed in).
  *     The actual reactivation is driven by the `checkout.session.completed`
  *     webhook, which dispatches a fresh provisioning run + SSH restore.
@@ -139,7 +139,7 @@ export async function POST(request: Request) {
     // Abuse gate: resubscription is a new lifetime. Block the 4th+ one so a
     // serial-canceler can't keep cycling intro discounts.
     //
-    // Fail closed when no profile can be resolved — previously this branch
+    // Fail closed when no profile can be resolved, previously this branch
     // read `ctxRes.context.profile && count >= CAP`, so a null profile
     // (pre-lifecycle business or transient readback failure) would
     // short-circuit to falsy and silently skip the cap, letting a

@@ -19,7 +19,7 @@ import {
  * The REAL ai-flow-worker against a REAL local Postgres: run claiming,
  * persistence, revision bumps, wait_for_reply park + timeout resume (the
  * `resume_overdue_reply_waits` RPC), sleep deferral via earliest_claim_at,
- * stale-lease reclaim, and test-mode simulation — the layer the in-process
+ * stale-lease reclaim, and test-mode simulation, the layer the in-process
  * suites cannot reach (the Truly incident's dead-end lived exactly in this
  * park/resume state machine).
  *
@@ -31,7 +31,7 @@ const LEAD = "+14165550123";
 
 /**
  * Schema-validated fixture (a broken fixture must fail loudly here). Every
- * flow opens with the extract step real flows use — the semantic validator
+ * flow opens with the extract step real flows use, the semantic validator
  * requires {{vars.lead_phone}} to be produced before it is consumed, and
  * with no GOOGLE_API_KEY in the served worker the extraction falls back to
  * the regex phone scan over the trigger windowText (also a real prod path).
@@ -237,7 +237,7 @@ describe("stale-lease reclaim (reclaim_stale_ai_flow_runs RPC)", () => {
 describe("group_lead_phone seeding gate (worker executeRun)", () => {
   // A referral-style group thread: the service's DID sent the intro, the
   // business DID and the lead (seller) are the other two participants. The
-  // lead's number appears NOWHERE in the message text — the roster is the
+  // lead's number appears NOWHERE in the message text, the roster is the
   // only way to identify it, which is exactly why the var exists.
   const SERVICE = "+13144708990";
   const BIZ_DID = "+16028053377";
@@ -246,7 +246,7 @@ describe("group_lead_phone seeding gate (worker executeRun)", () => {
   /**
    * A flow whose SMS trigger PINS the sender to the service via from_matches,
    * with a single pure goal step (the seeding happens at run start, before any
-   * step, and is persisted in context.vars). Not the shared flow() helper —
+   * step, and is persisted in context.vars). Not the shared flow() helper,
    * that one hard-codes an empty-conditions trigger.
    */
   function pinnedGroupFlow(): Record<string, unknown> {
@@ -288,7 +288,7 @@ describe("group_lead_phone seeding gate (worker executeRun)", () => {
   it("lead-sent group message: group_lead_phone stays empty (the bug-2 gate)", async () => {
     // The failure this gate closes: the LEAD themselves sends the matched
     // group message. The sender is no longer the pinned service, so the
-    // roster remainder would be the SERVICE — a stranger this var must never
+    // roster remainder would be the SERVICE, a stranger this var must never
     // carry (it can be texted). senderPinnedByFromMatches sees from != the
     // from_matches value and refuses to seed. (enqueueRun inserts the run
     // directly, exercising the worker gate regardless of trigger eval.)
@@ -348,7 +348,7 @@ describe("test-mode runs", () => {
     expect((send.result as { simulated?: string }).simulated).toBe("send_sms");
     expect((send.result as { body?: string }).body).toBe(`Hi ${LEAD}!`);
 
-    // No real outbound was logged — the send never left the simulator.
+    // No real outbound was logged, the send never left the simulator.
     const { data: outbound } = await db
       .from("sms_outbound_log")
       .select("id")

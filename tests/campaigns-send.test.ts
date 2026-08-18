@@ -195,7 +195,7 @@ describe("processCampaignSweep, promotion", () => {
     const rows = insertRecipients.mock.calls[0][0];
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ contact_id: "a", email: "jane@x.test" });
-    // Claim-first: the guarded transition is the single-writer lock — an
+    // Claim-first: the guarded transition is the single-writer lock, an
     // overlapping sweep on a stale due-list loses it BEFORE touching any
     // recipient rows. Then stale pendings clear, rows land, and the
     // snapshot stamp + total is recorded.
@@ -289,7 +289,7 @@ describe("processCampaignSweep, sending", () => {
     expect(opts.replyTo).toBe("owner@truly.test");
     expect(opts.unsubscribeUrl).toContain("/api/marketing/unsubscribe?bid=");
     expect(opts.html).toContain("Spring special");
-    // Counters derived from recipient rows — never read-modify-write.
+    // Counters derived from recipient rows, never read-modify-write.
     expect(patch).toHaveBeenCalledWith(
       BIZ,
       "c-1",
@@ -403,7 +403,7 @@ describe("processCampaignSweep, sending", () => {
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db, now: () => NOW });
     expect(result.completed).toBe(1);
-    // Completion carries freshly derived counters — a batch that crashed
+    // Completion carries freshly derived counters, a batch that crashed
     // before its counter patch can't close the campaign with stale zeros.
     expect(transition).toHaveBeenCalledWith(
       BIZ,
@@ -419,7 +419,7 @@ describe("processCampaignSweep, sending", () => {
       db
     );
 
-    // A lost completion race is NOT counted — the winner reports it.
+    // A lost completion race is NOT counted, the winner reports it.
     vi.clearAllMocks();
     listDue.mockResolvedValue([]);
     listSending.mockResolvedValue([campaign({ status: "sending" })]);

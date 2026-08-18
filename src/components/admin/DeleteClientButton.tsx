@@ -10,7 +10,7 @@
  *   - wipes durable data, marks the business `status='wiped'`, and
  *   - deletes the owner's Supabase auth user so they can't log back in.
  *
- * No grace period — this is the "nuke now" path. Confirmation copy
+ * No grace period, this is the "nuke now" path. Confirmation copy
  * reflects the irreversible nature of the action.
  */
 

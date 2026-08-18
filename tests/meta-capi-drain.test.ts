@@ -109,7 +109,7 @@ function makeDb(queues: Record<string, Scripted[]>) {
 
 /**
  * The standard outbox scripts for one drain tick over `rows`: the id read,
- * then the update stream — stale reclaim, atomic claim (returns the rows),
+ * then the update stream, stale reclaim, atomic claim (returns the rows),
  * and any extra scripted markRow results.
  */
 function outboxQueues(rows: Array<Record<string, unknown>>, markRowResults: Scripted[] = []) {
@@ -273,7 +273,7 @@ describe("drainMetaCapiEvents", () => {
       });
     }
 
-    // A throwing connection lookup degrades to the same deferral — Error
+    // A throwing connection lookup degrades to the same deferral, Error
     // and non-Error rejections both.
     getMetaConnection.mockReset().mockRejectedValue(new Error("conn down"));
     const { db } = makeDb({
@@ -427,7 +427,7 @@ describe("drainMetaCapiEvents", () => {
       const summary = await drainMetaCapiEvents(db as never);
       expect(summary.deferred).toBe(1);
       // The claim is released (back to pending) WITHOUT burning an upload
-      // attempt — flaky reads must never eat the Graph retry budget.
+      // attempt, flaky reads must never eat the Graph retry budget.
       expect(updates[0].fields).toEqual({
         status: "pending",
         claimed_at: null,

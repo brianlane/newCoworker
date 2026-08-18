@@ -110,7 +110,7 @@ describe("maybeBuildGraphDb", () => {
     const dir = tmpDir();
     writeFileSync(join(dir, "graph.jsonl"), JSONL);
     expect((await maybeBuildGraphDb({ memoryDir: dir })).built).toBe(true);
-    // New content, mtime pinned to the EPOCH — the exact shape a tar unpack
+    // New content, mtime pinned to the EPOCH, the exact shape a tar unpack
     // produces. An mtime-based check would skip this forever.
     writeFileSync(
       join(dir, "graph.jsonl"),

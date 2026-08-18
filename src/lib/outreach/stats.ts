@@ -1,5 +1,5 @@
 /**
- * Prospecting — the funnel the owner surface reports.
+ * Prospecting, the funnel the owner surface reports.
  *
  * The honedtech lesson this encodes: drafted and sent are DIFFERENT events,
  * and conflating them makes the dashboard claim outreach that never happened.
@@ -17,7 +17,7 @@ import type { OutreachProspectStatus } from "./db";
 export type OutreachFunnel = {
   discovered: number;
   drafted: number;
-  /** Drafts waiting on the owner (manual mode) — not yet outreach. */
+  /** Drafts waiting on the owner (manual mode), not yet outreach. */
   pending: number;
   sent: number;
   replied: number;

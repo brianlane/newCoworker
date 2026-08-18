@@ -1,10 +1,10 @@
 /**
- * Quote funnel report — quote lifecycle tracking over the canonical stage
+ * Quote funnel report, quote lifecycle tracking over the canonical stage
  * TAGS. Stages ride the existing contact-tag machinery on purpose: the
  * pipeline board renders them as columns, the Contacts page filters on
  * them, tag edits fire the normal tag_changed automation hooks (so an
  * AiFlow can advance a stage with update_contact), and CSV import can bulk
- * load them — no new table, no new writers.
+ * load them, no new table, no new writers.
  *
  * A contact counts once, at its FURTHEST stage (someone tagged both
  * requested and won is a win, not two funnel entries). `quote-lost` is the
@@ -58,7 +58,7 @@ export type QuoteFunnel = {
   totalTracked: number;
   /** won / totalTracked, 0-1; null when nothing is tracked yet. */
   conversionRate: number | null;
-  /** True when the directory scan filled its cap — counts are partial. */
+  /** True when the directory scan filled its cap, counts are partial. */
   clipped: boolean;
 };
 

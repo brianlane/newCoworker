@@ -170,7 +170,7 @@ describe("chunkJournalRows", () => {
 
   it("never batches two upserts for the same primary key together", () => {
     // Postgres rejects one INSERT ... ON CONFLICT DO UPDATE touching the
-    // same row twice — a rapid update-update pair must split into two
+    // same row twice, a rapid update-update pair must split into two
     // sequential chunks (order preserved).
     const rows = [
       row(1, { payload: { id: "same", business_id: BIZ } }),
@@ -195,7 +195,7 @@ describe("chunkJournalRows", () => {
       )
     ).toEqual([[1, 2], [3]]);
     // A row whose PK cannot be fingerprinted (unknown table / missing PK
-    // value) is never merged into a batch — it stands alone so the drain's
+    // value) is never merged into a batch, it stands alone so the drain's
     // unknown-table/missing-PK handling sees it individually.
     const broken = row(2, { table_name: "businesses" });
     expect(chunkJournalRows([row(1), broken, row(3)], 100).map((c) => c.length)).toEqual([
@@ -445,7 +445,7 @@ describe("runResidencyReplay", () => {
 
   it("a missing business row defaults to supabase mode (purge path, null-safe)", async () => {
     // makeDb with mode:null returns no business row AND a null delete+select
-    // payload — both `??` fallbacks in the rollback path fire.
+    // payload, both `??` fallbacks in the rollback path fire.
     const { client } = makeDb({ pendingBusinesses: [BIZ], mode: null });
     const summary = await runResidencyReplay({ client, makeDataApi: () => makeApi({}) });
     expect(summary.businesses[0]).toEqual({ businessId: BIZ, replayed: 0, skipped: 0 });

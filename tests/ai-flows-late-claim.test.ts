@@ -98,7 +98,7 @@ describe("matchLateClaimReply, buckets", () => {
       routing: { tried: [JASON], step_index: 5 }
     });
     expect(match([advanced])?.kind).toBe("late");
-    // An ETA is fine on a true late claim — there's no live countdown to protect.
+    // An ETA is fine on a true late claim, there's no live countdown to protect.
     expect(match([done], { timeframe: "2 hours" })?.kind).toBe("late");
   });
 
@@ -390,7 +390,7 @@ describe("matchLateClaimReply, a NAMED claim after the offer lapsed", () => {
     // The flows in a chain do not all capture a phone (the no-phone guard path
     // leaves lead_phone empty or "none"), so keying on name+phone would split
     // one lead across two entries and ask "Aurora Anthony (...0022) or Aurora
-    // Anthony?" — the exact question this collapse exists to prevent.
+    // Anthony?", the exact question this collapse exists to prevent.
     const withPhone = row({
       status: "done",
       routing: { tried: [JASON], offered_log: [JASON], step_index: 5 },

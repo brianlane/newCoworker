@@ -30,7 +30,7 @@ export function nangoAccountConnectionLimit(): number {
 
 /**
  * Counts connections across the whole Nango account. Null when the count
- * could not be read (missing key / API error / unexpected shape) — callers
+ * could not be read (missing key / API error / unexpected shape), callers
  * render "unavailable" or skip the alert; observability must never take a
  * page or a connect down.
  */
@@ -52,7 +52,7 @@ export async function getNangoAccountUsage(): Promise<NangoAccountUsage | null> 
 /**
  * Fires the near-limit ops email at most once per 24h (durable limiter key
  * `ops:nango-quota-alert`). Called after a NEW connection completes; never
- * throws — the alert must never fail the connect that triggered it.
+ * throws, the alert must never fail the connect that triggered it.
  */
 export async function maybeSendNangoQuotaAlert(): Promise<void> {
   try {

@@ -1,5 +1,5 @@
 /**
- * Persistence for `api_keys` — hashed bearer credentials for the public
+ * Persistence for `api_keys`, hashed bearer credentials for the public
  * REST API. See src/lib/public-api/keys.ts for the credential format; this
  * module never sees plaintext keys, only SHA-256 hashes.
  */
@@ -92,7 +92,7 @@ export async function revokeApiKey(
   return ((data as { id: string }[] | null) ?? []).length > 0;
 }
 
-/** Resolve an ACTIVE key row by its hash — the public-API auth lookup. */
+/** Resolve an ACTIVE key row by its hash, the public-API auth lookup. */
 export async function findActiveApiKeyByHash(
   keyHash: string,
   client?: SupabaseClient

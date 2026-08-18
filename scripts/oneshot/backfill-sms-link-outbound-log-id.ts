@@ -107,7 +107,7 @@ async function main() {
   // An outbound row is claimed by ONE mint batch: links from separate texts
   // in the same run to the same number must not share a log row, but a
   // single text with several tracked URLs mints its links milliseconds
-  // apart — those legitimately all pair to the same row.
+  // apart, those legitimately all pair to the same row.
   const MINT_BATCH_MS = 2_000;
   const claimedAt = new Map<string, number>();
   for (const link of rows) {

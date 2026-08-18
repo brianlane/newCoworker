@@ -4,7 +4,7 @@
  * Hostinger boxes are effectively non-refundable for us until ≈Dec 30, 2026
  * (30-day-per-box AND 180-days-since-last-refund policy), so canceled /
  * replaced VMs are sunk cost. This module tracks owned boxes so provisioning
- * can adopt one (Hostinger setup/recreate — no purchase) before buying new.
+ * can adopt one (Hostinger setup/recreate, no purchase) before buying new.
  *
  * Lifecycle of a row:
  *   purchase           → recordVpsAssigned (state=assigned)
@@ -12,7 +12,7 @@
  *   adopt-first hit    → claimAvailableVps (state=assigned, race-safe)
  *   box gone upstream  → retireVps         (state=retired, audit kept)
  *
- * Service-role only — the table has RLS on with no policies.
+ * Service-role only, the table has RLS on with no policies.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -41,7 +41,7 @@ export type VpsInventoryRow = {
   assigned_at: string | null;
   notes: string | null;
   /**
-   * Sunk-cost box that must lapse at its paid period end NO MATTER WHAT —
+   * Sunk-cost box that must lapse at its paid period end NO MATTER WHAT,
    * even while assigned to a live tenant. The adopt path skips its
    * auto-renew re-enable and the billing-posture cron skips its auto-heal
    * (nagging ops to migrate the tenant instead). Example: srv1632631, KVM8
@@ -84,17 +84,17 @@ export function hasPoolRunway(
  * Preference: furthest {@link VpsInventoryRow.expires_at} first (unknown
  * expiry sorts last), then oldest `acquired_at` as a tie-break. Candidates
  * with a known expiry under {@link VPS_POOL_MIN_RUNWAY_MS} are skipped so a
- * signup is never landed on a box that dies the next day — the caller then
+ * signup is never landed on a box that dies the next day, the caller then
  * falls through to purchase.
  *
  * Race safety: two concurrent provisions must never adopt the same VM. The
- * conditional UPDATE (`state = 'available'` in the WHERE) is the lock — the
+ * conditional UPDATE (`state = 'available'` in the WHERE) is the lock, the
  * loser's update matches zero rows and moves on to the next candidate (or
  * returns null → caller falls back to purchase).
  *
  * Retry idempotency: a box THIS business already claimed is returned
  * as-is before the available scan. Without this, a provision that died
- * after the pool claim (the KYP Ads Jul 14 2026 signup — webhook function
+ * after the pool claim (the KYP Ads Jul 14 2026 signup, webhook function
  * torn down mid-adopt) left the row 'assigned' to the business, and the
  * retry would skip it and PURCHASE a second box; recovering required a
  * manual pool-row reset. Now the watchdog's re-run lands back on the same
@@ -221,7 +221,7 @@ export async function recordVpsAssigned(
      * expiry: `claimAvailableVps` sorts unknown expiry last, so a box with
      * real runway used to lose the adopt-first ranking to a box with a known
      * but shorter one until the daily billing-posture cron filled the column
-     * in. Omit (not null) to leave an existing value untouched — PostgREST
+     * in. Omit (not null) to leave an existing value untouched, PostgREST
      * upserts only the keys present in the payload, and a caller that could
      * not resolve the date must not erase one we already knew.
      */
@@ -251,7 +251,7 @@ export async function recordVpsAssigned(
 
 /**
  * Return a box to the pool after its tenant cancels. The box stays owned
- * (auto-renew off — it lapses at its paid period end unless adopted first),
+ * (auto-renew off, it lapses at its paid period end unless adopted first),
  * so the next matching-size provision can reuse it instead of purchasing.
  *
  * Existing rows keep their recorded `plan`: the SKU captured at

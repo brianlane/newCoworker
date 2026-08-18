@@ -38,7 +38,7 @@ const META: IntakeMeta = { businessName: "Acme Home Services", industry: "home_s
 
 /**
  * Topics the onboarding interview already collects (Step 1 form + chat).
- * The intake questionnaire must NEVER re-ask them — the admin supplies
+ * The intake questionnaire must NEVER re-ask them, the admin supplies
  * business name + industry at create time, and the rest lives in
  * onboarding's knownContext/profile.
  */

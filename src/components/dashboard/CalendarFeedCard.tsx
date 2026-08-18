@@ -5,7 +5,7 @@
  *
  * This is deliberately provider-agnostic: it renders for Vagaro and Acuity
  * businesses too (whose native booking page is disabled), because they are
- * exactly the tenants the shared NewCoworker calendar cannot always reach —
+ * exactly the tenants the shared NewCoworker calendar cannot always reach,
  * it needs a Google or Microsoft account to live on, and a feed URL does
  * not. Any calendar app that can subscribe to a URL works.
  *

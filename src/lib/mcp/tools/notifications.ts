@@ -2,12 +2,12 @@
  * Claude-connector notification tools (KYP, Jul 20 2026: "let me know when
  * clients text back" had no tool behind it).
  *
- * Both tools are manage_settings-gated — the SAME permission matrix as the
+ * Both tools are manage_settings-gated, the SAME permission matrix as the
  * dashboard notifications page (manager+), so a staff-role connector user
  * can neither read nor mutate alert settings. Mutation goes through the
  * shared whitelist core: boolean toggles only, never `phone_number`,
  * `alert_email`, digest recipients, or `unsubscribed_at`. The read answers
- * the toggle map plus recipient PRESENCE (configured yes/no) — never the
+ * the toggle map plus recipient PRESENCE (configured yes/no), never the
  * recipients themselves, since the model has no need for that PII to answer
  * "is it on?".
  */

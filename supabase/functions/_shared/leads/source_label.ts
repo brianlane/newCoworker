@@ -9,7 +9,7 @@
  * "ReferralExchange Lead", "Realtor.com Lead + Reply forward". So the flow
  * name IS the signal, and this trims it down to the vendor.
  *
- * Deliberately conservative — one cut and at most one stripped word — so a
+ * Deliberately conservative, one cut and at most one stripped word, so a
  * flow the heuristic does not recognize degrades to its own name rather than
  * to something wrong. "New Lead Intake" stays "New Lead Intake" instead of
  * collapsing to "New".

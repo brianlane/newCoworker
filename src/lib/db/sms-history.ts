@@ -19,7 +19,7 @@
  *   inbound job IS the conversational unit.
  *
  *   `sms_outbound_log` holds worker-initiated sends (AiFlow lead intros,
- *   team agent offers, owner notifications) that have no inbound job — the
+ *   team agent offers, owner notifications) that have no inbound job, the
  *   ai-flow-worker writes one row per send. Both sources are merged here so
  *   the Text history shows every message the coworker sent, not just replies
  *   to inbound texts.
@@ -31,7 +31,7 @@ import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-// Residency (box) projection — mirrors OUTBOUND_LOG_SELECT below. Only
+// Residency (box) projection, mirrors OUTBOUND_LOG_SELECT below. Only
 // `sms_outbound_log` moves; `sms_inbound_jobs` is an ENGINE table and stays
 // central (see src/lib/residency/tables.ts), so vps-mode threads merge a
 // central inbound read with a box outbound read.
@@ -56,7 +56,7 @@ export type SmsJobRow = {
   status: "pending" | "processing" | "done" | "dead_letter";
   /**
    * Durable outbound reply text. Written by the worker at send time and never
-   * cleared — the canonical source for the dashboard thread.
+   * cleared, the canonical source for the dashboard thread.
    */
   assistant_reply_text: string | null;
   /**
@@ -131,7 +131,7 @@ const OUTBOUND_LOG_SELECT =
 export type SmsMessageDirection = "inbound" | "outbound";
 
 export type SmsMessage = {
-  /** Synthetic id — `<job_id>:<direction>` so React lists are stable. */
+  /** Synthetic id, `<job_id>:<direction>` so React lists are stable. */
   id: string;
   jobId: string;
   direction: SmsMessageDirection;
@@ -151,7 +151,7 @@ export type SmsMessage = {
 export type SmsConversation = {
   customerE164: string;
   lastMessageAt: string;
-  /** Preview text — last inbound message, or last outbound if no inbound text recoverable. */
+  /** Preview text, last inbound message, or last outbound if no inbound text recoverable. */
   lastMessage: string;
   /** Whether the most recent exchange ended in `done`. */
   lastStatus: SmsJobRow["status"];
@@ -166,7 +166,7 @@ export const MAX_LIST_LIMIT = 200;
  *
  * Defensive against:
  *   - missing `data` / `payload`
- *   - alternate spellings (`text` vs `body` — Telnyx is inconsistent)
+ *   - alternate spellings (`text` vs `body`, Telnyx is inconsistent)
  *   - non-string payloads
  */
 export function inboundTextFromPayload(
@@ -204,7 +204,7 @@ function isRenderableSender(value: string): boolean {
 
 /**
  * Pluck the customer-side phone (E.164 or short code) from a Telnyx webhook
- * envelope. Returns `null` when the envelope shape is unrecognized — the
+ * envelope. Returns `null` when the envelope shape is unrecognized, the
  * caller should drop those rows from the conversation index rather than
  * crash.
  */
@@ -235,7 +235,7 @@ export function customerE164FromPayload(
  * Group the most-recent N inbound jobs PLUS worker-initiated outbound sends
  * into per-customer conversations. Sorted by most-recent activity first.
  * Rows without a parseable customer number are skipped (typically Telnyx
- * delivery receipts that landed in the wrong table — defence against schema
+ * delivery receipts that landed in the wrong table, defence against schema
  * drift).
  */
 export async function listConversationsForBusiness(
@@ -447,12 +447,12 @@ export async function listMessagesForCustomer(
         jobId: row.id,
         direction: "outbound",
         content: outboundText,
-        // Outbound timestamp tracks when the worker finished — falls back
+        // Outbound timestamp tracks when the worker finished, falls back
         // to created_at on legacy rows that pre-date the updated_at stamp.
         timestamp: row.updated_at || row.created_at,
         status: row.status,
         lastError: row.last_error,
-        // The reply's own delivery channel, NOT the inbound channel — an
+        // The reply's own delivery channel, NOT the inbound channel, an
         // RCS inbound can be answered over plain SMS (fallback), and the
         // badge must reflect what actually went out.
         channel: row.reply_channel === "rcs" ? "rcs" : "sms"
@@ -492,7 +492,7 @@ function clampLimit(raw: number | undefined): number {
 /**
  * Owner-facing "delete conversation": SOFT-deletes every message exchanged
  * with one customer number (deleted_at stamp, admin-restorable) while
- * behaving exactly like a hard delete in the dashboard — both readers above
+ * behaving exactly like a hard delete in the dashboard, both readers above
  * filter the stamp. The contact row is deliberately untouched (it has its
  * own delete on the customers page).
  *
@@ -515,7 +515,7 @@ export async function softDeleteSmsConversation(
 
   // 1) Worker-initiated sends FIRST (residency-aware: box + central). The
   // box tunnel round-trip is the step most likely to fail; running it
-  // before any central stamps means a failure aborts with NOTHING hidden —
+  // before any central stamps means a failure aborts with NOTHING hidden,
   // never a half-deleted conversation whose visibility depends on the read
   // path. The central-only steps below can still fail individually, but a
   // retry of the (idempotent) delete converges.
@@ -539,7 +539,7 @@ export async function softDeleteSmsConversation(
   let inboundJobs = Array.isArray(stamped) ? stamped.length : 0;
 
   // 3) The thread reader identifies rows by PARSING THE PAYLOAD, not by the
-  // denormalized column — so any still-visible row the column pass missed
+  // denormalized column, so any still-visible row the column pass missed
   // (legacy NULL columns, or a column value that diverged from the payload,
   // e.g. normalization differences) must be caught the same way the reader
   // finds it. Page every live row, match payloads, stamp by id. Ids are

@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
     // Fire notifications for urgent events. The dispatcher resolves per-business
     // preferences (alert_email/phone_number, four channel toggles, unsubscribed_at)
-    // and writes one `notifications` row per channel — sent, failed, or skipped —
+    // and writes one `notifications` row per channel, sent, failed, or skipped,
     // so the dashboard "Recent notifications" list is the source of truth.
     if (urgency.shouldNotify) {
       try {

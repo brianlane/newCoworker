@@ -200,8 +200,8 @@ describe("db/voice-transcripts, getTranscriptById", () => {
   });
 
   it("falls back to the default service client when none is supplied", async () => {
-    // Covers the `client ?? (await createSupabaseServiceClient())` short-circuit
-    // — without this branch, src/lib/db/voice-transcripts.ts stays at 95% line
+    // Covers the `client ?? (await createSupabaseServiceClient())` short-circuit,
+    // without this branch, src/lib/db/voice-transcripts.ts stays at 95% line
     // coverage and the global 100% threshold trips.
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
@@ -274,7 +274,7 @@ describe("db/voice-transcripts, listTurns", () => {
 
 describe("db/voice-transcripts, listTranscriptsForCaller (Phase 4b)", () => {
   // Cross-link helper for the per-customer dashboard page. Scopes by
-  // caller_e164 (NOT call_control_id / id) and orders by started_at —
+  // caller_e164 (NOT call_control_id / id) and orders by started_at,
   // started_at is more meaningful than created_at on the customers
   // page because it reflects when the conversation actually began.
   const CALLER = "+15555550199";
@@ -405,7 +405,7 @@ describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel
     const { db } = setupDb({ transcripts: [] });
     const result = await listVoiceTurnsForCustomer(BIZ, CALLER, {}, db as never);
     expect(result).toEqual([]);
-    // Only the transcripts SELECT — no `in()` call when there's
+    // Only the transcripts SELECT, no `in()` call when there's
     // nothing to fetch turns for.
     expect(db.from).toHaveBeenCalledTimes(1);
   });
@@ -455,8 +455,8 @@ describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel
       ]
     });
     await listVoiceTurnsForCustomer(BIZ, CALLER, {}, db as never);
-    // .from("voice_call_transcripts") + .from("voice_call_transcript_turns")
-    // — exactly two database round trips regardless of N transcripts.
+    // .from("voice_call_transcripts") + .from("voice_call_transcript_turns"),
+    // exactly two database round trips regardless of N transcripts.
     expect(db.from).toHaveBeenCalledTimes(2);
     expect(turnsChain.in).toHaveBeenCalledWith("transcript_id", ["t-a", "t-b"]);
   });
@@ -465,7 +465,7 @@ describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel
     // Note transcripts come in newest-first (DESC by started_at), but
     // the output should be oldest-first chronologically. The bulk
     // turns SELECT itself orders by turn_index but ACROSS transcripts
-    // the chronology has to come from started_at — exercising that
+    // the chronology has to come from started_at, exercising that
     // sort step.
     const { db } = setupDb({
       transcripts: [TRANSCRIPT_B, TRANSCRIPT_A],
@@ -574,7 +574,7 @@ describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel
   it("returns null callStartedAt when neither the turn nor the transcript has one (degraded but never crashes the summarizer)", async () => {
     // Defensive: voice_call_transcripts.started_at is NOT NULL in
     // schema, but a Supabase eventual-consistency window or a
-    // partial migration could deliver `null` — the summarizer
+    // partial migration could deliver `null`, the summarizer
     // should still produce a result rather than throw on .sort().
     const transcriptNoStarted = { ...TRANSCRIPT_A, started_at: null as unknown as string };
     const { db } = setupDb({
@@ -637,7 +637,7 @@ describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel
   });
 
   it("sort comparator's `?? \"\"` fallback fires when BOTH turns lack a callStartedAt, neither in turn nor on the parent transcript", async () => {
-    // Two turns with NO timestamp anywhere — exercises the
+    // Two turns with NO timestamp anywhere, exercises the
     // `aTs = a.callStartedAt ?? ""` and matching `bTs ?? ""` arms in
     // the comparator on lines 214-215. Returns `0` (equal-key) so
     // DB ordering wins.

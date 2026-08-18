@@ -2,15 +2,15 @@
  * White-glove onboarding packages (fleet economics plan, Phase C5).
  *
  * Two one-time packages, resolved in Phase 0 decision #5:
- *   - setup    $750  — guided setup, number porting, and a live training call.
- *   - buildout $2,000 — full AiFlow buildout plus a 30-day priority line.
+ *   - setup    $750, guided setup, number porting, and a live training call.
+ *   - buildout $2,000, full AiFlow buildout plus a 30-day priority line.
  *
  * Purchasing either package flips the business's priority call/video support
  * window on (`businesses.priority_support_until` = purchase + 30 days).
  * Without it, Starter/Standard support is email-only.
  *
  * Both are charged as `mode=payment` Stripe Checkout Sessions with inline
- * `price_data` (no per-environment Stripe product/price setup needed — the
+ * `price_data` (no per-environment Stripe product/price setup needed, the
  * amounts here ARE the source of truth). The Stripe webhook records the
  * purchase on `checkout.session.completed` with
  * `metadata.checkoutKind === "white_glove_package"`.
@@ -97,7 +97,7 @@ export function listWhiteGlovePackages(locale: "en" | "es" = "en"): WhiteGlovePa
   );
 }
 
-/** Null for unknown ids — API boundaries fail closed. */
+/** Null for unknown ids, API boundaries fail closed. */
 export function getWhiteGlovePackage(id: string): WhiteGlovePackage | null {
   if (!WHITE_GLOVE_PACKAGE_IDS.includes(id as WhiteGlovePackageId)) return null;
   return PACKAGES[id as WhiteGlovePackageId];
@@ -139,7 +139,7 @@ export function hasPrioritySupportForTier(
 }
 
 /**
- * Scheduling link the confirmation email/banner points at. Optional — when
+ * Scheduling link the confirmation email/banner points at. Optional, when
  * unset the copy falls back to "reply to this email to schedule".
  */
 export function getWhiteGloveBookingUrl(): string | null {

@@ -4,7 +4,7 @@
  *
  * Why: no surface told the model the current date, so relative dates
  * ("tomorrow at 2pm", "next Tuesday") could not be resolved into the ISO
- * timestamps the calendar tools require — the model either guessed a year
+ * timestamps the calendar tools require, the model either guessed a year
  * or refused.
  *
  * When the business has a timezone set (IANA name on `businesses.timezone`),

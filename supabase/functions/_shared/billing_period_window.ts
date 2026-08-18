@@ -14,7 +14,7 @@
  * /api/checkout.
  *
  * Backward compatibility: for a monthly subscription "now" always falls in
- * window 0, and window 0 returns the input string UNCHANGED — so existing
+ * window 0, and window 0 returns the input string UNCHANGED, so existing
  * monthly tenants keep their exact current quota keys and no usage pool is
  * split by this change.
  *
@@ -23,7 +23,7 @@
  * extension-less via a relative path, like `voice_reservation_limits.ts`).
  * The per-tenant VPS services (vps/chat-worker/worker.mjs,
  * vps/voice-bridge/src/index.ts) carry inline copies that MUST stay in
- * lockstep — they build/deploy from their own directories.
+ * lockstep, they build/deploy from their own directories.
  */
 
 export type QuotaWindow = {

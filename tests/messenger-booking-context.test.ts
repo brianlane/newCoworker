@@ -2,7 +2,7 @@
  * Booking-status context on the Messenger/WhatsApp engine
  * (src/lib/messenger/engine.ts): the same Calendly-backed "Booking status"
  * line the SMS worker injects, resolved for the conversation's VERIFIED
- * phone — WhatsApp's psid IS the Meta-verified wa_id; Messenger/IG fall
+ * phone, WhatsApp's psid IS the Meta-verified wa_id; Messenger/IG fall
  * back to the lead-captured contact_phone. Fail-open with a short timeout:
  * a Calendly hiccup must never delay or kill a DM reply.
  */

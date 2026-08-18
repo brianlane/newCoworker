@@ -1,16 +1,16 @@
 /**
  * Admin CRUD for white-glove intake questionnaires.
  *
- * POST   — create a questionnaire for a prospective white-glove client. The
+ * POST, create a questionnaire for a prospective white-glove client. The
  *          admin supplies the business/prospect NAME (and optionally the
- *          industry, which drives the questionnaire's suggested wording —
+ *          industry, which drives the questionnaire's suggested wording,
  *          business name + industry are already collected by the onboarding
  *          interview, so the prospect is never asked them again). An email
  *          is OPTIONAL: when present, the public /intake/<token> link is
- *          emailed to it (best-effort — a Resend hiccup never fails the
+ *          emailed to it (best-effort, a Resend hiccup never fails the
  *          creation); without one the admin just gets the copyable link.
- * GET    — list every intake, newest first (admin panel).
- * DELETE — revoke a SENT intake (a completed one can't be revoked; its
+ * GET, list every intake, newest first (admin panel).
+ * DELETE, revoke a SENT intake (a completed one can't be revoked; its
  *          answers are the build record).
  */
 import { z } from "zod";
@@ -54,7 +54,7 @@ async function emailIntakeToRecipient(
       siteUrl,
       locale: await resolveOwnerUiLocaleForEmail(intake.recipient_email)
     });
-    // Resend can reject WITHOUT throwing (returns no message id) — treat that
+    // Resend can reject WITHOUT throwing (returns no message id), treat that
     // as a failed send so the admin copies the link manually instead of the
     // notice claiming an email that never went out.
     const messageId = await sendOwnerEmail(apiKey, intake.recipient_email, subject, {

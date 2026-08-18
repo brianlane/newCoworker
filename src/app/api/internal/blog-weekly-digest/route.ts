@@ -4,8 +4,8 @@
  * Call chain: pg_cron (Mondays) → Edge `blog-weekly-digest` → this route.
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
- * One auto post per week on a rotating category — PR digest, Tutorial,
- * Business Tips, Feature deep-dive — see src/lib/blog/weekly-topics.ts
+ * One auto post per week on a rotating category, PR digest, Tutorial,
+ * Business Tips, Feature deep-dive, see src/lib/blog/weekly-topics.ts
  * (rotation + fallbacks) and src/lib/blog/weekly-digest.ts (the digest's
  * volume bar, features-only filter, and word cap).
  */

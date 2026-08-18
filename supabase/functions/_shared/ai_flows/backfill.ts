@@ -4,13 +4,13 @@
  * A backfill run replays an inbound tenant-mailbox email that arrived while
  * the flow was disabled, so the lead still gets filed and contacted. The one
  * hard rule: a replay must NEVER re-text a lead who already exists as a
- * contact — the original run (or the owner) already reached out, and a
+ * contact, the original run (or the owner) already reached out, and a
  * duplicate intro hours later reads as spam.
  *
  * Like test mode, the flag rides on the run's persisted trigger scope so it
  * survives every park/resume. The worker's `upsert_customer` step checks it:
  * when the extracted lead already has a contacts row (alias-aware), the run
- * finalizes as done at that step — no enrichment, no send_sms, no
+ * finalizes as done at that step, no enrichment, no send_sms, no
  * wait_for_reply. A pre-check read failure counts as "exists" for backfill
  * runs (fail SAFE: skipping one lead beats double-texting one).
  */

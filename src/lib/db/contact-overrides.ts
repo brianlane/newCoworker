@@ -5,7 +5,7 @@
  * the Safe Mode forward cell that belongs to someone other than
  * `businesses.owner_name`, or a lead-source short code like ReferralExchange's
  * 73339 that has no roster/customer identity. It is the same record the AI's
- * customer memory uses — these helpers just set the owner-facing name/email/type
+ * customer memory uses, these helpers just set the owner-facing name/email/type
  * without touching the memory fields.
  *
  * A row's `type` distinguishes a manual label (owner/tester/service/other) from
@@ -41,7 +41,7 @@ export type SetContactOverrideInput = {
  * Set the owner-facing label for a number on the unified contacts table.
  *
  * Update-then-insert (not a blind upsert) so labeling an existing CUSTOMER from
- * a call/text thread only renames them — it never demotes their `type` away from
+ * a call/text thread only renames them, it never demotes their `type` away from
  * 'customer'. A number with no contact row yet becomes a manual contact (default
  * type 'other'); the memory fields stay at their defaults until the person
  * actually texts/calls.
@@ -63,7 +63,7 @@ export async function setContactOverride(
   const db = client ?? (await createSupabaseServiceClient());
   const emailPatch = "email" in options ? { email: options.email?.trim() || null } : {};
   // This is the owner's manual label, so the name wins over a derived
-  // owner/employee identity at read time — stamp name_source='manual' on every
+  // owner/employee identity at read time, stamp name_source='manual' on every
   // write path below (relabel-existing, fresh insert, and the race relabel).
   const namePatch = {
     display_name: trimmed,
@@ -71,7 +71,7 @@ export async function setContactOverride(
     ...emailPatch
   };
 
-  // 1) Try to relabel an existing row first — preserves its type (a customer
+  // 1) Try to relabel an existing row first, preserves its type (a customer
   //    stays a customer) and never disturbs the memory fields.
   const { data: updated, error: updErr } = await db
     .from("contacts")
@@ -121,7 +121,7 @@ export async function listContactOverrides(
 
 /**
  * Remove a manual contact label. Only deletes rows that are NOT customer
- * profiles, so deleting a label can never wipe the AI's customer memory — a
+ * profiles, so deleting a label can never wipe the AI's customer memory, a
  * customer is removed from the Customers page flow instead (deleteCustomerMemory).
  */
 export async function deleteContactOverride(

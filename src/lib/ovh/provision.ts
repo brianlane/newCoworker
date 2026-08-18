@@ -1,5 +1,5 @@
 /**
- * High-level OVH VPS provisioning for a single tenant business — the
+ * High-level OVH VPS provisioning for a single tenant business, the
  * Canadian (Beauharnois) analog of `provisionVpsForBusiness` in
  * src/lib/hostinger/provision.ts. Returns the same result shape so the
  * orchestrator's downstream phases (SSH bootstrap, tunnel, DID, deploy,
@@ -7,7 +7,7 @@
  *
  * Sequence:
  *   1. Generate a fresh ed25519 keypair (comment = business id).
- *   2. Snapshot the account's VPS service names BEFORE checkout — OVH's
+ *   2. Snapshot the account's VPS service names BEFORE checkout, OVH's
  *      checkout response carries an orderId, not the delivered service
  *      name, so the new box is identified by diffing the list.
  *   3. Order-cart purchase: create/assign cart, add the size's plan code,
@@ -21,7 +21,7 @@
  *   6. Poll state back to `running`, resolve the public IPv4.
  *   7. Persist the keypair to `vps_ssh_keys` (provider='ovh', region='ca',
  *      host=IP, box id = the OVH service name). Last step, same as the
- *      Hostinger path — never persist a key to a box that doesn't exist.
+ *      Hostinger path, never persist a key to a box that doesn't exist.
  */
 
 import { logger } from "@/lib/logger";
@@ -92,10 +92,10 @@ export async function provisionOvhVpsForBusiness(
 
   const keypair = await generateKeypair(`newcoworker-ovh-${input.businessId}`);
 
-  // 2. Pre-checkout snapshot — the delivered service name is found by diff.
+  // 2. Pre-checkout snapshot, the delivered service name is found by diff.
   const before = new Set(await client.listVps());
 
-  // 3. Order-cart purchase. Subsidiary matches the account entity (US —
+  // 3. Order-cart purchase. Subsidiary matches the account entity (US,
   // the OVHcloud US catalog sells the BHS-capable `-ca` plan codes).
   const planCode = ovhPlanCodeForSize(input.vpsSize, env);
   const cart = await client.createCart(ovhSubsidiary(env));
@@ -160,7 +160,7 @@ export async function provisionOvhVpsForBusiness(
     throw new Error(`OVH ${serviceName} is running but has no public IPv4 (ips: ${ips.join(", ")})`);
   }
 
-  // 7. Persist the key — last, so a failed provision never strands a row.
+  // 7. Persist the key, last, so a failed provision never strands a row.
   const sshKey = await dbInsert({
     business_id: input.businessId,
     hostinger_vps_id: serviceName,
@@ -187,7 +187,7 @@ export async function provisionOvhVpsForBusiness(
     publicKeyId: null,
     postInstallScriptId: null,
     // OVH billing is keyed on the service name itself (serviceInfos /
-    // delete-at-expiration) — there is no separate billing-subscription id.
+    // delete-at-expiration), there is no separate billing-subscription id.
     hostingerBillingSubscriptionId: null
   };
 }

@@ -27,7 +27,7 @@ import { loadEnv } from "./_shared.ts";
 loadEnv();
 
 /**
- * "Meta Review Sandbox (internal)" — NOT the New Coworker HQ tenant
+ * "Meta Review Sandbox (internal)", NOT the New Coworker HQ tenant
  * (8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d), which despite the name has NO
  * meta_connections row at all. The sandbox tenant is the only holder of a
  * Meta connection, and the Page behind it is the real "New Coworker" Page

@@ -112,7 +112,7 @@ describe("retrieveGraphContext", () => {
     });
     expect(result.matchedEntities).toBe(1);
     expect(result.facts).toBe(2);
-    expect(result.context).toContain("- Amy Laidlaw (person) — aka Amy; phone 602-695-1142; email amy@example.com");
+    expect(result.context).toContain("- Amy Laidlaw (person), aka Amy; phone 602-695-1142; email amy@example.com");
     // The org rides in through the 1-hop edge and gets an identity line.
     expect(result.context).toContain("- HomeSmart (organization)");
     expect(result.context).toContain("- Amy Laidlaw phone: 602-695-1142");
@@ -162,7 +162,7 @@ describe("retrieveGraphContext", () => {
       charBudget: 500
     });
     expect(result.context.length).toBeLessThanOrEqual(500);
-    // 30 facts matched but only what fit was rendered — the count must say
+    // 30 facts matched but only what fit was rendered, the count must say
     // what the prompt actually carried.
     expect(result.facts).toBeGreaterThan(0);
     expect(result.facts).toBeLessThan(30);
@@ -199,13 +199,13 @@ describe("retrieveGraphContext", () => {
     });
     // Owner fact reads plain; claims carry attribution + (unverified).
     expect(result.context).toContain("- Amy Laidlaw phone: 602-695-1142");
-    expect(result.context).not.toContain("phone: 602-695-1142 — claimed");
+    expect(result.context).not.toContain("phone: 602-695-1142, claimed");
     expect(result.context).toContain(
-      "- Amy Laidlaw roof_status: replaced in 2019 — claimed by +14805551234 (unverified)"
+      "- Amy Laidlaw roof_status: replaced in 2019, claimed by +14805551234 (unverified)"
     );
     // No attributed_to → the source stands in.
     expect(result.context).toContain(
-      "- Amy Laidlaw budget: about 500k — claimed by webchat (unverified)"
+      "- Amy Laidlaw budget: about 500k, claimed by webchat (unverified)"
     );
     // Higher trust packs first even though the claim was listed first.
     expect(result.context.indexOf("phone: 602-695-1142")).toBeLessThan(

@@ -33,7 +33,7 @@ describe("webchatClientMetaSchema", () => {
   });
 
   it("degrades invalid fields to undefined instead of failing the payload", () => {
-    // The loader sends screen:"" when dimensions are unavailable — that must
+    // The loader sends screen:"" when dimensions are unavailable, that must
     // not drop the rest of the payload (Bugbot Medium on PR #653).
     const parsed = webchatClientMetaSchema.parse({
       screen: "",

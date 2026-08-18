@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-usage-summary.sh — aggregate the live e2e suite's billed-token log
+# e2e-usage-summary.sh, aggregate the live e2e suite's billed-token log
 # (test-results/e2e-gemini-usage.jsonl, written per call by
 # tests/e2e/usage-log.ts) into the GitHub job summary, so every run's paid
 # Gemini footprint is visible next to its verdict and reconcilable against

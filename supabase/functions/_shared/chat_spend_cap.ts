@@ -41,11 +41,11 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
   "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 },
-  // Gemini 3.5 Flash (GA May 2026) — the voice `voice_task` Rowboat model.
+  // Gemini 3.5 Flash (GA May 2026), the voice `voice_task` Rowboat model.
   // Missing here until Jul 2026: an AIFLOW_EXTRACT_MODEL/SMS pin to 3.5-flash
   // would have priced at the old $0.5/$3.0 default, a 3x undercount.
   "gemini-3.5-flash": { in: 1.5, out: 9.0 },
-  // GA Jul 21 2026 — the tenant chat + mid-tier default after the 3.6
+  // GA Jul 21 2026, the tenant chat + mid-tier default after the 3.6
   // migration (same list price as gemini-2.5-flash).
   "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
   // GA Jul 21 2026: replaces 3.5-flash as the flagship default (cheaper
@@ -80,7 +80,7 @@ export function capMicrosForTier(
 
 /**
  * Exact cost (micro-USD) from billed token counts (`usageMetadata`).
- * `outputTokens` must already include thinking tokens — Google bills them at
+ * `outputTokens` must already include thinking tokens, Google bills them at
  * the output rate. Negative inputs clamp to 0.
  */
 export function geminiCostMicrosFromTokens(
@@ -118,15 +118,15 @@ export type SmsTurnPlan = {
  * already bound to it (and new threads default to it), so we keep the call
  * STATEFUL (caller passes the stored conversationId) and meter the turn.
  *
- * Over cap: Rowboat IGNORES `startAgent` whenever a conversationId is supplied —
- * it resumes the agent the thread was first bound to — so the only way to switch
+ * Over cap: Rowboat IGNORES `startAgent` whenever a conversationId is supplied,
+ * it resumes the agent the thread was first bound to, so the only way to switch
  * an existing thread to the local agent is to drop the continuation. We force a
  * STATELESS turn on the local agent; it is $0 (not metered) and intentionally
  * degraded (relies on the customer preamble for context). This is a rare safety
  * state, and we deliberately do NOT persist the local turn's conversationId so
  * the thread resumes on Gemini once the period resets.
  *
- * Over cap with NO local agent (kvm1 hardware — see `tenantHasLocalModel`):
+ * Over cap with NO local agent (kvm1 hardware, see `tenantHasLocalModel`):
  * refuse the turn entirely. Continuing on Gemini would silently disable the
  * fuse; degrading is impossible because the local model was never installed.
  */
@@ -149,7 +149,7 @@ export function pickSmsTurn(opts: {
  * path can degrade to over cap (mirrors `vpsSizeHasLocalModel` in
  * src/lib/vps/size.ts: only kvm1 ships without Ollama).
  *
- * Deliberately keyed on the EXPLICIT `businesses.vps_size` pin only — a null
+ * Deliberately keyed on the EXPLICIT `businesses.vps_size` pin only, a null
  * pin means the tenant predates pin persistence and was provisioned on
  * legacy kvm2/kvm8 hardware that DOES have the local model, so the refuse
  * path must not fire for them. Every kvm1 box is provisioned after the
@@ -161,7 +161,7 @@ export function tenantHasLocalModel(vpsSize: string | null | undefined): boolean
   return vpsSize !== "kvm1";
 }
 
-/** Start of the current UTC month, ISO — fallback period key when no subscription. */
+/** Start of the current UTC month, ISO, fallback period key when no subscription. */
 export function monthStartIso(now: Date = new Date()): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
@@ -173,7 +173,7 @@ type DbResult = { data: unknown; error: { message: string } | null };
 // Mirrors supabase-js's two-stage builder: `from()` exposes the table verbs
 // (select/update), and only the result of those exposes the row filters. Modeling
 // it this way (rather than a single flat QueryBuilder) lets the real
-// PostgrestQueryBuilder satisfy this interface structurally — it has no
+// PostgrestQueryBuilder satisfy this interface structurally, it has no
 // eq/is/order directly on the from() result either.
 interface FilterBuilder extends PromiseLike<DbResult> {
   eq(col: string, val: unknown): FilterBuilder;
@@ -246,7 +246,7 @@ export async function readChatSpendMicros(
  * Purchased spend credit currently active for this business (micro-USD).
  * Comes from `chat_spend_credit_grants` via the `chat_active_credit_micros`
  * RPC; credit RAISES the period cap (base + credits) rather than being
- * consumed per turn. Returns 0 on any failure — the base cap still applies,
+ * consumed per turn. Returns 0 on any failure, the base cap still applies,
  * so a read blip can never mint free headroom.
  */
 export async function readActiveChatCreditMicros(
@@ -273,7 +273,7 @@ export type CapDecision = {
 };
 
 /**
- * Resolve the cap decision for the SMS turn about to run. Never throws — on any
+ * Resolve the cap decision for the SMS turn about to run. Never throws, on any
  * read failure it fails OPEN (overCap=false → Gemini), and returns the period it
  * resolved so post-turn metering can reuse it without a second subscription read.
  * The cap compared against is `base cap + active purchased credit`

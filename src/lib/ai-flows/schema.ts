@@ -43,7 +43,7 @@ export const FLOW_STEP_TYPES = [
   "email_extract",
   // Read typed fields out of a DOCUMENT (the triggering email's PDF/text
   // attachment) via Gemini's native PDF understanding, optionally filing it
-  // into Business Documents — the back-office primitive (renewal review,
+  // into Business Documents, the back-office primitive (renewal review,
   // doc intake) built on the existing documents store.
   "doc_extract",
   "send_sms",
@@ -62,14 +62,14 @@ export const FLOW_STEP_TYPES = [
   // (contacts.owner_employee_id, set when a teammate claims) when there is
   // one, else the business owner. Resolution keys on a phone var first,
   // then a name var (unique display-name match), and always falls back to
-  // the owner — a forwarded message is never dropped.
+  // the owner, a forwarded message is never dropped.
   "notify_lead_owner",
   "http_call",
   "sleep",
   "wait_for_reply",
   // Batch-flow outbound AI call: dial a var-held number, run a scripted AI
   // persona, optionally live-transfer, and park until the call's outcome
-  // lands. Runs on the async worker (NOT a voice-channel step) — the call
+  // lands. Runs on the async worker (NOT a voice-channel step), the call
   // itself is placed through the same origination edge function as
   // outbound_call, with identical budget metering.
   "place_ai_call",
@@ -143,17 +143,17 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  *   - `claimed_agent_phone`: the claiming teammate's E.164 phone (or "none",
  *     same lifecycle as `claimed_agent`), so a LATER `wait_for_reply` can
  *     park on the CLAIMER's next text (e.g. "that lead's number is
- *     disconnected") — not just on the lead's.
+ *     disconnected"), not just on the lead's.
  *   - `claimed_agent_eta_minutes`: the ETA a claimer stated ("1, 20 min" →
  *     "20"), parsed to whole minutes; "0" when they claimed with a bare "1"
  *     or the ETA wasn't a parseable duration. Feed it through a `math` step
  *     to size a follow-up wait (e.g. ETA + 60).
- *   - `group_lead_phone`: on a group-text trigger, the lead's E.164 number —
+ *   - `group_lead_phone`: on a group-text trigger, the lead's E.164 number,
  *     the one thread participant who is neither the alert's sender nor any of
  *     the business's own numbers (e.g. the seller in a referral service's
  *     intro thread, whose number appears nowhere in the message text). Only
  *     seeded when a `from_matches` trigger condition PINS the sender to a
- *     declared identity — without the pin the sender could be the lead
+ *     declared identity, without the pin the sender could be the lead
  *     themselves and the roster remainder would be the service. Empty for
  *     non-group triggers, unpinned senders, or when the roster leaves 0 or
  *     2+ candidates (never guess who the lead is).
@@ -210,7 +210,7 @@ export const VAR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 /**
  * Trigger-scope keys templates may reference. url/windowText/from are set on
  * every channel (see evaluateSmsTrigger); to/participants are SMS-only and
- * event_id/event_title/starts_at/ends_at/calendar are calendar-only — the
+ * event_id/event_title/starts_at/ends_at/calendar are calendar-only, the
  * engine renders absent keys as "", so cross-channel references degrade
  * instead of failing.
  */
@@ -222,7 +222,7 @@ export const TRIGGER_SCOPE_KEYS = [
   // Email channels (email / tenant_email). These were emitted by the trigger
   // scopes from the start but never listed here, so a flow that templated the
   // subject it already had was rejected at authoring for referencing an
-  // "unknown trigger field" — which is why the HQ inbox-triage flow paid a
+  // "unknown trigger field", which is why the HQ inbox-triage flow paid a
   // model call to re-extract a subject sitting in scope verbatim, and got an
   // empty string back. `subject` is the verbatim subject line; `message_id`
   // the provider message id (also email_organize's messageIdTemplate default);
@@ -258,17 +258,17 @@ export const TRIGGER_SCOPE_KEYS = [
   "calendar",
   // First image attached to the triggering message: an inbound MMS photo
   // (Telnyx media URL) or an inbound tenant-mailbox email attachment
-  // (`email-attachments:<path>` ref). "" on every other channel — used by
+  // (`email-attachments:<path>` ref). "" on every other channel, used by
   // generate_image's inputImageTemplate to edit the sender's photo.
   "image",
   // First DOCUMENT attachment (PDF / txt / markdown / csv) on an inbound
   // tenant-mailbox email, as an `email-attachments:<path>` ref ("" on every
-  // other channel) — the default source of a doc_extract step. document_name
+  // other channel), the default source of a doc_extract step. document_name
   // is its display filename for templates/notifications.
   "document",
   "document_name",
   // tenant_email only: the comma-separated attachment filenames and their
-  // count — what document-receipt confirmations name back to the sender.
+  // count, what document-receipt confirmations name back to the sender.
   // "" / absent on every other channel.
   "attachments",
   "attachment_count",
@@ -426,7 +426,7 @@ const webhookTriggerSchema = z.object({
 
 /**
  * Calendar-event trigger: the app polls the business's connected calendar
- * (resolved like the calendar tools — Google first, Microsoft fallback; no
+ * (resolved like the calendar tools, Google first, Microsoft fallback; no
  * connectionId stored) and fires when an event is created (`on:
  * "event_created"`) or is about to start (`on: "event_start"`, `leadMinutes`
  * before the start). `calendar` picks which calendar(s) to watch: the
@@ -444,7 +444,7 @@ const calendarTriggerSchema = z
     leadMinutes: z.number().int().min(1).max(1440).optional(),
     // event_end only: run this long AFTER the event's actual end time (0 /
     // omitted = right when it ends). Anchored to the event's real end, so a
-    // 30-minute and a 2-hour appointment both follow up correctly — no
+    // 30-minute and a 2-hour appointment both follow up correctly, no
     // guessed sleep needed.
     followMinutes: z.number().int().min(0).max(1440).optional(),
     conditions: z.array(conditionSchema).max(20)
@@ -888,9 +888,9 @@ const nonBranchStepMembers = [
       .optional(),
     when: whenSchema.optional()
   }),
-  // Read typed fields out of a DOCUMENT — the triggering email's PDF/text
+  // Read typed fields out of a DOCUMENT, the triggering email's PDF/text
   // attachment ({{trigger.document}}, the plan-time default when
-  // sourceTemplate is omitted) — via Gemini's native PDF understanding.
+  // sourceTemplate is omitted), via Gemini's native PDF understanding.
   // Produces {{vars.<field>}} like extract_text; a trigger with no document
   // SKIPS the step gracefully (all-text emails must not fail the flow).
   // `fileAs` additionally files the source into Business Documents (condensed
@@ -908,18 +908,18 @@ const nonBranchStepMembers = [
     fileAs: z
       .object({
         titleTemplate: z.string().min(1).max(200),
-        // Who the filed document is retrievable by (default staff — filed
+        // Who the filed document is retrievable by (default staff, filed
         // back-office paperwork must not leak into customer-facing answers).
         audience: z.enum(["clients", "staff", "both"]).optional(),
         // ── Record sinks (all optional): make the filed copy a structured
         // contact RECORD, not just a library document. ──
-        // Link to the contact whose phone this var holds — an earlier
+        // Link to the contact whose phone this var holds, an earlier
         // step's var OR one of THIS step's own extracted fields (the
         // document itself often carries the customer's number). Scope rule
         // enforced in validateDefinitionSemantics.
         contactPhoneVar: varName.optional(),
         // Stamp the extracted fields onto record_fields (carrier, premium,
-        // deductible, ... — whatever the step extracts).
+        // deductible, ..., whatever the step extracts).
         recordFieldsFromExtraction: z.boolean().optional(),
         // Parse this extracted field (must be one of the step's own field
         // names) as the record's renewal_date, feeding the renewal sweep +
@@ -949,7 +949,7 @@ const nonBranchStepMembers = [
     /**
      * Attach the image URL held in this var (produced by an earlier
      * generate_image step) so the text goes out as MMS. An empty/unset var at
-     * run time degrades to a plain text send — an image hiccup must not block
+     * run time degrades to a plain text send, an image hiccup must not block
      * the message.
      */
     mediaUrlVar: varName.optional(),
@@ -1030,7 +1030,7 @@ const nonBranchStepMembers = [
     attachScreenshot: z.boolean().optional(),
     /**
      * Template resolving to a `business-docs:<documentId>` ref to attach to
-     * the send — a picked library document, or a run_agent-generated one via
+     * the send, a picked library document, or a run_agent-generated one via
      * `business-docs:{{vars.<saveAs>_document_id}}`. A blank rendered ref
      * sends without an attachment (mirrors document-less run_agent skips);
      * a ref that resolves to a missing/oversized document fails the step
@@ -1162,7 +1162,7 @@ const nonBranchStepMembers = [
     /**
      * Share a business document with the lead: mint an expiring tokenized
      * link for `documentId` and deliver it via SMS or email. The runtime
-     * re-checks the document is ready, client-audience, and not expired —
+     * re-checks the document is ready, client-audience, and not expired,
      * a stale price sheet is never sent even if the flow was authored while
      * it was fresh. `{{share_url}}` in messageTemplate marks where the link
      * goes; without it the link is appended. `saveAs` exposes the link to
@@ -1251,7 +1251,7 @@ const nonBranchStepMembers = [
   }),
   // Text whoever the lead BELONGS to (e.g. forward a realtor.com reply relay):
   // the contact's owning employee when one is on record, else the business
-  // owner. phoneVar (preferred) / nameVar locate the contact; both optional —
+  // owner. phoneVar (preferred) / nameVar locate the contact; both optional,
   // with neither resolvable the message still reaches the business owner.
   z.object({
     id: stepId,
@@ -1298,12 +1298,12 @@ const nonBranchStepMembers = [
     when: whenSchema.optional()
   }),
   // Pause the run then continue. Exactly one mode (enforced in
-  // validateDefinitionSemantics — a discriminatedUnion member can't hold a
+  // validateDefinitionSemantics, a discriminatedUnion member can't hold a
   // superRefine): relative minutes, a next local wall-clock time, an ISO
   // date/datetime rendered from a template ("wake on {{vars.renewal_date}}"),
   // or a template datetime plus a signed offset ("2 hours before the
   // appointment": relativeToTemplate {{trigger.starts_at}}, offsetMinutes
-  // -120). 43200 min = 30 days — generous, but bounded so a typo can't park
+  // -120). 43200 min = 30 days, generous, but bounded so a typo can't park
   // a run for years.
   z.object({
     id: stepId,
@@ -1352,7 +1352,7 @@ const nonBranchStepMembers = [
   // `personaTemplate` script on answer, then PARK the run (status
   // awaiting_call, same machinery as wait_for_reply) until the call ends. The
   // outcome lands in {{vars.<saveAs>}} (default "call_outcome"): transferred /
-  // answered / no_answer / not_placed / failed — so later steps gate the next
+  // answered / no_answer / not_placed / failed, so later steps gate the next
   // follow-up attempt on it. With `transfer` configured, the AI texts the
   // transfer target the rendered preSmsTemplate pre-alert and warm-transfers
   // the live call to them once the callee confirms it's a good time. Budget is
@@ -1368,7 +1368,7 @@ const nonBranchStepMembers = [
     /** Greeting/script template the AI opens the call with. */
     personaTemplate: z.string().min(1).max(2000),
     /**
-     * What the AI already knows about the person (templated) — injected into
+     * What the AI already knows about the person (templated), injected into
      * the call prompt with a never-re-ask rule, so the AI doesn't ask for
      * details the flow already extracted.
      */
@@ -1473,7 +1473,7 @@ const nonBranchStepMembers = [
   // the business's voice_expected_transfers row, and while it is unexpired and
   // unconsumed, telnyx-voice-inbound bridges any inbound call that matched NO
   // per-caller voice routing straight to the target (no AI conversation), then
-  // consumes the window — one arming transfers exactly one call. Built for
+  // consumes the window, one arming transfers exactly one call. Built for
   // referral services (e.g. Clever) whose concierges call from a rotating
   // number pool minutes after an SMS cue is confirmed. Exactly one of
   // toE164 / toRef (enforced in validateDefinitionSemantics).
@@ -1578,7 +1578,7 @@ const nonBranchStepMembers = [
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
   // for the run's lead (replied / appointment booked / tag added / claimed),
   // the run fast-forwards to this step and everything in between is skipped
-  // (goal_jump) — "stop nurturing people who already converted". Trunk-only
+  // (goal_jump), "stop nurturing people who already converted". Trunk-only
   // and tag-required-for-tag_added are enforced in validateDefinitionSemantics.
   z.object({
     id: stepId,
@@ -1626,13 +1626,13 @@ const nonBranchStepMembers = [
     // mutually exclusive with agentName; enforced in validateDefinitionSemantics).
     agentRef: contactRefSchema.optional(),
     // BROADCAST mode: offer the lead to ALL of these roster members at once,
-    // sharing one claim deadline — first "1" wins, a "2" retires just that
+    // sharing one claim deadline, first "1" wins, a "2" retires just that
     // teammate, and when everyone passed (or the deadline lapsed) the lead
     // falls back to the owner. Mutually exclusive with agentName/agentRef
     // (validateDefinitionSemantics); duplicates rejected there too.
     agentNames: z.array(z.string().min(1).max(120)).min(2).max(10).optional(),
     // BROADCAST-ALL mode: offer EVERY active, available roster member at
-    // once — the roster is resolved at EXECUTION time so the offer set never
+    // once, the roster is resolved at EXECUTION time so the offer set never
     // desyncs as employees change (the worker caps the fan-out at the same
     // 10 recipients agentNames allows, rotation order). Mutually exclusive
     // with agentName/agentRef/agentNames (validateDefinitionSemantics).
@@ -1664,13 +1664,13 @@ const nonBranchStepMembers = [
     //
     // First to claim (ON by default; set false to opt out): while the offer is
     // live with one teammate, any teammate it was offered EARLIER can still
-    // take it with a bare "1" — the lead needs a call right away, so whoever
+    // take it with a bare "1", the lead needs a call right away, so whoever
     // can do it first wins. Only a bare "1" yanks; "1, <eta>" from outside the
     // sender's own window never preempts the active countdown.
     firstToClaim: z.boolean().optional(),
     // Keep-for-owner rule: when ownerDirectWhen matches on first entry (e.g.
     // price_band equals over_1m for $1M+ leads), the lead is NEVER offered to
-    // the team — the owner is texted ownerDirectTemplate instead and
+    // the team, the owner is texted ownerDirectTemplate instead and
     // claimed_agent is set to "none" so claim-gated later steps skip. The two
     // fields are both-or-neither (validateDefinitionSemantics).
     ownerDirectWhen: whenSchema.optional(),
@@ -1795,7 +1795,7 @@ const nonBranchStepMembers = [
     when: whenSchema.optional()
   }),
   // Generate an AI image from a prompt template and save a signed URL to the
-  // stored image as {{vars.<saveAs>}} — consumable by a later send_sms
+  // stored image as {{vars.<saveAs>}}, consumable by a later send_sms
   // (mediaUrlVar → MMS) or embedded in a send_email body. Metered into the
   // shared AI budget at the flat per-image price; hard-refused when the
   // budget is exhausted. AiFlow runs are exempt from the conversational
@@ -1811,7 +1811,7 @@ const nonBranchStepMembers = [
      * the step generates from scratch; renders to an unusable reference →
      * the step fails (silently ignoring the owner's source image would be
      * worse). The worker only fetches platform-controlled sources (own
-     * storage buckets + Telnyx media CDN) — never arbitrary URLs.
+     * storage buckets + Telnyx media CDN), never arbitrary URLs.
      */
     inputImageTemplate: z.string().min(1).max(500).optional(),
     saveAs: varName,
@@ -1820,12 +1820,12 @@ const nonBranchStepMembers = [
   // Run a saved Agent (a reusable instruction set from /dashboard/agents)
   // against flow content: either the rendered `input` template (text) or a
   // DOCUMENT (`documentTemplate`, an email-attachments:<path> /
-  // business-docs:<id> ref — default {{trigger.document}}) is handed to the
+  // business-docs:<id> ref, default {{trigger.document}}) is handed to the
   // agent's instructions on central Gemini and the produced artifact lands
   // in {{vars.<saveAs>}} for later steps (send_email body, notify_owner,
   // extract_text, ...). Exactly one of input/documentTemplate (enforced in
   // validateDefinitionSemantics). `saveDocument` additionally files the
-  // artifact into Business Documents (staff-only audience — an automated
+  // artifact into Business Documents (staff-only audience, an automated
   // run must never widen output to customer channels). Metered into the
   // shared AI budget. The write-time validator (validateRunAgentSteps)
   // checks the agent exists and is enabled; the runtime re-checks at
@@ -1841,7 +1841,7 @@ const nonBranchStepMembers = [
     input: z.string().min(1).max(8000).optional(),
     /**
      * Template resolving to a document ref the agent runs on instead of
-     * text — usually {{trigger.document}} (the triggering email's PDF/text
+     * text, usually {{trigger.document}} (the triggering email's PDF/text
      * attachment); a trigger with no document SKIPS the step gracefully.
      */
     documentTemplate: z.string().min(1).max(300).optional(),
@@ -1879,8 +1879,8 @@ const nonBranchStepMembers = [
   }),
   // Maintain the contact's lead-state tags from a flow: removals apply before
   // additions ("removeTags New Lead, addTags Contacted" = one status change).
-  // At least one of addTags/removeTags is required (validateDefinitionSemantics
-  // — a discriminatedUnion member can't hold a refine). Tag strings mirror the
+  // At least one of addTags/removeTags is required (validateDefinitionSemantics,
+  // a discriminatedUnion member can't hold a refine). Tag strings mirror the
   // dashboard limits (40 chars, 25 per list).
   z.object({
     id: stepId,
@@ -2023,7 +2023,7 @@ const nonBranchStepMembers = [
   })
 ] as const;
 
-/** The non-branch step union — everything the flat (pre-branch) engine ran. */
+/** The non-branch step union, everything the flat (pre-branch) engine ran. */
 const nonBranchStepSchema = z.discriminatedUnion("type", [...nonBranchStepMembers]);
 
 export type StepCondition = z.infer<typeof whenSchema>;
@@ -2032,7 +2032,7 @@ type NonBranchStep = z.infer<typeof nonBranchStepSchema>;
 /**
  * Branch types are declared BY HAND (mirroring the runtime types in
  * supabase/functions/_shared/ai_flows/types.ts) because they reference the
- * full step union recursively — TypeScript cannot infer a type that circularly
+ * full step union recursively, TypeScript cannot infer a type that circularly
  * references itself through zod's generics, so the schema below is checked
  * against these declarations via the annotated lazy indirection instead.
  */
@@ -2151,7 +2151,7 @@ export const aiFlowDefinitionSchema = z.object({
       dedupeLeadRunsByVar: varName.optional(),
       // Owner opt-in for the texting coworker's start_aiflow_for_contact
       // tool: when true, the SMS model may enroll the CURRENT texter into
-      // this flow. Default off — the customer-facing surface stays barred
+      // this flow. Default off, the customer-facing surface stays barred
       // from every flow the owner has not explicitly flagged.
       agentInvocable: z.boolean().optional(),
       // Voice warm-handoff flows only: frame every alert text this flow
@@ -2229,8 +2229,8 @@ const TEMPLATE_REF_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 
 /**
  * The literal token a share_document messageTemplate uses to place the
- * minted link. NOT a scope reference — the worker substitutes it after
- * template rendering — so the scope checker strips it first (and the
+ * minted link. NOT a scope reference, the worker substitutes it after
+ * template rendering, so the scope checker strips it first (and the
  * runtime planner shares this regex).
  */
 export const SHARE_URL_TOKEN_RE = /\{\{\s*share_url\s*\}\}/g;
@@ -2349,7 +2349,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     // event note is a template.
     case "update_contact":
       return [step.noteTemplate ?? ""];
-    // wait_for_call carries a literal partner E.164 and var NAMES — no templates.
+    // wait_for_call carries a literal partner E.164 and var NAMES, no templates.
     case "wait_for_call":
     case "extract_url":
     case "browse_extract":
@@ -2358,14 +2358,14 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "upsert_customer":
     // classify carries var NAMES, category tokens, and a plain-text question.
     case "classify":
-    // goal carries a display label and literal event kinds/tags — no templates.
+    // goal carries a display label and literal event kinds/tags, no templates.
     case "goal":
     // branch: the question/labels are display copy and the conditions are
     // var-name references (scope-checked in validateDefinitionSemantics), so
     // there is nothing to template-check on the step itself. Nested arm steps
     // are walked separately.
     case "branch":
-    // arm_voice_transfer carries literal numbers/refs and a whisper string —
+    // arm_voice_transfer carries literal numbers/refs and a whisper string,
     // no templates.
     case "arm_voice_transfer":
     // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
@@ -2644,7 +2644,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   // definition-wide total cap.
   let totalSteps = 0;
 
-  // Walk one step, then (for a branch) its arms and else — the same
+  // Walk one step, then (for a branch) its arms and else, the same
   // depth-first order the worker flattens to, so "an EARLIER step" means the
   // same thing at author time and run time. Var registration is deliberately
   // PERMISSIVE across arms: a var produced inside one arm is legal for any
@@ -2743,7 +2743,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
             issues.push(`Step "${step.id}" references unknown offer field "${ref.key}".`);
           }
         } else if (ref.scope === "now") {
-          // {{now.today.*}} / {{now.tomorrow.*}} / {{now.afternoonTime}} —
+          // {{now.today.*}} / {{now.tomorrow.*}} / {{now.afternoonTime}},
           // relative dates the worker injects each run. Only the first segment
           // is validated; the date parts under today/tomorrow are open.
           if (!NOW_KEYS.has(ref.key)) {
@@ -2835,7 +2835,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
-    // sleep: exactly one wait mode — relative minutes, untilTime (+ its
+    // sleep: exactly one wait mode, relative minutes, untilTime (+ its
     // timezone), an untilDate template, or a relativeTo template (+ its
     // offset). Mixing modes (or half a mode) would silently pick one at run
     // time, so reject at author time instead.
@@ -3006,7 +3006,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     }
 
     // goal: trunk-only (a jump onto an unevaluated branch path would be
-    // unsafe), and each watched event must be fully specified — tag_added
+    // unsafe), and each watched event must be fully specified, tag_added
     // needs its tag, and a tag on any other kind is a config mistake.
     if (step.type === "goal") {
       if (depth > 0) {
@@ -3038,7 +3038,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     }
 
     // update_contact: the phone var must exist, and the step must actually
-    // change something (at least one of addTags/removeTags — the union member
+    // change something (at least one of addTags/removeTags, the union member
     // can't hold that refine).
     if (step.type === "update_contact") {
       if (!vars.has(step.phoneVar) && !ENGINE_VARS.has(step.phoneVar)) {
@@ -3123,7 +3123,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     }
 
     // A send_whatsapp needs EXACTLY ONE recipient source (same rule as
-    // send_sms, minus replyToGroup — WhatsApp has no group-MMS reply path).
+    // send_sms, minus replyToGroup, WhatsApp has no group-MMS reply path).
     if (step.type === "send_whatsapp") {
       const waSources = [
         Boolean(step.to),
@@ -3175,7 +3175,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
     // doc_extract record sinks: the contact phone may come from an earlier
     // step's var OR from one of THIS step's own extracted fields (the
-    // document often carries the customer's number — extraction precedes
+    // document often carries the customer's number, extraction precedes
     // filing at runtime). The renewal date is extraction-only.
     if (step.type === "doc_extract" && step.fileAs) {
       const ownFields = new Set(step.fields.map((f) => f.name));
@@ -3256,7 +3256,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
         );
       }
       // broadcastAll resolves its own offer set (the whole active roster) at
-      // execution time — any pinned recipient option alongside it would
+      // execution time, any pinned recipient option alongside it would
       // leave the worker with two contradictory offer sets.
       if (step.broadcastAll && (step.agentName || step.agentRef || step.agentNames)) {
         issues.push(
@@ -3477,12 +3477,12 @@ const STEP_ISSUE_RE = /Step "([^"]+)"/;
 /**
  * Targeted mend for a step-scoped semantic issue: strip the one broken knob
  * and keep the step where that is safe, or return null to have the step
- * dropped. The mends only ever REMOVE configuration — a mended step does
+ * dropped. The mends only ever REMOVE configuration, a mended step does
  * strictly less than the AI asked for, never something different.
  */
 function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean {
   // A screenshot attachment with no earlier capture (or an unsupported
-  // sender): the send itself is still what the owner wants — just without
+  // sender): the send itself is still what the owner wants, just without
   // the attachment.
   if (/attaches a screenshot/.test(issue)) {
     delete step.attachScreenshot;
@@ -3513,13 +3513,13 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
     return true;
   }
   // An MMS attachment var no earlier step produces: the text itself is still
-  // what the owner wants — send it without the image.
+  // what the owner wants, send it without the image.
   if (/attaches an image from/.test(issue)) {
     delete step.mediaUrlVar;
     return true;
   }
   // A generate_image whose source-image template references an unproduced
-  // var: keep the generation, drop the edit source — only when the bad var
+  // var: keep the generation, drop the edit source, only when the bad var
   // is confined to inputImageTemplate (a broken promptTemplate still drops
   // the step; an image prompt without its subject would be nonsense).
   const badVar = /uses \{\{vars\.(\w+)\}\} before/.exec(issue)?.[1];
@@ -3564,11 +3564,11 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
  * the owner reviews the salvaged flow rather than retyping their description.
  *
  * Salvage only ever SUBTRACTS: invalid steps/triggers/knobs are removed, and
- * an ununderstandable trigger falls back to Run-now — nothing is invented
+ * an ununderstandable trigger falls back to Run-now, nothing is invented
  * beyond the placeholder step required when no step survives.
  *
  * Returns null when there is nothing usable at all (not an object, or the
- * salvage loop can't converge) — the caller then surfaces the plain error.
+ * salvage loop can't converge), the caller then surfaces the plain error.
  */
 export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
@@ -3617,7 +3617,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   }
 
   // Steps: mint/dedupe ids, then keep each step that parses (retrying once
-  // without its `when` guard — a malformed guard is a common single fault).
+  // without its `when` guard, a malformed guard is a common single fault).
   const seenIds = new Set<string>();
   const steps: FlowStep[] = [];
   const rawSteps = Array.isArray(raw.steps) ? raw.steps.slice(0, 25) : [];
@@ -3678,7 +3678,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   for (let guard = 0; guard < 60; guard++) {
     if (steps.length === 0) {
       // A voice flow can only hold voice steps, so the notify-me placeholder
-      // below would be rejected (and re-injected) forever — a voice trigger
+      // below would be rejected (and re-injected) forever, a voice trigger
       // with no surviving call steps falls back to Run-now first.
       if (trigger.channel === "voice") {
         trigger = { channel: "manual" };
@@ -3730,7 +3730,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
       continue;
     }
     // Trigger-level / voice-shape issue: fall back to Run-now once (which also
-    // invalidates any voice steps — the loop then removes them) — then give up.
+    // invalidates any voice steps, the loop then removes them), then give up.
     // (Under a manual trigger no non-step issues remain, so the second-reset
     // bail is defensive.)
     /* c8 ignore next */

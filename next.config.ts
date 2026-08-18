@@ -84,7 +84,7 @@ const securityHeaders = [
 // of every CSP header on a response, so the global `frame-ancestors 'none'`
 // above would override the per-tenant frame-ancestors the frame route sets
 // dynamically (from chat_widget_settings.allowed_origins) no matter what we
-// add — the global rule's matcher must EXCLUDE the path entirely. Everything
+// add, the global rule's matcher must EXCLUDE the path entirely. Everything
 // else from the baseline set that doesn't block framing is re-applied here.
 const widgetFrameHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
@@ -92,7 +92,7 @@ const widgetFrameHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
   // No frame-ancestors here: the route handler emits it per tenant. The
-  // widget is a public embed — keep it out of search results.
+  // widget is a public embed, keep it out of search results.
   { key: "X-Robots-Tag", value: "noindex" }
 ];
 
@@ -103,7 +103,7 @@ const nextConfig: NextConfig = {
   },
   // `ssh2` pulls in native/optional deps (e.g. `cpu-features`) and ships a
   // `crypto.js` file that Turbopack cannot statically analyse for ESM. It must
-  // stay as a runtime `require()` on the server — it is only reached from
+  // stay as a runtime `require()` on the server, it is only reached from
   // server-only routes (orchestrator / provisioning), never from the browser.
   serverExternalPackages: ["ssh2"],
   // `/api/brand-logo` reads public/logo.png with a path built at runtime, which

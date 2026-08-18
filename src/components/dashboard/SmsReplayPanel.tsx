@@ -27,7 +27,7 @@ type ReplayState =
  * window of inbound texts through a chosen flow as BACKFILL runs: each text
  * is re-checked against the flow's trigger conditions, already-handled
  * messages are deduped by their event id, and leads already saved as
- * contacts are filed without any outreach — nobody gets double-texted.
+ * contacts are filed without any outreach, nobody gets double-texted.
  *
  * Unlike the Emails page there is no unmatched count to show up front (most
  * ordinary texts legitimately match no flow), so this renders as a compact

@@ -1,5 +1,5 @@
 /**
- * hostinger-term-prices.ts — read-only: print every VPS catalog price entry
+ * hostinger-term-prices.ts, read-only: print every VPS catalog price entry
  * (all term lengths) for kvm1/kvm2/kvm4/kvm8 so we can compare monthly vs
  * 12/24-month term buying. No writes.
  *

@@ -1,13 +1,13 @@
 /**
- * arm_voice_transfer — the "expect a live-transfer call" step (Jul 20 2026
+ * arm_voice_transfer, the "expect a live-transfer call" step (Jul 20 2026
  * Clever incident: the Cue flow replied "Y", the concierge called from a
  * number outside every per-caller routing rule, and the AI intake script ran
  * instead of the warm transfer).
  *
  * Covers the three layers a batch step spans:
- *   1. authoring schema (src/lib/ai-flows/schema.ts) — shape + exactly-one-
+ *   1. authoring schema (src/lib/ai-flows/schema.ts), shape + exactly-one-
  *      target semantics;
- *   2. runtime planner (supabase/functions/_shared/ai_flows/steps.ts) —
+ *   2. runtime planner (supabase/functions/_shared/ai_flows/steps.ts),
  *      defaults, clamping, ref passthrough;
  *   3. test-mode simulation (no window row is ever written by a test run);
  * plus the migration's RLS/claim contract.
@@ -253,7 +253,7 @@ describe("telnyx-voice-inbound expected-transfer claim (contract)", () => {
   );
 
   it("claims atomically (unexpired + unconsumed -> consumed) and falls through on error", () => {
-    // The claim is a single conditional UPDATE — never a read-then-write pair
+    // The claim is a single conditional UPDATE, never a read-then-write pair
     // that two concurrent calls could both pass.
     expect(handler).toMatch(
       /from\("voice_expected_transfers"\)\s*\.update\(\{ consumed_at: [\s\S]*?\.is\("consumed_at", null\)\s*\.gt\("expires_at", [\s\S]*?\.select\("to_e164, whisper"\)/

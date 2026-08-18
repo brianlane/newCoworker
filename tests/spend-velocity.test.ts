@@ -106,7 +106,7 @@ describe("computeVelocityBreaches", () => {
       config: CONFIG,
       now: NOW
     });
-    // Delta is exactly $3 — NOT more than $3, no alert.
+    // Delta is exactly $3, NOT more than $3, no alert.
     expect(exact).toEqual([]);
 
     const over = computeVelocityBreaches({

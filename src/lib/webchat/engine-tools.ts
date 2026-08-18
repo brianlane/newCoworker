@@ -1,19 +1,19 @@
 /**
  * The website chat widget's tool surface for the PLATFORM-SIDE Gemini
- * engine (reply_engine='gemini') — declarations + gated executor.
+ * engine (reply_engine='gemini'), declarations + gated executor.
  *
  * This is the same restricted, fail-closed surface the box-hosted
  * WebchatCoworker gets, kept in DELIBERATE LOCKSTEP with two other layers:
  *
  *   * the Rowboat workflow seed in vps/scripts/deploy-client.sh (the
- *     `webchat_*` tool declarations — descriptions/parameters here mirror
+ *     `webchat_*` tool declarations, descriptions/parameters here mirror
  *     those verbatim so both engines steer the model identically), and
  *   * the `/api/rowboat/tool-call` dispatcher (TOOL_GATES + zod arg
  *     schemas + per-tool Settings enforcement + the failure-guidance copy).
  *
  * Info + lead gen ONLY: knowledge lookup, lead capture, calendar
  * find/book, inline document share. NO SMS, NO email, NO calls, NO image
- * generation — visitors are untrusted, and an unknown tool name fails
+ * generation, visitors are untrusted, and an unknown tool name fails
  * closed here exactly like it does on the webhook path. Do NOT add
  * side-effect tools without revisiting that threat model.
  */
@@ -36,7 +36,7 @@ export type WebchatToolResult = {
 /**
  * Declarations mirroring the deploy-client.sh workflow seed byte-for-byte
  * on names and near-verbatim on descriptions (the seed's descriptions are
- * apostrophe-free only because of its bash heredoc — no such constraint
+ * apostrophe-free only because of its bash heredoc, no such constraint
  * here, but keeping them identical keeps model behavior identical).
  */
 export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
@@ -138,7 +138,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
 
 /**
  * tool name → Settings → Coworker tools toggle. Identical mapping to the
- * `webchat_*` block of TOOL_GATES in /api/rowboat/tool-call — the same
+ * `webchat_*` block of TOOL_GATES in /api/rowboat/tool-call, the same
  * owner toggle must gate BOTH engines or flipping one off would only
  * half-apply.
  */
@@ -150,7 +150,7 @@ export const WEBCHAT_ENGINE_TOOL_GATES: Record<string, { toolKey: string }> = {
   webchat_document_share: { toolKey: "document_share" }
 };
 
-// Arg schemas — mirror /api/rowboat/tool-call exactly (same bounds, same
+// Arg schemas, mirror /api/rowboat/tool-call exactly (same bounds, same
 // offset-aware datetimes) so a model prompt tuned on one engine parses
 // identically on the other.
 const knowledgeArgsSchema = z.object({ question: z.string().min(1).max(500) });
@@ -221,7 +221,7 @@ export type WebchatToolExecutorDeps = {
 
 /**
  * Execute one webchat tool call for the Gemini engine. Never throws for a
- * model-caused problem (bad args, unknown name, disabled tool) — those
+ * model-caused problem (bad args, unknown name, disabled tool), those
  * come back as `{ ok:false, ... }` results the model can explain, exactly
  * matching the webhook dispatcher's contract. Handler exceptions DO
  * propagate; the engine loop maps them to `{ ok:false, detail }` so one
@@ -257,7 +257,7 @@ export async function executeWebchatEngineTool(
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      // Customer surface reads as clients — internal docs stay invisible.
+      // Customer surface reads as clients, internal docs stay invisible.
       return knowledgeLookup(businessId, parsed.data.question, { audience: "clients" });
     }
     case "webchat_capture_lead": {
@@ -300,7 +300,7 @@ export async function executeWebchatEngineTool(
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      // Webchat is ALWAYS inline (no phone/email args) — the handler never
+      // Webchat is ALWAYS inline (no phone/email args), the handler never
       // sends SMS/email for the webchat surface.
       return shareDocument(businessId, { documentRef: parsed.data.document }, "webchat");
     }

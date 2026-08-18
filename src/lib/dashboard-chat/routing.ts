@@ -10,8 +10,8 @@
  * degrade), a missing platform API key, and inline-call failures (the
  * caller enqueues after a failed inline attempt).
  *
- * Attachment turns can never fall back — the local model cannot read PDFs
- * and the worker input protocol is text-only — so over-budget/unconfigured
+ * Attachment turns can never fall back, the local model cannot read PDFs
+ * and the worker input protocol is text-only, so over-budget/unconfigured
  * attachment turns are refused with an honest message instead.
  */
 
@@ -32,7 +32,7 @@ export const ATTACHMENT_NOT_CONFIGURED_MESSAGE =
 export function resolveChatTurnRoute(args: {
   hasAttachment: boolean;
   apiKeyPresent: boolean;
-  /** Null when the spend read failed — fail OPEN to inline (quality over fuse on a transient DB blip, same posture as the worker). */
+  /** Null when the spend read failed, fail OPEN to inline (quality over fuse on a transient DB blip, same posture as the worker). */
   spend: ChatSpendSnapshot | null;
 }): ChatTurnRoute {
   const overCap = args.spend !== null && args.spend.spendMicros >= args.spend.effectiveCapMicros;

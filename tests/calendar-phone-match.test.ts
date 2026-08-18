@@ -28,7 +28,7 @@ describe("phoneDigitsMatch", () => {
 
   it("rejects different numbers and shared-suffix lookalikes", () => {
     expect(phoneDigitsMatch("15485773546", "15550001111")).toBe(false);
-    // Same last digits, different subscriber prefix — no suffix relation.
+    // Same last digits, different subscriber prefix, no suffix relation.
     expect(phoneDigitsMatch("15485773546", "15495773547")).toBe(false);
   });
 

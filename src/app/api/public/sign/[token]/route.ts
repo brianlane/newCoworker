@@ -2,8 +2,8 @@
  * Public signing endpoint: POST /api/public/sign/:token
  *
  * Body: { signatureName, consent }. The token is the whole capability
- * (256-bit, sha256-only at rest); every non-servable state — unknown/void/
- * expired token, expired or deleted document, already signed — fails closed
+ * (256-bit, sha256-only at rest); every non-servable state, unknown/void/
+ * expired token, expired or deleted document, already signed, fails closed
  * with the same shape the signing page can render. Rate-limited per IP so
  * the endpoint can't be brute-forced or spammed.
  */
@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 const bodySchema = z.object({
   signatureName: z.string().min(1).max(200),
   consent: z.boolean(),
-  /** Fingerprint of the content the page showed — binds view to signature. */
+  /** Fingerprint of the content the page showed, binds view to signature. */
   contentSha256: z.string().regex(/^[0-9a-f]{64}$/)
 });
 
@@ -60,7 +60,7 @@ export async function POST(request: Request, context: RouteContext) {
       }
       // `already_signed` and `content_changed` stay distinct: both concern
       // a LIVE token whose page is already being served (the certificate
-      // page / the current document), so nothing new is revealed — and the
+      // page / the current document), so nothing new is revealed, and the
       // form needs them for honest copy.
       if (result.detail === "already_signed" || result.detail === "content_changed") {
         return Response.json(result, { status: 409 });

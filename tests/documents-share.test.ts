@@ -264,7 +264,7 @@ describe("resolveDocumentShareByToken", () => {
       ok: false,
       detail: "document_unavailable"
     });
-    // A dashboard-minted link survives — the owner explicitly sent it.
+    // A dashboard-minted link survives, the owner explicitly sent it.
     vi.mocked(getDocumentShareByTokenSha).mockResolvedValue({
       ...share,
       channel: "dashboard"

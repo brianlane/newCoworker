@@ -1,5 +1,5 @@
 /**
- * Weekly PR-digest post — the engine behind the Monday blog-weekly-digest
+ * Weekly PR-digest post, the engine behind the Monday blog-weekly-digest
  * cron (pg_cron → Edge → /api/internal/blog-weekly-digest → here).
  *
  * One run:
@@ -8,19 +8,19 @@
  *   2. List PRs merged into main over the past 7 days (GitHub REST).
  *      The volume bar: MORE THAN 10 merged PRs, or the week is too quiet
  *      to be worth a post.
- *   3. Keep FEATURES ONLY — customers never read "we fixed bugs":
+ *   3. Keep FEATURES ONLY, customers never read "we fixed bugs":
  *      - label `blog: skip` (or Dependabot / docs / test / chore / bump /
  *        one-shot titles) excludes a PR outright;
  *      - label `blog: feature` includes it;
  *      - the unlabeled remainder is classified by Gemini (JSON mode), and
  *        a classifier failure conservatively drops them.
  *   4. Gemini writes the post: plain English a 12-year-old could follow,
- *      UNDER 700 words — the cap is prompted, then verified in code
+ *      UNDER 700 words, the cap is prompted, then verified in code
  *      (regenerate once, then truncate at a section boundary).
  *   5. Generate a 16:9 featured image (unless `digest_include_image` is
  *      off) into the public blog-images bucket.
- *   6. Insert the post `scheduled` for now — the 5-minute publish sweep
- *      takes it live with the full fan-out — or as a `draft` when
+ *   6. Insert the post `scheduled` for now, the 5-minute publish sweep
+ *      takes it live with the full fan-out, or as a `draft` when
  *      `digest_as_draft` is on.
  *
  * Environment: GITHUB_DIGEST_TOKEN + GITHUB_DIGEST_REPO ("owner/name"),
@@ -51,7 +51,7 @@ export const DIGEST_MIN_MERGED_PRS = 10;
 export const DIGEST_MAX_WORDS = 700;
 
 /**
- * A composed digest under this many words is too thin to publish — the run
+ * A composed digest under this many words is too thin to publish, the run
  * skips, and because every run's PR window starts at the LAST digest post,
  * the skipped week's features roll into the next week's post.
  */
@@ -94,7 +94,7 @@ export function countWords(text: string): number {
 
 /**
  * Trim an over-long markdown body to the word cap by dropping trailing
- * `##` sections whole — a truncated post must still end cleanly.
+ * `##` sections whole, a truncated post must still end cleanly.
  * Falls back to a hard word cut when there is only one section.
  */
 export function truncateAtSectionBoundary(content: string, maxWords: number): string {
@@ -239,7 +239,7 @@ export async function classifyFeaturePrsWithGemini(
 /**
  * Features only: `blog: skip` / noise excluded, `blog: feature` included,
  * the unlabeled remainder classified. A classifier failure drops the
- * unlabeled PRs (conservative — better a shorter digest than bug-fix copy).
+ * unlabeled PRs (conservative, better a shorter digest than bug-fix copy).
  */
 export async function selectFeaturePrs(
   prs: MergedPr[],
@@ -306,7 +306,7 @@ export async function composeDigestWithGemini(
       maxOutputTokens: 4096
     });
     const parsed = JSON.parse(raw) as Partial<DigestDraft>;
-    // House rule: no em dashes in blog copy, ever — enforced (not just
+    // House rule: no em dashes in blog copy, ever, enforced (not just
     // prompted), and BEFORE the emptiness check so a dash-only field
     // counts as missing.
     const cleaned = stripEmDashesFromDraft({
@@ -426,7 +426,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   /* c8 ignore stop */
 
   const nowDate = now();
-  // The digest covers the week that just ENDED — key it by the ISO week of
+  // The digest covers the week that just ENDED, key it by the ISO week of
   // (now − 7 days). Stable across retries any day of the current week: a
   // Monday run and a Wednesday re-run both key the same prior week, so the
   // digest_week idempotency probe actually catches the duplicate.
@@ -447,7 +447,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   }
 
   // The window starts where the LAST digest post left off (its creation
-  // instant), so a skipped week — quiet, feature-less, or too thin — rolls
+  // instant), so a skipped week, quiet, feature-less, or too thin, rolls
   // its findings into the next post instead of being lost. Capped at
   // DIGEST_MAX_WINDOW_DAYS so a long gap can't balloon into a mega-post;
   // first-ever run falls back to the plain trailing week.
@@ -455,10 +455,10 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   const weekAgoMs = nowDate.getTime() - 7 * 24 * 60 * 60 * 1000;
   const windowFloorMs = nowDate.getTime() - DIGEST_MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const lastDigest = await findLatestDigest(db);
-  // The anchor is the previous run's window END (`scheduled_for` — recorded
+  // The anchor is the previous run's window END (`scheduled_for`, recorded
   // on every digest row, draft mode included, precisely for this). Falling
   // back to `created_at` (older rows / admin-cleared schedules) can miss
-  // merges that landed during that run's compose window — acceptable
+  // merges that landed during that run's compose window, acceptable
   // seconds-scale residual on a rare path.
   const anchorIso = lastDigest ? (lastDigest.scheduled_for ?? lastDigest.created_at) : null;
   const sinceMs = anchorIso ? Math.max(windowFloorMs, Date.parse(anchorIso)) : weekAgoMs;
@@ -474,7 +474,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   }
 
   const draft = await compose(features, weekKey);
-  // A thin week isn't worth a post — skip BEFORE spending on the image;
+  // A thin week isn't worth a post, skip BEFORE spending on the image;
   // the anchored window above carries these features into next week.
   if (countWords(draft.content) < DIGEST_MIN_WORDS) {
     logger.info("weekly-digest: composed digest too thin, rolling into next week", {
@@ -509,7 +509,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
         // `scheduled_for` doubles as the covered window's END (= untilIso):
         // the next run anchors on it, so merges landing DURING this run's
         // compose/image/insert are never skipped. Draft-mode rows carry it
-        // too — the publish sweep only picks status "scheduled", so it is
+        // too, the publish sweep only picks status "scheduled", so it is
         // inert there beyond prefilling the admin schedule picker.
         status: settings.digest_as_draft ? ("draft" as const) : ("scheduled" as const),
         scheduled_for: untilIso
@@ -519,7 +519,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   } catch (err) {
     // Two overlapping runs can both pass the findExisting probe; the loser
     // hits the unique digest_week/slug constraint. That is the idempotency
-    // working, not a failure — report it as already_exists.
+    // working, not a failure, report it as already_exists.
     if (await findExisting(weekKey, db)) {
       logger.info("weekly-digest: lost the insert race to a concurrent run", { weekKey });
       return { ...base, mergedCount: merged.length, outcome: "already_exists" };

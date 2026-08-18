@@ -45,7 +45,7 @@ const CONFIRM_PHRASE = "DELETE";
 /**
  * Danger-zone self-serve account deletion (BizBlasts-style): expanding the
  * card fetches a live impact preview (what data is removed, which number and
- * server are released), then requires the typed phrase + current password —
+ * server are released), then requires the typed phrase + current password,
  * both re-verified server-side.
  */
 export function DeleteAccountCard() {

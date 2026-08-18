@@ -1,5 +1,5 @@
 /**
- * Prospecting — recording that a prospect answered.
+ * Prospecting, recording that a prospect answered.
  *
  * WHY THIS EXISTS. The follow-up is scheduled off silence: sent five or more
  * days ago, never nudged. If nothing ever writes a reply to the ledger, then a

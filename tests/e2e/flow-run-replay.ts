@@ -2,19 +2,19 @@
  * Timing-aware AiFlow replay harness: `walkFlowTimed` executes a REAL flow
  * definition through the same shared engine modules as `walkFlow`
  * (flow-walker.ts) but models the PRODUCTION PARKING SEMANTICS the plain
- * walker cannot express — the semantics that caused the 2026-07-14 Truly
+ * walker cannot express, the semantics that caused the 2026-07-14 Truly
  * incident (lead Alex, run 5820f7f0):
  *
  *   - An inbound lead text is consumed by a `wait_for_reply` ONLY when the
  *     run is parked at that wait when the text arrives (the webhook resumes
- *     `status='awaiting_reply'` runs and nothing else — see
+ *     `status='awaiting_reply'` runs and nothing else, see
  *     telnyx-sms-inbound's wait-resume).
  *   - A `route_to_team` step PARKS the run (`awaiting_agent`) for its offer
  *     window. A lead text arriving during that park matches no wait, is
  *     never queued, and falls through to the generic AI reply path.
  *
  * `walkFlow` treats route_to_team as instant, so a scripted reply is always
- * consumed by the next wait — which is exactly how the existing engine e2e
+ * consumed by the next wait, which is exactly how the existing engine e2e
  * stayed green while production dropped Alex's "July 23, 2026" renewal
  * answer: the flow's wait_renewal sat AFTER route_to_team, the run was
  * parked on the agent offer when the answer arrived, and the wait later
@@ -23,7 +23,7 @@
  * The virtual clock is in minutes since run start. Non-parking steps take
  * zero time; a wait_for_reply advances to the consumed message's arrival
  * (or its timeout); a route_to_team advances by its responseMinutes (one
- * un-claimed offer window — production escalates through the roster, which
+ * un-claimed offer window, production escalates through the roster, which
  * only widens the fall-through window, so one window is the CONSERVATIVE
  * model).
  */
@@ -55,7 +55,7 @@ export type TimedInbound = {
   atMinutes: number;
 };
 
-/** A lead text no wait_for_reply was parked for — the generic-AI-path class. */
+/** A lead text no wait_for_reply was parked for, the generic-AI-path class. */
 export type FellThroughInbound = TimedInbound & {
   /**
    * The step the run was parked at when the text arrived (`route_to_team`
@@ -76,7 +76,7 @@ export type TimedWalkResult = {
    */
   fellThroughToGenericPath: FellThroughInbound[];
   /** Lead texts arriving after the walk finished (a finished run hands the
-   * thread back to the generic assistant legitimately — not a violation). */
+   * thread back to the generic assistant legitimately, not a violation). */
   arrivedAfterRun: TimedInbound[];
   endedAtMinutes: number;
 };
@@ -167,7 +167,7 @@ export async function walkFlowTimed(
       }
       case "wait_for_reply": {
         // Texts that arrived before this park started were never queued for
-        // it — in production they already went to the generic path.
+        // it, in production they already went to the generic path.
         divertBefore(clock, null);
         const next = pending[0];
         if (next && next.atMinutes <= clock + action.timeoutMinutes) {
@@ -193,7 +193,7 @@ export async function walkFlowTimed(
       case "route_to_team": {
         // The run parks awaiting_agent for the offer window; every lead text
         // arriving inside it falls through to the generic path (the
-        // incident). The window resolves un-claimed (owner fallback) — a
+        // incident). The window resolves un-claimed (owner fallback), a
         // claim would only shorten it.
         divertBefore(clock, null);
         const windowEnd = clock + action.responseMinutes;

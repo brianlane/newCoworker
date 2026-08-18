@@ -12,7 +12,7 @@ import { parseAiFlowDefinition, AiFlowValidationError } from "../src/lib/ai-flow
  * The one-shot's pure patch helpers, validated through the SAME
  * parseAiFlowDefinition the dashboard (and the script's own pre-write check)
  * uses. Each config's templates may only reference vars the real flow
- * produces — the fixtures here declare exactly the extraction fields the
+ * produces, the fixtures here declare exactly the extraction fields the
  * live flows have, so a config referencing a var the flow doesn't produce
  * fails HERE instead of at apply time against production data.
  */
@@ -204,7 +204,7 @@ describe("buildBadPhoneSteps", () => {
       expect(sent.body).toContain("separate EMAIL BOUNCED alert");
       expect(sent.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       // Bounce check: 20-minute grace, then read Amy's mailbox (the SAME
-      // connection the send used — her Gmail/Outlook, which Resend can't
+      // connection the send used, her Gmail/Outlook, which Resend can't
       // see). Pinned to THIS flow's send: the notice must name the lead's
       // address AND quote the follow-up's subject; the 4h lookback absorbs
       // delayed worker resumes.
@@ -248,7 +248,7 @@ describe("buildBadPhoneSteps", () => {
       expect(report.subject).toContain("NO EMAIL");
       expect(report.body).toContain("NO follow-up email was sent");
       expect(report.body).toContain("{{vars.agent_report}}");
-      // No lead-facing email in this arm — there is no address to send to.
+      // No lead-facing email in this arm, there is no address to send to.
       expect(noEmailArm.some((s) => s.to === "{{vars.lead_email}}")).toBe(false);
     }
   });

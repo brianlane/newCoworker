@@ -1,5 +1,5 @@
 /**
- * GET /api/book/manage/slots?token=… — the times an invitee may move their
+ * GET /api/book/manage/slots?token=…, the times an invitee may move their
  * booking to.
  *
  * The same availability the public page offers (identical policy knobs,

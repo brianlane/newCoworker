@@ -310,7 +310,7 @@ describe("aggregateTelnyxRecords", () => {
     ]);
     const rows = aggregateTelnyxRecords({
       records: [
-        // Outbound: sender (cli) pays — biz-a, even though cld is biz-b.
+        // Outbound: sender (cli) pays, biz-a, even though cld is biz-b.
         {
           sent_at: "2026-07-10T01:00:00Z",
           direction: "outbound",
@@ -318,7 +318,7 @@ describe("aggregateTelnyxRecords", () => {
           cld: "+16025552222",
           cost: "0.01"
         },
-        // Inbound: receiver (cld) pays — biz-b, even though cli is biz-a.
+        // Inbound: receiver (cld) pays, biz-b, even though cli is biz-a.
         {
           sent_at: "2026-07-10T02:00:00Z",
           direction: "inbound",

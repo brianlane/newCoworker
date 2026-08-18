@@ -1,6 +1,6 @@
 # Per-tenant AiFlow render service (headless Chromium).
 #
-# Deployed by vps/scripts/deploy-client.sh ONLY on render-capable tiers — never
+# Deployed by vps/scripts/deploy-client.sh ONLY on render-capable tiers, never
 # the starter/KVM2 box, whose RAM is already committed to Ollama + Rowboat.
 #
 # Exposed to the internet by the per-tenant Cloudflare Tunnel at

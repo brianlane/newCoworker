@@ -58,7 +58,7 @@ export default async function NotificationsPage(props: {
   // and be able to save from it. The row is seeded from the TENANT's contacts
   // either way (seedUserEmail/seedAuthPhone above already exclude the admin's
   // own address and phone), so nothing of the operator's leaks into it.
-  // Prefs and the recent list are independent — one parallel group (for
+  // Prefs and the recent list are independent, one parallel group (for
   // residency tenants the notifications read is a tunnel round-trip).
   const [prefs, recent, whatsappConnected] = await Promise.all([
     businessId && businessRow

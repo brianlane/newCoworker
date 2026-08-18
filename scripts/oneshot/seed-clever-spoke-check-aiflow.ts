@@ -6,39 +6,39 @@
  *   "Once the AI accepts the lead and sends it to Dave, Dave responds whether
  *    he spoke with the lead. If not, the AI calls the lead once a week; when
  *    the lead says now is a good time, text Dave the lead's info + cash
- *    offers ('LIVE TRANSFER is coming — pick up!') and live-transfer the
+ *    offers ('LIVE TRANSFER is coming, pick up!') and live-transfer the
  *    call to him."
  *
- * Trigger: `owner_assigned` scoped to Clever-tagged contacts — fires when the
+ * Trigger: `owner_assigned` scoped to Clever-tagged contacts, fires when the
  * accept flow's route_to_team claim assigns the lead to a roster member (the
  * accept flow tags contacts "Clever" via patch-clever-accept-followup.ts).
  *
  * Steps:
- *   1. extract_text     — lead_name / lead_phone from the contact-event text.
- *   2. recall_url       — the Clever lead page URL the accept flow remembered
+ *   1. extract_text, lead_name / lead_phone from the contact-event text.
+ *   2. recall_url, the Clever lead page URL the accept flow remembered
  *                         (keyed by phone; see patch-clever-accept-followup).
- *   3. browse_extract   — credentialed re-read of that page for the CURRENT
+ *   3. browse_extract, credentialed re-read of that page for the CURRENT
  *                         address + cash offers (skipped when no URL was
- *                         remembered — the messages just omit those lines).
- *   4. sleep 3 days     — give the agent time to reach the lead themselves.
- *   5. route_to_team    — the spoke check, pinned to the agent: "Reply 1 =
+ *                         remembered, the messages just omit those lines).
+ *   4. sleep 3 days, give the agent time to reach the lead themselves.
+ *   5. route_to_team, the spoke check, pinned to the agent: "Reply 1 =
  *                         YES I spoke with them, 2 = NO not yet". Reply 1 →
  *                         claimed_agent set → every follow-up step below
  *                         skips. Reply 2 / 24h timeout → owner fallback tells
  *                         Amy the weekly AI calls are starting.
- *   6. place_ai_call    — attempt 1 (gated claimed_agent = none): the AI
+ *   6. place_ai_call, attempt 1 (gated claimed_agent = none): the AI
  *                         calls the lead with the scripted greeting; on "now
  *                         is a good time" it texts the agent the pre-alert
  *                         and live-transfers. Outcome → {{vars.call_outcome}}.
- *   7-13. branches      — attempts 2..8, one per week: each branch re-checks
+ *   7-13. branches, attempts 2..8, one per week: each branch re-checks
  *                         claimed_agent (via its `when`) and call_outcome
- *                         (arms) — once a call was transferred OR answered,
+ *                         (arms), once a call was transferred OR answered,
  *                         the remaining attempts skip; otherwise sleep 7 days
  *                         and call again.
- *   14. goal            — replied / appointment_booked / claimed: the moment
+ *   14. goal, replied / appointment_booked / claimed: the moment
  *                         the lead converts by any other path, the run jumps
  *                         here and pending calls never fire.
- *   15. notify_owner    — final outcome summary to Amy.
+ *   15. notify_owner, final outcome summary to Amy.
  *
  * Employee-agnostic: the agent is a roster member resolved BY NAME at seed
  * time (AIFLOW_CLEVER_AGENT_NAME, default "Dave Lane") into employee

@@ -9,16 +9,16 @@
  *   - peak call hours (business timezone) ← voice_call_transcripts
  *   - caller sentiment mix ← the AI call-summary perk's output
  *
- * Drill-downs (all plain navigation — the page stays a server component):
- *   - `?day=YYYY-MM-DD`   — a volume-chart bar: that UTC day's totals plus
+ * Drill-downs (all plain navigation, the page stays a server component):
+ *   - `?day=YYYY-MM-DD`, a volume-chart bar: that UTC day's totals plus
  *     its individual calls and texts, deep-linking into
  *     /dashboard/calls/[id] and /dashboard/messages/[e164].
- *   - `?sentiment=<key>`  — a sentiment row: the window's calls with that
+ *   - `?sentiment=<key>`, a sentiment row: the window's calls with that
  *     sentiment and their AI summaries.
- *   - `?hour=<0-23>`      — a peak-hours bar: the window's calls in that
+ *   - `?hour=<0-23>`, a peak-hours bar: the window's calls in that
  *     local-time hour.
  *
- * Starter tenants see an upgrade card instead of data — the gate is
+ * Starter tenants see an upgrade card instead of data, the gate is
  * server-side here, mirroring the messages/tools pattern.
  */
 
@@ -183,7 +183,7 @@ export default async function DashboardAnalyticsPage(props: {
   const timeZone = (business.timezone as string | null) ?? null;
 
   // Drill-down params. A malformed or out-of-window value is ignored rather
-  // than reaching a query — same posture as the aiflows runs page's flowId
+  // than reaching a query, same posture as the aiflows runs page's flowId
   // guard. Only one drill-down renders at a time (day > sentiment > hour).
   const params = (await props.searchParams) ?? {};
   const now = new Date();
@@ -255,7 +255,7 @@ export default async function DashboardAnalyticsPage(props: {
       getEngagementOverview(business.id, { client: db, now }).catch(() => null),
       // Where new leads came from (channels + source tags); a blip hides it.
       getLeadSourceOverview(business.id, { client: db, now }).catch(() => null),
-      // Owner-only roster leaderboard — never even fetched for team viewers.
+      // Owner-only roster leaderboard, never even fetched for team viewers.
       isOwnerViewer
         ? getEmployeePerformance(business.id, { client: db, now }).catch(() => null)
         : Promise.resolve(null),
@@ -268,7 +268,7 @@ export default async function DashboardAnalyticsPage(props: {
         includeClicks: true
       }).catch(() => null),
       // Reporting suite (renewal pipeline / response times / retention /
-      // monthly rollup) — each degrades to a hidden card on a blip.
+      // monthly rollup), each degrades to a hidden card on a blip.
       getRenewalPipeline(business.id, { client: db, now }).catch(() => null),
       getResponseTimeStats(business.id, { client: db, now }).catch(() => null),
       getRetentionOverview(business.id, { client: db, now }).catch(() => null),
@@ -291,7 +291,7 @@ export default async function DashboardAnalyticsPage(props: {
     ]);
   const segmentDetail = sentimentDetail ?? hourDetail;
 
-  // Deltas only when NEITHER window's transcript scan hit its row cap — a
+  // Deltas only when NEITHER window's transcript scan hit its row cap, a
   // capped scan undercounts, so a percentage against it would be wrong, not
   // merely incomplete (the answer-rate card suppresses for the same reason).
   const comparablePeriod =
@@ -319,7 +319,7 @@ export default async function DashboardAnalyticsPage(props: {
         sms: week.reduce((s: number, p: SnapshotSeriesPoint) => s + p.smsSent, 0)
       });
     }
-    // Forecast over the covered tail only — leading zero-filled days from
+    // Forecast over the covered tail only, leading zero-filled days from
     // before snapshots began would fake a growth trend.
     const firstCovered = points.findIndex((p) => p.calls > 0 || p.smsSent > 0 || p.voiceMinutes > 0);
     const tail = firstCovered >= 0 ? points.slice(firstCovered) : points;

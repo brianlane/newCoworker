@@ -3,7 +3,7 @@
  * events, call transcripts, and the Task Center's leads-in-motion view.
  *
  * Every tool is tenant-scoped and role-gated through the central
- * permission matrix — reads use the same action each surface's dashboard
+ * permission matrix, reads use the same action each surface's dashboard
  * route requires (`view_dashboard` for dashboards, `operate_messages` for
  * contact/thread content), so a Claude connector can never see more than
  * the same login sees in the dashboard.

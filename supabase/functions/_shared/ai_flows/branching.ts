@@ -4,14 +4,14 @@
  * A `branch` step gives a flow real multi-way control flow (GHL-style
  * If/Else). The definition stores the arms NESTED (each arm carries its own
  * step list), but the worker's run state machine is built around a FLAT
- * integer `current_step` (every park/resume path — approval gates, agent
- * offers, reply waits, quiet-hour deferrals — stores and rewinds that index).
+ * integer `current_step` (every park/resume path, approval gates, agent
+ * offers, reply waits, quiet-hour deferrals, stores and rewinds that index).
  * Rather than rework all of that, the worker flattens the nested definition
  * into a deterministic execution list at claim time:
  *
  *   - `flattenSteps` walks the tree depth-first: a branch step is emitted
  *     first, then every arm's steps in order, then the else steps. Each entry
- *     carries its `branchPath` — the chain of (branch step id, arm id) pairs
+ *     carries its `branchPath`, the chain of (branch step id, arm id) pairs
  *     it lives under.
  *   - Executing a branch step evaluates its arms top to bottom (first match
  *     wins, falling through to "else") and records the choice in the engine
@@ -22,7 +22,7 @@
  *     "skipped" with reason branch_not_taken), exactly like a when_unmet skip.
  *
  * Flattening is a pure function of the definition, so the same definition
- * always yields the same indices — a parked run resumes at the same flat
+ * always yields the same indices, a parked run resumes at the same flat
  * index it parked on.
  */
 import { evaluateStepCondition } from "./engine.ts";
@@ -108,7 +108,7 @@ export function chooseBranchArm(
  * Is this flattened entry on the taken path? Every hop's recorded choice
  * (`__branch_<id>` in the run vars) must equal the entry's arm id. A hop
  * whose choice is missing (its branch step was itself skipped, or hasn't run
- * yet) is NOT on the active path — an unevaluated branch must never execute
+ * yet) is NOT on the active path, an unevaluated branch must never execute
  * its children.
  */
 export function isOnActivePath(
@@ -136,7 +136,7 @@ export function resumeMarkerFor(flat: FlatStepEntry[], index: number): string {
  * Resolve where a parked run should resume in the CURRENT definition's
  * flattened order.
  *
- * `current_step` is a flat integer index — only stable while the definition
+ * `current_step` is a flat integer index, only stable while the definition
  * never changes. Editing a flow while runs are parked shifts every index, and
  * a stale index re-executes arbitrary steps (a lead once got the greeting +
  * two nudges re-sent back-to-back this way). The marker var pins the STEP ID
@@ -145,11 +145,11 @@ export function resumeMarkerFor(flat: FlatStepEntry[], index: number): string {
  *
  * Returns:
  *   - the stored index when there is no marker (legacy runs) or it still
- *     points at the marked step (unchanged definition — the common case);
+ *     points at the marked step (unchanged definition, the common case);
  *   - `flat.length` for the end marker (a finished cursor must never
  *     re-execute steps appended by a later edit);
  *   - the marked step's new index when the edit moved it;
- *   - null when the marked step no longer exists — the caller must stop the
+ *   - null when the marked step no longer exists, the caller must stop the
  *     run rather than guess.
  */
 export function resolveResumeIndex(
@@ -166,11 +166,11 @@ export function resolveResumeIndex(
 
 /**
  * Return a context copy whose resume marker matches an EXTERNALLY written
- * `current_step` (goal jumps, route-claim rewinds — writers outside the
+ * `current_step` (goal jumps, route-claim rewinds, writers outside the
  * worker's step loop). A stale marker would relocate the next resume back to
  * wherever the run previously parked, silently undoing the jump/rewind.
  * `markerId` null/absent DELETES the marker (resume falls back to the raw
- * index — the pre-marker behavior).
+ * index, the pre-marker behavior).
  */
 export function withResumeMarkerVar(
   context: Record<string, unknown>,

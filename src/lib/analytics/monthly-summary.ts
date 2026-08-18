@@ -1,12 +1,12 @@
 /**
- * Monthly production summary — a calendar-month rollup of the business's
+ * Monthly production summary, a calendar-month rollup of the business's
  * activity: calls, texts, voice minutes, missed calls (from the nightly
  * analytics snapshots, which survive retention pruning), plus new contacts
  * created (from `contacts`). Current month-to-date sits next to the
  * previous full month so the owner can see the month shaping up.
  *
  * Snapshots cover FINISHED days only (the nightly sweep runs after
- * midnight), so month-to-date lags today by up to a day — labeled in the
+ * midnight), so month-to-date lags today by up to a day, labeled in the
  * card rather than papered over.
  */
 

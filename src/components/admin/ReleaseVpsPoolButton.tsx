@@ -5,7 +5,7 @@
  * adopt pool (state=available) while the account keeps running on it. When
  * a new signup's adopt-first claim picks the box up, the adopt recreates it
  * and the OLD account is cascade-deleted (business row + all tenant data +
- * owner login). Two-step confirm mirrors DeleteClientButton — the eventual
+ * owner login). Two-step confirm mirrors DeleteClientButton, the eventual
  * effect is just as irreversible, only deferred to reuse time.
  */
 

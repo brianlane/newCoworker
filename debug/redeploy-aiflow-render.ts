@@ -7,7 +7,7 @@
  * caller's environment every time (`AIFLOW_RENDER_TOKEN=${AIFLOW_RENDER_TOKEN:-}`,
  * see vps/scripts/deploy-client.sh) AND restarts voice-bridge + chat-worker.
  * Before 2026-07-21 the local `.env` did NOT carry AIFLOW_RENDER_TOKEN, so
- * every full redeploy from a laptop BLANKED the render service's bearer —
+ * every full redeploy from a laptop BLANKED the render service's bearer,
  * which is exactly how the whole fleet ended up answering /render (and /pdf)
  * unauthenticated. The token now lives in the local `.env` (synced from the
  * Vercel app env, same value as the Supabase Edge secret), so full redeploys
@@ -26,7 +26,7 @@
  *
  * `--seed-token`: additionally REPLACE the AIFLOW_RENDER_TOKEN line in the
  * box's EXISTING /opt/aiflow-render/.env with the caller's env value before
- * the rebuild — the remediation for boxes whose bearer was blanked by a
+ * the rebuild, the remediation for boxes whose bearer was blanked by a
  * pre-2026-07-21 full redeploy (empty token = the sidecar's auth middleware
  * never enforces). Requires AIFLOW_RENDER_TOKEN in the caller env; the value
  * is single-quoted into the remote script and only ever echoed as a length.
@@ -37,7 +37,7 @@
  * KVM2), so the missing-.env guard below aborts. `--init-env` bypasses the
  * gate by seeding a minimal .env from the caller's environment
  * (AIFLOW_RENDER_TOKEN required; APP_BASE_URL / ROWBOAT_GATEWAY_TOKEN
- * optional) — mirroring the exact block deploy-client.sh writes on standard
+ * optional), mirroring the exact block deploy-client.sh writes on standard
  * boxes. Only for capability experiments (e.g. the KVM2 render-contention
  * test); production starter boxes stay render-free by policy.
  *   AIFLOW_RENDER_TOKEN=<token> tsx debug/redeploy-aiflow-render.ts --business-id <cloneId> --init-env

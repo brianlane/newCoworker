@@ -29,7 +29,7 @@ function StatusLine({ status }: { status: Status }) {
 
 /**
  * Settings → Business: the business name and timezone cards (split out of
- * the old AccountSettingsForms when Settings became a multi-page hub — the
+ * the old AccountSettingsForms when Settings became a multi-page hub, the
  * login email/password cards live in AccountCredentialsForms on the Account
  * page).
  */

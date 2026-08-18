@@ -94,7 +94,7 @@ describe("lookupCustomerByPhone", () => {
     const result = await lookupCustomerByPhone(BIZ, PHONE);
     const customer = (result.data as { customer: Record<string, unknown> }).customer;
     expect(customer.recentInteractions).toContain("July 23, 2026");
-    // One call with the queried number — the loader itself is alias-aware
+    // One call with the queried number, the loader itself is alias-aware
     // (it resolves the profile's primary + merged numbers).
     expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledWith(
@@ -145,7 +145,7 @@ describe("setCustomerDisplayName (dashboard rename semantics)", () => {
       displayName: "Juhu",
       nameSource: "manual"
     });
-    // The stale name lives in summary_md too — the rename must trigger a
+    // The stale name lives in summary_md too, the rename must trigger a
     // FORCED regeneration (a rename adds no interaction, so the normal
     // threshold/debounce gates would skip it).
     expect(vi.mocked(summarizeCustomerMemoryAndLog)).toHaveBeenCalledWith(
@@ -235,7 +235,7 @@ describe("setCustomerDisplayName (dashboard rename semantics)", () => {
     // The two `updated: false` branches are NOT the same situation, and an
     // early version of this change gave both the refusal text. When no row
     // exists, recordInteractionAndIncrement force-creates it WITH this name,
-    // the re-read matches, and we land in name_already_set_matches — so a
+    // the re-read matches, and we land in name_already_set_matches, so a
     // first-time caller who just gave their name would have been told the tool
     // saved nothing.
     it("does not deny the save for a first-time caller the RPC just created", async () => {

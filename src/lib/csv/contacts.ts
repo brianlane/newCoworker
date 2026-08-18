@@ -12,7 +12,7 @@
  *     by that address instead, which is also how a previously EXPORTED
  *     email-keyed contact round-trips (its `phone` cell holds the `email:` key).
  *   * Existing contact (primary number OR merged-away alias) → update, but
- *     only with non-empty cells — a blank cell means "leave as is", never
+ *     only with non-empty cells, a blank cell means "leave as is", never
  *     "clear". A CSV name is a deliberate label (name_source='manual').
  *   * New phone whose EMAIL matches exactly ONE existing customer profile →
  *     the same person's second number (CustomerLinker-style email
@@ -26,7 +26,7 @@
  *     good rows still apply.
  *
  * Service-role only. Owner authorization is the API route's job
- * (requireOwner before any call here) — same trust model as customer-memory/db.
+ * (requireOwner before any call here), same trust model as customer-memory/db.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -260,7 +260,7 @@ export async function importContactsCsv(
     }
 
     try {
-      // Only write cells the file actually provided — blank means keep.
+      // Only write cells the file actually provided, blank means keep.
       const patch: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
         ...(name ? { display_name: name, name_source: "manual" } : {}),
@@ -307,7 +307,7 @@ export async function importContactsCsv(
       // inbound auto-create, and a bare row means the merge can't
       // double-apply CSV content), then the CSV cells land on the SURVIVOR,
       // and only then the battle-tested merge_customer_memories RPC folds
-      // the temp row in — locking both rows, recording the number in
+      // the temp row in, locking both rows, recording the number in
       // alias_e164s, and deleting the temp row. Ordering matters: every
       // failure before the merge aborts cleanly (the bare temp row is a
       // harmless standalone contact a re-import updates), so there is no
@@ -354,7 +354,7 @@ export async function importContactsCsv(
           if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
           return "raced";
         }
-        // CSV cells are deliberate owner edits — apply to the survivor
+        // CSV cells are deliberate owner edits, apply to the survivor
         // BEFORE the merge so a patch failure aborts the fold cleanly. On
         // that failure the bare temp row is removed again: leaving it would
         // make a RE-IMPORT of the row take the plain phone-update path
@@ -367,7 +367,7 @@ export async function importContactsCsv(
             .eq("business_id", businessId)
             .eq("customer_e164", phone);
           if (undoErr) {
-            // Both the patch and the undo failed — surface both so the owner
+            // Both the patch and the undo failed, surface both so the owner
             // knows the number now exists as a bare contact.
             throw new Error(`${patchErr.message} (temp row cleanup also failed: ${undoErr.message})`);
           }
@@ -379,7 +379,7 @@ export async function importContactsCsv(
           p_into_e164: rows[0].customer_e164
         });
         if (mergeErr) {
-          // The fold target changed under us (deleted/merged mid-import) —
+          // The fold target changed under us (deleted/merged mid-import),
           // promote the bare temp row to a full standalone contact instead.
           const { error: promoteErr } = await db
             .from("contacts")
@@ -395,7 +395,7 @@ export async function importContactsCsv(
       const fireCreated = async () => {
         // contact_created triggers: an import-created contact may start
         // flows watching for new contacts (drip pacing spaces bulk
-        // enrollments out). Best-effort inside fireContactEvent — a
+        // enrollments out). Best-effort inside fireContactEvent, a
         // trigger failure never fails the row. Timestamped like the
         // dashboard add: a re-imported number after a delete is a NEW
         // creation and must refire.
@@ -417,7 +417,7 @@ export async function importContactsCsv(
         if (await applyUpdate()) {
           summary.updated += 1;
         } else {
-          // The racing row vanished again (e.g. concurrent delete/merge) —
+          // The racing row vanished again (e.g. concurrent delete/merge),
           // report it instead of silently losing the row's data.
           throw new Error(
             `A concurrent change kept ${phone} from being saved; re-import this row.`

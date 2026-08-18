@@ -6,7 +6,7 @@
  * through the orchestrator.
  *
  * Security:
- *   - `requireAdmin()` must return truthy — non-admin sessions get 403.
+ *   - `requireAdmin()` must return truthy, non-admin sessions get 403.
  *   - Payload includes the full PKCS#8 private key. Callers should treat
  *     it as sensitive: don't log, don't cache, rotate if exfiltrated.
  *   - The response is Cache-Control: no-store to keep CDNs from stashing it.
@@ -21,7 +21,7 @@ import {
   getActiveVpsSshKeyForBusiness
 } from "@/lib/db/vps-ssh-keys";
 import { logger } from "@/lib/logger";
-// NOTE: we deliberately do NOT use `successResponse` here — this endpoint
+// NOTE: we deliberately do NOT use `successResponse` here, this endpoint
 // must set `Cache-Control: no-store, private` on the success path to keep
 // the private key out of any intermediate cache, and the shared helper
 // doesn't expose a headers override. Manual `new Response(...)` below.
@@ -43,7 +43,7 @@ export async function GET(
     const business = await getBusiness(businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
 
-    // Prefer a lookup keyed by hostinger_vps_id when we have one — it's
+    // Prefer a lookup keyed by hostinger_vps_id when we have one, it's
     // guaranteed one-per-row. Fall back to business_id for businesses that
     // were provisioned before we started storing the vpsId column.
     const row = business.hostinger_vps_id

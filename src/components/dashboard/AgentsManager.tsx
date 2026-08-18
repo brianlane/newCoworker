@@ -4,8 +4,8 @@
  * Agents manager (Dashboard → Agents).
  *
  * An agent is a saved, reusable task: name + instructions + output format.
- * The owner runs it against an attachment — a fresh upload (PDF / text /
- * markdown / CSV) or an existing business document — and gets the same kind
+ * The owner runs it against an attachment, a fresh upload (PDF / text /
+ * markdown / CSV) or an existing business document, and gets the same kind
  * of output every time. Each expanded agent shows a run panel and run
  * history with the produced artifact (view / copy / download / save into
  * the Documents knowledge library).
@@ -66,7 +66,7 @@ export function AgentsManager({
   /** When true (`?draft=1`), load the chat-created draft stashed in sessionStorage. */
   initialDraft?: boolean;
   /**
-   * Business plan tier — gates the re-typeset output option (it renders on
+   * Business plan tier, gates the re-typeset output option (it renders on
    * the tenant's VPS render sidecar, which Starter boxes don't run). The
    * server enforces the same gate; this only hides the option.
    */
@@ -180,7 +180,7 @@ export function AgentsManager({
     setDraftFormat(agent.output_format);
     setRuns([]);
     setRunDocumentIds([]);
-    // Clear any attachment left over from another agent's run panel — the
+    // Clear any attachment left over from another agent's run panel, the
     // file input is shared across panels and runAgent prefers it over the
     // document picker.
     if (runFileRef.current) runFileRef.current.value = "";
@@ -420,7 +420,7 @@ export function AgentsManager({
                     type="button"
                     title={t.description}
                     onClick={() => {
-                      // Prefill only — nothing is saved until Create, and a
+                      // Prefill only, nothing is saved until Create, and a
                       // template-created agent runs like any other: manually,
                       // never from a trigger.
                       setCreateName(t.name);

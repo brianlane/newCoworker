@@ -1,6 +1,6 @@
 /**
  * Per-user sidebar layout (order + visibility). Scoped to the SIGNED-IN
- * auth user — no business role involved, and safe during view-as (an
+ * auth user, no business role involved, and safe during view-as (an
  * impersonating admin edits their own layout, never the tenant's).
  */
 import { z } from "zod";

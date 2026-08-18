@@ -1,7 +1,7 @@
 /**
  * Owner business-memory append helper
  * (src/lib/dashboard-chat/memory-append.ts): pure dedupe/build/archive rules
- * plus the IO orchestration with injected deps — semantics must match the
+ * plus the IO orchestration with injected deps, semantics must match the
  * owner-append adapter route it was factored from.
  *
  * The load-bearing invariant pinned here: memory overflow is ARCHIVED, never
@@ -174,7 +174,7 @@ describe("buildNextMemory", () => {
     expect(next.length).toBeLessThanOrEqual(MEMORY_MD_MAX_CHARS);
     expect(next.endsWith("- new rule")).toBe(true);
     expect(archived).toBe(true);
-    // The oldest section moved to the archive — not destroyed.
+    // The oldest section moved to the archive, not destroyed.
     expect(nextArchive).toContain("oldest rule about January");
     expect(next).not.toContain("oldest rule about January");
     // keptPrior is exactly the surviving prior portion.
@@ -261,7 +261,7 @@ describe("appendOwnerMemoryBullets", () => {
 
   it("handles a null config row as empty memory (default clock)", async () => {
     const d = deps(null);
-    // Omit the injected clock — the helper stamps today's real date.
+    // Omit the injected clock, the helper stamps today's real date.
     const res = await appendOwnerMemoryBullets(BIZ, "Only rule", {
       fetchConfig: d.fetchConfig,
       saveConfig: d.saveConfig,

@@ -1,7 +1,7 @@
 /**
  * On-box graph projection (src/lib/memory/graph-projection.ts): upstream-
  * style entity notes (frontmatter, Key facts, [[wikilinks]]), graph.jsonl,
- * filename safety, and collision handling — plus the dependency-free ustar
+ * filename safety, and collision handling, plus the dependency-free ustar
  * packer (src/lib/tar/pack.ts) it ships through, verified by extracting
  * with the system tar.
  */

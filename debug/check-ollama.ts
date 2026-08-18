@@ -1,7 +1,7 @@
 /**
  * Verify a tenant VPS's local Ollama is reachable FROM the chat-worker
  * container and that the memory-capture extraction model responds with valid
- * structured JSON. Useful when owner-rule capture silently no-ops — it
+ * structured JSON. Useful when owner-rule capture silently no-ops, it
  * isolates "is Ollama the problem" from the worker/adapter path.
  *
  * Usage:

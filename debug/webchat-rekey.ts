@@ -1,11 +1,11 @@
 /**
  * Mint (or read) a business's webchat widget key and enable the widget with
- * the newcoworker.com origins/theme — the script that re-keyed the site
+ * the newcoworker.com origins/theme, the script that re-keyed the site
  * webchat onto the HQ tenant when the Residency Pilot backing box retired.
  *
- * Prints the ncw_pub_ site key (public by design — it ships in page HTML).
+ * Prints the ncw_pub_ site key (public by design, it ships in page HTML).
  * The Vercel env flip (NEXT_PUBLIC_WEBCHAT_SITE_KEY, via
- * debug/vercel-env-set.ts + debug/vercel-redeploy.ts) is a separate step —
+ * debug/vercel-env-set.ts + debug/vercel-redeploy.ts) is a separate step,
  * do it only after the target box is verified (debug/box-verify.ts).
  *
  * Defaults to the New Coworker (HQ, internal) tenant.

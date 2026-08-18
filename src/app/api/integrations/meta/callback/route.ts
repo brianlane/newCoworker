@@ -1,5 +1,5 @@
 /**
- * GET /api/integrations/meta/callback — Facebook Login redirect target.
+ * GET /api/integrations/meta/callback, Facebook Login redirect target.
  *
  * Validates the HMAC-signed `state` (binds the code to a business and a
  * 15-minute window), exchanges the code for a long-lived user token, and
@@ -7,7 +7,7 @@
  * /dashboard/integrations/meta, where the Meta card lists their Pages for
  * the final pick (which activates the connection and subscribes leadgen).
  *
- * Always redirects back to the integrations page — errors land as a
+ * Always redirects back to the integrations page, errors land as a
  * `?error=` banner, never a JSON 500, because this URL is user-facing.
  */
 import { NextResponse, type NextRequest } from "next/server";
@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
       // The leadgen subscription is an app<->page edge shared by whoever
       // holds the Page. If another business claimed it (active OR paused)
       // between the reset and here, unsubscribing would sever THEIR
-      // delivery — so only unsubscribe while the Page is unclaimed.
+      // delivery, so only unsubscribe while the Page is unclaimed.
       const claim = await getMetaPageClaim(existing.page_id).catch(() => null);
       if (!claim) {
         await unsubscribePage(existing.page_id, existing.pageToken);

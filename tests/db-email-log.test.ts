@@ -425,7 +425,7 @@ describe("recordInboundTriggerEmail", () => {
     providerMessageId: "m1"
   };
 
-  /** insert().select().single() — the id is returned for the trigger scope. */
+  /** insert().select().single(), the id is returned for the trigger scope. */
   const insertReturning = (result: { data?: unknown; error?: { message: string } | null }) =>
     vi.fn(() => ({ select: () => ({ single: () => Promise.resolve(result) }) }));
 

@@ -26,9 +26,9 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   HOMELIGHT_VOICE_FROM      (default "+14159851909" — HomeLight live transfer)
- *   HOMELIGHT_VOICE_DAVE      (default "+16025245719" — Dave)
- *   HOMELIGHT_VOICE_AMY       (default "+16026951142" — Amy)
+ *   HOMELIGHT_VOICE_FROM      (default "+14159851909", HomeLight live transfer)
+ *   HOMELIGHT_VOICE_DAVE      (default "+16025245719", Dave)
+ *   HOMELIGHT_VOICE_AMY       (default "+16026951142", Amy)
  *   HOMELIGHT_VOICE_RING_SECS (default 20)
  */
 import { createClient } from "@supabase/supabase-js";

@@ -4,8 +4,8 @@
  * The origination edge function (telnyx-voice-originate) dials the callee and
  * the call.answered handler (telnyx-voice-call-end) attaches the Gemini bridge.
  * Both correlate the leg through a `client_state` we stamp on the dial. The
- * branch-free decisions — how to encode/parse that client_state and how to read
- * the single outbound_call step out of a flow definition — live here so they can
+ * branch-free decisions, how to encode/parse that client_state and how to read
+ * the single outbound_call step out of a flow definition, live here so they can
  * be unit-tested under Node/Vitest without a live call. Dependency-free
  * (btoa/atob only), mirroring voice_handoff.ts.
  *
@@ -298,7 +298,7 @@ export function classifyTelnyxDialFailure(
 /**
  * Parse + validate a per-call origination payload (the `call` object a
  * place_ai_call worker step POSTs to telnyx-voice-originate) into an
- * OutboundCallPlan. Returns null when the payload is not usable — a
+ * OutboundCallPlan. Returns null when the payload is not usable, a
  * malformed internal call is a caller bug, and dialing with a half-read
  * config (e.g. a dropped transfer) would silently run the wrong call.
  */

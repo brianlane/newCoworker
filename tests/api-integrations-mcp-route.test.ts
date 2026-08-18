@@ -1,5 +1,5 @@
 /**
- * DELETE /api/integrations/mcp — the Disconnect button on the Claude and
+ * DELETE /api/integrations/mcp, the Disconnect button on the Claude and
  * ChatGPT cards.
  *
  * The behavior worth pinning is the asymmetry between its two halves.

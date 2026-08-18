@@ -15,8 +15,8 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 
 /**
  * Live-model contracts for the Truly follow-up commitments (Issues 4 and 6),
- * replayed through the REAL production prompt builders — imported, never
- * paraphrased — so a prompt/preamble edit that breaks either contract fails
+ * replayed through the REAL production prompt builders, imported, never
+ * paraphrased, so a prompt/preamble edit that breaks either contract fails
  * here against the actual model before it ships.
  *
  *  - Issue 6: the stored display name ("Juhu") must win over the longer
@@ -32,7 +32,7 @@ const LEAD = "+15485773546";
 /**
  * Issue 4 contracts, judged semantically via the shared judge (judge.ts):
  * keyword matching kept sprouting exception classes (negated refusals,
- * "No problem" openers, "won't be an issue" reassurance idioms — each
+ * "No problem" openers, "won't be an issue" reassurance idioms, each
  * Bugbot round on PR #581 exposed the next), because claiming-an-action-
  * happened is a semantic property, not a lexical one. Calibration for
  * these questions lives in judge-calibration.e2e.test.ts.
@@ -100,7 +100,7 @@ describe("stored display name wins over the lead-form name (Issue 6, real preamb
 
   it("never addresses the customer by the lead-form full name", () => {
     // The hard contract: the longer form name from the automation context
-    // must not leak into the reply — the stored "Juhu" takes precedence.
+    // must not leak into the reply, the stored "Juhu" takes precedence.
     expect(reply).not.toMatch(/Muhammad|Fahad/);
   });
 });
@@ -112,7 +112,7 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   // Scope note: only the RESCHEDULE claim is pinned here. The equivalent
   // cancel-claim contract does not reliably hold at the prompt level with
   // tools absent (a pre-existing SMS_GROUNDED_ACTIONS_LINE gap, unrelated to
-  // the lifecycle-tools change — every wording that fixed it in isolation
+  // the lifecycle-tools change, every wording that fixed it in isolation
   // destabilized the other pinned persona contracts). In production the
   // cancel path runs through the real calendar_cancel_appointment tool,
   // which is covered by the unit suite, the dispatcher gating, and the
@@ -126,7 +126,7 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   ];
   // No reasoning-trailer instruction here (the voice-persona e2e pattern):
   // at temperature 0 this scenario reliably yields a trailer-ONLY turn,
-  // which the worker treats as rowboat_empty_assistant and retries — fine
+  // which the worker treats as rowboat_empty_assistant and retries, fine
   // in production, but useless as a stable probe of the words themselves.
   const SYSTEM = BASE_LINES.join("\n\n");
 
@@ -159,7 +159,7 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   });
 
   it("never offers to book a NEW appointment as a reschedule workaround", () => {
-    // The prompt rule: move/cancel ONLY via the lifecycle tools — a second
+    // The prompt rule: move/cancel ONLY via the lifecycle tools, a second
     // booking was exactly the stacked-invitations failure Truly reported.
     expect(verdict.answers.offers_new_booking).toBe(false);
   });

@@ -8,7 +8,7 @@ import {
 
 /**
  * "Customer Called" pause: a lead who phones in must stop receiving automated
- * texts — parked waits resolve with the customer_called sentinel, queued
+ * texts, parked waits resolve with the customer_called sentinel, queued
  * follow-ups defer, and the contact is tagged. All best-effort.
  */
 
@@ -128,7 +128,7 @@ describe("pauseLeadAutomationOnCall", () => {
     const res = await pauseLeadAutomationOnCall(db, BIZ, CALLER, NOW);
     expect(res).toEqual({ resumedWaits: 0, deferredRuns: 2, tagged: true });
 
-    // Lead matching (sender OR extracted phone) is the ONLY .or() — the
+    // Lead matching (sender OR extracted phone) is the ONLY .or(), the
     // wake-sooner guard is applied client-side (Bugbot 17abe4a0: two chained
     // .or() trees on one PostgREST update clobber each other).
     const ors = calls.filter((c) => c.name === "or" && c.table === "ai_flow_runs");

@@ -1,11 +1,11 @@
 /**
- * Customer response-time report — how fast inbound texts get answered.
+ * Customer response-time report, how fast inbound texts get answered.
  *
  * Derived from `sms_inbound_jobs` (central engine table): a job's
  * `created_at` is the inbound receipt and `updated_at` is stamped when the
  * reply completes (`complete_sms_inbound_job*`), so `updated_at −
  * created_at` is the customer-observed wait for `done` jobs. Retried jobs
- * carry their LAST completion stamp — the honest number, since that is
+ * carry their LAST completion stamp, the honest number, since that is
  * when the customer actually got the reply.
  */
 

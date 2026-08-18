@@ -13,7 +13,7 @@
  * is never confirmed, so "Submit Update" stays disabled. The click then times
  * out; the render service's overlay-dismiss retry closes the whole modal and
  * the action fails with `click_text "Submit Update": no matching control on the
- * page` — which is exactly what "Clever Update Leads (Chris)" has been failing
+ * page`, which is exactly what "Clever Update Leads (Chris)" has been failing
  * with (all list items).
  *
  * DOM-verified fix: pick a concrete TIME right after the day. Selecting a time

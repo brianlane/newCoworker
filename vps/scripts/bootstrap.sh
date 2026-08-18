@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# bootstrap.sh — Full server hardening + Ollama + Rowboat + cloudflared
+# bootstrap.sh, Full server hardening + Ollama + Rowboat + cloudflared
 # Run as root on a fresh Ubuntu 24.04 KVM VPS
 # Usage: TIER=starter VPS_SIZE=kvm1 ./bootstrap.sh
 #
-# TIER (starter|standard) is the ENTITLEMENT axis — it no longer drives any
+# TIER (starter|standard) is the ENTITLEMENT axis, it no longer drives any
 # hardware decision here. VPS_SIZE (kvm1|kvm2|kvm4|kvm8) is the HARDWARE axis:
 # ZRAM, Ollama tuning + model pulls, and the Rowboat compose profile all key
 # on it. When VPS_SIZE is unset we fall back to the tier default mapping
-# (starter→kvm1, standard→kvm8 — keep in lockstep with
+# (starter→kvm1, standard→kvm8, keep in lockstep with
 # src/lib/vps/size.ts DEFAULT_TIER_VPS_SIZE).
 #
-# kvm1 (1 vCPU / 4GB, starter default since Jul 2026): ZRAM on, NO Ollama —
+# kvm1 (1 vCPU / 4GB, starter default since Jul 2026): ZRAM on, NO Ollama,
 # AI is Gemini-only with the shared budget fuse; a fuse trip means no AI
 # until the period resets (accepted trade-off, fleet economics Phase E).
 
@@ -50,7 +50,7 @@ log "=== New Coworker VPS Bootstrap (TIER=${TIER}, VPS_SIZE=${VPS_SIZE}) ==="
 # ------------------------------------------------------------------
 log "Hardening system..."
 
-# Race protection — see `buildDefaultPostInstallScript` in
+# Race protection, see `buildDefaultPostInstallScript` in
 # src/lib/hostinger/provision.ts for the full rationale. We do NOT call
 # `cloud-init status --wait` here: bootstrap.sh is invoked downstream of
 # the slim PIS loader, which itself runs inside cloud-init's `runcmd`
@@ -73,7 +73,7 @@ APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=300)
 apt-get "${APT_LOCK_OPTS[@]}" update -qq
 apt-get "${APT_LOCK_OPTS[@]}" install -y -qq ufw fail2ban unattended-upgrades curl wget git jq zram-config
 
-# UFW firewall — Cloudflare Tunnel (cloudflared) handles all public traffic
+# UFW firewall, Cloudflare Tunnel (cloudflared) handles all public traffic
 # via an outbound dial, so the only port that needs to be reachable from the
 # internet is SSH. 80/443 are intentionally closed: nothing on the VPS
 # listens on them, and leaving them open is a latent footgun if a future
@@ -85,7 +85,7 @@ ufw allow 22/tcp   # SSH (orchestrator deploy + operator escape hatch)
 # the dockerised llm-router (which resolves Ollama via the
 # `host.docker.internal=host-gateway` extra_host) gets dropped at the
 # host's INPUT chain because UFW's default-deny applies to traffic
-# arriving from any interface — including the docker0 bridge. Symptom
+# arriving from any interface, including the docker0 bridge. Symptom
 # without this rule: rowboat-app → llm-router → 502 "fetch failed
 # upstream: ollama" on every chat turn even though Ollama is healthy on
 # the host. /16 covers both the default Docker bridge subnet (172.17/16)
@@ -98,21 +98,21 @@ ufw delete allow 80/tcp 2>/dev/null || true
 ufw delete allow 443/tcp 2>/dev/null || true
 ufw --force enable
 
-# fail2ban — block brute-force SSH
+# fail2ban, block brute-force SSH
 systemctl enable fail2ban
 systemctl start fail2ban
 
 # Automatic security updates
 dpkg-reconfigure -plow unattended-upgrades > /dev/null 2>&1
 
-# SSH hardening — a drop-in under /etc/ssh/sshd_config.d/ takes precedence
+# SSH hardening, a drop-in under /etc/ssh/sshd_config.d/ takes precedence
 # over the main sshd_config (sshd reads .d files first, first match wins).
 # Using a drop-in makes this idempotent across re-bootstraps and keeps the
 # main sshd_config untouched for operator inspection.
 #
 # IMPORTANT: PermitRootLogin stays at `prohibit-password` because the
 # orchestrator SSHes in as root with a per-VPS ed25519 key (see
-# src/lib/hostinger/provision.ts — keypair stored in the `vps_ssh_keys`
+# src/lib/hostinger/provision.ts, keypair stored in the `vps_ssh_keys`
 # table). Flipping to `no` would break every subsequent deploy.
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/10-newcoworker.conf <<'SSHD_EOF'
@@ -132,7 +132,7 @@ ClientAliveCountMax 2
 SSHD_EOF
 chmod 0644 /etc/ssh/sshd_config.d/10-newcoworker.conf
 
-# Validate the merged config before reloading sshd — a typo here would
+# Validate the merged config before reloading sshd, a typo here would
 # prevent sshd from starting on the next reboot and lock us out of the VPS.
 # If validation fails, remove the drop-in so the host stays reachable; the
 # operator can diagnose via /var/log/newcoworker-bootstrap.log.
@@ -147,7 +147,7 @@ fi
 log "System hardening complete."
 
 # ------------------------------------------------------------------
-# 2. ZRAM (mandatory for the small boxes — KVM 1 4GB and KVM 2 8GB)
+# 2. ZRAM (mandatory for the small boxes, KVM 1 4GB and KVM 2 8GB)
 # ------------------------------------------------------------------
 if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
   log "Configuring ZRAM (mandatory for ${VPS_SIZE} low-RAM hardware)..."
@@ -224,7 +224,7 @@ fi
 mkdir -p /etc/systemd/system/ollama.service.d
 
 if [[ "$VPS_SIZE" == "kvm2" ]]; then
-  # KVM 2 (2 vCPU, 8GB RAM) — Resource-First config
+  # KVM 2 (2 vCPU, 8GB RAM), Resource-First config
   # Llama 3.2 3B (~2 GiB typical in Ollama); strict single-model enforcement
   # TurboQuant KV cache compression: reduces active memory per conversation ~75%
   # Dynamic VRAM / Weight Streaming: loads weights just-in-time from NVMe
@@ -238,11 +238,11 @@ Environment="OMP_NUM_THREADS=2"
 # default-deny on the public interface still blocks external 11434 access;
 # only the loopback + docker bridge paths are reachable.
 Environment="OLLAMA_HOST=0.0.0.0:11434"
-# TurboQuant KV cache compression — ACTIVE: quantizes KV cache to 4-bit,
+# TurboQuant KV cache compression, ACTIVE: quantizes KV cache to 4-bit,
 # reducing active memory per conversation by ~75% (critical for 8GB KVM 2).
 # OLLAMA_KV_CACHE_TYPE is a live Ollama env var (supported since Ollama 0.3+).
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
-# Flash Attention — ACTIVE: enables memory-efficient attention computation
+# Flash Attention, ACTIVE: enables memory-efficient attention computation
 # (prerequisite for Dynamic VRAM / Weight Streaming on llama.cpp backend).
 Environment="OLLAMA_FLASH_ATTENTION=1"
 # Keep the owner's primary model resident so /dashboard/chat feels instant.
@@ -252,7 +252,7 @@ Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 # Copyable env list for Compose / docs: vps/fragments/starter-ollama-container.env
 elif [[ "$VPS_SIZE" == "kvm4" ]]; then
-  # KVM 4 (4 vCPU, 16GB RAM) — same llama3.2:3b model as KVM 2 (only KVM 8
+  # KVM 4 (4 vCPU, 16GB RAM), same llama3.2:3b model as KVM 2 (only KVM 8
   # carries qwen), with headroom for one extra parallel slot on the bigger box.
   cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
@@ -264,15 +264,15 @@ Environment="OMP_NUM_THREADS=4"
 # default-deny on the public interface still blocks external 11434 access;
 # only the loopback + docker bridge paths are reachable.
 Environment="OLLAMA_HOST=0.0.0.0:11434"
-# TurboQuant KV cache — ACTIVE
+# TurboQuant KV cache, ACTIVE
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
-# Flash Attention — ACTIVE
+# Flash Attention, ACTIVE
 Environment="OLLAMA_FLASH_ATTENTION=1"
 # Keep the owner's primary model resident (see starter tier comment above).
 Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 else
-  # KVM 8 (8 vCPU, 32GB RAM) — full model set, higher parallelism
+  # KVM 8 (8 vCPU, 32GB RAM), full model set, higher parallelism
   cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
 Environment="OLLAMA_NUM_PARALLEL=3"
@@ -289,16 +289,16 @@ Environment="OLLAMA_HOST=0.0.0.0:11434"
 # room for conversation history → the model "forgot" earlier turns (observed
 # on business 621a5b0d, June 2026). 16384 gives ~4x headroom so the resent
 # recent-turn tail + rolling summary fit comfortably. This is a CEILING, not
-# a target — actual prefill cost on this CPU-only box tracks the REAL prompt
+# a target, actual prefill cost on this CPU-only box tracks the REAL prompt
 # size (which the app caps), and with q4_0 KV cache 16384 tokens is only
 # ~0.6 GB across the 3 parallel slots, trivial on 32 GB. Applies to the
 # OpenAI-compatible /v1 path the llm-router uses (which can't pass num_ctx
 # per-request). Raise toward 20480 only if real prompts grow and you accept
 # slower CPU prefill; 16384 is the balanced default.
 Environment="OLLAMA_CONTEXT_LENGTH=16384"
-# TurboQuant KV cache — ACTIVE: reduces KV cache memory ~75% (beneficial on KVM 8 too)
+# TurboQuant KV cache, ACTIVE: reduces KV cache memory ~75% (beneficial on KVM 8 too)
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
-# Flash Attention — ACTIVE
+# Flash Attention, ACTIVE
 Environment="OLLAMA_FLASH_ATTENTION=1"
 # Keep the owner's primary model resident (see starter tier comment above).
 Environment="OLLAMA_KEEP_ALIVE=-1"
@@ -308,7 +308,7 @@ fi
 systemctl daemon-reload
 systemctl enable ollama
 # `restart`, NOT `start`: on an adoption-pool re-bootstrap the service is
-# already running, and `start` is a silent no-op — the refreshed drop-in
+# already running, and `start` is a silent no-op, the refreshed drop-in
 # above (OLLAMA_HOST etc.) never reached the live process, leaving Ollama
 # loopback-bound and the llm-router fallback broken (Amy/Truly/KYP drift,
 # July 2026). `restart` applies the config; on a fresh box it just starts.
@@ -317,7 +317,7 @@ systemctl restart ollama
 # Hardware-aware model pulls
 log "Pre-pulling AI models for VPS_SIZE=${VPS_SIZE} (background)..."
 if [[ "$VPS_SIZE" == "kvm2" || "$VPS_SIZE" == "kvm4" ]]; then
-  # KVM 2 / KVM 4: single model — Llama 3.2 3B (only KVM8 hardware uses qwen3:4b-instruct)
+  # KVM 2 / KVM 4: single model, Llama 3.2 3B (only KVM8 hardware uses qwen3:4b-instruct)
   (
     sleep 10
     ollama pull llama3.2:3b || true
@@ -347,7 +347,7 @@ rm -rf /opt/bifrost 2>/dev/null || true
 log "LLM traffic: Rowboat uses PROVIDER_BASE_URL → host Ollama OpenAI API (http://127.0.0.1:11434/v1)."
 
 # ------------------------------------------------------------------
-# 6. Rowboat (agent runtime — replaces OpenClaw)
+# 6. Rowboat (agent runtime, replaces OpenClaw)
 # ------------------------------------------------------------------
 log "Installing Rowboat..."
 mkdir -p /opt/rowboat/vault /opt/rowboat/memory /opt/rowboat/logs
@@ -356,7 +356,7 @@ mkdir -p /opt/rowboat/vault /opt/rowboat/memory /opt/rowboat/logs
 #
 # Pin to the SHA in ${ROWBOAT_GIT_REF}. Without an explicit checkout we'd
 # track whatever upstream calls `main` today, and as of late-2025 that is
-# the Electron desktop-app refactor — the server Dockerfile moved from the
+# the Electron desktop-app refactor, the server Dockerfile moved from the
 # repo root to apps/rowboat/, breaking every `docker compose up --build`
 # call here (the failure is silent because the surrounding `|| true`).
 # Pinning + apps/rowboat-context (see compose templates below) keep prod
@@ -402,16 +402,16 @@ fi
 #
 # Build context note: upstream Rowboat keeps the server Dockerfile under
 # apps/rowboat/Dockerfile, NOT at the repo root. Pointing `context:` at the
-# repo root — as we did before late-2025 — fails with `failed to read
+# repo root, as we did before late-2025, fails with `failed to read
 # dockerfile: open Dockerfile: no such file or directory`. Because
 # `docker compose up --build` is wrapped in `|| true` (preserving the rest
 # of bootstrap on a partial Rowboat failure), that error was silently
 # swallowed and chat was permanently broken. apps/rowboat is the correct
 # context for both `rowboat` and `jobs-worker`.
 if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
-  # KVM 1 / KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker.
+  # KVM 1 / KVM 2: slim stack, no qdrant, constrained mongo, no rag-worker.
   # On KVM 1 the llm-router's OLLAMA_URL points at nothing (no host Ollama);
-  # that's fine — no seeded agent routes a local tag there, gemini-* traffic
+  # that's fine, no seeded agent routes a local tag there, gemini-* traffic
   # goes straight to Google.
   cat > /opt/rowboat/docker-compose.yml <<'REOF'
 services:
@@ -586,9 +586,9 @@ log "cloudflared installed (tunnel credentials required via deploy-client.sh)."
 # is "public repo checked out at the canonical path" and we handle it here.
 #
 # Overridable via env for forks / private mirrors:
-#   NEWCOWORKER_REPO_URL    — git URL (default: public OSS repo)
-#   NEWCOWORKER_REPO_REF    — branch/tag/sha to check out (default: main)
-#   NEWCOWORKER_REPO_PATH   — filesystem destination (default: /opt/newcoworker-repo)
+#   NEWCOWORKER_REPO_URL, git URL (default: public OSS repo)
+#   NEWCOWORKER_REPO_REF, branch/tag/sha to check out (default: main)
+#   NEWCOWORKER_REPO_PATH, filesystem destination (default: /opt/newcoworker-repo)
 # ------------------------------------------------------------------
 NEWCOWORKER_REPO_URL="${NEWCOWORKER_REPO_URL:-https://github.com/brianlane/newCoworker.git}"
 NEWCOWORKER_REPO_REF="${NEWCOWORKER_REPO_REF:-main}"
@@ -606,7 +606,7 @@ else
   # `--depth=1 --branch` is much faster and avoids ~100 MB of history we never
   # need on a VPS. The repo is currently public; if it becomes private, replace
   # the URL with an HTTPS+token or a deploy-key SSH variant via the env overrides
-  # above — no code changes required here.
+  # above, no code changes required here.
   git clone --depth=1 --branch "${NEWCOWORKER_REPO_REF}" \
     "${NEWCOWORKER_REPO_URL}" "${NEWCOWORKER_REPO_PATH}" || \
     log "WARN: git clone ${NEWCOWORKER_REPO_URL} failed; voice-bridge source will be missing until deploy-client.sh re-syncs."
@@ -620,7 +620,7 @@ mkdir -p /opt/newcoworker/scripts
 cp /opt/rowboat/crontab /opt/newcoworker/scripts/ 2>/dev/null || true
 # Install the heartbeat script the cron line below targets. Historically
 # this was missing (only the crontab file was copied), so the monitor
-# silently never ran on fresh boxes until the first deploy-client run —
+# silently never ran on fresh boxes until the first deploy-client run,
 # which ALSO didn't install it before Jul 2026. deploy-client.sh now
 # refreshes it on every deploy; this bootstrap copy covers the window
 # between first boot and the first deploy.

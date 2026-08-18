@@ -1,8 +1,8 @@
 /**
  * Admin: onboarding reminder nudge (BizBlasts "Stripe Connect reminder"
- * analog). Computes what the tenant hasn't finished — checkout, website
+ * analog). Computes what the tenant hasn't finished, checkout, website
  * knowledge, coworker phone number, unpaid white-glove offers / enterprise
- * deals — and emails the owner a friendly checklist with links.
+ * deals, and emails the owner a friendly checklist with links.
  *
  * POST { businessId } → { sent, items } (items also returned when nothing
  * is missing so the admin UI can say "nothing to nudge about").
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Email send failed; nudge not sent", 502);
     }
     if (!messageId) {
-      // Resend accepted the call but returned no id — treat as undelivered
+      // Resend accepted the call but returned no id, treat as undelivered
       // rather than telling the operator the reminder went out.
       return errorResponse("INTERNAL_SERVER_ERROR", "Email provider returned no message id", 502);
     }

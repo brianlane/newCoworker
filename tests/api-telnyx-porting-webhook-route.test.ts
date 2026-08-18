@@ -170,7 +170,7 @@ describe("api/telnyx/porting-webhook route", () => {
     expect((await res2.json()).activated).toBe(false);
 
     // Redeliveries that don't claim the milestone still reach activation
-    // (crash recovery) — but a no-op attempt is not reported as `activated`.
+    // (crash recovery), but a no-op attempt is not reported as `activated`.
     vi.mocked(activatePortedNumber).mockClear();
     vi.mocked(activatePortedNumber).mockResolvedValue({
       attempted: false,

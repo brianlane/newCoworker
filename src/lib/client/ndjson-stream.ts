@@ -1,6 +1,6 @@
 /**
  * Tiny NDJSON line splitter shared by streaming dashboard surfaces
- * (currently /api/dashboard/chat). Pure helper — accepts a chunk of
+ * (currently /api/dashboard/chat). Pure helper, accepts a chunk of
  * decoded text and a buffer-state object, returns parsed JSON values
  * for any complete lines.
  *
@@ -12,7 +12,7 @@
  *
  *   1. Direct unit tests in `tests/client-ndjson-stream.test.ts`
  *      against the same line-buffer semantics the component uses.
- *   2. A stable contract surface — any future change to NDJSON
+ *   2. A stable contract surface, any future change to NDJSON
  *      framing (e.g. adding a length-prefix) lands in exactly one
  *      place.
  *
@@ -32,7 +32,7 @@ export type NdjsonBuffer = { buffer: string };
 export type NdjsonChunkResult<T> = {
   /** Parsed events from any complete lines in this chunk. */
   events: T[];
-  /** Number of lines that failed JSON.parse — caller-visible diagnostic. */
+  /** Number of lines that failed JSON.parse, caller-visible diagnostic. */
   parseErrorCount: number;
 };
 
@@ -58,7 +58,7 @@ export function consumeNdjsonChunk<T>(
 }
 
 /**
- * Drain any trailing partial line as a final attempt — used when the
+ * Drain any trailing partial line as a final attempt, used when the
  * upstream stream closes. A well-formed server always ends events with
  * `\n` (so this is a no-op), but tolerating clipped final newlines
  * means an intermediary stripping the trailing byte doesn't drop our

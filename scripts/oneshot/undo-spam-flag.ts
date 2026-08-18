@@ -1,9 +1,9 @@
 /**
- * undo-spam-flag.ts — reverse a WRONGFUL owner spam flag on a real contact.
+ * undo-spam-flag.ts, reverse a WRONGFUL owner spam flag on a real contact.
  *
  * Background (Jul 24 2026, KYP Ads / Chris Gregoris): James texted "stop
  * texting chris please" about a hot lead who was waiting on a personal call,
- * and the owner-operator turn mapped it onto flag_contact_spam — an
+ * and the owner-operator turn mapped it onto flag_contact_spam, an
  * irreversible STOP-list block plus a spam tag and a "declared this contact
  * SPAM" pinned note. The right primitive for that intent is
  * contacts.sms_reply_mode='suppress' (no default Coworker reply; manual
@@ -12,11 +12,11 @@
  *
  * SAFETY GATE: the script scans the contact's ENTIRE inbound history with
  * the same isStopKeyword matcher the compliance handler uses and ABORTS if
- * the person ever texted STOP themselves — a genuine customer opt-out is
+ * the person ever texted STOP themselves, a genuine customer opt-out is
  * sacred (CTIA / A2P 10DLC) and only the contact texting START may lift it.
  * Only tool-/owner-written suppression is reversible here.
  *
- * What --apply does (ordered so no sending gap ever opens — the opt-outs
+ * What --apply does (ordered so no sending gap ever opens, the opt-outs
  * clear LAST, after everything that limits sending is in place):
  *   1. Set sms_reply_mode via the shared dashboard helper (alias-aware,
  *      creates a minimal contact row when none exists). Default: suppress,
@@ -27,7 +27,7 @@
  *      opt-outs are touched.
  *   3. Contact cleanup: remove the "spam" tag and the pinned-note lines
  *      carrying the spam-declaration marker.
- *   4. sms_clear_opt_out RPC for every identity number — removes the
+ *   4. sms_clear_opt_out RPC for every identity number, removes the
  *      suppression rows.
  *
  * Usage:
@@ -87,7 +87,7 @@ const SPAM_NOTE_MARKER = "declared this contact SPAM";
 // ---------------------------------------------------------------------------
 // Current state.
 // ---------------------------------------------------------------------------
-// Read AFTER the contact resolve below builds the identity set — declared
+// Read AFTER the contact resolve below builds the identity set, declared
 // here, filled in once identitySet exists.
 let optRows: Array<{ sender_e164: string; kind: string; set_at: string }> = [];
 
@@ -117,7 +117,7 @@ const identitySet = [
   )
 ];
 
-// Suppression rows across the whole identity set — a spam flag opted out
+// Suppression rows across the whole identity set, a spam flag opted out
 // every number, so the undo must clear every number.
 const { data: optData, error: optErr } = await db
   .from("sms_opt_outs")
@@ -134,7 +134,7 @@ optRows = (optData ?? []) as typeof optRows;
 // SAFETY GATE: did this person ever text a STOP keyword themselves? Scan the
 // business's FULL inbound history (paginated past any row cap) and match the
 // sender per row from BOTH the customer_e164 column AND the raw Telnyx
-// payload — historical rows can carry the sender only in the payload (NULL /
+// payload, historical rows can carry the sender only in the payload (NULL /
 // mismatched column). Bodies are extracted with the SAME inboundSmsBody
 // helper the compliance handler uses (RCS nests text under a body object).
 // A genuine customer STOP must never be cleared by platform tooling.
@@ -145,7 +145,7 @@ const stopTexts: string[] = [];
 let scanned = 0;
 {
   // Compound keyset cursor (created_at, id): rows sharing a timestamp across
-  // a page boundary are still fetched — a strict created_at-only cursor
+  // a page boundary are still fetched, a strict created_at-only cursor
   // could skip them.
   let cursor: { createdAt: string; id: string } | null = null;
   for (;;) {
@@ -216,12 +216,12 @@ if (!APPLY) {
 }
 
 // The order below is deliberate: everything that limits sending (reply mode,
-// run cancels) lands BEFORE the opt-outs are cleared — while opt-out rows
+// run cancels) lands BEFORE the opt-outs are cleared, while opt-out rows
 // exist no path can text the person, so there is never a gap where an
 // uncanceled run could deliver.
 
 // ---------------------------------------------------------------------------
-// 1. Reply mode FIRST — via the shared helper the dashboard toggle uses
+// 1. Reply mode FIRST, via the shared helper the dashboard toggle uses
 //    (alias-aware, creates a minimal contact row when none exists, so a
 //    wrongful flag whose tag write failed still ends in the intended mode).
 // ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ await setContactSmsReplyMode(BUSINESS_ID, PHONE, REPLY_MODE as "suppress" | "aut
 console.log(`[oneshot] sms_reply_mode set to ${REPLY_MODE}`);
 
 // ---------------------------------------------------------------------------
-// 2. On suppress intent, stop any pending automation runs for the lead —
+// 2. On suppress intent, stop any pending automation runs for the lead,
 //    runs the original spam-flag sweep missed (or enrolled since) must be
 //    dead BEFORE the opt-outs stop shielding the recipient. Same shared core
 //    the set_contact_reply_mode suppress path uses.
@@ -237,7 +237,7 @@ console.log(`[oneshot] sms_reply_mode set to ${REPLY_MODE}`);
 if (REPLY_MODE === "suppress") {
   // The shared core cancels at most 25 runs per call (goal-jump parity
   // bound), so DRAIN it until a pass cancels nothing, then verify zero
-  // pending matches remain — only that proves it is safe to clear opt-outs.
+  // pending matches remain, only that proves it is safe to clear opt-outs.
   let totalCanceled = 0;
   for (let pass = 0; pass < 40; pass++) {
     const cancelResult = await cancelPendingRunsForLead(
@@ -305,7 +305,7 @@ if (contact) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Clear the suppression rows LAST (every identity number) — only after
+// 4. Clear the suppression rows LAST (every identity number), only after
 //    the reply mode and run cancels guarantee nothing is waiting to send.
 // ---------------------------------------------------------------------------
 if (optRows.length > 0) {

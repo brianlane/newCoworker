@@ -1,7 +1,7 @@
 /**
  * system_logs writer for Edge functions (Deno).
  *
- * Best-effort and NEVER throws — logging must never break the worker path it
+ * Best-effort and NEVER throws, logging must never break the worker path it
  * observes. Mirrors src/lib/db/system-logs.ts on the app side; the table is
  * created by 20260610010000_system_logs.sql and is service-role-only.
  */

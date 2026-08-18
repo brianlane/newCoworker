@@ -6,8 +6,8 @@
  * Byte-for-byte the Settings routes' semantics, because this core and those
  * routes must stay interchangeable:
  *  - hours merge OVER the stored value per day (omitted day = unchanged,
- *    explicit null = closed) — /api/account/business-profile.
- *  - timezone is validated the way its consumer formats with it (Intl) —
+ *    explicit null = closed), /api/account/business-profile.
+ *  - timezone is validated the way its consumer formats with it (Intl),
  *    /api/account/timezone.
  *  - after the committed column writes: refresh the canonical
  *    business_configs.profile_md block, then fire-and-forget the vault sync
@@ -107,7 +107,7 @@ export async function applyBusinessProfileUpdate(
 
   // Merge submitted days OVER the stored value. A patch carrying only some
   // weekdays must not silently drop the previously saved schedule for the
-  // others — omitting a day means "unchanged", an explicit null "closed".
+  // others, omitting a day means "unchanged", an explicit null "closed".
   let mergedHours: BusinessHours | undefined;
   if (patch.hours !== undefined) {
     mergedHours = stored ?? {};

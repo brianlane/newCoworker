@@ -29,7 +29,7 @@ import { logger } from "@/lib/logger";
  *
  * Documents are audience-gated per surface: customer channels (voice / sms
  * / webchat) read as `clients` and only see client-audience docs; the owner
- * dashboard reads as `staff` and sees everything. Retrieval is two-stage —
+ * dashboard reads as `staff` and sees everything. Retrieval is two-stage,
  * a deterministic term-overlap ranking picks which docs' full contents fit
  * the prompt budget (no second model round-trip; the voice path runs under
  * a 3s deadline), and the rest are surfaced as title+summary mentions.
@@ -76,7 +76,7 @@ export function classifyGeminiError(err: unknown): string {
 // gemini-3.5-flash-lite (GA Jul 21 2026): cheaper than the old
 // gemini-3-flash-preview default ($0.30/$2.50 vs $0.50/$3.00 per 1M),
 // stronger on this task class, 350 tok/s (matters under the 3s voice
-// deadline), and a GA id — the 404 fallback should not sit on a preview.
+// deadline), and a GA id, the 404 fallback should not sit on a preview.
 const GEMINI_LOOKUP_DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 type AskGeminiResult = {
@@ -116,8 +116,8 @@ async function askGemini(
         // cap of 200 the model spent ~190 tokens on hidden reasoning and
         // truncated the visible answer mid-sentence (live repro on Truly's
         // knowledge base: "What insurance products do we offer?" → "D&O").
-        // `minimal` gives the whole budget to the answer — a lookup over an
-        // already-retrieved 12k-char context needs no chain-of-thought —
+        // `minimal` gives the whole budget to the answer, a lookup over an
+        // already-retrieved 12k-char context needs no chain-of-thought,
         // and is also the fastest option under the 3s voice deadline
         // (~1.1-1.4s measured vs MAX_TOKENS truncation before). 300 keeps
         // the read-aloud backstop with headroom for list-style answers.
@@ -130,7 +130,7 @@ async function askGemini(
       return { answer: text, model, usage, inputChars };
     } catch (err) {
       // Empty replies (e.g. thinking-only output) are still billed by
-      // Google — meter them here, where the model is known, then rethrow.
+      // Google, meter them here, where the model is known, then rethrow.
       if (err instanceof GeminiEmptyError) {
         await meterGeminiSpendForBusiness({
           businessId,
@@ -184,22 +184,22 @@ export async function lookupBusinessKnowledge(
   if (business?.name) parts.push(`Business name: ${business.name}`);
   if (config?.identity_md) parts.push(`# identity.md\n${config.identity_md}`);
   // Structured business profile (hours/address/contact) rendered from the
-  // businesses row — the canonical answer source for "when are you open?".
+  // businesses row, the canonical answer source for "when are you open?".
   if (config?.profile_md) parts.push(`# profile.md\n${config.profile_md}`);
   if (config?.soul_md) parts.push(`# soul.md\n${config.soul_md}`);
   if (config?.website_md) parts.push(`# website.md\n${config.website_md}`);
 
   // Memory knowledge graph (per-tenant rollout via memory_graph_mode):
-  //   shadow — compute + log the graph context; the live answer path stays
+  //   shadow, compute + log the graph context; the live answer path stays
   //            byte-identical (the comparison feeds the Amy-first rollout).
-  //   active — the graph context SUPPLEMENTS the ranked-markdown memory
+  //   active, the graph context SUPPLEMENTS the ranked-markdown memory
   //            section (entity/relationship facts alongside the owner's
-  //            saved notes — the graph's identity lines alone must never
+  //            saved notes, the graph's identity lines alone must never
   //            crowd out the note that actually answers the question).
   // Both graph and memory sections are budgeted against the remaining
   // prompt space (header + joiner reserved) so neither can push the
   // assembled context past the cap and silently truncate documents.
-  // retrieveGraphContext never throws — a graph failure degrades to "".
+  // retrieveGraphContext never throws, a graph failure degrades to "".
   const graphHeader = "# memory graph (facts most relevant to the question)\n";
   let graphRetrieval = { context: "", matchedEntities: 0, facts: 0 };
   // Wall-clock cost of each retrieval path, recorded on the comparison
@@ -227,8 +227,8 @@ export async function lookupBusinessKnowledge(
 
   // Ranked memory retrieval (same treatment documents get): score active +
   // archived memory sections against the question and pack only the most
-  // relevant into a bounded share of the prompt. Archived facts — evicted
-  // from the active 14KB window — stay answerable here.
+  // relevant into a bounded share of the prompt. Archived facts, evicted
+  // from the active 14KB window, stay answerable here.
   const memoryHeader = "# memory.md (saved notes most relevant to the question)\n";
   const memoryBudget = Math.max(
     0,
@@ -251,7 +251,7 @@ export async function lookupBusinessKnowledge(
 
   if (graphMode === "shadow") {
     // Shadow telemetry: what the graph WOULD have contributed vs what the
-    // ranked-markdown path carried. Log-only — zero behavior change.
+    // ranked-markdown path carried. Log-only, zero behavior change.
     logger.info("kg_shadow_retrieval", {
       businessId,
       questionChars: question.length,
@@ -281,7 +281,7 @@ export async function lookupBusinessKnowledge(
 
   try {
     const result = await askGemini(question, context, businessId);
-    // Knowledge lookups run on the gemini-3 tier — meter them into the
+    // Knowledge lookups run on the gemini-3 tier, meter them into the
     // shared AI budget so the billing-page number matches Google's bill.
     await meterGeminiSpendForBusiness({
       businessId,
@@ -293,7 +293,7 @@ export async function lookupBusinessKnowledge(
     });
 
     // Durable comparison ledger (powers /admin/memory-graph). Recorded for
-    // shadow AND active tenants — the comparison must keep accumulating
+    // shadow AND active tenants, the comparison must keep accumulating
     // after a flip. Never fatal: a ledger write failure can't break a
     // lookup the caller is waiting on.
     if (graphMode === "shadow" || graphMode === "active") {

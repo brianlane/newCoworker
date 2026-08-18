@@ -12,7 +12,7 @@
  *   - LIVE BRIDGE: an Instagram scraping tool (Apify etc.) → Make.com/Zapier
  *     → POST /api/public/v1/flow-events with source "instagram_scraper".
  *   - BATCH IMPORT: a scraper's CSV export → /dashboard/aiflows/import-leads
- *     with the same source label — each row rides the identical webhook path.
+ *     with the same source label, each row rides the identical webhook path.
  *
  * Compliance is front and center: scraped prospects never consented (TCPA /
  * CAN-SPAM), so the starter flow files + tags them for owner review and
@@ -105,7 +105,7 @@ export function InstagramLeadsGuide({
   const [refreshing, setRefreshing] = useState(false);
 
   const template = instagramProspectTemplate();
-  // Only a flow that IS this starter counts as installed — a tenant with some
+  // Only a flow that IS this starter counts as installed, a tenant with some
   // other webhook flow still gets the one-click install (same rule as the
   // Meta-leads guide, Bugbot fe7aebd1).
   const existingFlow = webhookFlows.find((f) => f.name === template.name) ?? null;

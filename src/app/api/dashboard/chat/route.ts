@@ -743,7 +743,7 @@ export async function POST(request: Request) {
 
     // Settings → Coworker tools, batched: ONE query resolves every gate the
     // inline path may declare this turn (the email prompt block, knowledge
-    // lookup, and the action tools — worker parity with the Rowboat
+    // lookup, and the action tools, worker parity with the Rowboat
     // OwnerCoworker, whose tool-call route gates per call). Same per-key
     // semantics as isAgentToolEnabled: a read error resolves each key to its
     // registry default, so a DB blip degrades to the owner's expected state
@@ -866,7 +866,7 @@ export async function POST(request: Request) {
 
     // MCP-bridge tools (connector parity): the Settings toggles gate the
     // groups, and the bridge itself prunes any tool whose handler bar the
-    // caller's role cannot pass (per-tool, mirroring the handlers) — so a
+    // caller's role cannot pass (per-tool, mirroring the handlers), so a
     // staff turn is never handed a get_flow that can only refuse. Admin
     // view-as resolves owner through `callerRole` above and passes the pinned
     // business to the caller, which is what the per-call

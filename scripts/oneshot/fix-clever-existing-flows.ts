@@ -67,7 +67,7 @@ function fixAccept(def: AiFlowDefinition): AiFlowDefinition {
     if (s.type !== "browse_action" || s.id !== "accept") return s;
     const actions = Array.isArray(s.actions) ? [...s.actions] : [];
     // Don't prepend a second Accept if one already exists ANYWHERE in the
-    // sequence — re-running this (or a flow that already clicks Accept later in
+    // sequence, re-running this (or a flow that already clicks Accept later in
     // its wizard) must not double-accept the lead.
     const hasAcceptClick = actions.some(
       (a) =>

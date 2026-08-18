@@ -3,11 +3,11 @@
  *
  * When a tenant_email flow is disabled, inbound mail still lands on the
  * Emails page (`email_log`, source `tenant_mailbox_inbound`) but no run is
- * enqueued — the lead is never filed or contacted. Once the owner re-enables
+ * enqueued, the lead is never filed or contacted. Once the owner re-enables
  * the flow, this module replays those missed messages: each qualifying
  * email_log row is rebuilt into the exact trigger scope the live inbound
  * path would have produced (`tenantEmailTriggerScope`) and enqueued as a
- * BACKFILL run — the worker's `upsert_customer` step ends a backfill run
+ * BACKFILL run, the worker's `upsert_customer` step ends a backfill run
  * without outreach when the extracted lead already exists as a contact, so
  * a replay can never double-text someone the business already reached.
  *
@@ -17,7 +17,7 @@
  *
  * Reads/writes central email_log only (service role). Residency note: a
  * `vps`-read-mode tenant's mail content lives on their box, so this replay
- * (like the flow engine's own state) deliberately stays central — the rows
+ * (like the flow engine's own state) deliberately stays central, the rows
  * simply won't qualify there. Owner authorization is the API route's job.
  */
 
@@ -36,7 +36,7 @@ import { BACKFILL_SKIP_EXISTING_TRIGGER_KEY } from "../../../supabase/functions/
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Replays fan out SMS per new lead, so cap a single request well below the
- *  lead-import sheet cap — the missed-window use case is dozens, not
+ *  lead-import sheet cap, the missed-window use case is dozens, not
  *  thousands. */
 export const MAX_REPLAY_EMAILS = 100;
 
@@ -51,12 +51,12 @@ export type ReplayEmailsInput = {
 export type ReplayEmailOutcome = {
   emailLogId: string;
   /**
-   * enqueued  — a backfill run was queued for this email.
-   * duplicate — a run with this message's dedupe key already exists on the
+   * enqueued, a backfill run was queued for this email.
+   * duplicate, a run with this message's dedupe key already exists on the
    *             flow (earlier replay or the live webhook); nothing new queued.
-   * skipped   — the row doesn't qualify (not an unmatched inbound AI-mailbox
+   * skipped, the row doesn't qualify (not an unmatched inbound AI-mailbox
    *             email, or it has no usable body).
-   * error     — this row's enqueue failed; other rows still apply.
+   * error, this row's enqueue failed; other rows still apply.
    */
   status: "enqueued" | "duplicate" | "skipped" | "error";
   reason?: string;
@@ -79,7 +79,7 @@ type DefinitionLike = {
 
 /**
  * True when the flow starts from a tenant_email trigger (primary OR one of
- * the extra `triggers`) — the route's gate: replaying AI-mailbox mail into a
+ * the extra `triggers`), the route's gate: replaying AI-mailbox mail into a
  * flow that never reads it would just produce confusing failed runs. Same
  * structural-walk pattern as lead-backlog's flowHasWebhookTrigger.
  */
@@ -89,7 +89,7 @@ export function flowHasTenantEmailTrigger(definition: unknown): boolean {
   return (def?.triggers ?? []).some((t) => t?.channel === "tenant_email");
 }
 
-/** Steps that reach a customer/teammate — the sends a backfill must guard. */
+/** Steps that reach a customer/teammate, the sends a backfill must guard. */
 const OUTREACH_STEP_TYPES = new Set([
   "send_sms",
   "send_email",
@@ -107,14 +107,14 @@ type StepLike = {
 /**
  * True when every path through the flow files the lead (`upsert_customer`)
  * BEFORE any outreach step. The worker's backfill halt lives inside
- * `upsert_customer` — it can only protect sends that come after it — so
+ * `upsert_customer`, it can only protect sends that come after it, so
  * replaying into a flow that texts first (or never files the lead at all)
  * would break the "never double-text an existing contact" guarantee. The
  * route rejects such flows up front.
  *
  * Branch arms are checked with the upsert-seen state at the branch point;
  * an upsert INSIDE one arm deliberately does not credit steps after the
- * branch (the other arm may have skipped it) — conservative by design.
+ * branch (the other arm may have skipped it), conservative by design.
  * notify_owner is not outreach (owner-facing, same exemption as budgets).
  */
 export function flowUpsertsBeforeOutreach(definition: unknown): boolean {
@@ -141,7 +141,7 @@ export function flowUpsertsBeforeOutreach(definition: unknown): boolean {
 
 /**
  * One condition list per tenant_email trigger in the flow's set (OR across
- * lists, AND within one) — the same parse `loadTenantEmailFlows` does on the
+ * lists, AND within one), the same parse `loadTenantEmailFlows` does on the
  * live inbound path, so replay honors exactly the filters the flow would
  * have applied when the mail arrived.
  */
@@ -171,8 +171,8 @@ type ReplayableEmailRow = {
 /**
  * The first image attachment's `email-attachments:<path>` ref, mirroring the
  * live inbound path's {{trigger.image}}. Inbound rows omit `bucket` (the
- * bytes live in the default email-attachments bucket); anything else — an
- * outbound screenshot ref that somehow appears — is not an inbound image.
+ * bytes live in the default email-attachments bucket); anything else, an
+ * outbound screenshot ref that somehow appears, is not an inbound image.
  */
 function firstImageRef(attachments: StoredAttachment[] | null): string | undefined {
   const hit = (attachments ?? []).find(
@@ -184,7 +184,7 @@ function firstImageRef(attachments: StoredAttachment[] | null): string | undefin
 /**
  * The first document attachment's ref + filename, mirroring the live inbound
  * path's {{trigger.document}}: gated on the STORED PATH's extension, because
- * that suffix is exactly what docExtract classifies the type from — a
+ * that suffix is exactly what docExtract classifies the type from, a
  * MIME-only match with an extensionless path would hand the step a ref it
  * can only fail on.
  */
@@ -210,13 +210,13 @@ export type ReplayFlow = { id: string; definition: unknown };
 
 /**
  * Replay unmatched inbound AI-mailbox emails through `flow` as backfill
- * runs. Rows apply independently — one failure never blocks the rest. The
+ * runs. Rows apply independently, one failure never blocks the rest. The
  * caller (API route) has already verified the flow: exists for this
  * business, enabled, and carries a tenant_email trigger.
  *
  * Each email is re-evaluated against the flow's tenant_email trigger
  * conditions exactly like the live inbound path (`processInboundTenantEmail`)
- * would have — mail the flow intentionally filters out (wrong sender, no
+ * would have, mail the flow intentionally filters out (wrong sender, no
  * keyword match) is skipped, never force-fed into SMS outreach. A
  * `from_matches` contact-ref resolution failure fails CLOSED (skip), same as
  * live.
@@ -304,14 +304,14 @@ export async function replayInboundEmails(
     const bodyText = row.body_full ?? row.body_preview ?? "";
     const subject = row.subject ?? "";
     if (!bodyText.trim() && !subject.trim()) {
-      // Nothing for extract_text to read — a run would only fail.
+      // Nothing for extract_text to read, a run would only fail.
       summary.skipped += 1;
       summary.outcomes.push({ emailLogId: id, status: "skipped", reason: "empty message" });
       continue;
     }
     // Same dedupe namespace as the live webhook enqueue (`email:<messageId>`)
     // so replay + live delivery can never both fire the flow for one message.
-    // Rows predating provider-id capture key off the log row id instead —
+    // Rows predating provider-id capture key off the log row id instead,
     // still stable across repeated replays.
     const messageId = row.provider_message_id ?? `log:${row.id}`;
     const imageRef = firstImageRef(row.attachments);
@@ -352,7 +352,7 @@ export async function replayInboundEmails(
       if (!run) {
         // A run for this message already exists (earlier replay whose stamp
         // failed, or the live webhook). Look it up: a live/finished run means
-        // the mail is genuinely handled — re-stamp the log row so it stops
+        // the mail is genuinely handled, re-stamp the log row so it stops
         // reading as unmatched. A FAILED (or key-holding canceled) run still
         // owns the dedupe key without having recovered anything, so report
         // it as an error and leave the row unstamped rather than pretending

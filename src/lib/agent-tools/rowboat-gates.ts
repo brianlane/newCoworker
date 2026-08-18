@@ -7,7 +7,7 @@
  *
  * Lives in src/lib (not the route file) so the seed-parity CI test
  * (tests/agent-tool-seed-parity.test.ts) can assert registry ↔ seed ↔ gates
- * lockstep — a Next route module may only export HTTP handlers.
+ * lockstep, a Next route module may only export HTTP handlers.
  */
 
 import type { AgentKey } from "@/lib/agent-tools/registry";
@@ -49,7 +49,7 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
   send_whatsapp: { agentKey: "dashboard", toolKey: "send_whatsapp" },
   // Marketplace parity (all tools on all workers): the texting coworker
-  // declares the bare names, the dashboard coworker its `dashboard_` twins —
+  // declares the bare names, the dashboard coworker its `dashboard_` twins,
   // same cores, separate Settings toggles.
   send_email: { agentKey: "sms", toolKey: "send_email" },
   // Texting-coworker escalation channel (same rationale as the voice twin in
@@ -63,7 +63,7 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
   calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
   // Appointment lifecycle beyond the initial booking (Truly Issue 4): a
-  // reschedule updates the EXISTING provider event and a cancel deletes it —
+  // reschedule updates the EXISTING provider event and a cancel deletes it,
   // never a second event plus a lingering original. No webchat twins: the
   // anonymous surface must not mutate the owner's calendar.
   calendar_reschedule_appointment: {
@@ -94,7 +94,7 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
     toolKey: "calendar_join_waitlist"
   },
   // Website chat widget (anonymous internet surface): info + lead gen ONLY.
-  // This is the COMPLETE `webchat_*` allowlist — the WebchatCoworker agent
+  // This is the COMPLETE `webchat_*` allowlist, the WebchatCoworker agent
   // seed declares exactly these names, and because TOOL_GATES doubles as the
   // dispatch allowlist, no webchat-prefixed name can ever resolve to SMS,
   // email, call, or image-generation fulfilment. Keep it that way: when new
@@ -110,7 +110,7 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
     toolKey: "calendar_book_appointment"
   },
   // Business documents: share exists on every Rowboat surface (webchat's
-  // twin is inline-only — the handler never sends SMS/email for webchat);
+  // twin is inline-only, the handler never sends SMS/email for webchat);
   // list/update/set-expiration are dashboard-only by design (customers must
   // never mutate business knowledge), so no sms/webchat names exist for
   // them and unknown names fail closed.
@@ -136,13 +136,13 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   dashboard_run_aiflow: { agentKey: "dashboard", toolKey: "run_aiflow" },
   // The ONE narrow exception to the rule above, double-gated: the texting
   // coworker may enroll the CURRENT texter into a flow the owner explicitly
-  // flagged `options.agentInvocable` (per-flow opt-in, default off) — it can
+  // flagged `options.agentInvocable` (per-flow opt-in, default off), it can
   // never enumerate, start, or even see any other automation, and a live
   // enrollment is never restarted (loop guard in the core). Deliberately NO
   // webchat twin: the anonymous surface must not start automations at all.
   start_aiflow_for_contact: { agentKey: "sms", toolKey: "start_aiflow_for_contact" },
   // Notification toggles from the texting surface (KYP, Jul 20 2026: "let
-  // me know when clients text back"). ENABLE-ONLY at dispatch — the SMS
+  // me know when clients text back"). ENABLE-ONLY at dispatch, the SMS
   // Coworker serves customers and staff alike, so a prompt-injected
   // customer must never be able to SILENCE the owner's alerts; the worst
   // outcome is extra noise. Full control lives on identity-verified

@@ -2,17 +2,17 @@
  * Bring-your-own-number (BYON) orchestration.
  *
  * Sits between the dashboard API routes and the raw Telnyx porting client:
- *   - `runPortabilityCheck`     — wizard step 1 ("can my number move?")
- *   - `createByonPortRequest`   — wizard submit: create order → upload LOA +
+ *   - `runPortabilityCheck`, wizard step 1 ("can my number move?")
+ *   - `createByonPortRequest`, wizard submit: create order → upload LOA +
  *                                 bill → attach details → confirm → persist
  *                                 `number_port_requests` rows
- *   - `listByonPortRequests`    — status card data
- *   - `cancelByonPortRequest`   — abort a not-yet-ported order
- *   - `handlePortingStatusChange` — webhook: mirror Telnyx status onto the
+ *   - `listByonPortRequests`, status card data
+ *   - `cancelByonPortRequest`, abort a not-yet-ported order
+ *   - `handlePortingStatusChange`, webhook: mirror Telnyx status onto the
  *                                 row and alert the owner on milestones
  *
  * Service-role only. Owner authorization is the API route's job
- * (requireOwner before any call here) — same trust model as `src/lib/csv`.
+ * (requireOwner before any call here), same trust model as `src/lib/csv`.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -98,7 +98,7 @@ const STATUS_ORDER: Record<string, number> = {
  * - Forward moves always apply.
  * - Backward moves are legitimate (exception → in-process after a fix, FOC
  *   rescheduled, …) but indistinguishable from a delayed retry by status
- *   alone — so they only apply when the event's `occurred_at` is newer than
+ *   alone, so they only apply when the event's `occurred_at` is newer than
  *   our last write. A retry of an old event carries its original timestamp
  *   and is dropped instead of regressing the row.
  */
@@ -234,7 +234,7 @@ export type CreateByonPortRequestInput = {
 export type CreateByonPortRequestResult = {
   /**
    * One row per Telnyx porting order (a single submit can split into
-   * several). Each row's `status` reflects its own outcome — `submitted`
+   * several). Each row's `status` reflects its own outcome, `submitted`
    * when confirmed, `draft` with a SUBMIT_FAILED detail when the carrier
    * side rejected that order.
    */
@@ -252,7 +252,7 @@ function validateDocument(doc: ByonDocumentInput, label: string): void {
   if (!doc.filename?.trim()) {
     throw new ByonValidationError(`The ${label} upload is missing a filename.`);
   }
-  // base64 inflates bytes to 4·ceil(n/3) — compare in encoded space to avoid
+  // base64 inflates bytes to 4·ceil(n/3), compare in encoded space to avoid
   // decoding. Computed as the exact encoded length of a MAX-byte file so a
   // file at the advertised 5 MB limit (which passes the client's raw-size
   // check) is accepted here too.
@@ -289,7 +289,7 @@ export async function createByonPortRequest(
   const city = requireField(input.serviceAddress?.city, "Enter the service address city.");
   const state = requireField(input.serviceAddress?.state, "Enter the service address state.");
   const zip = requireField(input.serviceAddress?.zip, "Enter the service address ZIP code.");
-  // Validate optional inputs UP FRONT too — a bad billing phone must fail as
+  // Validate optional inputs UP FRONT too, a bad billing phone must fail as
   // a 400 before any Telnyx order/document exists, not mid-submit.
   const billingPhoneE164 = input.carrier?.billingPhone?.trim()
     ? requireE164(input.carrier.billingPhone)
@@ -308,7 +308,7 @@ export async function createByonPortRequest(
     throw new Error("Telnyx did not return a porting order for this number.");
   }
 
-  // Telnyx deletes unlinked documents after 30 minutes — upload right before
+  // Telnyx deletes unlinked documents after 30 minutes, upload right before
   // the PATCH that links them.
   const [loaDoc, billDoc] = await Promise.all([
     porting.uploadDocument({
@@ -351,7 +351,7 @@ export async function createByonPortRequest(
     .select();
   if (insertErr) throw new Error(`createByonPortRequest: ${insertErr.message}`);
 
-  // One phone number normally yields one order, but Telnyx can split — treat
+  // One phone number normally yields one order, but Telnyx can split, treat
   // each order independently so one carrier-side rejection doesn't strand
   // the others. `submitted` means "every order confirmed".
   let submitted = true;
@@ -394,7 +394,7 @@ export async function createByonPortRequest(
     } catch (err) {
       // Update/confirm can fail on carrier-side validation (e.g. requirements
       // not met). Keep the draft + documents so the owner can fix and
-      // resubmit instead of losing everything they typed — and keep going so
+      // resubmit instead of losing everything they typed, and keep going so
       // sibling orders in a split still submit.
       submitted = false;
       confirmError = errMessage(err);
@@ -406,7 +406,7 @@ export async function createByonPortRequest(
       });
     }
 
-    // Refresh the tracking row from the confirm snapshot — but only while it
+    // Refresh the tracking row from the confirm snapshot, but only while it
     // still holds the status we inserted. Telnyx can deliver a
     // status_changed webhook between confirm and this write; a newer webhook
     // state (exception details, ported, …) must never be clobbered by the
@@ -460,7 +460,7 @@ export async function createByonPortRequest(
     const fallback = ((insertedRows ?? []) as NumberPortRequestRow[]).find(
       (r) => r.telnyx_order_id === order.id
     );
-    // The refresh write failed but Telnyx already accepted the submit —
+    // The refresh write failed but Telnyx already accepted the submit,
     // return the state we KNOW is true (the confirm snapshot) rather than
     // the stale inserted draft, so `submitted: true` and `rows` agree. The
     // webhook heals the DB row itself.
@@ -521,7 +521,7 @@ export async function cancelByonPortRequest(
   }
 
   // Conditional on the status we checked: if a status webhook (e.g. ported)
-  // landed between the read and this write, don't regress the row — Telnyx's
+  // landed between the read and this write, don't regress the row, Telnyx's
   // cancel webhooks will record the cancel outcome if there is one.
   const { data: updatedRows, error: updateErr } = await db
     .from("number_port_requests")
@@ -566,7 +566,7 @@ export type PortingStatusChangeResult = {
   handled: boolean;
   /**
    * True exactly when this delivery CLAIMED the `ported` milestone (via the
-   * notified_status compare-and-swap) — exactly once across retries, crashed
+   * notified_status compare-and-swap), exactly once across retries, crashed
    * deliveries, and parallel workers, so activation hooks can key off it.
    */
   ported: boolean;
@@ -593,8 +593,8 @@ function statusSummary(status: string, phoneE164: string): string {
  * between them, and Telnyx's retry then looks like a benign redelivery. So
  * alerting keys off durable state instead of in-memory transitions:
  * `notified_status` records the last status an alert was claimed for, and a
- * compare-and-swap on it lets exactly one delivery — original, retry, or
- * parallel worker — send each milestone's alert (and, for `ported`, report
+ * compare-and-swap on it lets exactly one delivery, original, retry, or
+ * parallel worker, send each milestone's alert (and, for `ported`, report
  * the activation signal).
  */
 async function claimByonMilestone(
@@ -631,7 +631,7 @@ async function claimByonMilestone(
   }
   const claimedRow = ((data ?? []) as NumberPortRequestRow[])[0] ?? null;
   if (!claimedRow) {
-    // Another delivery claimed (or the status moved again) — they alert.
+    // Another delivery claimed (or the status moved again), they alert.
     return { claimed: false, row };
   }
 
@@ -707,7 +707,7 @@ export async function handlePortingStatusChange(
   // Compare-and-swap loop: each attempt updates conditionally on the status
   // it read. Concurrent writers (Telnyx retries, parallel workers, the
   // post-confirm refresh) make the CAS match zero rows; we then RE-READ and
-  // re-evaluate against the fresh row instead of discarding the event — a
+  // re-evaluate against the fresh row instead of discarding the event, a
   // legitimate transition retries, a duplicate of the winner's transition
   // dedupes (one alert), and a now-stale event drops via the ordering guard.
   const MAX_CAS_ATTEMPTS = 3;
@@ -731,7 +731,7 @@ export async function handlePortingStatusChange(
 
     // A status TRANSITION owns the details outright (clearing stale exception
     // codes when the port recovers). A redelivery of the same status only
-    // overwrites when it actually carries details — Telnyx retries can omit
+    // overwrites when it actually carries details, Telnyx retries can omit
     // them, and wiping stored exception codes would strip the dashboard of
     // its "here's how to fix it" hints.
     const payloadDetails = payload.status?.details ?? null;
@@ -753,7 +753,7 @@ export async function handlePortingStatusChange(
       JSON.stringify(statusDetail ?? null) === JSON.stringify(prior.status_detail ?? null);
     if (noop) {
       // Even with nothing to write, the milestone alert may still be
-      // unclaimed — e.g. the delivery that wrote this status crashed before
+      // unclaimed, e.g. the delivery that wrote this status crashed before
       // notifying, and this retry is what recovers the alert.
       const claim = await claimByonMilestone(db, prior, deps, orderId);
       return {
@@ -780,7 +780,7 @@ export async function handlePortingStatusChange(
 
     if (row) {
       // Alerting keys off durable state (notified_status), not this
-      // in-memory transition — see claimByonMilestone.
+      // in-memory transition, see claimByonMilestone.
       const claim = await claimByonMilestone(db, row, deps, orderId);
       return {
         handled: true,
@@ -807,7 +807,7 @@ export async function handlePortingStatusChange(
     }
     // Loop with the fresh row: the next attempt re-evaluates everything
     // against it. A winner that applied this very transition lands in the
-    // same-status path — the no-op check dedupes if our payload carries
+    // same-status path, the no-op check dedupes if our payload carries
     // nothing new, a same-status CAS merges newer details/FOC/support key if
     // it does, and the milestone claim picks up an alert the winner crashed
     // before sending.

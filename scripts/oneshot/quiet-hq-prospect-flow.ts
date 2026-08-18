@@ -1,5 +1,5 @@
 /**
- * quiet-hq-prospect-flow.ts — drop the per-prospect owner text from HQ's
+ * quiet-hq-prospect-flow.ts, drop the per-prospect owner text from HQ's
  * "Prospect outreach follow-through" flow.
  *
  * HQ's flow was installed from the template BEFORE the template dropped its

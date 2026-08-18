@@ -1,5 +1,5 @@
 /**
- * Email campaigns — single-campaign management.
+ * Email campaigns, single-campaign management.
  *
  *   PATCH  /api/dashboard/campaigns/:campaignId
  *            body: { businessId, subject?, bodyMd?, audienceTag?,
@@ -68,7 +68,7 @@ export async function PATCH(request: Request, context: RouteContext) {
           status: "cancelled"
         }));
       if (!cancelled) {
-        // Say what actually blocked it — "already sending" would be wrong
+        // Say what actually blocked it, "already sending" would be wrong
         // for a campaign that's already cancelled or finished.
         const current = await getEmailCampaign(body.data.businessId, campaignId);
         if (current?.status === "cancelled") {

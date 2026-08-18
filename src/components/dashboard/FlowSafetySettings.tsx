@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/Card";
 
 /**
  * Settings card for AiFlow safety preferences. Currently one toggle:
- * staff-contact tag protection — whether automation `update_contact` steps
+ * staff-contact tag protection, whether automation `update_contact` steps
  * may write lead-state tags ("New Lead", "Engaged", ...) on owner/employee
  * contacts. Protection defaults ON; the classic trap it prevents is a
  * teammate testing a flow with their own number and ending up tagged as a

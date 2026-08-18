@@ -3,7 +3,7 @@
 /**
  * Team access card (enterprise): invite additional logins with roles,
  * change roles, revoke access. Talks to /api/dashboard/team; the server
- * enforces the enterprise tier gate and the manage_team permission — this
+ * enforces the enterprise tier gate and the manage_team permission, this
  * card is rendered for enterprise businesses only, but nothing here is
  * trusted.
  */

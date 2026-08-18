@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 /** Bounded depth for the see-all view (the dashboard card shows 15). */
 const ALERTS_PAGE_LIMIT = 100;
 
-/** Status chips — labels match the badge terms the rows display. */
+/** Status chips, labels match the badge terms the rows display. */
 const TYPE_OPTIONS: FeedFilterOption[] = ALERT_FILTER_STATUSES.map((status) => ({
   value: status,
   label: formatAlertStatusLabel(status)

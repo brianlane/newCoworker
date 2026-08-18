@@ -10,8 +10,8 @@
  * Two modes (exactly one is configured, enforced by the authoring schema):
  *   - daily: `time` ("HH:MM") in `timezone`, optionally limited to
  *     `daysOfWeek` (0=Sunday..6=Saturday). Due for DAILY_CATCHUP_MINUTES
- *     after the wall-clock time passes — including across local midnight for
- *     near-midnight targets — so up to an hour of cron downtime still
+ *     after the wall-clock time passes, including across local midnight for
+ *     near-midnight targets, so up to an hour of cron downtime still
  *     triggers that day's run (the occurrence key is the occurrence's local
  *     date).
  *   - interval: `everyMinutes`. Each interval bucket of the epoch clock is
@@ -19,7 +19,7 @@
  *
  * Unlike quiet-hours (which fail OPEN so a corrupt config degrades to "no
  * quiet hours"), schedule helpers fail CLOSED: a malformed time/zone yields
- * null ("not due") — failing open here would enqueue a run on every tick.
+ * null ("not due"), failing open here would enqueue a run on every tick.
  */
 import { parseHHMM, zonedClock } from "./quiet_hours.ts";
 
@@ -36,14 +36,14 @@ export type ScheduleConfig = {
 export type ScheduleOccurrence = {
   /** Stable per-occurrence key (goes into the run's dedupe_key). */
   key: string;
-  /** The occurrence instant, ISO — lands in {{trigger}} context for audit. */
+  /** The occurrence instant, ISO, lands in {{trigger}} context for audit. */
   scheduledForIso: string;
 };
 
 /** How long after the daily wall-clock time a missed tick may still fire. */
 export const DAILY_CATCHUP_MINUTES = 60;
 
-/** Floor for interval mode — the worker tick itself is only ~1/minute. */
+/** Floor for interval mode, the worker tick itself is only ~1/minute. */
 export const MIN_EVERY_MINUTES = 15;
 
 const WEEKDAY_INDEX: Record<string, number> = {
@@ -124,7 +124,7 @@ export function scheduleDue(nowMs: number, cfg: ScheduleConfig): ScheduleOccurre
   // occurrence must use yesterday's date for its dedupe key and weekday
   // check. The 1440-minute day assumption is off by ±60 on DST-transition
   // days, which only matters for near-midnight schedules on those two days a
-  // year — and the dedupe key keeps any double-fire to a benign 23505.
+  // year, and the dedupe key keeps any double-fire to a benign 23505.
   const sincePrev = clock.minutesOfDay + 1440 - targetMin;
   if (sincePrev >= DAILY_CATCHUP_MINUTES) return null;
   const prevDate = zonedDate(nowMs - (clock.minutesOfDay + 1) * 60_000, cfg.timezone);

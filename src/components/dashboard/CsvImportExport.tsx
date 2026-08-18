@@ -44,7 +44,7 @@ const DATASETS: { type: CsvType; title: string; blurb: string }[] = [
 
 /**
  * CSV import/export cards (modeled on BizBlasts' /manage/csv page): per
- * dataset — export the current data, download a template, or upload a CSV.
+ * dataset, export the current data, download a template, or upload a CSV.
  * Imports run synchronously and report created/updated/skipped plus per-row
  * errors inline.
  */

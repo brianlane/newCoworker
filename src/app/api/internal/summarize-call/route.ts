@@ -2,7 +2,7 @@
  * Internal, cron-triggered endpoint that generates the AI summary + sentiment
  * for a single voice call transcript (Standard/Enterprise perk).
  *
- * Why this exists: the summarizer lives in src/lib (Next.js runtime) — it
+ * Why this exists: the summarizer lives in src/lib (Next.js runtime), it
  * needs the Gemini key and meterGeminiSpendForBusiness, which aren't
  * available from a Deno Edge function. The Edge cron sweep
  * (`call-summary-sweep`) scans eligible rows and posts here once per row.

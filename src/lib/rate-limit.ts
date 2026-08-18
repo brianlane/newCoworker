@@ -84,7 +84,7 @@ export const RATE_LIMITS = {
  * `app_rate_limit_hit` SECURITY DEFINER RPC, service_role-only).
  *
  * Why: the in-memory `rateLimit` above uses a per-process `Map`, which on
- * Vercel serverless is per-isolate and ephemeral — it barely binds across
+ * Vercel serverless is per-isolate and ephemeral, it barely binds across
  * the fleet. This variant records the hit in a shared table so the window
  * is enforced globally, which matters most for UNAUTHENTICATED,
  * cost-amplifying endpoints (LLM-backed onboarding chat / website preview)

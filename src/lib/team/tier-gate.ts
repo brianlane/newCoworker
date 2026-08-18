@@ -2,7 +2,7 @@
  * Team access (additional logins with roles) is an ENTERPRISE-tier feature.
  *
  * The gate lives server-side so every invite/role write enforces it
- * regardless of what the UI shows — same pattern as the BYON tier gate
+ * regardless of what the UI shows, same pattern as the BYON tier gate
  * (src/lib/byon/tier-gate.ts). Revoking access and reading the roster stay
  * allowed on any tier, so a downgraded business can always shed members but
  * never add them.

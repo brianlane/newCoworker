@@ -1,5 +1,5 @@
 /**
- * Public self-serve booking page — the durable, shareable link
+ * Public self-serve booking page, the durable, shareable link
  * (/book/<ncb_token>) a business hands to anyone who should book time on
  * its calendar. Fully public by design (no login, no account): the
  * unguessable capability token is the only credential, exactly like the

@@ -93,7 +93,7 @@ function OnboardSuccessContent() {
         if (typeof verifiedBusinessId === "string" && verifiedBusinessId) {
           // Stamp the verified businessId into local state so the
           // CoworkerProvisioningProgress widget can mount immediately
-          // when the user transitions to "provisioning" — without this,
+          // when the user transitions to "provisioning", without this,
           // the widget has to wait on the first /api/business/status
           // poll roundtrip, leaving a 5-second blank gap where the user
           // sees no progress signal.
@@ -123,7 +123,7 @@ function OnboardSuccessContent() {
   }, [sessionId]);
 
   useEffect(() => {
-    // Onboarding is over once the coworker is online — scrub the local
+    // Onboarding is over once the coworker is online, scrub the local
     // draft so its resumable businessId can't be replayed into a fresh
     // onboarding months later against this (now live) business.
     if (status === "online") clearOnboardingStorage();
@@ -136,7 +136,7 @@ function OnboardSuccessContent() {
 
     // Provisioning is server-side (Stripe webhook → orchestrator). It
     // typically completes in 2–5 minutes but can take longer. We poll
-    // /api/business/status purely to detect the "online" terminal — the
+    // /api/business/status purely to detect the "online" terminal, the
     // real percent + failure UI comes from the embedded
     // CoworkerProvisioningProgress widget below, which polls
     // /api/provisioning/status on its own. Previously this polled for
@@ -205,7 +205,7 @@ function OnboardSuccessContent() {
     if (!sessionId) {
       // The Stripe-signed sessionId is the credential the server uses to
       // mint the auth user. Without it, /api/onboard/set-password has no
-      // way to bind the password to a paid checkout — refuse rather than
+      // way to bind the password to a paid checkout, refuse rather than
       // silently dropping the request.
       setError(t("errSessionExpired"));
       return;
@@ -247,7 +247,7 @@ function OnboardSuccessContent() {
         // case (see /api/onboard/set-password's docstring for the
         // takeover attack this prevents). The customer's payment is
         // still bound to their business via /api/onboard/finalize-signup,
-        // so steering them to /login is the correct recovery — they
+        // so steering them to /login is the correct recovery, they
         // sign in with their existing credentials and the new business
         // shows up under the same email-keyed authorization.
         window.history.replaceState({}, "", "/onboard/success");
@@ -270,7 +270,7 @@ function OnboardSuccessContent() {
 
       if (signInError) {
         // The set-password call above already passed, so the auth user
-        // exists with this password — but the immediate sign-in didn't
+        // exists with this password, but the immediate sign-in didn't
         // establish a session. Steer the user to /login (via
         // `awaiting_confirmation`) to retry with a clean cookie jar.
         window.history.replaceState({}, "", "/onboard/success");
@@ -287,7 +287,7 @@ function OnboardSuccessContent() {
       // localStorage when /api/onboard/finalize-signup succeeded, so
       // any further overlay just risks drift if the user ever edits
       // it from another tab. (Also flagged by CodeQL js/clear-text-
-      // storage-of-sensitive-information — the field was already
+      // storage-of-sensitive-information, the field was already
       // present, so refraining from re-writing keeps the same data
       // surface without adding a new write site.)
       if (onboardingData) {

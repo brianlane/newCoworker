@@ -2,13 +2,13 @@
  * Internal endpoint that runs one calendar trigger poll.
  *
  * Kicked ~1/min by the ai-flow-worker Edge Function's cron tick (the worker
- * can't poll calendars itself — the Nango client + connection verification
+ * can't poll calendars itself, the Nango client + connection verification
  * live in this Next.js runtime), exactly like /api/internal/aiflow-email-poll.
  * Reads recently-created and soon-starting events for every calendar watched
  * by an enabled calendar-triggered flow and enqueues matching ai_flow_runs;
  * the worker then claims those on its next tick like any other queued run.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape and
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape and
  * secret as the other /api/internal/* endpoints.
  *
  * Self-healing: dedupe keys make repeat polls idempotent, so a failed or
@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<Response> {
     });
     // Calendly booking → appointment_booked goal sweep rides the same tick
     // (per-business failures already isolate inside; this guard keeps a
-    // sweep-level failure from masking the poll result — bookings stay
+    // sweep-level failure from masking the poll result, bookings stay
     // fresh for the whole lookback, so the next tick retries).
     const bookingGoals = await sweepCalendlyBookingGoals().catch((err) => {
       console.error("aiflow-calendar-poll booking-goal sweep", err);

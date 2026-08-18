@@ -96,7 +96,7 @@ function chainToDefinition(row: ChainRow): AiFlowDefinition {
     // AiFlow schema bounds ringSeconds to [5,120], so clamp positive legacy values
     // into that range (3 -> 5, 200 -> 120) to preserve timing intent rather than
     // dropping them (which would silently fall back to 20s). Non-positive/NaN ->
-    // undefined, which the compiler defaults to 20 — matching legacy behavior.
+    // undefined, which the compiler defaults to 20, matching legacy behavior.
     const ringRaw = typeof o.ring_secs === "number" ? o.ring_secs : Number(o.ring_secs);
     const ringSeconds = Number.isFinite(ringRaw) && ringRaw > 0
       ? Math.min(120, Math.max(5, Math.floor(ringRaw)))
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
   // Defined as closures over `db` (rather than typed top-level helpers) so they
-  // use the client's inferred schema type — aliasing it via ReturnType erases
+  // use the client's inferred schema type, aliasing it via ReturnType erases
   // it to `never` rows under the current supabase-js typings.
 
   /** All voice-flow caller numbers already in ai_flows for a business. */
@@ -244,7 +244,7 @@ async function main(): Promise<void> {
       continue;
     }
     // One unmigratable legacy row (e.g. a malformed E.164 that fails the
-    // authoring schema) must NOT abort the whole run — log it and keep going so
+    // authoring schema) must NOT abort the whole run, log it and keep going so
     // later businesses/rows still migrate.
     let definition: AiFlowDefinition;
     try {
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
       summary: `ring ${rings} human(s)${hasAi ? " + AI takeover" : ""}`,
       definition
     });
-    // Only an ENABLED legacy chain wins over a transfer rule at runtime — the
+    // Only an ENABLED legacy chain wins over a transfer rule at runtime, the
     // voice webhook skips a disabled chain and falls through to the rule. So a
     // disabled chain must NOT reserve from_e164 against the rule loop, or the
     // live blind-transfer rule for the same caller would never migrate. (The

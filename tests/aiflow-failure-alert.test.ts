@@ -68,7 +68,7 @@ describe("describeLead", () => {
   });
 
   it("falls back to booking-flow invitee vars and email contact (KYP Jul 22 alerts)", () => {
-    // The failed booking-confirmation runs carried invitee_* vars only — the
+    // The failed booking-confirmation runs carried invitee_* vars only, the
     // alert must name the person, not say "an unidentified lead".
     expect(
       describeLead({

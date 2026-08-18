@@ -1,5 +1,5 @@
 /**
- * Birthday trigger — pure due-check helpers.
+ * Birthday trigger, pure due-check helpers.
  *
  * The worker's cron tick sweeps enabled birthday flows: a contact whose
  * stored birthday (contacts.birthday, a DATE) is "today" in the trigger's

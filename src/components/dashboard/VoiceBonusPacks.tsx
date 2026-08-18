@@ -7,7 +7,7 @@
  * is the best effective $/min across the configured packs. Stripe Prices are
  * immutable by id, so as long as the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s are
  * rotated in the same deploy as any env price change, UI ≡ Stripe charge by
- * construction — see the pricing-contract comment in
+ * construction, see the pricing-contract comment in
  * `src/lib/billing/voice-bonus-packs.ts` for the operator rule.
  *
  * Purchase flow:

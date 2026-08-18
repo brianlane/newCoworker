@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Full `deploy-client.sh` rollout across every per-tenant VPS (automated —
+ * Full `deploy-client.sh` rollout across every per-tenant VPS (automated,
  * uses the same programmatic SSH path as `redeploy-voice-bridge.ts`, not an
  * interactive SSH session).
  *
@@ -12,7 +12,7 @@
  *      platform secrets from the caller's process env)
  *
  * This re-seeds Rowboat Mongo (workflow/agents), rewrites vault, restarts
- * voice-bridge + chat-worker, etc. — the same as initial provision's deploy
+ * voice-bridge + chat-worker, etc., the same as initial provision's deploy
  * phase, **without** buying a new VM.
  *
  * Usage:
@@ -26,12 +26,12 @@
  * token (the bearer / Rowboat tool-call JWT secret / outbound API key), resolved
  * or minted per business from `vps_gateway_tokens` and CONFIRMED after a
  * successful deploy. The shared platform `ROWBOAT_GATEWAY_TOKEN` env value is NO
- * LONGER injected onto boxes here — it stays a platform-internal secret. Running
+ * LONGER injected onto boxes here, it stays a platform-internal secret. Running
  * this against a legacy box still on the shared token therefore ROTATES it onto a
  * fresh per-tenant token.
  *
  * Required env (mirrors orchestrator + voice-bridge redeploy):
- *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL alone — we alias it for you)
+ *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL alone, we alias it for you)
  *   SUPABASE_SERVICE_ROLE_KEY
  *   HOSTINGER_API_TOKEN
  *   TELNYX_* (see orchestrate.ts envVars), etc.
@@ -41,8 +41,8 @@
  * Supabase for each business so a fleet redeploy does not blank the bridge.
  *
  * Optional:
- *   INTERNAL_CRON_SECRET — written into chat-worker .env (summarizer callback)
- *   CLOUDFLARE_TUNNEL_TOKEN — omit on redeploy if tunnel already on host;
+ *   INTERNAL_CRON_SECRET, written into chat-worker .env (summarizer callback)
+ *   CLOUDFLARE_TUNNEL_TOKEN, omit on redeploy if tunnel already on host;
  *      empty avoids re-running `cloudflared service install`
  *
  * Keep {@link buildDeployEnvPrefix} in sync with `runOrchestrator`'s envVars
@@ -86,7 +86,7 @@ import {
  * Must stay aligned with `runOrchestrator` deploy phase (orchestrate.ts ~822).
  *
  * `gatewayToken` is the PER-TENANT gateway token for this box (resolved/minted by
- * the caller), NOT the shared platform `ROWBOAT_GATEWAY_TOKEN` env value — the box's
+ * the caller), NOT the shared platform `ROWBOAT_GATEWAY_TOKEN` env value, the box's
  * `ROWBOAT_GATEWAY_TOKEN`, its Rowboat tool-call JWT secret, and its outbound API key
  * are all this unique token, so a redeploy rotates the box onto its own secret instead
  * of re-stamping the shared one.
@@ -121,7 +121,7 @@ function buildDeployEnvPrefix(
     // deploy-client.sh re-pins /opt/newcoworker-repo to NEWCOWORKER_REPO_REF
     // (default "main") before it rsyncs+builds chat-worker / voice-bridge /
     // aiflow-render. Pass the requested ref through so `--ref` actually controls
-    // what gets BUILT, not just which deploy-client.sh runs — otherwise a branch
+    // what gets BUILT, not just which deploy-client.sh runs, otherwise a branch
     // redeploy silently builds those components from main.
     ["NEWCOWORKER_REPO_REF", repoRef],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ""],
@@ -136,7 +136,7 @@ function buildDeployEnvPrefix(
     // Tenant boxes get the PRODUCTION Gemini key. Since the Jul 2026 key
     // split (docs/GEMINI-SPEND.md), the laptop .env's GOOGLE_API_KEY is the
     // INTERNAL engineering key (CI/debug/e2e spend) and the tenant key lives
-    // in GOOGLE_API_KEY_TENANTS — prefer it so a fleet redeploy can never
+    // in GOOGLE_API_KEY_TENANTS, prefer it so a fleet redeploy can never
     // stamp the internal key onto a customer box (which would misattribute
     // tenant spend as engineering spend in AI Studio).
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY_TENANTS ?? process.env.GOOGLE_API_KEY ?? ""],
@@ -249,7 +249,7 @@ async function redeployOne(
   // token, or mint a fresh PENDING one, and inject IT as the box's
   // ROWBOAT_GATEWAY_TOKEN. After a successful deploy we CONFIRM it
   // (`markGatewayTokenDeployed`), which revokes any older token and flips
-  // outbound/JWT verification onto the per-tenant secret — mirroring
+  // outbound/JWT verification onto the per-tenant secret, mirroring
   // orchestrate.ts. This is what lets a redeploy ROTATE a legacy box off the
   // shared platform token onto its own unique one, and keeps a routine fleet
   // redeploy from ever re-stamping the shared token over a rotated tenant.
@@ -258,7 +258,7 @@ async function redeployOne(
     existing ?? (await issueGatewayToken(target.businessId, { label: "vps-redeploy" }));
   const tier = deployTierFromBusinessTier(target.tier);
   // Deployed-box resolver: an unpinned starter is a legacy KVM2 box, not the
-  // new kvm1 default — the redeploy profile must match the actual hardware.
+  // new kvm1 default, the redeploy profile must match the actual hardware.
   const vpsSize = resolveDeployedVpsSize(tier, target.vpsSize);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
   // Same gate as orchestrate.ts: REAL tier + data_residency_mode past
@@ -268,7 +268,7 @@ async function redeployOne(
     target.tier === "enterprise" &&
     (target.dataResidencyMode ?? "supabase") !== "supabase";
   // Designated models + voice (enterprise): mirror the orchestrator so a
-  // fleet redeploy APPLIES saved per-tenant overrides — the admin UI
+  // fleet redeploy APPLIES saved per-tenant overrides, the admin UI
   // promises "applies at next redeploy", and this path is the redeploy.
   let modelOverrides: EnterpriseModels | null = null;
   if (target.tier === "enterprise") {
@@ -298,7 +298,7 @@ async function redeployOne(
   }
   // Reconcile the tunnel ingress with the residency gate. The redeploy path
   // is how an admin residency flip reaches an EXISTING box, and cloudflared
-  // (config_src=cloudflare) picks ingress changes up remotely — without this
+  // (config_src=cloudflare) picks ingress changes up remotely, without this
   // an enable leaves no data-* route and a disable leaves a public route
   // pointing at a stopped service. PUT /configurations replaces the whole
   // ingress array, so dataEnabled:false naturally drops the data rule; the

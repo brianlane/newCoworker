@@ -1,8 +1,8 @@
 /**
  * AiFlow test runs ("Test with a contact", GHL's Test Workflow).
  *
- * A test run executes the REAL engine — trigger scope, templating,
- * extraction, branching, goals — but never touches the outside world or the
+ * A test run executes the REAL engine, trigger scope, templating,
+ * extraction, branching, goals, but never touches the outside world or the
  * CRM: every side-effecting action is SIMULATED (its fully-rendered output
  * recorded as the step result) and every wait resolves instantly, so the
  * whole flow plays out in seconds on the runs page.
@@ -34,7 +34,7 @@ export function isTestModeTrigger(trigger: Record<string, unknown> | undefined):
 
 /**
  * Simulate one planned action for a test run. Returns the step result to
- * record (already fully rendered — exactly what the live run would have
+ * record (already fully rendered, exactly what the live run would have
  * sent/done), or null when the action is safe to execute for real. May stamp
  * scope vars the same way the live path would (wait markers, saveAs values)
  * so downstream steps and branches behave identically.
@@ -46,7 +46,7 @@ export function simulateTestAction(
   switch (action.kind) {
     case "send_sms":
       // A planner skip (templated recipient resolved to nothing usable) must
-      // read as the SKIP the live run would record — not as a successful
+      // read as the SKIP the live run would record, not as a successful
       // send to the "(group thread)" display fallback.
       if (action.skipReason) {
         return { simulated: "send_sms", skipped: action.skipReason };
@@ -132,7 +132,7 @@ export function simulateTestAction(
       // No model call is made (budget-metered); the saveAs var gets a visible
       // placeholder so later templates render distinguishably.
       if (action.skipReason) {
-        // Live skips stamp the vars "" — mirror that so later when-guards and
+        // Live skips stamp the vars "", mirror that so later when-guards and
         // templates behave identically in test and production.
         scope.vars[action.saveAs] = "";
         scope.vars[`${action.saveAs}_document_id`] = "";
@@ -172,7 +172,7 @@ export function simulateTestAction(
         source: action.sourceRef,
         saved,
         ...(action.fileTitle ? { would_file_as: action.fileTitle } : {}),
-        // Record sinks are platform-side writes — report intent only.
+        // Record sinks are platform-side writes, report intent only.
         ...(action.fileContactPhone !== undefined || action.fileContactField
           ? {
               would_link_contact: action.fileContactField
@@ -262,8 +262,8 @@ export function simulateTestAction(
       };
     case "place_ai_call": {
       // No call is placed (voice minutes are metered). Resolve instantly with
-      // the outcome the configured happy path would produce — "transferred"
-      // when a live transfer is configured, else "answered" — so the
+      // the outcome the configured happy path would produce, "transferred"
+      // when a live transfer is configured, else "answered", so the
       // follow-up gating downstream plays out its success branch. A planner
       // skip (no usable callee phone) mirrors the live not_placed sentinel.
       if (action.skipReason) {

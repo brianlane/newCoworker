@@ -1,6 +1,6 @@
 /**
  * CSV shaping for the analytics export (BizBlasts ExportService analog).
- * Pure — the API route handles auth/tier gating and the HTTP envelope.
+ * Pure, the API route handles auth/tier gating and the HTTP envelope.
  */
 
 import { serializeCsv } from "@/lib/csv/csv";

@@ -86,7 +86,7 @@ describe("resolveOutputTarget", () => {
 
   it("maps pdf_retypeset onto an html-artifact target whose format word is the HTML contract", () => {
     const target = resolveOutputTarget("pdf_retypeset", "application/pdf");
-    // text/html is the ARTIFACT mime — the explicit renderer discriminator;
+    // text/html is the ARTIFACT mime, the explicit renderer discriminator;
     // the download/filed representation becomes application/pdf.
     expect(target.mime).toBe("text/html");
     expect(target.extension).toBe("pdf");

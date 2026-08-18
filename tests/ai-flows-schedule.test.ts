@@ -6,7 +6,7 @@ import {
   zonedDate
 } from "../supabase/functions/_shared/ai_flows/schedule";
 
-// Phoenix never observes DST, so UTC-7 holds year-round — exact-instant
+// Phoenix never observes DST, so UTC-7 holds year-round, exact-instant
 // assertions stay stable no matter when the suite runs.
 const PHX = "America/Phoenix";
 /** Epoch ms for a Phoenix wall-clock time on 2026-06-09 (a Tuesday, UTC-7). */
@@ -52,7 +52,7 @@ describe("scheduleDue, daily mode", () => {
   });
   it("stays due across local midnight for a near-midnight target", () => {
     const nearMidnight = { timezone: PHX, time: "23:30" };
-    // 2026-06-10 00:15 Phoenix is 45 minutes past 2026-06-09 23:30 — inside
+    // 2026-06-10 00:15 Phoenix is 45 minutes past 2026-06-09 23:30, inside
     // the catch-up window, keyed to the occurrence's (previous) local date.
     const due = scheduleDue(phx(24, 15, 5), nearMidnight);
     expect(due).not.toBeNull();
@@ -69,7 +69,7 @@ describe("scheduleDue, daily mode", () => {
   });
   it("an early-morning target is not due just after midnight", () => {
     // 00:10 with an 00:30 target: today's occurrence hasn't happened and
-    // yesterday's was a full day ago — neither branch may fire.
+    // yesterday's was a full day ago, neither branch may fire.
     expect(scheduleDue(phx(24, 10), { timezone: PHX, time: "00:30" })).toBeNull();
   });
   it("fails closed on malformed time or zone", () => {

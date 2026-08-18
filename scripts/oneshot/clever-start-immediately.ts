@@ -6,13 +6,13 @@
  * on enqueue instead of leaving the run for the next tick. HomeLight already has
  * it; two Clever flows have the same shape:
  *
- *   Clever Cue Text     — "Clever has a customer ready to connect NOW", and the
+ *   Clever Cue Text, "Clever has a customer ready to connect NOW", and the
  *                         flow's whole job is to reply Y and arm the live-transfer
  *                         window. Measured queue-to-done on her last 12 runs:
  *                         22s median, 52s worst. That is a person waiting on the
  *                         line while a queued run sits there. Clever sends no
  *                         "no longer available" text, so the loss is silent.
- *   Clever Lead - Accept — its second step ACCEPTS the referral in the portal,
+ *   Clever Lead - Accept, its second step ACCEPTS the referral in the portal,
  *                         and the flow already guards on the page saying
  *                         "already been claimed", which is direct evidence other
  *                         agents race for the same lead.

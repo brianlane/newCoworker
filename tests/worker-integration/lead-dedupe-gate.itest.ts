@@ -13,9 +13,9 @@ import {
 } from "./harness";
 
 /**
- * Post-extraction lead-dedupe gate (options.dedupeLeadRuns — Amy's
+ * Post-extraction lead-dedupe gate (options.dedupeLeadRuns, Amy's
  * Realtor.com $1.75M double-route, 2026-07-19): a run whose extracted lead
- * identity (phone/email) — and property, when both runs carry an address —
+ * identity (phone/email), and property, when both runs carry an address,
  * matches an EARLIER non-failed run of the same flow must be canceled
  * before its first communication step. Sender-keyed re-entry can't cover
  * this: realtor.com's relay texts arrive with an empty shared sender.
@@ -52,7 +52,7 @@ function dedupeFlow(options: Record<string, unknown> = { dedupeLeadRuns: true })
 /**
  * Vars pre-seeded as extract_text would have produced them (the itest stack
  * has no Gemini key, and an extract step would overwrite seeded vars with
- * empties). The gate reads scope.vars either way — extraction correctness
+ * empties). The gate reads scope.vars either way, extraction correctness
  * is pinned by its own suites.
  */
 function leadVars(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -144,7 +144,7 @@ describe("post-extraction lead-dedupe gate (real worker)", () => {
     expect((await getRun(db, first)).status).toBe("done");
 
     // A relay text the extraction got nothing from (the Jennifer Phillips
-    // reply shape) — with the tightened trigger this run shouldn't exist at
+    // reply shape), with the tightened trigger this run shouldn't exist at
     // all, but if one does enroll, the gate must not guess on a bare name.
     const second = await enqueueRun(db, flowId, biz, TRIGGER, {
       lead_name: "Jennifer Phillips"

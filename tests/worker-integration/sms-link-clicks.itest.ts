@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { seedBusiness, serviceDb } from "./harness";
 
 /**
- * The `sms_link_click` RPC against REAL Postgres — the decision core of the
+ * The `sms_link_click` RPC against REAL Postgres, the decision core of the
  * Jul 18 KYP triple-notification incident (PR #753, fix 2): the owner got
  * three simultaneous "opened your booking link" alerts because carrier /
  * device link-preview PREFETCH hits (observed 3-16s after delivery) counted
@@ -13,7 +13,7 @@ import { seedBusiness, serviceDb } from "./harness";
  * The fix lives in plpgsql (migration 20260814030000), which the unit layer
  * can only mock: clicks inside the 60s prefetch window are logged but
  * flagged `likely_prefetch` and never notify; `should_notify` is true for
- * exactly ONE click per link — the first non-prefetch one — because
+ * exactly ONE click per link, the first non-prefetch one, because
  * `notified_at` is stamped in the same locked transaction that reports it.
  * This suite replays the incident's click pattern (a burst of delivery-time
  * prefetches, then a real tap, then more taps) and pins the alert count.
@@ -21,7 +21,7 @@ import { seedBusiness, serviceDb } from "./harness";
  * Out of scope here (unit-tested in tests/link-click-notify.test.ts and
  * tests/link-preview-bots.test.ts): the /s/[code] route's bot-UA / HEAD
  * short-circuit and the per-contact hourly collapse in the Next notify
- * path — both sit in front of / behind this RPC.
+ * path, both sit in front of / behind this RPC.
  */
 
 type ClickResult = {
@@ -106,7 +106,7 @@ describe("sms_link_click RPC (real Postgres), the triple-notification incident p
     const link = await mintLink(biz);
 
     // The incident: three preview/scanner hits seconds after the SMS went
-    // out. All land inside the 60s prefetch window — logged and counted,
+    // out. All land inside the 60s prefetch window, logged and counted,
     // flagged, and NONE may notify (pre-fix each was a "first click" race
     // candidate and the owner got three alerts).
     for (let i = 1; i <= 3; i++) {
@@ -133,7 +133,7 @@ describe("sms_link_click RPC (real Postgres), the triple-notification incident p
     expect(row.notified_at).not.toBeNull();
 
     // Every later tap (re-opens, forwards) is one engagement already
-    // alerted on — never a second notification from this link.
+    // alerted on, never a second notification from this link.
     for (let i = 0; i < 2; i++) {
       const again = await click(link.code);
       expect(again.is_prefetch).toBe(false);
@@ -161,7 +161,7 @@ describe("sms_link_click RPC (real Postgres), the triple-notification incident p
   it("a link that only ever gets prefetch hits still has its one alert available for a later tap", async () => {
     // The regression the notified_at design closes: under the old
     // "notify on the first click" rule, a suppressed prefetch first click
-    // would have consumed the link's only alert — the real tap after it
+    // would have consumed the link's only alert, the real tap after it
     // would never notify. The stamp moves with the DECISION, not the click
     // ordinal.
     const biz = await seedBusiness(db, "IT link clicks prefetch-only");

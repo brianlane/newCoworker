@@ -109,7 +109,7 @@ describe("expectedTriggerFields", () => {
     const def = {
       steps: [
         { type: "extract_text", fields: [{ name: "lead_name" }, { name: "lead_phone" }] },
-        // Reads a fetched page / a mailbox — says nothing about the sheet.
+        // Reads a fetched page / a mailbox, says nothing about the sheet.
         { type: "browse_extract", fields: [{ name: "portal_only" }] },
         { type: "email_extract", fields: [{ name: "mailbox_only" }] },
         {

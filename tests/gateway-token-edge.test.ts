@@ -1,6 +1,6 @@
 /**
  * Unit tests for the edge workers' per-tenant Rowboat bearer resolution
- * (supabase/functions/_shared/gateway_token.ts) — the fix for the June 19
+ * (supabase/functions/_shared/gateway_token.ts), the fix for the June 19
  * incident where a re-keyed VPS rejected the stale shared env token and every
  * customer SMS dead-lettered.
  */

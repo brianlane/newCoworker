@@ -1,5 +1,5 @@
 /**
- * DELETE /api/public/v1/hooks/:id — unsubscribe a REST hook.
+ * DELETE /api/public/v1/hooks/:id, unsubscribe a REST hook.
  *
  * Zapier calls this when a Zap is turned off. Hard delete (business-scoped);
  * deleting an already-gone hook returns 404, which Zapier treats as success.

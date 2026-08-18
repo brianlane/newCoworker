@@ -3,7 +3,7 @@
  * One-shot: make every lead flow's owner notification carry the FULL lead
  * details (audit Jul 2026). Amy's notify_owner steps had drifted: HomeLight's
  * said "Duane (seller in Mesa, ~$785K)" with no phone/email/address, and
- * Realtor.com's was just "Routing Update: {{vars.actions_taken}}" — the owner
+ * Realtor.com's was just "Routing Update: {{vars.actions_taken}}", the owner
  * had to dig through the QT email or the portal for the lead's contact info.
  *
  * Three idempotent edits, in place (manual template tweaks elsewhere survive):
@@ -13,7 +13,7 @@
  *   2. Add a trailing notify_owner step to "Clever Lead - Accept", which had
  *      NONE (the owner only heard about claims via the route templates).
  *   3. Upgrade every `lead_address` extraction field description to demand
- *      the FULL address — street, city, state, and ZIP — so the address the
+ *      the FULL address, street, city, state, and ZIP, so the address the
  *      notify shows isn't just a street line.
  *
  * ReferralExchange's notify steps already carry name/phone/email/location/

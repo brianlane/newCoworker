@@ -107,7 +107,7 @@ export async function POST(request: Request) {
 
     // Re-contract (Hostinger-consistent): once the paid commitment has
     // elapsed and the plan is rolling month-to-month at the renewal rate,
-    // starting a NEW contract — even for the same tier/period — is a
+    // starting a NEW contract, even for the same tier/period, is a
     // legitimate action at the contract rate. It relaxes the plan-unchanged
     // guard below and exempts the lifetime abuse cap (a long-lived customer
     // re-committing every 1-2 years must never be blocked as an abuser).
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       Boolean(subscription.stripe_subscription_id) && isCommitmentElapsed(subscription);
     // Abuse cap: a change-plan burns a lifetime slot (fresh Stripe sub).
     //
-    // Fail closed when no profile can be resolved — previously this branch
+    // Fail closed when no profile can be resolved, previously this branch
     // read `profile && count >= CAP`, so a null profile (pre-lifecycle
     // business or transient readback failure) would short-circuit to
     // falsy and silently skip the cap. Mirror the /api/admin/force-refund
@@ -155,7 +155,7 @@ export async function POST(request: Request) {
       // `previousSubscriptionId` and re-reads `subscription.customer_profile_id`)
       // all see the same profile. Without this we'd cap-check the
       // freshly-upserted profile while the stale id remains pinned to
-      // the subscription row — splitting lifetime accounting across
+      // the subscription row, splitting lifetime accounting across
       // two profile rows and effectively bypassing the lifetime cap
       // when the linked profile was hard-deleted (GDPR purge, manual
       // cleanup) since the upsert-by-email returns a new id with
@@ -195,7 +195,7 @@ export async function POST(request: Request) {
     // No-op guard: same tier AND same period. Cheap to enforce here so the
     // UI can stay dumb and we don't create a pointless duplicate sub. A
     // same-plan RE-CONTRACT after the commitment elapsed is explicitly
-    // allowed — that's how a rolled-over customer gets back onto the
+    // allowed, that's how a rolled-over customer gets back onto the
     // contract rate.
     if (
       subscription.tier === payload.tier &&
@@ -211,7 +211,7 @@ export async function POST(request: Request) {
     // The country messaging surcharges follow the subscription they were
     // born on: carry one onto the replacement sub ONLY when the current
     // Stripe sub carries its flag (stamped by the signup checkout).
-    // Grandfathered pre-fee tenants — and US tenants — never gain one here.
+    // Grandfathered pre-fee tenants, and US tenants, never gain one here.
     // A metadata read failure fails toward NOT charging.
     let carryCanadaFee = false;
     let carryMexicoFee = false;
@@ -234,7 +234,7 @@ export async function POST(request: Request) {
     }
 
     // Intentionally do NOT apply the intro-discount coupon on upgrade/
-    // downgrade — first-cycle discounts are for brand-new customers only,
+    // downgrade, first-cycle discounts are for brand-new customers only,
     // and granting them on change-plan would let users oscillate plans to
     // harvest the discount.
     const packAddons = resolveMembershipPackAddons(

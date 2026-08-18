@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — sidecar is plain JS without types; importing the pure
+// @ts-expect-error, sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-// prettier-ignore — single line so the ts-expect-error covers the untyped import
+// prettier-ignore, single line so the ts-expect-error covers the untyped import
 import { chatCompletionHasOutput, createSseEmptyCompletionProbe } from "../vps/llm-router/src/routing.js";
 
 // Real shape captured live 2026-07-19 (HQ tenant, gemini-2.5-flash via the

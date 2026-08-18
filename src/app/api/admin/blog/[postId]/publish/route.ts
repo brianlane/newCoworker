@@ -1,7 +1,7 @@
 /**
  * Admin "Publish now": flips the post to published (guarded against a
  * concurrent sweep publishing it first) and runs the same fan-out the
- * scheduled path gets — subscriber email, Instagram cross-post, IndexNow ping.
+ * scheduled path gets, subscriber email, Instagram cross-post, IndexNow ping.
  */
 
 import { requireAdmin } from "@/lib/auth";

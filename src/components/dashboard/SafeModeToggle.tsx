@@ -4,7 +4,7 @@
  * Safe Mode control + forwarding phone setup.
  *
  * Safe Mode forwards inbound customer SMS/voice to `forward_to_e164` instead
- * of running the AI. The number is a precondition — the toggle stays disabled
+ * of running the AI. The number is a precondition, the toggle stays disabled
  * until it's saved, so there is never a state where Safe Mode is on with no
  * destination. Turning it off is always permitted.
  */

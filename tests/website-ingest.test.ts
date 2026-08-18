@@ -52,7 +52,7 @@ describe("humanizeFetchError", () => {
   // Owners whose own site is fronted by Cloudflare with bot-fight-mode on
   // see HTTP 403 + `cf-mitigated: challenge` on every crawl. Before this
   // helper, the dashboard rendered the canned "Check the URL, SSL, or
-  // firewall and retry" — which was actively misleading. These tests
+  // firewall and retry", which was actively misleading. These tests
   // pin the actionable copy.
   it("maps 403 to a CDN-blocking explanation that mentions Cloudflare and the paste-source fallback", () => {
     const msg = humanizeFetchError("status_403");
@@ -269,7 +269,7 @@ describe("extractReadableText", () => {
 
   it("leaves unknown numeric entities as spaces instead of crashing", () => {
     // NaN + out-of-range code points hit the fallback branch in the &#NN;
-    // handler — both should become whitespace, not raw entity text.
+    // handler, both should become whitespace, not raw entity text.
     const text = extractReadableText("<p>x&#0;y&#99999999;z</p>");
     expect(text).toBe("x y z");
   });
@@ -400,7 +400,7 @@ describe("ingestWebsite", () => {
     const html = `<html><body><h1>Realty</h1><p>${"We help buyers. ".repeat(50)}</p></body></html>`;
     const rawFetch = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) {
-        // Default-deny — would block under strict compliance.
+        // Default-deny, would block under strict compliance.
         return new Response("User-agent: *\nDisallow: /\n", {
           status: 200,
           headers: { "content-type": "text/plain" }
@@ -427,7 +427,7 @@ describe("ingestWebsite", () => {
       expect(res.websiteMd).toMatch(/Realty/);
       expect(res.pagesCrawled).toBeGreaterThanOrEqual(1);
     }
-    // Bypass is total — robots.txt is never even fetched, saving the
+    // Bypass is total, robots.txt is never even fetched, saving the
     // round-trip and removing it as a possible failure mode.
     expect(
       rawFetch.mock.calls.some(([url]) => String(url).endsWith("/robots.txt"))
@@ -435,7 +435,7 @@ describe("ingestWebsite", () => {
   });
 
   it("ignoreRobots does not weaken SSRF / private-IP / DNS-rebind defenses", async () => {
-    // Bypass MUST only relax the robots layer — security guardrails still
+    // Bypass MUST only relax the robots layer, security guardrails still
     // apply. A redirect to a private IP must still be blocked even though
     // robots is being skipped.
     const fetchImpl = vi.fn(async (url: string) => {
@@ -806,7 +806,7 @@ describe("ingestWebsite", () => {
 
   it("returns private_address when the initial hostname resolves into RFC1918", async () => {
     // Hits the `private_address` arm of the ternary in the outer catch block
-    // of ingestWebsite — symmetric to the dns_failure test above, but through
+    // of ingestWebsite, symmetric to the dns_failure test above, but through
     // `assertSafeHostname`'s IP-check path instead of the lookup-reject path.
     const lookup = vi.fn().mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
     const res = await ingestWebsite("https://intranet.example/", {
@@ -979,7 +979,7 @@ describe("ingestWebsite", () => {
   it("rejects a redirect without a Location header", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      // Non-empty body so `hopResponse.body.cancel()` runs — covers the
+      // Non-empty body so `hopResponse.body.cancel()` runs, covers the
       // drain-before-redirect branch.
       return new Response("redirect body", { status: 301 });
     }) as unknown as typeof fetch;
@@ -1311,7 +1311,7 @@ describe("ingestWebsite", () => {
   it("rejects responses whose content-type is absent or non-html-ish", async () => {
     // Build a Response whose headers.get('content-type') returns null so the
     // `?? ""` fallback runs, then the HTML regex fails and we bail with
-    // non_html_content_type — which the outer crawler surfaces as fetch_failed.
+    // non_html_content_type, which the outer crawler surfaces as fetch_failed.
     const makeHeaderlessResponse = (body: string) => {
       const response = new Response(body, { status: 200 });
       const headers = new Headers();
@@ -1449,7 +1449,7 @@ describe("ingestWebsite", () => {
     )}</p></body></html>`;
 
   it("BFS-expands links from subpages, not just the homepage", async () => {
-    // /b is only discoverable through /a — and /a itself is a textless nav
+    // /b is only discoverable through /a, and /a itself is a textless nav
     // page (link hub). The old homepage-only expansion could never reach /b;
     // deep BFS must, and the textless hub must not count as a crawled page.
     const requested: string[] = [];
@@ -1591,7 +1591,7 @@ describe("ingestWebsite", () => {
       requested.push(url);
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
       if (url === "https://example.com/sitemap.xml") {
-        // /a is ALSO linked from the homepage — the queue must dedupe it.
+        // /a is ALSO linked from the homepage, the queue must dedupe it.
         return xmlResponse(urlset(["https://example.com/a", "https://example.com/deep-page"]));
       }
       if (url === "https://example.com/") {
@@ -1611,7 +1611,7 @@ describe("ingestWebsite", () => {
     });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.pagesCrawled).toBe(3); // home + /a + /deep-page
-    // /deep-page is not linked anywhere — only the sitemap could surface it.
+    // /deep-page is not linked anywhere, only the sitemap could surface it.
     expect(requested).toContain("https://example.com/deep-page");
     // Deduped: /a fetched exactly once despite appearing in links AND sitemap.
     expect(requested.filter((u) => u === "https://example.com/a")).toHaveLength(1);
@@ -1792,7 +1792,7 @@ describe("ingestWebsite", () => {
     });
     expect(resMissing.ok).toBe(true);
 
-    // Soft-404: sitemap URL answers with an HTML page — must not be parsed
+    // Soft-404: sitemap URL answers with an HTML page, must not be parsed
     // as a sitemap (content-type gate rejects it).
     const soft404 = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
@@ -1994,7 +1994,7 @@ describe("ingestWebsite", () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
       fetched.push(url);
-      // Each textless page links to two brand-new URLs — an infinite frontier.
+      // Each textless page links to two brand-new URLs, an infinite frontier.
       const a = `/n${(serial += 1)}`;
       const b = `/n${(serial += 1)}`;
       return new Response(`<html><body><a href="${a}"></a><a href="${b}"></a></body></html>`, {
@@ -2410,7 +2410,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
 
   it("pins thinkingLevel=minimal for Gemini 3 summarizers and omits it for 2.5 overrides", async () => {
     // Regression pin (2026-07-16 probe): Gemini 3.x default thinking counts
-    // against the 1500-token cap — gemini-3.5-flash spent 1126 tokens on
+    // against the 1500-token cap, gemini-3.5-flash spent 1126 tokens on
     // hidden reasoning and truncated the website summary at MAX_TOKENS.
     process.env.GOOGLE_API_KEY = "test-key";
     delete process.env.GEMINI_SUMMARY_MODEL;

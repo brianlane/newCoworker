@@ -4,10 +4,10 @@
  * Per-contact SMS reply mode control (contacts.sms_reply_mode).
  *
  * Three modes, persisted via PATCH /api/dashboard/customers/:e164:
- *   auto          — the assistant replies to this contact's texts (default).
- *   suppress      — no automatic reply. AiFlows you've set up and manual
+ *   auto, the assistant replies to this contact's texts (default).
+ *   suppress, no automatic reply. AiFlows you've set up and manual
  *                   sends from the thread still work.
- *   forward_owner — no automatic reply; the text is forwarded to the owner's
+ *   forward_owner, no automatic reply; the text is forwarded to the owner's
  *                   cell with "What would you like me to say?" and the
  *                   owner's reply is sent to the contact.
  *

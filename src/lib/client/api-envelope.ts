@@ -21,7 +21,7 @@ export async function parseEnvelope<T>(res: Response): Promise<ApiEnvelope<T>> {
   try {
     return (await res.json()) as ApiEnvelope<T>;
   } catch {
-    // 5xx + non-JSON usually means a Vercel/Cloudflare gateway page —
+    // 5xx + non-JSON usually means a Vercel/Cloudflare gateway page,
     // most often a 502 returned because the function timed out or
     // was killed by the platform reaper. Showing the literal "Unexpected
     // server response" is technically true but actively unhelpful: the

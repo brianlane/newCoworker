@@ -11,7 +11,7 @@ export function emailMessagesForLocale(locale: AppLocale): EmailMessages {
 /**
  * Tiny `{var}` interpolator for the email catalogs. Emails are plain
  * strings built outside the React tree, so next-intl's ICU pipeline isn't
- * available — this mirrors the `.replace("{summary}", …)` pattern the
+ * available, this mirrors the `.replace("{summary}", …)` pattern the
  * urgent-alert dispatcher already uses, generalized to any variable set.
  */
 export function fmtEmail(template: string, vars: Record<string, string>): string {

@@ -1,5 +1,5 @@
 /**
- * src/lib/mcp/connector-status.ts — the per (user, MCP client, business)
+ * src/lib/mcp/connector-status.ts, the per (user, MCP client, business)
  * "first/last authorized call" bookkeeping behind each connector card's
  * Connected state.
  */

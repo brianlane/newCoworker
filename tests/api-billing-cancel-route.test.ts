@@ -28,10 +28,10 @@ const {
 // `after()` from `next/server` requires the Next.js work-units context
 // (only present inside the actual Next runtime). In tests we run the
 // route handler bare, so polyfill it to invoke the callback on
-// `queueMicrotask` — close enough to "after the response" for assertions
+// `queueMicrotask`, close enough to "after the response" for assertions
 // that need the slow phase to have executed.
 // Phase 2 (agency): the route resolves the ACTIVE business through the
-// cookie-aware helper; pin it to a fixed id here — the supabase chain mock
+// cookie-aware helper; pin it to a fixed id here, the supabase chain mock
 // below still decides which rows come back, so existing fixtures keep
 // driving each scenario.
 vi.mock("@/lib/dashboard/active-business", () => ({
@@ -280,7 +280,7 @@ describe("/api/billing/cancel", () => {
 
   it("refund mode is refused for Canadian/BYOS placements (Terms §9 exclusion)", async () => {
     // OVH (Canada) and BYOS tenants are excluded from the self-serve
-    // 30-day guarantee — the underlying OVH box is non-refundable to the
+    // 30-day guarantee, the underlying OVH box is non-refundable to the
     // platform. period_end cancellation stays available.
     for (const vpsProvider of ["ovh", "byos"]) {
       loadLifecycleContextMock.mockResolvedValueOnce({

@@ -1,10 +1,10 @@
 /**
- * `owner_append_business_memory` — persist business-wide rules from **owner
+ * `owner_append_business_memory`, persist business-wide rules from **owner
  * Dashboard chat** into `business_configs.memory_md` (Rowboat vault
  * `memory.md`), then fire-and-forget VPS vault sync.
  *
  * The dedupe/append/truncate semantics live in the shared helper
- * (src/lib/dashboard-chat/memory-append.ts) — also used directly by the
+ * (src/lib/dashboard-chat/memory-append.ts), also used directly by the
  * platform-inline chat turn's rule capture; this route remains the
  * gateway-authed adapter the VPS chat-worker calls.
  *
@@ -35,7 +35,7 @@ import { logger } from "@/lib/logger";
 // The vault re-seed (scheduleVaultSync → after()) runs post-response and SSHes
 // into the tenant VPS. after() shares this single invocation budget, and
 // syncVaultToVps alone allows a 60s SSH timeout plus Hostinger IP lookup + DB
-// reads beforehand — so 60s would race the re-seed on a cold VPS. Budget well
+// reads beforehand, so 60s would race the re-seed on a cold VPS. Budget well
 // above the sync's own ceiling.
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -85,7 +85,7 @@ export async function POST(request: Request) {
     const result = await appendOwnerMemoryBullets(envelope.businessId, parsed.data.bullets);
 
     // Knowledge-graph ingestion (mode-gated, off by default) runs after the
-    // response like the vault sync — a graph failure can never break or slow
+    // response like the vault sync, a graph failure can never break or slow
     // the capture, and the ingest never throws.
     if (result.savedBullets.length > 0) {
       scheduleGraphIngest(envelope.businessId, result.savedBullets);

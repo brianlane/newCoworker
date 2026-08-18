@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/memory-graph — the KG rollout controls: per-tenant mode
+ * POST /api/admin/memory-graph, the KG rollout controls: per-tenant mode
  * override (with the projection-shipping vault sync) and the fleet-wide
  * default every 'inherit' tenant follows.
  */

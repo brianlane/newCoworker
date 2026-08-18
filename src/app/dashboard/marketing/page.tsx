@@ -40,7 +40,7 @@ const WEBHOOK_SCAN_LIMIT = 500;
  * runs as plain data prep.
  *
  * `clipped`: the newest-first fetch filled its bound and even its OLDEST
- * row is still inside the window — more in-window deliveries exist beyond
+ * row is still inside the window, more in-window deliveries exist beyond
  * the fetch, so the counts are floors. The panel renders them as "N+"
  * with a note instead of silently underreporting (a big backlog import
  * alone can exceed the bound).

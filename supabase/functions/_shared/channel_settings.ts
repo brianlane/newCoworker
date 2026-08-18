@@ -3,7 +3,7 @@
  *
  * RCS is an Enterprise perk: sends go RCS-first (Telnyx
  * `POST /v2/messages/rcs`, verified-brand sender) with automatic SMS fallback
- * from the tenant's existing number. This helper decides — per business —
+ * from the tenant's existing number. This helper decides, per business,
  * whether outbound customer messages may use the RCS channel.
  *
  * The gate is deliberately three-way AND:
@@ -13,7 +13,7 @@
  * resolves to null (fail-safe: SMS always works).
  *
  * Mirrors the Next.js-side resolution in src/lib/telnyx/messaging.ts
- * (getTelnyxMessagingForBusiness) — keep the two in sync.
+ * (getTelnyxMessagingForBusiness), keep the two in sync.
  */
 
 // Minimal structural type so this module works with the esm.sh supabase-js
@@ -35,10 +35,10 @@ type ChannelSupabase = {
  * Tiers entitled to the RCS channel.
  *
  * Enterprise-only (decided Jul 18 2026): an RCS inbound identifies only the
- * agent — no recipient DID — so a shared agent cannot route replies for more
+ * agent, no recipient DID, so a shared agent cannot route replies for more
  * than one tenant, and the agent's verified brand replaces the tenant's own
  * identity on the handset. Tenant RCS requires a dedicated per-tenant agent
- * (own Google verification, own Telnyx carrier fees) — an Enterprise line
+ * (own Google verification, own Telnyx carrier fees), an Enterprise line
  * item. Mirror of src/lib/telnyx/messaging.ts.
  */
 export function rcsTierAllowed(tier: string | null | undefined): boolean {

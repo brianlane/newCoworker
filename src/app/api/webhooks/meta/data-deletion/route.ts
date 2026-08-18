@@ -1,5 +1,5 @@
 /**
- * POST /api/webhooks/meta/data-deletion — Meta's Data Deletion Request
+ * POST /api/webhooks/meta/data-deletion, Meta's Data Deletion Request
  * callback.
  *
  * Meta calls this when a person removes New Coworker AND asks us to delete

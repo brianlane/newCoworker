@@ -5,7 +5,7 @@
  *   POST /api/public/v1/hooks           → subscribe { event, target_url }
  *
  * On POST the subscription starts with last_cursor = now(), so only events
- * that occur AFTER subscribing are delivered — Zapier's expected REST-hook
+ * that occur AFTER subscribing are delivered, Zapier's expected REST-hook
  * semantics. Delivery itself is the webhook-dispatcher Edge cron.
  *
  * Auth: `Authorization: Bearer nck_…` (public API key).

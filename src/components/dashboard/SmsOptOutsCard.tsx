@@ -10,7 +10,7 @@ type OptOutEntry = { e164: string; name: string | null; setAt: string };
 /**
  * Settings → Channels: compliance visibility into the SMS STOP list, plus
  * proactive suppression ("never text this number"). Deliberately no
- * owner-side removal — a customer's STOP holds until they text START.
+ * owner-side removal, a customer's STOP holds until they text START.
  */
 export function SmsOptOutsCard({ businessId }: { businessId: string }) {
   const [entries, setEntries] = useState<OptOutEntry[] | null>(null);

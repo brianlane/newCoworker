@@ -179,7 +179,7 @@ describe("callSmsRowboatWithStatelessFallback, happy path", () => {
     // Fresh-thread flow anchor (2026-07-14 Truly incident): the small SMS
     // model ignored context that lived only in the system preamble but
     // honors it adjacent to the user turn. The note must never become a
-    // separate system message — Gemini's OpenAI-compat keeps only the last
+    // separate system message, Gemini's OpenAI-compat keeps only the last
     // system message pre-merge, and the note's whole point is proximity.
     const fetchStub = vi
       .fn<typeof fetch>()
@@ -336,7 +336,7 @@ describe("callSmsRowboatWithStatelessFallback, stateless retry on stale continua
   it("appends statelessContextExtra to the preamble ONLY on the stateless retry call", async () => {
     // The retry roots a brand-new Rowboat conversation; the transcript block
     // is what keeps it from restarting intake. The first (stateful) attempt
-    // must NOT carry it — Rowboat already holds the history there.
+    // must NOT carry it, Rowboat already holds the history there.
     const fetchStub = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({}, { status: 404 }))
@@ -549,7 +549,7 @@ describe("callSmsRowboatWithStatelessFallback, stateless retry on stale continua
 describe("callSmsRowboatWithStatelessFallback, combined budget bound (P1 fix)", () => {
   // The bug being pinned: a slow first call (~60s timeoutMs) followed
   // by a fresh full-window retry (another 60s) put the SMS worker at
-  // ~120s wall time total — but pg_cron caps the worker HTTP
+  // ~120s wall time total, but pg_cron caps the worker HTTP
   // invocation at 90s, so the retry was getting truncated mid-call
   // and the outbound never went out. Cron then requeued the same
   // job, looping forever.
@@ -594,7 +594,7 @@ describe("callSmsRowboatWithStatelessFallback, combined budget bound (P1 fix)", 
 
   it("skips retry entirely when remaining budget < retryMinBudgetMs (surfaces FIRST error)", async () => {
     // First call fails fast (~10ms) with HTTP 500. Budget is 50ms,
-    // retryMinBudgetMs is 100ms — so even though budget would
+    // retryMinBudgetMs is 100ms, so even though budget would
     // technically allow a 40ms retry, we skip and surface the first
     // error rather than guarantee a self-inflicted timeout.
     const fetchStub = vi.fn<typeof fetch>();
@@ -621,7 +621,7 @@ describe("callSmsRowboatWithStatelessFallback, combined budget bound (P1 fix)", 
   });
 
   it("uses default retry-min-budget (5s) when caller doesn't override", async () => {
-    // Budget 1000ms, default retryMinBudgetMs=5000ms — first failure
+    // Budget 1000ms, default retryMinBudgetMs=5000ms, first failure
     // means remaining ~1000ms which is < 5000, so retry is skipped.
     const fetchStub = vi.fn<typeof fetch>();
     fetchStub.mockImplementationOnce(async () => {
@@ -648,7 +648,7 @@ describe("callSmsRowboatWithStatelessFallback, combined budget bound (P1 fix)", 
   it("never extends a single call past its configured per-call timeoutMs", async () => {
     // Budget is 100s of seconds (effectively unbounded), but
     // timeoutMs is 50ms. Retry's per-call timeout must not exceed
-    // 50ms even though the budget allows much more — we don't want
+    // 50ms even though the budget allows much more, we don't want
     // the helper to silently extend a tight per-call ceiling.
     const fetchStub = vi.fn<typeof fetch>();
     fetchStub.mockImplementationOnce(async () => {

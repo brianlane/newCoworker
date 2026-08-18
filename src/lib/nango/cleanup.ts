@@ -4,13 +4,13 @@
  * delete-user, and the grace-expired wipe.
  *
  * Why: deleting a business row cascades the `workspace_oauth_connections`
- * rows away, but Nango's side of each connection lives on — and every
+ * rows away, but Nango's side of each connection lives on, and every
  * leaked connection consumes the platform's ACCOUNT-WIDE Nango quota
  * forever. The wipe path is worse: it keeps the business row, so without
  * this nothing ever revokes the tenant's grants at all.
  *
  * Ordering contract (Bugbot on the cap PR): teardown must never run BEFORE
- * the terminal step commits — a failed business delete / wipe stamp must
+ * the terminal step commits, a failed business delete / wipe stamp must
  * leave the tenant fully intact, not active with dead integrations. So:
  *   - hard-delete callers SNAPSHOT the rows first
  *     (`snapshotNangoConnectionLinks`), delete the business row (cascade
@@ -60,7 +60,7 @@ function nangoBrokeredOnly<T extends NangoConnectionLink>(rows: readonly T[]): T
 }
 
 /**
- * Pre-delete snapshot of the business's connection links. Never throws — a
+ * Pre-delete snapshot of the business's connection links. Never throws, a
  * read blip returns [] (the revocation is then skipped and the audit script
  * reclaims the orphans later) rather than blocking the deletion.
  */

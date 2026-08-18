@@ -1,10 +1,10 @@
 /**
- * Team access — DB layer for business_members (see migration
+ * Team access, DB layer for business_members (see migration
  * 20260808000000_business_members.sql).
  *
  * A row grants one email a `manager`/`staff` role on one business. The
  * business's `owner_email` login is the implicit OWNER and never has a row
- * here. Service-role only — authorization is the API route's job
+ * here. Service-role only, authorization is the API route's job
  * (`requireBusinessRole` before any call here).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -50,7 +50,7 @@ export async function listBusinessMembers(
 
 /**
  * Every membership row across all businesses (admin engagement page).
- * Includes revoked rows — callers filter by status as needed.
+ * Includes revoked rows, callers filter by status as needed.
  */
 export async function listAllBusinessMembers(
   client?: SupabaseClient
@@ -65,7 +65,7 @@ export async function listAllBusinessMembers(
 }
 
 /**
- * Hard-delete every membership row for `email` across all businesses —
+ * Hard-delete every membership row for `email` across all businesses,
  * the admin "delete account completely" path (a business's own members go
  * with the business-row cascade; this catches grants on OTHER tenants).
  * Returns how many rows were removed.
@@ -112,7 +112,7 @@ export class BusinessMemberConflictError extends Error {
 
 /**
  * Invite (or RE-invite) `email` to a business. One row per (business,
- * lower(email)) — inviting an address that already has a REVOKED row flips
+ * lower(email)), inviting an address that already has a REVOKED row flips
  * it back to `invited` with the new role; an existing invited/active row is
  * a conflict (change the role via updateBusinessMemberRole instead).
  */
@@ -225,7 +225,7 @@ export async function revokeBusinessMember(
 /**
  * First-login binding: activate every INVITED membership addressed to this
  * email (case-insensitive), stamping the auth user id. Called from the
- * dashboard layout on render (same as reconcilePendingEmailChange) — cheap
+ * dashboard layout on render (same as reconcilePendingEmailChange), cheap
  * indexed no-op when nothing is pending. Returns how many rows flipped.
  */
 export async function bindBusinessMemberUser(

@@ -67,7 +67,7 @@ describe("smsSegmentInfo", () => {
     it("treats smart punctuation as GSM, matching the worker's gsmSafeSmsText", () => {
       // A long body whose only non-ASCII chars are smart punctuation: the
       // worker normalizes it to ASCII before the cap check, so nothing is
-      // converted or stripped — the hint must not warn.
+      // converted or stripped, the hint must not warn.
       const long = "It\u2019s a \u201Cbig\u201D deal \u2014 really\u2026 " + "a".repeat(700);
       const info = smsSegmentInfo(long, { normalizeSmartPunctuation: true });
       expect(info.encoding).toBe("gsm");

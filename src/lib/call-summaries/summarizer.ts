@@ -14,14 +14,14 @@
  * Terminal-vs-retry contract (the sweep re-dispatches rows whose
  * `summarized_at` is NULL and `summary_attempts` is under its cap):
  *   - success            → summary/sentiment set, summarized_at set (terminal)
- *   - empty transcript   → summarized_at set, summary stays NULL (terminal —
+ *   - empty transcript   → summarized_at set, summary stays NULL (terminal,
  *                          nothing will ever appear in an empty call)
  *   - transient failure  → summary_error set; the row already consumed one
  *                          summary_attempts at claim time, so it retries
  *                          until the sweep's attempt cap
  *   - tier/not-found/... → skipped without touching the row
  *
- * Concurrency: before spending AI budget we take an optimistic claim — a
+ * Concurrency: before spending AI budget we take an optimistic claim, a
  * conditional UPDATE that increments summary_attempts only if the row still
  * has the attempts count we read and no summarized_at. Overlapping sweep
  * dispatches (or a stale retry racing a slow first run) lose the claim and
@@ -56,14 +56,14 @@ export const CALL_SUMMARY_MAX_CHARS = 600;
 /**
  * Prompt budget for transcript text. When a call runs over, we keep the
  * opening (why they called) and the tail (how it resolved) and elide the
- * middle — both ends matter more to a digest than mid-call back-and-forth.
+ * middle, both ends matter more to a digest than mid-call back-and-forth.
  */
 export const CALL_SUMMARY_MAX_TRANSCRIPT_CHARS = 24_000;
 
 /**
  * Abort the Gemini call after this long so one dispatch always fits inside
  * the summarize endpoint's 30s maxDuration (and, transitively, the sweep's
- * cron-timeout budget). The row stays retryable — the next pass tries again.
+ * cron-timeout budget). The row stays retryable, the next pass tries again.
  */
 export const CALL_SUMMARY_GEMINI_TIMEOUT_MS = 25_000;
 
@@ -122,7 +122,7 @@ export function clampTranscriptText(text: string, maxChars = CALL_SUMMARY_MAX_TR
 }
 
 /**
- * Gemini JSON mode is reliable but not infallible — tolerate code fences and
+ * Gemini JSON mode is reliable but not infallible, tolerate code fences and
  * surrounding prose, then validate the shape ourselves.
  */
 export function parseCallSummaryJson(
@@ -174,7 +174,7 @@ export async function summarizeCallTranscript(
   if (row.summarized_at) return { ok: false, reason: "already_summarized" };
 
   // Re-check tier at generation time: the sweep filters too, but a downgrade
-  // can land between scan and dispatch — never spend AI budget on a tenant
+  // can land between scan and dispatch, never spend AI budget on a tenant
   // whose plan no longer includes the perk.
   const { data: bizData, error: bizErr } = await db
     .from("businesses")
@@ -227,7 +227,7 @@ export async function summarizeCallTranscript(
   // Optimistic claim: increment summary_attempts only if the row is still
   // unsummarized AND still at the attempts count we read. A concurrent
   // dispatch (overlapping sweeps, stale retry racing a slow first run) loses
-  // this compare-and-swap, gets zero rows back, and skips — one transcript
+  // this compare-and-swap, gets zero rows back, and skips, one transcript
   // can never meter two Gemini calls at once.
   const { data: claimRows, error: claimErr } = await db
     .from("voice_call_transcripts")
@@ -272,7 +272,7 @@ export async function summarizeCallTranscript(
     text = res.text;
     usage = res.usage;
   } catch (err) {
-    // Empty replies (thinking-only output) are still billed — meter them
+    // Empty replies (thinking-only output) are still billed, meter them
     // before recording the retryable failure.
     if (err instanceof GeminiEmptyError) {
       await meter({

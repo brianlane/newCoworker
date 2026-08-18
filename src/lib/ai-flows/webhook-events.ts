@@ -9,8 +9,8 @@
  *   3. record a `webhook_event_received` system log even when nothing matched,
  *      so the dashboard How-To guide can show "your test lead arrived".
  *
- * Mirrors processInboundTenantEmail (src/lib/email/inbound.ts) — the other
- * push-based enqueue path — deliberately, minus the mailbox-specific parts.
+ * Mirrors processInboundTenantEmail (src/lib/email/inbound.ts), the other
+ * push-based enqueue path, deliberately, minus the mailbox-specific parts.
  */
 import { createHash } from "node:crypto";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -39,7 +39,7 @@ export type WebhookFlowEventResult = {
   /**
    * Flows whose conditions matched this event, whether or not a run was
    * enqueued. matched > 0 with enqueued === 0 means a duplicate redelivery
-   * (the first delivery already ran) — NOT a broken setup, so the guide's
+   * (the first delivery already ran), NOT a broken setup, so the guide's
    * readout must not report "no flow matched".
    */
   flowsMatched: number;
@@ -60,7 +60,7 @@ type WebhookFlow = {
 /**
  * Enabled flows with a `webhook` trigger anywhere in their trigger set: the
  * primary `trigger` (SQL channel filter) OR the additional `triggers` array
- * (fetched broadly — flows carrying extras are rare — then filtered here).
+ * (fetched broadly, flows carrying extras are rare, then filtered here).
  * A flow with several webhook triggers matches when ANY of its condition
  * lists does, so each flow appears once with all its lists.
  */
@@ -106,7 +106,7 @@ export function webhookEventKey(event: WebhookEventInput): string {
 }
 
 /**
- * How many enabled flows would evaluate a webhook event right now — the
+ * How many enabled flows would evaluate a webhook event right now, the
  * lead-backlog import's preview uses this to warn "0 webhook flows enabled,
  * nothing will fire" before the owner commits an upload.
  */
@@ -121,7 +121,7 @@ export async function countEnabledWebhookFlows(
 export type ProcessWebhookFlowEventOptions = {
   /**
    * When set, enqueued runs carry this `earliest_claim_at`, so the worker's
-   * claim RPC leaves them queued until the time passes — how the lead-backlog
+   * claim RPC leaves them queued until the time passes, how the lead-backlog
    * import drips a spreadsheet of events out instead of firing all at once.
    */
   earliestClaimAt?: string;
@@ -188,7 +188,7 @@ export async function processWebhookFlowEvent(
   const enqueuedFlowIds: string[] = [];
   for (const flow of flows) {
     // OR across the flow's webhook triggers: the first condition list that
-    // matches fires the flow (one run — the dedupe key is per event).
+    // matches fires the flow (one run, the dedupe key is per event).
     let anyMatched = false;
     for (const conditions of flow.conditionSets) {
       // Pre-resolve any from_matches saved-contact refs (fail CLOSED per flow,
@@ -239,7 +239,7 @@ export async function processWebhookFlowEvent(
     );
   }
 
-  // Always log the delivery — the guide page's "recent events" readout shows
+  // Always log the delivery, the guide page's "recent events" readout shows
   // the owner their test lead arrived even before any flow is enabled.
   await recordSystemLog(
     {

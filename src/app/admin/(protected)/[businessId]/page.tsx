@@ -127,21 +127,21 @@ export default async function BusinessDetailPage({
   ]);
   const postureReport = await getLatestVpsPostureReport(businessId);
   const teamMembers = await listBusinessMembers(businessId);
-  // Widget settings for the Web chat card. Best-effort read — the page
+  // Widget settings for the Web chat card. Best-effort read, the page
   // must render even if the row is missing (owner never enabled it).
   const widgetSettings = await getWidgetSettingsForBusiness(businessId).catch(() => null);
-  // RCS channel wiring for the Messaging channel card. Best-effort — the
+  // RCS channel wiring for the Messaging channel card. Best-effort, the
   // page must render even if the read fails (card shows defaults).
   const channelSettings = await getChannelSettings(businessId).catch(() => ({
     rcsAgentId: null,
     rcsEnabled: false
   }));
-  // Platform contact-form sink designation. Best-effort — defaults to "no
+  // Platform contact-form sink designation. Best-effort, defaults to "no
   // sink anywhere" when the read fails so the page still renders.
   const contactFormSinkBusinessId = await getContactFormSinkBusinessId().catch(
     () => null
   );
-  // Knowledge-graph card data. Best-effort — the page must render even if
+  // Knowledge-graph card data. Best-effort, the page must render even if
   // the graph tables are unreadable (card shows zeros). The fleet default
   // is read FRESH (not through the resolver's ~60s cache) so the card can
   // never disagree with /admin/memory-graph within one browsing session.
@@ -162,7 +162,7 @@ export default async function BusinessDetailPage({
   if (!business) notFound();
 
   // This tenant's economics from the margin engine (same numbers as
-  // /admin/costs and /admin/usage). Best effort — the page renders without
+  // /admin/costs and /admin/usage). Best effort, the page renders without
   // the card if the load fails.
   const economics = await loadFleetMargins()
     .then((data) => data.byBusiness.get(businessId) ?? null)
@@ -176,7 +176,7 @@ export default async function BusinessDetailPage({
 
   // BYOS enrollment state (enterprise only): the active key row for the
   // byos-<businessId> sentinel box. Only SAFE fields cross into the client
-  // component — never private_key_pem.
+  // component, never private_key_pem.
   const byosKeyRow =
     business.tier === "enterprise" ? await getActiveVpsSshKey(byosBoxId(businessId)) : null;
   const byosEnrollment =
@@ -227,7 +227,7 @@ export default async function BusinessDetailPage({
           </Badge>
         </div>
         <div className="ml-auto flex shrink-0 items-start gap-2">
-          {/* Deploy moved off the All Clients table — offline boxes are
+          {/* Deploy moved off the All Clients table, offline boxes are
               (re)provisioned from here now. */}
           {business.status === "offline" && <DeployButton businessId={businessId} />}
           <ViewAsButton businessId={businessId} />
@@ -461,7 +461,7 @@ export default async function BusinessDetailPage({
             Data residency
           </h2>
           <ResidencyPanel
-            // Remount on tenant OR mode change so useState re-seeds — a
+            // Remount on tenant OR mode change so useState re-seeds, a
             // navigation between businesses (or a server refresh after a
             // flip) must never show the previous tenant's mode.
             key={`${businessId}:${business.data_residency_mode ?? "supabase"}`}
@@ -471,7 +471,7 @@ export default async function BusinessDetailPage({
         </Card>
       )}
 
-      {/* Memory knowledge graph (all tiers — the graph runs fleet-wide) */}
+      {/* Memory knowledge graph (all tiers, the graph runs fleet-wide) */}
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           Memory knowledge graph
@@ -488,7 +488,7 @@ export default async function BusinessDetailPage({
         />
       </Card>
 
-      {/* Privacy / data lifecycle (all tiers — retention + erasure are
+      {/* Privacy / data lifecycle (all tiers, retention + erasure are
           compliance levers, not enterprise features) */}
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
@@ -501,7 +501,7 @@ export default async function BusinessDetailPage({
         />
       </Card>
 
-      {/* Owner-deleted items (soft deletes) — view + restore */}
+      {/* Owner-deleted items (soft deletes), view + restore */}
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           Deleted items
@@ -739,7 +739,7 @@ export default async function BusinessDetailPage({
           business.status !== "wiped" &&
           (business.vps_provider ?? "hostinger") !== "byos" && (
             <div className="mb-4">
-              {/* Active subscription but no box yet — the admin-created
+              {/* Active subscription but no box yet, the admin-created
                   enterprise path lands here (create-client writes an active
                   Stripe-less subscription without provisioning). Hidden for
                   BYOS tenants: their provisioning path is the SSH-handover
@@ -750,7 +750,7 @@ export default async function BusinessDetailPage({
           )}
         {business.hostinger_vps_id &&
           (business.vps_provider ?? "hostinger") === "hostinger" && (
-            /* Hardware migration is a Hostinger purchase/teardown flow —
+            /* Hardware migration is a Hostinger purchase/teardown flow,
                migrate-vps-size fails closed for BYOS/OVH tenants, so don't
                offer the panel for them (resize happens provider-side). */
             <HardwareSizePanel
@@ -763,7 +763,7 @@ export default async function BusinessDetailPage({
           (business.vps_provider ?? "hostinger") === "hostinger" &&
           business.status !== "wiped" && (
             /* Return the box to the adopt pool without tearing the tenant
-               down now — the account is cascade-deleted when a new signup
+               down now, the account is cascade-deleted when a new signup
                adopts the box. The route fail-closes on active/past_due
                subscriptions. */
             <div className="mt-4">
@@ -782,7 +782,7 @@ export default async function BusinessDetailPage({
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
             Web chat
           </h2>
-          {/* Admin transcript review — the only review surface for widgets
+          {/* Admin transcript review, the only review surface for widgets
               with no tenant dashboard behind them (e.g. the direct-Gemini
               tenant serving newcoworker.com's own chat). */}
           <Link
@@ -825,7 +825,7 @@ export default async function BusinessDetailPage({
         />
       </Card>
 
-      {/* Messaging channel — per-tenant RCS agent + enable switch. Rendered
+      {/* Messaging channel, per-tenant RCS agent + enable switch. Rendered
           for every tier (with a warning when the tier gate would demote
           sends) so an operator can stage the wiring before an upgrade. */}
       <Card>
@@ -833,7 +833,7 @@ export default async function BusinessDetailPage({
           Messaging channel (RCS)
         </h2>
         <RcsChannelPanel
-          // Remount on tenant change so useState re-seeds — navigation
+          // Remount on tenant change so useState re-seeds, navigation
           // between businesses must never show the previous tenant's values.
           // Deliberately NOT keyed on the settings values: the panel tracks
           // its own saved baseline, and a value-keyed remount after
@@ -849,7 +849,7 @@ export default async function BusinessDetailPage({
         />
       </Card>
 
-      {/* Platform contact-form sink — which business (at most one) receives
+      {/* Platform contact-form sink, which business (at most one) receives
           public /contact submissions as webhook AiFlow events. Only the HQ
           dogfood tenant should normally hold this. */}
       <Card>
@@ -880,7 +880,7 @@ export default async function BusinessDetailPage({
         </Card>
       )}
 
-      {/* Admin dashboard mutes — fleet-feed noise control for this tenant */}
+      {/* Admin dashboard mutes, fleet-feed noise control for this tenant */}
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           Admin notification mutes

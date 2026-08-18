@@ -2,14 +2,14 @@
  * Re-entry gate (GHL "allow re-entry").
  *
  * When a flow's `options.allowReentry` is EXPLICITLY false, a contact who
- * already has a run of that flow — any status, including finished ones — is
+ * already has a run of that flow, any status, including finished ones, is
  * not enrolled again. Enforced best-effort at the lead-keyed enqueue sites
  * (inbound-SMS trigger eval, contact events, the Node enqueueAiFlowRun);
  * enqueues that carry no lead identity (webhook payloads before extraction,
  * schedule/manual starts) are governed by their own dedupe keys instead.
  *
- * Identity is CROSS-CHANNEL: the caller's key(s) — a phone, an email, or
- * both — are first expanded through the business's contact records (a phone
+ * Identity is CROSS-CHANNEL: the caller's key(s), a phone, an email, or
+ * both, are first expanded through the business's contact records (a phone
  * key pulls that contact's email and phone aliases, and vice versa), then a
  * prior run matches on ANY expanded key across the stored identity paths
  * (trigger sender, extracted lead phone/email, contact-event email, parked
@@ -20,11 +20,11 @@
  * Deliberate semantics:
  *   - test runs never count as an enrollment (excluded in the QUERY so they
  *     can never crowd real enrollments out of the scan slice; the test-run
- *     route also never calls this gate — testing must always work);
+ *     route also never calls this gate, testing must always work);
  *   - a lookup FAILURE fails OPEN (the run enqueues): a duplicate follow-up
  *     is recoverable, a silently dropped lead is not;
  *   - two perfectly concurrent enqueues may both pass (best-effort, same as
- *     drip pacing) — the flow's dedupe key still collapses true duplicates.
+ *     drip pacing), the flow's dedupe key still collapses true duplicates.
  */
 import { isTestModeTrigger } from "./test_mode.ts";
 import { isE164, normalizeNanpToE164 } from "./engine.ts";
@@ -77,7 +77,7 @@ function normalizeKeys(keys: string | Array<string | null | undefined>): string[
 /**
  * Expand the caller's key(s) through the business's contact records: any
  * contact whose primary phone, email, or phone alias matches a key donates
- * ALL its identities to the set. Best-effort — an expansion failure just
+ * ALL its identities to the set. Best-effort, an expansion failure just
  * matches on the original keys.
  */
 async function expandIdentityKeys(
@@ -185,8 +185,8 @@ const ACTIVE_RUN_STATUSES = [
 /**
  * Does this person currently have a LIVE (non-terminal, non-test) run of
  * this flow, under any of the given identity keys (contact-expanded)?
- * Unlike hasPriorRunForLead — which counts finished runs too and backs the
- * allowReentry option — this is the loop guard for AGENT-initiated
+ * Unlike hasPriorRunForLead, which counts finished runs too and backs the
+ * allowReentry option, this is the loop guard for AGENT-initiated
  * enrollments (start_aiflow_for_contact): a flow-sent text must never lead
  * the model to re-enroll the same contact mid-flow, while a contact whose
  * earlier run FINISHED may legitimately be enrolled again. Fails OPEN
@@ -258,7 +258,7 @@ function normalizeAddress(raw: unknown): string {
 
 /**
  * Post-extraction lead dedupe (options.dedupeLeadRuns): does an EARLIER
- * non-failed, non-test run of this flow exist for the same person — and,
+ * non-failed, non-test run of this flow exist for the same person, and,
  * when both runs carry a property address, the same property?
  *
  * This is the gate the sender-keyed re-entry check cannot provide for
@@ -268,7 +268,7 @@ function normalizeAddress(raw: unknown): string {
  * phone (raw + E.164-normalized) and email, contact-expanded like
  * hasPriorRunForLead. Failed/canceled prior runs never block (a repeat
  * inquiry is how a failed first run recovers), and a lookup failure fails
- * OPEN — a duplicate follow-up is recoverable, a dropped lead is not.
+ * OPEN, a duplicate follow-up is recoverable, a dropped lead is not.
  */
 export async function duplicateLeadRunExists(
   supabase: AnyClient,
@@ -298,10 +298,10 @@ export async function duplicateLeadRunExists(
   const hasVarKey = Boolean(varName && varValue);
   if (keys.length === 0 && !hasVarKey) return false;
   try {
-    // Only runs created strictly BEFORE this one count — otherwise two
+    // Only runs created strictly BEFORE this one count, otherwise two
     // near-simultaneous runs for the same lead could each see the other and
     // BOTH cancel, dropping the lead. An exact created_at tie means neither
-    // blocks (fail open, both proceed — the recoverable direction).
+    // blocks (fail open, both proceed, the recoverable direction).
     const { data: selfRow, error: selfErr } = await supabase
       .from("ai_flow_runs")
       .select("created_at")
@@ -353,7 +353,7 @@ export async function duplicateLeadRunExists(
       }
       if (!currentAddress) return true;
       const priorAddress = normalizeAddress(priorVars?.lead_address);
-      // A prior run with no address can't prove a different property —
+      // A prior run with no address can't prove a different property,
       // the person match stands. Differing addresses = a NEW lead.
       return !priorAddress || priorAddress === currentAddress;
     });

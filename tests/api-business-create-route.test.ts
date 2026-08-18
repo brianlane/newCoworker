@@ -176,7 +176,7 @@ describe("/api/business/create, anonymous Stripe-first flow", () => {
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ businessId: BIZ, onboardingToken: ONBOARDING_TOKEN });
-    // No second insert — that would 23505 against the existing row.
+    // No second insert, that would 23505 against the existing row.
     expect(createBusiness).not.toHaveBeenCalled();
   });
 
@@ -324,12 +324,12 @@ describe("/api/business/create, Step 1 dropdown teamSize → integer mapping", (
   // Regression suite for the codex-flagged bug where the route called
   // `parseInt(body.teamSize, 10)` directly. After the Step 1 form
   // migration, `teamSize` arrives as bucket strings like "Just me",
-  // "2-3", "4-5", etc. — `parseInt("Just me")` was `NaN` (broke
+  // "2-3", "4-5", etc., `parseInt("Just me")` was `NaN` (broke
   // create/checkout for solo operators) and `parseInt("4-5")`
   // silently truncated to `4` purely by parseInt's trailing-garbage
   // tolerance. The route now delegates to `teamSizeBucketToInt`,
   // which is exhaustively unit-tested in
-  // `onboarding-intake-options.test.ts` — these cases lock the route
+  // `onboarding-intake-options.test.ts`, these cases lock the route
   // contract: every dropdown bucket reaches `createBusiness` as a
   // valid positive integer.
   const cases: { input: string; expected: number }[] = [

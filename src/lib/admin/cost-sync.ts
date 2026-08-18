@@ -1,5 +1,5 @@
 /**
- * Platform cost sync — the productized version of the one-shot canvas pull
+ * Platform cost sync, the productized version of the one-shot canvas pull
  * (debug/pull-cost-data.ts), run daily by cron and on demand from the admin
  * Costs page:
  *
@@ -8,7 +8,7 @@
  *      record type / direction into `telnyx_cost_daily`. Records are
  *      attributed to a tenant when the MDR's cli/cld matches one of the
  *      tenant's DIDs (messaging from-number + routed voice DIDs);
- *      unmatched records land with business_id NULL — the costs page
+ *      unmatched records land with business_id NULL, the costs page
  *      shows that bucket as a leak detector.
  *   2. The Hostinger billing-subscription list (KVM boxes only), joined to
  *      VMs and live tenant assignments, snapshotted into
@@ -20,7 +20,7 @@
  * (the "Last synced" line + Sync-now feedback on the Costs page).
  *
  * All dependencies are injected; the internal route wires production
- * implementations. Nothing here bills anyone — operator telemetry only.
+ * implementations. Nothing here bills anyone, operator telemetry only.
  */
 
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
@@ -499,7 +499,7 @@ export function buildHostingerSnapshot(params: {
 
   const rows: HostingerVpsCostInsert[] = [];
   for (const sub of params.subscriptions) {
-    // Only VPS (KVM) subscriptions — the billing list can carry other products.
+    // Only VPS (KVM) subscriptions, the billing list can carry other products.
     const planName = sub.name ?? "";
     if (!/kvm/i.test(planName)) continue;
     const vm = vmBySubscription.get(sub.id) ?? null;

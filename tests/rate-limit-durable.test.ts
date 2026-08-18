@@ -105,7 +105,7 @@ describe("rateLimitDurable", () => {
   it("fails open when the RPC stalls past the timeout (no error, just slow)", async () => {
     vi.useFakeTimers();
     try {
-      // PostgREST hangs rather than erroring — the RPC never settles.
+      // PostgREST hangs rather than erroring, the RPC never settles.
       rpcMock.mockReturnValue(new Promise(() => {}));
       const pending = rateLimitDurable("durable-timeout", CONFIG);
       // Drain the awaited client-resolution microtasks, then trip the deadline.

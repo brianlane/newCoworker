@@ -81,7 +81,7 @@ describe("prepareSmsBody", () => {
   });
   it("strips kept emoji when the STOP suffix would push a UCS-2 body past the send cap", () => {
     // Body sits just UNDER the UCS-2 cap with an unmapped emoji kept; the
-    // appended suffix would exceed it — the rocket must be stripped, never
+    // appended suffix would exceed it, the rocket must be stripped, never
     // shipped as an unsendable 11-segment message.
     const body = `\u{1F680} ${"x".repeat(UCS2_MAX_SENDABLE_CHARS - 10)}`;
     const out = prepareSmsBody(body, { requireStop: true });

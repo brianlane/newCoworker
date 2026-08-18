@@ -4,12 +4,12 @@
  * Cron bridge for the per-minute Instagram post publisher. pg_cron hits
  * this with `Authorization: Bearer <INTERNAL_CRON_SECRET>`; we validate the
  * bearer, then forward to the Next.js internal endpoint which holds the
- * publishing logic (the Meta Graph client lives in the Node runtime) —
+ * publishing logic (the Meta Graph client lives in the Node runtime),
  * same indirection as email-campaign-sweep.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";

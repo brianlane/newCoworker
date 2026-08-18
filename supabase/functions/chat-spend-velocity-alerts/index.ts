@@ -76,7 +76,7 @@ serve(async (req: Request) => {
   const windowStartIso = new Date(now.getTime() - config.windowMinutes * 60_000).toISOString();
 
   // 2. Current spend rows (cap the lookback so a years-old stale period row
-  //    never masquerades as current — 62 days safely covers one monthly
+  //    never masquerades as current, 62 days safely covers one monthly
   //    quota window plus slack).
   const lookbackIso = new Date(now.getTime() - 62 * 24 * 60 * 60 * 1000).toISOString();
   const { data: spendRows, error: spendErr } = await supabase
@@ -131,7 +131,7 @@ serve(async (req: Request) => {
   let raced = 0;
   for (const breach of breaches) {
     // ATOMIC claim (unique on business + window-length time bucket): two
-    // overlapping invocations can't both pass — the loser gets NULL and
+    // overlapping invocations can't both pass, the loser gets NULL and
     // skips. See spend_velocity_try_claim_alert in the migration.
     const { data: claimId, error: claimErr } = await supabase.rpc(
       "spend_velocity_try_claim_alert",

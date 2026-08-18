@@ -1,13 +1,13 @@
 /**
  * Admin CRUD for enterprise deals (custom setup + monthly pricing).
  *
- * POST   — create a deal (setup + monthly, in whole USD from the admin UI)
+ * POST, create a deal (setup + monthly, in whole USD from the admin UI)
  *          for ONE enterprise-tier business. The stored row is the pricing
  *          source of truth for Stripe Checkout; the payer never supplies an
  *          amount. Returns the durable public payment link
  *          (/enterprise-offer/<pay_token>) for the admin to send.
- * GET    — list a business's deals (?businessId=<uuid>).
- * DELETE — revoke an OPEN deal (an active deal can't be revoked here; the
+ * GET, list a business's deals (?businessId=<uuid>).
+ * DELETE, revoke an OPEN deal (an active deal can't be revoked here; the
  *          underlying Stripe subscription is canceled through the normal
  *          billing lifecycle instead).
  */

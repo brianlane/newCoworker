@@ -540,7 +540,7 @@ describe("updateCaldavEventTime", () => {
     expect(calls[0].url).toBe(`${CAL_URL}${UID}.ics`);
     expect(calls[0].init.method).toBe("GET");
     expect(calls[1].init.method).toBe("PUT");
-    // No If-None-Match on the update PUT — it must overwrite the resource.
+    // No If-None-Match on the update PUT, it must overwrite the resource.
     expect((calls[1].init.headers as Record<string, string>)["If-None-Match"]).toBeUndefined();
 
     const body = calls[1].init.body as string;
@@ -571,7 +571,7 @@ describe("updateCaldavEventTime", () => {
 
   it("rewrites ONLY the VEVENT when a VTIMEZONE block precedes it", async () => {
     // Servers routinely prepend a VTIMEZONE whose STANDARD/DAYLIGHT
-    // sub-components carry their own DTSTART lines — those must survive
+    // sub-components carry their own DTSTART lines, those must survive
     // untouched while the event's parameterized times are rewritten.
     const withTimezone =
       "BEGIN:VCALENDAR\r\n" +
@@ -634,7 +634,7 @@ describe("updateCaldavEventTime", () => {
     const dateOnly = STORED_ICAL
       .replace("DTSTART:20260714T160000Z\r\n", "DTSTART;VALUE=DATE:20260714\r\n")
       .replace("DTEND:20260714T163000Z\r\n", "");
-    // The DTSTART;VALUE=DATE line gets rewritten, but DTEND is absent — the
+    // The DTSTART;VALUE=DATE line gets rewritten, but DTEND is absent, the
     // guard must refuse rather than PUT an event we cannot fully retime.
     const { impl, calls } = fetchSequence([response(200, dateOnly)]);
     await expect(

@@ -1,7 +1,7 @@
 /**
  * Write-time validation for `run_agent` AiFlow steps.
  *
- * The schema (schema.ts) can only check SHAPE — that agentId is a uuid.
+ * The schema (schema.ts) can only check SHAPE, that agentId is a uuid.
  * Whether that agent exists and is enabled requires a DB read, so the flows
  * CRUD routes and the compile pipeline call this AFTER parseAiFlowDefinition
  * (same layering as the share_document checks). The runtime re-checks at

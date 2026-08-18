@@ -3,12 +3,12 @@
  * (Admin → business → Web chat card).
  *
  * GET  → widget summary (enabled, engine, key presence).
- * POST → { replyEngine: "vps" | "gemini" } — flips who answers widget
+ * POST → { replyEngine: "vps" | "gemini" }, flips who answers widget
  *        turns. 'gemini' routes turns to the platform-side direct
  *        responder (src/lib/webchat/gemini-engine.ts), which is how a
  *        tenant with no live VPS (e.g. the internal marketing-site pilot
  *        after its box returned to the adopt pool) keeps a working chat.
- *        Applies on the visitor's next turn — no redeploy, no box contact.
+ *        Applies on the visitor's next turn, no redeploy, no box contact.
  *
  * Deliberately admin-only: the owner-facing widget settings surface never
  * exposes the engine (it's an infrastructure decision, not a preference).
@@ -61,7 +61,7 @@ export async function POST(
 
     const body = bodySchema.parse(await request.json());
     // First flip on a tenant whose owner never opened the widget settings
-    // mints the (disabled) row — the engine choice must not depend on the
+    // mints the (disabled) row, the engine choice must not depend on the
     // owner having visited their settings page first.
     await getOrCreateWidgetSettings(businessId);
     const updated = await updateWidgetSettings(businessId, {

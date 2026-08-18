@@ -626,7 +626,7 @@ describe("executeLifecyclePlan refund handling", () => {
 
   it("carves out only the POST-discount fee amount when a coupon touched the fee line", async () => {
     // Real-world shape from Truly Insurance's Jul 2026 first invoice: the
-    // monthly intro coupon ($84.00) was allocated proportionally by Stripe —
+    // monthly intro coupon ($84.00) was allocated proportionally by Stripe,
     // $78.52 onto the plan line and $5.48 onto the carrier fee line. The
     // customer effectively paid $19.50 − $5.48 = $14.02 for the fee, so the
     // carve-out must keep $14.02, not $19.50 (which would claw back part of
@@ -1183,7 +1183,7 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(hostinger.enableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
     expect(updateBusinessStatusMock).toHaveBeenCalledWith("biz_1", "wiped");
     // The wipe keeps the business row, so this is the only hook that ever
-    // revokes the tenant's Nango workspace connections — and it runs AFTER
+    // revokes the tenant's Nango workspace connections, and it runs AFTER
     // the stamp commits, so a failed stamp leaves integrations untouched.
     expect(revokeNangoConnectionsForBusinessMock).toHaveBeenCalledWith("biz_1");
     expect(revokeNangoConnectionsForBusinessMock.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -1804,13 +1804,13 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
   it("slow phase swallows SSH, Hostinger, and email failures so the background task can never crash the server", async () => {
     // The /api/billing/cancel route kicks the slow phase off as a
     // fire-and-forget Promise. Any unhandled rejection would surface as
-    // an unhandledRejection on the serverless worker — assert every
+    // an unhandledRejection on the serverless worker, assert every
     // failure class is internalised. Mix Error and non-Error rejection
     // values to exercise both branches of the defensive
     // `err instanceof Error ? err.message : String(err)` normalisation.
     backupBusinessDataMock.mockRejectedValueOnce(new Error("ssh pipe broken"));
     const hostinger = {
-      // Non-Error reject value — forces the String(err) branch on the
+      // Non-Error reject value, forces the String(err) branch on the
       // hostinger error path.
       createSnapshot: vi.fn().mockRejectedValue("hostinger 500"),
       deleteSnapshot: vi.fn(),
@@ -1840,7 +1840,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       {},
       {
         hostinger: hostinger as never,
-        // Non-Error reject value — forces String(err) on the email path.
+        // Non-Error reject value, forces String(err) on the email path.
         sendEmail: vi.fn().mockRejectedValue("smtp down")
       }
     );

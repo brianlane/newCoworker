@@ -343,7 +343,7 @@ describe("auth", () => {
     it("returns false on a partial page that doesn't contain the target (definitive miss without exhausting the scan)", async () => {
       // Hits the `users.length < perPage` short-circuit: a single
       // partial page (< perPage users, none matching) is a definitive
-      // miss — listing further pages would just churn admin API
+      // miss, listing further pages would just churn admin API
       // calls. This branch is the common case for small / fresh
       // deployments that haven't applied the RPC migration yet, so
       // its correctness directly affects every legacy fallback miss.
@@ -446,7 +446,7 @@ describe("auth", () => {
         }),
         auth: {
           admin: {
-            // Error object intentionally has no `message` field — pins
+            // Error object intentionally has no `message` field, pins
             // the `?? "unknown error"` fallback in the listUsers
             // branch.
             listUsers: vi
@@ -465,7 +465,7 @@ describe("auth", () => {
       // Branch coverage for the `(u.email ?? "")` fallback inside
       // the page scan. Real auth.users rows occasionally carry null
       // emails (provider-only signups, post-deletion soft-tombstones,
-      // historical rows) — the comparator must skip them rather than
+      // historical rows), the comparator must skip them rather than
       // throw on `null.toLowerCase()`.
       vi.mocked(createSupabaseServiceClient).mockResolvedValue({
         rpc: vi.fn().mockResolvedValue({
@@ -495,7 +495,7 @@ describe("auth", () => {
       // null `data` payload (so the `?? []` defensive fallback runs)
       // and the resulting empty users array hits the
       // `users.length === 0` early-return. This is the "fewer users
-      // than perPage and the FIRST page is empty" shape — a
+      // than perPage and the FIRST page is empty" shape, a
       // freshly-provisioned auth schema, for instance.
       vi.mocked(createSupabaseServiceClient).mockResolvedValue({
         rpc: vi.fn().mockResolvedValue({

@@ -43,7 +43,7 @@ export function foldIcsLine(line: string): string {
 }
 
 export type IcsEvent = {
-  /** Stable per-event identifier — the same booking must keep the same UID
+  /** Stable per-event identifier, the same booking must keep the same UID
    * across fetches, or subscribing clients duplicate it. */
   uid: string;
   summary: string;
@@ -59,7 +59,7 @@ export type IcsEvent = {
  * feed and REPLACE their copy with its contents, so an event that stops
  * appearing (a canceled booking, whose ledger row is deleted) simply
  * disappears on the next sync. No SEQUENCE or STATUS:CANCELLED dance is
- * needed — that machinery belongs to iTIP invitations, not feeds.
+ * needed, that machinery belongs to iTIP invitations, not feeds.
  *
  * Events with an unparseable start or end are skipped rather than rendered
  * broken: one bad row must not corrupt the whole calendar for every

@@ -11,7 +11,7 @@ import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
- * fireLifecycleStage: the Node-side wrapper around applyLifecycleStage —
+ * fireLifecycleStage: the Node-side wrapper around applyLifecycleStage,
  * phone normalization in front, service client supplied, best-effort
  * throughout. The tagging rules themselves live in
  * pipelines-lifecycle-apply.test.ts; this is the plumbing.

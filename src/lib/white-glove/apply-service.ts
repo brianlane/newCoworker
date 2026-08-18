@@ -8,12 +8,12 @@
  *      previous apply's block, never owner edits outside the markers);
  *   2. `businesses.business_hours` when the free text parsed (plus a
  *      profile_md refresh so prompts pick the hours up);
- *   3. the "Lead follow-up" flow — created DISABLED on first apply so the
+ *   3. the "Lead follow-up" flow, created DISABLED on first apply so the
  *      owner approves the wording, updated in place on re-apply (the flow's
  *      enabled state is preserved);
  *   4. the intake row's business link + `applied_at` / `applied_flow_id`.
  *
- * The caller (admin route) schedules the vault → VPS sync afterwards —
+ * The caller (admin route) schedules the vault → VPS sync afterwards,
  * `scheduleVaultSync` needs the request scope this module deliberately
  * avoids so it stays unit-testable.
  *
@@ -81,7 +81,7 @@ export async function applyWhiteGloveIntake(
     );
   }
   // An intake already tied to a tenant (at create time or by an earlier
-  // apply) can never be applied to a DIFFERENT one — that would write one
+  // apply) can never be applied to a DIFFERENT one, that would write one
   // customer's build document into another customer's coworker.
   if (intake.business_id && intake.business_id !== args.businessId) {
     throw new WhiteGloveApplyError(
@@ -101,7 +101,7 @@ export async function applyWhiteGloveIntake(
   });
 
   // Vault blocks (marker-replace) with the cap check BEFORE the claim below,
-  // so every typed refusal leaves the intake exactly as it was found — a
+  // so every typed refusal leaves the intake exactly as it was found, a
   // vault_over_limit must never pin an unlinked intake to a business that
   // received nothing. Loud failure over silent truncation.
   const config = await getBusinessConfig(args.businessId, db);
@@ -121,13 +121,13 @@ export async function applyWhiteGloveIntake(
   }
 
   // Atomically CLAIM the intake for this tenant before writing anything.
-  // The read-then-check above is only a fast path — two overlapping applies
+  // The read-then-check above is only a fast path, two overlapping applies
   // targeting different tenants would both pass it; the conditional UPDATE
   // (unlinked-or-same-business) makes exactly one of them proceed.
   //
   // Every typed refusal is thrown BEFORE this claim, so a refused apply
   // leaves the intake exactly as it was found. A failure AFTER the claim is
-  // a write failure — data may already have landed on this tenant — so the
+  // a write failure, data may already have landed on this tenant, so the
   // claim deliberately stays in place: re-applying to the SAME business is
   // the idempotent recovery, and the mismatch guard keeps a half-built
   // tenant's intake from ever being re-pointed at a different one.
@@ -166,7 +166,7 @@ async function performApplyWrites(args: {
 
   // 2. Business hours (only when the free text parsed) + profile_md refresh
   //    so prompt composition picks the change up. Parsed days are MERGED over
-  //    the tenant's existing hours — a dayless intake ("11am to 6pm" →
+  //    the tenant's existing hours, a dayless intake ("11am to 6pm" →
   //    Mon–Fri) must not silently drop a weekend the owner configured in
   //    Settings. The refresh is best-effort by contract
   //    (refreshBusinessProfileMdAndLog never throws).
@@ -185,7 +185,7 @@ async function performApplyWrites(args: {
   //    (preserving its enabled state), else create it DISABLED for review.
   //    The stamped applied_flow_id is the primary reference; falling back to
   //    a NAME lookup keeps a retry idempotent when a previous apply created
-  //    the flow but died before stamping the intake row — without it, that
+  //    the flow but died before stamping the intake row, without it, that
   //    retry would install a duplicate flow on the same webhook trigger.
   let existingFlowId: string | null = null;
   if (intake.applied_flow_id) {

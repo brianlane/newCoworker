@@ -3,7 +3,7 @@
  *
  * Mirrors the Texts/Calls server-component pattern: resolve the caller's
  * business via service-role lookup after auth, then render a read-only list
- * of coworker email activity from `email_log` — AiFlow sends (Resend and
+ * of coworker email activity from `email_log`, AiFlow sends (Resend and
  * owner-mailbox) plus the inbound emails that triggered flows.
  */
 
@@ -128,7 +128,7 @@ export default async function DashboardEmailsPage({
   const [listRows, flows, linkedRow] = await Promise.all([
     listEmailLog(business.id, listFilters),
     // Replay targets ("Replay through flow" on unmatched inbox mail): enabled
-    // flows that read the AI mailbox. Best-effort — no flows just hides the
+    // flows that read the AI mailbox. Best-effort, no flows just hides the
     // action.
     listAiFlows(business.id).catch(() => []),
     // The row a deep link names, fetched separately so a link tapped days
@@ -150,7 +150,7 @@ export default async function DashboardEmailsPage({
     .map((f) => ({ id: f.id, name: f.name }));
 
   // Link addresses to contact profiles (contacts.email match) so the reading
-  // pane's From/To/Cc lines navigate to the contact page. Best-effort — on
+  // pane's From/To/Cc lines navigate to the contact page. Best-effort, on
   // failure the addresses just render unlinked.
   const emailContacts: Record<string, EmailContactLink> = {};
   try {

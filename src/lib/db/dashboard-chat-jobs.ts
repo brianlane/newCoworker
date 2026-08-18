@@ -11,7 +11,7 @@
  *   - vps/chat-worker/worker.mjs
  *
  * Access is service-role only; all callers MUST gate on requireOwner()
- * before invoking — same trust model as the rest of dashboard-chat.ts.
+ * before invoking, same trust model as the rest of dashboard-chat.ts.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -48,8 +48,8 @@ export type DashboardChatJobRow = {
    * Stateless-retry fallback input. Non-null only when the first-attempt
    * input was a continuation call (Rowboat's server-side state expected
    * to fill in the conversation tail). On a STATELESS_RETRY_ERRORS-class
-   * failure the worker re-invokes Rowboat with THIS variant — which
-   * already includes the tail as a system message — and WITHOUT a
+   * failure the worker re-invokes Rowboat with THIS variant, which
+   * already includes the tail as a system message, and WITHOUT a
    * conversationId, so the call succeeds entirely off our local prompt.
    * Null on fresh-thread jobs where the first-attempt input is already
    * stateless (no fallback escalation makes sense).
@@ -80,7 +80,7 @@ export type DashboardChatJobRow = {
  *
  * Idempotency: callers MUST pass a fresh `userMessageId` per turn.
  * Re-using the same `userMessageId` for a second job would create a
- * duplicate worker run — there's no unique index on `user_message_id`
+ * duplicate worker run, there's no unique index on `user_message_id`
  * (deliberately, to keep stateless retries cheap if the route ever
  * needs them) so the schema doesn't catch that mistake.
  */
@@ -92,7 +92,7 @@ export async function insertChatJob(
     inputMessages: DashboardChatJobInputMessage[];
     /**
      * Stateless-retry fallback input. Pass null when the first-attempt
-     * input is ALREADY stateless (fresh thread, no continuation) — the
+     * input is ALREADY stateless (fresh thread, no continuation), the
      * worker treats null as "no fallback path" and any error from the
      * single attempt is final.
      */
@@ -152,7 +152,7 @@ export async function getChatJobById(
  * Sized just above the worker's absolute worst case (primary attempt +
  * stateless retry = 2 × WORKER_ROWBOAT_TIMEOUT_MS (240s) + DB headroom).
  * A job older than this that's STILL `queued`/`processing` is almost
- * certainly orphaned (worker was down — see the May 11 Realtime/Supabase
+ * certainly orphaned (worker was down, see the May 11 Realtime/Supabase
  * incident) and reclaim_stale_chat_jobs() will eventually flip or error
  * it; we don't want such a corpse to render a permanent "thinking…"
  * indicator on every page load.
@@ -164,7 +164,7 @@ export const IN_FLIGHT_CHAT_JOB_MAX_AGE_MS = 10 * 60 * 1000;
  * "your coworker is thinking…" indicator after a refresh / navigation.
  *
  * Only `queued`/`processing` rows newer than {@link IN_FLIGHT_CHAT_JOB_MAX_AGE_MS}
- * qualify — see that constant for why stale rows are excluded. Returns the
+ * qualify, see that constant for why stale rows are excluded. Returns the
  * newest match (a thread should only ever have one live job, but ordering
  * newest-first is belt-and-suspenders if a reclaim race ever leaves two).
  */

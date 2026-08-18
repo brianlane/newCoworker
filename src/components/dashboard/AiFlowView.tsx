@@ -63,7 +63,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 /**
  * Display text for a voice number source: the hardcoded E.164 when set,
  * otherwise the saved-contact reference's label (the person's name captured
- * when picked — the live number is resolved at call time).
+ * when picked, the live number is resolved at call time).
  */
 function voiceTarget(e164: string | undefined, ref: { label?: string } | undefined): string {
   if (e164) return e164;
@@ -98,7 +98,7 @@ function conditionLabel(c: TriggerCondition): string {
 function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; heading?: string }) {
   // Our own integrations ride the webhook channel, so a flow pinned to one of
   // them must not be labelled "Webhook (Zapier, Make, or API)" anywhere on
-  // this page — the generic label is for the channel PICKER, where the owner
+  // this page, the generic label is for the channel PICKER, where the owner
   // is choosing a channel type, not for a flow whose source we already know.
   const webhookSource =
     trigger.channel === "webhook" ? describeWebhookTriggerSource(trigger.conditions) : null;
@@ -251,7 +251,7 @@ function ConditionsView({ conditions }: { conditions: TriggerCondition[] }) {
   );
 }
 
-/** "price_band equals \"over_1m\"" — the human reading of a StepCondition. */
+/** "price_band equals \"over_1m\"", the human reading of a StepCondition. */
 function conditionText(when: StepCondition): string {
   const operator =
     when.equals !== undefined ? "equals" : when.notEquals !== undefined ? "does not equal" : "contains";

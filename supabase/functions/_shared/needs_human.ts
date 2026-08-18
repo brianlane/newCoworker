@@ -1,5 +1,5 @@
 /**
- * "Needs human intervention" escalation — the promised behavior when the
+ * "Needs human intervention" escalation, the promised behavior when the
  * AI runs into something it can't handle:
  *
  *   the conversation flips into a needs-human state, the owner is notified,
@@ -57,7 +57,7 @@ export type EscalationInput = {
   businessId: string;
   /** The texter's number (the inbound `from`). */
   contactE164: string;
-  /** Why the model handed off — the reasoning trailer's rationale. */
+  /** Why the model handed off, the reasoning trailer's rationale. */
   reason: string;
   /** The texter's goal (reasoning trailer intent, snake_case). */
   intent: string;
@@ -84,7 +84,7 @@ export type EscalationResult =
 
 /**
  * businesses.needs_human_team_first, read fail-safe: any error (or a missing
- * row) counts as OFF so the escalation degrades to the page-the-owner path —
+ * row) counts as OFF so the escalation degrades to the page-the-owner path,
  * a toggle-read hiccup must never silence an alert.
  */
 async function teamFirstEnabled(supabase: AnyClient, businessId: string): Promise<boolean> {
@@ -123,7 +123,7 @@ type EscalationContactRow = {
 
 /**
  * Open the needs-human state: write the tag, then fire the SAME hooks as
- * every other tag write path — goal events on every linked number, and the
+ * every other tag write path, goal events on every linked number, and the
  * tag_changed contact-event trigger (which is what starts a team-offer
  * flow). Returns whether the tag landed and how many flow runs the event
  * enqueued, so the caller can decide whether a direct owner page is still
@@ -188,13 +188,13 @@ async function openNeedsHumanState(
  * falls back to the page-first ordering below.
  *
  * The page comes before the tag so a failed notification never strands a
- * tagged-but-never-paged contact behind the `already_open` dedupe — a
+ * tagged-but-never-paged contact behind the `already_open` dedupe, a
  * failed page leaves NO state, and the next escalated turn retries. A
  * failed tag write after a successful page errs the other way (a possible
  * duplicate page next turn), which is the safe direction.
  *
  * `already_open` = the contact carries the tag (owner hasn't cleared it),
- * or — for untaggable contacts — a notifications row shows a page within
+ * or, for untaggable contacts, a notifications row shows a page within
  * NEEDS_HUMAN_REPAGE_HOURS.
  */
 export async function escalateToHuman(
@@ -214,7 +214,7 @@ export async function escalateToHuman(
     const contact = data as EscalationContactRow | null;
 
     // Dedupe 1: the tag is the open/closed state. For contacts that can
-    // carry it, it is the ONLY dedupe — when the owner clears the tag they
+    // carry it, it is the ONLY dedupe, when the owner clears the tag they
     // are saying "resolved", and a fresh handoff (even minutes later) must
     // page again rather than silently vanish into a history-window match.
     if (contact && hasNeedsHumanTag(contact.tags)) return "already_open";
@@ -224,11 +224,11 @@ export async function escalateToHuman(
     const canCarryTag = Boolean(contact?.id) && existingTags.length < MAX_TAGS;
 
     // TEAM-FIRST: with businesses.needs_human_team_first ON, the tag + hooks
-    // go FIRST — the tag_changed hook enqueues the team-offer flow, whose
+    // go FIRST, the tag_changed hook enqueues the team-offer flow, whose
     // broadcast owns notification (owner paged only by its timeout fallback).
     // The direct owner page is skipped ONLY when a run really enqueued; a
     // deleted/disabled flow, a deduped enqueue, or a failed tag write all
-    // fall through to the page below — silence is never the end state.
+    // fall through to the page below, silence is never the end state.
     // Untaggable contacts (no row, tag cap) never consult the toggle: the
     // tag is the open/closed state the whole feature hangs off.
     let teamFirstTagWritten = false;
@@ -264,7 +264,7 @@ export async function escalateToHuman(
       // escalation.
     }
 
-    // Dedupe 2 (ONLY for contacts that cannot carry the tag — no CRM row, or
+    // Dedupe 2 (ONLY for contacts that cannot carry the tag, no CRM row, or
     // a row at the tag cap): recent-page fallback against the notifications
     // history, so every turn of an open escalation doesn't page again. The
     // notifications function stamps contactE164 into every history row for
@@ -292,7 +292,7 @@ export async function escalateToHuman(
 
     // 1) Page the owner FIRST (notifications function fans out SMS/email/
     // dashboard per their preferences and records the history rows). A
-    // failure leaves no state so the next escalated TURN retries — and
+    // failure leaves no state so the next escalated TURN retries, and
     // because the reply path only escalates on the fresh-reply attempt
     // (cached retries skip it), transient upstream blips get a bounded
     // in-call retry here so one 503 can't lose the page for a job whose
@@ -346,7 +346,7 @@ export async function escalateToHuman(
     if (!delivered) {
       // Team-first wrote the tag BEFORE this page (the flow was supposed to
       // own notification, but no run enqueued). A failed page must not leave
-      // the tag behind — the next escalated turn would hit `already_open`
+      // the tag behind, the next escalated turn would hit `already_open`
       // and the owner would NEVER hear about it (Bugbot, PR #801). Roll the
       // tag back, best-effort, so the retry semantics match the legacy
       // page-first ordering: a failed page leaves NO state.
@@ -360,7 +360,7 @@ export async function escalateToHuman(
       return "notify_failed";
     }
 
-    // 2) Open the needs-human state (contacts with tag headroom only —
+    // 2) Open the needs-human state (contacts with tag headroom only,
     // untaggable contacts were deduped against the history above). A
     // team-first attempt that already WROTE the tag is not repeated; one
     // whose write FAILED gets the same retry the legacy path would.

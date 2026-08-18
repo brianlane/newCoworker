@@ -7,7 +7,7 @@
  * Loud-on-missing semantics: TELNYX_CONNECTION_ID is the Call Control
  * Application id Telnyx routes inbound voice webhooks through. When it
  * was unset (early platform days), provisioning silently ordered numbers
- * with `connection_id: ""`, leaving the DID dangling — Telnyx had nowhere
+ * with `connection_id: ""`, leaving the DID dangling, Telnyx had nowhere
  * to send call.initiated events, owners heard "the call could not be
  * completed", and the failure mode was invisible until someone tried to
  * call. assertPlatformTelnyxDefaults() is the canary: the orchestrator

@@ -6,10 +6,10 @@
  *   1. `browse` gains `screenshot: true` (render service captures the lead page).
  *   2. Three gated `send_email` steps right after `browse` email the owner the
  *      lead with the screenshot attached. Subject codes: BS for buyers, QT for
- *      sellers, BS QT for both — "{{vars.lead_name}} <code> RX".
+ *      sellers, BS QT for both, "{{vars.lead_name}} <code> RX".
  *   3. The single ungated `route_to_team` step is replaced by three gated
- *      copies (buyer / seller / both) — so routing only runs when lead_type
- *      extracted to a known value — each with `attachScreenshot: true` so the
+ *      copies (buyer / seller / both), so routing only runs when lead_type
+ *      extracted to a known value, each with `attachScreenshot: true` so the
  *      agent offer SMS carries the screenshot as MMS.
  *
  * Validates the result through parseAiFlowDefinition before writing, prints

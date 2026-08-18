@@ -107,7 +107,7 @@ describe("POST /api/admin/telnyx/assign-did, platform-defaults assertion guard",
       expect.objectContaining({
         associateWithPlatform: false
       }),
-      // No telnyx client passed when associate=false — DB-only update.
+      // No telnyx client passed when associate=false, DB-only update.
       { telnyxNumbers: undefined }
     );
   });

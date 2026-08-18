@@ -2,27 +2,27 @@
  * SSH-based backup/restore of durable tenant data to Supabase Storage.
  *
  * Used by the lifecycle engine in two places:
- *   * cancel-grace — snapshot + tarball before we tear the VM down so the
+ *   * cancel-grace, snapshot + tarball before we tear the VM down so the
  *     user's content survives the 30-day data-retention window; restored
  *     on reactivation during grace.
- *   * change-plan — same tarball primitive, restored into the freshly-
+ *   * change-plan, same tarball primitive, restored into the freshly-
  *     provisioned VM at the new tier before we cut the Cloudflare tunnel
  *     over.
  *
  * Why SSH tar and not Hostinger snapshots as the durable artefact?
  * Hostinger snapshots are attached to the VM and destroyed with it (manual
- * hPanel deletion or billing lapse — see plan blocker B1). To survive
+ * hPanel deletion or billing lapse, see plan blocker B1). To survive
  * cancellation we need an off-VPS artefact, and Supabase Storage is the
  * cheapest durable option already in our stack.
  *
  * Durable directories (must match `vps/scripts/deploy-client.sh`):
- *   * /opt/rowboat/vault   — soul.md, identity.md, memory.md, website.md
- *   * /opt/rowboat/memory  — Organizations/, People/, Topics/, Projects/
+ *   * /opt/rowboat/vault, soul.md, identity.md, memory.md, website.md
+ *   * /opt/rowboat/memory, Organizations/, People/, Topics/, Projects/
  *                            plus `.newcoworker-seeds/` manifests
  *
  * Everything else (the Rowboat image, env files, tunnel credentials, etc.)
  * is re-derived by the deploy-client.sh run on the new VM, so we do NOT
- * back it up — keeping the tarball small and avoiding stale-config drift.
+ * back it up, keeping the tarball small and avoiding stale-config drift.
  */
 
 import * as nodeCrypto from "node:crypto";
@@ -45,7 +45,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
  */
 export const DURABLE_DATA_DIRS = ["vault", "memory"] as const;
 
-/** Bucket the tarballs live in. Private — never exposed to tenant clients. */
+/** Bucket the tarballs live in. Private, never exposed to tenant clients. */
 export { DATA_BACKUP_BUCKET } from "@/lib/db/data-backups";
 
 export type SshExecutor = (opts: {
@@ -117,7 +117,7 @@ export type RestoreResult = {
 /**
  * Deterministic storage path per business: `backups/<businessId>/latest.tar.gz`.
  * One-per-business (matches the `data_backups` PK on business_id). We
- * deliberately don't timestamp — the lifecycle only ever needs the most
+ * deliberately don't timestamp, the lifecycle only ever needs the most
  * recent snapshot and overwriting keeps storage bounded.
  */
 export function buildBackupStoragePath(businessId: string): string {
@@ -259,7 +259,7 @@ export async function backupBusinessData(
  * target VPS, untar under /opt/rowboat, chown, and verify sha. Intentionally
  * the inverse of {@link backupBusinessData} so sha equality is the integrity
  * gate. Callers (change-plan, reactivate) are expected to kick the service
- * stack themselves (deploy-client.sh re-run / docker compose up) — this
+ * stack themselves (deploy-client.sh re-run / docker compose up), this
  * function is a pure data restore, not a service-bring-up.
  */
 export async function restoreBusinessData(

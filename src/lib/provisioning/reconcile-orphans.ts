@@ -7,7 +7,7 @@
  * materialized ~58s later) while STILL creating the VM and an active billing
  * subscription. Because `acquireVps` only records pool bookkeeping when the
  * purchase call RETURNS, such a box becomes an invisible orphan: paid for,
- * sitting in `initial`, and unknown to `vps_inventory` — so the next
+ * sitting in `initial`, and unknown to `vps_inventory`, so the next
  * provisioning attempt buys ANOTHER box (double spend).
  *
  * This module closes that gap. On a purchase failure the orchestrator calls
@@ -15,23 +15,23 @@
  * {@link reconcileUntilSizeMatch}), which lists the account's VMs and pools
  * (state=available) every box that:
  *
- *   - was created recently (default: within the last 30 minutes — old strays
+ *   - was created recently (default: within the last 30 minutes, old strays
  *     like retired experiments must never get auto-pooled), AND
  *   - carries the fail-but-charge signature: Hostinger `state === "initial"`
  *     with NO template applied. When the purchase call fails, the embedded
  *     setup payload is never applied, so the box sits in `initial` with
  *     `template: null` (observed on VMs 1806114 and 1815606). A healthy
  *     concurrent purchase's box has its template from the setup payload and
- *     moves to installing/running — and a `running` tenant box whose
+ *     moves to installing/running, and a `running` tenant box whose
  *     post-purchase pool bookkeeping failed (bookkeeping is best-effort)
  *     must NEVER be pooled out from under its business, AND
  *   - has a recognizable KVM plan (kvm1/kvm2/kvm4/kvm8), AND
- *   - is not already tracked in `vps_inventory` (any state — a `retired` row
+ *   - is not already tracked in `vps_inventory` (any state, a `retired` row
  *     means the box was deliberately pulled and must stay out).
  *
  * The caller can then re-run the adopt-first claim (or, for term purchases
  * with `skipPoolAdopt`, adopt the SPECIFIC reconciled orphan) so the paid
- * box is used instead of purchasing again — turning the fail-but-charge trap
+ * box is used instead of purchasing again, turning the fail-but-charge trap
  * into a self-healing path.
  *
  * Everything is dependency-injected so tests run without Hostinger or a
@@ -80,7 +80,7 @@ export const ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES = 3;
 
 /**
  * Normalize Hostinger's human plan label ("KVM 2") to our VpsSize slug
- * ("kvm2"). Returns null for unrecognized plans so callers skip them —
+ * ("kvm2"). Returns null for unrecognized plans so callers skip them,
  * pooling a box we can't size-match would poison the adopt-first claim.
  */
 export function normalizeHostingerPlan(plan: string | undefined | null): VpsSize | null {
@@ -156,7 +156,7 @@ export async function reconcileOrphanedPurchases(args: {
   for (const vm of vms) {
     if (knownVmIds.has(vm.id)) continue;
     // Fail-but-charge signature gate (see module header): only a box that
-    // was never set up — `initial` with no template — is safe to pool. A
+    // was never set up, `initial` with no template, is safe to pool. A
     // running/installing box may belong to a live tenant or a concurrent
     // in-flight provision; stealing it into the pool would let another
     // signup recreate it.
@@ -200,7 +200,7 @@ export async function reconcileOrphanedPurchases(args: {
 /**
  * True when an orphan is eligible as the size match for this purchase
  * attempt. Without `minCreatedAtMs`, any size match counts. With it, only
- * orphans created at/after that stamp count — so an unrelated recent
+ * orphans created at/after that stamp count, so an unrelated recent
  * fail-but-charge of the same size cannot end the wait before THIS
  * purchase's VM materializes.
  */

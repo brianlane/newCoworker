@@ -12,10 +12,10 @@
  *   * Ordering is sacred: on the first failing row/batch the business's
  *     drain STOPS. Skipping ahead could replay a delete before its insert
  *     or an old update over a newer one.
- *   * Confirmed rows are DELETED — central Supabase holds residency
+ *   * Confirmed rows are DELETED, central Supabase holds residency
  *     content in transit only, never at rest in the journal.
  *   * A tenant flipped back to 'supabase' mode gets pending rows marked
- *     skipped (audited via last_error) instead of replayed — the box is no
+ *     skipped (audited via last_error) instead of replayed, the box is no
  *     longer authoritative and must not keep receiving writes.
  *   * Every batch is capped and the whole run is bounded, so a huge
  *     backlog degrades to "multiple runs", never to an unbounded request.
@@ -89,7 +89,7 @@ function pkKeyOf(row: JournalRow): string | null {
 }
 
 /**
- * Consecutive same-table upserts collapse into one batched insert call —
+ * Consecutive same-table upserts collapse into one batched insert call,
  * EXCEPT when a batch would touch the same primary key twice: Postgres
  * rejects a single `INSERT … ON CONFLICT DO UPDATE` that affects one row
  * twice ("cannot affect row a second time"), so a rapid update-update pair
@@ -137,8 +137,8 @@ export function deleteFiltersFor(
 
 /**
  * Upserts can carry columns the payload rows don't share with each other
- * (schema drift between journal time and now is impossible within one batch
- * — the trigger snapshots full row images — but defensive normalization
+ * (schema drift between journal time and now is impossible within one batch,
+ * the trigger snapshots full row images, but defensive normalization
  * keeps the batch insert well-formed if a migration lands mid-backlog).
  */
 export function normalizeBatchColumns(
@@ -203,7 +203,7 @@ async function drainBusiness(
   const result: ReplayBusinessResult = { businessId, replayed: 0, skipped: 0 };
 
   // Mode re-check: a tenant rolled back to central must stop receiving
-  // replicated writes immediately — pending rows are marked skipped, kept
+  // replicated writes immediately, pending rows are marked skipped, kept
   // nowhere (deleted) since central remains the source of truth anyway.
   const { data: biz, error: bizError } = await db
     .from("businesses")
@@ -248,7 +248,7 @@ async function drainBusiness(
     if (!isResidencyMovedTable(table)) {
       // A journal row for a table the box does not host can never replay;
       // stopping here would wedge the business forever, so record + stop
-      // loudly — this indicates a trigger/inventory mismatch that needs a
+      // loudly, this indicates a trigger/inventory mismatch that needs a
       // human (it cannot happen while the migration and tables.ts agree).
       await markBatchFailed(db, chunk, `unknown moved table: ${table}`);
       result.stoppedAt = chunk[0].seq;

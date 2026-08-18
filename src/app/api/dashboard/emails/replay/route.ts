@@ -9,7 +9,7 @@
  * because the flow was disabled when they arrived) through the chosen
  * tenant_email flow, as BACKFILL runs: the worker files brand-new leads and
  * runs the full flow for them, but ends the run without outreach when the
- * lead already exists as a contact — a replay can never double-text.
+ * lead already exists as a contact, a replay can never double-text.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_aiflows")
  * (admins bypass, same convention as the lead-import route). The target flow
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     const body = bodySchema.parse(raw);
 
     // Same gating shape as the lead-import target flow: it must exist for
-    // THIS business and be enabled — and here it must actually read the AI
+    // THIS business and be enabled, and here it must actually read the AI
     // mailbox, or every replayed run would just fail confusingly.
     const flow = await getAiFlow(businessId, body.flowId);
     if (!flow) return errorResponse("NOT_FOUND", "Flow not found", 404);

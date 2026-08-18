@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     await setBusinessPaused(body.businessId, body.paused);
     if (user.isAdmin) {
       // Only OPERATOR-initiated flips go to the admin audit trail. The one
-      // self-service case is the admin pausing a tenant they OWN — anything
+      // self-service case is the admin pausing a tenant they OWN, anything
       // else (no relationship, or a mere staff/manager grant on a customer
       // business) is a fleet-operator action and must be audited. A failed
       // role lookup fails toward auditing (an extra row beats a gap).

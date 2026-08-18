@@ -1,5 +1,5 @@
 /**
- * Email campaigns — dashboard management API.
+ * Email campaigns, dashboard management API.
  *
  *   GET  /api/dashboard/campaigns?businessId=…   → list campaigns
  *   POST /api/dashboard/campaigns                → create (draft or scheduled)

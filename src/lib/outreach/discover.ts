@@ -1,5 +1,5 @@
 /**
- * Prospecting — discovery through the Google Places Text Search API.
+ * Prospecting, discovery through the Google Places Text Search API.
  *
  * The tenant's own targeting drives this: each search term is crossed with
  * each service-area city, and the resulting query list is interleaved
@@ -84,7 +84,7 @@ export const PLATFORM_HOSTS = [
   "thumbtack.com"
 ];
 
-/** Places results requested per query — a page is 20, we want the top few. */
+/** Places results requested per query, a page is 20, we want the top few. */
 export const PLACES_RESULTS_PER_QUERY = 8;
 
 /** Paid Places queries a single discovery pass may run. */
@@ -156,7 +156,7 @@ export function rotationWindow<T>(rotation: T[], dayIndex: number, perRun: numbe
   return out;
 }
 
-/** Days since the epoch — the rotation's cursor, so it needs no stored state. */
+/** Days since the epoch, the rotation's cursor, so it needs no stored state. */
 export function dayIndexFor(now: Date): number {
   return Math.floor(now.getTime() / 86_400_000);
 }

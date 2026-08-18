@@ -142,7 +142,7 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
     }
 
     // Idempotent delete: removing an already-removed member is a no-op, not
-    // a 404 — flaky-network retries shouldn't error.
+    // a 404, flaky-network retries shouldn't error.
     await deleteTeamMember(businessId, id);
     return successResponse({ ok: true });
   } catch (err) {

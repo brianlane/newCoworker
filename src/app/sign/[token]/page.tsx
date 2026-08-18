@@ -37,7 +37,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
 
   const signed = request.status === "signed";
   // A signed certificate renders the SNAPSHOT taken at signing, never the
-  // live document — later edits must not change what the record displays.
+  // live document, later edits must not change what the record displays.
   const displayContent = signed
     ? (request.signed_content_md ?? document.content_md)
     : document.content_md;

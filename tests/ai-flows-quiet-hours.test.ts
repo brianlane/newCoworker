@@ -11,7 +11,7 @@ import {
   zonedClock
 } from "../supabase/functions/_shared/ai_flows/quiet_hours";
 
-// Phoenix never observes DST, so UTC-7 holds year-round — exact-instant
+// Phoenix never observes DST, so UTC-7 holds year-round, exact-instant
 // assertions below stay stable no matter when the suite runs.
 const PHX = "America/Phoenix";
 /** Epoch ms for a Phoenix wall-clock time on 2026-06-09 (UTC-7). */

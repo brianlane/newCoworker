@@ -155,7 +155,7 @@ describe("POST /api/voice/tools/sms", () => {
     );
     const body = await res.json();
     expect(body.ok).toBe(true);
-    // Both the STOP-list check and Telnyx get the canonical E.164 form —
+    // Both the STOP-list check and Telnyx get the canonical E.164 form,
     // formatting must never let a stopped number slip past the exact match.
     expect(checkSmsOptOut).toHaveBeenCalledWith(BIZ, "+16025550147");
     expect(sendTelnyxSms).toHaveBeenCalledWith(expect.anything(), "+16025550147", "hi", {

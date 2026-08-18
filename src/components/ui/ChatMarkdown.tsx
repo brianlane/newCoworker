@@ -47,7 +47,7 @@ export function InlineMarkdown({ text }: { text: string }) {
 /**
  * Markdown image, restricted to the owner-authenticated generated-image
  * proxy. Only a same-origin `/api/dashboard/images/<uuid>/<uuid>.<ext>`
- * source (the exact shape the generator writes) renders as an `<img>` — any
+ * source (the exact shape the generator writes) renders as an `<img>`, any
  * other URL stays plain text, so the model can never embed an arbitrary
  * remote image (tracking pixels, mixed content) in owner chat. The src is
  * REBUILT from the strictly-charset-limited match groups (hex/dash uuids +
@@ -115,7 +115,7 @@ export function ChatMarkdown({ text }: { text: string }) {
           <p key={blockIdx}>
             {lines.map((line, i) => {
               // The model may keep the image on the same block as its text
-              // (no blank line) — still render it inline.
+              // (no blank line), still render it inline.
               const lineImage = chatImageFromLine(line);
               return (
                 <span key={i}>

@@ -9,7 +9,7 @@ import {
 } from "@/lib/ai-flows/manual-run-tool";
 
 /**
- * Shared cores behind BOTH dashboard-chat "run automations" surfaces — the
+ * Shared cores behind BOTH dashboard-chat "run automations" surfaces, the
  * inline action tools and the Rowboat dispatcher's dashboard_ twins. The
  * behavior here is model-facing contract: honest refusals, never a fake
  * success.

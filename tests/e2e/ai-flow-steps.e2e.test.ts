@@ -8,8 +8,8 @@ import {
 import { geminiJson } from "./gemini";
 
 /**
- * The two AI-decision steps every serious flow leans on — extract_text and
- * classify — against the LIVE model with the worker's exact prompts, parsers,
+ * The two AI-decision steps every serious flow leans on, extract_text and
+ * classify, against the LIVE model with the worker's exact prompts, parsers,
  * and generation config. Unit tests pin the prompt/parser logic with scripted
  * responses; this layer pins that the real model, given those prompts,
  * actually returns decisions the parsers accept and the flows route on.
@@ -98,7 +98,7 @@ describe("classify step live", () => {
     { retry: 1, timeout: 60_000 },
     async () => {
       // Run 5575c2b2: the reply the pre-patch dead end dropped. The late
-      // fork uses its own question wording — pin the recorded utterance
+      // fork uses its own question wording, pin the recorded utterance
       // against THAT prompt, not the first-reply one.
       const raw = await geminiJson(
         buildClassifyPrompt(

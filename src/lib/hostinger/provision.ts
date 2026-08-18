@@ -12,7 +12,7 @@
  *      `/api/vps/v1/post-install-scripts`. On accounts that already own a
  *      VPS this returns 200 and we attach `post_install_script_id` to the
  *      setup payload so cloud-init runs the bootstrap at first boot.
- *      Brand-new accounts hit `403 [VPS:2000] Unauthorized` here — that's
+ *      Brand-new accounts hit `403 [VPS:2000] Unauthorized` here, that's
  *      expected (chicken-and-egg: you can only register a script after the
  *      account owns at least one VPS), so we swallow the 403 and let the
  *      orchestrator's SSH-bootstrap path run the same script content over
@@ -231,10 +231,10 @@ export const DEFAULT_TIER_PRICE_ITEM: Record<"starter" | "standard", string> = {
 export const DEFAULT_TEMPLATE_ID = 1121;
 
 /**
- * Boston 2 — the only US data center in Hostinger's fleet as of 2026-04-29.
+ * Boston 2, the only US data center in Hostinger's fleet as of 2026-04-29.
  *
  * The previous Boston DC (id 17) was retired and replaced with `bos2` (id 24).
- * `GET /api/vps/v1/data-centers` is the source of truth — verify with
+ * `GET /api/vps/v1/data-centers` is the source of truth, verify with
  * `scripts/hostinger-preflight.ts` whenever Hostinger announces a fleet
  * change. Sending `data_center_id: 17` to the purchase endpoint after the
  * retirement returns HTTP 422 with `{ "errors": { "data_center_id": ["…"] } }`,
@@ -248,7 +248,7 @@ export type ProvisionVpsForBusinessInput = {
   /**
    * Hardware pin (`businesses.vps_size`). Omitted/null falls back to the
    * tier default (starter→kvm2, standard→kvm8). Drives the Hostinger SKU
-   * only — entitlements stay on `tier`.
+   * only, entitlements stay on `tier`.
    */
   vpsSize?: VpsSize | null;
   /**
@@ -289,7 +289,7 @@ export type ProvisionVpsForBusinessInput = {
    * attach the resulting `post_install_script_id` to the setup payload so
    * it runs at first boot. On 403 (the chicken-and-egg the endpoint hits
    * for accounts without an existing VPS) we silently fall back to "no
-   * script attached" — the orchestrator's SSH-bootstrap path runs the
+   * script attached", the orchestrator's SSH-bootstrap path runs the
    * same content after the VPS is up.
    *
    * When omitted we DO NOT attempt the API call (the orchestrator can
@@ -348,7 +348,7 @@ export type ProvisionVpsDeps = {
    * {@link provisionVpsForBusiness}; rotation / business-status writes happen
    * in the higher-level orchestrator (`src/lib/provisioning/orchestrate.ts`)
    * and are injected there, not here. Don't add fields to this shape without
-   * a caller that actually reads them — stale override hooks give test
+   * a caller that actually reads them, stale override hooks give test
    * authors false confidence that their mocks are being exercised.
    */
   db?: {
@@ -399,7 +399,7 @@ export async function provisionVpsForBusiness(
   const pollInterval = input.pollIntervalMs ?? 10_000;
   const readyTimeout = input.readyTimeoutMs ?? 15 * 60 * 1000;
 
-  // 1. Keypair — comment includes the businessId for later audit + rotation.
+  // 1. Keypair, comment includes the businessId for later audit + rotation.
   const keypair = await generateKeypair(`newcoworker-${input.businessId}`);
   onProgress?.("keypair_generated", { fingerprint: keypair.fingerprintSha256 });
 
@@ -413,12 +413,12 @@ export async function provisionVpsForBusiness(
   });
 
   // 3. Try to register a Hostinger post-install script (PIS) so cloud-init
-  //    runs the bootstrap at first boot — saves the orchestrator from
+  //    runs the bootstrap at first boot, saves the orchestrator from
   //    waiting on sshd to come up before kicking off install. The endpoint
   //    is famously gated for fresh accounts: `POST /post-install-scripts`
   //    returns `403 [VPS:2000] Unauthorized` until the account already
   //    owns at least one VPS (chicken-and-egg). That 403 is expected and
-  //    NOT an error — we degrade to "no script attached" and the
+  //    NOT an error, we degrade to "no script attached" and the
   //    orchestrator's SSH-bootstrap path runs the same content over SSH
   //    after the VPS reaches `running`. Both paths converge to the same
   //    final state because the script is idempotent.
@@ -426,11 +426,11 @@ export async function provisionVpsForBusiness(
   //    Timeouts / network failures (`status: 0` on HostingerApiError) get
   //    ONE retry and then the same degrade: the Jul 8 2026 Truly Insurance
   //    signup died at 5% because Hostinger's API spent minutes answering
-  //    normally sub-second calls and this attach — an optimization with a
-  //    guaranteed SSH fallback — timed out and was treated as fatal. A
+  //    normally sub-second calls and this attach, an optimization with a
+  //    guaranteed SSH fallback, timed out and was treated as fatal. A
   //    retry covers blips; the degrade covers sustained slowness. The
   //    attach POST only creates a script resource (no money moves), so a
-  //    retry after an ambiguous timeout is safe — worst case is a
+  //    retry after an ambiguous timeout is safe, worst case is a
   //    duplicate timestamped resource in the panel. Every OTHER status
   //    (402/422/5xx…) still throws: those fire before the purchase and
   //    usually indicate an account/token problem the operator must see.
@@ -470,7 +470,7 @@ export async function provisionVpsForBusiness(
         }
         if (status === 0) {
           // Timeout or network failure. Retry once, then degrade to
-          // "no script attached" — the SSH-bootstrap phase produces the
+          // "no script attached", the SSH-bootstrap phase produces the
           // same end state, so a slow Hostinger API must never kill the
           // provision here.
           if (attempt < 2) {
@@ -497,7 +497,7 @@ export async function provisionVpsForBusiness(
   }
 
   // 4. Purchase the VPS. `setup.public_key_ids` attaches at first boot, so
-  //    SSH works immediately once cloud-init finishes — no later attach call.
+  //    SSH works immediately once cloud-init finishes, no later attach call.
   //    `post_install_script_id` is included only when step 3 succeeded; on
   //    fallback we let the orchestrator do the bootstrap over SSH.
   const setup: VpsSetupRequest = {
@@ -509,7 +509,7 @@ export async function provisionVpsForBusiness(
       ? { post_install_script_id: postInstallScriptId }
       : {}),
     // Malware scanner is set up via its own endpoint below rather than the
-    // setup payload's `install_monarx` flag — the dedicated endpoint returns
+    // setup payload's `install_monarx` flag, the dedicated endpoint returns
     // an Action we can track, whereas setup-embedded install is fire-and-forget.
     install_monarx: false
   };
@@ -576,7 +576,7 @@ export async function provisionVpsForBusiness(
     await client.installMonarx(vm.id);
     onProgress?.("monarx_installed", { virtualMachineId: vm.id });
   } catch (err) {
-    // Non-fatal: Monarx is defense-in-depth, not a gate. Log and continue —
+    // Non-fatal: Monarx is defense-in-depth, not a gate. Log and continue,
     // ops can retry via POST /api/vps/v1/virtual-machines/{id}/monarx.
     logger.warn("Monarx install failed; continuing without malware scanner", {
       businessId: input.businessId,
@@ -586,7 +586,7 @@ export async function provisionVpsForBusiness(
   }
 
   // 7. Persist the keypair so the orchestrator (and later redeploys) can
-  //    SSH in. This is the last step — if anything above fails we never
+  //    SSH in. This is the last step, if anything above fails we never
   //    write a key to a VPS that doesn't exist.
   const sshKey = await dbInsert({
     business_id: input.businessId,
@@ -635,7 +635,7 @@ export async function provisionVpsForBusiness(
  *   1. As Hostinger's first-boot hook (when {@link provisionVpsForBusiness}
  *      successfully attaches it via `POST /api/vps/v1/post-install-scripts`).
  *   2. As an orchestrator-side SSH exec (fallback when the PIS attach 403'd
- *      on a brand-new account) — see `runOrchestrator` in
+ *      on a brand-new account), see `runOrchestrator` in
  *      `src/lib/provisioning/orchestrate.ts`.
  *
  * Both invocations converge to the same end state because the script is
@@ -648,7 +648,7 @@ export async function provisionVpsForBusiness(
  * Hostinger's API.
  *
  * Hostinger's post-install-script payload is capped at 48KB so this MUST
- * stay slim — bootstrap.sh on the cloned repo is unbounded.
+ * stay slim, bootstrap.sh on the cloned repo is unbounded.
  */
 export function buildDefaultPostInstallScript(opts?: {
   repoUrl?: string;
@@ -673,7 +673,7 @@ export function buildDefaultPostInstallScript(opts?: {
    * DETERMINISTIC key-attach path for adopt/recreate flows: Hostinger's
    * standalone setup, recreate, and attach endpoints all silently drop
    * `public_key_ids` on some VMs (observed on VM 1798267 during the KVM2
-   * experiment and VM 1806097 during the KVM1 Phase E smoke, Jul 2026 —
+   * experiment and VM 1806097 during the KVM1 Phase E smoke, Jul 2026,
    * recreate reported success twice, key never landed). Embedding the key
    * in the post-install script sidesteps the flaky attach entirely; the
    * purchase-embedded setup path still honors `public_key_ids` so this is
@@ -691,7 +691,7 @@ export function buildDefaultPostInstallScript(opts?: {
   // even before single-quote escaping runs. `repoUrl` must be an http(s) URL;
   // `repoRef` must look like a git ref (no shell metachars, no spaces, no
   // leading `-` which would be interpreted as a git flag). This complements
-  // the single-quote emission below — callers should never reach the script
+  // the single-quote emission below, callers should never reach the script
   // generator with hostile input, but we belt-and-suspenders it because this
   // script runs as root on a fresh VPS.
   assertSafeRepoUrl(repoUrl);
@@ -701,7 +701,7 @@ export function buildDefaultPostInstallScript(opts?: {
     assertSafeAuthorizedKey(authorizedKey);
   }
   // vpsSize needs no assert: `resolveVpsSize` whitelists to 'kvm2'|'kvm8'
-  // (any other input — including hostile strings — falls to the tier default).
+  // (any other input, including hostile strings, falls to the tier default).
 
   return `#!/bin/bash
 # newCoworker VPS bootstrap (slim loader).

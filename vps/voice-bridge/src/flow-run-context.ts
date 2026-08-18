@@ -1,7 +1,7 @@
 /**
  * AiFlow → voice-bridge context bridge. Mirrors
  * `supabase/functions/_shared/ai_flows/run_context.ts` (the bridge is
- * rsynced to the VPS standalone, so it can't import across the repo) — the
+ * rsynced to the VPS standalone, so it can't import across the repo), the
  * DATA rules (query predicates, lookback, var filtering, status phrasing)
  * must stay identical to the shared module; only the surrounding wording is
  * voice-specific ("they are calling from it" vs "you are texting it").
@@ -10,7 +10,7 @@
  *
  * Why this exists: when an automation texts a lead and the lead CALLS the
  * business instead of texting back, the voice assistant historically knew
- * nothing about the automation — it would restart intake on a caller whose
+ * nothing about the automation, it would restart intake on a caller whose
  * name, product, and renewal timing the flow had already collected (the SMS
  * twin of this bug shipped in the Truly Insurance 2026-07-11 incident).
  *
@@ -28,7 +28,7 @@ const MAX_RUNS_PER_CONTACT = 3;
 /** Vars cap per run (schema-capped flows stay well under this). */
 const MAX_VARS_PER_RUN = 12;
 
-/** Per-value excerpt cap — long lead replies stay readable, not dominant. */
+/** Per-value excerpt cap, long lead replies stay readable, not dominant. */
 const MAX_VALUE_CHARS = 160;
 
 /** Excerpt cap for each already-sent automated message body. */
@@ -36,7 +36,7 @@ const MAX_LAST_MESSAGE_CHARS = 300;
 
 /**
  * Most recent automated messages quoted back to the model (mirror of the
- * shared module's MAX_FLOW_MESSAGES — keep in sync).
+ * shared module's MAX_FLOW_MESSAGES, keep in sync).
  */
 export const MAX_FLOW_MESSAGES = 3;
 
@@ -98,7 +98,7 @@ export function presentableVars(vars: Record<string, unknown>): [string, string]
  *
  * Ordering differs from the SMS mirror on purpose: the voice bridge hard-
  * clips this block to VOICE_FLOW_CONTEXT_MAX_CHARS, so the header, the
- * already-sent texts, and the continue-the-thread guidance LEAD — a clip can
+ * already-sent texts, and the continue-the-thread guidance LEAD, a clip can
  * only ever cost var lines of older runs, never the guidance itself.
  *
  * @param recentFlowMessages automated texts already sent to this caller,
@@ -160,7 +160,7 @@ type RunRow = {
 /**
  * PostgREST predicate excluding test runs AT THE QUERY so they can never
  * occupy the page and starve live runs out of the limit (mirror of the
- * shared module's NOT_TEST_RUN_OR — keep in sync).
+ * shared module's NOT_TEST_RUN_OR, keep in sync).
  */
 const NOT_TEST_RUN_OR =
   "context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true";
@@ -237,8 +237,8 @@ export async function loadVoiceFlowContext(
     }));
 
     // The last few things an automation texted this caller (send_sms steps
-    // only — agent offers and owner notices go to teammates, not the lead).
-    // Multiple messages, not just the newest — mirror of the shared module.
+    // only, agent offers and owner notices go to teammates, not the lead).
+    // Multiple messages, not just the newest, mirror of the shared module.
     let recentFlowMessages: string[] = [];
     const { data: outbound, error: outboundErr } = await supabase
       .from("sms_outbound_log")

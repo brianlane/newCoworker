@@ -5,18 +5,18 @@
  * search specs, trying the next one whenever Telnyx has no inventory for
  * the current one:
  *
- *   1. `requested`        — the area code the owner explicitly chose at
+ *   1. `requested`, the area code the owner explicitly chose at
  *                           signup (`businesses.preferred_area_code`).
- *   2. `owner_local`      — the NPA derived from the owner's own phone
+ *   2. `owner_local`, the NPA derived from the owner's own phone
  *                           number (`extractNanpAreaCode`).
- *   3. `platform_default` — `TELNYX_DEFAULT_AREA_CODE` (+ the
+ *   3. `platform_default`, `TELNYX_DEFAULT_AREA_CODE` (+ the
  *                           `TELNYX_DEFAULT_STATE` filter).
- *   4. `any`              — any number in the default country. Always
+ *   4. `any`, any number in the default country. Always
  *                           last, so a signup never fails outright just
  *                           because a specific area code sold out.
  *
  * Country awareness: the NANP spans the US and Canada, and Telnyx files
- * inventory under separate `country_code`s — a 519 (Ontario) search under
+ * inventory under separate `country_code`s, a 519 (Ontario) search under
  * `US` returns nothing (the Jul 8 2026 Truly Insurance signup needed a
  * manual CA-scoped order for exactly this reason). Specs therefore carry
  * the country their NPA belongs to, via a static Canadian-NPA table.
@@ -24,7 +24,7 @@
 
 /**
  * Geographic Canadian NPAs (as assigned by the CNA, mid-2026). Non-geographic
- * codes (600/622/633/644/655/677/688) are deliberately excluded — they're
+ * codes (600/622/633/644/655/677/688) are deliberately excluded, they're
  * not purchasable local inventory. A stale entry degrades gracefully: the
  * search just returns no inventory and the cascade moves on.
  */

@@ -19,9 +19,9 @@
  *   tsx debug/set-sms-reply-mode.ts --business <uuid> --phone +1XXXXXXXXXX --mode suppress --apply  # write
  *
  * Modes (see sms-inbound-worker's reply gate for the semantics):
- *   auto          — normal Coworker auto-reply (the default for every contact)
- *   suppress      — no auto-reply; inbound still logged and counted
- *   forward_owner — no auto-reply; text forwarded to the owner's cell with a
+ *   auto, normal Coworker auto-reply (the default for every contact)
+ *   suppress, no auto-reply; inbound still logged and counted
+ *   forward_owner, no auto-reply; text forwarded to the owner's cell with a
  *                   "what would you like me to say?" relay prompt
  */
 import { loadEnv } from "./_shared.ts";

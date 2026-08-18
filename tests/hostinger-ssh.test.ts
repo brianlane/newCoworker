@@ -25,7 +25,7 @@ type FakeClientOpts = {
   onError?: Error;
   connectError?: Error;
   execError?: Error;
-  /** Expected host key — if provided, we call the hostVerifier with it. */
+  /** Expected host key, if provided, we call the hostVerifier with it. */
   hostKeyBlob?: Buffer;
   /** Return value the verifier should receive (for testing strict mode failures). */
   /** Make the stream's stdin write throw (exercises the labeled-reject
@@ -241,7 +241,7 @@ describe("sshExec", () => {
 
   it("rejects with timeout when the command exceeds timeoutMs", async () => {
     const client = new FakeClient({
-      // Never emit close — let the timer fire.
+      // Never emit close, let the timer fire.
       onReady: () => {}
     });
     await expect(
@@ -260,7 +260,7 @@ describe("sshExec", () => {
 
   // Pinning test for the `accept-any` default (also the default when
   // `hostKeyPolicy` is omitted). ssh2 currently treats an omitted
-  // `hostVerifier` as "accept any host key" — see
+  // `hostVerifier` as "accept any host key", see
   // node_modules/ssh2/lib/protocol/kex.js ("Host accepted by default").
   // If a future ssh2 major version flips that default to reject, this test
   // will fail loudly and force us to wire `hostVerifier: () => true` in

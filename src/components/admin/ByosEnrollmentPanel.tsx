@@ -4,10 +4,10 @@
  * Admin BYOS enrollment console (enterprise businesses only).
  *
  * Two-step SSH-handover flow against POST /api/admin/byos/enroll:
- *   1. Prepare — operator enters the customer box's IP/hostname + region;
+ *   1. Prepare, operator enters the customer box's IP/hostname + region;
  *      the server pins vps_provider='byos', mints (or reuses) the per-box
  *      keypair, and returns the PUBLIC key to hand to the customer.
- *   2. Verify & provision — the server probes SSH auth for immediate
+ *   2. Verify & provision, the server probes SSH auth for immediate
  *      feedback, then runs the standard provisioning pipeline in the
  *      background; progress appears in the provisioning-log card below.
  *

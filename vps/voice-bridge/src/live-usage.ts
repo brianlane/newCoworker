@@ -9,7 +9,7 @@
  * Cumulative token usage for a Gemini Live session, split by modality so the
  * app can price audio tokens (input $3/1M, output $12/1M) apart from the small
  * amount of TEXT tokens (system instruction, coordinator cues, tool JSON).
- * Populated from the `usageMetadata` Gemini Live reports on server messages —
+ * Populated from the `usageMetadata` Gemini Live reports on server messages,
  * see `readLiveUsage`.
  */
 export type GeminiLiveUsage = {

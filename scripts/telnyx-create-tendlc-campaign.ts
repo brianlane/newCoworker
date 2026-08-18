@@ -8,14 +8,14 @@
  *
  * Why one-shot:
  *   Telnyx charges a non-refundable 3-month upfront fee at submit time,
- *   so this is intentionally NOT wired into automated CI / migration runs
- *   — it requires deliberate human invocation.
+ *   so this is intentionally NOT wired into automated CI / migration runs,
+ *   it requires deliberate human invocation.
  *
  * Idempotency:
  *   The script first lists existing campaigns for the brand and refuses
  *   to submit a duplicate. Re-runs are safe; the second invocation prints
  *   the already-existing campaign and exits 0. Pass `--force` only when
- *   you genuinely want a SECOND campaign on the same brand (rare — the
+ *   you genuinely want a SECOND campaign on the same brand (rare, the
  *   shared-campaign / many-numbers pattern is enough up to 49 DIDs per
  *   campaign).
  *
@@ -26,9 +26,9 @@
  *   TELNYX_API_KEY=… npx tsx scripts/telnyx-create-tendlc-campaign.ts --dry-run
  *
  * Exit codes:
- *   0  — campaign exists or was submitted successfully
- *   1  — Telnyx returned an error (insufficient funds, validation, etc)
- *   2  — required env missing
+ *   0, campaign exists or was submitted successfully
+ *   1, Telnyx returned an error (insufficient funds, validation, etc)
+ *   2, required env missing
  */
 
 import {
@@ -83,7 +83,7 @@ function buildPayload(brandId: string): TendlcCampaignSubmit {
     optinKeywords: "START,YES,UNSTOP",
     optoutKeywords: "STOP,STOPALL,UNSUBSCRIBE,CANCEL,END,QUIT",
     helpKeywords: "HELP",
-    // Industry-agnostic samples — Path A small-business assistant covering
+    // Industry-agnostic samples, Path A small-business assistant covering
     // services, scheduling, pricing, transactional confirms, and inbound
     // photo-collection. All include STOP language per CTIA guidelines.
     sample1:

@@ -1,7 +1,7 @@
 /**
  * Daily analytics snapshots + activity forecasting (concepts ported from
  * BizBlasts' AnalyticsSnapshot / daily_snapshot_job / RevenueForecastService,
- * with activity counts standing in for revenue — newCoworker holds no tenant
+ * with activity counts standing in for revenue, newCoworker holds no tenant
  * payment data).
  *
  * The nightly sweep (pg_cron → Edge `analytics-snapshot-sweep` →
@@ -9,7 +9,7 @@
  * `analytics_daily_snapshots` row per business per UTC day: aggregate call /
  * text / minute counters computed from the same sources as the live cards.
  * Because the rows are counts only (no content), they survive retention
- * pruning and never need residency routing — the long-window trend and the
+ * pruning and never need residency routing, the long-window trend and the
  * forecast keep working even for tenants whose raw transcripts age out
  * after 30 days.
  *
@@ -58,7 +58,7 @@ function callSeconds(startedAt: string, endedAt: string | null): number {
 }
 
 /**
- * Aggregate one business's activity for one UTC day — same sources and
+ * Aggregate one business's activity for one UTC day, same sources and
  * populations as the live analytics cards (transcripts excluding missed,
  * `daily_usage.sms_sent`, `voice_call_blocked` refusals).
  */
@@ -159,7 +159,7 @@ export async function upsertDailySnapshot(
   if (error) throw new Error(`upsertDailySnapshot: ${error.message}`);
 }
 
-/** Days (ending yesterday) each nightly sweep recomputes — covers a missed night or late-settling data. */
+/** Days (ending yesterday) each nightly sweep recomputes, covers a missed night or late-settling data. */
 export const SNAPSHOT_BACKFILL_DAYS = 3;
 
 export type SnapshotSweepResult = {
@@ -218,13 +218,13 @@ export type SnapshotSeriesPoint = {
 export type SnapshotSeries = {
   /** Zero-filled, oldest → newest. */
   points: SnapshotSeriesPoint[];
-  /** Days that actually have a snapshot row — gates the trend/forecast UI. */
+  /** Days that actually have a snapshot row, gates the trend/forecast UI. */
   coveredDays: number;
 };
 
 /**
  * Zero-filled snapshot series for the trailing `days` finished UTC days
- * (ending yesterday — today has no snapshot yet by design).
+ * (ending yesterday, today has no snapshot yet by design).
  */
 export async function getSnapshotSeries(
   businessId: string,
@@ -293,7 +293,7 @@ export type ActivityForecast = {
 
 /**
  * Mean + least-squares trend over a daily series (oldest first), projected
- * 30 days out. Returns null below FORECAST_MIN_DAYS of history — a trend
+ * 30 days out. Returns null below FORECAST_MIN_DAYS of history, a trend
  * line through a few points is noise dressed up as insight.
  */
 export function forecastActivity(values: number[]): ActivityForecast | null {

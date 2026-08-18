@@ -187,7 +187,7 @@ export function callerLabel(callerE164: string | null): string {
 /**
  * Incoming / Outgoing pill for a call row + the transcript header. Outbound
  * (the coworker placed the call) reads as the assistant's accent (claw-green),
- * inbound (the business received it) as signal-teal — mirroring the email
+ * inbound (the business received it) as signal-teal, mirroring the email
  * list's Received/Sent direction badge.
  */
 export function CallDirectionBadge({ direction }: { direction: VoiceTranscriptDirection }) {

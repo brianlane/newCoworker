@@ -1,7 +1,7 @@
 /**
  * Coworker tool-policy tool: flip a Settings → Coworker tools toggle per
  * channel, the category-D one-shot class ("the AI canceled a lead's booking
- * from a text — make sure that can't happen" = disable
+ * from a text, make sure that can't happen" = disable
  * calendar_cancel_appointment on the sms surface).
  *
  * The Amy lesson is load-bearing here: a policy set on one surface reaches
@@ -27,14 +27,14 @@ import { upsertAgentToolSetting } from "@/lib/db/agent-tool-settings";
 
 const AGENT_KEYS = ["dashboard", "voice", "sms", "webchat", "email", "slack"] as const;
 
-/** Which surfaces declare this toolKey at all — for actionable refusals. */
+/** Which surfaces declare this toolKey at all, for actionable refusals. */
 function surfacesDeclaring(toolKey: string): string[] {
   return AGENT_TOOL_REGISTRY.filter((agent) =>
     agent.tools.some((tool) => tool.toolKey === toolKey)
   ).map((agent) => agent.key);
 }
 
-/** The toolKey vocabulary for one surface — for unknown-key refusals. */
+/** The toolKey vocabulary for one surface, for unknown-key refusals. */
 function toolKeysForSurface(agentKey: string): string[] {
   const agent = AGENT_TOOL_REGISTRY.find((a) => a.key === agentKey);
   return agent ? agent.tools.map((t) => t.toolKey) : [];

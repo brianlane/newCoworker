@@ -73,7 +73,7 @@ const createSchema = z
   });
 
 export type CustomerListItem = {
-  /** contacts row id — the stable key AiFlow contact refs point at. */
+  /** contacts row id, the stable key AiFlow contact refs point at. */
   id: string;
   customerE164: string;
   type: CustomerMemoryRow["type"];

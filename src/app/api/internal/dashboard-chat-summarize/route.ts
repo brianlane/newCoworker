@@ -7,7 +7,7 @@
  * back. PR #79 moved generation off Vercel onto the per-tenant VPS
  * chat-worker, which means the route now returns BEFORE the assistant
  * turn is persisted. Firing the summarizer from the route at that
- * point would build a summary missing the latest assistant turn —
+ * point would build a summary missing the latest assistant turn,
  * Bugbot Medium-severity finding on PR #79. Moving the trigger here
  * (called by the worker AFTER it persists the assistant message)
  * keeps the summarizer logic in TypeScript on Vercel without porting
@@ -18,7 +18,7 @@
  *   VPS chat-worker (after assistant insert) → this route
  *     → shouldSummarize → summarizeThreadAndLog
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape
  * and same secret as the other /api/internal/* endpoints (trusted
  * internal traffic only, never reachable through the public CDN
  * surface; the worker holds the secret as WORKER_VERCEL_BEARER).
@@ -29,7 +29,7 @@
  * summarizeThreadAndLog which itself catches all errors internally
  * (returns ok:false rather than throwing). A 5xx from this route
  * means the next turn re-evaluates shouldSummarize and the work just
- * happens one turn later — self-healing.
+ * happens one turn later, self-healing.
  */
 
 import { z } from "zod";
@@ -79,11 +79,11 @@ export async function POST(request: Request): Promise<Response> {
   // Wrap the entire DB+summarizer pipeline in handleRouteError so
   // transient Supabase failures surface as the standard
   // { ok:false, error:{ code, message } } envelope rather than an
-  // uncontrolled 500 — matches every other route handler in this
+  // uncontrolled 500, matches every other route handler in this
   // PR. Bugbot Low-severity finding on PR #79 round-5.
   try {
     // Confirm the thread still exists and belongs to the claimed
-    // business — protects against a bogus worker payload poking at
+    // business, protects against a bogus worker payload poking at
     // someone else's thread. shouldSummarize() and summarizeThread()
     // both trust their (businessId, threadId) input, so we own the
     // gating here.
@@ -99,7 +99,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const messages = await listMessages(body.threadId);
     if (!shouldSummarize(thread, messages.length)) {
-      // Cheap gate — most worker calls land here and exit quickly.
+      // Cheap gate, most worker calls land here and exit quickly.
       return successResponse({
         triggered: false,
         messageCount: messages.length,
@@ -112,7 +112,7 @@ export async function POST(request: Request): Promise<Response> {
     // don't pay for a second round of getThreadById/listMessages
     // (Bugbot Low-severity finding on PR #79 round-10). Wrapping each
     // injected dep in a constant function keeps summarizeThread's
-    // signature unchanged — it always invokes the dep with the same
+    // signature unchanged, it always invokes the dep with the same
     // arguments we'd otherwise hit DB with. The result captured the
     // moment we checked shouldSummarize is still the correct input
     // for the summary because the user message it's keyed on has

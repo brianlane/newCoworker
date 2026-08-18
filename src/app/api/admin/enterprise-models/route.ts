@@ -13,7 +13,7 @@ const bodySchema = z.object({
 /**
  * Admin-only per-tenant model/voice overrides (mirrors
  * /api/admin/enterprise-limits). Values apply at the NEXT deploy/redeploy of
- * the tenant box — the orchestrator reads businesses.enterprise_models into
+ * the tenant box, the orchestrator reads businesses.enterprise_models into
  * deploy env; nothing is live-applied here.
  */
 export async function POST(request: Request) {

@@ -1,12 +1,12 @@
 /**
  * Owner alert when a lead taps a tracked SMS short link.
- * Called from the public /s/<code> redirect route — fire-and-forget.
+ * Called from the public /s/<code> redirect route, fire-and-forget.
  *
  * Truthfulness gates, in order:
- *   1. The RPC's `should_notify` — true exactly once per link, for the first
+ *   1. The RPC's `should_notify`, true exactly once per link, for the first
  *      click OUTSIDE the prefetch window (delivery-time preview fetches are
  *      logged but never alert; `notified_at` stamps the dedupe atomically).
- *   2. Per-contact throttle — a lead tapping links in several messages of
+ *   2. Per-contact throttle, a lead tapping links in several messages of
  *      one thread is ONE engagement moment: at most one alert per contact
  *      per hour, other leads unaffected.
  */
@@ -48,7 +48,7 @@ type ServiceClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 /**
  * Give the link its alert back. The RPC stamps `notified_at` atomically with
  * `should_notify` (that is the concurrent-tap dedupe), so any path that ends
- * WITHOUT an owner alert must release the stamp — otherwise this link's one
+ * WITHOUT an owner alert must release the stamp, otherwise this link's one
  * alert is consumed by a notification that never happened. Best-effort: a
  * failed release stays at-most-once by design (never alert-storms).
  */
@@ -86,7 +86,7 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
 
   // Per-contact collapse: several links first-tapped in one sitting (the
   // greeting's and the nudges' links all point at the same booking page)
-  // must not each ping the owner. Fail toward delivering — a throttle read
+  // must not each ping the owner. Fail toward delivering, a throttle read
   // error must not eat a real engagement alert.
   if (result.to_e164) {
     try {
@@ -98,7 +98,7 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
         db
       );
       if (recent) {
-        // No alert went out for THIS link — release its stamp so a tap in a
+        // No alert went out for THIS link, release its stamp so a tap in a
         // later engagement moment (past the throttle window) still alerts.
         await releaseNotifyStamp(db, result);
         return;
@@ -157,7 +157,7 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
       linkId: result.link_id,
       error: err instanceof Error ? err.message : String(err)
     });
-    // A THROWN dispatch means no alert and no audit rows — give the alert
+    // A THROWN dispatch means no alert and no audit rows, give the alert
     // back so the lead's next human tap retries (the hourly throttle bounds
     // how often).
     await releaseNotifyStamp(db, result);

@@ -1,6 +1,6 @@
 /**
  * Contact booking context (src/lib/ai-flows/contact-booking-context.ts): the
- * SMS agent's "booking status" line — connection gating, contact-identifier
+ * SMS agent's "booking status" line, connection gating, contact-identifier
  * resolution, the active/canceled Calendly scans (email-narrowed, capped,
  * fail-open), the Vagaro and Acuity arms, the rescheduled/canceled
  * classification, and line wording.
@@ -352,7 +352,7 @@ describe("contactBookingContextForPhone", () => {
       /starting [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} (AM|PM) E[DS]T\.$/
     );
     // The listing was narrowed by the contact's email, and its window floors
-    // at NOW — a past-start active event must never shadow the upcoming slot.
+    // at NOW, a past-start active event must never shadow the upcoming slot.
     const listCall = request.mock.calls.find(
       (c) => (c[2] as Cfg).endpoint === "/scheduled_events"
     );
@@ -650,7 +650,7 @@ describe("contactBookingContextForPhone Vagaro arm", () => {
     expect(out.status).toBe("booked");
     expect(out.line).toContain('"Gel Manicure"');
     expect(out.line).toContain("upcoming booking");
-    // Only the upcoming listing ran — a booked hit skips the canceled scan.
+    // Only the upcoming listing ran, a booked hit skips the canceled scan.
     expect(d.listAppointments).toHaveBeenCalledTimes(1);
   });
 

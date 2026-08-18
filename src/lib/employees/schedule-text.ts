@@ -7,7 +7,7 @@
  *   "mon,wed 9:00-12:00; sat 10:00-14:00, 15:00-17:00"
  *
  * and we store the canonical jsonb shape the routing engine reads
- * (`{"mon":[["09:00","17:00"]]}` — see parseWeeklyWindows in
+ * (`{"mon":[["09:00","17:00"]]}`, see parseWeeklyWindows in
  * supabase/functions/_shared/ai_flows/engine.ts). Parsing is strict so a
  * typo'd schedule errors in the form instead of silently making an employee
  * unavailable; formatting groups consecutive days that share identical
@@ -105,7 +105,7 @@ export function parseScheduleText(text: string): ParseResult {
       if (!start || !end) {
         return { ok: false, error: `"${windowText}" is not a time window (use HH:MM-HH:MM, e.g. 09:00-17:00)` };
       }
-      // end < start is a valid OVERNIGHT window ("18:00-02:00" — the engine
+      // end < start is a valid OVERNIGHT window ("18:00-02:00", the engine
       // splits it across midnight); only a zero-length window is an error.
       if (end === start) {
         return { ok: false, error: `"${windowText}" starts and ends at the same time` };

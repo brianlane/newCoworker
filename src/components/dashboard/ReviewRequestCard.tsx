@@ -9,7 +9,7 @@
  *
  * Rendered INSIDE AiFlowsManager's list view and driven entirely by its
  * `flows` state: `installedFlow` derives from the live list and
- * `onInstalled` is the manager's reload — so installing here immediately
+ * `onInstalled` is the manager's reload, so installing here immediately
  * shows the flow in the list below, and deleting the flow in the list
  * immediately re-offers the installer (no page reload either way).
  */
@@ -74,7 +74,7 @@ export function ReviewRequestCard({
         setError(json.error.message);
         return;
       }
-      // Refresh the manager's list — installedFlow flips via props.
+      // Refresh the manager's list, installedFlow flips via props.
       await onInstalled();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");

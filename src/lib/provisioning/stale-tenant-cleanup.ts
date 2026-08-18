@@ -3,7 +3,7 @@
  *
  * An admin can return a live account's VPS to the `vps_inventory` pool
  * (POST /api/admin/vps/[businessId]/release-to-pool) without touching the
- * account itself — the old tenant keeps running on the box until a new
+ * account itself, the old tenant keeps running on the box until a new
  * signup claims it. The moment the adopt path recreates the box for the new
  * tenant, the old account's data on it is gone and its `businesses` row is a
  * live hazard: it still points `hostinger_vps_id` at hardware someone else
@@ -11,11 +11,11 @@
  * hardware migration) would clobber the new tenant.
  *
  * This module severs that linkage right after a successful adopt: every
- * OTHER business still pointing at the adopted VM is cascade-deleted —
+ * OTHER business still pointing at the adopted VM is cascade-deleted,
  * the `businesses` row delete fans out through the schema's
  * `ON DELETE CASCADE` foreign keys (configs, contacts, logs, telnyx
  * settings, tokens, SSH keys, …), and the owner's Supabase auth user is
- * deleted best-effort so the login dies with the account — but ONLY when
+ * deleted best-effort so the login dies with the account, but ONLY when
  * that email owns no other business rows (one login can own several
  * businesses in the multi-business agency model, and could even be the
  * adopting signup itself).
@@ -27,7 +27,7 @@
  *
  * Every step is best-effort per business: one failure is logged and the
  * loop continues, and the CALLER (the orchestrator's adopt path) treats a
- * thrown error as non-fatal — a cleanup failure must never abort a signup
+ * thrown error as non-fatal, a cleanup failure must never abort a signup
  * that already has its box.
  */
 
@@ -49,7 +49,7 @@ export type StaleTenantCleanupDeps = {
   /**
    * Stripe-linkage lookup used as a delete-time guard: a business whose
    * subscription became Stripe-linked again AFTER its box was released
-   * (owner resubscribed through checkout — including a paid checkout whose
+   * (owner resubscribed through checkout, including a paid checkout whose
    * webhook is still activating, i.e. `pending` with a
    * stripe_subscription_id) must never be deleted.
    */
@@ -109,8 +109,8 @@ export async function cleanupStaleTenantsForVm(
   // old owner can resubscribe through checkout (the released row is
   // canceled-no-grace, which deliberately doesn't block a returning
   // customer). If a stale business's subscription is Stripe-LINKED right
-  // now — active/past_due billing OR a paid checkout whose webhook is still
-  // activating (`pending` with a stripe_subscription_id) — deleting it
+  // now, active/past_due billing OR a paid checkout whose webhook is still
+  // activating (`pending` with a stripe_subscription_id), deleting it
   // would orphan Stripe billing. Skip it and scream instead; the operator
   // has to reconcile (the paying tenant needs a box: it either keeps this
   // one via re-provision or gets a new one).
@@ -135,7 +135,7 @@ export async function cleanupStaleTenantsForVm(
     }
     // Business row first: severing the control surface over the adopted box
     // is the safety-critical half. Only after the row is gone do we consider
-    // the login — and only when the email owns NOTHING else.
+    // the login, and only when the email owns NOTHING else.
     try {
       await deleteBiz(business.id);
       deletedBusinessIds.push(business.id);
@@ -149,7 +149,7 @@ export async function cleanupStaleTenantsForVm(
       // Loud but non-fatal: the adopt already succeeded. The stale row still
       // pointing at the box is dangerous (see module header), so this error
       // is the operator's cue to delete it manually. Skip the auth-user step
-      // entirely — the login must survive while its business row does.
+      // entirely, the login must survive while its business row does.
       logger.error("stale-tenant cleanup: business delete FAILED, stale row still references the adopted box", {
         staleBusinessId: business.id,
         vpsId,
@@ -159,7 +159,7 @@ export async function cleanupStaleTenantsForVm(
       continue;
     }
     // Auth-user hygiene, best-effort: one login can own several businesses
-    // (multi-business agencies — including, in theory, the adopting signup
+    // (multi-business agencies, including, in theory, the adopting signup
     // itself), so the user is only deleted when the email owns zero
     // remaining rows AFTER this row's delete.
     if (business.owner_email) {

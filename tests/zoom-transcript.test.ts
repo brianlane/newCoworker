@@ -408,7 +408,7 @@ describe("fetchZoomMeetingTranscript", () => {
   });
 
   it("uses the default token resolver and fetch when no deps are injected", async () => {
-    // Token resolves to null, so the default global fetch is never reached —
+    // Token resolves to null, so the default global fetch is never reached,
     // this exercises the no-deps call path end to end.
     getZoomAccessToken.mockResolvedValue(null);
     const res = await fetchZoomMeetingTranscript(BIZ, MEETING);

@@ -9,7 +9,7 @@
  * floating chat bubble and lazily injects an <iframe> pointing at
  * /widget/frame (served from the New Coworker origin) the first time the
  * visitor opens it. All chat UI, credentials, and API traffic live inside
- * the iframe — nothing sensitive ever runs in the host page's context, and
+ * the iframe, nothing sensitive ever runs in the host page's context, and
  * the host page's CSS cannot leak into the chat.
  */
 (function () {
@@ -33,7 +33,7 @@
   var Z = "2147483000"; // near-max, still leaves headroom for host overlays
 
   // --- Passive visitor context (no PII: page, referrer, UTM, device hints).
-  // Collected here because the loader runs on the HOST page — the iframe
+  // Collected here because the loader runs on the HOST page, the iframe
   // can't see the visitor's URL, referrer, or campaign params. Sent to the
   // frame via postMessage; the server validates and stores it with the
   // session. The visitor's IP is never part of this.
@@ -75,7 +75,7 @@
 
   // SPA navigation: keep the frame's notion of "current page" fresh so the
   // conversation's page trail follows the visitor, and restart the
-  // time-on-page clock — timeOnPageMs means "time on the page where the
+  // time-on-page clock, timeOnPageMs means "time on the page where the
   // chat was opened", not the whole visit.
   function notifyPage() {
     loadedAt = Date.now();
@@ -145,7 +145,7 @@
       ensureFrame();
       frame.style.cssText = panelStyle();
       btn.setAttribute("aria-label", "Close chat");
-      // Fresh context on every open — the visitor may be on a different
+      // Fresh context on every open, the visitor may be on a different
       // page (and time-on-page has moved) since the last snapshot.
       postToFrame({ type: "ncw:meta", meta: collectMeta() });
     } else if (frame) {

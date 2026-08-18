@@ -14,7 +14,7 @@ import { geminiJson } from "./gemini";
  * bp_classify step the add-bad-phone-agent-report one-shot appends to Amy's
  * lead flows): a teammate's post-claim text must land bad_phone_number ONLY
  * when it actually describes the lead's phone negatively. The near-misses
- * matter most — "she didn't pick up" or "left a voicemail" emailing the lead
+ * matter most, "she didn't pick up" or "left a voicemail" emailing the lead
  * "your number is wrong" would be a real-world embarrassment, so this suite
  * pins the separation with the EXACT question + categories production runs
  * (imported from the one-shot, not copied).
@@ -56,7 +56,7 @@ describe("bad-phone-report classify (live Gemini)", () => {
   });
 
   // Explicit loop instead of it.each so every single-shot boundary
-  // classification carries the suite-standard { retry: 1 } — the near-miss
+  // classification carries the suite-standard { retry: 1 }, the near-miss
   // cases sit right on the category line and a lone marginal draw must not
   // fail the gated CI run.
   for (const [reply, want] of CASES) {

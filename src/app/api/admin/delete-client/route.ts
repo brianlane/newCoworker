@@ -11,7 +11,7 @@
  *   - Auth-user deletion so the owner can't log back in.
  *   - `businesses.status='wiped'` + `subscriptions.wiped_at` audit stamps.
  *
- * Unlike the self-serve cancel flow, this skips the 30-day grace window —
+ * Unlike the self-serve cancel flow, this skips the 30-day grace window,
  * admin force-cancel is terminal the moment it returns.
  *
  * The route still returns `{ deleted: true }` for back-compat with the
@@ -69,7 +69,7 @@ export async function DELETE(request: Request) {
 
     // Resolve the owner's auth user id so the wipe step can disable them
     // via `supabase.auth.admin.deleteUser`. Fall back to the admin's own
-    // id if we can't find the owner — the executor tolerates a missing
+    // id if we can't find the owner, the executor tolerates a missing
     // owner id by skipping the auth-delete step, but we still want a best
     // effort lookup.
     const ownerAuthUserId = business.owner_email
@@ -91,8 +91,8 @@ export async function DELETE(request: Request) {
         // `subscriptions` row was inserted. Without it, the route
         // would delete the business row (severing our only DB
         // correlation) while the VM keeps running and Hostinger keeps
-        // billing — there'd be no way to find or stop the orphan
-        // afterward. Auth deletion is best-effort — missing users are
+        // billing, there'd be no way to find or stop the orphan
+        // afterward. Auth deletion is best-effort, missing users are
         // ignored, other errors are logged but don't fail the
         // operator's action since the business row is already gone at
         // that point.
@@ -188,7 +188,7 @@ export async function DELETE(request: Request) {
           );
         }
         // Snapshot the Nango connections BEFORE the row delete (the cascade
-        // removes the rows) but revoke them AFTER it commits — a failed
+        // removes the rows) but revoke them AFTER it commits, a failed
         // delete must leave the tenant fully intact, never active with dead
         // integrations. Nango's side would otherwise outlive the tenant and
         // burn account-wide quota forever.
@@ -242,7 +242,7 @@ export async function DELETE(request: Request) {
     // before we return. The slow phase (SSH backup, Hostinger
     // snapshot/stop/billing-cancel, owner emails) runs post-response
     // via `next/server` `after()` so the serverless runtime keeps the
-    // function alive for minutes-long teardown — a synchronous
+    // function alive for minutes-long teardown, a synchronous
     // `await` here would otherwise time out on real tenants and leave
     // Stripe canceled but the VPS still running with Hostinger billing
     // active. The grace-sweep cron is the backstop for any individual
@@ -250,7 +250,7 @@ export async function DELETE(request: Request) {
     //
     // Auth-delete vs slow-phase email ordering: the fast phase runs
     // `delete_auth_user` BEFORE the slow phase fires the operator/owner
-    // emails. This is intentional and benign — the email step pulls the
+    // emails. This is intentional and benign, the email step pulls the
     // recipient address from `business.owner_email` (which we kept on
     // the row even after wiping) rather than from the just-deleted
     // Supabase auth user, so the email still goes through. The

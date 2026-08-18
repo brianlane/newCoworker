@@ -4,7 +4,7 @@
  *
  * This is the app-side counterpart to the AiFlow worker's tenant-mailbox send
  * (supabase/functions/ai-flow-worker deliverFlowEmail default path): same
- * identity rules — always send FROM the coworker's own address with reply_to
+ * identity rules, always send FROM the coworker's own address with reply_to
  * pointing back at it, so replies re-enter the tenant_email inbound flow. Used
  * by the dashboard Emails composer when the owner picks "AI coworker's email"
  * as the sender. Plain text only by design.
@@ -57,7 +57,7 @@ async function resolveTenantFrom(
 /**
  * Send from the business's AI coworker mailbox. Throws on a missing
  * RESEND_API_KEY (setup error) or a Resend transport failure so the caller can
- * surface the reason — the dashboard send route maps these to a 502.
+ * surface the reason, the dashboard send route maps these to a 502.
  */
 export async function sendFromTenantMailbox(
   businessId: string,

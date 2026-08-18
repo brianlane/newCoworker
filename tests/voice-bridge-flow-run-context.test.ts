@@ -17,7 +17,7 @@ import {
  * The voice bridge is rsynced to the VPS standalone, so it vendors a mirror
  * of the shared AiFlow run-context module instead of importing it. The DATA
  * rules (queries, lookback, var filtering, status phrasing) must stay
- * identical — only the surrounding wording is channel-specific. These tests
+ * identical, only the surrounding wording is channel-specific. These tests
  * pin the two implementations against each other so a one-sided edit is
  * loud (same pattern as tests/datetime-line.test.ts).
  */

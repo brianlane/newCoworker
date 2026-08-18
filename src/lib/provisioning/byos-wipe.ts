@@ -3,16 +3,16 @@
  *
  * A canceled Hostinger tenant's box is stopped + returned to the pool; a
  * BYOS box belongs to the CUSTOMER, so the equivalent terminal action is to
- * remove everything the platform put on it — containers, images/volumes,
+ * remove everything the platform put on it, containers, images/volumes,
  * the repo checkout, and every `.env` secret (gateway token, tunnel token,
- * backup passphrase, service-role key) — and leave the box otherwise
+ * backup passphrase, service-role key), and leave the box otherwise
  * untouched for its owner. Central-side revocation (gateway token, tunnel
  * deletion, business `wiped` status) is handled by the same lifecycle plan
  * that dispatches this op; this module is only the on-box half.
  *
  * The script is embedded (not read from the box's repo checkout) so the
  * wipe never depends on the state it is deleting, and every step is
- * best-effort (`|| true`) — a half-broken box must still shed as many
+ * best-effort (`|| true`), a half-broken box must still shed as many
  * secrets as possible rather than aborting at the first missing unit.
  */
 
@@ -66,7 +66,7 @@ export type WipeByosBoxDeps = {
  * Run the terminal wipe on a BYOS box over SSH. Throws when the box is
  * unreachable or the wipe never printed its completion marker, so the
  * lifecycle slow-phase logs the failure loudly (the grace-sweep retries on
- * its next tick — the plan is idempotent).
+ * its next tick, the plan is idempotent).
  */
 export async function wipeByosBox(
   input: { businessId: string; vpsHost: string },

@@ -14,7 +14,7 @@
  *   tsx debug/vps-exec.ts 621a5b0d-... "grep -E 'START_AGENT' /opt/chat-worker/.env"
  *   tsx debug/vps-exec.ts 621a5b0d-... "cd /opt/rowboat/src && git log --oneline -1"
  *
- * ⚠️ Runs as root on a LIVE tenant box — read your command twice.
+ * ⚠️ Runs as root on a LIVE tenant box, read your command twice.
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 

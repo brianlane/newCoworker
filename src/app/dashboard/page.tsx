@@ -112,7 +112,7 @@ export default async function DashboardPage() {
       : null;
 
   // Verification status. The auth user's `email_confirmed_at` is
-  // authoritative — a signed-in owner whose auth email is confirmed is
+  // authoritative, a signed-in owner whose auth email is confirmed is
   // verified, full stop. Only when auth hasn't confirmed it do we fall back
   // to `customer_profiles.email_verified_at` ("the human pressed the
   // verification link"). Checking the profile FIRST caused a false banner:

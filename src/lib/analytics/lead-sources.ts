@@ -1,19 +1,19 @@
 /**
- * Lead-source reporting (the FUB accountability story) — derived entirely
+ * Lead-source reporting (the FUB accountability story), derived entirely
  * from signals other features already write, no new stamping:
  *
  *   - CHANNELS: `contacts.last_channel` (sms / voice / messenger /
- *     instagram / webchat …) — where the relationship lives today;
- *   - SOURCE TAGS: `contacts.tags` — the platform's actual source-stamping
+ *     instagram / webchat …), where the relationship lives today;
+ *   - SOURCE TAGS: `contacts.tags`, the platform's actual source-stamping
  *     mechanism (intake flows tag their leads via update_contact, pipeline
  *     stages are tags, imports carry tags).
  *
  * For each group over the trailing window's NEW customer contacts:
- *   - newContacts — rows created in the window;
- *   - engaged     — of those, how many have interacted at least once;
- *   - claimed     — of those, how many a roster member owns.
+ *   - newContacts, rows created in the window;
+ *   - engaged, of those, how many have interacted at least once;
+ *   - claimed, of those, how many a roster member owns.
  *
- * A contact with neither a channel nor any tag counts as UNTRACKED — that
+ * A contact with neither a channel nor any tag counts as UNTRACKED, that
  * number is the honest residue of intake paths with no source signal
  * (manual adds, bare CSV imports), surfaced rather than hidden so owners
  * know how much of their funnel is dark.
@@ -36,21 +36,21 @@ export type LeadSourceRow = {
 export type LeadSourceOverview = {
   /** New customer contacts created in the window. */
   totalNewContacts: number;
-  /** New contacts with no channel and no tags — no source signal at all. */
+  /** New contacts with no channel and no tags, no source signal at all. */
   untracked: number;
   /** By last_channel, largest first. */
   channels: LeadSourceRow[];
   /** By tag (a contact counts once per tag it carries), largest first. */
   tags: LeadSourceRow[];
   windowDays: number;
-  /** True when the scan filled its cap — counts are partial. */
+  /** True when the scan filled its cap, counts are partial. */
   clipped: boolean;
 };
 
 export const LEAD_SOURCE_WINDOW_DAYS = 30;
 /** Tag rows shown (a tenant can carry many one-off tags). */
 export const LEAD_SOURCE_TAG_LIMIT = 12;
-/** New-contact rows scanned per window — far above current tenant volumes. */
+/** New-contact rows scanned per window, far above current tenant volumes. */
 export const LEAD_SOURCE_SCAN_LIMIT = 5000;
 
 export type LeadSourceContact = {
@@ -86,7 +86,7 @@ export function buildLeadSourceOverview(
     // so an underscore someone deliberately typed into a tag survives.
     const channelLabel = contactChannelLabel(row.last_channel);
     // Case-insensitive dedupe PER CONTACT: a row carrying "VIP" and "vip"
-    // is one contact in that tag's bucket, never two — otherwise a tag's
+    // is one contact in that tag's bucket, never two, otherwise a tag's
     // counts could exceed the window total.
     const rowTags = new Map<string, string>();
     for (const raw of Array.isArray(row.tags) ? row.tags : []) {
@@ -122,7 +122,7 @@ export async function getLeadSourceOverview(
   const now = opts.now ?? new Date();
   const windowDays = opts.windowDays ?? LEAD_SOURCE_WINDOW_DAYS;
   // UTC day-aligned window start, matching every other analytics card on the
-  // page (volume, funnels, peak hours) — the same "30 days" label must mean
+  // page (volume, funnels, peak hours), the same "30 days" label must mean
   // the same contacts everywhere.
   const since = analyticsWindowStart(now, windowDays).toISOString();
 

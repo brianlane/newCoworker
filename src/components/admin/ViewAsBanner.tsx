@@ -16,7 +16,7 @@ export const VIEW_AS_BANNER_HIDE_KEY = "admin-view-as-banner-hidden";
  * Per-tab (sessionStorage) record of the admin page the view-as session was
  * started from (pathname + query, e.g. "/admin/clients?page=2"), written by
  * ViewAsButton so Exit can land back where the admin was. Absent in a tab
- * that didn't start the session (fresh tab) — Exit then falls back to the
+ * that didn't start the session (fresh tab), Exit then falls back to the
  * business detail page.
  */
 export const VIEW_AS_RETURN_TO_KEY = "admin-view-as-return-to";
@@ -54,12 +54,12 @@ export function ViewAsBanner({
     setExiting(true);
     setError(null);
     try {
-      // Navigate only after the cookie is actually cleared — otherwise the
+      // Navigate only after the cookie is actually cleared, otherwise the
       // next /dashboard visit would silently still be impersonating.
       const res = await fetch("/api/admin/view-as", { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       sessionStorage.removeItem(VIEW_AS_BANNER_HIDE_KEY);
-      // Only same-origin admin paths are honored — anything else (stale or
+      // Only same-origin admin paths are honored, anything else (stale or
       // garbled value) falls back to the business detail page.
       const returnTo = sessionStorage.getItem(VIEW_AS_RETURN_TO_KEY);
       sessionStorage.removeItem(VIEW_AS_RETURN_TO_KEY);

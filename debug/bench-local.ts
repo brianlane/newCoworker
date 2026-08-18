@@ -1,5 +1,5 @@
 /**
- * Benchmark runner — LOCAL model (qwen3:4b-instruct on the tenant VPS).
+ * Benchmark runner, LOCAL model (qwen3:4b-instruct on the tenant VPS).
  *
  * This is the "current setup" model. We can't reach the box's Ollama from a
  * laptop (loopback/docker-bridge bound), so we SSH in and run ONE remote node
@@ -29,7 +29,7 @@ import { buildPrompt, QUESTION, EXPECTED_ANSWERS } from "./bench-prompts.ts";
 loadEnv();
 // Strict argv parse: unknown flags are fatal (a typo like --modell must not
 // silently fall through), and a flagged invocation requires an explicit
-// business id — flags mean "non-default tier config", and defaulting that to
+// business id, flags mean "non-default tier config", and defaulting that to
 // Amy's production box would SSH-bench the wrong VPS for many minutes.
 const args = process.argv.slice(2);
 const KNOWN_VALUE_FLAGS = new Set(["--model", "--num-ctx"]);

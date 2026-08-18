@@ -88,7 +88,7 @@ function aiFlowSortValue(row: AiFlowRow, field: string): string | number | null 
   return row.last_run_at;
 }
 
-// Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
+// Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts,
 // that module is server-only (it pulls in the service-role Supabase client),
 // so the client bundle keeps its own copy of these three string keys.
 const EMAIL_CONNECTION_KEYS = ["google-mail", "gmail", "google", "outlook"];
@@ -233,7 +233,7 @@ type EditorState = {
   dripIntervalMinutes: number | null;
   /**
    * Multi-trigger (OR) support: the OTHER triggers in the flow's set, as
-   * stored FlowTrigger objects — the per-channel fields above always hold the
+   * stored FlowTrigger objects, the per-channel fields above always hold the
    * ONE trigger currently being edited. `editingTriggerIndex` is that
    * trigger's position within the full ordered set (composed at save/switch
    * time by inserting the edited trigger back among these).
@@ -471,7 +471,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
   };
 }
 
-/** A NEW (unsaved) editor pre-loaded from a definition — used by AI generate
+/** A NEW (unsaved) editor pre-loaded from a definition, used by AI generate
  *  and the "Adapt with AI" library hand-off. Starts disabled for review. */
 function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState {
   return {
@@ -681,7 +681,7 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
 
 /**
  * Deep-clone a step with fresh ids, for the per-step duplicate button. A
- * branch clone refreshes every nested step/arm id too — step ids must stay
+ * branch clone refreshes every nested step/arm id too, step ids must stay
  * unique across the whole flow tree.
  */
 function duplicateOf(step: FlowStep): FlowStep {
@@ -697,7 +697,7 @@ function duplicateOf(step: FlowStep): FlowStep {
   return clone;
 }
 
-/** All vars produced by steps BEFORE `index` — the legal targets for a `when`. */
+/** All vars produced by steps BEFORE `index`, the legal targets for a `when`. */
 function varsProducedBefore(steps: FlowStep[], index: number): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -778,7 +778,7 @@ function editorTrigger(s: EditorState): FlowTrigger {
         calendar: s.calendarSource,
         on: s.calendarOn,
         ...(s.calendarOn === "event_start" ? { leadMinutes: s.calendarLeadMinutes } : {}),
-        // 0 = fire right at the event's end, which is the schema default —
+        // 0 = fire right at the event's end, which is the schema default,
         // only a real delay is stored.
         ...(s.calendarOn === "event_end" && s.calendarFollowMinutes > 0
           ? { followMinutes: s.calendarFollowMinutes }
@@ -830,7 +830,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
     };
   }
   // ring_handoff / voice_transfer: the number source is EITHER a saved-contact
-  // ref (live number) or a hardcoded E.164 — a chosen ref supersedes any stale
+  // ref (live number) or a hardcoded E.164, a chosen ref supersedes any stale
   // text, and a blank text field is dropped so the semantic "no number to
   // ring" message shows instead of a regex error.
   if (step.type === "ring_handoff" || step.type === "voice_transfer") {
@@ -987,7 +987,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
     };
   }
   // forEachLinkMatchVar is only valid alongside forEachLink. The editor hides
-  // (but keeps) it when the selector is cleared, so drop a stale value here —
+  // (but keeps) it when the selector is cleared, so drop a stale value here,
   // otherwise parseAiFlowDefinition rejects the otherwise-valid flow on save.
   if (step.forEachLinkMatchVar) {
     const { forEachLinkMatchVar: _drop, ...rest } = step;
@@ -1074,7 +1074,7 @@ export function AiFlowsManager({
   });
   // Snapshot of the editor as it was OPENED (or last saved): the flow editor
   // is dirty whenever the live state has drifted from it. `null` while the
-  // editor holds an AI-generated draft — those are unsaved by definition
+  // editor holds an AI-generated draft, those are unsaved by definition
   // (leaving would throw away paid AI work). Tenant feedback: flow edits
   // were being silently lost by navigating away.
   const [editorBaseline, setEditorBaseline] = useState<string | null>(() => {
@@ -1089,7 +1089,7 @@ export function AiFlowsManager({
   const [aiBusy, setAiBusy] = useState(false);
   // Dirty = the draft drifted from its opened/saved snapshot, OR there's an
   // ungenerated "Generate with AI" description sitting in the box (typing a
-  // prompt and leaving loses it just the same — the exact miss from Truly's
+  // prompt and leaving loses it just the same, the exact miss from Truly's
   // first test of this guard). The AI box only renders for NEW flows
   // (editor.id === null), so leftover prompt text must not dirty an edit
   // session where the box isn't even visible.
@@ -1176,7 +1176,7 @@ export function AiFlowsManager({
           /* warnings are advisory, never block the draft on them */
         }
         setEditor(editorFromDefinition(def, "Adapted automation"));
-        // An adapted draft is unsaved AI work — dirty until saved.
+        // An adapted draft is unsaved AI work, dirty until saved.
         setEditorBaseline(null);
       }
     } catch {
@@ -1212,7 +1212,7 @@ export function AiFlowsManager({
               // `provider_account_email` is the REAL account behind the OAuth
               // grant. `end_user_*` are the dashboard login that started the
               // connect session (identical for every account the owner
-              // connects) — legacy-row fallbacks only.
+              // connects), legacy-row fallbacks only.
               const m = c.metadata ?? {};
               const email =
                 (typeof m.provider_account_email === "string" && m.provider_account_email) ||
@@ -1650,11 +1650,11 @@ export function AiFlowsManager({
 
   // Timestamps render in the OWNER's timezone, so they must not be part of
   // the server-rendered markup (the server would bake in ITS zone and
-  // mismatch on hydration) — the status-times span mounts client-side only.
+  // mismatch on hydration), the status-times span mounts client-side only.
   const [clockMounted, setClockMounted] = useState(false);
   useEffect(() => setClockMounted(true), []);
 
-  /** "Jul 10, 3:12 PM" — compact stamp for the list row's status times. */
+  /** "Jul 10, 3:12 PM", compact stamp for the list row's status times. */
   const shortWhen = (iso: string | null | undefined): string | null => {
     if (!iso) return null;
     const d = new Date(iso);
@@ -1697,7 +1697,7 @@ export function AiFlowsManager({
         return;
       }
       // Best-effort salvage warnings: the draft loaded, but parts were
-      // repaired/removed — tell the owner exactly what to double-check.
+      // repaired/removed, tell the owner exactly what to double-check.
       const warnings = json.data.warnings ?? [];
       setAiWarnings(warnings);
       const def = json.data.definition;
@@ -1722,7 +1722,7 @@ export function AiFlowsManager({
         dripIntervalMinutes: def.drip?.intervalMinutes ?? null,
         steps: def.steps
       }));
-      // A generated draft is unsaved AI work — dirty until saved.
+      // A generated draft is unsaved AI work, dirty until saved.
       setEditorBaseline(null);
     } finally {
       setAiBusy(false);
@@ -1784,7 +1784,7 @@ export function AiFlowsManager({
             )}
             <button
               onClick={() => {
-                // Closing throws away edits — make that a decision, not an
+                // Closing throws away edits, make that a decision, not an
                 // accident (the browser prompt only covers page unloads).
                 if (
                   editorDirty &&
@@ -3133,7 +3133,7 @@ export function AiFlowsManager({
                     Test
                   </button>
                 )}
-                {/* Outbound voice flows are started on demand here — the call is
+                {/* Outbound voice flows are started on demand here, the call is
                     placed and metered by telnyx-voice-originate. */}
                 {row.enabled &&
                   outboundAiCallsEnabled &&
@@ -3357,7 +3357,7 @@ function RecipientListField({
 }
 
 /**
- * "Variables you can use" — placeholder discoverability for the step editor.
+ * "Variables you can use", placeholder discoverability for the step editor.
  * The scope math (trigger fields per channel, earlier-step vars, name-part
  * variants) lives in src/lib/ai-flows/variables-palette.ts under the
  * coverage gate; this renders the chips and copies a clicked placeholder to
@@ -3910,7 +3910,7 @@ function StepFields({
             type="checkbox"
             checked={Boolean(step.replyToGroup)}
             onChange={(ev) =>
-              // Group reply is its own recipient source — clear any prior
+              // Group reply is its own recipient source, clear any prior
               // `to`/`toAgentName`/`toRef` so the "exactly one recipient" rule
               // passes on save (those fields are hidden while group reply is on).
               patchStep(
@@ -7177,7 +7177,7 @@ function sameNoMatchVars(
  * Keeps the RAW text in local state and publishes only the lines that parse.
  * Deriving the textarea's value from the parsed record looked simpler and was
  * unusable: a half-typed line has no "=" yet, so the parse dropped it and the
- * controlled value snapped back on every keystroke — nothing could be typed,
+ * controlled value snapped back on every keystroke, nothing could be typed,
  * only a finished line pasted (Bugbot, PR #1401).
  *
  * The buffer re-seeds whenever `value` changes to something OTHER than what

@@ -17,7 +17,7 @@
  *                          "dashboard" interaction channel); Owner agents
  *                          are repointed from customer_* to these
  *
- * Surgical Mongo patch over SSH — no container churn, no .env regeneration
+ * Surgical Mongo patch over SSH, no container churn, no .env regeneration
  * (mirrors debug/reseed-sms-workflow.ts). Idempotent: re-running converges
  * to the same state and never duplicates the send_sms tool.
  *

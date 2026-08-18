@@ -1,5 +1,5 @@
 /**
- * "F" — a teammate marking a lead as needing AI follow-up, by text.
+ * "F", a teammate marking a lead as needing AI follow-up, by text.
  *
  * Amy's team works leads from their phones, so the shortest thing they can
  * type has to be the thing that works. `F` (or "needs follow up", or any of the

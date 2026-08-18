@@ -6,7 +6,7 @@
  * appointment on the merchant's book. Both need a Vagaro SERVICE to operate
  * on: the owner's configured default (`vagaro_connections.default_service_id`)
  * wins, then the model's explicit `serviceId` arg, then the merchant's
- * service whose duration is closest to the requested duration — so the tools
+ * service whose duration is closest to the requested duration, so the tools
  * work before the owner has opened the settings card.
  *
  * All errors that mean "the stored credentials are wrong" surface as the
@@ -134,7 +134,7 @@ export async function findVagaroSlots(
 }
 
 /**
- * `calendar_book_appointment` core for Vagaro connections — creates a real
+ * `calendar_book_appointment` core for Vagaro connections, creates a real
  * appointment on the merchant's book.
  *
  * @param fallbackPhone surface-provided attendee phone (the voice bridge
@@ -196,7 +196,7 @@ export async function bookVagaroAppointment(
  * `calendar_reschedule_appointment` core for Vagaro connections: moves the
  * located appointment IN PLACE on the merchant's book. The appointment id
  * comes from the caller (resolved via the booking ledger); no Vagaro-side
- * search exists in v1 — a ledger-less booking surfaces booking_not_found
+ * search exists in v1, a ledger-less booking surfaces booking_not_found
  * upstream.
  */
 export async function rescheduleVagaroAppointment(

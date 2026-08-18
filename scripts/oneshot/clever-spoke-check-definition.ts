@@ -2,7 +2,7 @@
  * Definition builder for the "Clever - Spoke Check & Weekly Call Follow-Up"
  * AiFlow (Amy's weekly-call-until-reached routine, Jul 2026). Kept separate
  * from the seed script (seed-clever-spoke-check-aiflow.ts) so the unit suite
- * can validate the EXACT definition the one-shot inserts — the seed script
+ * can validate the EXACT definition the one-shot inserts, the seed script
  * itself runs main() on import and needs live env/DB.
  *
  * See the seed script header for the full flow narrative.
@@ -44,7 +44,7 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
 
   // Everything the flow already extracted rides into the call prompt with a
   // never-re-ask rule, so the AI greets the lead by name and never asks for
-  // details it already has (address, offers — and never their phone).
+  // details it already has (address, offers, and never their phone).
   const contextTemplate =
     "Their name: {{vars.lead_name}}. " +
     "Property address: {{vars.lead_address}}. " +
@@ -66,7 +66,7 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
 
   // Attempts 2..N: one top-level branch per week. The branch's own `when`
   // re-checks the spoke check (a claimed lead never gets called), and the
-  // arms stop the chain once any call CONNECTED (transferred or answered) —
+  // arms stop the chain once any call CONNECTED (transferred or answered),
   // matched arms carry no steps, the else sleeps a week and calls again.
   const weeklyBranches: FlowStep[] = [];
   for (let i = 2; i <= opts.attempts; i++) {
@@ -122,7 +122,7 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
       // Fresh read of the lead page: current address + cash offers for the
       // spoke-check text, the call script, and the live-transfer pre-alert.
       // Skipped (vars stay empty, messages omit those lines) when no URL was
-      // remembered — contains "http" is the recall-miss guard.
+      // remembered, contains "http" is the recall-miss guard.
       {
         id: "read_page",
         type: "browse_extract",
@@ -177,15 +177,15 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
           leadLine +
           "\nNo AI follow-up calls will be made."
       },
-      // Attempt 1 — right after the spoke check resolves (business hours via
+      // Attempt 1, right after the spoke check resolves (business hours via
       // the flow time window).
       {
         ...(placeCall("week_1_call") as object),
         when: { var: "claimed_agent", equals: "none" }
       } as FlowStep,
       ...weeklyBranches,
-      // The moment the lead converts by any other path — texts back, books an
-      // appointment, or a teammate claims them — jump here: no more calls.
+      // The moment the lead converts by any other path, texts back, books an
+      // appointment, or a teammate claims them, jump here: no more calls.
       {
         id: "converted",
         type: "goal",

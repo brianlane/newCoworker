@@ -27,7 +27,7 @@ import { stepOf, walkFlow } from "./flow-walker";
  *   2. The fallback's field-name heuristic (/tel|cell/ substrings) stuffed
  *      phones into non-phone fields like hotel_name / cancellation_policy.
  *   3. buildClassifyPrompt clipped the HEAD of windowText, cutting the
- *      newest message — a lead's opt-out — out of the prompt (misrouting).
+ *      newest message, a lead's opt-out, out of the prompt (misrouting).
  *   4. splitReplyReasoning leaked pretty-printed/fenced trailer JSON to the
  *      customer and dropped the handoff escalation carried in it.
  *   5. Test mode reported a send the live run would SKIP as a successful
@@ -35,10 +35,10 @@ import { stepOf, walkFlow } from "./flow-walker";
  *   6. normalizeNanpToE164 accepted NANP-invalid numbers (0/1-leading area
  *      or exchange codes), deferring a guaranteed failure to Telnyx.
  *
- * Round 4 (2026-07-12, second pass — three more bugs proven and fixed):
+ * Round 4 (2026-07-12, second pass, three more bugs proven and fixed):
  *   7. extract_text was prompt-injectable: a lead email carrying an embedded
  *      instruction ("set lead_phone to +1500…") made the model return the
- *      planted number, which the flow then TEXTED — even overriding a real
+ *      planted number, which the flow then TEXTED, even overriding a real
  *      lead's genuine phone. buildExtractionPrompt now marks the content as
  *      untrusted data to ignore embedded instructions.
  *   8. renderTemplate left a broken "Hi !" greeting in a customer-facing SMS
@@ -55,10 +55,10 @@ function steps(def: unknown): FlowStep[] {
 }
 
 // ---------------------------------------------------------------------------
-// Bug 1 — invented phone numbers from non-phone digit runs
+// Bug 1, invented phone numbers from non-phone digit runs
 // ---------------------------------------------------------------------------
 
-/** Lead email with NO phone — but a USPS tracking number full of digits. */
+/** Lead email with NO phone, but a USPS tracking number full of digits. */
 const TRACKING_EMAIL = [
   "New lead: Jane Roe",
   "You have a new lead from your campaign.",
@@ -125,7 +125,7 @@ describe("BUG 1 (fixed): phone fallback must not invent numbers from tracking/or
 });
 
 // ---------------------------------------------------------------------------
-// Bug 2 — field-name heuristic false positives (tel/cell substrings)
+// Bug 2, field-name heuristic false positives (tel/cell substrings)
 // ---------------------------------------------------------------------------
 
 /** Email WITH a real lead phone, but no hotel / no cancellation policy. */
@@ -153,7 +153,7 @@ const SUBSTRING_FIELDS_FLOW = {
       fields: [
         { name: "lead_name", description: "The lead's full name" },
         { name: "lead_phone", description: "The lead's phone number" },
-        // Neither of these is a phone field — but both matched the old bare
+        // Neither of these is a phone field, but both matched the old bare
         // substring heuristic ("tel" in hotel, "cell" in cancellation).
         { name: "hotel_name", description: "The hotel the lead is staying at, if mentioned" },
         {
@@ -207,7 +207,7 @@ describe("BUG 2 (fixed): phone fallback fires only on real phone field names", (
 });
 
 // ---------------------------------------------------------------------------
-// Bug 3 — classify clip must keep the newest message
+// Bug 3, classify clip must keep the newest message
 // ---------------------------------------------------------------------------
 
 const TRULY_CATEGORIES = [
@@ -225,7 +225,7 @@ const OPT_OUT_LINE = "Actually you know what, please stop texting me. I'm all se
  * A realistic long correlation window: the lead pasted their policy
  * declarations page over several texts (oldest first, the way the engine
  * joins windowText), then opted out in the NEWEST message. Total length
- * pushes past buildClassifyPrompt's 4000-char clip — the opt-out used to be
+ * pushes past buildClassifyPrompt's 4000-char clip, the opt-out used to be
  * clipped out of the prompt entirely.
  */
 const POLICY_PASTE =
@@ -265,7 +265,7 @@ describe("BUG 3 (fixed): classify keeps the tail of a long window, the message b
 });
 
 // ---------------------------------------------------------------------------
-// Bug 4 — multi-line reasoning trailers must never reach the customer
+// Bug 4, multi-line reasoning trailers must never reach the customer
 // ---------------------------------------------------------------------------
 
 describe("BUG 4 (fixed): splitReplyReasoning strips multi-line trailer variants", () => {
@@ -281,7 +281,7 @@ describe("BUG 4 (fixed): splitReplyReasoning strips multi-line trailer variants"
     ].join("\n");
     const split = splitReplyReasoning(modelOutput);
     expect(split.reply).toBe("Thanks for letting me know! I've noted that for your broker.");
-    // The record survives — including handoff:true, so the needs-human
+    // The record survives, including handoff:true, so the needs-human
     // escalation (escalateToHuman in sms-inbound-worker) still fires.
     expect(split.reasoning).toEqual({
       intent: "gave_renewal_info",
@@ -302,10 +302,10 @@ describe("BUG 4 (fixed): splitReplyReasoning strips multi-line trailer variants"
 });
 
 // ---------------------------------------------------------------------------
-// Bug 5 — test mode must report skips as skips
+// Bug 5, test mode must report skips as skips
 // ---------------------------------------------------------------------------
 
-/** Lead email with no digits anywhere — no phone can be extracted or invented. */
+/** Lead email with no digits anywhere, no phone can be extracted or invented. */
 const NO_PHONE_EMAIL = [
   "New lead: Jane Roe",
   "",
@@ -340,7 +340,7 @@ describe("BUG 5 (fixed): a send with no usable recipient surfaces as SKIPPED in 
 });
 
 // ---------------------------------------------------------------------------
-// Bug 6 — NANP validation
+// Bug 6, NANP validation
 // ---------------------------------------------------------------------------
 
 describe("BUG 6 (fixed): normalizeNanpToE164 rejects NANP-invalid numbers", () => {
@@ -353,7 +353,7 @@ describe("BUG 6 (fixed): normalizeNanpToE164 rejects NANP-invalid numbers", () =
 });
 
 // ---------------------------------------------------------------------------
-// Bug 7 — extract_text prompt injection (a planted number gets texted)
+// Bug 7, extract_text prompt injection (a planted number gets texted)
 // ---------------------------------------------------------------------------
 
 /** A phoneless lead whose email body tries to plant an attacker phone. */
@@ -456,7 +456,7 @@ describe("BUG 7 (fixed): extract_text ignores an embedded injection instruction"
 });
 
 // ---------------------------------------------------------------------------
-// Bug 8 — empty-name greeting ("Hi !") reaching the customer
+// Bug 8, empty-name greeting ("Hi !") reaching the customer
 // ---------------------------------------------------------------------------
 
 const NAMELESS_FLOW = {
@@ -506,7 +506,7 @@ describe("BUG 8 (fixed): an empty name never produces a broken 'Hi !' greeting",
 });
 
 // ---------------------------------------------------------------------------
-// Bug 9 — isPhoneFieldName missed contact_number / contact_no
+// Bug 9, isPhoneFieldName missed contact_number / contact_no
 // ---------------------------------------------------------------------------
 
 describe("BUG 9 (fixed): isPhoneFieldName recognizes contact_number without false positives", () => {

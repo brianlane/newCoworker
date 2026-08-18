@@ -1,11 +1,11 @@
 /**
- * Smart Lists (FUB-style saved dynamic segments) — pure domain rules.
+ * Smart Lists (FUB-style saved dynamic segments), pure domain rules.
  *
  * A segment is a NAMED, SAVED set of contact filters ("New leads this
  * week", "No contact in 5 days") the team works as a one-click list on the
  * Contacts page. Like the pipeline board, a segment is a pure VIEW over the
- * contacts table — membership is evaluated live against each contact's
- * current facts, never stored — so lists can't go stale and there is no new
+ * contacts table, membership is evaluated live against each contact's
+ * current facts, never stored, so lists can't go stale and there is no new
  * automation surface.
  *
  * Types-only + pure functions (no Supabase import) so client components can
@@ -42,7 +42,7 @@ export const segmentFiltersSchema = z
     lastInteractionWithinDays: z.number().int().min(1).max(365).optional(),
     /**
      * NO interaction in the last N days ("needs follow-up"). A contact with
-     * no interactions at all counts as overdue — that's exactly who a
+     * no interactions at all counts as overdue, that's exactly who a
      * follow-up list must not hide.
      */
     lastInteractionOlderThanDays: z.number().int().min(1).max(365).optional(),

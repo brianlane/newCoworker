@@ -2,9 +2,9 @@
  * Vagaro candidate-event fetcher for the AiFlow calendar-trigger poller.
  *
  * Vagaro tenants had NO working calendar triggers: the poller's fetchers
- * speak Google/Graph/Calendly only, so appointment-driven flows —
+ * speak Google/Graph/Calendly only, so appointment-driven flows,
  * "text the customer 2 hours before their appointment", "follow up after
- * the visit" — were impossible for a merchant whose whole book lives on
+ * the visit", were impossible for a merchant whose whole book lives on
  * Vagaro. This module lists the merchant's appointments over the poller's
  * mode windows (via the direct Vagaro API client) and normalizes them into
  * the same `CalendarEventInput` shape the other fetchers produce, so
@@ -15,13 +15,13 @@
  *     source, and shared-only flows simply see no Vagaro events (Calendly
  *     parity).
  *   - The appointments listing already carries the customer's name / phone /
- *     email, so there is no per-event enrichment call — those fields land in
+ *     email, so there is no per-event enrichment call, those fields land in
  *     the event description (trigger conditions and
  *     `{{trigger.windowText}}` → extract_text see them, invitee-context
  *     parity).
  *   - The listing filters on START date only; `event_created` is gated in
  *     JS on the item's creation timestamp. A listing that omits creation
- *     timestamps simply never fires created mode from the poll — the
+ *     timestamps simply never fires created mode from the poll, the
  *     Vagaro webhook receiver fires it in real time either way
  *     (src/lib/vagaro/webhook.ts), sharing the same `cal:` dedupe keys.
  *   - `event_canceled` needs a status-filtered listing; if the merchant's
@@ -43,7 +43,7 @@ export const VAGARO_POLL_MAX_EVENTS = 100;
 /**
  * event_created scans this many days of UPCOMING appointments (the listing
  * cannot filter by creation time server-side; `eventCreatedDue` narrows to
- * the real lookback). Calendly-parity values — fresh bookings
+ * the real lookback). Calendly-parity values, fresh bookings
  * overwhelmingly start within days.
  */
 export const VAGARO_CREATED_SCAN_DAYS = 30;
@@ -103,7 +103,7 @@ export function vagaroAppointmentToCalendarEvent(
     ...(item.createdIso ? { createdIso: item.createdIso } : {}),
     ...(item.updatedIso ? { updatedIso: item.updatedIso } : {}),
     cancelled: item.cancelled,
-    // Vagaro has no shared-calendar concept — everything is "primary".
+    // Vagaro has no shared-calendar concept, everything is "primary".
     calendar: "primary"
   };
 }
@@ -131,7 +131,7 @@ export type VagaroPollDeps = {
 /**
  * List + normalize + due-filter this business's Vagaro candidate events for
  * one poll tick. Throws `calendar_not_connected` when the connection row is
- * gone (resolved moments earlier by the caller — a vanished row is a
+ * gone (resolved moments earlier by the caller, a vanished row is a
  * disconnect); listing failures follow the per-window isolation rule: one
  * window failing must not drop the events other windows collected, and only
  * when EVERY window failed with nothing collected does the failure
@@ -167,7 +167,7 @@ export async function fetchVagaroCandidateEvents(
       const existingIdx = indexById.get(ev.id);
       if (existingIdx !== undefined) {
         // The canceled window runs LAST and is the only listing that carries
-        // cancellations — a canceled version must replace the stale
+        // cancellations, a canceled version must replace the stale
         // non-canceled row an earlier window already collected, or
         // event_canceled never becomes due from the poll (Bugbot on PR #810)
         // and the other modes keep treating the appointment as standing.

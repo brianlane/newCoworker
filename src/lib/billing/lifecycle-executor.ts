@@ -1,5 +1,5 @@
 /**
- * Executor for {@link LifecyclePlan} — the thin side-effectful counterpart
+ * Executor for {@link LifecyclePlan}, the thin side-effectful counterpart
  * to the pure planner in [./lifecycle.ts].
  *
  * The executor is explicitly NOT covered by the planner's table-driven
@@ -13,7 +13,7 @@
  * Execution order is fixed and intentional:
  *   1. Stripe ops (refund → cancel, or set-cancel-at-period-end).
  *      We do Stripe FIRST because a Stripe failure is the most recoverable
- *      class of error — if we crash here, the user still has a working VM
+ *      class of error, if we crash here, the user still has a working VM
  *      and can retry the cancel. If we did VM teardown first, a Stripe
  *      failure would leave us with a dead VM + live Stripe sub.
  *   2. SSH backup (before any Hostinger destruction). If backup fails we
@@ -25,7 +25,7 @@
  *   5. Emails: fire-and-forget. Failures logged but don't fail the action.
  *
  * We deliberately don't wrap the whole thing in a "rollback on failure"
- * transaction — Stripe refunds are not reversible, and we'd rather crash
+ * transaction, Stripe refunds are not reversible, and we'd rather crash
  * with a clear log and triage than paper over half-applied state.
  */
 
@@ -118,7 +118,7 @@ function defaultTelnyxNumbersClient(): TelnyxNumbersClient | null {
 /* c8 ignore stop */
 
 export type ExecutorExtra = {
-  /** Forwarded from the lifecycle caller — we need it to locate the latest charge for refunds. */
+  /** Forwarded from the lifecycle caller, we need it to locate the latest charge for refunds. */
   customerProfileId?: string | null;
   businessId: string;
   vpsHost: string | null;
@@ -162,7 +162,7 @@ export async function executeLifecyclePlan(
   for (const op of plan.dbUpdates) {
     await runDbOp(op, extra, result, paidThroughResolverFor(deps, extra.businessId));
   }
-  // Emails last and tolerant — don't block the user's cancel path on SMTP.
+  // Emails last and tolerant, don't block the user's cancel path on SMTP.
   for (const op of plan.emailsToSend) {
     try {
       await runEmailOp(op, emailer, result);
@@ -232,7 +232,7 @@ export async function executeLifecyclePlanFastPhase(
  * ExecutorResult} returned by the fast phase so the email op can
  * surface the Stripe refund amount we already recorded.
  *
- * All errors are logged but swallowed — the DB state is already
+ * All errors are logged but swallowed, the DB state is already
  * authoritative from the fast phase, and the grace-sweep will retry any
  * missed Hostinger ops when the grace window elapses.
  */
@@ -278,12 +278,12 @@ export async function executeLifecyclePlanSlowPhase(
   }
   // DID releases run in the slow phase (fast phase skips telnyxOps
   // entirely): they're best-effort network calls the user's HTTP response
-  // must never block on, and — like pool returns — they belong after the
+  // must never block on, and, like pool returns, they belong after the
   // backup so a mid-teardown crash retried by the grace sweep re-runs them.
   for (const op of plan.telnyxOps) {
     await runTelnyxOp(op, deps.telnyxNumbers);
   }
-  // Pool returns run here — AFTER backup + stop_vm — because a box marked
+  // Pool returns run here, AFTER backup + stop_vm, because a box marked
   // `available` is immediately claimable by a concurrent signup, whose
   // adopt path recreates (wipes) the VM. The fast phase skipped these ops.
   for (const op of plan.dbUpdates) {
@@ -387,13 +387,13 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
         return;
       }
       // The one-time 10DLC carrier-registration pass-through (Phase C3) is
-      // non-refundable — the TCR/carrier fees behind it are non-refundable
+      // non-refundable, the TCR/carrier fees behind it are non-refundable
       // to us and the checkout discloses it. Carve its line(s) out of the
       // 30-day money-back amount.
       //
       // POST-DISCOUNT: Stripe allocates invoice-level coupons (e.g. the
       // monthly-signup intro coupon) proportionally across ALL line items,
-      // including this fee line — on Truly Insurance's Jul 2026 invoice the
+      // including this fee line, on Truly Insurance's Jul 2026 invoice the
       // customer effectively paid $14.02 for the $19.50 fee. Carving out the
       // pre-discount `line.amount` would keep more than the customer
       // actually paid for the fee, silently clawing back part of their plan
@@ -431,7 +431,7 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           return sum + Math.max((line.amount ?? 0) - discounted, 0);
         }, 0);
       // Billable-usage policy (Jul 2026): the tenant's third-party usage
-      // charges (SMS, voice, Gemini spend) are withheld at platform cost —
+      // charges (SMS, voice, Gemini spend) are withheld at platform cost,
       // computed by the refund route via src/lib/billing/usage-charges.ts
       // and threaded through the op. Zero when the plan never loaded it.
       const usageCarveOutCents = op.usageCarveOutCents;
@@ -504,7 +504,7 @@ async function runSshOp(op: SshOp): Promise<void> {
     case "restore_durable_data":
       // Restore is only dispatched by change-plan & reactivate flows, which
       // run their own provisioning setup and then invoke the helper
-      // directly — we don't route restore through the executor here because
+      // directly, we don't route restore through the executor here because
       // the new VPS + SSH key info isn't known to the planner.
       logger.warn("restore_durable_data dispatched through executor; expected out-of-band handling", {
         businessId: op.businessId
@@ -542,7 +542,7 @@ async function runHostingerOp(op: HostingerOp, client: HostingerClient): Promise
     case "stop_vm":
       // Tolerate 404: the grace-expired-wipe backstop re-emits `stop_vm`
       // even when the VM was already deleted manually in hPanel (the ops
-      // deletion-request flow). A 404 there is benign — the goal state is
+      // deletion-request flow). A 404 there is benign, the goal state is
       // achieved.
       await safeHostinger(
         () => client.stopVirtualMachine(op.virtualMachineId),
@@ -663,7 +663,7 @@ async function runDbOp(
       // Tear down the tenant's Nango workspace connections AFTER the stamp
       // commits (a failed stamp must leave the tenant intact, and the sweep
       // retries the whole op). The wipe KEEPS the business row, so no
-      // cascade ever removes these — without this hook each leaked
+      // cascade ever removes these, without this hook each leaked
       // connection consumes account-wide Nango quota forever. Best-effort
       // by contract: a Nango blip never fails the wipe (the audit script
       // reclaims orphans).
@@ -702,10 +702,10 @@ async function runDbOp(
 
 /**
  * Best-effort DID release: stop the number's monthly rental at Telnyx, then
- * clean up the routing rows. Never throws — a wipe must not fail because a
+ * clean up the routing rows. Never throws, a wipe must not fail because a
  * $1.10/mo number couldn't be released (it's operator-recoverable in the
  * Telnyx portal, and the grace-sweep's idempotent retry re-attempts it).
- * A 404 from Telnyx means the number is already gone — the goal state.
+ * A 404 from Telnyx means the number is already gone, the goal state.
  */
 async function runTelnyxOp(
   op: TelnyxOp,
@@ -718,7 +718,7 @@ async function runTelnyxOp(
       e164: op.e164
     });
     // The wipe stamp that follows removes this business from every retry
-    // sweep, so a skipped release would silently rent forever — page ops.
+    // sweep, so a skipped release would silently rent forever, page ops.
     await sendOpsDidReleaseFailedEmail({
       businessId: op.businessId,
       e164: op.e164,
@@ -758,7 +758,7 @@ async function runTelnyxOp(
       error: reason
     });
     // Teardown continues (blocking the wipe on a Telnyx outage would break
-    // the retention promise), but nothing retries after the wipe stamp —
+    // the retention promise), but nothing retries after the wipe stamp,
     // alert ops so the number gets released manually instead of leaking.
     await sendOpsDidReleaseFailedEmail({
       businessId: op.businessId,
@@ -770,7 +770,7 @@ async function runTelnyxOp(
 
 /**
  * Best-effort pool return: vps_inventory is an economics optimization
- * (adopt-first reuse of owned boxes), never a correctness dependency — a
+ * (adopt-first reuse of owned boxes), never a correctness dependency, a
  * pool write failure must not fail the cancel/wipe. Split out of
  * {@link runDbOp} because the split-phase executor runs this op from the
  * SLOW phase (after backup + stop_vm), where no {@link ExecutorExtra} is

@@ -1,5 +1,5 @@
 /**
- * Central outbound WhatsApp delivery — the ONE path every business-
+ * Central outbound WhatsApp delivery, the ONE path every business-
  * initiated send takes (AiFlow send_whatsapp steps, owner alerts, the
  * dashboard coworker tool). Conversational replies from the messenger
  * worker do NOT come through here (they are always in-window free-form).
@@ -9,7 +9,7 @@
  *     WhatsApp within 24h) → free-form text, exactly as written.
  *   * Window CLOSED → the pre-approved utility template for the audience
  *     (owner_alert / contact_followup), with the text as the body
- *     variable — Meta bills the tenant per template message.
+ *     variable, Meta bills the tenant per template message.
  *   * Template not APPROVED (still in review, rejected, or registration
  *     failed) → honest structured skip; the caller reports it and other
  *     channels (SMS/email) still fire.
@@ -167,7 +167,7 @@ export async function deliverWhatsApp(
     connection = await getConnection(input.businessId);
   } catch (err) {
     // A throwing read is an infrastructure blip, not "the owner never
-    // connected WhatsApp" — report it retryable so AiFlows/alerts don't
+    // connected WhatsApp", report it retryable so AiFlows/alerts don't
     // log a misleading not-connected skip.
     logger.warn("deliverWhatsApp: connection read failed", {
       businessId: input.businessId,
@@ -185,7 +185,7 @@ export async function deliverWhatsApp(
   // Window check: an existing conversation whose last inbound message is
   // under 24h old permits free-form text; absent/stale means the template
   // path. A FAILING read must not silently pick the billed template path
-  // (the recipient may be in an open, free window) — it fails retryable.
+  // (the recipient may be in an open, free window), it fails retryable.
   const readConversation = (): Promise<MessengerConversationRow | null | "read_failed"> =>
     getConversation(input.businessId, connection.phone_number_id, "whatsapp", waId).catch(
       (err) => {
@@ -209,7 +209,7 @@ export async function deliverWhatsApp(
   let windowOpen = conversation ? messengerWindowOpen(conversation, now()) : false;
   if (!windowOpen) {
     // Narrow the read→send race: a customer's first inbound message can
-    // open the window between the read above and the send below — a
+    // open the window between the read above and the send below, a
     // second read right before committing to the billed template path
     // flips those sends back to free (and unbilled) text. A failing
     // re-read keeps the first read's verdict (already a good read).
@@ -241,7 +241,7 @@ export async function deliverWhatsApp(
 
     // Language pick: explicit input wins; contact sends fall back to the
     // stored contact preference. Spanish only applies when the Spanish
-    // variant is APPROVED — otherwise the English variant keeps working
+    // variant is APPROVED, otherwise the English variant keeps working
     // exactly as before.
     let wantEs = input.language === "es";
     if (input.language === undefined && input.audience === "contact") {
@@ -300,7 +300,7 @@ export async function deliverWhatsApp(
     }
   }
 
-  // Transcript append (best-effort — the send already happened): thread
+  // Transcript append (best-effort, the send already happened): thread
   // the outbound into the WhatsApp inbox so a reply lands in context.
   try {
     if (!conversation) {

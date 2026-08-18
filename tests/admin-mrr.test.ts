@@ -50,7 +50,7 @@ describe("computeDayCurrentMrr", () => {
   });
 
   it("keeps the contract rate past renewal_at while the Stripe period is still term-length (auto-renewed contract)", () => {
-    // renewal_at is never advanced on an auto-renewed full term — the
+    // renewal_at is never advanced on an auto-renewed full term, the
     // 24-month Stripe period is what says "still committed".
     const result = computeDayCurrentMrr({
       subscriptions: [
@@ -115,7 +115,7 @@ describe("computeDayCurrentMrr", () => {
       getPeriodPricing("starter", "monthly").renewalMonthlyCents
     );
 
-    // Malformed renewal_at takes the same created_at fallback — created this
+    // Malformed renewal_at takes the same created_at fallback, created this
     // month → still intro.
     const malformed = computeDayCurrentMrr({
       subscriptions: [

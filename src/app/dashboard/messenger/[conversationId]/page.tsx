@@ -4,7 +4,7 @@
  * the AI uses).
  *
  * IDOR guard: the conversation row is resolved by id and then verified
- * against the caller's ACTIVE business before any message read — a
+ * against the caller's ACTIVE business before any message read, a
  * guessed UUID renders the same not-found state as a missing row
  * (webchat transcript pattern).
  */

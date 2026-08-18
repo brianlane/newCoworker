@@ -42,7 +42,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.7
   }));
 
-  // Published blog posts — best-effort: a DB hiccup must not 500 the
+  // Published blog posts, best-effort: a DB hiccup must not 500 the
   // sitemap, so the static routes always render.
   let blogRoutes: { path: string; priority: number }[] = [];
   try {

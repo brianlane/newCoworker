@@ -47,14 +47,14 @@ export const PINNED_MAX_CHARS = 2000;
 
 /**
  * `customer_lookup_by_phone` core. A malformed phone reports `found:false`
- * rather than erroring — Telnyx has been observed to deliver "anonymous" /
+ * rather than erroring, Telnyx has been observed to deliver "anonymous" /
  * "" / "unknown" as the caller id in spotty CNAM cases, and the model
  * should just treat those as "nobody on file".
  *
  * `recentInteractions` is the cross-channel raw timeline (SMS both
  * directions + recent call summaries, contact_context.ts): mid-first-
- * conversation the rolling `summary` is still empty — the summarize sweep
- * runs later — so without it a lookup told the agent NOTHING about an
+ * conversation the rolling `summary` is still empty, the summarize sweep
+ * runs later, so without it a lookup told the agent NOTHING about an
  * exchange that happened minutes ago (the 2026-07-14 Truly incident
  * class). Best-effort: a timeline failure degrades to the pre-existing
  * summary-only shape, never a failed lookup.
@@ -86,7 +86,7 @@ export async function lookupCustomerByPhone(
       customer: {
         displayName: memory.display_name,
         customerE164: memory.customer_e164,
-        // Customer-safe summary only — owner notes (pinned_md) stay
+        // Customer-safe summary only, owner notes (pinned_md) stay
         // server-side; the agent uses them for steering but doesn't
         // read them back to the customer.
         summary: memory.summary_md,
@@ -105,7 +105,7 @@ export async function lookupCustomerByPhone(
  * `ok: true` alone was read as success. On Chris Bartelot's call (Aug 3 2026)
  * the voice coworker re-asked for a name it already had, mis-heard the repeat,
  * called this tool, got `{ ok: true, updated: false }` back, and told the
- * caller "I've updated your name here" — while the contact row was untouched.
+ * caller "I've updated your name here", while the contact row was untouched.
  * The system instruction already bans announcing an action whose tool call did
  * not succeed; the result shape is what made a refusal look like a success.
  *
@@ -123,7 +123,7 @@ export const NAME_UNCHANGED_MESSAGE =
  * `updated: false` covers two different situations, and the first version of
  * this change gave both the refusal text above. That was wrong for the common
  * one: when no row exists, `recordInteractionAndIncrement` force-creates it
- * WITH this name, the re-read then matches, and the code lands here — so on a
+ * WITH this name, the re-read then matches, and the code lands here, so on a
  * first-time caller who just gave their name, the tool would have told the
  * model to deny that anything was saved.
  *
@@ -138,7 +138,7 @@ export const NAME_ALREADY_MATCHES_MESSAGE =
 
 /**
  * `customer_set_display_name` core. Customer surfaces (voice/SMS) never
- * overwrite a name that is already set — agent-discovered names only land
+ * overwrite a name that is already set, agent-discovered names only land
  * when display_name is currently null/empty. The DASHBOARD surface is the
  * owner speaking, so there a rename IS authoritative: it overwrites,
  * stamps name_source='manual' (same provenance as a contacts-UI edit), and
@@ -206,7 +206,7 @@ export async function setCustomerDisplayName(
 /**
  * `customer_append_pinned_note` core. Appends a date-stamped line to
  * pinned_md, truncating oldest-first when the cap is exceeded. Refuses a
- * single note that alone exceeds the cap (`note_too_long`) — better the
+ * single note that alone exceeds the cap (`note_too_long`), better the
  * agent re-summarize than crowd out everything else.
  *
  * `stampLabel` names the originating surface in the persisted line, e.g.

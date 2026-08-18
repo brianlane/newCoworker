@@ -2,22 +2,22 @@
  * Minimal fake of the Next.js platform app for worker→app bridge calls made
  * by the served ai-flow-worker. The suite points the worker's
  * AIFLOW_PLATFORM_URL at this server (bound on 0.0.0.0 so the edge runtime
- * container can reach it — same host-gateway mechanics as fake-rowboat).
+ * container can reach it, same host-gateway mechanics as fake-rowboat).
  *
  * Endpoints:
- *   - POST /api/internal/aiflow-booking-precheck — scripted per test (FIFO):
+ *   - POST /api/internal/aiflow-booking-precheck, scripted per test (FIFO):
  *     answer `{ booked }` in the route's success envelope, or an HTTP error
  *     status for the fail-open path. Unscripted calls answer booked:false so
  *     unrelated scenarios never hang on this gate.
- *   - POST /api/internal/contact-booking-context — scripted per test (FIFO):
+ *   - POST /api/internal/contact-booking-context, scripted per test (FIFO):
  *     answer `{ line }` in the route's success envelope so the
  *     sms-inbound-worker's booking-status preamble line is assertable on the
  *     Rowboat wire. Unscripted calls answer line:null (no booking context).
- *   - POST /v2/messages — a Telnyx /v2/messages stand-in (the suite points
+ *   - POST /v2/messages, a Telnyx /v2/messages stand-in (the suite points
  *     the worker's TELNYX_API_BASE here): records the send and answers with
  *     a fresh message id, so the reply pipeline's DELIVERED body (e.g. the
  *     short-linked text) is assertable end to end.
- *   - POST /api/internal/aiflow-email-poll / aiflow-calendar-poll — the
+ *   - POST /api/internal/aiflow-email-poll / aiflow-calendar-poll, the
  *     worker kicks these fire-and-forget every tick once AIFLOW_PLATFORM_URL
  *     is set; answered 200 so the logs stay quiet.
  */

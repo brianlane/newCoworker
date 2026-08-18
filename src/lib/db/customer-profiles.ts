@@ -9,8 +9,8 @@
  * migration [20260501000000_subscription_lifecycle.sql].
  *
  * Callers must pass a *normalized* email. Normalization = lowercase, trim,
- * and Gmail plus-aliases collapsed (`foo+bar@gmail.com` → `foo@gmail.com`)
- * — kept out of the DB so the normalization stays in TypeScript and is
+ * and Gmail plus-aliases collapsed (`foo+bar@gmail.com` → `foo@gmail.com`),
+ * kept out of the DB so the normalization stays in TypeScript and is
  * easy to unit-test.
  */
 
@@ -29,7 +29,7 @@ export type CustomerProfileRow = {
   /**
    * Stamped when the customer clicks the verification link we emailed at
    * `/api/onboard/set-password` (or via the dashboard's "Resend email"
-   * button). Distinct from `auth.users.email_confirmed_at` — that one is
+   * button). Distinct from `auth.users.email_confirmed_at`, that one is
    * set by the admin-API user-mint and only means "Supabase considers
    * this email valid for sign-in", not "the human pressed a link in
    * their inbox". The dashboard renders the unverified-email banner
@@ -48,7 +48,7 @@ export const LIFETIME_SUBSCRIPTION_CAP = 3;
 
 /**
  * Normalize an email for profile keying. Lowercase + trim + collapse Gmail
- * plus-aliases. Any throwing on malformed input is intentional — we should
+ * plus-aliases. Any throwing on malformed input is intentional, we should
  * never have reached checkout with a value that can't be normalized.
  */
 export function normalizeEmailForProfile(email: string): string {
@@ -138,7 +138,7 @@ export async function getCustomerProfileByEmail(
 
 /**
  * Atomically bump the lifetime count. Called from the Stripe webhook on
- * `checkout.session.completed` — never from request handlers — so we only
+ * `checkout.session.completed`, never from request handlers, so we only
  * count paid subscription lifetimes, not abandoned checkouts.
  */
 export async function incrementLifetimeSubscriptionCount(
@@ -163,7 +163,7 @@ export async function incrementLifetimeSubscriptionCount(
  * slot for a subscription we refused to provision. Floors at zero via
  * the RPC so replays can't produce negative counts.
  *
- * Only called from trusted server-side code — never from user-facing
+ * Only called from trusted server-side code, never from user-facing
  * request handlers.
  */
 export async function decrementLifetimeSubscriptionCount(
@@ -196,7 +196,7 @@ export async function markRefundUsed(
   if (error) throw new Error(`markRefundUsed: ${error.message}`);
 }
 
-/** Stamp first_paid_at once — the 30-day window anchor (answer to Q1). */
+/** Stamp first_paid_at once, the 30-day window anchor (answer to Q1). */
 export async function markFirstPaidIfUnset(
   profileId: string,
   at: Date,
@@ -236,7 +236,7 @@ export type MarkEmailVerifiedResult =
  * `alreadyVerified: true` when the column was already non-null so the
  * `/verify-email` route can render a "Email already confirmed" path
  * (typical when the user clicks the link from two devices or hits the
- * back button). Returns `not_found` when the profile doesn't exist —
+ * back button). Returns `not_found` when the profile doesn't exist,
  * which in production is essentially unreachable because
  * `upsertCustomerProfile` runs on `/api/checkout` BEFORE the user is
  * sent to Stripe, so by the time set-password fires the verification

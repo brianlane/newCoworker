@@ -31,7 +31,7 @@ describe("onboarding chat helpers", () => {
     expect(prompt).toContain("assistant profile");
     expect(prompt).toContain("Never mention internal implementation details or file names");
     expect(prompt).toContain("Ask one focused question at a time");
-    // CRM-as-tools fallback — wording shifted post-Step-1 migration
+    // CRM-as-tools fallback, wording shifted post-Step-1 migration
     // ("None — texts, email, or calendar only" is the canonical
     // dropdown value), but the underlying instruction (treat no
     // formal CRM as a valid answer, not a gap) is still present.
@@ -134,7 +134,7 @@ describe("onboarding chat helpers", () => {
     // Service area, team size, and CRM/tools moved from Step 2 chat
     // elicitation to Step 1 closed-class form fields. The chat
     // system prompt must explicitly tell the model those values in
-    // `knownContext` are authoritative — re-asking them after the
+    // `knownContext` are authoritative, re-asking them after the
     // user already filled out the form reads as the assistant
     // ignoring the user (the same UX failure that drove the original
     // dead-end fallback work). Tests the literal contract because
@@ -147,7 +147,7 @@ describe("onboarding chat helpers", () => {
     });
     expect(prompt).toContain("collected on the Step 1 form");
     expect(prompt).toContain("do NOT re-ask those topics");
-    // The prompt also dumps knownContext as JSON — sanity check that
+    // The prompt also dumps knownContext as JSON, sanity check that
     // the form-collected values arrive there so the model can see
     // them.
     expect(prompt).toContain("Phoenix metro, AZ");
@@ -452,7 +452,7 @@ describe("onboarding chat helpers", () => {
 
   it("summarizes the chat-elicited topics from the profile alone (no knownContext / transcript inputs)", () => {
     // Service area / team size / CRM are collected on the Step 1
-    // form and never feed into the chat-side topic status — the
+    // form and never feed into the chat-side topic status, the
     // summary function takes only the profile. Pinning the
     // resulting object's exact shape locks the migration: no
     // future code path should leak `serviceAreaKnown`,
@@ -476,9 +476,9 @@ describe("onboarding chat helpers", () => {
   });
 
   it("derives toneKnown true from a non-empty signature alone (escalationRules also satisfies routingRulesKnown)", () => {
-    // The two OR clauses inside summarizeOnboardingTopicStatus —
+    // The two OR clauses inside summarizeOnboardingTopicStatus,
     // toneKnown via signature, routingRulesKnown via
-    // escalationRules — would otherwise go uncovered if every test
+    // escalationRules, would otherwise go uncovered if every test
     // populated the primary branch.
     const topicStatus = summarizeOnboardingTopicStatus({
       ...createEmptyAssistantProfile(),
@@ -712,7 +712,7 @@ describe("CHAT_ELICITED_TOPIC_KEYS / areAllChatTopicsCovered", () => {
 
   it("exposes exactly the 5 chat-elicited keys in declared order", () => {
     // Order matters because `createFallbackAssistantQuestion` walks
-    // these in priority sequence — pinning it prevents accidental
+    // these in priority sequence, pinning it prevents accidental
     // reordering from changing which question fires when multiple
     // topics are uncovered.
     expect([...CHAT_ELICITED_TOPIC_KEYS]).toEqual([

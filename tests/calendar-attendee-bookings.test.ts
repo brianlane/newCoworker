@@ -1,7 +1,7 @@
 /**
  * Shared attendee-bookings module (src/lib/calendar-tools/attendee-bookings.ts):
  *
- *  - the provider REGISTRY PARITY guard — every provider key
+ *  - the provider REGISTRY PARITY guard, every provider key
  *    `resolveCalendarConnection` can return must be registered (adapter or
  *    explicit `ledger_only`), parsed from the connections module's source so
  *    a new provider without a booking-visibility decision fails CI;
@@ -278,7 +278,7 @@ describe("lookupProviderBookingsForAttendee", () => {
       { mode: "existence" }
     );
     expect(res).toEqual({ ok: true, bookings: [] });
-    // One email-narrowed listing only — no full phone-path listing.
+    // One email-narrowed listing only, no full phone-path listing.
     expect(request).toHaveBeenCalledTimes(1);
   });
 

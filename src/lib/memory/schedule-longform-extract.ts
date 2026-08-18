@@ -3,7 +3,7 @@ import { extractLongFormGraph, type LongFormExtractInput } from "./graph-longfor
 
 /**
  * Schedule long-form knowledge-graph extraction (document body, website
- * knowledge, identity markdown) to run AFTER the HTTP response is sent —
+ * knowledge, identity markdown) to run AFTER the HTTP response is sent,
  * same rationale as scheduleVaultSync: on Vercel a bare fire-and-forget
  * promise is frozen when the response flushes, while `after()` keeps the
  * invocation alive until the callback settles. A chunked extraction can

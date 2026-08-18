@@ -3,7 +3,7 @@
  *
  * Response discipline is the point here. Acuity retries 5xx for 24 hours and
  * DISABLES the webhook after five days of continuous failure, so anything we
- * understand — including deliveries we deliberately ignore — must answer
+ * understand, including deliveries we deliberately ignore, must answer
  * 2xx. The single exception is a failure to read the appointment back, which
  * is genuinely transient. Getting this backwards costs a tenant their
  * real-time path silently.

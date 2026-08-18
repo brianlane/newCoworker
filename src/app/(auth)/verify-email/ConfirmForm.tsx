@@ -20,7 +20,7 @@ type Props = {
  * The render is one of three states:
  *   1. Initial (no submission yet): show the email + a primary button
  *      whose `formAction` is the server action. The button submits a
- *      hidden `token` field carried over from the URL — there's nothing
+ *      hidden `token` field carried over from the URL, there's nothing
  *      else the user can change.
  *   2. After action returns `kind: "ok"`: success card. Distinguishes
  *      first-confirm vs. idempotent replay via `alreadyVerified` so the
@@ -32,7 +32,7 @@ type Props = {
  *          the link is unrecoverable from this page, but the dashboard's
  *          "Resend email" banner can mint a fresh token. Sign in.
  *        - `not_found` → Contact support (`mailto:`): no profile exists
- *          for the email in the token, so signing in won't help — there
+ *          for the email in the token, so signing in won't help, there
  *          is no account to log into. Hand off to humans.
  *        - `internal` → Try again (`window.location.reload()`): the
  *          token itself is valid (we already cryptographically
@@ -106,7 +106,7 @@ export function ConfirmForm({ token, email }: Props) {
             {t("tryAgain")}
           </button>
         ) : result.reason === "not_found" ? (
-          // mailto: deliberately uses a plain <a> rather than next/link —
+          // mailto: deliberately uses a plain <a> rather than next/link,
           // we don't want client-side navigation to intercept it, the
           // browser should hand off to the user's mail client.
           <a href="mailto:support@newcoworker.com" className={ctaClasses}>

@@ -44,7 +44,7 @@ describe("parseCiE2eMode", () => {
   it("recognizes nightly-only and defaults EVERYTHING else to per-change", () => {
     expect(parseCiE2eMode("nightly-only")).toBe("nightly-only");
     expect(parseCiE2eMode("per-change")).toBe("per-change");
-    // Missing row, legacy junk, wrong types — all read as the default so a
+    // Missing row, legacy junk, wrong types, all read as the default so a
     // corrupted setting can never silently turn the merge-time suite off.
     expect(parseCiE2eMode(null)).toBe("per-change");
     expect(parseCiE2eMode(undefined)).toBe("per-change");

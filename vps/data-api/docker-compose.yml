@@ -8,7 +8,7 @@
 #
 # Memory posture: the whole stack must fit alongside Rowboat/Ollama on an
 # 8 GB KVM2 (the standard-profile box enterprise runs on). Tenant content is
-# a few MB, so a tiny Postgres is ample — mem_limit + conservative
+# a few MB, so a tiny Postgres is ample, mem_limit + conservative
 # shared_buffers/work_mem keep RSS bounded under ZRAM.
 #
 # The .env written by deploy-client.sh provides DATA_API_TOKENS,

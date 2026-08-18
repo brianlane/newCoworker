@@ -44,8 +44,8 @@ const querySchema = z.object({
 });
 
 // Forgiving phone input: "602-555-1234" and "(602) 555-1234" are assumed US
-// (+1); explicit +country-code numbers pass through. Short codes are refused
-// — roster numbers must be dialable. The parsed value is canonical E.164.
+// (+1); explicit +country-code numbers pass through. Short codes are refused,
+// roster numbers must be dialable. The parsed value is canonical E.164.
 const phoneField = z.string().transform((val, ctx) => {
   const result = normalizeDialableNumber(val);
   if (!result.ok) {

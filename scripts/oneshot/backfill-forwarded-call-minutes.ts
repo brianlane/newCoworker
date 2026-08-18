@@ -80,7 +80,7 @@ export type Classification =
  * keys usage by `deriveMonthlyQuotaWindow(periodStart, Date.now())`. Passing
  * `Date.now()` here would file every historical call into the CURRENT month,
  * inflating this month's usage with minutes from months already invoiced. So
- * we pass the call's own timestamp instead — and a call that predates the
+ * we pass the call's own timestamp instead, and a call that predates the
  * tenant's current Stripe period start cannot be keyed at all (that period's
  * anchor is gone from `subscriptions`, and re-opening an invoiced period is
  * not this script's call to make). Those are reported, never metered.
@@ -89,7 +89,7 @@ export type Classification =
  * runs from the hangup webhook, so its `Date.now()` is effectively the call's
  * end. For a call that straddles a month-window boundary the two differ, and
  * keying off `started_at` would file it in the window BEFORE the one the live
- * meter would have used — a silent disagreement between backfilled and live
+ * meter would have used, a silent disagreement between backfilled and live
  * rows for exactly the calls hardest to reconcile by hand.
  */
 export function classifyForwardedCall(

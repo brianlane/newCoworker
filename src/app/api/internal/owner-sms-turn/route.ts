@@ -1,23 +1,23 @@
 /**
- * Owner-operator turn over SMS — the dashboard-chat inline engine, reached
+ * Owner-operator turn over SMS, the dashboard-chat inline engine, reached
  * from the SMS pipeline.
  *
  * When the business OWNER texts their own business line, the SMS worker
  * historically ran the turn on the Rowboat staff persona, whose tool
  * surface deliberately excludes send_sms (customers must never trigger
- * arbitrary outbound texts) — so "can you text Uday a confirmation?" could
+ * arbitrary outbound texts), so "can you text Uday a confirmation?" could
  * only escalate via notify_team… straight back to the owner who asked (KYP
  * Ads, Jul 16). The Rowboat tool webhook carries no sender context, so
  * owner-only tools CANNOT be gated safely on that path.
  *
  * This route is the safe path: the platform executes the turn itself
- * (runInlineChatTurn — the same engine, prompt blocks, Settings gates, and
+ * (runInlineChatTurn, the same engine, prompt blocks, Settings gates, and
  * action tools as dashboard chat, including send_sms, calendar lifecycle,
  * and list/run AiFlows), with the owner's identity established server-side
  * by the caller (telnyx-sms-inbound already classifies staff_kind="owner"
  * from the owner's known number before the job is queued).
  *
- * Auth: platform-internal — the SMS worker presents the gateway bearer;
+ * Auth: platform-internal, the SMS worker presents the gateway bearer;
  * verified per-business exactly like the other worker→app calls
  * (gatewayBusinessGuard). POST { businessId, ownerE164, ownerName?, text }
  * → { ok, reply } (ok:false ⇒ the worker falls back to the Rowboat staff
@@ -182,14 +182,14 @@ export async function POST(request: Request) {
       : null;
 
     // Continuity: the recent SMS exchange with the owner's number (both
-    // directions — inbound texts, AI replies, and logged outbound sends).
+    // directions, inbound texts, AI replies, and logged outbound sends).
     let transcript = "";
     try {
       const messages = await listMessagesForCustomer(body.businessId, body.ownerE164, {
         limit: OWNER_SMS_TAIL_MESSAGES
       });
       // The in-flight inbound job is usually already stored, so the current
-      // message would otherwise appear twice (transcript + user turn) —
+      // message would otherwise appear twice (transcript + user turn),
       // drop trailing inbound copies of it.
       const tail = messages.slice(-OWNER_SMS_TAIL_MESSAGES);
       while (
@@ -254,14 +254,14 @@ export async function POST(request: Request) {
       // what it DOES needs the owner looking at the flow, so structural
       // edits refuse here and point at the dashboard.
       flowEditSurfaceKind: "text",
-      // No builder UI on SMS to hand a draft card to — creation tools off,
+      // No builder UI on SMS to hand a draft card to, creation tools off,
       // so compile work can't succeed into a void (the model points the
       // owner to dashboard chat / /dashboard/aiflows for authoring instead).
       includeCreationTools: false,
       // MUST stay below the SMS worker's OWNER_SMS_TURN_TIMEOUT_MS (75s)
       // abort: the engine stops starting new steps (and thus committing new
       // tool calls) before the worker gives up and falls back to the Rowboat
-      // staff reply — otherwise a slow turn could keep acting after the
+      // staff reply, otherwise a slow turn could keep acting after the
       // owner already received a contradictory fallback answer.
       //
       // 60s, not 70s, because EMAIL_SEND fulfilment runs AFTER this returns
@@ -284,7 +284,7 @@ export async function POST(request: Request) {
         calendar_join_waitlist: calWaitlistEnabled,
         list_aiflows: runAiflowEnabled,
         run_aiflow: runAiflowEnabled,
-        // Edits apply in place with full validation — no builder step
+        // Edits apply in place with full validation, no builder step
         // needed, so the SMS surface gets the tool too (unlike the
         // draft-card creation tools below).
         edit_aiflow: editAiflowEnabled,
@@ -292,20 +292,20 @@ export async function POST(request: Request) {
         // text must be able to take that rewrite back by text.
         undo_aiflow_edit: editAiflowEnabled,
         // The dashboard image tool returns an inline /api/dashboard/images
-        // URL + markdown — there is nowhere to render that over SMS (the
+        // URL + markdown, there is nowhere to render that over SMS (the
         // texting coworker's MMS path is a different tool). Off by design.
         generate_image: false,
         // FULL toggle control: the texter is the verified OWNER (identity
         // established server-side from their number before this route is
-        // called), and owners always pass manage_settings — "let me know
+        // called), and owners always pass manage_settings, "let me know
         // when clients text back" flips the toggle right from this thread.
         update_notification_preferences: notificationPrefsToolEnabled,
-        // The texter is the verified OWNER — exactly the caller a spam
+        // The texter is the verified OWNER, exactly the caller a spam
         // declaration comes from ("hes spam", KYP Jul 23 2026, was THIS
         // surface promising an action it had no tool for).
         flag_contact_spam: flagSpamToolEnabled,
         // "stop texting chris please" (KYP Jul 24 2026) belongs HERE, not
-        // on the spam block — the reversible sibling.
+        // on the spam block, the reversible sibling.
         set_contact_reply_mode: replyModeToolEnabled,
         // Roster changes happen away from a laptop ("Sandy starts today,
         // her cell is..."), and the texter is the verified owner, who
@@ -332,7 +332,7 @@ export async function POST(request: Request) {
       source: "sms_assistant"
     });
 
-    // Same silent durable-rule capture as dashboard turns — deferred via
+    // Same silent durable-rule capture as dashboard turns, deferred via
     // after() so the capture (and its graph ingest) reliably completes on
     // Vercel instead of being frozen when the response flushes.
     scheduleCaptureOwnerRuleInline({

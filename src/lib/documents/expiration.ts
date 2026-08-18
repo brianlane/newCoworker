@@ -1,11 +1,11 @@
 /**
- * Business Documents — daily expiration + renewal sweep.
+ * Business Documents, daily expiration + renewal sweep.
  *
  * Called from /api/internal/document-expiration-sweep (pg_cron → Edge
  * `document-expiration-sweep` → route). Notifies owners about documents
  * expiring within DOCUMENT_EXPIRING_SOON_DAYS and about just-expired ones,
  * and runs the RENEWAL escalation ladder for documents carrying a renewal
- * date (policies, leases, contracts — renewal keeps the doc active, unlike
+ * date (policies, leases, contracts, renewal keeps the doc active, unlike
  * expiry):
  *
  *   ~30 days out  - heads-up            (renewal_due_notified_at)
@@ -15,10 +15,10 @@
  * Each tier fires ONCE (armed/cleared stamps, reset whenever the owner
  * changes the date). A late-entering date fires only its most urgent tier.
  * Every tier notifies the owner channels AND texts the assigned employee
- * directly (operational metering — counted, never refused). Entering the
+ * directly (operational metering, counted, never refused). Entering the
  * window also fires ONE `document_renewal` webhook flow event so an
  * owner-enabled AiFlow can reach out to the customer to update their
- * information — no flow enabled, no outreach.
+ * information, no flow enabled, no outreach.
  *
  * The exclusion of expired docs from lookups / digests / shares happens at
  * read time; the sweep is purely the reminder half of the guarantee.
@@ -75,7 +75,7 @@ function formatDate(iso: string): string {
 
 /**
  * One pass over every document with an expiration date. Per-document errors
- * are collected and the sweep continues — notification stamps make re-runs
+ * are collected and the sweep continues, notification stamps make re-runs
  * idempotent.
  */
 export async function sweepDocumentExpirations(
@@ -113,10 +113,10 @@ export async function sweepDocumentExpirations(
   };
 
   // Renewal reminders name the contact (policy holder) and the assigned
-  // employee — and the outreach event carries the contact's reachables — so
+  // employee, and the outreach event carries the contact's reachables, so
   // both directories are pre-fetched in bulk for every doc inside the
   // renewal window (any tier or the outreach could still fire for it).
-  // Lookup failures degrade to nameless reminders — a directory hiccup must
+  // Lookup failures degrade to nameless reminders, a directory hiccup must
   // not stop the sweep.
   const renewalCandidates = docs.filter(
     (d) => d.renewal_date && isRenewalDueWithin(d, now, DOCUMENT_RENEWAL_SOON_DAYS)
@@ -304,7 +304,7 @@ export async function sweepDocumentExpirations(
 
           // Direct text to the assigned employee (owner alerts above go to
           // the OWNER's channels). Operational metering: counted, never
-          // refused. Best-effort — a carrier hiccup must not re-fire the
+          // refused. Best-effort, a carrier hiccup must not re-fire the
           // whole tier tomorrow, so failures log and move on.
           if (employee?.phone) {
             try {
@@ -342,10 +342,10 @@ export async function sweepDocumentExpirations(
         // Customer outreach: ONE document_renewal flow event per renewal
         // date (stamped separately from the reminder tiers, so documents
         // that were reminded before this shipped still get outreach).
-        // Requires a linked, resolvable contact — outreach without a person
+        // Requires a linked, resolvable contact, outreach without a person
         // to reach is meaningless (an unlinked doc skips WITHOUT stamping,
         // so linking a contact later still fires). Nothing happens unless
-        // the owner enabled a webhook flow matching the source — fired
+        // the owner enabled a webhook flow matching the source, fired
         // AFTER the tier stamps so an enqueue failure retries tomorrow
         // without re-sending reminders.
         if (!doc.renewal_outreach_enqueued_at && contact) {

@@ -1,10 +1,10 @@
 /**
  * Owner-facing SMS opt-out (STOP list) management.
  *
- * GET  ?businessId= — list suppressed numbers (with contact names resolved
+ * GET  ?businessId=, list suppressed numbers (with contact names resolved
  *      for display) so owners have compliance visibility into who can't be
  *      texted.
- * POST { businessId, e164 } — proactively suppress a number ("never text
+ * POST { businessId, e164 }, proactively suppress a number ("never text
  *      this person"). There is NO owner-facing removal: a customer's STOP
  *      holds until they text START themselves.
  */

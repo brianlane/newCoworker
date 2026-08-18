@@ -1,5 +1,5 @@
 /**
- * /api/mcp — the Claude connector's remote MCP server (Streamable HTTP).
+ * /api/mcp, the Claude connector's remote MCP server (Streamable HTTP).
  *
  * Owners add `https://<app>/api/mcp` as a custom connector in Claude; Claude
  * discovers the OAuth authorization server (Supabase Auth, via the 401

@@ -102,7 +102,7 @@ describe("rateLimitIdentifierFromRequest", () => {
     // Some L4 proxies prepend an empty entry when no upstream IP is
     // known (e.g. ", 10.0.0.1"). The outer header is truthy so the
     // RFC 7230 OWS-stripping in `Headers.get()` won't reduce it to "",
-    // but the first comma-separated segment trims to empty — we must
+    // but the first comma-separated segment trims to empty, we must
     // fall through to the next header rather than rate-limiting all
     // such requests under a shared empty-string bucket.
     const id = rateLimitIdentifierFromRequest(

@@ -9,7 +9,7 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
  * REAL sms-inbound-worker + REAL Postgres (PR #566):
  *
  *  1. A Rowboat 5xx on an EARLY attempt no longer triggers the
- *     history-dropping stateless retry — the failure surfaces to the
+ *     history-dropping stateless retry, the failure surfaces to the
  *     job-level retry, which re-runs STATEFUL with the thread intact.
  *  2. On a LATE attempt the stateless reset is allowed as the last resort,
  *     and the reset call carries the recent-thread transcript block so the
@@ -86,7 +86,7 @@ describe("5xx retry semantics (history preservation, PR #566 fix 2)", () => {
     rowboat.scriptError(500);
     await tickSmsWorker();
 
-    // Exactly ONE wire call (pre-fix: two — initial + history-dropping
+    // Exactly ONE wire call (pre-fix: two, initial + history-dropping
     // stateless retry), and it carried the stored continuation.
     expect(rowboat.calls.length).toBe(before + 1);
     expect(rowboat.calls[before].body.conversationId).toBe("conv-KEEP");
@@ -138,7 +138,7 @@ describe("5xx retry semantics (history preservation, PR #566 fix 2)", () => {
     expect(system?.content).toContain("Recent SMS conversation with this texter");
     expect(system?.content).toContain("Texter: I want to book a call");
     expect(system?.content).toContain("You: I have Monday, July 13th at 4:00 PM EDT available.");
-    // The first (stateful) call must NOT carry it — Rowboat holds history there.
+    // The first (stateful) call must NOT carry it, Rowboat holds history there.
     const firstSystem = first.body.messages.find((m) => m.role === "system");
     expect(firstSystem?.content).not.toContain("Recent SMS conversation with this texter");
 
@@ -232,7 +232,7 @@ describe("per-contact FIFO claim (PR #566 fix 4)", () => {
 
   it("legacy NULL-sender jobs are exempt from serialization (pre-fix behavior)", async () => {
     const biz = await seedBusiness(db, "IT fifo null exempt");
-    // enqueueSmsJob does NOT stamp customer_e164 — exactly the legacy shape.
+    // enqueueSmsJob does NOT stamp customer_e164, exactly the legacy shape.
     await enqueueSmsJob(db, biz, LEAD, "legacy one");
     await enqueueSmsJob(db, biz, LEAD, "legacy two");
 

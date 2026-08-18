@@ -1,7 +1,7 @@
 /**
  * Spanish variants of the owner-facing transactional emails. English output
- * stays the default (no locale passed) — pinned by the existing template
- * tests — so these only assert the es branches and the shared helpers.
+ * stays the default (no locale passed), pinned by the existing template
+ * tests, so these only assert the es branches and the shared helpers.
  */
 import { describe, expect, it } from "vitest";
 

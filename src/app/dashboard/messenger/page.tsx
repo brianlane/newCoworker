@@ -4,7 +4,7 @@
  * Mirrors the Web chat index: server-component list of conversations with
  * captured contact details, each linking into the thread view. Reached
  * via a sidebar item that only renders once the business has an ACTIVE
- * Meta connection — direct URL access without one gets a friendly
+ * Meta connection, direct URL access without one gets a friendly
  * "connect Facebook first" state instead of a 404.
  */
 

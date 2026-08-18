@@ -1,5 +1,5 @@
 /**
- * POST /api/oauth/decision — the consent page's Approve/Deny handler.
+ * POST /api/oauth/decision, the consent page's Approve/Deny handler.
  *
  * Session-cookie authenticated (the browser form post from /oauth/consent;
  * CSRF origin checks apply normally). Approve/deny run against Supabase

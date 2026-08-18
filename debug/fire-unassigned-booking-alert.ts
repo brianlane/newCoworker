@@ -2,11 +2,11 @@
 /**
  * Fire the unassigned-booking owner alert (PR #828's fan-out) for ONE
  * existing booking, through the REAL production core
- * (src/lib/calendar-tools/unassigned-booking-alert.ts) — same contact
+ * (src/lib/calendar-tools/unassigned-booking-alert.ts), same contact
  * ownership check, same preference gate, same dispatcher.
  *
  * Why: the fan-out fires at BOOKING time, and the booking that motivated it
- * (Truly / Shabir, Wed Jul 22 12:00 PM ET) predates the deploy — so the
+ * (Truly / Shabir, Wed Jul 22 12:00 PM ET) predates the deploy, so the
  * owner was never paged. This one-shot delivers that page retroactively and
  * doubles as the live verification of the new path.
  *
@@ -52,7 +52,7 @@ async function main() {
 
   // Read-only preview of the SAME gates the core applies on --apply:
   // phone-first (alias-aware) contact lookup, then email, then the toggle
-  // (Bugbot Medium on PR #829 — the preview must never disagree with the
+  // (Bugbot Medium on PR #829, the preview must never disagree with the
   // core's verdict).
   const { data: byPhone, error: phoneErr } = await db
     .from("contacts")
@@ -60,7 +60,7 @@ async function main() {
     .eq("business_id", businessId!)
     .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
     .maybeSingle();
-  // The core THROWS on lookup errors and answers `failed` without sending —
+  // The core THROWS on lookup errors and answers `failed` without sending,
   // the preview must mirror that instead of guessing (Bugbot on PR #829).
   if (phoneErr) throw new Error(`contact lookup (phone) failed, --apply would not send: ${phoneErr.message}`);
   let contact = byPhone as { owner_employee_id: string | null } | null;

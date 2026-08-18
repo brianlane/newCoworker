@@ -5,7 +5,7 @@
  * polls. A pass is a single indexed read when no appointment is inside a
  * reminder window, which is most ticks.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape and
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape and
  * secret as the other /api/internal/* endpoints.
  *
  * Self-healing: every send is claimed on the booking row before it goes

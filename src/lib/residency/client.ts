@@ -6,7 +6,7 @@
  * with the tenant's per-box gateway token.
  *
  * Worst-case posture:
- *   * Every call has a hard timeout — a hung box must never wedge a replay
+ *   * Every call has a hard timeout, a hung box must never wedge a replay
  *     drain or a dashboard request.
  *   * Server-side failures come back HTTP 200 + { ok:false } (the tunnel
  *     replaces origin 5xx bodies); transport failures throw. Callers decide
@@ -159,7 +159,7 @@ export class DataApiClient {
     return this.post<Row>("delete", req);
   }
 
-  /** GET /v1/health — unauthenticated; ok:false means datastore unreachable. */
+  /** GET /v1/health, unauthenticated; ok:false means datastore unreachable. */
   async health(): Promise<DataApiHealthResponse> {
     const base = this.baseUrl ?? residencyDataBaseUrl(this.businessId);
     const controller = new AbortController();

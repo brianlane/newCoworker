@@ -211,7 +211,7 @@ export async function runReachLadder(
       const bLeg = outcome.bLeg || dialRes.callControlId;
       // An answer is not yet a person. A phone that is off reaches carrier
       // voicemail in a couple of seconds, inside any ring window, and the
-      // voicemail ANSWERS the leg — bridging on the answer alone put the
+      // voicemail ANSWERS the leg, bridging on the answer alone put the
       // caller inside a teammate's voicemail greeting. Hold the bridge until
       // AMD clears the leg: a human verdict bridges as soon as it lands
       // (typically inside a second or two), a machine verdict skips the rung

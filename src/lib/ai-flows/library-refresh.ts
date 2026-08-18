@@ -87,9 +87,9 @@ const BUSINESS_NAME_STOPWORDS: ReadonlySet<string> = new Set([
 ]);
 
 type KnownNames = {
-  /** Owner + roster names — used to redact the (kept) definition strings. */
+  /** Owner + roster names, used to redact the (kept) definition strings. */
   body: Map<string, string[]>;
-  /** body names PLUS business-name tokens — used only to redact the title. */
+  /** body names PLUS business-name tokens, used only to redact the title. */
   title: Map<string, string[]>;
 };
 
@@ -184,7 +184,7 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
   const candidates = await aggregateLibraryCandidates(db);
 
   // Known names must be loaded BEFORE grouping so the grouping key (and later
-  // the public title/URL slug) is derived from a PII-redacted name — the same
+  // the public title/URL slug) is derived from a PII-redacted name, the same
   // phone/email/known-name redaction applied to the definition. This also makes
   // grouping more robust: "Amy's referral flow" and "Bob's referral flow"
   // redact to the same "[name]'s referral flow" and collapse into one entry.
@@ -244,7 +244,7 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
     await upsertLibraryEntry(
       {
         templateKey,
-        // Title comes from the redacted name too — never the raw (PII) name.
+        // Title comes from the redacted name too, never the raw (PII) name.
         title: cleanTitle(redactText(representative.name, knownNames.title.get(bid) ?? [])),
         summary: summarizeDefinition(representative.definition),
         category: deriveCategory(representative.business_type),
@@ -292,7 +292,7 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
   }
 
   // Drop catalog entries whose flows no longer qualify (no successful runs) or
-  // were withheld by the PII gate — keep only what we actually published.
+  // were withheld by the PII gate, keep only what we actually published.
   await pruneLibraryEntries(publishedKeys, db);
 
   return {

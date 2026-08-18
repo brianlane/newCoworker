@@ -3,14 +3,14 @@
  *
  * Calendly's API is deliberately narrower than Google/Microsoft: it can list
  * an event type's bookable times, but it cannot CREATE a booking on the
- * invitee's behalf — invitees always confirm through a Calendly page. So:
+ * invitee's behalf, invitees always confirm through a Calendly page. So:
  *
  *   - findCalendlySlots        → GET /event_type_available_times, mapped to
  *     the same `{slots, timezone}` shape the other providers return.
  *   - createCalendlyBookingLink → POST /scheduling_links with
  *     `max_event_count: 1`; the result carries `bookingLink` and the distinct
  *     detail `booking_link_created` so the model knows the appointment is NOT
- *     booked yet — it must send the link to the customer to finish.
+ *     booked yet, it must send the link to the customer to finish.
  *
  * Both pick the owner's active event type whose duration is closest to the
  * requested duration (ties go to the earlier listing).
@@ -76,7 +76,7 @@ export type CalendlyRequestConfig = {
 
 /**
  * Direct-PAT request. Null means "not usable" (missing/inactive direct row,
- * revoked PAT, or a conn that isn't the direct key at all — legacy Nango
+ * revoked PAT, or a conn that isn't the direct key at all, legacy Nango
  * conns land here since the proxy transport was removed), which callers map
  * to `calendar_not_connected`. Exported for the AiFlow calendar-trigger
  * poller (src/lib/ai-flows/calendly-poll.ts) and the webhook-subscription
@@ -90,7 +90,7 @@ export async function calendlyRequest(
   if (conn.providerConfigKey !== CALENDLY_DIRECT_KEY) return null;
   // conn.connectionId names WHICH calendly_connections row carries the PAT
   // (a business can link several accounts). A row that RESOLVES but is
-  // disabled refuses — falling back to the primary here would query one
+  // disabled refuses, falling back to the primary here would query one
   // account's calendar with another account's token. Only an id that
   // matches no row at all (legacy conns from before ids were stamped,
   // injected test shapes) falls back to the primary connection, the
@@ -108,7 +108,7 @@ export async function calendlyRequest(
 }
 
 /**
- * The connected account's user URI — the required `user` filter for the
+ * The connected account's user URI, the required `user` filter for the
  * event-types listing. Null when the connection is unusable (revoked PAT /
  * missing row).
  */
@@ -258,7 +258,7 @@ type SchedulingLinkBody = {
 // ── Appointment lifecycle (reschedule / cancel) ─────────────────────────────
 //
 // A Calendly "booking" is completed by the INVITEE on a Calendly page, so no
-// event id ever lands in our booking ledger — lifecycle operations locate the
+// event id ever lands in our booking ledger, lifecycle operations locate the
 // scheduled event through Calendly's own API instead: list the user's active
 // upcoming events, then match an invitee by email or SMS-reminder number.
 //
@@ -267,7 +267,7 @@ type SchedulingLinkBody = {
 //   - reschedule  → Calendly cannot move an event on the invitee's behalf
 //     (same constraint as booking). Every invitee carries a reschedule_url,
 //     so the core returns it with the distinct detail
-//     `reschedule_link_created` — the model sends the link and must never
+//     `reschedule_link_created`, the model sends the link and must never
 //     describe the reschedule as done (mirrors booking_link_created).
 
 /** Upcoming events scanned when matching the customer. */
@@ -301,7 +301,7 @@ export type CalendlyLocatedEvent = {
  * or email. When BOTH identities are supplied, a phone match is
  * authoritative and wins over any email-only match on an earlier event: the
  * phone is the surface-verified identity (the number that texted us), while
- * the model-supplied email can be stale or shared — an OR across
+ * the model-supplied email can be stale or shared, an OR across
  * earliest-first events would let the wrong booking win (Bugbot on PR #584).
  * Returns:
  *   - `{ event }` on a match,
@@ -349,7 +349,7 @@ export async function findCalendlyScheduledEvent(
         : null
   });
 
-  // Earliest event with an email-only match — used ONLY if no event in the
+  // Earliest event with an email-only match, used ONLY if no event in the
   // whole scan matches the phone.
   let emailFallback: CalendlyLocatedEvent | null = null;
 
@@ -388,7 +388,7 @@ export async function findCalendlyScheduledEvent(
 
 /**
  * `calendar_cancel_appointment` core for Calendly connections: a real
- * API-side cancellation — Calendly emails the invitee ONE notice.
+ * API-side cancellation, Calendly emails the invitee ONE notice.
  */
 export async function cancelCalendlyAppointment(
   businessId: string,
@@ -405,7 +405,7 @@ export async function cancelCalendlyAppointment(
     data: { reason: "Canceled at the customer's request via the business's assistant." }
   });
   // The locate steps succeeded moments ago, so an unusable response here is
-  // a failed MUTATION on a connected account — reporting it as a missing
+  // a failed MUTATION on a connected account, reporting it as a missing
   // calendar would steer the model to "you cannot cancel any appointment"
   // (Bugbot on PR #584; same rationale as the Graph mutations on PR #577).
   if (!res) return { ok: false, detail: "calendar_cancel_failed" };
@@ -418,7 +418,7 @@ export async function cancelCalendlyAppointment(
 
 /**
  * `calendar_reschedule_appointment` core for Calendly connections: returns
- * the invitee's own reschedule link (detail `reschedule_link_created`) —
+ * the invitee's own reschedule link (detail `reschedule_link_created`),
  * Calendly cannot move an event on the invitee's behalf, so the customer
  * picks the new time themselves and the SAME event is updated by Calendly.
  */
@@ -451,7 +451,7 @@ export async function createCalendlyRescheduleLink(
 /**
  * `calendar_book_appointment` core for Calendly connections. Creates a
  * SINGLE-USE scheduling link for the best-matching event type. The result is
- * ok:true with detail `booking_link_created` — the appointment does not exist
+ * ok:true with detail `booking_link_created`, the appointment does not exist
  * until the customer completes the Calendly page, and the tool copy tells the
  * model to send `bookingLink` onward rather than confirm a booked time.
  */

@@ -71,7 +71,7 @@ import { parseCallDurationSeconds } from "../_shared/telnyx_call_duration.ts";
 
 const MAX_BODY = 256 * 1024;
 
-/** Hangup / ended only — avoid `call.cost` (may fire multiple times or off teardown timing). */
+/** Hangup / ended only, avoid `call.cost` (may fire multiple times or off teardown timing). */
 const END_EVENTS = new Set(["call.hangup", "call.ended"]);
 
 // ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ async function handleOutboundAnswered(
   const businessId = parsed.businessId;
 
   // Telnyx has already moved this leg to `answered`, so every bail-out below
-  // must hang the leg up — otherwise the callee sits connected to silence with
+  // must hang the leg up, otherwise the callee sits connected to silence with
   // no cleanup. The one exception is a missing TELNYX_API_KEY, where we have no
   // way to issue the hangup at all.
   if (!apiKey) {
@@ -134,7 +134,7 @@ async function handleOutboundAnswered(
     return jsonOk("outbound_no_api_key");
   }
   // Tear down a leg we won't bridge: release any reservation origination may have
-  // taken (idempotent — a no-op if none exists, and the RPC defensively refuses
+  // taken (idempotent, a no-op if none exists, and the RPC defensively refuses
   // once a stream has attached) so a refused/aborted/raced leg never holds a
   // concurrency slot until the stale-settlement sweep, then hang up.
   const hangUpAnd = async (path: string, extra: Record<string, unknown> = {}): Promise<Response> => {
@@ -162,14 +162,14 @@ async function handleOutboundAnswered(
 
   // The `ai_intake` session is the SINGLE authoritative gate. telnyx-voice-
   // originate writes it ONLY after a successful budget reservation, so its
-  // presence proves the leg is both budgeted and configured. Anything else —
-  // terminal `done`, or another business — means we must NOT bridge: doing so
+  // presence proves the leg is both budgeted and configured. Anything else,
+  // terminal `done`, or another business, means we must NOT bridge: doing so
   // could meter a call the UI already refused, or attach AI media to an aborted
   // leg. (Choosing "hang up when unconfirmed" over "reserve here" keeps budget
   // enforcement authoritative: a refused call can never proceed behind the UI's
   // back.) A *missing* row is the benign race where origination has reserved but
   // its session upsert (tens of ms later) hasn't landed when a very fast answer
-  // arrives — retry briefly so we don't drop an otherwise-valid call before
+  // arrives, retry briefly so we don't drop an otherwise-valid call before
   // concluding the leg is unconfirmed.
   let sess: { status?: string; business_id?: string } | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -200,7 +200,7 @@ async function handleOutboundAnswered(
   }
 
   // Idempotent: a retried call.answered after we already attached is a no-op.
-  // (We don't re-read for budget — the ai_intake session above already proves
+  // (We don't re-read for budget, the ai_intake session above already proves
   // origination reserved this leg.)
   const { data: resvRow } = await supabase
     .from("voice_reservations")
@@ -259,7 +259,7 @@ async function handleOutboundAnswered(
 
   // Stream attached → flip pending_answer → active so settlement bills the media
   // minutes (signal 1 of 2 is the later call.hangup). Mirror the inbound path:
-  // a failed or not-ok mark is a HARD failure — return 500 so Telnyx retries the
+  // a failed or not-ok mark is a HARD failure, return 500 so Telnyx retries the
   // webhook rather than leaving a live stream on a reservation stuck in
   // pending_answer (which would weaken billing/concurrency accounting).
   const { error: markErr, data: markData } = await supabase.rpc("voice_mark_answer_issued", {
@@ -309,7 +309,7 @@ type HandoffSession = {
 /**
  * Atomically claim an advancement so concurrent no-answer hangups can't
  * double-act. Returns true only when this caller won the race (a row matched and
- * updated). A real Supabase error is NOT a lost race — it throws so the caller
+ * updated). A real Supabase error is NOT a lost race, it throws so the caller
  * ends the call cleanly instead of silently stalling on `handoff_already_advanced`.
  */
 async function claimStep(
@@ -335,13 +335,13 @@ async function claimStep(
 /**
  * Terminal cleanup for a handoff that can't continue: mark the session done and
  * hang up the inbound A-leg so the caller is never stranded on an answered leg.
- * Both steps swallow their own errors — this is already the failure path.
+ * Both steps swallow their own errors, this is already the failure path.
  */
 async function endHandoff(deps: HandoffDeps, aLeg: string): Promise<void> {
   // Release any voice budget reserved for an AI takeover that never reached the
   // bridge. endHandoff marks the session `done` before the self-initiated
   // hangup, so the A-leg hangup webhook can't recognize it as `ai_intake` and
-  // settle/release it — without this the reservation would sit in
+  // settle/release it, without this the reservation would sit in
   // `pending_answer` holding a concurrency slot until a maintenance sweep. The
   // RPC is a no-op for the pre-reserve transfer paths and defensively refuses to
   // release once the bridge has attached, so it is always safe here.
@@ -377,7 +377,7 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
 
   // Every advancement action (transfer / DTMF / streaming_start / hangup) needs
   // the Telnyx API key. telnyx-voice-call-end historically ran settlement-only,
-  // where the key was optional — but a handoff session can't proceed without it.
+  // where the key was optional, but a handoff session can't proceed without it.
   // Make the misconfiguration loud (telemetry + log) instead of silently
   // stalling the chain with the inbound leg still up.
   if (!apiKey) {
@@ -493,7 +493,7 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
         return jsonOk("handoff_ai_no_budget", { reason: reserve.reason });
       }
       // Press "1" FIRST so HomeLight connects the live client, THEN attach the
-      // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
+      // bridge, otherwise the AI greeting plays to the IVR / dead air. If the
       // DTMF fails the client is never bridged, so abort rather than run the
       // intake assistant against hold music (and text Amy a phantom lead).
       //
@@ -609,7 +609,7 @@ async function handleMachineDetection(
       result: typeof payload["result"] === "string" ? payload["result"] : null
     });
     // Screening means a live person is deciding, and Telnyx's sequence fires
-    // the provisional "machine" verdict BEFORE this event — clear it, or a
+    // the provisional "machine" verdict BEFORE this event, clear it, or a
     // screened call the human answers would settle as no_answer and its
     // follow-up ladder would redial someone who already picked up.
     await clearProvisionalMachine(supabase, callControlId, { ios_screening: true });
@@ -1000,7 +1000,7 @@ async function handleReachLeg(
  * AnsweringMachineBadge, which would otherwise label a real conversation a
  * machine). The transcript write is a compare-and-swap on "machine" so a
  * later legitimate value can never be blanked; zero rows matching is fine.
- * Best-effort throughout — a failed clear understates, never misroutes.
+ * Best-effort throughout, a failed clear understates, never misroutes.
  */
 async function clearProvisionalMachine(
   supabase: SupabaseClient,
@@ -1215,7 +1215,7 @@ async function decorateTranscriptForVoicemail(
   const transcriptId = ((rows ?? [])[0] as { id?: string } | undefined)?.id;
   if (!transcriptId) {
     // Zero rows matched. PostgREST reports success for that, which is exactly
-    // how the mid-call variant of this write went unnoticed — so say it out
+    // how the mid-call variant of this write went unnoticed, so say it out
     // loud. Reachable when the bridge never created a row (pre-eager-create
     // boxes, or a leg that died before attach).
     console.error("amd: transcript voicemail decorate matched no row", callControlId);
@@ -1333,7 +1333,7 @@ async function handleHandoffLifecycle(
     if (!parsed) return { handled: false, response: jsonOk("ignored_bridged") };
     // Match the exact ringing step encoded in client_state. A delayed bridged
     // webhook from an EARLIER step's leg must not mark the session bridged while
-    // a LATER step is ringing — that would freeze the chain (subsequent
+    // a LATER step is ringing, that would freeze the chain (subsequent
     // no-answer hangups would be ignored as "not ringing"). `.select()` tells us
     // whether THIS event was the one that flipped ringing→bridged, so the
     // success SMS fires exactly once (concurrent/duplicate bridged events get an
@@ -1375,7 +1375,7 @@ async function handleHandoffLifecycle(
     return { handled: true, response: jsonOk("handoff_bridged") };
   }
 
-  // call.hangup — outbound AiFlow leg. Unlike inbound (which always answers and
+  // call.hangup, outbound AiFlow leg. Unlike inbound (which always answers and
   // engages the AI within ms), an outbound call commonly rings out unanswered.
   // call.answered then never runs, so its pre-answer reservation would sit in
   // `pending_answer` holding a concurrency slot until the stale-settlement sweep.
@@ -1414,7 +1414,7 @@ async function handleHandoffLifecycle(
     );
     // Resume the parked batch run (place_ai_call) with the call's outcome.
     // Status-guarded: if the bridge already resumed it with "transferred" at
-    // transfer time, this write is a no-op. Best-effort — a miss is
+    // transfer time, this write is a no-op. Best-effort, a miss is
     // backstopped by the resume_overdue_call_waits sweep.
     if (obCtx.flow_run) {
       // A machine picking up ANSWERS the leg, so answer_issued_at is set and
@@ -1489,7 +1489,7 @@ async function handleHandoffLifecycle(
       return { handled: true, response: jsonOk("handoff_stale_step") };
     }
     // Defence in depth in case call.bridged was not delivered: a normal_clearing
-    // hangup means the human answered and the call completed — don't advance.
+    // hangup means the human answered and the call completed, don't advance.
     //
     // UNLESS the AMD handler marked this step's leg as machine-answered. It
     // hangs the leg up itself, and an API hangup on an answered leg arrives
@@ -1505,7 +1505,7 @@ async function handleHandoffLifecycle(
       // did (call.bridged was dropped but the human answered), send the success
       // SMS that the bridged branch would have. The shared hl:success key makes
       // it a no-op if call.bridged already notified. `bridged` (not `done`) so
-      // the A-leg terminal below records this call as ANSWERED — any non-ringing
+      // the A-leg terminal below records this call as ANSWERED, any non-ringing
       // status equally stops chain advancement, so semantics don't change.
       const { data: doneRows } = await supabase
         .from("voice_handoff_sessions")
@@ -1561,7 +1561,7 @@ async function handleHandoffLifecycle(
     .from("voice_handoff_sessions")
     .update({ status: "done" })
     .eq("call_control_id", callControlId);
-  // The A-leg hangup is the handoff chain's terminal event — record the
+  // The A-leg hangup is the handoff chain's terminal event, record the
   // call-log row for the human-only outcomes. `bridged` means a human step
   // answered (answered forwarded call); `ringing`/`done` mean nobody did and
   // no AI takeover happened (missed → auto-text + blocked ledger + spike).
@@ -1593,7 +1593,7 @@ async function handleHandoffLifecycle(
   }
   // An AI takeover reserved voice budget for this A-leg, so its hangup MUST flow
   // into settlement (signal 1 of 2) to bill the Gemini minutes. Human-only
-  // handoffs never reserved, so settlement is a no-op for them — short-circuit
+  // handoffs never reserved, so settlement is a no-op for them, short-circuit
   // to avoid an extra "unknown_call" round-trip.
   if (priorStatus === "ai_intake") {
     return { handled: false, response: jsonOk("handoff_session_closed") };
@@ -1646,7 +1646,7 @@ async function meteredWarmTransferSend(
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
   if (!reserve?.ok) {
     // Over the monthly cap: alert the owner once per period (same channel the
-    // other metered send paths use), then skip — retrying won't help this month.
+    // other metered send paths use), then skip, retrying won't help this month.
     if (reserve?.reason === "monthly_sms_limit") {
       await sendCapAlertOnce(supabase, {
         businessId,
@@ -1756,7 +1756,7 @@ async function sendWarmTransferNotifications(
   // the profile's number pool). No profile ⇒ we can't send.
   if (!messagingProfileId) return { sent: false, reason: "no_sms_sender" };
 
-  // Dedup claim — only the first writer proceeds to send.
+  // Dedup claim, only the first writer proceeds to send.
   const { error: claimErr } = await supabase
     .from("voice_transfer_notifications")
     .insert({ dedupe_key: dedupeKey, business_id: businessId, outcome });
@@ -1826,12 +1826,12 @@ async function sendWarmTransferNotifications(
  * and for a MISSED forwarded call runs the same follow-ups as a refused
  * inbound call: caller auto-text (Standard/Enterprise, forwarded_no_answer),
  * the `voice_call_blocked` ledger row (answer-rate card + spike counter), and
- * the once-per-day missed-call spike alert. Never throws — logging must not
+ * the once-per-day missed-call spike alert. Never throws, logging must not
  * break webhook handling (settlement/handoff advancement).
  *
  * Returns the call-log record status (null on an unexpected throw) so callers
- * can detect `superseded` — a missed-cause hangup on a call a human actually
- * answered (call.bridged landed first) — and still meter its carrier time.
+ * can detect `superseded`, a missed-cause hangup on a call a human actually
+ * answered (call.bridged landed first), and still meter its carrier time.
  */
 async function logForwardedCallOutcome(
   deps: HandoffDeps,
@@ -1866,7 +1866,7 @@ async function logForwardedCallOutcome(
     }
     if (args.outcome !== "missed") return rec.status;
     // `superseded`: an answered row already exists for this call (missed is
-    // insert-only, so a reordered/duplicate hangup can't downgrade it) — the
+    // insert-only, so a reordered/duplicate hangup can't downgrade it), the
     // human DID answer, so the missed-call follow-ups must not fire.
     if (rec.status === "superseded") return rec.status;
 
@@ -1990,7 +1990,7 @@ async function handleWarmTransferLifecycle(
   // Terminal record. normal_clearing → answered upsert (refreshes ended_at to
   // the real call end over the bridged-time row). Any other cause → missed,
   // but insert-only: if call.bridged already recorded answered, the missed
-  // write is superseded and the follow-ups are skipped — the cause alone is
+  // write is superseded and the follow-ups are skipped, the cause alone is
   // not proof nobody answered. Missed → caller auto-text + blocked ledger +
   // spike.
   const recStatus = await logForwardedCallOutcome(deps, {
@@ -2007,10 +2007,10 @@ async function handleWarmTransferLifecycle(
   // full duration whether the AI or a human did the talking. Every single-leg
   // transfer path funnels through here (AI transfer_to_owner, caller-rule
   // transfers, safe-mode forwards), so this one hook covers them all. Metered
-  // when the human answered — including the `superseded` reorder case (a
+  // when the human answered, including the `superseded` reorder case (a
   // non-normal_clearing hangup after call.bridged recorded the answer).
   // Missed legs bill nothing (the carrier doesn't charge unanswered legs).
-  // Post-hoc and idempotent per leg; never refuses — the reserve gate and the
+  // Post-hoc and idempotent per leg; never refuses, the reserve gate and the
   // safe-mode pre-check refuse the NEXT call once the pool is spent.
   if (answered || recStatus === "superseded") {
     await meterForwardedCallSeconds(deps.supabase, {

@@ -97,7 +97,7 @@ describe("toWaId", () => {
   });
 
   it("accepts international digits with or without the plus (inbound wa_id round-trip)", () => {
-    // Meta's stored psid is plus-less international digits — sending back
+    // Meta's stored psid is plus-less international digits, sending back
     // to it must work as-is.
     expect(toWaId("447911123456")).toBe("447911123456");
     expect(toWaId("+44 7911 123456")).toBe("447911123456");
@@ -416,7 +416,7 @@ describe("deliverWhatsApp", () => {
 
   it("re-checks the window before committing to the template path (first-message race)", async () => {
     // First read: stale. Second read (right before the send): the
-    // customer's first message just landed — the window is open, so the
+    // customer's first message just landed, the window is open, so the
     // send flips to free-form text instead of a billed template.
     const deps = makeDeps({
       getConversation: vi

@@ -5,7 +5,7 @@
  * chunks; the bridge resamples each to Telnyx's 16 kHz and RTP-wraps it. The
  * old one-shot `resamplePCM16Mono` reset its read phase and dropped the
  * sub-sample remainder on every chunk, so each chunk boundary got a step
- * discontinuity — audible as a periodic click/"typing" sound under the voice.
+ * discontinuity, audible as a periodic click/"typing" sound under the voice.
  *
  * `StreamingResampler` carries the phase + previous sample across calls. The
  * defining property is "chunking invariance": feeding a stream in arbitrary
@@ -78,7 +78,7 @@ describe("StreamingResampler", () => {
 
     // Stateless: resample each chunk independently (the old behaviour). It does
     // outLen = floor(chunkLen / ratio), so it discards the sub-sample remainder
-    // on EVERY chunk — the phase drifts and total samples come up short, which
+    // on EVERY chunk, the phase drifts and total samples come up short, which
     // is exactly the glitch the streaming resampler removes.
     const statelessParts: Int16Array[] = [];
     const streaming = new StreamingResampler(IN_RATE, OUT_RATE);

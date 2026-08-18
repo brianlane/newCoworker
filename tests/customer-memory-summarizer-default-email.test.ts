@@ -84,7 +84,7 @@ describe("summarizeCustomerMemory, default listEmailLogForAddress path", () => {
       callRowboatChat: callRowboatChat as never,
       listSmsHistoryForCustomer: (async () => []) as never,
       listVoiceTurnsForCustomer: vi.fn(async () => []),
-      // INTENTIONALLY OMIT listEmailLogForAddress — exercises the ?? fallback.
+      // INTENTIONALLY OMIT listEmailLogForAddress, exercises the ?? fallback.
       updateCustomerSummary: vi.fn(async () => {}) as never,
       rowboatBearer: "tok"
     });

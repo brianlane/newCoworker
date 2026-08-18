@@ -6,7 +6,7 @@ import { setAdminNotificationMutes } from "@/lib/db/admin-mutes";
 
 /**
  * Admin-only: per-business mutes for the fleet-wide /admin/dashboard feeds
- * (Recent Activity / System Errors / Recent Alerts). Partial patches — omit
+ * (Recent Activity / System Errors / Recent Alerts). Partial patches, omit
  * a field to leave that switch unchanged. Muting only hides the business
  * from the aggregate feeds; its own admin page keeps showing everything.
  */

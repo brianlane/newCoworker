@@ -4,8 +4,8 @@
  * A pipeline is an ordered list of STAGES, and each stage is BACKED BY A
  * CONTACT TAG: a contact "is in" a stage when its `contacts.tags` carries
  * the stage's name (case-insensitive, like every other tag comparison in
- * the platform). Storage-wise the board is a pure VIEW over tags — there is
- * no opportunities table — which keeps AiFlow `update_contact` steps and
+ * the platform). Storage-wise the board is a pure VIEW over tags, there is
+ * no opportunities table, which keeps AiFlow `update_contact` steps and
  * `tag_changed` triggers moving leads across the board with zero new
  * automation surface.
  *

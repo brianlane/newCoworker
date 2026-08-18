@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * AiFlowCanvas — the GHL-style vertical flowchart rendering of an AiFlow.
+ * AiFlowCanvas, the GHL-style vertical flowchart rendering of an AiFlow.
  *
  * Pure presentation over a definition's step TREE: a trigger node at the top,
  * color-coded step nodes joined by connectors, branch steps fanning out into
  * labeled columns (arms + the "None" else path) with dashed joins, and a
- * finish flag at the end of every terminal path — mirroring the auto-laid-out
+ * finish flag at the end of every terminal path, mirroring the auto-laid-out
  * tree look of GoHighLevel's workflow builder, in our dark theme, with no
  * canvas/graph dependency (nested flex columns + CSS borders).
  *
@@ -237,7 +237,7 @@ function stepSubtitle(step: FlowStep): string {
               } ${step.relativeToTemplate}`
             : `until ${step.untilTime ?? "?"} (${step.timezone ?? "?"})`;
     case "wait_for_reply":
-      // The timeout IS the follow-up cadence — without it the canvas can't
+      // The timeout IS the follow-up cadence, without it the canvas can't
       // show "nudge after 2 hours, again after 24" at a glance.
       return `from {{vars.${step.phoneVar}}} · up to ${formatDurationMinutes(step.timeoutMinutes ?? 1440)}`;
     case "branch":
@@ -307,7 +307,7 @@ function stepSubtitle(step: FlowStep): string {
   }
 }
 
-/** "lead_type equals \"buyer\"" — the short reading of a when/arm condition. */
+/** "lead_type equals \"buyer\"", the short reading of a when/arm condition. */
 export function canvasConditionText(when: StepCondition): string {
   const op =
     when.equals !== undefined ? "=" : when.notEquals !== undefined ? "≠" : "contains";
@@ -430,7 +430,7 @@ function StepPickerOverlay({
   );
   // Open toward the roomier side, and cap the panel's height to the space
   // that side actually has (minus margins) so it can never run past the
-  // window edge — it scrolls internally instead.
+  // window edge, it scrolls internally instead.
   const openUp = anchor.y > vh / 2;
   const available = openUp ? anchor.y - PICKER_MARGIN * 2 : vh - anchor.y - PICKER_MARGIN * 2;
   const maxHeight = Math.max(120, Math.min(vh * 0.7, available));
@@ -491,7 +491,7 @@ function InsertPoint({
   }
   // Goal checkpoints are trunk-only (a milestone jump can never land on an
   // unevaluated branch path), so insert points inside an arm/else don't
-  // offer them — mirrors the validateDefinitionSemantics rule.
+  // offer them, mirrors the validateDefinitionSemantics rule.
   const offeredTypes =
     container.kind === "trunk" ? addableTypes : addableTypes.filter((t) => t !== "goal");
   return (
@@ -607,8 +607,8 @@ function NodeCard({
       {!readOnly && (
         // Hover reveals on desktop; coarse pointers (touch) have no hover, so
         // there the toolbar shows on the SELECTED step only (tapping a card
-        // selects it) — lifted above the card so it never covers the step
-        // title — with padded tap targets.
+        // selects it), lifted above the card so it never covers the step
+        // title, with padded tap targets.
         <div
           className={`absolute -right-2 -top-2 hidden items-center gap-1 rounded-md border border-parchment/15 bg-deep-ink px-1 py-0.5 group-hover:flex ${
             selected ? "pointer-coarse:-top-8 pointer-coarse:flex" : ""
@@ -670,7 +670,7 @@ function FinishFlag() {
 }
 
 /**
- * One vertical chain of steps. `terminal` chains end with a finish flag —
+ * One vertical chain of steps. `terminal` chains end with a finish flag,
  * a branch's columns are terminal only when nothing runs after the branch.
  */
 function StepChain({
@@ -774,8 +774,8 @@ function BranchFan({
       <Connector dashed />
       <div className="flex w-full items-start justify-center gap-6 border-t border-dashed border-parchment/20 pt-3">
         {/* Columns use min-w-max (not a fixed min-width) so a column is never
-            narrower than its widest content — a w-64 card or an entire nested
-            fan — otherwise sibling columns' cards overlap. */}
+            narrower than its widest content, a w-64 card or an entire nested
+            fan, otherwise sibling columns' cards overlap. */}
         {columns.map((col) => (
           <div key={col.key} className="flex min-w-max flex-1 flex-col items-center">
             <span
@@ -958,7 +958,7 @@ export function AiFlowCanvas(props: AiFlowCanvasProps) {
 
   const startPan = (ev: React.MouseEvent) => {
     if (ev.button !== 0) return;
-    // Nodes, insert points, and controls keep their own click behavior — only
+    // Nodes, insert points, and controls keep their own click behavior, only
     // a drag that starts on empty canvas pans.
     if ((ev.target as HTMLElement).closest('button, input, select, textarea, a, [role="button"]')) {
       return;

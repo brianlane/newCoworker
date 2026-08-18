@@ -169,7 +169,7 @@ describe("setContactTextingMode", () => {
 
   it("drains the 25-run cancel bound across passes, summing the counts", async () => {
     // Suppress has no opt-out backstop, so a single capped call is not
-    // enough (Bugbot Medium, PR #898) — the core loops until a pass finds
+    // enough (Bugbot Medium, PR #898), the core loops until a pass finds
     // nothing.
     const { db } = makeDb([{ data: [], error: null }]);
     const d = deps(db, {

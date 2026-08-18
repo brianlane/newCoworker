@@ -94,7 +94,7 @@ describe("intakeSystemInstruction", () => {
   });
 
   it("outbound collect lists drop 'phone' (defaults and explicit), degrading to notes", () => {
-    // Default field set includes phone — outbound must not list it (Bugbot:
+    // Default field set includes phone, outbound must not list it (Bugbot:
     // listing it contradicts the never-ask rule in the same paragraph).
     const defaults = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
     expect(defaults).toContain("name, address, timeframe, notes");
@@ -193,7 +193,7 @@ describe("composeIntakeLeadSms", () => {
     expect(text).toContain("Callback: +15551112222");
     expect(text).toContain("Address: 123 Main St");
     expect(text).toContain("Timeframe: 3 months");
-    // The transfer partner's line is labeled as such — never as the callback.
+    // The transfer partner's line is labeled as such, never as the callback.
     expect(text).toContain("Transferred via: +14159851909");
     expect(text).toContain("Transcript:");
     expect(text).toContain("Client: I want to sell");

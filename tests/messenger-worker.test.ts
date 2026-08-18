@@ -165,7 +165,7 @@ describe("processMessengerJobs", () => {
     const summary = await processMessengerJobs({}, deps);
     expect(summary.replied).toBe(1);
     expect(deps.resolveSendAccount).toHaveBeenCalledWith("whatsapp", "pn-9");
-    // WhatsApp display names arrive with the webhook — never a Graph lookup.
+    // WhatsApp display names arrive with the webhook, never a Graph lookup.
     expect(deps.fetchProfileName).not.toHaveBeenCalled();
     expect(deps.send).toHaveBeenCalledWith(
       "whatsapp",
@@ -304,7 +304,7 @@ describe("processMessengerJobs", () => {
   });
 
   it("flips the job to a terminal error when the commit fails AFTER the send", async () => {
-    // The reply already reached the lead — leaving the job 'processing'
+    // The reply already reached the lead, leaving the job 'processing'
     // would let the stale reclaim retry the turn and double-send.
     const deps = makeDeps({
       complete: vi.fn(async () => {

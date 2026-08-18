@@ -76,7 +76,7 @@ describe("compileVoiceFlow", () => {
   });
 
   it("returns null when a handoff chain has no ringable human", () => {
-    // An intake-only flow can't start (no human to ring) — falls through.
+    // An intake-only flow can't start (no human to ring), falls through.
     const plan = compileVoiceFlow(
       def([{ id: "ai", type: "voice_ai_intake", notifyE164: "+16026951142" }]),
       TO

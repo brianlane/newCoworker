@@ -87,7 +87,7 @@ export function AiFlowLibraryActions({
       // Stash the adapted draft for the builder to pick up, then open a fresh
       // editor pre-loaded from it. The builder reads the draft from
       // sessionStorage, so if the write fails (private mode, quota, storage
-      // disabled) we must NOT navigate — otherwise the paid adaptation is lost.
+      // disabled) we must NOT navigate, otherwise the paid adaptation is lost.
       let stored = false;
       try {
         sessionStorage.setItem("aiflow_adapt_draft", JSON.stringify(json.data.definition));

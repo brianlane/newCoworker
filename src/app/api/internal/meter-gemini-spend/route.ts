@@ -9,7 +9,7 @@
  * worker, which is why those surfaces previously metered a chars/4 ESTIMATE.
  *
  * The router POSTs the exact billed tokens here and we record them into the
- * same `owner_chat_model_spend` pool the billing page reads — via the shared
+ * same `owner_chat_model_spend` pool the billing page reads, via the shared
  * `meterGeminiSpendForBusiness` path the platform's own Gemini surfaces
  * (website-ingest, knowledge, AiFlow) already use. So every chat-budget Gemini
  * call now meters the same way: exact tokens, one pool, one number.

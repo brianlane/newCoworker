@@ -22,7 +22,7 @@
  * cannot see would be a second, invisible notion of lead state. Five things
  * keep that from looping or surprising a tenant:
  *
- *   1. `sourceFlowId` loop guard — contact_events already excludes the flow
+ *   1. `sourceFlowId` loop guard, contact_events already excludes the flow
  *      whose own step caused the write, so a flow that files a lead cannot
  *      retrigger itself through the "New Lead" tag it caused.
  *   2. Forward-only + no-op suppression (see planLifecycleStageWrites): a

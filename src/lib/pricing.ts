@@ -72,7 +72,7 @@ export function getFirstCycleDiscountCents(tier: PlanTier, period: BillingPeriod
 }
 
 /**
- * The monthly rate an EXISTING customer pays for a plan — i.e. WITHOUT the
+ * The monthly rate an EXISTING customer pays for a plan, i.e. WITHOUT the
  * first-month intro discount, which is offered to brand-new customers only
  * (the change-plan checkout deliberately omits the intro coupon, and Stripe
  * charges the full price). For monthly this is the regular renewal rate; for

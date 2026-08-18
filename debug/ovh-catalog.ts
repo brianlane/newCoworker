@@ -1,9 +1,9 @@
 /**
- * ovh-catalog.ts — read-only audit of the live OVHcloud public VPS catalog
+ * ovh-catalog.ts, read-only audit of the live OVHcloud public VPS catalog
  * against our VpsSize → plan-code mapping (src/lib/ovh/plans.ts).
  *
  * Runs against the OVHcloud US endpoint by default (the platform's account
- * entity — its catalog sells the `-ca` plan codes with the Beauharnois/BHS
+ * entity, its catalog sells the `-ca` plan codes with the Beauharnois/BHS
  * datacenter). For each mapped size it reports whether the plan code exists
  * in the live catalog, its price, and whether BHS + an Ubuntu 24.04 OS
  * value are available for it. Run this BEFORE the first real OVH purchase
@@ -96,7 +96,7 @@ for (const size of VPS_SIZES) {
     (v) => v.toLowerCase() === OVH_DATACENTER_CANADA.toLowerCase()
   );
   const ubuntu = (osConf?.values ?? []).filter((v) => /ubuntu/i.test(v));
-  // Provisioning rebuilds with OVH_UBUNTU_IMAGE_MATCH specifically — a plan
+  // Provisioning rebuilds with OVH_UBUNTU_IMAGE_MATCH specifically, a plan
   // that only ships older Ubuntu releases must FAIL the audit, not pass on
   // a generic /ubuntu/ match.
   const ubuntu2404 = ubuntu.filter((v) =>

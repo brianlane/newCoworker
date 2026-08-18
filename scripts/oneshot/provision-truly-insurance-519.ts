@@ -1,5 +1,5 @@
 /**
- * provision-truly-insurance-519.ts — one-shot: provision the Truly Insurance
+ * provision-truly-insurance-519.ts, one-shot: provision the Truly Insurance
  * tenant (690f85c0-ee16-4ee5-bde5-5829df2e5410, signed up Jul 8 2026) whose
  * Stripe-webhook-triggered provisioning died at 5% with
  * "Hostinger /api/vps/v1/post-install-scripts → HTTP 0 (timed out after
@@ -7,7 +7,7 @@
  *
  * Runs the standard orchestrator locally with ONE override: the DID
  * provisioner is pinned to a Canadian 519 (Ontario) number for THIS tenant
- * only — the owner is in Ontario (416 phone), and 519 inventory only exists
+ * only, the owner is in Ontario (416 phone), and 519 inventory only exists
  * under countryCode=CA, which the env-default US/602 search would never find.
  * Platform defaults (TELNYX_DEFAULT_*) are untouched.
  *
@@ -45,7 +45,7 @@ console.log("[oneshot] DID search override:", DID_SEARCH);
 
 // Refuse when the business is online OR already has a VPS reference. A
 // failed provision that got past bootstrap leaves `hostinger_vps_id` set
-// with status still `offline` — re-running the purchase path there would
+// with status still `offline`, re-running the purchase path there would
 // buy a second box. Re-provisioning onto an existing box is the admin
 // /api/provisioning route's job, not this one-shot's.
 if (business.status === "online" || business.hostinger_vps_id) {

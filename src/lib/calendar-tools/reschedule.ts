@@ -51,8 +51,8 @@ import { logger } from "@/lib/logger";
 
 /**
  * Appointment lifecycle beyond the initial booking (Truly feedback Issue 4,
- * 2026-07-13): a reschedule must UPDATE the existing provider event — the
- * provider then emails an updated invitation — and a cancellation must
+ * 2026-07-13): a reschedule must UPDATE the existing provider event, the
+ * provider then emails an updated invitation, and a cancellation must
  * delete it, producing exactly one cancellation email. Before these cores
  * existed, the model's only move was booking a second event and leaving the
  * first one standing.
@@ -60,19 +60,19 @@ import { logger } from "@/lib/logger";
  * Provider coverage:
  *   - Google + Microsoft (Nango proxy): PATCH/DELETE the real event.
  *   - Vagaro: PUT/DELETE the appointment on the merchant's book. Resolution
- *     is ledger-only — Vagaro bookings stamp their appointment id into the
+ *     is ledger-only, Vagaro bookings stamp their appointment id into the
  *     dedupe ledger at booking time, and the v1 client has no
  *     search-by-customer surface.
  *   - Calendly: cancel is a real API cancellation; reschedule returns the
  *     invitee's own reschedule link (`reschedule_link_created`) because
- *     Calendly cannot move an event on the invitee's behalf — mirrors the
+ *     Calendly cannot move an event on the invitee's behalf, mirrors the
  *     `booking_link_created` booking contract.
  *   - CalDAV: the SAME .ics resource is rewritten in place (reschedule) or
- *     DELETEd (cancel). Resolution is ledger-only, like Vagaro — the client
+ *     DELETEd (cancel). Resolution is ledger-only, like Vagaro, the client
  *     has no search-by-attendee surface.
  *
  * Event resolution: the `calendar_booking_dedupe` ledger row (stamped at
- * booking) is the primary key — no provider search needed. Bookings that
+ * booking) is the primary key, no provider search needed. Bookings that
  * predate the ledger fall back to a provider-side search for the attendee's
  * phone/email marker in the event body (bookings always carry an
  * `Attendee:`/`Phone:`/`Email:` description).
@@ -248,7 +248,7 @@ async function searchProviderEvents(
               start?: { dateTime?: string };
             }>;
           } | null)?.items ?? [];
-        // `q` is a loose full-text match — verify the identity actually sits
+        // `q` is a loose full-text match, verify the identity actually sits
         // in the event description before mutating anything, mirroring the
         // Microsoft path, so a fuzzy hit can never reschedule/cancel someone
         // else's event (Bugbot on PR #577).
@@ -290,7 +290,7 @@ async function searchProviderEvents(
           endDateTime: endIso,
           // Full body, not just bodyPreview: booked events carry free-form
           // notes BEFORE the Attendee/Phone/Email marker lines, and Graph
-          // previews are short — long notes would push the marker out of the
+          // previews are short, long notes would push the marker out of the
           // preview and make valid appointments unfindable (Bugbot on
           // PR #577). The marker (an E.164 or email) substring-matches even
           // when Graph returns the body HTML-wrapped.
@@ -299,7 +299,7 @@ async function searchProviderEvents(
           // A busy calendar can hold far more than a couple dozen upcoming
           // events in the window; a small page made valid bookings past it
           // unfindable (Bugbot on PR #577). One large page keeps the call
-          // single-round-trip — the search is already scoped to 60 days.
+          // single-round-trip, the search is already scoped to 60 days.
           $top: "250"
         }
       });
@@ -401,7 +401,7 @@ async function locateUpcomingAppointment(
   const searched = candidates[0];
   // The event may still hold a ledger row under a DIFFERENT attendee key
   // (booked by phone, rescheduled by email) carrying the booking's Zoom
-  // meeting — capture it NOW, before the callers' by-event ledger cleanup
+  // meeting, capture it NOW, before the callers' by-event ledger cleanup
   // deletes that row, so the meeting still moves/dies with the event.
   const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, searched.eventId);
   return {
@@ -468,7 +468,7 @@ async function mutateGoogleEvent(
 
 /**
  * Ledger resolution for Vagaro, Acuity and CalDAV (their ONLY resolution
- * path — none has a search-by-customer cancel surface): exact attendee key
+ * path, none has a search-by-customer cancel surface): exact attendee key
  * first, then the phone-tolerant fallback, since the booking may have
  * stored a differently formatted phone than the lifecycle call passes
  * (Bugbot on PR #584).
@@ -481,7 +481,7 @@ async function findLedgerOnlyClaim(businessId: string, attendeeKey: string, phon
 
 /**
  * Move the attendee's upcoming appointment to a new time IN PLACE. The
- * provider sends the attendee an UPDATED invitation for the same event —
+ * provider sends the attendee an UPDATED invitation for the same event,
  * never a second invite plus a lingering original.
  */
 export async function rescheduleCalendarAppointment(
@@ -547,14 +547,14 @@ export async function rescheduleCalendarAppointment(
       if (moved.ok) {
         await rescheduleBookingClaim(
           businessId,
-          // The row's own key when the phone-tolerant fallback resolved it —
+          // The row's own key when the phone-tolerant fallback resolved it,
           // conflict cleanup must target the key the row is stored under.
           claim.attendeeKey ?? attendeeKey,
           claim.id,
           new Date(args.newStartIso).toISOString()
         );
         // Move the booking's Zoom meeting with it (best-effort; only CalDAV
-        // bookings carry one on this path — Vagaro bookings are Zoom-free).
+        // bookings carry one on this path, Vagaro bookings are Zoom-free).
         if (claim.zoomMeetingId) {
           await updateZoomMeetingForBooking(businessId, claim.zoomMeetingId, {
             startIso: args.newStartIso,
@@ -582,7 +582,7 @@ export async function rescheduleCalendarAppointment(
         await offerFreedSlot(businessId, claim.startAt, {}, attendee);
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
-        // survived — drop it so the stale claim can't shadow the slot or
+        // survived, drop it so the stale claim can't shadow the slot or
         // resolve future lifecycle calls to a dead event. Its mirror goes
         // with it: the appointment it represents no longer exists, and a
         // surviving mirror is what the team plans around.
@@ -625,7 +625,7 @@ export async function rescheduleCalendarAppointment(
         }
       });
       // The connection resolved moments ago, so a falsy proxy response here
-      // is a failed MUTATION, not a missing calendar — reporting
+      // is a failed MUTATION, not a missing calendar, reporting
       // calendar_not_connected would steer the model to "you cannot change
       // any appointment" (Bugbot on PR #577).
       if (!res) return { ok: false, detail: "calendar_reschedule_failed" };
@@ -634,7 +634,7 @@ export async function rescheduleCalendarAppointment(
     // Keep the slot ledger matching the provider event so a later duplicate
     // check / reschedule / cancel resolves without a provider search. For a
     // provider-search hit (no ledger row under OUR key), first drop any row
-    // the event holds under a DIFFERENT attendee key — its old start would
+    // the event holds under a DIFFERENT attendee key, its old start would
     // otherwise linger as a phantom booked slot.
     if (located.claimId) {
       await rescheduleBookingClaim(
@@ -760,7 +760,7 @@ export async function cancelCalendarAppointment(
       if (canceled.ok) {
         await deleteBookingClaim(claim.id);
         // Delete the booking's Zoom meeting with it (best-effort; only
-        // CalDAV bookings carry one here — Vagaro bookings are Zoom-free).
+        // CalDAV bookings carry one here, Vagaro bookings are Zoom-free).
         if (claim.zoomMeetingId) {
           await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
         }
@@ -812,14 +812,14 @@ export async function cancelCalendarAppointment(
         endpoint: `/v1.0/me/events/${encodeURIComponent(located.eventId)}`,
         method: "DELETE"
       });
-      // Same rationale as the reschedule PATCH: the calendar exists — this
+      // Same rationale as the reschedule PATCH: the calendar exists, this
       // is a failed mutation, not a disconnected calendar.
       if (!res) return { ok: false, detail: "calendar_cancel_failed" };
     }
 
     // Ledger cleanup covers BOTH resolution paths: the caller's own claim row
     // (ledger hit) and any row recorded under a different attendee key
-    // (provider-search hit) — a canceled slot must never survive as a
+    // (provider-search hit), a canceled slot must never survive as a
     // "booked" ledger entry under any key.
     if (located.claimId) {
       await deleteBookingClaim(located.claimId);

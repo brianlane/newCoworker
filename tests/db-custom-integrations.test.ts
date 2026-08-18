@@ -79,16 +79,16 @@ describe("isPrivateOrLoopbackHost", () => {
     // Out-of-range octets: shape matches IPv4 dotted-quad, but the
     // shared `isPrivateIpv4` helper conservatively classifies any
     // input outside 0–255 as private. We adopt that conservative
-    // answer at registration time too — refusing nonsense addresses
+    // answer at registration time too, refusing nonsense addresses
     // costs nothing and removes an obfuscation vector.
     ["256.256.256.256", true],
-    // Multicast (224–239) + reserved (240–255) — the local IPv4
+    // Multicast (224–239) + reserved (240–255), the local IPv4
     // helper used to miss these; now delegated to the shared module.
     ["224.0.0.1", true],
     ["239.255.255.255", true],
     ["240.0.0.1", true],
     ["255.255.255.255", true],
-    // IPv6 — defense-in-depth so a future caller relying on this
+    // IPv6, defense-in-depth so a future caller relying on this
     // function alone (without isBareIpHost) doesn't have an SSRF gap.
     ["::1", true],
     ["::", true],
@@ -291,7 +291,7 @@ describe("validateUpsertInput", () => {
     expect(() =>
       validateUpsertInput({
         ...base,
-        // @ts-expect-error — testing runtime guard against type-cast bypass
+        // @ts-expect-error, testing runtime guard against type-cast bypass
         authScheme: "garbage"
       })
     ).toThrow(/auth_scheme is invalid/);
@@ -419,7 +419,7 @@ describe("getCustomIntegrationByLabel", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     // An agent that submits `%` for the label must not match any row in
-    // the business — and definitely must not stream a credential to the
+    // the business, and definitely must not stream a credential to the
     // first row found by collation order.
     await getCustomIntegrationByLabel("biz-1", "%");
     expect(ilike).toHaveBeenCalledWith("label", "\\%");
@@ -470,7 +470,7 @@ describe("createCustomIntegration", () => {
     const payload = insert.mock.calls[0][0] as Record<string, string>;
     expect(payload.secret_encrypted).toMatch(/^enc:v1:/);
     // The cleartext is 1 char so "doesn't contain k" can collide with
-    // random base64; assert via length instead — encrypted form is far
+    // random base64; assert via length instead, encrypted form is far
     // longer than the cleartext.
     expect(payload.secret_encrypted.length).toBeGreaterThan(20);
   });
@@ -543,8 +543,8 @@ describe("createCustomIntegration", () => {
  *     credentialed scheme but didn't supply a new secret).
  *
  * Tests can override either chain via the options bag. The default
- * existence-check returns a row with auth_scheme="bearer" — matching
- * the typical test input — so non-rotation updates short-circuit
+ * existence-check returns a row with auth_scheme="bearer", matching
+ * the typical test input, so non-rotation updates short-circuit
  * cleanly. Override `selectMaybeSingle` to exercise scheme-change /
  * missing-row / DB-error branches.
  */
@@ -645,13 +645,13 @@ describe("updateCustomIntegration", () => {
       db
     );
     const patch = update.mock.calls[0][0] as Record<string, unknown>;
-    // Empty-string must NOT clobber the stored ciphertext — that would
+    // Empty-string must NOT clobber the stored ciphertext, that would
     // leave the row with scheme=bearer + no credential.
     expect(patch).not.toHaveProperty("secret_encrypted");
   });
 
   it("rejects update when scheme=bearer but no stored secret AND none supplied", async () => {
-    // Same-scheme update path — row's existing scheme matches the
+    // Same-scheme update path, row's existing scheme matches the
     // input scheme, but the stored ciphertext is null. The row would
     // be unusable, so refuse.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
@@ -684,7 +684,7 @@ describe("updateCustomIntegration", () => {
     // and this exercises the empty-secret + no-stored-secret branch
     // (lines 625–629 in custom-integrations.ts). Without
     // `auth_scheme: "bearer"` here the test would silently cover the
-    // wrong branch — Cursor Bugbot flagged exactly that.
+    // wrong branch, Cursor Bugbot flagged exactly that.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
       data: { secret_encrypted: null, auth_scheme: "bearer" },
       error: null
@@ -836,7 +836,7 @@ describe("updateCustomIntegration", () => {
 
   it("allows credentialed→none scheme change without a secret (clears stored)", async () => {
     // Going from a credentialed scheme to "none" must NOT require a
-    // fresh secret — the patch wipes the stored ciphertext anyway.
+    // fresh secret, the patch wipes the stored ciphertext anyway.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
       data: { secret_encrypted: "enc:v1:bearer-token", auth_scheme: "bearer" },
       error: null

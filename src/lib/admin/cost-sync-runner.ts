@@ -1,5 +1,5 @@
 /**
- * Production wiring for the platform cost sync — shared by the internal
+ * Production wiring for the platform cost sync, shared by the internal
  * cron route (/api/internal/platform-cost-sync) and the admin Sync-now
  * route (/api/admin/cost-sync) so the two can never drift.
  */

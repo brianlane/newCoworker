@@ -27,7 +27,7 @@ export function hasFhaRisk(text: string): boolean {
 /**
  * Compliance guardrail injected into the agent's system prompt. Housing
  * business types (see {@link FHA_BUSINESS_TYPES}) keep the Fair Housing Act
- * guardrail verbatim; all other industries — and unknown/undefined types —
+ * guardrail verbatim; all other industries, and unknown/undefined types,
  * get an industry-neutral legal/ethical guardrail.
  */
 export function buildComplianceSystemPrompt(businessType?: string | null): string {

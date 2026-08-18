@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 export type FeedFilterOption = {
   /** URL-param value (e.g. "sms_outbound", "error"). */
   value: string;
-  /** Chip text — matches the badge terms the rows themselves display. */
+  /** Chip text, matches the badge terms the rows themselves display. */
   label: string;
 };
 
@@ -18,7 +18,7 @@ const DAY_PRESETS = [1, 7, 30] as const;
  * /admin/activity): toggle chips for the type filter (no chips selected =
  * everything), a business select, and a look-back preset. State lives in the
  * URL (`types`, `business`, `days`) so the server component refetches the
- * filtered view — same convention as the owner dashboard's ActivityFilters.
+ * filtered view, same convention as the owner dashboard's ActivityFilters.
  */
 export function AdminFeedFilters({
   basePath,
@@ -132,8 +132,8 @@ export function AdminFeedFilters({
                 {b.name}
               </option>
             ))}
-            {/* A URL-carried id outside the fleet list still renders selected
-                — the query is scoped to it (showing nothing), and the select
+            {/* A URL-carried id outside the fleet list still renders selected,
+                the query is scoped to it (showing nothing), and the select
                 must say so instead of pretending "All businesses". */}
             {businessId !== undefined && !businesses.some((b) => b.id === businessId) && (
               <option value={businessId}>{t("unknownBusiness")}</option>

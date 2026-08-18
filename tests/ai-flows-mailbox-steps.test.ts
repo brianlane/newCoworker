@@ -16,8 +16,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 /**
  * Write-time validation for mailbox bindings (send_email.fromConnectionId and
  * send_sms.quietHours.emailFromConnectionId): the KYP Ads incident of Jul 22
- * 2026 — a flow saved pointing at a mailbox connection id that didn't exist
- * for the business — failed at SEND time with the cryptic
+ * 2026, a flow saved pointing at a mailbox connection id that didn't exist
+ * for the business, failed at SEND time with the cryptic
  * `owner-mailbox send failed (connection_not_found)` and paged the owner.
  * These checks surface the same mistake at save time instead.
  */

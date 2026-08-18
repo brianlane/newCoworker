@@ -20,7 +20,7 @@ export type SubscriptionRow = {
   stripe_subscription_id: string | null;
   tier: "starter" | "standard" | "enterprise";
   /**
-   * DB status enum. App code never writes `past_due` — payment failures flip
+   * DB status enum. App code never writes `past_due`, payment failures flip
    * directly to `canceled` with `grace_ends_at` set, per the lifecycle plan.
    * `past_due` is kept in the type for back-compat with historical rows.
    */
@@ -264,7 +264,7 @@ export async function listSubscriptionsByBusinessIds(
 }
 
 /**
- * EVERY subscription row across all businesses, newest first — history
+ * EVERY subscription row across all businesses, newest first, history
  * included (older canceled rows under a resubscribe, wiped rows). Powers the
  * admin revenue analytics, which needs cancels for churn, not just the
  * newest-per-business row that {@link listSubscriptionsByBusinessIds} keeps.
@@ -285,7 +285,7 @@ export type LiveSubscriptionBusinessIds = {
   /** Live (active/past_due) subscription BACKED BY A STRIPE PAYMENT. */
   stripeBacked: Set<string>;
   /**
-   * Live subscription with NO Stripe linkage — admin-created enterprise
+   * Live subscription with NO Stripe linkage, admin-created enterprise
    * rows, internal pilots, skip-payment accounts. Nobody is being charged.
    */
   stripeless: Set<string>;
@@ -299,7 +299,7 @@ export type LiveSubscriptionBusinessIds = {
 
 /**
  * Which of `businessIds` have ANY subscription in a live billing state
- * (`active` / `past_due`) — regardless of row age — split by whether a real
+ * (`active` / `past_due`), regardless of row age, split by whether a real
  * Stripe payment backs it. Deliberately NOT newest-row-wins like
  * {@link listSubscriptionsByBusinessIds}: a newer `pending` row (resubscribe
  * checkout in flight) must not shadow an older `active` one when the caller
@@ -307,13 +307,13 @@ export type LiveSubscriptionBusinessIds = {
  *
  * The Stripe split exists for the VPS billing-posture cron: only a tenant
  * with a REAL payment relationship justifies auto-spending platform money
- * (re-enabling Hostinger renewal). A Stripe-less active row — the Residency
- * Pilot's internal subscription, admin-created enterprise accounts — must
+ * (re-enabling Hostinger renewal). A Stripe-less active row, the Residency
+ * Pilot's internal subscription, admin-created enterprise accounts, must
  * never trigger an automatic billing change; those are surfaced report-only.
  * A business with both kinds of rows counts as stripeBacked.
  *
  * `cancelAtPeriodEnd` is the set of businesses whose live row already has
- * `cancel_at_period_end = true` — still "live" for Stripe, but Hostinger
+ * `cancel_at_period_end = true`, still "live" for Stripe, but Hostinger
  * renewal was deliberately disabled and must not be healed.
  */
 export async function listBusinessIdsWithLiveSubscription(
@@ -356,7 +356,7 @@ export async function listBusinessIdsWithLiveSubscription(
 
 /**
  * Which of `businessIds` have ANY subscription row that is Stripe-linked and
- * not canceled — i.e. Stripe either IS billing (active/past_due) or MAY
+ * not canceled, i.e. Stripe either IS billing (active/past_due) or MAY
  * start billing any second (a paid checkout's `pending` row whose webhook
  * is still activating). Any-row semantics like
  * {@link listBusinessIdsWithLiveSubscription}, but deliberately wider: this
@@ -385,13 +385,13 @@ export async function listBusinessIdsWithStripeLinkedSubscription(
  * Compare-and-swap cancel for the admin release-to-pool flow: flip the row
  * to `canceled` ONLY IF it is still Stripe-less at write time. A checkout
  * webhook can attach a `stripe_subscription_id` to this very row between
- * the caller's guard read and this write — blindly cancelling then would
+ * the caller's guard read and this write, blindly cancelling then would
  * mask the linkage from the adopt-time delete guard (which ignores
  * canceled rows) and let the cascade delete an account Stripe is billing.
  * Returns true when the row was cancelled, false when the CAS lost (row
  * became Stripe-linked, or was already cancelled by a concurrent writer).
  *
- * `grace_ends_at` is cleared so the grace sweep never wipes the account —
+ * `grace_ends_at` is cleared so the grace sweep never wipes the account,
  * deletion stays with the adopt-time cascade.
  */
 export async function cancelSubscriptionIfStripeless(
@@ -514,8 +514,8 @@ const MONTHLY_PERIOD_MAX_MS = 32 * 24 * 60 * 60 * 1000;
  *
  * Two signals are BOTH required:
  * - `renewal_at` (stamped at checkout as start + commitment months) has
- *   passed — the original term is over; and
- * - the cached Stripe billing period is monthly-length — with auto-renew ON
+ *   passed, the original term is over; and
+ * - the cached Stripe billing period is monthly-length, with auto-renew ON
  *   the subscription renews for another FULL prepaid term (12/24-month
  *   period) but `renewal_at` is never advanced, so a past `renewal_at`
  *   alone cannot distinguish "rolling month-to-month" from "inside a
@@ -544,11 +544,11 @@ export function isCommitmentElapsed(
  * True when `row` represents live (or plausibly-live) paid service that a
  * fresh onboarding checkout must NOT shadow with a new `pending` row:
  *
- * - `active` — live service; the Billing page (change-plan / reactivate) is
+ * - `active`, live service; the Billing page (change-plan / reactivate) is
  *   the only legitimate way to alter it.
- * - canceled-in-grace — the customer can still reactivate the existing
+ * - canceled-in-grace, the customer can still reactivate the existing
  *   subscription with its data intact; a parallel new signup would fork it.
- * - any non-canceled row that already has a `stripe_subscription_id` — a paid
+ * - any non-canceled row that already has a `stripe_subscription_id`, a paid
  *   checkout whose webhook processing may still be in flight.
  *
  * Deliberately NOT blocking: unpaid `pending` rows (abandoned checkouts must
@@ -567,7 +567,7 @@ export function isCheckoutBlockingSubscription(
 /**
  * Finds a subscription row across `businessIds` that must block a NEW
  * onboarding checkout (see `isCheckoutBlockingSubscription`). Scans every
- * row — not just the latest per business — because an abandoned `pending`
+ * row, not just the latest per business, because an abandoned `pending`
  * row can sit on top of (and hide) an older `active` one, which is exactly
  * the shadowing incident this guard exists to prevent.
  *

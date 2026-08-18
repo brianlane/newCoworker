@@ -1,6 +1,6 @@
 /**
  * Thin PostgREST wrappers for the memory knowledge graph tables
- * (memory_entities / memory_facts — see the 20260820100100_memory_graph
+ * (memory_entities / memory_facts, see the 20260820100100_memory_graph
  * migration). Service-role only, same posture as the other tenant-content
  * tables. Resolution/supersedence LOGIC lives in graph-write.ts; this module
  * pins the wire-level shapes.
@@ -102,7 +102,7 @@ export async function updateMemoryEntity(
   if (error) throw new Error(`updateMemoryEntity: ${error.message}`);
 }
 
-/** Every active fact for a business — the retrieval working set. */
+/** Every active fact for a business, the retrieval working set. */
 export async function listActiveFactsForBusiness(
   businessId: string,
   client?: SupabaseClient
@@ -117,7 +117,7 @@ export async function listActiveFactsForBusiness(
   return (data ?? []) as MemoryFactRow[];
 }
 
-/** Active facts for one subject+predicate — the supersedence lookup. */
+/** Active facts for one subject+predicate, the supersedence lookup. */
 export async function listActiveFacts(
   businessId: string,
   subjectEntityId: string,
@@ -157,7 +157,7 @@ export async function insertMemoryFact(
 }
 
 /**
- * Re-stated fact: an identical (subject, predicate, object) landed again —
+ * Re-stated fact: an identical (subject, predicate, object) landed again,
  * no new row, but stated_at bumps so recency reflects the latest
  * re-confirmation (repeat bookings, owners repeating rules).
  */
@@ -175,7 +175,7 @@ export async function touchMemoryFactStatedAt(
 
 /**
  * Retire facts WITHOUT a successor (owner removed the source content, e.g.
- * a cleared pinned note): active=false, superseded_by stays null — which
+ * a cleared pinned note): active=false, superseded_by stays null, which
  * distinguishes "withdrawn" from "replaced by a newer statement".
  */
 export async function deactivateMemoryFacts(
@@ -268,7 +268,7 @@ export async function getMemoryGraphDefaultMode(
 
 /**
  * Pure inheritance step: explicit off/shadow/active as-is; 'inherit' (or
- * absent/unknown — rows predating the migration) follows the supplied
+ * absent/unknown, rows predating the migration) follows the supplied
  * fleet default. Admin views use this with a FRESHLY-READ default so a
  * single page render can never mix cached and fresh values.
  */
@@ -281,7 +281,7 @@ export function effectiveMemoryGraphMode(
 
 /**
  * Resolve a business_configs.memory_graph_mode value to the EFFECTIVE mode:
- * explicit off/shadow/active as-is; 'inherit' (or absent/unknown — rows
+ * explicit off/shadow/active as-is; 'inherit' (or absent/unknown, rows
  * predating the migration) follows the fleet default (cached ~60s).
  */
 export async function resolveMemoryGraphMode(

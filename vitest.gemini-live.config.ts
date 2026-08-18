@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Narrow config so `vitest exclude` doesn't block explicitly running the
- * Gemini live ping (see npm script `test:gemini-live`). No coverage — network only.
+ * Gemini live ping (see npm script `test:gemini-live`). No coverage, network only.
  */
 export default defineConfig({
   resolve: {

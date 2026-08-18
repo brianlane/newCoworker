@@ -2,7 +2,7 @@
  * Audit/index of the most recent SSH-tarball backup per business. The
  * tarball itself lives in Supabase Storage (private bucket); this row lets
  * us locate and verify it during cancel-grace restore and change-plan
- * migration. Only one row per business — upsert overwrites on new backup.
+ * migration. Only one row per business, upsert overwrites on new backup.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";

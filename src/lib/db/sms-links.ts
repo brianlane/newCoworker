@@ -64,7 +64,7 @@ export const DEFAULT_LINK_CLICKS_LIMIT = 20;
 /**
  * Ceiling on how many links get an inline click TIMELINE per enrichment
  * call. Aggregates (click_count / first / last) always render; past the cap
- * the expandable per-click list is simply absent — this bounds the per-link
+ * the expandable per-click list is simply absent, this bounds the per-link
  * query fan-out on very large views (analytics can load 500 links).
  */
 export const MAX_CLICK_TIMELINE_LINKS = 100;
@@ -198,7 +198,7 @@ export async function listSmsLinksForContact(
     includeClicks?: boolean;
     client?: SupabaseClient;
     now?: Date;
-    /** Merged alias numbers — links stored under any of them still belong to this contact. */
+    /** Merged alias numbers, links stored under any of them still belong to this contact. */
     aliases?: string[];
   } = {}
 ): Promise<SmsLinkView[]> {

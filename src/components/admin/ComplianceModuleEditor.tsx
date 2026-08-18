@@ -5,7 +5,7 @@
  * text + restricted terms, layered on top of (never replacing) the platform
  * guardrails. Saving rewrites the marker-delimited soul.md block and
  * re-seeds the tenant vault, so changes reach the live agent within a
- * minute — no redeploy.
+ * minute, no redeploy.
  */
 
 import { useState } from "react";

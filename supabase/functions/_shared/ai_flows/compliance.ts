@@ -6,9 +6,9 @@
  * consent risk in the product. Two guards live here, used by the ai-flow-worker
  * before it ever calls Telnyx:
  *
- *   1. `ensureStopLanguage` — every cold body must carry opt-out language
+ *   1. `ensureStopLanguage`, every cold body must carry opt-out language
  *      (CTIA / A2P 10DLC), appended idempotently.
- *   2. `isRecipientOptedOut` — never message a recipient who has sent STOP for
+ *   2. `isRecipientOptedOut`, never message a recipient who has sent STOP for
  *      this business (the same `sms_is_opted_out` RPC the inbound webhook uses).
  *
  * The business still owns consent; these are defense-in-depth so a misconfigured
@@ -24,7 +24,7 @@ import { truncateAtWord } from "../text_truncate.ts";
  */
 const ELLIPSIS_GROWTH = 2;
 
-/** Structural Supabase client (RPC only) — see _shared/chat_spend_cap.ts. */
+/** Structural Supabase client (RPC only), see _shared/chat_spend_cap.ts. */
 export interface ComplianceRpcClient {
   // PromiseLike (not Promise) so supabase-js's thenable PostgrestFilterBuilder
   // satisfies the interface structurally (same approach as _shared/cap_alerts.ts).
@@ -48,7 +48,7 @@ export function stopSuffixForLocale(locale?: string | null): string {
  */
 export function ensureStopLanguage(body: string, suffix: string = STOP_SUFFIX): string {
   // "ALTO" only counts as existing opt-out language in an actual opt-out
-  // instruction ("responde/envía ALTO ...") — the bare word is everyday
+  // instruction ("responde/envía ALTO ..."), the bare word is everyday
   // Spanish ("un costo muy alto") and must not skip the required footer.
   if (/\bstop\b/i.test(body)) return body;
   if (/\b(responde|respondiendo|env[ií]a|texto|manda)\s+alto\b/i.test(body)) return body;
@@ -106,7 +106,7 @@ export function gsmSafeSmsText(text: string): string {
  * produce an unsendable message: GSM-normalize, append the STOP suffix (cold
  * sends), then re-check the UCS-2 cap and the 10-segment GSM cap AFTER the
  * suffix. Appending after the cap check (the previous order) could push a
- * ≤670-char UCS-2 body past Telnyx's ten-segment limit — failing exactly the
+ * ≤670-char UCS-2 body past Telnyx's ten-segment limit, failing exactly the
  * sends the STOP suffix exists to protect.
  */
 export function prepareSmsBody(

@@ -19,7 +19,7 @@
  * sending it (or if a caller synthesizes it); the timestamp span is the
  * fallback, not the replacement.
  *
- * Extracted to `_shared` so it is directly testable — the Edge function itself
+ * Extracted to `_shared` so it is directly testable, the Edge function itself
  * is not imported by the vitest suite.
  */
 

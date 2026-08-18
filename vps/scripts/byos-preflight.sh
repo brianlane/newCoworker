@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# byos-preflight.sh — hard enrollment gate for customer-supplied (BYOS) boxes.
+# byos-preflight.sh, hard enrollment gate for customer-supplied (BYOS) boxes.
 #
 # Runs over SSH (as root) BEFORE bootstrap during BYOS enrollment
 # (src/lib/provisioning/byos.ts stages it base64-encoded, like the
@@ -12,7 +12,7 @@
 #   PREFLIGHT <check> <PASS|FAIL|WARN> <detail…>   one line per check
 #   PREFLIGHT RESULT <PASS|FAIL>                   final verdict
 # Exit code: 0 when no check FAILed, 1 otherwise. WARN never fails the
-# script — disk encryption WARN is enforced app-side via the operator's
+# script, disk encryption WARN is enforced app-side via the operator's
 # provider-level-encryption attestation.
 
 set -uo pipefail
@@ -28,7 +28,7 @@ report() {
 
 # ------------------------------------------------------------------ os
 # The whole fleet (bootstrap.sh, compose profiles, ZRAM handling) is built
-# and tested against Ubuntu 24.04 — anything else is unsupported.
+# and tested against Ubuntu 24.04, anything else is unsupported.
 OS_ID="unknown"; OS_VERSION="unknown"
 if [[ -r /etc/os-release ]]; then
   # shellcheck disable=SC1091
@@ -116,7 +116,7 @@ fi
 
 # ------------------------------------------------------------------ disk encryption
 # PII requirement: encryption at rest. dm-crypt/LUKS is detectable; provider-
-# level (hypervisor/SAN) encryption is not — that case is a WARN and the
+# level (hypervisor/SAN) encryption is not, that case is a WARN and the
 # enrollment flow requires an explicit operator attestation instead.
 if lsblk -rno TYPE 2>/dev/null | grep -q '^crypt$'; then
   report disk_encryption PASS "dm-crypt/LUKS volume detected"

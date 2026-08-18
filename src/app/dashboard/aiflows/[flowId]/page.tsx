@@ -40,7 +40,7 @@ export default async function AiFlowViewPage({ params }: Props) {
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
 
   // Only offer "View runs" when this flow has actually been triggered/run at
-  // least once — a cheap single-row probe scoped to this flow.
+  // least once, a cheap single-row probe scoped to this flow.
   const hasRuns =
     businessId && flow
       ? (await listAiFlowRuns(businessId, { flowId, limit: 1 })).length > 0
@@ -48,10 +48,10 @@ export default async function AiFlowViewPage({ params }: Props) {
 
   // Per-node run stats for the canvas overlay: aggregate the recorded step
   // outcomes of the (up to) 100 most recent runs. Runs don't snapshot the
-  // definition, so only runs STARTED AFTER the flow's last edit are counted —
+  // definition, so only runs STARTED AFTER the flow's last edit are counted,
   // older runs executed a different flatten order and their step indices
   // would land on the wrong nodes (statsByStepIdFromRunSteps additionally
-  // type-checks each row). Best-effort — the view renders without the overlay
+  // type-checks each row). Best-effort, the view renders without the overlay
   // when nothing qualifies.
   let statsByStepId: Record<string, StepStats> | undefined;
   if (businessId && flow && hasRuns) {
@@ -94,7 +94,7 @@ export default async function AiFlowViewPage({ params }: Props) {
           {flow ? (
             <>
               {/* The page's own title: show it in full (wrapped) rather than
-                  truncating — the pill hangs off the first line. */}
+                  truncating, the pill hangs off the first line. */}
               <div className="flex items-start gap-2">
                 <h1 className="min-w-0 break-words text-2xl font-bold text-parchment">
                   {flow.name}

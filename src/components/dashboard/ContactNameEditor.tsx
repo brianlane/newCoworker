@@ -10,7 +10,7 @@ type Props = {
   currentName: string | null;
   /**
    * Whether the shown name comes from a manual override row. "Remove" only
-   * makes sense then — deleting an override under a derived name would
+   * makes sense then, deleting an override under a derived name would
    * succeed yet visibly change nothing.
    */
   hasOverride: boolean;
@@ -18,7 +18,7 @@ type Props = {
 
 /**
  * Inline "set contact name" control for an SMS thread. Saves an owner-set
- * override that wins over derived names (owner/employee/customer) — the
+ * override that wins over derived names (owner/employee/customer), the
  * way to label a number the system can't identify (short-code lead sources
  * like ReferralExchange) or identifies wrongly.
  */

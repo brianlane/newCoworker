@@ -10,7 +10,7 @@ export type AuthUser = {
    */
   phone?: string | null;
   /**
-   * `auth.users.email_confirmed_at` — set when Supabase Auth considers the
+   * `auth.users.email_confirmed_at`, set when Supabase Auth considers the
    * email confirmed (including admin-created users with `email_confirm:
    * true`). Authoritative "this mailbox is verified" signal; the dashboard
    * banner consults it BEFORE `customer_profiles.email_verified_at`, whose
@@ -176,13 +176,13 @@ export async function verifySignupIdentity(userId: string, email: string): Promi
  * lookup against `auth.users.email`, constant-time per call.
  *
  * Fallback: older deployments that haven't applied the migration yet
- * land in a bounded `auth.admin.listUsers` scan — capped at
- * `PAGE_CAP * perPage` total users scanned — so a nonexistent email
+ * land in a bounded `auth.admin.listUsers` scan, capped at
+ * `PAGE_CAP * perPage` total users scanned, so a nonexistent email
  * can't linearly scan the entire auth directory. This used to read
  * `PAGE_CAP = 500` (100K users) despite a docblock claiming 10 pages;
  * we've tightened it back to match the docblock.
  *
- * Returns `null` when no user matches — callers should treat that as a
+ * Returns `null` when no user matches, callers should treat that as a
  * benign "already deleted" state rather than an error, since the same
  * grace-sweep row can be retried if an earlier run already removed the
  * user.
@@ -207,14 +207,14 @@ export async function findAuthUserIdByEmail(email: string): Promise<string | nul
       // so a `null` result means "no such user". Falling through to
       // the paginated listUsers scan in the miss case would burn up to
       // PAGE_CAP * perPage (2,000) admin API calls per nonexistent
-      // email — exactly the regression this RPC was added to fix.
+      // email, exactly the regression this RPC was added to fix.
       return typeof data === "string" && data.length > 0 ? data : null;
     }
     // PostgREST surfaces "function does not exist" with PGRST202 on
     // older instances that haven't applied the migration yet. Swallow
     // and fall through to the listUsers fallback so staging/dev don't
     // hard-break. Any OTHER rpc error is a true lookup failure and we
-    // return null (same contract as before — "not found").
+    // return null (same contract as before, "not found").
     if (error.code !== "PGRST202") {
       return null;
     }
@@ -246,7 +246,7 @@ export async function findAuthUserIdByEmail(email: string): Promise<string | nul
  * id, or null when the user is gone or the lookup fails.
  *
  * Deliberately best-effort. The caller is the connector card, which names
- * WHICH teammate's assistant is connected — useful context, never a gate, so
+ * WHICH teammate's assistant is connected, useful context, never a gate, so
  * a failed lookup should drop the name rather than break the page.
  */
 export async function findAuthUserEmailById(userId: string): Promise<string | null> {
@@ -288,7 +288,7 @@ export async function authUserExistsByEmail(email: string): Promise<boolean> {
   const db = await createSupabaseServiceClient();
 
   // Fast path: SECURITY DEFINER RPC. Treat any RPC error other than
-  // "function does not exist" (PGRST202) as a hard failure — silent
+  // "function does not exist" (PGRST202) as a hard failure, silent
   // null on, say, a replica timeout would let an attacker bypass
   // the uniqueness gate by retrying until a transient miss landed.
   const { data, error } = await db.rpc("find_auth_user_id_by_email", {

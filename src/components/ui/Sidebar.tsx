@@ -56,7 +56,7 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
 
   // Auto-close on navigation (covers link taps, back/forward, programmatic
   // routing). We adjust state during render by comparing the current pathname
-  // to the one we last rendered with — React's recommended alternative to a
+  // to the one we last rendered with, React's recommended alternative to a
   // setState-in-effect, which also avoids the cascading-render lint rule.
   const [lastPathname, setLastPathname] = useState(pathname);
   if (pathname !== lastPathname) {
@@ -65,7 +65,7 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
   }
 
   // The hamburger is fixed over a scrollable <main>, and the layout's top
-  // padding only clears it at scroll position 0 — once the page scrolls, the
+  // padding only clears it at scroll position 0, once the page scrolls, the
   // button floats over the page title. Hide it while scrolling down; bring it
   // back on any scroll up or near the top. The listener attaches to the
   // layout's scroll container ([data-app-main]); if a layout lacks one the
@@ -93,7 +93,7 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
 
   return (
     <>
-      {/* Mobile hamburger — hidden at lg+ where the sidebar is always visible. */}
+      {/* Mobile hamburger, hidden at lg+ where the sidebar is always visible. */}
       <button
         type="button"
         aria-label="Open menu"

@@ -1,5 +1,5 @@
 /**
- * Prospecting — the site probe: what can we honestly say about this business
+ * Prospecting, the site probe: what can we honestly say about this business
  * before we email them?
  *
  * The pitch is only allowed to claim what a finding recorded, so every finding
@@ -30,7 +30,7 @@ export type ProbeResult = {
   failure?: string;
 };
 
-/** Body bytes read per page — hooks live in the markup, not in megabytes. */
+/** Body bytes read per page, hooks live in the markup, not in megabytes. */
 export const PROBE_MAX_BYTES = 400_000;
 
 /** Per-request timeout. A slow prospect is skipped, not waited on. */

@@ -68,7 +68,7 @@ function readPositiveMs(envKey: string, fallback: number): number {
 // Shared AI-budget cap (micro-USD), read from the SAME env vars as owner chat +
 // SMS (OWNER_CHAT_SPEND_CAP_MICROS / _STARTER) so the mid-call time cap trips
 // against the identical pool total those surfaces (and the pre-call gate in
-// telnyx-voice-inbound) use — hardcoding $5/$10 here would desync voice from an
+// telnyx-voice-inbound) use, hardcoding $5/$10 here would desync voice from an
 // ops-tuned cap. Defaults match _shared/chat_spend_cap.ts and chat-usage.ts.
 const OWNER_CHAT_SPEND_CAP_MICROS = (() => {
   const n = Number(process.env.OWNER_CHAT_SPEND_CAP_MICROS);
@@ -90,10 +90,10 @@ const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
  * Remaining is read via `owner_chat_ai_remaining`, which subtracts persisted
  * spend AND active reservations for OTHER concurrent calls (this call's own hold
  * is excluded by `p_exclude_call_control_id`), so overlapping calls size their
- * sessions against what's genuinely left — not the same stale pool.
+ * sessions against what's genuinely left, not the same stale pool.
  *
  * Combined two-way audio costs ~0.375 micro-USD/ms (25 tok/s each way at the
- * $3-in/$12-out audio rates), intentionally CONSERVATIVE — overestimating cost
+ * $3-in/$12-out audio rates), intentionally CONSERVATIVE, overestimating cost
  * yields a shorter cap, never a longer one. Fails OPEN: any read error returns
  * `envMaxMs` (never shorten a call over a DB blip), and the result is clamped to
  * a small floor so we never answer-then-immediately-hang-up.
@@ -102,7 +102,7 @@ const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
 // Monthly quota windows within a (possibly multi-month) Stripe billing period.
 // 12/24-month plans are charged in full at checkout, so the Stripe period can
 // span the whole prepaid term while the shared AI budget still resets MONTHLY.
-// INLINE COPY of supabase/functions/_shared/billing_period_window.ts — keep in
+// INLINE COPY of supabase/functions/_shared/billing_period_window.ts, keep in
 // lockstep (the bridge builds/deploys from its own directory).
 // ---------------------------------------------------------------------------
 function addUtcMonthsClamped(base: Date, months: number): Date {
@@ -249,7 +249,7 @@ function normalizeE164(raw: string | null | undefined): string | null {
  * customer. Mirrors the SMS worker's gate (telnyx-sms-inbound): a call from a
  * known team member or one of the owner's configured numbers (Safe Mode
  * forward cell, notification alert phone, or the business's own number) is
- * never a customer. Best-effort — any DB hiccup degrades to "customer" so a
+ * never a customer. Best-effort, any DB hiccup degrades to "customer" so a
  * lookup failure never blocks a live call. Returns `{ kind: "customer" }` for
  * anonymous/unknown callers.
  */
@@ -281,7 +281,7 @@ async function resolveCallerIdentity(
     .map((n) => normalizeE164(n ?? ""))
     .filter((n): n is string => Boolean(n));
   if (ownerNorm.includes(callerNorm)) {
-    // Leave name unset when owner_name is blank (don't fabricate "the owner" —
+    // Leave name unset when owner_name is blank (don't fabricate "the owner",
     // the greeting would then literally say "Hey the owner"). The greeting and
     // system prompt both handle a nameless staff caller gracefully.
     return { kind: "owner", name: ownerName?.trim() || undefined };
@@ -371,7 +371,7 @@ type TenantTelnyxSettings = {
 };
 
 /**
- * Supabase-backed `TranscriptAdapter`. Writes are direct (service-role) —
+ * Supabase-backed `TranscriptAdapter`. Writes are direct (service-role),
  * same trust model as `voice_active_sessions` heartbeats. All methods log on
  * failure and never throw; a DB issue must not crash the media pipe.
  */
@@ -590,12 +590,12 @@ async function sendMissedCallSms(params: {
  */
 /**
  * Estimate a Gemini Live session's usage from its DURATION when the session
- * never reported `usageMetadata` (some sessions — very short calls, transport
- * errors — close without a usage frame). Without this the spend POST is skipped
+ * never reported `usageMetadata` (some sessions, very short calls, transport
+ * errors, close without a usage frame). Without this the spend POST is skipped
  * entirely, leaving `owner_chat_model_spend` flat while Google still bills the
  * audio, so the pre-call/mid-call budget gates would keep allowing voice on an
  * already-exhausted pool. Gemini Live audio is ~25 tokens/sec each direction; we
- * count both directions for the full call (conservative — never undercount) so
+ * count both directions for the full call (conservative, never undercount) so
  * the token math lands on the same ~0.375 micro-USD/ms the mid-call cap assumes
  * (25 tok/s × ($3 in + $12 out)/1M). Returns null for a zero/negative duration.
  */
@@ -618,7 +618,7 @@ function estimateLiveUsageFromDuration(
 }
 
 /**
- * Release this call's AI-budget hold WITHOUT recording spend — used when the
+ * Release this call's AI-budget hold WITHOUT recording spend, used when the
  * bridge never opened or produced no billable tokens. Best-effort; the
  * reservation also auto-expires, so a failure here can't pin budget forever.
  */
@@ -651,7 +651,7 @@ async function meterGeminiLiveSpend(params: {
   const appBaseUrl = (process.env.APP_BASE_URL ?? "").replace(/\/+$/, "");
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
   if (!appBaseUrl || !gatewayToken) return;
-  // Nothing billable (session never produced tokens) — skip the round trip.
+  // Nothing billable (session never produced tokens), skip the round trip.
   if (params.usage.promptTokens <= 0 && params.usage.outputTokens <= 0) return;
   try {
     const res = await fetch(`${appBaseUrl}/api/internal/meter-gemini-spend`, {
@@ -775,7 +775,7 @@ async function sendIntakeLeadSms(params: {
 
 /**
  * Text the flow-configured transfer target the pre-alert ("LIVE TRANSFER
- * incoming — pick up!") right before the warm transfer rings them. Same
+ * incoming, pick up!") right before the warm transfer rings them. Same
  * bridge-side send path as the intake summary SMS; a successful send is
  * counted against the tenant's operational SMS pool. Best-effort: an SMS
  * hiccup must never block the actual transfer.
@@ -857,7 +857,7 @@ async function stampTransferInitiated(
  * Resume the batch-flow run a place_ai_call step parked (status
  * `awaiting_call`) with the call outcome. Node mirror of
  * supabase/functions/_shared/ai_flows/call_outcome.ts (the bridge is a
- * separate runtime) — keep the two in lockstep. Status/revision-guarded so
+ * separate runtime), keep the two in lockstep. Status/revision-guarded so
  * only the first writer lands; a miss is backstopped by call-end and the
  * timeout sweep. Never throws.
  */
@@ -974,7 +974,7 @@ function main(): void {
 
   // Kick off the idle-heartbeat loop as soon as we have a Supabase client
   // and a known BUSINESS_ID. We deliberately skip the loop when BUSINESS_ID
-  // is missing (single-tenant container with no provisioned business yet) —
+  // is missing (single-tenant container with no provisioned business yet),
   // upserts without a primary key would error out with FK violations on
   // every interval and spam the logs without producing useful signal. The
   // per-call heartbeat inside the WS upgrade handler is still a backstop,
@@ -1036,7 +1036,7 @@ function main(): void {
     });
     // The caller number is only trustworthy when it was inside the verified v2
     // canonical. For v1 we must NOT trust the unsigned param for any security
-    // decision (staff persona, memory recognition) — see issue #268. Empty
+    // decision (staff persona, memory recognition), see issue #268. Empty
     // string makes the caller resolve as a first-time customer (safe default).
     const callerTrusted = v === 2;
     const trustedFromE164 = callerTrusted ? fromE164Info : "";
@@ -1175,7 +1175,7 @@ function main(): void {
       const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
       const businessTimezone = typeof biz?.timezone === "string" && biz.timezone.length > 0 ? biz.timezone : null;
 
-      // Owner / team / customer gate — same intent as the SMS worker. Owner
+      // Owner / team / customer gate, same intent as the SMS worker. Owner
       // numbers are the Safe Mode forward cell, the notification alert phone,
       // and the business's own number. Resolved up front so it can both pick
       // the staff persona and suppress customer-CRM side effects below.
@@ -1187,7 +1187,7 @@ function main(): void {
       const callerIdentity = await resolveCallerIdentity(
         supabase,
         businessId,
-        // Trusted (v2-signed) number only — a spoofed v1 caller must never get
+        // Trusted (v2-signed) number only, a spoofed v1 caller must never get
         // the staff persona or skip record_customer_interaction.
         trustedFromE164,
         [
@@ -1344,7 +1344,7 @@ function main(): void {
             }
           };
           // place_ai_call live-transfer config: the flow explicitly authorized
-          // a mid-call warm transfer (pre-alert SMS + wt: transfer) — carried
+          // a mid-call warm transfer (pre-alert SMS + wt: transfer), carried
           // per session, never inferred from tenant settings.
           if (typeof ctx.transfer?.to_e164 === "string" && ctx.transfer.to_e164.trim()) {
             intakeTransferConfig = {
@@ -1385,7 +1385,7 @@ function main(): void {
       }
 
       // Let the assistant hang up when the conversation is over. Available on
-      // every call (inbound + outbound) whenever we have a Telnyx API key — the
+      // every call (inbound + outbound) whenever we have a Telnyx API key, the
       // bridge gates the `end_call` tool on this capability being present.
       // Stop this call's media fork without hanging the leg up. Wired
       // unconditionally (not only alongside `transfer`) because translator mode
@@ -1590,17 +1590,17 @@ function main(): void {
       }
 
       // place_ai_call live transfer: the flow's per-session transfer config
-      // SUPERSEDES the tenant-settings forward target — the flow author picked
+      // SUPERSEDES the tenant-settings forward target, the flow author picked
       // exactly who this call may be transferred to. Sequence on invoke:
       //   1. pre-alert SMS to the transfer target (Amy's "LIVE TRANSFER is
-      //      coming — pick up!"), best-effort so an SMS hiccup never blocks
+      //      coming, pick up!"), best-effort so an SMS hiccup never blocks
       //      the actual transfer;
       //   2. Telnyx warm transfer with the same wt: client_state as the
       //      receptionist transfer (so forwarded-human-leg metering and the
       //      warm-transfer outcome notifications work unchanged);
       //   3. stamp `transfer_initiated` on the session (call-end reads it for
       //      the outcome) and resume the parked flow run with "transferred"
-      //      immediately — a transferred human conversation can outlive the
+      //      immediately, a transferred human conversation can outlive the
       //      run's wait ceiling, so the outcome must not wait for hangup.
       if (intake && intakeTransferConfig) {
         const telnyxApiKey = process.env.TELNYX_API_KEY ?? "";
@@ -1806,7 +1806,7 @@ function main(): void {
           // Prime Gemini's system instruction with the Rowboat vault so
           // identity/tone/long-term memory/website knowledge is already in
           // context when the greeting fires. A missing vault directory is
-          // logged but never fatal — the bridge still works with a generic
+          // logged but never fatal, the bridge still works with a generic
           // receptionist persona.
           const vault = await loadVaultForPrompt().catch((err) => {
             console.warn("voice-bridge: vault load failed; proceeding without priming", err);
@@ -1853,18 +1853,18 @@ function main(): void {
           // Phase 3b: cross-channel customer memory read. If we recognize
           // this caller from prior SMS or voice interactions, pull the
           // rolling summary so Gemini Live can pick up where the last
-          // conversation left off. Failure is non-fatal — first-time
+          // conversation left off. Failure is non-fatal, first-time
           // callers (no row) and DB hiccups both fall back to the
           // vault-only prompt that voice has always used.
           //
           // The customer_memories table was added in
           // supabase/migrations/20260507000000_customer_memories.sql.
           // On VPS instances whose Supabase still predates that
-          // migration, the call returns a 4xx error which we swallow —
+          // migration, the call returns a 4xx error which we swallow,
           // again, a degraded prompt is acceptable, a refused call is
           // not.
           let customerMemorySummary: string | undefined;
-          // Staff (owner/team) are not customers — don't pull a customer
+          // Staff (owner/team) are not customers, don't pull a customer
           // continuity note for them (mirrors the SMS gate not treating them
           // as a customer profile).
           // trustedFromE164 (not fromE164Info): never surface another contact's
@@ -1874,7 +1874,7 @@ function main(): void {
               // Alias-aware: a number merged into another profile
               // (alias_e164s) resolves to the surviving row. On a Supabase
               // predating the merge migration this errors like a missing
-              // table would — swallowed below, degraded prompt.
+              // table would, swallowed below, degraded prompt.
               const { data: memRow } = await supabase
                 .from("contacts")
                 .select("summary_md, pinned_md, display_name, total_interaction_count")
@@ -1905,7 +1905,7 @@ function main(): void {
 
           // AiFlow context bridge (voice twin of the SMS worker's block): a
           // lead an automation recently texted may CALL instead of texting
-          // back — without this the receptionist restarts intake on a caller
+          // back, without this the receptionist restarts intake on a caller
           // whose details the workflow already collected. Best-effort: null
           // on any failure (loadVoiceFlowContext never throws), degraded
           // prompt, never a refused call. Staff callers are skipped for the
@@ -1919,7 +1919,7 @@ function main(): void {
           // Cross-channel recent-interactions timeline (contact-context.ts):
           // the caller's raw SMS thread + recent call summaries from the last
           // hours. Mid-first-conversation the rolling summary above is still
-          // EMPTY (the summarize sweep runs later) — a lead who was texting
+          // EMPTY (the summarize sweep runs later), a lead who was texting
           // minutes ago and now calls would otherwise reach a receptionist
           // with no idea the exchange happened (the voice twin of the
           // 2026-07-14 Truly SMS incident). Same best-effort/staff gates.
@@ -1932,7 +1932,7 @@ function main(): void {
 
           // Booking-status line (booking-context.ts): the caller's live
           // Calendly state, fetched from the platform with this box's own
-          // gateway bearer. Same trusted-number + staff gates; fail-open —
+          // gateway bearer. Same trusted-number + staff gates; fail-open,
           // a platform hiccup only costs the line, never the call.
           let bookingStatusNote: string | undefined;
           if (trustedFromE164 && !callerIsStaff) {
@@ -2028,7 +2028,7 @@ function main(): void {
           recordDiag("voice_bridge_gemini_init_failed", { reason });
           // For a HomeLight ai_intake call the missed-call SMS would text the
           // tenant's forward number and label the caller as HomeLight's transfer
-          // line — wrong recipient and wrong story for a connected live seller.
+          // line, wrong recipient and wrong story for a connected live seller.
           // Skip it; the no-lead intake SMS below still notifies the intake owner.
           if (!intake) {
             await sendMissedCallSms({
@@ -2083,7 +2083,7 @@ function main(): void {
 
       ws.on("error", (err: Error) => {
         // Telnyx-side WS errors were previously swallowed by the default
-        // event handler — surface them so we can correlate them with
+        // event handler, surface them so we can correlate them with
         // "ring then silence" reports.
         console.error("voice-bridge: telnyx ws error", {
           callControlId,
@@ -2117,8 +2117,8 @@ function main(): void {
           // frame. Prefer the EXACT usageMetadata; if the session closed without
           // ever reporting billable tokens, fall back to a conservative
           // duration-based estimate so spend still advances (Google bills the
-          // audio regardless — a skipped POST would let the budget gates keep
-          // allowing voice on an exhausted pool). Best-effort — never blocks
+          // audio regardless, a skipped POST would let the budget gates keep
+          // allowing voice on an exhausted pool). Best-effort, never blocks
           // reservation settle.
           try {
             if (geminiLiveModel) {
@@ -2138,7 +2138,7 @@ function main(): void {
                 liveCostProxy(captured) >= liveCostProxy(durationEstimate);
               const usage = useCaptured ? captured : durationEstimate;
               // A truthy-but-zero usage (session opened, no tokens billed) must
-              // still RELEASE the hold — meterGeminiLiveSpend skips the settle
+              // still RELEASE the hold, meterGeminiLiveSpend skips the settle
               // POST when there's nothing billable, so route the zero case
               // straight to release rather than leaving the hold to expire.
               const hasBillable =
@@ -2200,7 +2200,7 @@ function main(): void {
               }
               // Release a flow parked on this call, using the link as it stands
               // NOW. Ordered after the write above so the worker can never wake
-              // to a session whose captured fields have not landed yet — this is
+              // to a session whose captured fields have not landed yet, this is
               // why the bridge owns the resume and the call-end webhook does not
               // (the overdue sweep is the backstop for a bridge that dies here).
               const liveLink = (liveCtx.flow_run ?? null) as FlowRunLink | null;

@@ -8,15 +8,15 @@
  *
  * The token is used two ways by the VPS:
  *   1. Bearer auth on VPS -> app calls (voice tools, nango proxy, custom
- *      credentials/call, aiflows, provisioning progress) — resolved here via
+ *      credentials/call, aiflows, provisioning progress), resolved here via
  *      the sha256 index (`resolveGatewayTokenBinding`).
  *   2. The HMAC secret Rowboat signs its tool-call JWT with, AND the API key
- *      the platform sends when calling the tenant's Rowboat — both need the
+ *      the platform sends when calling the tenant's Rowboat, both need the
  *      plaintext token (`getActiveGatewayTokenForBusiness`).
  *
  * Storing the plaintext is acceptable: the row is service_role-only (RLS on,
  * no policies), identical posture to `vps_ssh_keys` / integration secrets, and
- * each VPS only ever holds its OWN token — the central app DB is the trusted
+ * each VPS only ever holds its OWN token, the central app DB is the trusted
  * store and is never placed on a tenant box.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -24,7 +24,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Lowercase hex SHA-256 — the lookup index for the bearer path. */
+/** Lowercase hex SHA-256, the lookup index for the bearer path. */
 export function gatewayTokenSha256(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
@@ -60,7 +60,7 @@ export async function resolveGatewayTokenBinding(
 }
 
 /**
- * Latest non-revoked token (plaintext) for a business — INCLUDING a pending
+ * Latest non-revoked token (plaintext) for a business, INCLUDING a pending
  * (not-yet-deployed) one. Used by provisioning to REUSE a token across deploy
  * retries so a failed deploy doesn't churn the secret. Returns null when the
  * business has no per-tenant token at all.
@@ -83,7 +83,7 @@ export async function getActiveGatewayTokenForBusiness(
 }
 
 /**
- * EVERY non-revoked token (plaintext) for a business — pending AND
+ * EVERY non-revoked token (plaintext) for a business, pending AND
  * confirmed, newest first. Used to build the residency data-api's
  * DATA_API_TOKENS list: during a rotation the platform may still present
  * the old confirmed token while the box already carries the new pending
@@ -133,7 +133,7 @@ export async function getDeployedGatewayTokenForBusiness(
 /**
  * Resolve the business that owns Rowboat project `projectId`. The JWT's project
  * claim is `business_configs.rowboat_project_id`, which can be re-pointed per tenant
- * and defaults to the business UUID — so we look it up in the config first and fall
+ * and defaults to the business UUID, so we look it up in the config first and fall
  * back to treating `projectId` as the business id (the >99% case). Both tool-call
  * dispatch AND per-tenant token resolution MUST go through this so a re-pointed
  * project can't authenticate as one business but run tools against another.
@@ -169,14 +169,14 @@ export type ProjectGatewayTokens = {
  * Non-revoked tokens (plaintext) for the business that owns Rowboat project
  * `projectId`, plus whether any is confirmed-deployed. Used for tool-call JWT
  * verification: the VPS starts signing with a freshly deployed token the instant
- * deploy-client.sh restarts Rowboat — before the app confirms it — and during a
+ * deploy-client.sh restarts Rowboat, before the app confirms it, and during a
  * rotation an old (confirmed) and new (pending) token briefly coexist. Verifying
  * against EVERY non-revoked token (pending or confirmed) removes that window. The
  * `hasConfirmed` flag lets the caller keep accepting the shared secret until the
  * tenant's first token is actually live on the box (see `resolveRowboatWebhookClaims`).
  *
  * `projectId` is the JWT's project claim, which is `business_configs.rowboat_project_id`
- * (re-pointable per tenant) and defaults to the business UUID — so we resolve the
+ * (re-pointable per tenant) and defaults to the business UUID, so we resolve the
  * owning business via the config first, falling back to treating `projectId` as the
  * business id (the >99% case).
  */
@@ -212,7 +212,7 @@ export type IssueGatewayTokenOptions = {
  * callbacks can authenticate via the inbound binding; the caller confirms it with
  * `markGatewayTokenDeployed` only after a successful deploy. This is insert-only
  * (no revoke-before-insert), so a failed insert never leaves the business with
- * zero active tokens — the existing one stays untouched.
+ * zero active tokens, the existing one stays untouched.
  */
 export async function issueGatewayToken(
   businessId: string,

@@ -106,7 +106,7 @@ describe("TelnyxNumbersClient", () => {
 
   it("searchAvailable treats Telnyx 400/10031 (no inventory for filters) as an empty result", async () => {
     // Telnyx reports zero inventory for a filter combo as an error body
-    // instead of `data: []` — this must read as NO INVENTORY so the
+    // instead of `data: []`, this must read as NO INVENTORY so the
     // orchestrator's search cascade falls through to the next tier (the
     // KYP Ads Jul 14 2026 signup died on a sold-out CA/514 exactly here).
     const fetchImpl = mockFetch(() =>

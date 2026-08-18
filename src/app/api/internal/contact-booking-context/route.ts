@@ -11,10 +11,10 @@
  * provider answer none after a cheap connection lookup.
  *
  * Auth, two accepted callers (mirrors /api/internal/meter-gemini-spend):
- *   - `Authorization: Bearer <INTERNAL_CRON_SECRET>` — the sms-inbound-worker
+ *   - `Authorization: Bearer <INTERNAL_CRON_SECRET>`, the sms-inbound-worker
  *     and other platform edge callers;
  *   - a per-tenant gateway bearer bound to the posted businessId
- *     (`verifyGatewayTokenForBusiness`) — the voice bridge, which holds only
+ *     (`verifyGatewayTokenForBusiness`), the voice bridge, which holds only
  *     its own box's token, so one tenant's bridge can never read another
  *     tenant's booking state.
  * Everything inside fails open (status none, line null); callers treat any

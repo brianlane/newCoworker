@@ -219,7 +219,7 @@ describe("bookingPrecheckForRun gating", () => {
 
   it("uses the service client + production deps when none are injected", async () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(stdDb({ run: { data: null } }));
-    // No deps at all: binds every production default (none is invoked — the
+    // No deps at all: binds every production default (none is invoked, the
     // missing run short-circuits first).
     const result = await bookingPrecheckForRun(BIZ, RUN);
     expect(result.reason).toBe("run_not_found");

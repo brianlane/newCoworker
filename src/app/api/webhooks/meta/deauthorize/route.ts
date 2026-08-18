@@ -1,5 +1,5 @@
 /**
- * POST /api/webhooks/meta/deauthorize — Meta's Deauthorize callback.
+ * POST /api/webhooks/meta/deauthorize, Meta's Deauthorize callback.
  *
  * Meta calls this when a person removes New Coworker from their Facebook
  * account (Settings & Privacy → Settings → Apps and Websites). Register the

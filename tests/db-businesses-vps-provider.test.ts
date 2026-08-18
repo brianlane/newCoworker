@@ -10,8 +10,8 @@ import { VPS_PROVIDER_TIER_MESSAGE } from "@/lib/vps/provider";
 
 /**
  * Fake supabase client covering both chains the setter uses:
- *   read  — from("businesses").select().eq("id", id).single()
- *   write — from("businesses").update(patch).eq("id", id)
+ *   read, from("businesses").select().eq("id", id).single()
+ *   write, from("businesses").update(patch).eq("id", id)
  */
 function mockDb(opts: {
   business: Record<string, unknown> | null;

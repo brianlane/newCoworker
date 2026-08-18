@@ -1,6 +1,6 @@
 /**
  * Client-safe blog vocabulary: types, constants, and the public image URL
- * builder. No server-only imports — the admin editor (a client component)
+ * builder. No server-only imports, the admin editor (a client component)
  * pulls these; DB access stays in ./db.ts (which re-exports everything
  * here for server callers).
  */
@@ -71,7 +71,7 @@ export const BLOG_PAGE_SIZE = 9;
 
 /**
  * Public URL of a featured image in the blog-images bucket (the bucket is
- * public — the marketing site serves it directly and Meta downloads it for
+ * public, the marketing site serves it directly and Meta downloads it for
  * Instagram cross-posts). Null when the path is empty.
  */
 export function blogImagePublicUrl(path: string | null): string | null {

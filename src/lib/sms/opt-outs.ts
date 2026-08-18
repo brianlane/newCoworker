@@ -49,7 +49,7 @@ export type SmsOptOutCheck =
 /**
  * Consent check for a send site. Returns a typed result instead of throwing
  * so callers make the fail-closed decision explicitly: on a read error the
- * send must be REFUSED (never "couldn't check, send anyway") — an SMS to an
+ * send must be REFUSED (never "couldn't check, send anyway"), an SMS to an
  * opted-out number is a compliance violation, a delayed SMS is not.
  */
 export async function checkSmsOptOut(
@@ -68,9 +68,9 @@ export async function checkSmsOptOut(
 
 /**
  * Provenance kinds for a suppression row (migration 20260724204311):
- *  - "stop"       — the customer texted STOP themselves. Sacred: only the
+ *  - "stop", the customer texted STOP themselves. Sacred: only the
  *                   START keyword handler may lift it.
- *  - "owner_spam" — the owner flagged the contact as spam
+ *  - "owner_spam", the owner flagged the contact as spam
  *                   (flag_contact_spam). Same send-blocking effect
  *                   everywhere; reversible by service-role tooling. The RPC
  *                   never downgrades an existing "stop" row to this kind.

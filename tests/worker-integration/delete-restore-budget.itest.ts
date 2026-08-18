@@ -12,11 +12,11 @@ import { SUPABASE_URL, seedBusiness, serviceDb } from "./harness";
  * 300s call.
  *
  * Contracts pinned here:
- *   1. Owner delete of a call NEVER moves the voice budget — the billing
+ *   1. Owner delete of a call NEVER moves the voice budget, the billing
  *      ledger (voice_billing_period_usage) is independent of content
  *      visibility.
- *   2. Admin restore is a COMPLETE reverse cascade — the call is back in
- *      Call history, Recent Activity, and its transcript turns — and the
+ *   2. Admin restore is a COMPLETE reverse cascade, the call is back in
+ *      Call history, Recent Activity, and its transcript turns, and the
  *      budget still hasn't moved.
  *   3. The budget row is self-healing: if ANY stray write desyncs
  *      committed_included_seconds from the immutable settlement ledger
@@ -46,7 +46,7 @@ import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 const CALLER = "+14165550149";
 const TIER_CAP_SECONDS = 15_000; // standard: 250 included minutes
 
-/** 4m45s call — per-minute rounding settles it at 300 billable seconds. */
+/** 4m45s call, per-minute rounding settles it at 300 billable seconds. */
 const CALL_SECONDS = 285;
 const SETTLED_SECONDS = 300;
 
@@ -60,7 +60,7 @@ async function committedSeconds(db: SupabaseClient, businessId: string): Promise
   return (data as { committed_included_seconds: number }).committed_included_seconds;
 }
 
-/** One voice-settlement-sweep tick — the exact POST pg_cron makes every 5 min. */
+/** One voice-settlement-sweep tick, the exact POST pg_cron makes every 5 min. */
 async function tickMaintenanceSweep(): Promise<Record<string, unknown>> {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/voice-settlement-sweep`, {
     method: "POST",
@@ -245,7 +245,7 @@ describe("owner delete / admin restore never move the voice budget (self-healing
     }
     expect(await committedSeconds(db, businessId)).toBe(0);
 
-    // One maintenance sweep — the POST pg_cron fires every 5 minutes.
+    // One maintenance sweep, the POST pg_cron fires every 5 minutes.
     const summary = await tickMaintenanceSweep();
     expect(Number(summary.budget_rows_reconciled ?? 0)).toBeGreaterThanOrEqual(1);
 

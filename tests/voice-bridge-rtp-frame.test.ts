@@ -7,7 +7,7 @@
  * are the only thing standing between us and either:
  *   - shipping header bytes to Gemini (uplink garble), or
  *   - shipping bare PCM to Telnyx (Telnyx silently drops it, caller hears
- *     silence — the May 2026 outage).
+ *     silence, the May 2026 outage).
  *
  * RTP layout reference (RFC 3550 §5.1):
  *
@@ -146,7 +146,7 @@ describe("decodeTelnyxMediaPayload", () => {
 
   it("treats an X=1 packet too short for its ext header as raw L16, not RTP", () => {
     // 12-byte header, X=1, but no extension header bytes follow. A real RTP
-    // packet can't be shaped like this, so byte 0 only *looked* like V=2 —
+    // packet can't be shaped like this, so byte 0 only *looked* like V=2,
     // fall back to raw passthrough rather than emitting an empty/garbled chunk.
     const truncated = buildRtpPacket({ extension: true, payload: Buffer.alloc(0) }).subarray(0, 12);
     const out = decodeTelnyxMediaPayload(truncated.toString("base64"));
@@ -206,7 +206,7 @@ describe("decodeTelnyxMediaPayload", () => {
     // Regression for the 1007 outage: a raw L16 frame is just 16-bit samples,
     // and ~25% of first sample bytes land in 0x80–0xBF (V=2 bits set). The
     // per-frame heuristic would treat such a frame as RTP and splice real audio
-    // off the front — and when the strip came out odd, Gemini Live closed the
+    // off the front, and when the strip came out odd, Gemini Live closed the
     // socket with 1007 "Request contains an invalid argument." Any buffer the
     // decoder claims as RTP must be a whole number of 16-bit samples.
     for (const len of [13, 15, 583, 597, 639, 640, 628]) {
@@ -263,7 +263,7 @@ describe("RtpEncoder", () => {
     const samples = new Int16Array([0x1234, -1]);
     const frame = enc.encode(samples);
     const audio = frame.subarray(12);
-    // Int16Array stores host-endian; on x86/arm this is LE — Telnyx
+    // Int16Array stores host-endian; on x86/arm this is LE, Telnyx
     // negotiates L16 LE on bidi streams. Just check we forwarded the
     // underlying bytes verbatim, which is what the encoder is documented
     // to do.

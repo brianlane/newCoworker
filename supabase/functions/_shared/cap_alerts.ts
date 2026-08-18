@@ -42,7 +42,7 @@ export type CapAlertResult = "sent" | "already_alerted" | "mark_failed" | "post_
 
 /**
  * Send the urgent cap alert if this is the FIRST hit for (business, kind,
- * period). Never throws — alerting must never fail the send/turn that
+ * period). Never throws, alerting must never fail the send/turn that
  * discovered the cap.
  *
  * The mark RPC atomically claims the once-per-period guard BEFORE the post

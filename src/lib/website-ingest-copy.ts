@@ -7,7 +7,7 @@
  * the server set `inner.ok === false` without a `detail` string. This maps
  * each code to a sentence an owner can actually act on.
  *
- * `detail` — when the server sends one — always wins. It's already a
+ * `detail`, when the server sends one, always wins. It's already a
  * human-readable string produced by the ingestion pipeline (for example
  * Gemini's error message). The canned copy below is only used when `detail`
  * is null/empty.

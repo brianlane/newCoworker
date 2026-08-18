@@ -68,7 +68,7 @@ const SUMMARY_DEBOUNCE_MS = 30_000;
  * The cron only QUEUES rows. The Next.js summarizer worker (regular
  * /api/internal/summarize-customer endpoint) actually runs the
  * Rowboat call and DB writes, since the production summarizer is
- * Next.js code (not Edge) — it imports from @/lib/* and uses the
+ * Next.js code (not Edge), it imports from @/lib/* and uses the
  * platform Supabase client. This Edge function is the cheap
  * scan-and-dispatch layer.
  */
@@ -99,7 +99,7 @@ serve(async (req: Request) => {
     return new Response("Server misconfigured", { status: 500 });
   }
   if (!platformBase || !platformBearer) {
-    // Without these we can't dispatch — be loud rather than silently
+    // Without these we can't dispatch, be loud rather than silently
     // succeed-and-do-nothing.
     return new Response(
       JSON.stringify({
@@ -152,7 +152,7 @@ serve(async (req: Request) => {
   let succeeded = 0;
   let failed = 0;
   const failures: Array<{ businessId: string; customerE164: string; reason: string }> = [];
-  // Sequential dispatch — see file header for why.
+  // Sequential dispatch, see file header for why.
   for (const row of eligible) {
     try {
       const res = await fetch(

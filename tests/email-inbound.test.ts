@@ -95,7 +95,7 @@ describe("processInboundTenantEmail", () => {
             path: "inbound/_msg-1_example.com_/0-a.pdf"
           },
           // Foreign path (another message's namespace) must be ignored, never
-          // removed — otherwise a secret-holder could delete others' objects.
+          // removed, otherwise a secret-holder could delete others' objects.
           { filename: "evil.pdf", mimeType: "application/pdf", size: 1, path: "inbound/victim/0-x.pdf" }
         ]
       },
@@ -110,7 +110,7 @@ describe("processInboundTenantEmail", () => {
   it("fails closed when a from_matches contact ref cannot be resolved", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     // The flows-only db stub has no contacts/roster query support, so ref
-    // resolution throws — the flow must fail closed (no run) without breaking
+    // resolution throws, the flow must fail closed (no run) without breaking
     // the inbound path.
     const db = flowsDb({
       data: [
@@ -261,7 +261,7 @@ describe("processInboundTenantEmail", () => {
       expect.objectContaining({
         trigger: expect.objectContaining({
           image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg",
-          // The pdf (first) is the document — image and document coexist.
+          // The pdf (first) is the document, image and document coexist.
           document: "email-attachments:inbound/_msg-1_example.com_/0-quote.pdf",
           document_name: "quote.pdf"
         })
@@ -352,7 +352,7 @@ describe("processInboundTenantEmail", () => {
         ...PAYLOAD,
         attachments: [
           // Declared as PDF but stored without an extension: doc_extract
-          // classifies by path suffix, so exposing this ref could only fail —
+          // classifies by path suffix, so exposing this ref could only fail,
           // the trigger stays document-less and the step skips gracefully.
           {
             filename: "renewal",
@@ -378,7 +378,7 @@ describe("processInboundTenantEmail", () => {
     const db = flowsDb({
       data: [
         {
-          // Primary is SMS; tenant_email is one of the extras — must fire once.
+          // Primary is SMS; tenant_email is one of the extras, must fire once.
           id: "flow-multi",
           definition: {
             trigger: { channel: "sms", conditions: [] },
@@ -420,7 +420,7 @@ describe("processInboundTenantEmail", () => {
             size: 2048,
             path: "inbound/_msg-1_example.com_/0-quote.pdf"
           },
-          // Path outside this message's namespace — must be dropped so it can't
+          // Path outside this message's namespace, must be dropped so it can't
           // be bound to this tenant's row and signed by the dashboard.
           { filename: "secret.pdf", mimeType: "application/pdf", size: 9, path: "inbound/other/0-secret.pdf" }
         ]

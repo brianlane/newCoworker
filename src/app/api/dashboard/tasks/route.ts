@@ -12,7 +12,7 @@
  *   - collected info (run vars + the contact's rolling summary),
  *   - response reasoning (latest ai_reply_reasoning rows).
  *
- * Auth: requireBusinessRole(businessId, "view_dashboard") — staff can see
+ * Auth: requireBusinessRole(businessId, "view_dashboard"), staff can see
  * it. scope=mine filters to contacts OWNED by the caller's linked roster
  * member (business_members.employee_id → contacts.owner_employee_id);
  * callers with no linked roster member get an empty "mine" list rather
@@ -168,7 +168,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Group runs by lead phone. Runs with no identifiable lead are dropped —
+    // Group runs by lead phone. Runs with no identifiable lead are dropped,
     // a task card is a PERSON, and schedule/webhook runs without an extracted
     // lead have nobody to pin the card on.
     const runsByLead = new Map<string, RunRow[]>();
@@ -181,9 +181,9 @@ export async function GET(request: Request) {
     }
 
     // 3) Contacts: everyone with an active run, plus (scope-dependent) every
-    //    tagged contact — a lead can be mid-lifecycle with no queued run.
+    //    tagged contact, a lead can be mid-lifecycle with no queued run.
     //    Alias-aware: a run's lead phone may be a merged-away number whose
-    //    surviving contact row is keyed on a different primary — those runs
+    //    surviving contact row is keyed on a different primary, those runs
     //    are re-keyed onto the primary so one lead is always ONE card.
     const phones = [...runsByLead.keys()];
     type ContactRow = {
@@ -244,7 +244,7 @@ export async function GET(request: Request) {
     }
     // A lead can be in motion with NO contact row yet (the flow hasn't filed
     // them, or the profile is keyed on a merged-away number). Their runs must
-    // still get a card — synthesize a bare contact so the workflow position
+    // still get a card, synthesize a bare contact so the workflow position
     // shows even before the CRM entry exists.
     for (const [phone, leadRuns] of runsByLead) {
       if (contactsByPhone.has(phone)) continue;
@@ -453,7 +453,7 @@ export async function GET(request: Request) {
     }
 
     // Scope + ordering + cap. "Mine" with no linked roster member is empty
-    // by design — the client explains the linkage instead of showing all.
+    // by design, the client explains the linkage instead of showing all.
     // In-motion leads (active runs) always rank above tag-only cards so the
     // MAX_TASKS cap can never hide a running workflow behind recently-edited
     // tagged contacts; within each group, newest activity first.

@@ -138,7 +138,7 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
     );
     const res = await GET(req(), paramsFor(THREAD_ID));
     expect(res.status).toBe(403);
-    // Critically — the ownership check ran against the row's
+    // Critically, the ownership check ran against the row's
     // business_id, not anything the caller supplied.
     expect(requireBusinessRole).toHaveBeenCalledWith(BIZ_OTHER, "operate_messages");
     expect(listMessages).not.toHaveBeenCalled();

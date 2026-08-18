@@ -1,57 +1,57 @@
 #!/usr/bin/env bash
-# deploy-client.sh — Provision a client-specific configuration on the VPS
+# deploy-client.sh, Provision a client-specific configuration on the VPS
 # Called from the orchestration API after bootstrap.sh has run.
 #
 # Environment variables expected:
-#   BUSINESS_ID              — UUID from Supabase
-#   TIER                     — starter | standard (ENTITLEMENTS: drives the
+#   BUSINESS_ID, UUID from Supabase
+#   TIER, starter | standard (ENTITLEMENTS: drives the
 #                               aiflow-render gate; hardware decisions key on
 #                               VPS_SIZE)
-#   VPS_SIZE                 — kvm1 | kvm2 | kvm4 | kvm8 (HARDWARE: drives the
-#                               local Ollama fallback model — kvm1 has NONE: AI
+#   VPS_SIZE, kvm1 | kvm2 | kvm4 | kvm8 (HARDWARE: drives the
+#                               local Ollama fallback model, kvm1 has NONE: AI
 #                               is Gemini-only and over-cap turns refuse; kvm2
 #                               and kvm4 share the llama fallback; only kvm8
 #                               carries qwen). The
 #                               orchestrator ALWAYS passes this explicitly;
 #                               the unset fallback below (starter→kvm1,
 #                               standard→kvm8) only guards manual runs and may
-#                               not match the box — always set VPS_SIZE.
-#   SUPABASE_URL             — Supabase project URL
-#   SUPABASE_SERVICE_KEY     — Service role key (write config back)
-#   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
-#   ROWBOAT_GATEWAY_TOKEN    — shared bearer token for Rowboat gateway auth
-#   NOTIFICATIONS_WEBHOOK_TOKEN — token for Supabase Edge Function auth
-#   TELNYX_API_KEY           — Telnyx API key (Messaging + Call Control)
-#   TELNYX_MESSAGING_PROFILE_ID — Telnyx messaging profile for SMS
-#   TELNYX_SMS_FROM_E164     — optional E.164 from-number
-#   STREAM_URL_SIGNING_SECRET — HMAC secret for media stream URLs (Edge + bridge)
-#   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
-#   GOOGLE_API_KEY           — Gemini API key; blank disables Live on the bridge
-#   GEMINI_LIVE_MODEL        — optional; default gemini-3.1-flash-live-preview
-#   VOICE_NAME               — optional; prebuilt Gemini Live voice (enterprise
+#                               not match the box, always set VPS_SIZE.
+#   SUPABASE_URL, Supabase project URL
+#   SUPABASE_SERVICE_KEY, Service role key (write config back)
+#   CLOUDFLARE_TUNNEL_TOKEN, cloudflared tunnel token
+#   ROWBOAT_GATEWAY_TOKEN, shared bearer token for Rowboat gateway auth
+#   NOTIFICATIONS_WEBHOOK_TOKEN, token for Supabase Edge Function auth
+#   TELNYX_API_KEY, Telnyx API key (Messaging + Call Control)
+#   TELNYX_MESSAGING_PROFILE_ID, Telnyx messaging profile for SMS
+#   TELNYX_SMS_FROM_E164, optional E.164 from-number
+#   STREAM_URL_SIGNING_SECRET, HMAC secret for media stream URLs (Edge + bridge)
+#   BRIDGE_MEDIA_WSS_ORIGIN, public wss:// origin for the VPS voice bridge
+#   GOOGLE_API_KEY, Gemini API key; blank disables Live on the bridge
+#   GEMINI_LIVE_MODEL, optional; default gemini-3.1-flash-live-preview
+#   VOICE_NAME, optional; prebuilt Gemini Live voice (enterprise
 #                               voice picker). Blank keeps the model default.
-#   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
+#   GEMINI_ROWBOAT_MODEL, optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
 #                               gemini-3.7-flash.
-#   OWNER_CHAT_MODEL         — optional; model for the OwnerCoworker (owner
+#   OWNER_CHAT_MODEL, optional; model for the OwnerCoworker (owner
 #                               dashboard chat) agent. Defaults to
 #                               gemini-3.5-flash-lite; degrades to OLLAMA_MODEL
 #                               on a keyless host.
-#   SMS_CHAT_MODEL           — optional; model for the Coworker (inbound SMS)
+#   SMS_CHAT_MODEL, optional; model for the Coworker (inbound SMS)
 #                               agent. Defaults to gemini-3.5-flash-lite (shares
 #                               the owner-chat spend cap; falls back to the
 #                               CoworkerLocal/Qwen twin once tripped); degrades
 #                               to OLLAMA_MODEL on a keyless host.
-#   LLM_ROUTER_PORT          — optional; loopback port for the llm-router
+#   LLM_ROUTER_PORT, optional; loopback port for the llm-router
 #                               sidecar (default 11435).
-#   GEMINI_LIVE_ENABLED      — optional secondary rollout kill switch for the
+#   GEMINI_LIVE_ENABLED, optional secondary rollout kill switch for the
 #                               bridge ("false" keeps media WS up but silences
 #                               AI audio). When unset the deploy preserves any
 #                               value already present in the VPS's existing
 #                               /opt/voice-bridge/.env, defaulting to "true".
 #                               This matches the bridge's own default in
 #                               vps/voice-bridge/src/index.ts.
-#   VOICE_TRANSCRIPTION_ENABLED — optional rollout flag for Gemini Live
+#   VOICE_TRANSCRIPTION_ENABLED, optional rollout flag for Gemini Live
 #                               transcript capture. "true" attaches the
 #                               Supabase transcript adapter in the bridge and
 #                               persists voice_call_transcript_turns rows.
@@ -59,21 +59,21 @@
 #                               GEMINI_LIVE_ENABLED: when unset the deploy
 #                               keeps whatever is in /opt/voice-bridge/.env,
 #                               defaulting to "false" (off for staged rollout).
-#   GEMINI_LIVE_SESSION_MAX_MS — optional per-box Gemini Live session cap in
+#   GEMINI_LIVE_SESSION_MAX_MS, optional per-box Gemini Live session cap in
 #                               milliseconds (e.g. 300000 = the HQ demo line's
 #                               5-minute cap). Same preserve-existing-value
 #                               pattern as GEMINI_LIVE_ENABLED: when unset the
 #                               deploy keeps whatever is in the box's existing
 #                               /opt/voice-bridge/.env; blank means the
 #                               bridge's in-code default (14 minutes).
-#   VOICE_BRIDGE_SRC         — optional; path on VPS to copy bridge source from
+#   VOICE_BRIDGE_SRC, optional; path on VPS to copy bridge source from
 #                               (default: /opt/newcoworker-repo/vps/voice-bridge).
 #                               Operator is responsible for syncing the repo to
 #                               this path (e.g. via git clone in bootstrap.sh or
 #                               a rsync from the orchestrator).
-#   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
-#   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
-#   DATA_RESIDENCY_ENABLED   — "true" stands up the residency data-api +
+#   PROVISIONING_PROGRESS_URL, optional; POST JSON progress to app (see report_progress)
+#   PROVISIONING_PROGRESS_TOKEN, Bearer token for progress API
+#   DATA_RESIDENCY_ENABLED, "true" stands up the residency data-api +
 #                               box-local Postgres (enterprise tenants with
 #                               data_residency_mode past 'supabase'); any
 #                               other value tears a stale stack down. The
@@ -183,7 +183,7 @@ echo "$WEBSITE_MD"  > /opt/rowboat/vault/website.md
 # profile.md: rendered Business-profile block (same empty-file convention).
 echo "$PROFILE_MD"  > /opt/rowboat/vault/profile.md
 # documents.md: client-facing documents digest. Always empty at provision
-# time (no uploads exist yet) — the post-upload vault sync
+# time (no uploads exist yet), the post-upload vault sync
 # (src/lib/vps/sync-vault.ts) populates it. Touched here so the voice-bridge
 # vault loader has a stable file to stat.
 touch /opt/rowboat/vault/documents.md
@@ -266,10 +266,10 @@ report_progress 42 "vault_seeded" "Vault and memory seeds written"
 # ------------------------------------------------------------------
 log "Writing Rowboat .env..."
 
-# Hardware-aware model selection (local Ollama FALLBACK only — the primary
+# Hardware-aware model selection (local Ollama FALLBACK only, the primary
 # chat/SMS path is Gemini via the llm-router; this model serves cap-tripped
 # and outage turns).
-# KVM1 (4GB): NO local model — Ollama is never installed; over-cap turns
+# KVM1 (4GB): NO local model, Ollama is never installed; over-cap turns
 # refuse instead of degrading (fleet economics Phase E decision).
 # KVM2 (8GB) / KVM4 (16GB): **`llama3.2:3b`**. KVM8 (32GB CPU) only: **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
 if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
@@ -279,7 +279,7 @@ elif [[ "${VPS_SIZE}" == "kvm2" || "${VPS_SIZE}" == "kvm4" ]]; then
 else
   OLLAMA_MODEL="qwen3:4b-instruct"
 fi
-# Optional: cap num_ctx for starter TTFT — see vps/fragments/ollama-Modelfile-starter-4096.example
+# Optional: cap num_ctx for starter TTFT, see vps/fragments/ollama-Modelfile-starter-4096.example
 
 # llm-router sidecar: Rowboat talks to a small proxy (compose service
 # `llm-router`) that forwards llama*/qwen* traffic to Ollama and gemini-*
@@ -296,7 +296,7 @@ LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
 # verified live on both routes + the on-box Rowboat router path 2026-08-14.
 GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.7-flash"
 
-# Owner-dashboard chat model (OwnerCoworker agent only — SMS's Coworker agent
+# Owner-dashboard chat model (OwnerCoworker agent only, SMS's Coworker agent
 # stays on the local Ollama model for $0 marginal cost). The owner surface
 # sends a long prompt every turn (agent instructions + OWNER_PREAMBLE + synced
 # memory + recent tail) and is interactive, so the CPU-only local model's cold
@@ -311,25 +311,25 @@ GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.7-flash"
 # non-sequitur, contradicted itself about the tenant's live Calendly
 # connection within four turns, answered the owner's own decision checklist
 # on his behalf, and on an SMS resend passed its previous CHAT reply as the
-# message body — the same context-blindness class as the 2026-07-14 Truly
+# message body, the same context-blindness class as the 2026-07-14 Truly
 # incident that bumped SMS_CHAT_MODEL below). Bumped again 2.5-flash →
 # gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
 # 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
 # far stronger context-following and 350 tok/s. Gemini 3.x is usable on this
 # path since the llm-router thought-signature shim (PR #683, verified live
 # 2026-07-16). Note: 3.x thinking tokens bill as output, so per-turn cost
-# can run above 2.5-flash despite the identical list price — watch
+# can run above 2.5-flash despite the identical list price, watch
 # /admin/gemini after a default change and prefer a lower thinking level
 # over reverting the model.
 OWNER_CHAT_MODEL_DEFAULT="gemini-3.5-flash-lite"
 OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 
 # Safety fallback: a gemini-* OwnerCoworker model is only reachable when
-# GOOGLE_API_KEY is set — the llm-router returns 503 for gemini-* routes with
+# GOOGLE_API_KEY is set, the llm-router returns 503 for gemini-* routes with
 # no key. Seeding Gemini on a keyless host would break owner dashboard chat on
 # every turn (worse than the slow-but-working local model), so degrade to the
 # local Ollama tag instead. Tenants with a key keep Gemini.
-# On kvm1 there IS no local tag to degrade to — a keyless kvm1 host has no
+# On kvm1 there IS no local tag to degrade to, a keyless kvm1 host has no
 # working AI at all, so fail the deploy loudly instead of shipping a tenant
 # whose every chat/SMS turn 503s.
 case "${OWNER_CHAT_MODEL}" in
@@ -346,7 +346,7 @@ case "${OWNER_CHAT_MODEL}" in
 esac
 
 # Inbound-SMS chat model (the `Coworker` startAgent). Repointed off local Qwen
-# to Gemini for the same latency/quality win owner chat got — the CPU-only
+# to Gemini for the same latency/quality win owner chat got, the CPU-only
 # local model routinely took >20s for the first SMS reply. Gemini bills per
 # token, so the SMS Edge worker shares the owner-chat $10/period fuse and
 # falls back to the `CoworkerLocal` (Qwen) twin once the COMBINED spend trips
@@ -355,7 +355,7 @@ esac
 # exact answer context and replied context-blind). Bumped again 2.5-flash →
 # gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
 # 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
-# significantly stronger agentic/context behavior, and 350 tok/s — unlike
+# significantly stronger agentic/context behavior, and 350 tok/s, unlike
 # the earlier 3.5-flash trade (~$0.026/turn at 8-13s vs 2.5-flash
 # ~$0.004/turn at 2-4s on identical probes, a poor deal at $1.50/$9.00
 # list), Flash-Lite keeps the price while fixing the quality tier. Gemini
@@ -364,7 +364,7 @@ esac
 # the router re-injects cached/placeholder signatures), verified live
 # 2026-07-16 with zero 400s on multi-turn tool calling. Note: 3.x thinking
 # tokens bill as output, so per-turn cost can drift above 2.5-flash despite
-# the identical list price — watch /admin/gemini after rollout and prefer a
+# the identical list price, watch /admin/gemini after rollout and prefer a
 # lower thinking level over reverting the model. Override
 # SMS_CHAT_MODEL=gemini-3.7-flash per tenant when a flagship-quality trade
 # is worth it. Same keyless safety fallback as OWNER_CHAT_MODEL: a gemini-*
@@ -396,7 +396,7 @@ VPS_SIZE=${VPS_SIZE}
 # Upstream-required Rowboat keys.
 #
 # The pinned Rowboat fork (apps/rowboat) reads these at boot and crashes
-# when any are missing — even when the corresponding feature is disabled.
+# when any are missing, even when the corresponding feature is disabled.
 # Source of truth for the list: vps/integration/real/fixtures/rowboat.env.kvm8.integration
 # (kept in lockstep with the pinned upstream SHA).
 #
@@ -414,7 +414,7 @@ MONGODB_CONNECTION_STRING=mongodb://mongo:27017/rowboat
 REDIS_URL=redis://redis:6379
 # OPENAI_API_KEY is intentionally NOT set. Rowboat's PROVIDER_API_KEY
 # below takes precedence in every fallback chain (PROVIDER_API_KEY ||
-# OPENAI_API_KEY) so the placeholder never gated model calls — but the
+# OPENAI_API_KEY) so the placeholder never gated model calls, but the
 # OpenAI Agents SDK that Rowboat is built on auto-registered a tracing
 # exporter against platform.openai.com using whatever key was on hand,
 # generating one [non-fatal] 401 per request. OPENAI_AGENTS_DISABLE_TRACING
@@ -434,13 +434,13 @@ USE_RAG=false
 QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=
 
-# LLM provider routing — Rowboat talks to the llm-router sidecar (same
+# LLM provider routing, Rowboat talks to the llm-router sidecar (same
 # docker-compose network) which forwards to Ollama for dispatcher (SMS)
 # and Gemini for voice_task (voice). The llm-router service uses its
 # compose DNS alias; no host.docker.internal hop needed from Rowboat.
 # On a no-local-model host (kvm1) OLLAMA_MODEL is empty; every seeded agent
 # carries an explicit model, so the provider defaults only exist to satisfy
-# Rowboat's boot-time validator — point them at the Gemini SMS model there.
+# Rowboat's boot-time validator, point them at the Gemini SMS model there.
 PROVIDER_BASE_URL=http://llm-router:${LLM_ROUTER_PORT}/v1
 PROVIDER_API_KEY=router
 PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL:-${SMS_CHAT_MODEL}}
@@ -450,12 +450,12 @@ PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL:-${SMS_CHAT_MODEL}}
 #
 # The llm-router sidecar (env_file: this file) ALSO meters exact AI-chat-budget
 # spend: for every gemini-* completion it proxies for the chat surfaces (owner
-# chat, SMS, summarizers — NOT voice_task, which is GEMINI_ROWBOAT_MODEL and
+# chat, SMS, summarizers, NOT voice_task, which is GEMINI_ROWBOAT_MODEL and
 # billed as voice minutes) it POSTs the billed tokens to
 # ${APP_BASE_URL}/api/internal/meter-gemini-spend using ROWBOAT_GATEWAY_TOKEN.
 # It therefore relies on BUSINESS_ID, APP_BASE_URL, ROWBOAT_GATEWAY_TOKEN (all
 # written above) and GEMINI_ROWBOAT_MODEL (to exclude the voice path) being
-# present in this env file — keep them here when editing.
+# present in this env file, keep them here when editing.
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_ROWBOAT_MODEL=${GEMINI_ROWBOAT_MODEL:-${GEMINI_ROWBOAT_MODEL_DEFAULT}}
 OLLAMA_MODEL=${OLLAMA_MODEL}
@@ -496,7 +496,7 @@ report_progress 55 "env_written" "Rowboat .env written"
 # 2a'. Install/refresh the heartbeat monitor (cron target)
 #
 # bootstrap.sh schedules `/opt/newcoworker/scripts/heartbeat.sh` via cron
-# on every box, but historically NOTHING installed the script itself —
+# on every box, but historically NOTHING installed the script itself,
 # bootstrap only copied a crontab file into that directory, so the cron
 # fired at a nonexistent path and the service monitor (and the posture
 # reporting added Jul 2026) never ran. Install it from the staged repo on
@@ -519,9 +519,9 @@ fi
 # which is the single biggest source of "the chat is slow" reports. We
 # pair `OLLAMA_KEEP_ALIVE=-1` (set in bootstrap's service override) with
 # a scheduled single-token generate that stands down while the owner is
-# actively chatting — implementation in vps/scripts/keep-warm.sh.
+# actively chatting, implementation in vps/scripts/keep-warm.sh.
 #
-# No-local-model hosts (kvm1) have no Ollama to keep warm — skip, and tear
+# No-local-model hosts (kvm1) have no Ollama to keep warm, skip, and tear
 # down any timer left behind by an earlier same-box life as kvm2.
 # ------------------------------------------------------------------
 if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
@@ -542,7 +542,7 @@ else
   log "WARN: ${KEEPWARM_SRC} missing; keep-warm will not be installed on this deploy"
 fi
 
-# Dedicated env file — avoids exposing unrelated Rowboat secrets to a
+# Dedicated env file, avoids exposing unrelated Rowboat secrets to a
 # systemd-invoked script that only needs the 4 keys below.
 cat > /opt/rowboat/keep-warm.env <<KWENV
 BUSINESS_ID=${BUSINESS_ID}
@@ -613,7 +613,7 @@ fi # end HAS_LOCAL_MODEL keep-warm gate
 # populates on first boot but deploy-client.sh historically never refreshed.
 # A fleet redeploy (redeploy-deploy-client.ts) re-pins /opt/newcoworker-repo
 # to the requested ref, but `docker compose up --build` rebuilds the router
-# from the STALE /opt/rowboat/llm-router copy — silently shipping pre-merge
+# from the STALE /opt/rowboat/llm-router copy, silently shipping pre-merge
 # router code (e.g. the router never picks up exact AI-chat-budget metering)
 # while still stamping a fresh image timestamp. Mirror bootstrap.sh's staging
 # so every deploy rebuilds the sidecar from THIS deploy's code.
@@ -646,7 +646,7 @@ fi
 # ------------------------------------------------------------------
 # 3b. Seed the per-tenant Rowboat project + api_key
 #
-# Rowboat does not expose a public REST API for project creation — projects
+# Rowboat does not expose a public REST API for project creation, projects
 # live as documents in the bundled MongoDB. We use the same pattern the
 # integration tests use (see tests/integration/kvm-rowboat/mongo-seed.ts):
 # stage a mongosh script, copy it into the mongo container, and run it.
@@ -655,7 +655,7 @@ fi
 # `business_configs.rowboat_project_id` and POSTs to
 # `https://<biz>.newcoworker.com/api/v1/<projectId>/chat`. Rowboat
 # rejects unknown projectIds with HTTP 404, which the dashboard surfaces
-# as "your coworker's chat service isn't ready yet" — even when every
+# as "your coworker's chat service isn't ready yet", even when every
 # container is healthy. Seeding here closes that gap on the deploy path.
 #
 # Schema notes:
@@ -675,7 +675,7 @@ chmod 600 "${SEED_TMP}"
 
 # Build the workflow JSON safely with jq so embedded quotes / newlines in
 # the .md vault files don't break mongosh parsing. Empty md files collapse
-# to empty strings, which Rowboat tolerates — the agent just runs with
+# to empty strings, which Rowboat tolerates, the agent just runs with
 # whatever instructions are non-empty.
 # Field order must stay in lockstep with buildAgentInstructions in
 # src/lib/vps/sync-vault.ts (identity → profile → soul → website → memory).
@@ -691,7 +691,7 @@ SEED_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 # marked isWebhook and Rowboat POSTs tool calls to the platform dispatcher
 # (/api/rowboat/tool-call) which fulfils them for real and enforces the
 # owner's Settings → Coworker tools toggles. Without APP_BASE_URL the
-# tools stay placeholder (LLM-mocked) — the pre-webhook behavior — because
+# tools stay placeholder (LLM-mocked), the pre-webhook behavior, because
 # isWebhook tools with no webhookUrl make Rowboat throw mid-turn.
 ROWBOAT_TOOL_WEBHOOK_URL=""
 if [[ -n "${APP_BASE_URL:-}" ]]; then
@@ -725,7 +725,7 @@ WORKFLOW_JSON=$(jq -nc \
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
-      # Gemini via the llm-router (gemini-* => Google) — see SMS_CHAT_MODEL
+      # Gemini via the llm-router (gemini-* => Google), see SMS_CHAT_MODEL
       # above. Repointed off local Qwen: the CPU-only model routinely took
       # >20s for the first SMS reply. The SMS Edge worker meters Gemini turns
       # into the shared owner-chat fuse and, once the COMBINED period spend
@@ -739,7 +739,7 @@ WORKFLOW_JSON=$(jq -nc \
       # vps/voice-bridge/src/gemini-telnyx-bridge.ts:buildVoiceToolDeclarations).
       # The bridge advertises them to Gemini Live directly; this entry is
       # the gating layer for the Rowboat-mediated SMS path.
-      # owner_append_business_memory is NOT listed here — it is owner-dashboard
+      # owner_append_business_memory is NOT listed here, it is owner-dashboard
       # only on OwnerCoworker (see second agent below).
       tools: [
         "customer_lookup_by_phone",
@@ -803,7 +803,7 @@ WORKFLOW_JSON=$(jq -nc \
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
-      # Gemini via the llm-router (gemini-* ⇒ Google) — see OWNER_CHAT_MODEL
+      # Gemini via the llm-router (gemini-* ⇒ Google), see OWNER_CHAT_MODEL
       # above. The interactive owner surface needs sub-second-class latency the
       # CPU-only local model cannot give on its long per-turn prompt.
       model: $ownerModel,
@@ -811,7 +811,7 @@ WORKFLOW_JSON=$(jq -nc \
       ragReturnType: "chunks",
       # Dashboard surface declares its own customer-tool names so the
       # platform dispatcher can attribute the call (the Rowboat webhook
-      # payload has no agent context) — distinct Settings toggles and an
+      # payload has no agent context), distinct Settings toggles and an
       # honest interaction channel ("dashboard", not "sms").
       tools: [
         "dashboard_customer_lookup_by_phone",
@@ -880,12 +880,12 @@ WORKFLOW_JSON=$(jq -nc \
       name: "WebchatCoworker",
       type: "conversation",
       # Website chat widget (Standard+): the ANONYMOUS-INTERNET surface.
-      # Deliberately the smallest tool surface of any agent — info + lead
+      # Deliberately the smallest tool surface of any agent, info + lead
       # gen only. NO send_sms, NO send_email, NO calls, NO image tools:
       # visitors are untrusted, so even a fully prompt-injected turn can
       # only look up public knowledge, capture a lead, or book a calendar
       # slot. The platform dispatcher (/api/rowboat/tool-call) allowlists
-      # exactly these webchat_* names — declaring anything else here would
+      # exactly these webchat_* names, declaring anything else here would
       # fail closed there. Keep both layers in lockstep.
       description: "Website chat widget agent: business info and lead capture only.",
       disabled: false,
@@ -943,7 +943,7 @@ WORKFLOW_JSON=$(jq -nc \
   # webhook (/api/rowboat/tool-call) for REAL fulfilment + per-tool
   # Settings enforcement. The webhook payload carries no caller context,
   # so `phone` is REQUIRED on this path (the voice bridge keeps its own
-  # tool declarations with optional phone — see
+  # tool declarations with optional phone, see
   # vps/voice-bridge/src/gemini-telnyx-bridge.ts).
   tools: [
     {
@@ -1510,8 +1510,8 @@ WORKFLOW_JSON=$(jq -nc \
       }
     },
     # Dashboard-only document management tools. list/update/set_expiration
-    # exist ONLY on this surface — customers must never mutate business
-    # knowledge — and the platform dispatcher hard-refuses them elsewhere.
+    # exist ONLY on this surface, customers must never mutate business
+    # knowledge, and the platform dispatcher hard-refuses them elsewhere.
     {
       name: "dashboard_document_list",
       description: "List the business documents on file (title, category, audience, status, expiration, summary) so the owner can reference them by name.",
@@ -1618,7 +1618,7 @@ WORKFLOW_JSON=$(jq -nc \
         required: ["document", "signerName"]
       }
     },
-    # Run-automations tools (dashboard surface only — customers must never
+    # Run-automations tools (dashboard surface only, customers must never
     # enumerate or start the owner automations). Same dispatcher cores as the
     # inline dashboard path; both names share the single run_aiflow Settings
     # toggle.
@@ -1654,7 +1654,7 @@ WORKFLOW_JSON=$(jq -nc \
     # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher
     # cores as the knowledge/calendar tools above plus the webchat-only
     # lead-capture core; separate Settings toggles under the webchat agent
-    # key. This is the COMPLETE widget tool surface — see the agent comment.
+    # key. This is the COMPLETE widget tool surface, see the agent comment.
     {
       name: "webchat_business_knowledge_lookup",
       description: "Answer a website visitor question (hours, services, pricing, policies) from the business knowledge base and website summary. Use when the answer is not already in your instructions.",
@@ -1845,13 +1845,13 @@ if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
     # /etc/systemd/system/cloudflared.service ... if you are really sure,
     # you can do `cloudflared service uninstall`"). Re-running deploy on
     # an already-provisioned VPS used to surface this as a fatal exit
-    # code, masking real downstream failures — so same-tenant re-deploys
+    # code, masking real downstream failures, so same-tenant re-deploys
     # treat the existing unit as a restart.
     #
     # BUT the unit's baked-in token must match the token THIS deploy was
     # given. On a pool-adopted box the unit is left over from the previous
     # tenant, so "just restart" keeps serving the OLD tenant's tunnel while
-    # the new tenant's hostnames point at a connector-less tunnel — every
+    # the new tenant's hostnames point at a connector-less tunnel, every
     # request 530s (KYP Ads, Jul 15 2026: the owner's first SMS
     # dead-lettered with rowboat_http_530). Compare tokens and reinstall
     # when they differ.
@@ -1902,14 +1902,14 @@ report_progress 95 "business_online_patch" "Business status set to online in Sup
 #   * Sync the bridge source from ${VOICE_BRIDGE_SRC} (default
 #     /opt/newcoworker-repo/vps/voice-bridge) so `docker compose build` picks
 #     up repo updates since the last deploy. If no source exists, we skip the
-#     bridge entirely — preserves the "optional sidecar" behavior for VPS
+#     bridge entirely, preserves the "optional sidecar" behavior for VPS
 #     hosts that have not yet been staged.
 #   * ALWAYS rewrite .env. The previous "if [[ ! -f .env ]]" guard meant
 #     STREAM_URL_SIGNING_SECRET / GOOGLE_API_KEY rotations would not reach
 #     the container on the next deploy.
 #   * Use --force-recreate so a changed .env actually restarts the service
 #     even when the image layer is cached.
-#   * Health-gate up to ~40s on http://127.0.0.1:8090/ — a failed bridge
+#   * Health-gate up to ~40s on http://127.0.0.1:8090/, a failed bridge
 #     brings this whole phase down loudly instead of silently skipping.
 # ------------------------------------------------------------------
 VOICE_BRIDGE_SRC="${VOICE_BRIDGE_SRC:-/opt/newcoworker-repo/vps/voice-bridge}"
@@ -1923,7 +1923,7 @@ NEWCOWORKER_REPO_PATH="${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}"
 # bootstrap.sh does the initial clone; this block handles the ongoing pull
 # and tolerates the "staging skipped / overridden" case silently. If the
 # operator has pointed VOICE_BRIDGE_SRC at a custom path that isn't a git
-# checkout, we leave it alone — their sync discipline, their source of truth.
+# checkout, we leave it alone, their sync discipline, their source of truth.
 if [[ "${VOICE_BRIDGE_SRC}" == "${NEWCOWORKER_REPO_PATH}/vps/voice-bridge" ]]; then
   if [[ -d "${NEWCOWORKER_REPO_PATH}/.git" ]]; then
     log "Refreshing repo at ${NEWCOWORKER_REPO_PATH} (ref=${NEWCOWORKER_REPO_REF})..."
@@ -1964,8 +1964,8 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
 
     # GEMINI_LIVE_ENABLED is the bridge's secondary fine-grained kill switch
     # (primary being an empty GOOGLE_API_KEY). Because we now always rewrite
-    # .env on every deploy — necessary so secret rotations like
-    # STREAM_URL_SIGNING_SECRET reach the container — we have to explicitly
+    # .env on every deploy, necessary so secret rotations like
+    # STREAM_URL_SIGNING_SECRET reach the container, we have to explicitly
     # preserve this flag or an operator who SSH'd in and set it to "false"
     # would have Gemini Live silently re-enabled on the next deploy.
     #
@@ -1984,7 +1984,7 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
     fi
     effective_gemini_live_enabled="${GEMINI_LIVE_ENABLED:-${prev_gemini_live_enabled:-true}}"
 
-    # Same precedence ladder as GEMINI_LIVE_ENABLED above — operator can flip
+    # Same precedence ladder as GEMINI_LIVE_ENABLED above, operator can flip
     # transcription on for a single VPS without losing the flag on redeploy.
     # Default stays "false" so the feature only turns on where explicitly opted
     # in (either via Vercel → orchestrator, or by hand-editing the VPS .env).
@@ -2009,7 +2009,7 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
       ) || true
     fi
     # Precedence: deploy env (orchestrator / redeploy-deploy-client.ts), then
-    # value already on disk — avoids blanking wss:// on fleet redeploy when the
+    # value already on disk, avoids blanking wss:// on fleet redeploy when the
     # operator shell has no per-tenant origin.
     effective_bridge_media_wss_origin="${BRIDGE_MEDIA_WSS_ORIGIN:-${prev_bridge_media_wss_origin:-}}"
 
@@ -2043,7 +2043,7 @@ VOICE_NAME=${VOICE_NAME:-}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
 # Optional per-box session cap override (ms); blank = bridge default (14 min).
-# Preserved across redeploys — see the precedence ladder above.
+# Preserved across redeploys, see the precedence ladder above.
 GEMINI_LIVE_SESSION_MAX_MS=${effective_gemini_live_session_max_ms}
 # TELNYX_API_KEY powers the bridge's Telnyx Call Control actions: the `end_call`
 # hangup tool, the `transfer_to_owner` warm transfer, and the missed-call SMS
@@ -2057,7 +2057,7 @@ TELNYX_API_KEY=${TELNYX_API_KEY:-}
 #              Uses Docker DNS via the shared `rowboat_default` network
 #              (attached in vps/voice-bridge/docker-compose.yml). The old
 #              `host.docker.internal:3000` default does NOT work because
-#              Rowboat publishes 127.0.0.1:3000 only — the host gateway
+#              Rowboat publishes 127.0.0.1:3000 only, the host gateway
 #              IP isn't listening, so every request hangs ~30s and the
 #              caller hears silence (May 2026 outage).
 # APP_BASE_URL: platform Next.js origin for /api/voice/tools/* adapters.
@@ -2089,7 +2089,7 @@ VBENV_EOF
       GEMINI_LIVE_ENABLED
       # Rollout flag, not strictly required for bridge function (default "false"
       # disables transcripts and calls still work). Included here so the
-      # post-write verification catches accidentally-blank writes — the
+      # post-write verification catches accidentally-blank writes, the
       # effective_* fallback above always resolves to "true" or "false", so a
       # blank line would indicate the env block was tampered with.
       VOICE_TRANSCRIPTION_ENABLED
@@ -2100,7 +2100,7 @@ VBENV_EOF
     )
     missing_keys=()
     for key in "${bridge_required_keys[@]}"; do
-      # Match `KEY=<non-empty>` — a bare `KEY=` counts as missing. Restrict
+      # Match `KEY=<non-empty>`, a bare `KEY=` counts as missing. Restrict
       # the regex to line-start so a commented `# KEY=foo` doesn't mask a
       # blank real entry (belt-and-braces: we don't write comments above).
       if ! grep -E "^${key}=.+" .env >/dev/null 2>&1; then
@@ -2115,7 +2115,7 @@ VBENV_EOF
       report_progress 96 "voice_bridge_env_verified" \
         "voice-bridge .env has ${#bridge_required_keys[@]} required keys"
     else
-      # IFS-join without jq — keeps the message human-readable.
+      # IFS-join without jq, keeps the message human-readable.
       joined=$(IFS=,; echo "${missing_keys[*]}")
       log "WARN: voice-bridge .env is missing required keys: ${joined}"
       report_progress 96 "voice_bridge_env_incomplete" \
@@ -2194,27 +2194,27 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # separate env vars to keep Rowboat's identifier model decoupled.
     # WORKER_VERCEL_BASE_URL + WORKER_VERCEL_BEARER are passed through
     # only when both are present in the deploy environment. Missing
-    # values are equivalent to "rolling-summary callbacks disabled" —
+    # values are equivalent to "rolling-summary callbacks disabled",
     # the worker logs a warn and keeps processing jobs normally.
-    # APP_BASE_URL is the canonical source for the Vercel base URL —
+    # APP_BASE_URL is the canonical source for the Vercel base URL,
     # orchestrate.ts exports it by this name (see line 850 of
     # orchestrate.ts). INTERNAL_CRON_SECRET is the same secret asserted
     # by /api/internal/* routes via assertCronAuth in src/lib/cron-auth.ts.
-    # Resolve the owner-rule capture model BEFORE writing .env — the heredoc
+    # Resolve the owner-rule capture model BEFORE writing .env, the heredoc
     # below only EMITS values, so shell control flow placed inside it would be
     # written to .env as literal text and never run. Defaults to Gemini via the
     # llm-router; the CPU-only local model always timed out (~30s, saving
     # nothing) AND its CPU load inflated concurrent Gemini chat turns from ~7s to
     # ~50s. A gemini-* model needs GOOGLE_API_KEY (the router 503s gemini-*
-    # without one), so on a keyless host degrade capture to the local Ollama tag
-    # — same fallback policy as OWNER_CHAT_MODEL above.
+    # without one), so on a keyless host degrade capture to the local Ollama tag,
+    # same fallback policy as OWNER_CHAT_MODEL above.
     # gemini-3.5-flash-lite (GA 2026-07-21): captured rules become durable
-    # memory — same quality-tier bump as the platform capture default
+    # memory, same quality-tier bump as the platform capture default
     # (src/lib/dashboard-chat/memory-capture.ts).
     MEMORY_CAPTURE_MODEL_DEFAULT="gemini-3.5-flash-lite"
     MEMORY_CAPTURE_MODEL="${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}"
     # Match the worker's OWN gemini detection (extractOwnerRule uses
-    # /^gemini[-_.]/i — case-insensitive, with -, _, or . as the separator), so
+    # /^gemini[-_.]/i, case-insensitive, with -, _, or . as the separator), so
     # any model the worker would route to the router (e.g. "Gemini-…",
     # "gemini_…") also trips the keyless fallback here. Lowercase first, then
     # match the three separators.
@@ -2285,7 +2285,7 @@ OLLAMA_BASE_URL=${CHAT_WORKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434
 # Google's OpenAI-compatible endpoint + key for a gemini-* capture model. The
 # worker calls Google DIRECTLY here (it can reach Google in <1s) rather than via
 # the llm-router: POSTing to the router from the worker container hangs (the
-# worker is on a different docker network — small GETs pass, POST bodies stall).
+# worker is on a different docker network, small GETs pass, POST bodies stall).
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 MEMORY_CAPTURE_GEMINI_BASE_URL=${MEMORY_CAPTURE_GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
 MEMORY_CAPTURE_TIMEOUT_MS=${MEMORY_CAPTURE_TIMEOUT_MS:-30000}
@@ -2305,10 +2305,10 @@ else
 fi
 
 # ------------------------------------------------------------------
-# AiFlow render service (headless Chromium) — per-tenant sidecar.
+# AiFlow render service (headless Chromium), per-tenant sidecar.
 #
 # ENTITLEMENT gate (keys on TIER, not VPS_SIZE): standard/enterprise get the
-# sidecar, starter does not. This is a plan-feature decision — the June 2026
+# sidecar, starter does not. This is a plan-feature decision, the June 2026
 # KVM2 experiment validated that render runs fine on KVM2 hardware, so a
 # standard tenant pinned to a kvm2 box still gets the sidecar. On starter we
 # proactively tear any stale container down in case the tenant was downgraded.
@@ -2345,7 +2345,7 @@ elif [[ -d "${AIFLOW_RENDER_SRC}" ]]; then
     cd "${AIFLOW_RENDER_DEST}"
     # AIFLOW_PLATFORM_URL / AIFLOW_GATEWAY_TOKEN reuse the platform origin +
     # shared gateway bearer the rest of the stack already uses for
-    # /api/integrations/custom/* — the render service calls
+    # /api/integrations/custom/*, the render service calls
     # /api/integrations/custom/credentials to fetch the tenant's stored login.
     cat > .env <<AIRENV_EOF
 PORT=8080
@@ -2373,14 +2373,14 @@ fi
 # Gate: the orchestrator passes DATA_RESIDENCY_ENABLED=true ONLY for
 # enterprise tenants whose businesses.data_residency_mode is past
 # 'supabase'. Everyone else gets a teardown of any stale stack (a tenant
-# rolled back to central must not keep serving stale content from the box —
+# rolled back to central must not keep serving stale content from the box,
 # the named volume, i.e. the data itself, is deliberately preserved for the
 # pre-purge rollback window).
 #
 # Same sync model as the other sidecars: rsync from the staged repo,
 # rewrite .env every deploy (bearer-token rotations land), --force-recreate.
 # The Postgres password is generated ON THE BOX on first deploy and
-# preserved across redeploys — it never leaves the VPS (the platform talks
+# preserved across redeploys, it never leaves the VPS (the platform talks
 # to the data-api over the tunnel, never to Postgres directly).
 # ------------------------------------------------------------------
 DATA_API_SRC="${DATA_API_SRC:-/opt/newcoworker-repo/vps/data-api}"
@@ -2438,7 +2438,7 @@ DAENV_EOF
       # Schema upgrades on an EXISTING volume: the image's initdb hook only
       # runs on first boot, so re-apply the idempotent DDL (IF NOT EXISTS /
       # drop-and-add FKs) directly. The psql apply is RETRIED inside the same
-      # loop as the readiness probe — pg_isready can succeed while the server
+      # loop as the readiness probe, pg_isready can succeed while the server
       # is still mid-crash-recovery, and a transient apply failure must not
       # skip the schema for the whole deploy.
       schema_applied=0
@@ -2458,11 +2458,11 @@ DAENV_EOF
 
       # /v1/health deliberately answers HTTP 200 even when Postgres is down
       # (the tunnel replaces origin 5xx bodies), so readiness must check the
-      # JSON body's ok flag — a 200 with ok:false is NOT healthy.
+      # JSON body's ok flag, a 200 with ok:false is NOT healthy.
       # Encrypted backup timer (Phase B4): every 6h, pg_dump → gzip →
       # AES-256 → ciphertext-only upload. The passphrase is escrowed
       # centrally (residency_backup_keys) and reaches the box via the
-      # deploy env; without it the timer is skipped LOUDLY — an opted-in
+      # deploy env; without it the timer is skipped LOUDLY, an opted-in
       # box without backups is a DR gap, not a default.
       #
       # Gated on THIS deploy's schema apply: dumping an empty/incomplete
@@ -2477,7 +2477,7 @@ SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
 RESIDENCY_BACKUP_PASSPHRASE=${RESIDENCY_BACKUP_PASSPHRASE}
 RESIDENCY_BACKUP_BUCKET=${RESIDENCY_BACKUP_BUCKET:-business-backups}
 # central = upload ciphertext to central Storage; onbox = dumps stay on the
-# box (in-region even for ciphertext — Canadian/insurance deals).
+# box (in-region even for ciphertext, Canadian/insurance deals).
 RESIDENCY_BACKUP_DESTINATION=${RESIDENCY_BACKUP_DESTINATION:-central}
 RBENV_EOF
         chmod 600 /opt/data-api/backup.env
@@ -2527,7 +2527,7 @@ RBTMR_EOF
       else
         # No escrow key this deploy: also STOP a previously-installed timer
         # (its preserved backup.env would keep dumping with a key the
-        # platform may have rotated away) — "skipped" must mean stopped.
+        # platform may have rotated away), "skipped" must mean stopped.
         systemctl disable --now residency-backup.timer 2>/dev/null || true
         rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer /opt/data-api/backup.env
         systemctl daemon-reload 2>/dev/null || true
@@ -2558,7 +2558,7 @@ RBTMR_EOF
         report_progress 98 "data_api_unhealthy" "data-api started but /v1/health never reported ok:true"
       fi
     else
-      # Stack is in an unknown state — a previously-installed backup timer
+      # Stack is in an unknown state, a previously-installed backup timer
       # must not keep dumping it (same posture as the schema-apply gate).
       systemctl disable --now residency-backup.timer 2>/dev/null || true
       log "WARN: data-api compose failed (residency reads/writes will be degraded); backup timer stopped"

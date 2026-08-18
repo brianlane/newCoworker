@@ -36,7 +36,7 @@ export default async function MetaLeadsGuidePage() {
   const ctx = await resolveActiveBusinessContext(user);
   const activeBusinessId =
     ctx.businessId && ctx.role && can(ctx.role, "manage_aiflows") ? ctx.businessId : null;
-  // API keys are a manage_billing (owner) capability — managers get the
+  // API keys are a manage_billing (owner) capability, managers get the
   // guide without key metadata (hasApiKey drives copy only).
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db

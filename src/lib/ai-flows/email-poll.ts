@@ -10,7 +10,7 @@
  * Exactly-once: the run's dedupe_key is `email:<provider message id>` and
  * ai_flow_runs has a unique (flow_id, dedupe_key) index, so re-reading the
  * same messages never double-enqueues. Read efficiency: ai_flow_email_seen
- * markers record every (flow, message) evaluation — match or not — so the
+ * markers record every (flow, message) evaluation, match or not, so the
  * per-poll read cap is only spent on unevaluated mail; the markers are an
  * optimization, not a correctness dependency (losing them just re-reads, and
  * the dedupe keys absorb that).
@@ -63,7 +63,7 @@ export const EMAIL_POLL_PAGE_SIZE = 25;
  * Hard cap on messages READ (bodies fetched + conditions evaluated) per
  * mailbox per poll. Messages every flow on the mailbox has already evaluated
  * (per ai_flow_email_seen markers, written for matches AND non-matches) are
- * filtered out BEFORE the cap is applied — neither provider guarantees list
+ * filtered out BEFORE the cap is applied, neither provider guarantees list
  * order, so the cap must never be allowed to repeatedly select the same
  * already-read subset and starve the rest. With that filter, each poll reads
  * up to 100 unevaluated messages, so a burst drains at ~100/minute and only
@@ -78,7 +78,7 @@ export const EMAIL_POLL_MAX_MESSAGES = 100;
  * Sized so it never binds before read throughput does: mail stays in the
  * lookback window for LOOKBACK minutes and the poller evaluates up to
  * MAX_MESSAGES per minute-tick, so LOOKBACK × MAX_MESSAGES is the most a
- * mailbox can ever drain before mail ages out — and this many pages lists
+ * mailbox can ever drain before mail ages out, and this many pages lists
  * exactly that volume. It therefore only stops buggy or looping pagination
  * chains, never a drainable backlog.
  */
@@ -136,9 +136,9 @@ function b64UrlDecode(data: string): string {
 
 /**
  * Pull readable text out of a Gmail `payload` part tree: prefer the first
- * text/plain part — UNLESS it is itself tag-stripped template source (some
+ * text/plain part, UNLESS it is itself tag-stripped template source (some
  * senders flatten their HTML naively, leaving stylesheets and `*|MC:...|*`
- * merge tags in the "text"; same detection as the tenant-mailbox worker) —
+ * merge tags in the "text"; same detection as the tenant-mailbox worker),
  * falling back to the text/html part collapsed properly. Pure + exported for
  * tests.
  */
@@ -188,7 +188,7 @@ async function fetchGmailMessages(
   // exactly the set we cannot enumerate ourselves. Verified against the live
   // HQ mailbox: it drops all seven self-sent copies and keeps the real lead.
   const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)} -from:me`);
-  // List the whole lookback window first (id-only pages are cheap) — Gmail's
+  // List the whole lookback window first (id-only pages are cheap), Gmail's
   // list order is NOT guaranteed, so capping mid-listing could repeatedly
   // keep the same arbitrary subset and starve the rest across ticks.
   const ids: string[] = [];
@@ -324,7 +324,7 @@ async function fetchMicrosoftMessages(
     `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
     `&$top=${EMAIL_POLL_PAGE_SIZE}` +
     `&$select=id,subject,from,body,receivedDateTime`;
-  // mailFolders/inbox only — /me/messages spans Sent/Drafts too, and a flow
+  // mailFolders/inbox only, /me/messages spans Sent/Drafts too, and a flow
   // must never trigger on mail the owner sent.
   let endpoint = `/v1.0/me/mailFolders/inbox/messages?${params}`;
   const rows: Array<GraphMessage & { id: string }> = [];
@@ -334,7 +334,7 @@ async function fetchMicrosoftMessages(
     const res = await workspaceProxyForBusiness(businessId, link, { endpoint, method: "GET" });
     if (!res) throw new Error("email_not_connected");
     const d = res.data as { value?: GraphMessage[]; "@odata.nextLink"?: string };
-    // Graph pages carry full bodies, so the budget is enforced while paging —
+    // Graph pages carry full bodies, so the budget is enforced while paging,
     // but only NEW messages count against it, letting later ticks page past
     // the already-handled head of a burst down to the unprocessed remainder.
     const pageRows = (d?.value ?? []).filter(
@@ -347,7 +347,7 @@ async function fetchMicrosoftMessages(
     if (!next) break;
     // The page guard spans more mail than the lookback window can ever
     // drain (see EMAIL_POLL_MAX_LIST_PAGES), so even an all-handled backlog
-    // (e.g. right after adding a new flow) never hides reachable mail —
+    // (e.g. right after adding a new flow) never hides reachable mail,
     // hitting either bound means the remainder genuinely can't be read yet.
     if (rows.length >= EMAIL_POLL_MAX_MESSAGES || pages >= EMAIL_POLL_MAX_LIST_PAGES) {
       overflowed = true;
@@ -385,7 +385,7 @@ async function fetchMicrosoftMessages(
  * grew a reply arm for sales leads, flipped to "answers email", and started
  * marking Zapier newsletters read on the way past. The header comment on this
  * module already warned that "a triage flow silently marking them read makes
- * the inbox lie about what needs attention" — the predicate was just too
+ * the inbox lie about what needs attention", the predicate was just too
  * generous to honor it.
  *
  * Deliberately conservative. A `when`, a branch arm, or an approval gate all
@@ -505,7 +505,7 @@ export async function threadsWeHaveRepliedOn(
   }
 }
 
-/** Page size for the flow listing — paged so no flow is silently skipped. */
+/** Page size for the flow listing, paged so no flow is silently skipped. */
 export const EMAIL_POLL_FLOW_PAGE = 100;
 
 /** Poll every watched mailbox once and enqueue runs for matching messages. */
@@ -523,7 +523,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       .range(offset, offset + EMAIL_POLL_FLOW_PAGE - 1);
     if (error) {
       // Nothing listed yet → surface the failure. A LATER page failing must
-      // not discard the flows already in hand — poll those mailboxes this
+      // not discard the flows already in hand, poll those mailboxes this
       // tick and let the next tick retry the full listing.
       if (flowRows.length === 0) throw new Error(`pollEmailTriggers: ${error.message}`);
       console.error("pollEmailTriggers flow listing page", error.message);
@@ -539,7 +539,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
   if (flows.length === 0) return result;
 
   // Evaluation markers only matter inside the lookback window; prune old
-  // ones so the table can't grow unboundedly (best-effort — a failed prune
+  // ones so the table can't grow unboundedly (best-effort, a failed prune
   // just leaves rows for the next tick).
   const cutoff = new Date(Date.now() - EMAIL_SEEN_RETENTION_MINUTES * 60_000).toISOString();
   const { error: pruneErr } = await db.from("ai_flow_email_seen").delete().lt("seen_at", cutoff);
@@ -567,8 +567,8 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       // A message counts as handled once EVERY flow on this mailbox has an
       // evaluation marker for it (markers are written for matches and
       // non-matches alike, below). This is what lets a >cap burst drain
-      // across ticks — already-read messages stop consuming the per-poll
-      // read budget — while a freshly added flow (no markers yet) still gets
+      // across ticks, already-read messages stop consuming the per-poll
+      // read budget, while a freshly added flow (no markers yet) still gets
       // the in-window backlog re-read and evaluated for it; existing flows'
       // re-evaluations are absorbed by the run dedupe keys.
       const flowIds = group.map((f) => f.id);
@@ -624,7 +624,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         // or the listing guard cut a pathological page chain). Later ticks
         // keep draining (evaluated messages don't count against the budget),
         // but a burst that outruns ~cap/minute for the whole lookback window
-        // loses mail — surface it rather than dropping silently.
+        // loses mail, surface it rather than dropping silently.
         await recordSystemLog({
           businessId,
           source: "aiflow",
@@ -796,7 +796,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         }
       }
       if (seenRows.length > 0) {
-        // Mark every (flow, message) pair evaluated — match or not — so the
+        // Mark every (flow, message) pair evaluated, match or not, so the
         // next poll's read budget only goes to genuinely new mail. Written
         // after the whole batch: a crash mid-batch re-reads it next tick and
         // the run dedupe keys absorb the repeat enqueues.

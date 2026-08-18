@@ -6,11 +6,11 @@
  * converts .xlsx to CSV text and POSTs it to
  * /api/dashboard/aiflows/lead-import, which parses here (`parseLeadBacklog`)
  * and, per row, either:
- *   - feeds it through `processWebhookFlowEvent` — the SAME path a
- *     Zapier/Make bridge event takes — so every enabled `webhook`-channel
+ *   - feeds it through `processWebhookFlowEvent`, the SAME path a
+ *     Zapier/Make bridge event takes, so every enabled `webhook`-channel
  *     flow trigger-matches the row with zero flow changes, or
  *   - when the owner picked a TARGET FLOW (`flowId`), enqueues a run of that
- *     one flow directly, no webhook trigger required — the same "just run
+ *     one flow directly, no webhook trigger required, the same "just run
  *     this flow with this input" contract as the Run-now button, with the
  *     row's fields as the trigger scope.
  *
@@ -23,7 +23,7 @@
  * (event_id / lead_id / id, namespaced by the source label) or the payload
  * digest, so re-uploading the same sheet never double-enqueues.
  *
- * Service-role only. Owner authorization is the API route's job — same trust
+ * Service-role only. Owner authorization is the API route's job, same trust
  * model as src/lib/csv/contacts.ts.
  */
 
@@ -75,12 +75,12 @@ export function parseLeadBacklog(csvText: string): LeadBacklogParseResult {
 // Sheet ↔ flow fit check (preview heuristic)
 //
 // A flow's extract_text steps read the trigger text (the flattened row), so
-// their field names — lead_name, lead_phone, lead_email, product… — are what
+// their field names, lead_name, lead_phone, lead_email, product…, are what
 // the flow EXPECTS each lead to supply. The preview compares those against
 // the sheet's columns/values and warns about fields the sheet doesn't appear
 // to provide (e.g. a Telnyx billing report has phone-shaped values but no
 // name/email/product), so the owner catches a wrong file before 49 runs try
-// to mine it. Heuristic and advisory only — it never blocks the import.
+// to mine it. Heuristic and advisory only, it never blocks the import.
 // ---------------------------------------------------------------------------
 
 /** Minimal structural view of a definition (works for any AiFlowDefinition). */
@@ -104,7 +104,7 @@ export function flowHasWebhookTrigger(definition: unknown): boolean {
 }
 
 /**
- * The field names the flow's extract_text steps read from the trigger text —
+ * The field names the flow's extract_text steps read from the trigger text,
  * i.e. what each imported row is expected to supply. Walks branch arms and
  * else-paths too; deduped in first-seen order. Only extract_text counts:
  * browse_extract reads a fetched page and email_extract reads a mailbox, so
@@ -177,7 +177,7 @@ const FIT_SAMPLE_ROWS = 20;
 /**
  * Which expected fields the sheet does NOT appear to supply. A field counts
  * as supplied when a column name shares a meaningful (non-generic) token with
- * it, or — for phone/email fields — when any sampled cell value has the right
+ * it, or, for phone/email fields, when any sampled cell value has the right
  * shape (a billing export's number columns really do hold phones, even though
  * no column is called "phone").
  */
@@ -201,7 +201,7 @@ export function missingSheetFields(
 
   return expectedFields.filter((field) => {
     const fieldTokens = [...tokensOf(field)].filter((t) => !GENERIC_FIELD_TOKENS.has(t));
-    // A field named only in generic terms ("details") is unjudgeable — stay
+    // A field named only in generic terms ("details") is unjudgeable, stay
     // quiet rather than warn on every sheet.
     if (fieldTokens.length === 0) return false;
     if (fieldTokens.some((t) => headerTokens.some((ht) => ht.has(t)))) return false;
@@ -215,12 +215,12 @@ export type LeadBacklogRowOutcome = {
   /** 1-based file row (row 1 is the header). */
   row: number;
   /**
-   * enqueued  — at least one flow run was queued for this row.
-   * duplicate — a flow matched but the row was already enqueued earlier
+   * enqueued, at least one flow run was queued for this row.
+   * duplicate, a flow matched but the row was already enqueued earlier
    *             (same lead re-imported); nothing new was queued.
-   * no_match  — no enabled webhook flow's conditions matched the row.
-   * skipped   — the row had no non-empty cells to send.
-   * error     — this row's enqueue failed (see `errors`); other rows still apply.
+   * no_match, no enabled webhook flow's conditions matched the row.
+   * skipped, the row had no non-empty cells to send.
+   * error, this row's enqueue failed (see `errors`); other rows still apply.
    */
   status: "enqueued" | "duplicate" | "no_match" | "skipped" | "error";
   /** When the row's runs become claimable (absent = immediately). */
@@ -268,7 +268,7 @@ function rowExplicitId(row: Record<string, string>, source: string): string | un
  * The row's idempotency key: the explicit id column when present, else the
  * payload digest. Digest-keyed rows that repeat within one upload get a
  * stable occurrence suffix (#1, #2, …) so two identical-looking rows still
- * fire independently — while a RE-upload of the same sheet regenerates the
+ * fire independently, while a RE-upload of the same sheet regenerates the
  * same suffixes in the same order and stays fully deduped. Rows sharing an
  * EXPLICIT id are intentionally treated as the same lead (no suffix).
  */
@@ -295,7 +295,7 @@ function clampDripInterval(seconds: number | undefined): number {
 
 /**
  * Feed each sheet row through the webhook flow-event path, staggering release
- * times. Rows apply independently (a bad row never blocks the rest — matching
+ * times. Rows apply independently (a bad row never blocks the rest, matching
  * the CSV contacts import's row-by-row semantics).
  */
 export async function importLeadBacklog(
@@ -345,16 +345,16 @@ export async function importLeadBacklog(
         ? new Date(baseMs + slot * intervalS * 1000).toISOString()
         : undefined;
 
-    // Rows apply independently — a transient failure on one row is reported
+    // Rows apply independently, a transient failure on one row is reported
     // and the rest still land, matching the contacts CSV import's semantics.
     const eventId = rowEventId(rows[i], data, source, seenKeys);
     let result;
     try {
       if (options.flowId) {
         // Targeted mode: enqueue the chosen flow directly. Same scope shape
-        // and dedupe key as the webhook path — the key goes through
+        // and dedupe key as the webhook path, the key goes through
         // webhookEventKey (trim + 180-char cap) exactly like
-        // processWebhookFlowEvent does — so switching modes (or later adding
+        // processWebhookFlowEvent does, so switching modes (or later adding
         // a webhook trigger) never re-fires an already-imported lead into
         // the same flow.
         const run = await enqueueAiFlowRun(

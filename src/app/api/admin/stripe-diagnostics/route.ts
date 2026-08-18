@@ -1,6 +1,6 @@
 /**
  * Admin: one-call raw-Stripe view for a tenant (BizBlasts
- * `stripe_diagnostics` analog) — the customer, live subscription (+ any
+ * `stripe_diagnostics` analog), the customer, live subscription (+ any
  * commitment schedule), and recent invoices as Stripe reports them, so
  * billing investigations don't require hopping to the Stripe dashboard and
  * cross-referencing ids by hand.
@@ -80,7 +80,7 @@ export async function GET(request: Request) {
         const sub = await stripe.subscriptions.retrieve(row.stripe_subscription_id);
         // Same period resolution the billing cache uses: handles legacy
         // top-level period fields AND basil-era per-item periods aggregated
-        // across every item — first-item-only can be blank or wrong.
+        // across every item, first-item-only can be blank or wrong.
         const period = stripeSubscriptionPeriodCache(sub);
         subscription = {
           id: sub.id,

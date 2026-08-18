@@ -9,7 +9,7 @@
  *      until the multi-step wizard is done),
  *   2. RE-READS the claimed lead page (browse_extract) to pull the seller's
  *      name/phone/email/address off the contact card and screenshot THAT page
- *      (the "QT" Amy forwards) — extracting from the claimed details page, not
+ *      (the "QT" Amy forwards), extracting from the claimed details page, not
  *      the half-rendered wizard, is what makes Amy's email + Dave's offer carry
  *      the real data,
  *   3. files/fills the customer contact from those fields (upsert_customer).
@@ -25,7 +25,7 @@
  * URL), so that work is owned by the separate, enabled weekly "Clever Update
  * Leads" flow which drives the portal list directly.
  *
- * IMPORTANT — prerequisites before --apply / --enable:
+ * IMPORTANT, prerequisites before --apply / --enable:
  *   - The ai-flow-worker Edge function AND the tenant's render VPS must be on
  *     the Clever-engine build (older builds reject `click_text_while_present`
  *     and won't return page text in ACTION mode).
@@ -53,7 +53,7 @@
  *   AIFLOW_CLEVER_INTEGRATION_LABEL   (default "Clever")
  *   AIFLOW_CLEVER_MATCH_TEXT          (default "Clever referral")
  *   AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON (default: click "Next" while present)
- *   AIFLOW_CLEVER_SKIP_WHEN_TEXT      (default "already been claimed" — when the
+ *   AIFLOW_CLEVER_SKIP_WHEN_TEXT      (default "already been claimed", when the
  *                                      accept OR re-read page shows this, end
  *                                      the run as a graceful skip instead of a
  *                                      failure)
@@ -128,7 +128,7 @@ function buildDefinition(opts: {
     steps: [
       { id: "url", type: "extract_url", saveAs: "lead_url" },
       // Credentialed pass 1: accept the lead (click "Accept", then "Next" while
-      // present). No extraction/screenshot here — the wizard page is the
+      // present). No extraction/screenshot here, the wizard page is the
       // half-rendered "too white" view; we read the real data on the next step.
       {
         id: "accept",
@@ -138,7 +138,7 @@ function buildDefinition(opts: {
         actions: opts.acceptActions,
         // When the lead was already claimed by another agent the page shows
         // "Sorry! This referral opportunity has already been claimed." and there
-        // is no Accept button — the click times out. That's not a failure: end
+        // is no Accept button, the click times out. That's not a failure: end
         // the run gracefully (this step "skipped", run "done") instead of
         // dead-lettering it. Match a distinctive substring of that banner.
         skipWhenText: opts.skipWhenText
@@ -154,7 +154,7 @@ function buildDefinition(opts: {
         auth: { integrationLabel: opts.integrationLabel },
         // Backstop for a lead another agent claimed: the re-read page then shows
         // the "already been claimed" banner INSTEAD of the contact card, so
-        // there is nothing to extract — end the run as a graceful skip rather
+        // there is nothing to extract, end the run as a graceful skip rather
         // than extracting empty fields and failing on upsert_customer. (The
         // accept step's own skipWhenText handles the click-time case; this one
         // catches an accept that "succeeded" without actually claiming, e.g.

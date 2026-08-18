@@ -6,7 +6,7 @@ import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
- * fireContactEvent: the Node-side wrapper around enqueueContactEventRuns —
+ * fireContactEvent: the Node-side wrapper around enqueueContactEventRuns,
  * service client supplied, best-effort throughout. The evaluation mechanics
  * are covered in ai-flows-contact-events.test.ts.
  */

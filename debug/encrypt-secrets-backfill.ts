@@ -1,5 +1,5 @@
 /**
- * encrypt-secrets-backfill.ts — one-shot: wrap existing plaintext secrets in
+ * encrypt-secrets-backfill.ts, one-shot: wrap existing plaintext secrets in
  * the AES-256-GCM app-layer envelope (security review G5).
  *
  * Targets:
@@ -16,7 +16,7 @@
  *   npx tsx debug/encrypt-secrets-backfill.ts --genkey   # print a fresh key and exit
  *
  * Env: SUPABASE creds + SECRETS_ENCRYPTION_KEY (repo-root .env). The same
- * key MUST be set in Vercel before running --apply — otherwise the app
+ * key MUST be set in Vercel before running --apply, otherwise the app
  * reads ciphertext it cannot open and every SSH/deploy path fails closed.
  */
 import { randomBytes } from "node:crypto";
@@ -80,7 +80,7 @@ let failures = 0;
       console.error(`vps_ssh_keys ${row.id}: ${writeErr.message}`);
       failures += 1;
     } else if (!Array.isArray(written) || written.length === 0) {
-      // The guard matched zero rows — a concurrent write changed the value
+      // The guard matched zero rows, a concurrent write changed the value
       // between our read and update. Count it as a failure so the operator
       // re-runs (the re-run re-reads the new value and converges).
       console.error(`vps_ssh_keys ${row.id}: value changed concurrently, re-run to convert`);

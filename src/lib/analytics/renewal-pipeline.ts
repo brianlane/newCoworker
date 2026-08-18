@@ -1,5 +1,5 @@
 /**
- * Renewal/expiration pipeline report — documents carrying a renewal date,
+ * Renewal/expiration pipeline report, documents carrying a renewal date,
  * bucketed by how soon they renew (overdue / 30 / 60 / 90 days) with the
  * linked contact and assigned handler resolved. Generic over any record
  * type (policies, leases, contracts, memberships); the daily sweep sends
@@ -18,7 +18,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const RENEWAL_PIPELINE_WINDOW_DAYS = 90;
 /**
  * Furthest-BACK overdue renewals the report shows. A record more than a
- * year past due is stale bookkeeping, not an active pipeline item — and
+ * year past due is stale bookkeeping, not an active pipeline item, and
  * without a floor, a pile of ancient rows could fill the ascending scan
  * cap and push genuinely upcoming renewals out of a capped report.
  */
@@ -73,7 +73,7 @@ export async function getRenewalPipeline(
     now.getTime() - RENEWAL_PIPELINE_LOOKBACK_DAYS * DAY_MS
   ).toISOString();
 
-  // Ascending renewal_date = most-overdue first, then soonest upcoming —
+  // Ascending renewal_date = most-overdue first, then soonest upcoming,
   // the urgency order. The lookback floor keeps stale years-old rows from
   // filling the cap and crowding out the upcoming window.
   const { data, error } = await db

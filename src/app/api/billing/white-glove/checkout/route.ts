@@ -1,7 +1,7 @@
 /**
  * POST /api/billing/white-glove/checkout
  *
- * Authenticated tenant buys white-glove onboarding (Phase C5) — either a
+ * Authenticated tenant buys white-glove onboarding (Phase C5), either a
  * fixed catalog package (`packId` from `src/lib/plans/white-glove.ts`) or a
  * CUSTOM admin-authored offer (`packId` = the offer's UUID; the stored
  * `white_glove_offers` row is the pricing source of truth). Both paths

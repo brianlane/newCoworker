@@ -52,8 +52,8 @@ export function voiceToolValidationError(message: string): NextResponse {
  * businessId is known (envelope / query): the presented bearer must resolve to
  * THIS business (per-tenant token) OR be the legacy shared `ROWBOAT_GATEWAY_TOKEN`
  * (fail-open for boxes not yet on a per-tenant token). This closes the
- * cross-tenant hole — a leaked tenant token can only act as ITS tenant, never as
- * another via a forged businessId — while still accepting a tenant's own unique
+ * cross-tenant hole, a leaked tenant token can only act as ITS tenant, never as
+ * another via a forged businessId, while still accepting a tenant's own unique
  * token at the door (no separate shared-only pre-gate that would 401 it first).
  */
 export async function gatewayBusinessGuard(
@@ -79,7 +79,7 @@ export async function parseVoiceToolRequest(request: Request): Promise<VoiceTool
  *
  * Returned with HTTP 200 (not 4xx) deliberately: the caller is a model
  * runtime (Gemini Live bridge / chat-worker) that forwards the `{ ok,
- * detail }` body as a tool result — a 200 with ok:false lets it degrade
+ * detail }` body as a tool result, a 200 with ok:false lets it degrade
  * gracefully instead of treating the turn as an infrastructure failure.
  */
 export async function agentToolDisabledResponse(

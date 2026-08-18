@@ -54,7 +54,7 @@ export default async function AdminRevenuePage() {
   const revenueSubs: RevenueSubscription[] = subscriptions;
   const businessName = new Map(businesses.map((b) => [b.id, b.name]));
 
-  // Newest row per business for the headline KPI — the same view the admin
+  // Newest row per business for the headline KPI, the same view the admin
   // dashboard's MRR card computes from listSubscriptionsByBusinessIds, so
   // the two never disagree over historical/overlapping rows. Refund-exposure
   // stamping (splits out revenue still inside an open 30-day money-back
@@ -77,7 +77,7 @@ export default async function AdminRevenuePage() {
   const arpuCents = computeArpuCents({ subscriptions: revenueSubs, deals });
   const churn = computeChurnStats({ subscriptions: revenueSubs });
   const trend = computeMrrTrend({ subscriptions: revenueSubs, deals, months: 6 });
-  // Per-business revenue merged by businessId — its length is the UNIQUE
+  // Per-business revenue merged by businessId, its length is the UNIQUE
   // paying-business count (a tenant with both a subscription and an
   // enterprise deal counts once), and the top-10 slice feeds the list.
   const payingBusinesses = computeTopBusinessRevenue({

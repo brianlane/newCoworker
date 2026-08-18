@@ -634,7 +634,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     const res = await POST(makeRequest(content));
     const json = await res.json();
     expect(json.detail).toBe("calendar_not_connected");
-    // The anonymous widget has no notify_team — it saves the request instead.
+    // The anonymous widget has no notify_team, it saves the request instead.
     expect(json.message).toContain("capture_lead");
     expect(json.message).not.toContain("notify_team");
   });
@@ -660,7 +660,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
 
   it("attaches no guidance to non-availability booking failures (e.g. invalid_window)", async () => {
     // "That time was taken" framing on a malformed window would send the
-    // model retry-looping the same mistake — only real slot/calendar
+    // model retry-looping the same mistake, only real slot/calendar
     // failures get the availability message.
     vi.mocked(bookCalendarAppointment).mockResolvedValue({
       ok: false,
@@ -838,7 +838,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
 
   it("accepts offset-carrying ISO instants for calendar_book_appointment", async () => {
     // The tool contract instructs the model to send "ISO 8601 with timezone
-    // offset" — rejecting offsets made every booking attempt fail (Truly's
+    // offset", rejecting offsets made every booking attempt fail (Truly's
     // Junaid conversation). Offsets must validate.
     vi.mocked(bookCalendarAppointment).mockResolvedValue({
       ok: true,

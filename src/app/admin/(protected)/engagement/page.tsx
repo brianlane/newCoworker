@@ -21,7 +21,7 @@ export default async function AdminEngagementPage() {
   ]);
 
   const rows = buildUserEngagementRows({ users, businesses, members });
-  // The churn-risk KPI counts quiet OWNERS (per business) — the same set
+  // The churn-risk KPI counts quiet OWNERS (per business), the same set
   // that gets the churn-risk badge on /admin/clients, so the two surfaces
   // always agree. On a clipped (partial) auth scan the clients page hides
   // its badges, so this KPI goes unknown too rather than overstating risk
@@ -45,7 +45,7 @@ export default async function AdminEngagementPage() {
         </Card>
       )}
 
-      {/* KPI row (BizBlasts' DAU analytics panel) — client-computed so
+      {/* KPI row (BizBlasts' DAU analytics panel), client-computed so
           "Active Today" is the viewer's calendar day. */}
       <EngagementKpis
         users={users}

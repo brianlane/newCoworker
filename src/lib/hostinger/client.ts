@@ -5,12 +5,12 @@
  * SDKs consulted to pin endpoint shapes: `hostinger/api-php-sdk`,
  *                                       `hostinger/api-python-sdk`.
  *
- * Everything here is *primitive* — a thin, composable wrapper around the REST
+ * Everything here is *primitive*, a thin, composable wrapper around the REST
  * endpoints. Orchestration (keypair generation, post-install script content,
  * retry + polling, SSH exec) lives in sibling modules so this file stays
  * strictly Hostinger-contract-shaped and easy to mock in tests.
  *
- * Hostinger does NOT expose a `POST /exec` endpoint — any command execution
+ * Hostinger does NOT expose a `POST /exec` endpoint, any command execution
  * happens via SSH against the public IP with a private key we minted
  * ourselves. See `./ssh.ts`.
  */
@@ -117,7 +117,7 @@ export type BillingSubscription = {
   next_billing_at?: string | null;
   created_at?: string;
   /**
-   * Legacy fields — the live list API stopped returning these (verified Jul
+   * Legacy fields, the live list API stopped returning these (verified Jul
    * 2026; VM↔billing mapping now comes from the VM detail's
    * `subscription_id`). Kept optional for older API surfaces + fallbacks.
    */
@@ -153,7 +153,7 @@ export type VpsSetupRequest = {
 export type VpsPurchaseRequest = {
   /** Price item id from {@link HostingerClient.listCatalog} (e.g. `hostingercom-vps-kvm2-usd-1m`). */
   item_id: string;
-  /** Optional — Hostinger uses the account default when omitted. */
+  /** Optional, Hostinger uses the account default when omitted. */
   payment_method_id?: number;
   setup: VpsSetupRequest;
   coupons?: string[];
@@ -315,7 +315,7 @@ export class HostingerClient {
   /**
    * Attach one or more already-uploaded public keys to a running VPS.
    * Hostinger also accepts `public_key_ids` via the setup payload at purchase
-   * time — use this method only when retro-adding keys to an existing VPS.
+   * time, use this method only when retro-adding keys to an existing VPS.
    */
   async attachPublicKey(virtualMachineId: number, ids: number[]): Promise<Action> {
     return this.request<Action>(
@@ -449,7 +449,7 @@ export class HostingerClient {
 
   // -------------------- Snapshots --------------------
   //
-  // Hostinger supports exactly ONE snapshot per VM — `createSnapshotV1` on an
+  // Hostinger supports exactly ONE snapshot per VM, `createSnapshotV1` on an
   // existing snapshot overwrites it. We rely on that behaviour in the
   // lifecycle engine (cancel-grace always calls `createSnapshot` fresh).
   //

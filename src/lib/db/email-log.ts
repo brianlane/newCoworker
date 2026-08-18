@@ -23,7 +23,7 @@ import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-// Column projection for residency (box) reads — mirrors EMAIL_LOG_SELECT.
+// Column projection for residency (box) reads, mirrors EMAIL_LOG_SELECT.
 const EMAIL_LOG_COLUMNS = [
   "id",
   "business_id",
@@ -77,7 +77,7 @@ export type EmailLogSource =
  * it (the bytes live in `email-attachments`, which the reader treats as the
  * default). Outbound flow mail sets it to `aiflow-screenshots`, since the
  * coworker's only sent attachment is the optional lead screenshot, which already
- * lives in that bucket — we reference it in place rather than copying bytes.
+ * lives in that bucket, we reference it in place rather than copying bytes.
  */
 export type StoredAttachment = {
   filename: string;
@@ -128,7 +128,7 @@ export type EmailLogRow = {
 // The list query intentionally omits `body_full`: it loads up to 200 rows and
 // the list only renders `body_preview`. Full bodies (potentially large) are
 // fetched on demand via getEmailBody when a message is opened in the reading
-// pane — see /api/dashboard/emails/[id].
+// pane, see /api/dashboard/emails/[id].
 const EMAIL_LOG_SELECT =
   "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels, importance";
 
@@ -349,7 +349,7 @@ export async function getEmailLogRow(
  * SMS/voice history already shown there.
  *
  * Matching is case-insensitive. The address is wrapped as an anchored,
- * literal `ilike` value — `%`/`_` (legal in local-parts like `joe_smith`) are
+ * literal `ilike` value, `%`/`_` (legal in local-parts like `joe_smith`) are
  * escaped so they don't act as wildcards, and the PostgREST double-quote +
  * backslash dance mirrors listCustomerMemories so reserved chars (`.`, `,`)
  * inside the address can't split the filter string.
@@ -407,7 +407,7 @@ export async function listEmailLogForAddress(
     // Belt-and-braces exact match (case-insensitive): the escaped ILIKE is
     // already literal under PostgreSQL's default backslash escape, but the
     // rollup must never show someone else's mail if a server setting ever
-    // changes LIKE escape semantics — mirror findCustomerByEmail's JS
+    // changes LIKE escape semantics, mirror findCustomerByEmail's JS
     // re-check.
     const wanted = normalized.toLowerCase();
     return [...byId.values()]
@@ -504,7 +504,7 @@ export async function getEmailBody(
 /**
  * Owner-facing delete of one logged email: SOFT (deleted_at stamp,
  * residency-aware, admin-restorable) but indistinguishable from a hard
- * delete in the dashboard — every reader above filters the stamp. Returns
+ * delete in the dashboard, every reader above filters the stamp. Returns
  * the stamped-row count (0 when unknown/already deleted; idempotent).
  */
 export async function softDeleteEmailLogEntry(
@@ -541,7 +541,7 @@ export type RecordInboundTriggerEmailInput = {
 };
 
 /**
- * Record an inbound email that triggered a flow run. Best-effort by design —
+ * Record an inbound email that triggered a flow run. Best-effort by design,
  * the run is already enqueued, so a logging failure only logs to console.
  */
 export async function recordInboundTriggerEmail(
@@ -604,7 +604,7 @@ export type RecordTenantMailboxInboundInput = {
  * webhook's 200 (mail is already accepted by Cloudflare at that point).
  *
  * Returns the inserted row id (null on failure) so the caller can backfill
- * the flow/run linkage AFTER enqueueing — the row must exist BEFORE any run
+ * the flow/run linkage AFTER enqueueing, the row must exist BEFORE any run
  * does, because doc_extract's tenant-ownership gate reads this row's
  * attachment paths (a run racing ahead of the log row would fail its
  * document read).
@@ -650,7 +650,7 @@ export async function recordTenantMailboxInbound(
 
 /**
  * Backfill the flow/run linkage on an inbound mailbox row once runs exist
- * (the row itself is written BEFORE enqueueing — see above). Best-effort.
+ * (the row itself is written BEFORE enqueueing, see above). Best-effort.
  */
 export async function linkTenantMailboxInboundRun(
   businessId: string,
@@ -708,7 +708,7 @@ export type RecordOutboundAssistantEmailInput = {
 
 /**
  * Record an owner-mailbox email the assistant sent from chat/SMS/voice so it
- * shows on the dashboard Emails page. Best-effort by design — the email is
+ * shows on the dashboard Emails page. Best-effort by design, the email is
  * already out, so a logging failure only logs to console.
  */
 export async function recordOutboundAssistantEmail(

@@ -1,11 +1,11 @@
 /**
- * ai-flow-worker — async executor for AiFlow runs (Phase 5).
+ * ai-flow-worker, async executor for AiFlow runs (Phase 5).
  *
  * Scheduled by pg_cron (see 20260608010000_schedule_ai_flow_worker.sql), auth'd
  * with INTERNAL_CRON_SECRET via _shared/cron_auth.ts. Each invocation:
  *
- *   1. reclaim_stale_ai_flow_runs  — recover runs whose worker died mid-flight.
- *   2. claim_ai_flow_runs          — lease queued runs (FOR UPDATE SKIP LOCKED).
+ *   1. reclaim_stale_ai_flow_runs, recover runs whose worker died mid-flight.
+ *   2. claim_ai_flow_runs, lease queued runs (FOR UPDATE SKIP LOCKED).
  *   3. for each run: load the flow definition and execute steps sequentially
  *      from `current_step`, driving the run state machine:
  *        queued -> running -> (awaiting_approval ->) done | failed.
@@ -308,7 +308,7 @@ const SCREENSHOT_MMS_URL_TTL_S = 60 * 60;
 // later send_sms (mediaUrlVar → MMS) or send_email body can use it. Created by
 // 20260819000000_generated_images_bucket.sql. 32 days: the URL may sit in a
 // deferred run's context across sleeps/wait_for_reply, which cap at 30 days
-// (MAX_WAIT_MINUTES) — the TTL must outlive the longest possible deferral
+// (MAX_WAIT_MINUTES), the TTL must outlive the longest possible deferral
 // plus delivery headroom so the consuming send never holds a dead link.
 const GENERATED_IMAGES_BUCKET = "generated-images";
 const GENERATED_IMAGE_URL_TTL_S = 32 * 24 * 60 * 60;
@@ -328,13 +328,13 @@ const DEFAULT_IMAGE_COST_MICROS = 134_000;
  *
  * The render service is deployed PER-TENANT (one headless-Chromium sidecar on
  * each business's own VPS, exposed at `render-<businessId>.<zone>`), so the
- * shared worker templates the businessId into the URL — exactly like
+ * shared worker templates the businessId into the URL, exactly like
  * ROWBOAT_CHAT_URL_TEMPLATE does for per-tenant Rowboat. A static
  * `AIFLOW_RENDER_URL` (no `{businessId}` placeholder) still works for
  * single-host / local setups: the substitution is then a no-op.
  *
  * Returns null when neither var is configured (browse falls back to a static
- * fetch, which cannot drive a login form — see browseStep).
+ * fetch, which cannot drive a login form, see browseStep).
  */
 function resolveRenderUrl(businessId: string): string | null {
   const tmpl =
@@ -366,7 +366,7 @@ class RenderFailedError extends Error {
 }
 /**
  * Thrown when the tenant's shared AI budget (owner chat + SMS + AiFlows) is
- * exhausted for the period — a permanent, owner-actionable state, so the run
+ * exhausted for the period, a permanent, owner-actionable state, so the run
  * fails immediately instead of burning retries.
  */
 class SpendCapError extends Error {}
@@ -419,7 +419,7 @@ type Scope = {
   trigger: Record<string, unknown>;
   /**
    * Relative-date tokens ({{now.*}}), computed once per run in the business
-   * timezone. Derived only — buildContext omits it from the persisted context.
+   * timezone. Derived only, buildContext omits it from the persisted context.
    */
   now?: NowScope;
   // The AI coworker's own mailbox, exposed to templates as {{coworker.email}}
@@ -427,8 +427,8 @@ type Scope = {
   // run; never persisted in run.context (buildContext omits it).
   coworker?: { email: string };
   // Per-flow opt-in (options.captureStepScreenshots): capture a screenshot on
-  // every browse step — and a before/at-failure pair when a browse_action breaks
-  // — for the dashboard run "investigate" view. Default off so most flows pay no
+  // every browse step, and a before/at-failure pair when a browse_action breaks,
+  // for the dashboard run "investigate" view. Default off so most flows pay no
   // extra capture latency/storage; turned on for flows being debugged.
   captureScreenshots?: boolean;
   // Flow-level business-hours gate (definition.timeWindow): communication steps
@@ -561,7 +561,7 @@ serve(async (req: Request): Promise<Response> => {
 /** Run as many steps as possible; persist terminal/paused state. */
 async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // Kill switch: if the owner paused the business, do NOT execute side-effecting
-  // steps (send_sms / notify_owner / http_call) — including for runs that were
+  // steps (send_sms / notify_owner / http_call), including for runs that were
   // already queued or are resuming after approval. Defer by re-queuing without
   // burning an attempt so the run resumes cleanly once they unpause. Best-effort
   // so a transient write failure here just leaves the run for stale reclaim.
@@ -614,7 +614,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // Disabling must halt already-queued/approval-resumed runs, not just new
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
   // EXCEPTION: test runs ("Test with a contact") execute on DISABLED flows by
-  // design — testing a draft before switching it on is the point, and every
+  // design, testing a draft before switching it on is the point, and every
   // side-effecting action is simulated anyway. Soft-deleted flows (deleted_at
   // set) cancel either way, matching the old hard-delete "row missing" path
   // so a queued Test run cannot keep executing after the owner deleted it.
@@ -631,7 +631,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // the email message is still inside the poll lookback, it can fire
       // again instead of being silently swallowed by the unique
       // (flow_id, dedupe_key) index. Email runs also leave an evaluation
-      // marker that would skip the message on later polls — clear it too.
+      // marker that would skip the message on later polls, clear it too.
       const { data: dkRow } = await supabase
         .from("ai_flow_runs")
         .select("dedupe_key")
@@ -702,7 +702,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   if (typeof flow.name === "string" && flow.name.trim()) scope.flowName = flow.name.trim();
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
-  // route_to_team actually records a claim — an absent var would otherwise trim
+  // route_to_team actually records a claim, an absent var would otherwise trim
   // to "" and spuriously satisfy notEquals. Only seed when missing so a resume
   // (route_to_team waits across invocations) never clobbers a real claim that
   // was already persisted into run.context.vars.
@@ -720,7 +720,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   }
   // Engine-provided {{vars.group_lead_phone}}: in a group-text trigger (e.g. a
   // referral service's intro thread) the lead's number never appears in the
-  // message TEXT — it's the one thread participant who is neither the sender
+  // message TEXT, it's the one thread participant who is neither the sender
   // (the service) nor any of the business's own numbers. Seeded once at run
   // start ("" for non-group triggers or an ambiguous roster) and persisted via
   // buildContext like every other var, so parks/resumes never recompute it.
@@ -732,7 +732,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   //   - The sender must be PINNED by a from_matches trigger condition
   //     (senderPinnedByFromMatches): "roster minus sender minus us = the lead"
   //     only holds when the author declared who the sender is. Without a pin
-  //     the sender could BE the lead — and the remainder would be the referral
+  //     the sender could BE the lead, and the remainder would be the referral
   //     service, a mis-target this var must never carry.
   if (scope.vars.group_lead_phone === undefined) {
     const participants = Array.isArray(scope.trigger.participants)
@@ -744,7 +744,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       const triggers = flowTriggers(def);
       // from_matches saved-person refs resolve to live identity values, same
       // as trigger evaluation. Resolution failure fails CLOSED (no pin, var
-      // seeds "") — a lookup blip must never mislabel a lead.
+      // seeds ""), a lookup blip must never mislabel a lead.
       let refValues: ReadonlyMap<string, string[]> | undefined;
       const refConds = triggers
         .filter((t): t is SmsTrigger => t.channel === "sms")
@@ -784,7 +784,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       : "";
   }
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
-  // outbound email sends AS the coworker — never the platform identity — and so
+  // outbound email sends AS the coworker, never the platform identity, and so
   // flows can reference {{coworker.email}} in templates.
   const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
   scope.coworker = { email: mailbox.address };
@@ -834,7 +834,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     typeof resumeMarker === "string" ? resumeMarker : null
   );
   if (resolvedIndex === null) {
-    // The step this run parked on no longer exists in the edited flow —
+    // The step this run parked on no longer exists in the edited flow,
     // stopping cleanly beats guessing (and re-sending) from a wrong index.
     await updateRun(supabase, run.id, {
       status: "canceled",
@@ -871,7 +871,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   /**
    * Stamp the step ID the given index points at into the run vars, so the
    * `current_step` write that follows carries its own remap anchor. Must be
-   * called with the SAME index the write persists — a mismatched pair would
+   * called with the SAME index the write persists, a mismatched pair would
    * relocate a resume onto an already-executed step.
    */
   const stampResumeMarker = (i: number) => {
@@ -885,9 +885,9 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     // `canceled` while we hold the claim. Re-read the live status at the TOP
     // of every iteration (before branch-skip bookkeeping too, so a long skip
     // chain can't march to `done`) so a stopped run quits at the next step
-    // boundary — the step already in flight completes, nothing after it runs.
+    // boundary, the step already in flight completes, nothing after it runs.
     // Every updateRun below is additionally status-guarded, so even a cancel
-    // that lands mid-step can never be overwritten — this check is what stops
+    // that lands mid-step can never be overwritten, this check is what stops
     // the remaining SIDE EFFECTS, the guard is what protects the STATE. A
     // read failure proceeds (cancel stays best-effort; the write guard holds).
     try {
@@ -903,7 +903,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     } catch (e) {
       console.error("executeRun cancel check", e);
     }
-    // A step under an untaken (or not-yet-evaluated) branch arm never runs —
+    // A step under an untaken (or not-yet-evaluated) branch arm never runs,
     // recorded "skipped" like a when_unmet skip, so run history shows every
     // path with the untaken ones greyed.
     if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
@@ -919,8 +919,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     // Post-extraction lead-dedupe gate (options.dedupeLeadRuns, once per run,
     // before the FIRST outward touch): if an EARLIER non-failed run of this
     // flow already handled the same person (extracted lead_phone/lead_email,
-    // contact-expanded) — and, when both runs carry a lead_address, the same
-    // property — this run is a re-trigger of a lead someone already owns
+    // contact-expanded), and, when both runs carry a lead_address, the same
+    // property, this run is a re-trigger of a lead someone already owns
     // (realtor.com "Repeat inquiry" relays, Jennifer Phillips Jul 19 2026).
     // Cancel it before it emails/texts anyone or re-offers the lead to the
     // team. Fails OPEN on lookup trouble; test runs are never gated.
@@ -929,7 +929,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       !scope.testMode &&
       scope.vars[LEAD_DEDUPE_VAR] !== "1" &&
       flowDedupesLeadRuns(def) &&
-      // A step whose `when` guard is unmet skips inside runStep anyway —
+      // A step whose `when` guard is unmet skips inside runStep anyway,
       // don't spend the lookup on a message that won't send.
       (!step.when || evaluateStepCondition(step.when, scope))
     ) {
@@ -1004,7 +1004,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       COMM_STEP_TYPES.has(step.type) &&
       !scope.testMode &&
       scope.vars[BOOKING_PRECHECK_VAR] !== "1" &&
-      // A step whose `when` guard is unmet skips inside runStep anyway —
+      // A step whose `when` guard is unmet skips inside runStep anyway,
       // don't spend the platform round-trip on a message that won't send.
       (!step.when || evaluateStepCondition(step.when, scope))
     ) {
@@ -1043,11 +1043,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       }
     }
     // Event_end thread-activity gate (once per run, before the first
-    // lead-facing text, only in flows triggered by a calendar event_end —
+    // lead-facing text, only in flows triggered by a calendar event_end,
     // the no-show-recovery / post-appointment follow-up class): if the
-    // recipient's thread has ANY activity since the appointment STARTED —
+    // recipient's thread has ANY activity since the appointment STARTED,
     // they texted in, or anyone (owner, AI worker, another flow) texted
-    // them — the conversation is live, and a canned follow-up would re-send
+    // them, the conversation is live, and a canned follow-up would re-send
     // what the thread already handled (KYP Jul 20 2026: the no-show flow
     // texted a rebook link 2h23m after the lead had said "will have to
     // rebook" and the AI had already answered with one). The run stands
@@ -1065,10 +1065,10 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       (!step.when || evaluateStepCondition(step.when, scope))
     ) {
       // Anchored at the event's START (fallback: end minus a margin) so a
-      // mid-appointment text still suppresses — see eventEndActivityAnchorIso.
+      // mid-appointment text still suppresses, see eventEndActivityAnchorIso.
       const sinceIso = eventEndActivityAnchorIso(scope.trigger);
       const target = renderTemplate(step.to ?? "", scope).trim();
-      // Only a concrete lead number is gated — teammate/group/agent sends
+      // Only a concrete lead number is gated, teammate/group/agent sends
       // are internal notifications with their own semantics. The marker is
       // per RECIPIENT, so an earlier send to a different number (a teammate
       // heads-up before the invitee text) never consumes the invitee's gate.
@@ -1257,7 +1257,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null
       });
       if (!parked) {
-        // The owner stopped the run while this step executed — the park write
+        // The owner stopped the run while this step executed, the park write
         // matched nothing, so the approval prompt must not go out either.
         await stoppedMidExecutionLog(supabase, run, index);
         return;
@@ -1416,13 +1416,13 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null
       });
       if (!parked) {
-        // The owner stopped the run while this step executed — the park write
+        // The owner stopped the run while this step executed, the park write
         // matched nothing, so the agent offer must not go out either.
         await stoppedMidExecutionLog(supabase, run, index);
         return;
       }
       // A send failure here leaves the run parked; the escalation sweep moves on
-      // to the next agent at the deadline rather than stranding the lead — so we
+      // to the next agent at the deadline rather than stranding the lead, so we
       // log and stop instead of unwinding the durable parked state.
       try {
         if (outcome.operational) {
@@ -1474,7 +1474,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       routing.route_step_index = index;
       // Park BEFORE any offer goes out (state before side effect) so an
       // inbound 1/2 from any recipient always matches the run. No single
-      // awaiting_agent_e164 fits a broadcast — the webhook matches replies
+      // awaiting_agent_e164 fits a broadcast, the webhook matches replies
       // against routing.offered_all instead.
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
@@ -1486,7 +1486,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null
       });
       if (!parked) {
-        // The owner stopped the run while this step executed — no offers may
+        // The owner stopped the run while this step executed, no offers may
         // go out either.
         await stoppedMidExecutionLog(supabase, run, index);
         return;
@@ -1510,7 +1510,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         }
       }
       // A re-park after a "2" (empty recipients) is bookkeeping, not a new
-      // offer — don't re-announce it.
+      // offer, don't re-announce it.
       if (outcome.recipients.length > 0) {
         const agents = outcome.recipients.map((r) => r.e164);
         await telemetryRecord(supabase, "ai_flow_run_awaiting_agent", {
@@ -1541,7 +1541,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // text to this run via context.waiting_reply.from and re-queues it with
       // the reply in context.vars[saveAs]. The timeout sweep
       // (resume_overdue_reply_waits) re-queues with the no_reply sentinel at
-      // respond_by_at. Attempt giveback like defer — waiting is not a failure.
+      // respond_by_at. Attempt giveback like defer, waiting is not a failure.
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_reply",
@@ -1598,7 +1598,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // telnyx-voice-call-end hangup handler) resumes the run with the call
       // outcome in context.vars[saveAs] via the session's flow_run link. The
       // timeout sweep (resume_overdue_call_waits) re-queues with the
-      // no_answer sentinel at respond_by_at. Attempt giveback like defer —
+      // no_answer sentinel at respond_by_at. Attempt giveback like defer,
       // waiting on a live call is not a failure.
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
@@ -1621,7 +1621,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       if (!parked) {
         // Owner stopped the run while the call was being placed; the call
         // itself proceeds (hanging up a live callee mid-greeting would be
-        // worse), but nothing resumes — the outcome write no-ops on a
+        // worse), but nothing resumes, the outcome write no-ops on a
         // canceled run.
         await stoppedMidExecutionLog(supabase, run, index);
         return;
@@ -1656,7 +1656,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       // Park the whole run until the resume time: the claim RPC skips queued
       // runs whose earliest_claim_at is in the future. Give back the attempt
-      // the claim charged (same as the paused-business defer) — waiting out
+      // the claim charged (same as the paused-business defer), waiting out
       // quiet hours is not a failure and must not drain any budget.
       stampResumeMarker(index);
       const deferred = await updateRun(supabase, run.id, {
@@ -1768,14 +1768,14 @@ const BOOKING_PRECHECK_VAR = "__booking_precheck";
 
 /**
  * Marker var: the post-extraction lead-dedupe gate (options.dedupeLeadRuns)
- * already ran for this run — later comm steps and re-claims never re-pay the
+ * already ran for this run, later comm steps and re-claims never re-pay the
  * lookup. Stamped whether or not a duplicate was found.
  */
 const LEAD_DEDUPE_VAR = "__lead_dedupe";
 
 /**
  * Marker var PREFIX for the event_end thread-activity gate: stamped per
- * RECIPIENT (`__event_end_thread_check:<e164>`), not per run — a flow that
+ * RECIPIENT (`__event_end_thread_check:<e164>`), not per run, a flow that
  * texts a teammate before the invitee must still gate the invitee's send
  * (Bugbot Medium on PR #795, round 6). Re-claims and repeat sends to the
  * same number never re-pay the lookup.
@@ -1794,7 +1794,7 @@ const EVENT_END_THREAD_SKIP = "event_end_thread_active";
 /**
  * Anchor fallback when the trigger carries no starts_at: assume the
  * appointment ran at most this long before its end, so mid-appointment
- * texts ("running late", "have to rebook" — the incident's exact shape)
+ * texts ("running late", "have to rebook", the incident's exact shape)
  * still count as thread activity. Erring early only widens suppression to
  * a conversation active shortly BEFORE the appointment, which is equally a
  * live thread the canned follow-up must not talk over.
@@ -1833,10 +1833,10 @@ function flowCalendarTriggersAllEventEnd(def: AiFlowDefinition): boolean {
 /**
  * Whether THIS run was enqueued by an event_end firing. The run context does
  * not record which trigger fired, but the calendar poller's dedupe key does
- * (`cal:<eventId>:end:<endIso>` — see calendarDedupeKey in
+ * (`cal:<eventId>:end:<endIso>`, see calendarDedupeKey in
  * src/lib/ai-flows/calendar-poll.ts), so that is authoritative. A run with
  * no dedupe key (manual replays, older rows) falls back to the definition:
- * unambiguous only when EVERY calendar trigger is event_end — a flow also
+ * unambiguous only when EVERY calendar trigger is event_end, a flow also
  * watching event_start/event_created must never have those runs' reminders
  * or cancel texts stood down by this gate (Bugbot Medium on PR #795).
  * Fails CLOSED (not an event_end run) on lookup trouble.
@@ -1863,9 +1863,9 @@ async function runFiredByEventEnd(
 }
 
 /**
- * Whether the contact's SMS thread has activity SINCE `sinceIso` — an inbound
+ * Whether the contact's SMS thread has activity SINCE `sinceIso`, an inbound
  * text from them (sms_inbound_jobs), an AI auto-reply delivered to them (the
- * reply lives on the inbound job row, NOT in sms_outbound_log — a text from
+ * reply lives on the inbound job row, NOT in sms_outbound_log, a text from
  * before the anchor whose reply landed after it still counts), or any other
  * outbound to them (sms_outbound_log: owner/dashboard/MCP/flow sends). Fails
  * OPEN (false) on lookup trouble: a DB hiccup must never mute a follow-up
@@ -1915,7 +1915,7 @@ const BOOKING_PRECHECK_TIMEOUT_MS = 8_000;
  * First TRUNK goal step at or after `fromIndex` watching appointment_booked
  * (branch-nested goals are skipped for the same reason jumpRunToGoal skips
  * them: jumping onto an unevaluated branch path is unsafe). Null when the
- * rest of the flow carries none — then there is nothing to precheck for.
+ * rest of the flow carries none, then there is nothing to precheck for.
  */
 function findBookingGoalAhead(
   flat: ReturnType<typeof flattenSteps>,
@@ -1999,7 +1999,7 @@ async function stoppedMidExecutionLog(
 
 /**
  * Step types gated by the flow-level time window (definition.timeWindow):
- * everything that CONTACTS someone. Reads/waits/branches run any time — only
+ * everything that CONTACTS someone. Reads/waits/branches run any time, only
  * the outward touch waits for business hours.
  */
 const COMM_STEP_TYPES = new Set<string>([
@@ -2013,7 +2013,7 @@ const COMM_STEP_TYPES = new Set<string>([
   "notify_lead_owner",
   "route_to_team",
   "share_document",
-  // An outbound AI phone call is the most intrusive contact of all — it must
+  // An outbound AI phone call is the most intrusive contact of all, it must
   // never place outside the flow's business-hours window.
   "place_ai_call"
 ]);
@@ -2022,7 +2022,7 @@ type StepOutcome =
   // skipNextStep: how many steps an approval gate decided "skip" covers (the
   // steps directly after it). A gate guarding two sends must skip both, or the
   // second goes out unapproved.
-  // Legacy note: set by an approval gate decided "skip" — the step directly
+  // Legacy note: set by an approval gate decided "skip", the step directly
   // after the gate (the action it guards) is recorded as skipped and never
   // runs, while the rest of the flow continues.
   // endRun: finalize the run immediately after this step WITHOUT running any
@@ -2107,10 +2107,10 @@ async function runStep(
   routing: Record<string, unknown>
 ): Promise<StepOutcome> {
   // Per-step `when` guard: skip (don't run) when the condition is unmet. This is
-  // how a flow branches — e.g. a buyer vs. seller send_sms, only one of which
+  // how a flow branches, e.g. a buyer vs. seller send_sms, only one of which
   // fires. Evaluated before recording "running" so a skipped step is never shown
   // as having started. EXCEPTION: a goal step the run JUMPED to (its
-  // `__goal_<id>` var is stamped) ignores its guard — the milestone already
+  // `__goal_<id>` var is stamped) ignores its guard, the milestone already
   // fired, and letting a stale condition skip the checkpoint would resume the
   // very follow-ups the jump exists to stop.
   const jumpedToGoal =
@@ -2120,7 +2120,7 @@ async function runStep(
     return { kind: "ok", skipped: true, result: { skipped: "when_unmet", when: step.when } };
   }
   // Flow-level time window (definition.timeWindow): a communication step
-  // outside the window defers the whole run to the next open slot — the same
+  // outside the window defers the whole run to the next open slot, the same
   // earliest_claim_at mechanics as send_sms quiet hours, which still apply on
   // top per step. Checked AFTER the `when` guard so a step that would skip
   // anyway never parks the run, and before recording "running".
@@ -2147,7 +2147,7 @@ async function runStep(
   await recordStep(supabase, run, index, step, "running");
   // planStep's switch is compile-time exhaustive, but at RUNTIME a stored
   // definition can carry a step type this deploy predates (two agents
-  // deploying in parallel raced exactly this way once — the old worker died
+  // deploying in parallel raced exactly this way once, the old worker died
   // with a bare TypeError). Fail readably instead so the run history says
   // what to do.
   const plan = planStep(step, scope) as ReturnType<typeof planStep> | undefined;
@@ -2166,7 +2166,7 @@ async function runStep(
   if (scope.testMode && plan.ok) {
     const simulated = simulateTestAction(plan.action, scope);
     if (simulated) {
-      // A simulated SKIP (planner skipReason — e.g. no usable recipient) is
+      // A simulated SKIP (planner skipReason, e.g. no usable recipient) is
       // recorded as skipped, exactly like the live path, so a test run never
       // claims it sent something the live run would not.
       if (typeof simulated.skipped === "string") {
@@ -2242,7 +2242,7 @@ async function runStep(
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
       // When the self-number scrub emptied THIS step's phone var earlier in
-      // the run, the skip below is the scrub's doing — text the owner a
+      // the run, the skip below is the scrub's doing, text the owner a
       // plain-words explanation (the exact confusion from Truly's office-line
       // test). This notice used to ride the step's plan FAILURE; the step now
       // SKIPS on a missing phone, so it is surfaced here instead. Gated on
@@ -2304,7 +2304,7 @@ async function runStep(
  * Pause-then-continue: compute the resume instant, stamp the re-entry marker
  * (persisted with the deferred context so the step is a no-op after the
  * wait), and defer the run via earliest_claim_at. Fails OPEN on a bad
- * timezone (skip the wait, note why) — a config typo must not brick the run.
+ * timezone (skip the wait, note why), a config typo must not brick the run.
  */
 function sleepStep(
   scope: Scope,
@@ -2325,7 +2325,7 @@ function sleepStep(
     // Date-anchored wait (untilDateTemplate / relativeToTemplate): the
     // planner already rendered + offset the instant. null = unparseable
     // render → fail open below. A PAST instant means there is nothing to
-    // wait for — continue immediately rather than deferring a whole tick.
+    // wait for, continue immediately rather than deferring a whole tick.
     const targetMs = action.untilIso === null ? NaN : Date.parse(action.untilIso);
     if (Number.isFinite(targetMs) && targetMs <= nowMs) {
       scope.vars[action.marker] = "1";
@@ -2560,7 +2560,7 @@ async function enrichCustomerProfile(
     return;
   }
 
-  // The RPC returns the row it actually bumped — which is the SURVIVING profile
+  // The RPC returns the row it actually bumped, which is the SURVIVING profile
   // when customerE164 was a merged-away alias. Target the email update at that
   // row's primary key so the link lands even after a merge (the merged-away
   // number no longer exists as a customer_e164).
@@ -2623,7 +2623,7 @@ async function recordLeadCustomerProfile(
   // the customer in, not just ones using the exact `lead_name` key.
   const identity = extractLeadIdentity(scope.vars);
   // This helper also runs for every group-reply recipient (a teammate, the
-  // owner) — only the LEAD should get the extracted name/email, never a
+  // owner), only the LEAD should get the extracted name/email, never a
   // co-recipient. The lead is the recipient matching vars.lead_phone when the
   // flow captured it; when it didn't (e.g. the Clever group reply, which only
   // has seller_first_name), non-lead numbers (roster, self, saved business
@@ -2652,7 +2652,7 @@ async function recordLeadCustomerProfile(
  * `upsert_customer` step: file/fill the customer keyed by the resolved phone,
  * using the name/email the planner read from earlier-step vars. Unlike
  * recordLeadCustomerProfile (a side effect of a send), this is an explicit
- * step, so the phone IS the lead — no co-recipient gating needed.
+ * step, so the phone IS the lead, no co-recipient gating needed.
  */
 /**
  * How long a prior run of the same flow for the same lead phone suppresses a
@@ -2668,11 +2668,11 @@ const DUPLICATE_LEAD_WINDOW_HOURS = 72;
  * lead phone within the window → its id; null otherwise. Only lead-intake
  * triggers (tenant_email / webhook) are guarded. Strictly-earlier created_at
  * ordering (vs this run) keeps two same-batch duplicates from suppressing
- * each other into silence — exactly one of them wins.
+ * each other into silence, exactly one of them wins.
  *
  * Lead identity uses the SAME keys as the reply path's flow-context lookup
  * (run_context.ts / goal_events): the triggering sender, the extracted
- * lead_phone var, or the number a wait is parked on — trigger.from and
+ * lead_phone var, or the number a wait is parked on, trigger.from and
  * waiting_reply.from are always E.164, so a prior run whose extraction
  * stored a formatted lead_phone still matches on those (Bugbot Mediums on
  * PR #575). A flow filing leads under a fully custom var name degrades to
@@ -2683,7 +2683,7 @@ const DUPLICATE_LEAD_WINDOW_HOURS = 72;
  * number keys can hold an address.
  *
  * A CANCELED prior run counts only when it actually texted the lead before
- * being stopped — an owner canceling a run pre-outreach must not make the
+ * being stopped, an owner canceling a run pre-outreach must not make the
  * lead's next submission fall silent (Bugbot Medium on PR #575).
  *
  * Best-effort throughout: any read failure returns null (fail open).
@@ -2725,7 +2725,7 @@ async function findDuplicateLeadRun(
     ).toISOString();
     // Shared filter shape for both passes below. updated_at (not created_at):
     // a long-running/parked run enqueued more than 72h ago is still a live
-    // conversation for the reply path (which looks back on updated_at too) —
+    // conversation for the reply path (which looks back on updated_at too),
     // a repeat submission during it must still be suppressed. The second
     // .or() excludes simulated test runs (they never texted the lead).
     // (Bugbot Mediums on PR #575.)
@@ -2821,7 +2821,7 @@ async function upsertCustomerStep(
   }
   // Existence pre-check (alias-aware) so the contact_created trigger below
   // fires only for genuinely NEW contacts, never enrichments. Best-effort: a
-  // read failure just means no trigger fires this pass — except on backfill
+  // read failure just means no trigger fires this pass, except on backfill
   // runs, where it fails SAFE (treated as existing, run ends) below.
   let existedBefore = true;
   let precheckFailed = false;
@@ -2842,7 +2842,7 @@ async function upsertCustomerStep(
     precheckFailed = true;
   }
   // Email-replay backfill: the lead already has a contact row, so the
-  // original run (or the owner) already reached out — finalize as done here
+  // original run (or the owner) already reached out, finalize as done here
   // rather than continuing to send_sms/wait_for_reply and double-texting.
   // A failed pre-check counts as existing (fail safe: skipping one lead
   // beats spamming one). New leads fall through and run the full flow.
@@ -2866,12 +2866,12 @@ async function upsertCustomerStep(
   }
   // Duplicate lead submission guard (Truly Insurance, 2026-07-13): the same
   // lead source re-submitting the same phone number within the window must
-  // UPDATE the contact and flag the owner — never re-run the introduction.
+  // UPDATE the contact and flag the owner, never re-run the introduction.
   // Production showed five intro texts to one number in four minutes (one
   // per Privyr submission) and a second intro to an in-progress lead 1.75h
   // into their conversation. Scoped to lead-intake triggers (tenant_email /
   // webhook): contact-event and manual runs legitimately re-run for the
-  // same phone. Detection is best-effort and FAILS OPEN — a duplicate intro
+  // same phone. Detection is best-effort and FAILS OPEN, a duplicate intro
   // beats a lost lead.
   const duplicateOfRunId = isTestModeTrigger(scope.trigger)
     ? null
@@ -2892,7 +2892,7 @@ async function upsertCustomerStep(
       scope,
       `duplicate lead submission for ${action.e164}, contact updated, no new outreach (prior run ${duplicateOfRunId})`
     );
-    // Tell the owner once so the repeat isn't silent — someone may have
+    // Tell the owner once so the repeat isn't silent, someone may have
     // re-submitted the form on purpose and expects a human to look.
     await sendOwnerSms(
       supabase,
@@ -2930,7 +2930,7 @@ async function upsertCustomerStep(
   if (!existedBefore) {
     // contact_created triggers: a flow that files a brand-new lead may start
     // OTHER flows (loop-guarded against this one). Fired only when the row
-    // verifiably EXISTS now — enrichCustomerProfile is best-effort and can
+    // verifiably EXISTS now, enrichCustomerProfile is best-effort and can
     // exit without creating anything (staff-contact guard, RPC failure), and
     // a "new contact" event for a lead that was never filed would start
     // automations on a phantom. A verify-read failure just skips the event.
@@ -2954,7 +2954,7 @@ async function upsertCustomerStep(
           },
           sourceFlowId: run.flow_id,
           // Keyed to THIS run (idempotent across step retries) rather than
-          // the phone forever — a deleted-then-refiled contact is a new
+          // the phone forever, a deleted-then-refiled contact is a new
           // creation.
           dedupeKey: `ce:created:${action.e164}:${run.id}`
         });
@@ -3037,7 +3037,7 @@ async function isProtectedStaffContact(
  * alias-aware like getCustomerMemory, and tags are normalized the way the
  * dashboard write path does (trim, case-insensitive de-dup, 25-tag cap).
  * A missing phone (planner skipReason) or missing contact row SKIPS with a
- * note — tag bookkeeping must never fail an otherwise-healthy run.
+ * note, tag bookkeeping must never fail an otherwise-healthy run.
  */
 async function updateContactStep(
   supabase: Supabase,
@@ -3080,11 +3080,11 @@ async function updateContactStep(
     };
   }
   // Staff-contact protection (default ON, toggled from Settings): lead-state
-  // tags never land on the owner or a roster member — the classic trap is an
+  // tags never land on the owner or a roster member, the classic trap is an
   // employee testing a flow with their own number (customer filing shares the
   // same detection via staffNumberCheck). Staff = a stored
   // owner/employee type, OR any of the row's numbers (primary, merged
-  // aliases, the targeted number) on the ai_flow_team_members roster — the
+  // aliases, the targeted number) on the ai_flow_team_members roster, the
   // roster is authoritative even when the stored row is typed "customer".
   const contactNumbers = [
     ...new Set(
@@ -3108,9 +3108,9 @@ async function updateContactStep(
   const seen = new Set<string>();
   const next: string[] = [];
   // Tags actually stripped from the row (vs. merely CONFIGURED removals that
-  // were never present) — the actions_taken note must not over-claim.
+  // were never present), the actions_taken note must not over-claim.
   const removed: string[] = [];
-  // Existing tags (minus removals) survive unconditionally — the DB cap
+  // Existing tags (minus removals) survive unconditionally, the DB cap
   // guarantees there are at most 25 of them, so no truncation is possible.
   for (const t of Array.isArray(contact.tags) ? contact.tags : []) {
     const tag = t.trim().slice(0, 40);
@@ -3124,7 +3124,7 @@ async function updateContactStep(
     next.push(tag);
   }
   // Additions are tracked individually so the actions_taken note (and the
-  // recorded result) only claim tags that actually landed — a full contact
+  // recorded result) only claim tags that actually landed, a full contact
   // drops the overflow explicitly instead of silently.
   const added: string[] = [];
   const droppedAtCap: string[] = [];
@@ -3148,9 +3148,9 @@ async function updateContactStep(
   if (updErr) throw new Error(`update_contact write: ${updErr.message}`);
   // Goal Events: each tag that actually landed may jump OTHER parked/queued
   // runs for this lead to a matching tag_added goal (this running run is
-  // untouched — its own goals are passed inline). Runs match by the EXACT
+  // untouched, its own goals are passed inline). Runs match by the EXACT
   // number they were triggered with, which after a profile merge may be any
-  // of the row's numbers — fan out over all of them (contactNumbers already
+  // of the row's numbers, fan out over all of them (contactNumbers already
   // unions the targeted number, the primary, and the merge aliases).
   // Best-effort by design.
   for (const tag of added) {
@@ -3162,7 +3162,7 @@ async function updateContactStep(
   // state-machine chain the channel exists for). sourceFlowId loop-guards
   // this flow from retriggering itself; the dedupe key is idempotent across
   // step retries. Skipped entirely on test runs (this path is unreachable
-  // then — update_contact is simulated), so no extra guard needed.
+  // then, update_contact is simulated), so no extra guard needed.
   for (const [changed, change] of [
     ...added.map((t) => [t, "added"] as const),
     ...removed.map((t) => [t, "removed"] as const)
@@ -3211,7 +3211,7 @@ function appendActionTaken(scope: Scope, description: string): void {
 
 /**
  * The business's OWN phone numbers (tenant DID, owner forward cell, owner
- * profile phone) — the numbers an extracted "lead phone" can never
+ * profile phone), the numbers an extracted "lead phone" can never
  * legitimately be. Used to scrub extraction output (see
  * _shared/ai_flows/extracted_contact.ts). Best-effort: a lookup error returns
  * what was found so extraction never fails on this.
@@ -3244,7 +3244,7 @@ async function scrubExtractedSelfPhones(
     });
     // Record WHICH vars were scrubbed (in persisted vars, like the
     // wait_for_reply `__waited_*` markers) so a DOWNSTREAM unusable-phone
-    // failure can tell the owner why in plain words — but only when the var
+    // failure can tell the owner why in plain words, but only when the var
     // that failed is one the scrub actually cleared. Deliberately not
     // notifying here: a later extraction step (e.g. email_extract with
     // fillOnlyEmpty) may still backfill a real lead phone, in which case
@@ -3257,7 +3257,7 @@ async function scrubExtractedSelfPhones(
 }
 
 /**
- * The business's OWN people names (owner + active roster) — the names an
+ * The business's OWN people names (owner + active roster), the names an
  * extracted "the seller's/lead's name" answer is SUSPECT of confusing with
  * the actual subject (the Jul 22 2026 "Hi Amy" Clever greeting). Best-effort
  * like businessSelfNumbers: a lookup error returns what was found.
@@ -3287,7 +3287,7 @@ async function businessSelfNames(supabase: Supabase, businessId: string): Promis
  * person-name field's answer matches the owner's or a roster member's name,
  * re-run the extraction ONCE with an explicit "that is our own agent" hint
  * appended to the suspect fields. The retry's answer wins only when it names
- * someone else and is non-empty — a model that INSISTS on the same name is
+ * someone else and is non-empty, a model that INSISTS on the same name is
  * trusted (a lead can genuinely share the owner's name), and an empty retry
  * keeps the first answer rather than degrading "Hi Amy" into "Hi .". Fails
  * open on any retry error: the primary extraction already succeeded, so the
@@ -3384,8 +3384,8 @@ async function browseStep(
 
   // The render service is resolved per-tenant from the run's business_id
   // (this tenant's own VPS sidecar). A login-gated browse can only be
-  // performed by that headless service — a static fetch can't drive a login
-  // form — so missing config is a permanent setup error, not a transient one;
+  // performed by that headless service, a static fetch can't drive a login
+  // form, so missing config is a permanent setup error, not a transient one;
   // fail without burning retries.
   const renderUrl = resolveRenderUrl(run.business_id);
   if (action.auth && !renderUrl) {
@@ -3407,7 +3407,7 @@ async function browseStep(
       action.screenshot === true || scope.captureScreenshots === true
     );
   } catch (e) {
-    // A render login failure is permanent (bad creds / MFA), not transient IO —
+    // A render login failure is permanent (bad creds / MFA), not transient IO,
     // fail the run instead of letting it throw into the retry path.
     if (e instanceof BrowseLoginError) {
       const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
@@ -3470,14 +3470,14 @@ async function browseStep(
 
   let extracted: Record<string, string> = {};
   // Only run the (AI-budgeted) field extraction when the step actually asks for
-  // fields — a links-only browse_extract skips Gemini entirely.
+  // fields, a links-only browse_extract skips Gemini entirely.
   if (action.fields && action.fields.length > 0) {
     try {
       extracted = await extractFields(supabase, run, action.fields, pageText);
     } catch (e) {
       // Persist the page we ALREADY fetched (screenshot when captured + source,
       // which is always available) onto the failed step for ANY extraction
-      // failure — not just the budget cap. Previously a transient Gemini error
+      // failure, not just the budget cap. Previously a transient Gemini error
       // (e.g. 503) re-threw and discarded the in-hand page, leaving the
       // dead-lettered step with no screenshot/source for the investigate view.
       const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
@@ -3486,7 +3486,7 @@ async function browseStep(
       if (shotPath) diag.screenshot_path = shotPath;
       if (srcPath) diag.source_path = srcPath;
       // The shared AI budget being exhausted is a permanent, owner-actionable
-      // state for this period — fail the run now instead of retrying into the cap.
+      // state for this period, fail the run now instead of retrying into the cap.
       if (e instanceof SpendCapError) {
         return {
           kind: "fail",
@@ -3527,11 +3527,11 @@ async function browseStep(
   // Screenshot is captured on every browse for run-timeline visibility.
   // Best-effort: a storage failure must not fail a browse that already extracted
   // its fields. The downstream attach var (`screenshot_path` in scope) is only
-  // set when the flow asked to attach one — cleared FIRST so a failed
+  // set when the flow asked to attach one, cleared FIRST so a failed
   // capture/upload can never leave a stale path from an earlier browse.
   const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
   if (action.screenshot) out.screenshot_path = shotPath;
-  // Store the page source alongside the screenshot (diagnostic only — never an
+  // Store the page source alongside the screenshot (diagnostic only, never an
   // attach var) so the run timeline can link "View page source" for the shot.
   const srcPath = shotPath ? await storeSourceBestEffort(supabase, run, index, page.html) : "";
 
@@ -3565,7 +3565,7 @@ async function extractTextStep(
     extracted = await extractFields(supabase, run, action.fields, action.text);
   } catch (e) {
     // An exhausted shared AI budget is a permanent, owner-actionable state for
-    // this period — fail the run instead of retrying into the cap.
+    // this period, fail the run instead of retrying into the cap.
     if (e instanceof SpendCapError) return { kind: "fail", error: `extract_text: ${e.message}` };
     throw e;
   }
@@ -3605,7 +3605,7 @@ function isEmptyVarValue(v: unknown): boolean {
 
 /**
  * email_extract: read the best-matching recent inbound message from a connected
- * mailbox (via the gateway-guarded /api/internal/aiflow-email-fetch — the worker
+ * mailbox (via the gateway-guarded /api/internal/aiflow-email-fetch, the worker
  * can't reach Nango) and run the SAME Gemini extraction over it as extract_text.
  * Used as a FALLBACK source for lead details (e.g. HomeLight's "Client Details"
  * email) when a portal browse_extract was delayed/empty: with `fillOnlyEmpty`,
@@ -3656,7 +3656,7 @@ async function emailExtractStep(
   }
   const data = payload.data;
   // No matching email yet (the alert may still be in flight): this is a fallback,
-  // not a hard dependency — backfill nothing and let the run continue. The step's
+  // not a hard dependency, backfill nothing and let the run continue. The step's
   // noMatchVars ARE written (into still-empty vars only), because "looked and
   // found nothing" must be visible to downstream gates: an unset var matches no
   // equals/contains condition, which is how the HomeLight reveal ladder sat
@@ -3703,7 +3703,7 @@ async function emailExtractStep(
  * PDF/text attachment) and optionally file it into Business Documents. The
  * worker can't run Gemini's document pipeline or touch the documents store,
  * so the whole read+extract+file round-trips through the gateway-guarded
- * platform adapter (/api/internal/aiflow-doc-extract) — same proxy pattern
+ * platform adapter (/api/internal/aiflow-doc-extract), same proxy pattern
  * as email_extract's mailbox read. A planner skip (no document on the
  * trigger) records a skipped step; ok:false on 2xx is a permanent input
  * error (unsupported type, oversized, unreadable) → fail without retrying;
@@ -3799,7 +3799,7 @@ async function docExtractStep(
  * browse_action: drive an ordered click/fill sequence on a page via the
  * per-tenant render service (e.g. posting a "still trying to contact" update
  * on the ReferralExchange lead timeline). Unlike browse_extract there is no
- * static-fetch fallback — actions need a real browser — so missing render
+ * static-fetch fallback, actions need a real browser, so missing render
  * config is a permanent setup error. The render service reports how many
  * actions completed; a selector that no longer matches fails the run (the
  * page changed; retrying won't fix it) with the failing action in the error.
@@ -4053,7 +4053,7 @@ async function browseActionStep(
     const fe = parsed.forEach;
     if (fe.items === 0) {
       // Zero items WITH errors means link collection itself failed (e.g. a bad
-      // CSS selector throws in querySelectorAll) — fail loudly instead of
+      // CSS selector throws in querySelectorAll), fail loudly instead of
       // treating a broken weekly-update selector as a clean "nothing to do".
       if (fe.errors.length > 0) {
         return {
@@ -4089,7 +4089,7 @@ async function browseActionStep(
   }
 
   // The render service fails fast on the first broken action, so a 200 with a
-  // short count means the contract was violated somewhere — never mark the
+  // short count means the contract was violated somewhere, never mark the
   // step done unless every planned action actually ran.
   if (parsed.actionsCompleted < action.actions.length) {
     return {
@@ -4244,7 +4244,7 @@ async function storeScreenshot(
   index: number,
   base64: string,
   // Optional filename variant (e.g. "before") so a single step can store more
-  // than one screenshot — the default (no variant) stays `step-N.jpg`, which is
+  // than one screenshot, the default (no variant) stays `step-N.jpg`, which is
   // the path attachScreenshot steps consume, so their behavior is unchanged.
   variant?: string
 ): Promise<string> {
@@ -4377,14 +4377,14 @@ function readPageSourceBefore(body: unknown): string | null {
 /**
  * Best-effort: sign a short-lived URL for the run's stored screenshot so it can
  * ride along as MMS media. Returns null (and logs) when there is no stored
- * screenshot or signing fails — an offer without the image still routes the lead.
+ * screenshot or signing fails, an offer without the image still routes the lead.
  */
 async function screenshotMmsUrl(
   supabase: Supabase,
   run: RunRow,
   scope: Scope
 ): Promise<string | null> {
-  // Tenant guard: only a path under THIS run's business prefix is signable —
+  // Tenant guard: only a path under THIS run's business prefix is signable,
   // the var shares the scope.vars namespace with extraction outputs, whose
   // values inbound text controls (see screenshot_guard.ts).
   const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
@@ -4444,7 +4444,7 @@ async function fetchViaRender(
     if (errCode) {
       // login_failed (bad creds/MFA) and auth_config_error (missing platform
       // config, integration not found, wrong selectors) are permanent setup
-      // failures — fail the run rather than retrying transiently.
+      // failures, fail the run rather than retrying transiently.
       if (renderErrorKind(errCode) === "login") {
         // Same reasoning as the browse_action login arm: keep the render
         // service's `detail` (which submit selector it found, whether the
@@ -4482,7 +4482,7 @@ async function fetchStatic(
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
     // Follow redirects manually so each hop's host is re-validated against the
-    // SSRF guard — a public URL must not be able to redirect to a private /
+    // SSRF guard, a public URL must not be able to redirect to a private /
     // loopback / cloud-metadata host (CodeQL/Bugbot: unsafe redirect).
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -4512,8 +4512,8 @@ async function fetchStatic(
 /**
  * Fetch a page via the per-tenant render service, falling back to a static GET.
  *
- * Credentialed browse (`authCtx`) MUST use the render service — a static fetch
- * can't drive a login form — so its errors propagate. A NON-credentialed browse
+ * Credentialed browse (`authCtx`) MUST use the render service, a static fetch
+ * can't drive a login form, so its errors propagate. A NON-credentialed browse
  * falls back to a static fetch when the render service is unreachable: per-tenant
  * render only exists on render-capable tiers, so a starter/KVM2 tenant has no
  * `render-*` hostname/sidecar and must still read public/SPA pages statically
@@ -4540,7 +4540,7 @@ async function fetchPage(
 
 /**
  * True when this tenant's shared AI spend (owner chat + SMS + AiFlows) has
- * crossed the period cap. Fails OPEN on any read error — a metering blip must
+ * crossed the period cap. Fails OPEN on any read error, a metering blip must
  * never block a lead flow.
  */
 async function aiFlowSpendOverCap(supabase: Supabase, businessId: string): Promise<boolean> {
@@ -4558,7 +4558,7 @@ async function aiFlowSpendOverCap(supabase: Supabase, businessId: string): Promi
 /**
  * Meter one AiFlow model call (Gemini extraction or the legacy Rowboat
  * agent-pick) into the shared owner_chat_model_spend pool. Best-effort and
- * never throws — the reply/extraction already happened, so a metering failure
+ * never throws, the reply/extraction already happened, so a metering failure
  * only under-counts the fuse. A retried run can re-meter the same call (there
  * is no per-step claim like the SMS worker's metered_at); the cap is a safety
  * fuse, not an invoice, so a rare over-count errs on the safe side.
@@ -4583,7 +4583,7 @@ async function meterAiFlowSpend(
     const spend = supabase as unknown as SpendSupabase;
     const periodStart = await resolveChatPeriodStart(spend, run.business_id);
     const isExact = exactCostMicros !== null && exactCostMicros > 0;
-    // No exact usageMetadata tokens — estimate from text length (~4 chars/token)
+    // No exact usageMetadata tokens, estimate from text length (~4 chars/token)
     // and price with the same per-model table as the exact path above. Pass the
     // fractional chars/4 (no per-side rounding) so geminiCostMicrosFromTokens'
     // single trailing Math.ceil rounds once, avoiding an overcount on short text.
@@ -4599,7 +4599,7 @@ async function meterAiFlowSpend(
       p_period_start: periodStart,
       p_cost_micros: costMicros,
       p_cap_micros: CHAT_SPEND_CAP_MICROS,
-      // Ledger event params (observability only — the fuse math above is
+      // Ledger event params (observability only, the fuse math above is
       // untouched). Estimated turns carry their chars/4 token guesses so the
       // admin views stay comparable across pricing sources.
       p_model: GEMINI_MODEL,
@@ -4646,7 +4646,7 @@ const GEMINI_MAX_ATTEMPTS = (() => {
 
 /**
  * POST with bounded retry on TRANSIENT upstream failures (HTTP 429 / 5xx, and a
- * fetch that throws — a network blip). Exponential backoff with jitter
+ * fetch that throws, a network blip). Exponential backoff with jitter
  * (~0.5s, ~1s, …). Returns the last response (even if not ok) so the caller's
  * existing `!res.ok` handling still applies; a permanent 4xx (≠429) returns
  * immediately without retrying. Best-effort: never throws on its own beyond a
@@ -4676,7 +4676,7 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
 }
 
 /**
- * One spend-gated Gemini JSON call — the shared engine room for extract_text /
+ * One spend-gated Gemini JSON call, the shared engine room for extract_text /
  * browse extraction AND classify. Returns the response text, or null when no
  * API key is configured (callers fail open with their own fallback). Throws
  * SpendCapError when the shared AI budget is exhausted.
@@ -4699,11 +4699,11 @@ async function geminiJsonForPrompt(
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=` +
     encodeURIComponent(apiKey);
-  // Inner retry/backoff for TRANSIENT upstream errors (429 / 5xx — Gemini
+  // Inner retry/backoff for TRANSIENT upstream errors (429 / 5xx, Gemini
   // "model overloaded" returns 503). A single 503 used to bubble straight out
   // and burn a whole run-level retry, and an overloaded window could dead-letter
   // a run AFTER an irreversible earlier step (e.g. a lead already accepted on
-  // Clever) — orphaning it. Riding out a brief overload here avoids that. A 4xx
+  // Clever), orphaning it. Riding out a brief overload here avoids that. A 4xx
   // (other than 429) is permanent, so it fails fast without retrying.
   //
   // Structured extraction/classify needs no chain-of-thought, and Gemini 3
@@ -4746,7 +4746,7 @@ async function geminiJsonForPrompt(
   const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   // Prefer the EXACT billed tokens from usageMetadata: thinking tokens are
   // billed as output but invisible in the candidate text, and the configured
-  // model may not be flash-lite — both made the chars/4 estimate undercount.
+  // model may not be flash-lite, both made the chars/4 estimate undercount.
   const um = body.usageMetadata;
   const promptTokens = Number(um?.promptTokenCount ?? 0);
   const outputTokens =
@@ -4789,7 +4789,7 @@ async function extractFields(
  * classify step: decide which of the author's categories the message means,
  * writing the winner into vars[saveAs] so a branch can fork on it. Sentinel
  * inputs were pre-resolved by the planner (no model call); a missing API key
- * or an unusable model response resolves to the reserved "unclear" fallback —
+ * or an unusable model response resolves to the reserved "unclear" fallback,
  * the flow's unclear arm handles it, never a crash.
  */
 async function classifyStep(
@@ -4815,7 +4815,7 @@ async function classifyStep(
     );
   } catch (e) {
     // An exhausted shared AI budget is a permanent, owner-actionable state
-    // for this period — fail the run instead of retrying into the cap.
+    // for this period, fail the run instead of retrying into the cap.
     if (e instanceof SpendCapError) return { kind: "fail", error: `classify: ${e.message}` };
     throw e;
   }
@@ -4837,9 +4837,9 @@ const INPUT_MIME_BY_EXT: Record<string, string> = {
 };
 
 /**
- * Resolve a generate_image edit source to raw bytes. Accepted forms — ALL
+ * Resolve a generate_image edit source to raw bytes. Accepted forms, ALL
  * platform-controlled (never an arbitrary URL, so no SSRF surface):
- *   - `email-attachments:<inbound/...>` — an inbound tenant-mailbox
+ *   - `email-attachments:<inbound/...>`, an inbound tenant-mailbox
  *     attachment (path written by the platform into the trigger context);
  *   - a generated-images path `<businessId>/<uuid>.<ext>` for THIS business
  *     (a prior generation or a stored inbound MMS photo);
@@ -4854,7 +4854,7 @@ async function resolveFlowInputImage(
   ref: string,
   /**
    * The run's own platform-written {{trigger.image}} value. An
-   * `email-attachments:` ref is accepted ONLY when it matches this exactly —
+   * `email-attachments:` ref is accepted ONLY when it matches this exactly,
    * the platform wrote it into the run context for THIS tenant's inbound
    * mail, so no DB lookup (and no enqueue-vs-log race) is needed, and a
    * crafted literal path to another tenant's attachment reads nothing.
@@ -4914,7 +4914,7 @@ async function resolveFlowInputImage(
   if (!(telnyxHost || (ownHost && parsed.hostname === ownHost))) return null;
   // An own-host signed URL must additionally point at an object THIS run may
   // read: this business's generated-images prefix. (Email attachments are
-  // deliberately NOT accepted in URL form — they go through the
+  // deliberately NOT accepted in URL form, they go through the
   // `email-attachments:` ref above, which verifies tenancy via email_log.)
   // Without this, a signed URL for another tenant's object on the same
   // project host would pass the host check.
@@ -4963,7 +4963,7 @@ function inputImageBase64(bytes: Uint8Array): string {
  * and meters the flat per-image price into the shared AI budget. A missing
  * API key or an empty model response FAILS the step (unlike extraction there
  * is no fallback that can stand in for an image). AiFlow runs are exempt from
- * the conversational per-session image limit — flows are owner-authored and
+ * the conversational per-session image limit, flows are owner-authored and
  * explicitly enabled.
  */
 async function generateImageStep(
@@ -4980,10 +4980,10 @@ async function generateImageStep(
   // the coworker image tools): images are the priciest single model call,
   // there is no local fallback to degrade to, and the charge must never push
   // the business past the cap. The cap is tier-aware ($5 starter / $10
-  // otherwise) plus active purchased credits — the same effective cap
+  // otherwise) plus active purchased credits, the same effective cap
   // getChatSpendSnapshotForBusiness gives the dashboard/SMS tools, so the
   // surfaces can never disagree on whether a tenant may generate. Fails OPEN
-  // on a read error like aiFlowSpendOverCap — a metering blip must never
+  // on a read error like aiFlowSpendOverCap, a metering blip must never
   // block a lead flow.
   const flatCostMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
   if (AIFLOW_SPEND_METERING_ENABLED) {
@@ -5005,7 +5005,7 @@ async function generateImageStep(
       overCap = false;
     }
     if (overCap) {
-      // A permanent, owner-actionable state for this period — fail the run
+      // A permanent, owner-actionable state for this period, fail the run
       // now (like classify/extraction) instead of retrying into the cap.
       return {
         kind: "fail",
@@ -5017,7 +5017,7 @@ async function generateImageStep(
   }
 
   // Editing mode: resolve the source image BEFORE the (billed) model call.
-  // An unresolvable reference FAILS the step — silently generating from
+  // An unresolvable reference FAILS the step, silently generating from
   // scratch instead of editing the owner's chosen photo would be worse.
   let inputImage: { bytes: Uint8Array; mimeType: string } | null = null;
   if (action.inputImage) {
@@ -5045,7 +5045,7 @@ async function generateImageStep(
   // fetchWithTransientRetry already rides out 429/5xx blips INSIDE this call.
   // Anything still failing after that is treated as permanent for the run:
   // images are the priciest single model call, and a run-loop retry would
-  // call (and bill) Gemini again per attempt — fail the step instead.
+  // call (and bill) Gemini again per attempt, fail the step instead.
   let res: Response;
   try {
     res = await fetchWithTransientRetry(url, {
@@ -5096,7 +5096,7 @@ async function generateImageStep(
   try {
     body = (await res.json()) as ImageResponse;
   } catch {
-    // A 200 with an unreadable body was still billed by Google — fail the
+    // A 200 with an unreadable body was still billed by Google, fail the
     // step rather than let a retry bill again.
     return { kind: "fail", error: "generate_image: unreadable model response" };
   }
@@ -5105,7 +5105,7 @@ async function generateImageStep(
   )?.inlineData;
   if (!inline?.data) {
     // Google still bills an image-less response (thinking/text-only) by its
-    // token usage — meter that before failing, mirroring the coworker tools.
+    // token usage, meter that before failing, mirroring the coworker tools.
     const um = body.usageMetadata;
     const promptTokens = Number(um?.promptTokenCount ?? 0);
     const outputTokens =
@@ -5132,7 +5132,7 @@ async function generateImageStep(
   const ext = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
   const bytes = Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0));
   // Store/sign failures also FAIL the step (not throw): a run-loop retry
-  // would regenerate — and rebill — the image, and each failed attempt would
+  // would regenerate, and rebill, the image, and each failed attempt would
   // strand another object in the bucket.
   const path = `${run.business_id}/${crypto.randomUUID()}.${ext}`;
   const { error: upErr } = await supabase.storage
@@ -5154,8 +5154,8 @@ async function generateImageStep(
 
   // Meter LAST, once the step can no longer fail (store + sign both done):
   // any earlier failure yields no usable image, and a thrown error here would
-  // be retried — metering before the last failure point could bill twice for
-  // one intended image. Google bills per generated image — the flat list
+  // be retried, metering before the last failure point could bill twice for
+  // one intended image. Google bills per generated image, the flat list
   // price, not token math.
   await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros, {
     pricingSource: "override"
@@ -5190,7 +5190,7 @@ const SHARE_DOCUMENT_TTL_DAYS = 30;
  * apply). The eligibility re-check here is the AiFlow-side half of the
  * document-expiration guarantee: a document that expired (or was switched
  * to staff-only, or deleted) AFTER the flow was authored fails the step
- * loudly — with an owner notice — instead of silently sending a stale link.
+ * loudly, with an owner notice, instead of silently sending a stale link.
  */
 async function shareDocumentStep(
   supabase: Supabase,
@@ -5285,7 +5285,7 @@ async function shareDocumentStep(
   if (action.saveAs) scope.vars[action.saveAs] = url;
 
   // A link the recipient never received must not stay live: on any
-  // undelivered outcome the share is revoked (best-effort — it still dies
+  // undelivered outcome the share is revoked (best-effort, it still dies
   // at its TTL if the revoke itself fails).
   const revokeUndelivered = async (): Promise<void> => {
     const { error: revokeError } = await supabase
@@ -5342,7 +5342,7 @@ async function shareDocumentStep(
 /**
  * send_whatsapp: resolve the recipient (same roster/contact-ref semantics
  * as send_sms), then delegate delivery to the platform's internal
- * whatsapp-send endpoint — the Cloud API client, tenant token decryption,
+ * whatsapp-send endpoint, the Cloud API client, tenant token decryption,
  * 24h-window check, and template fallback all live in the Next app.
  * Policy skips (no WhatsApp connected, template still in Meta review)
  * come back as structured ok:false results and are recorded as honest
@@ -5519,7 +5519,7 @@ async function sendWhatsAppStep(
         error: `send_whatsapp: recipient "${toE164}" is not a usable phone number`
       };
     }
-    // send_failed: could be transient (Cloud API 5xx) — retryable.
+    // send_failed: could be transient (Cloud API 5xx), retryable.
     return {
       kind: "fail",
       error: `send_whatsapp: delivery failed (${result?.detail ?? "unknown"})`
@@ -5692,7 +5692,7 @@ async function sendSmsStep(
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
   // Named-agent send: resolve the roster member's current phone and render the
-  // body with {{agent.*}} in scope (the planner left both pending — only the
+  // body with {{agent.*}} in scope (the planner left both pending, only the
   // worker can read the roster). Everything below then treats it as a 1:1 send.
   let toE164 = action.to;
   let bodyText = action.body;
@@ -5847,7 +5847,7 @@ async function sendSmsStep(
   }
   // Group reply: one group MMS to every other participant in the inbound thread
   // (the planner already excluded our own DID). Diverges enough from the 1:1
-  // path — recipient list, per-recipient opt-out, array `to` — to live on its
+  // path, recipient list, per-recipient opt-out, array `to`, to live on its
   // own.
   if (action.recipients && action.recipients.length > 0) {
     return await sendGroupSmsStep(supabase, run, index, scope, action);
@@ -5861,7 +5861,7 @@ async function sendSmsStep(
   // Never text ourselves: a destination equal to our own sending DID (or any
   // of the business's own numbers) means an upstream extraction grabbed the
   // business's contact info instead of the lead's. Telnyx would reject it
-  // anyway (40310, source == destination) — fail the step IMMEDIATELY with a
+  // anyway (40310, source == destination), fail the step IMMEDIATELY with a
   // clear message instead of burning MAX_ATTEMPTS on a permanent 400.
   // isSelfPhone normalizes BOTH sides (businesses.phone is free-form), so the
   // guard and the extraction scrub can never disagree.
@@ -5967,10 +5967,10 @@ async function sendSmsStep(
 
   // Tracked short links: rewrite long URLs in lead-facing texts to /s/<code>
   // redirects so link clicks are measurable per flow (sms_links table).
-  // Teammate notifications keep raw URLs — tracking is for lead engagement,
+  // Teammate notifications keep raw URLs, tracking is for lead engagement,
   // and dashboard links read clearer unshortened. Runs AFTER the quota
   // reserve so a quota-skipped step never mints link rows, and every failed
-  // send below cleans its rows up — no live redirects for texts nobody got.
+  // send below cleans its rows up, no live redirects for texts nobody got.
   // Strictly fail-safe: any error leaves the original URL and the send
   // proceeds.
   let outboundBody = bodyText;
@@ -6008,7 +6008,7 @@ async function sendSmsStep(
       idempotencyKey: `aiflow:${run.id}:${index}`,
       // Lead-facing texts go RCS-first for eligible tenants (Enterprise,
       // approved agent) with Telnyx-side SMS fallback. Internal teammate
-      // texts stay plain SMS — the branded business agent shouldn't be the
+      // texts stay plain SMS, the branded business agent shouldn't be the
       // sender identity for roster notifications.
       rcsAgentId: internalAgentSend
         ? null
@@ -6016,7 +6016,7 @@ async function sendSmsStep(
     });
     if (!send.ok) {
       await release();
-      // The text never went out — remove its tracked links so no live
+      // The text never went out, remove its tracked links so no live
       // /s/<code> redirect survives for a message nobody received.
       await deleteShortLinks(supabase, shortenedLinks);
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
@@ -6049,7 +6049,7 @@ async function sendSmsStep(
       shortenedLinks.map((l) => l.shortCode),
       outboundLogId
     );
-    // An agent recipient is a teammate, not a lead — don't file them as a lead
+    // An agent recipient is a teammate, not a lead, don't file them as a lead
     // customer profile. A contact ref is still a lead-side recipient.
     if (!internalAgentSend) {
       await recordLeadCustomerProfile(supabase, run, scope, toE164);
@@ -6068,7 +6068,7 @@ async function sendSmsStep(
  * drop our own number (defensive) and any opted-out recipient, then reserve
  * units for every recipient leg in one atomic call (Telnyx bills group MMS
  * per recipient). With 2+ recipients we send a Telnyx group MMS (its
- * dedicated /messages/group_mms endpoint — the standard endpoint rejects a
+ * dedicated /messages/group_mms endpoint, the standard endpoint rejects a
  * multi-destination SMS `to`); with exactly one we fall back to a normal 1:1
  * SMS so a degenerate "group" of one still delivers.
  */
@@ -6162,7 +6162,7 @@ async function sendGroupSmsStep(
   }
 
   // Group replies are lead-facing too: same tracked-short-link rewrite as the
-  // 1:1 path (to_e164 stays null — one body, many recipients). Runs after the
+  // 1:1 path (to_e164 stays null, one body, many recipients). Runs after the
   // reserve, with failed-send cleanup below, so no link row outlives a text
   // that never went out. Fail-safe.
   const groupShortened = await shortenSmsBodyUrls(supabase, {
@@ -6216,7 +6216,7 @@ async function sendGroupSmsStep(
     }
     if (!send.ok) {
       await release();
-      // The group text never went out — remove its tracked links.
+      // The group text never went out, remove its tracked links.
       await deleteShortLinks(supabase, groupShortened.links);
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
       // Same permanent-4xx rule as the 1:1 send above (408/429 stay
@@ -6238,7 +6238,7 @@ async function sendGroupSmsStep(
     // each, mirroring the 1:1 path so every texted number shows up in Text
     // history and on the Customers page.
     // sms_outbound_log_id is a single FK, so the shared group links pair with
-    // the FIRST recipient's log row — enough for thread stats/deep links.
+    // the FIRST recipient's log row, enough for thread stats/deep links.
     // Strictly the first recipient: if that insert failed, the links stay
     // unpaired rather than attach to a different recipient's thread.
     let groupOutboundLogId: string | null = null;
@@ -6290,7 +6290,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 /**
  * email_organize: label / move / archive / mark read via the platform
- * gateway (/api/aiflows/organize-email). No contact outreach — not a COMM step.
+ * gateway (/api/aiflows/organize-email). No contact outreach, not a COMM step.
  */
 async function emailOrganizeStep(
   run: RunRow,
@@ -6462,7 +6462,7 @@ async function ensureMailboxIdentity(
       .insert({ business_id: businessId, local_part: fallback, personalized: false });
     if (insertError) {
       // 23505 = unique violation. The benign case is a concurrent insert for
-      // THIS business (business_id PK) — re-read and use the reserved row. But a
+      // THIS business (business_id PK), re-read and use the reserved row. But a
       // 23505 can also mean the local_part is already claimed by ANOTHER tenant;
       // in that case there's no row for this business and we must NOT fall back
       // to the default address (it would resolve to the wrong mailbox). Throw so
@@ -6500,16 +6500,16 @@ async function ensureMailboxIdentity(
  * Deliver one flow email.
  *
  * Default path: platform Resend transport, but always sending FROM the tenant's
- * own AI mailbox (created on the fly if missing) — never the platform identity.
+ * own AI mailbox (created on the fly if missing), never the platform identity.
  * Optionally attaches the screenshot a prior browse_extract stored (downloaded
- * from the private bucket by path — never by fetching a templatable URL). Missing
+ * from the private bucket by path, never by fetching a templatable URL). Missing
  * RESEND_API_KEY is a permanent setup error; a Resend/storage IO failure throws
  * so the run retries.
  *
- * `fromConnectionId` path: the owner chose "send as me" — the worker calls the
+ * `fromConnectionId` path: the owner chose "send as me", the worker calls the
  * app's gateway-guarded /api/aiflows/send-owner-email, which sends through the
  * owner's connected Gmail/Outlook via Nango (plain text only). A 200 ok:false
- * means the connection is missing/wrong — a permanent setup error; transport /
+ * means the connection is missing/wrong, a permanent setup error; transport /
  * 5xx failures throw so the run retries.
  */
 async function deliverFlowEmail(
@@ -6529,7 +6529,7 @@ async function deliverFlowEmail(
   const attachments: { filename: string; content: string }[] = [];
   // Metadata logged onto email_log.attachments so the dashboard reading pane
   // can show + sign each attachment. References the bytes in their source
-  // bucket in place (no copy) — see StoredAttachment.bucket.
+  // bucket in place (no copy), see StoredAttachment.bucket.
   const attachmentMetas: {
     filename: string;
     mime_type: string;
@@ -6539,7 +6539,7 @@ async function deliverFlowEmail(
   }[] = [];
   if (action.attachScreenshot) {
     // Tenant guard: only a path under THIS run's business prefix is
-    // downloadable (see screenshot_guard.ts) — the var shares scope.vars
+    // downloadable (see screenshot_guard.ts), the var shares scope.vars
     // with extraction outputs, whose values inbound text controls.
     const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
     if (path) {
@@ -6565,7 +6565,7 @@ async function deliverFlowEmail(
   }
   if (action.attachDocumentRef) {
     // Tenant gate: the ref must resolve to a READY document row keyed on THIS
-    // run's own business id — another tenant's document id reads as missing.
+    // run's own business id, another tenant's document id reads as missing.
     // Unlike a blank-rendered template (planned without the ref), a non-blank
     // ref that can't resolve is a permanent input problem: fail loudly rather
     // than quietly sending without the file the owner promised.
@@ -6584,7 +6584,7 @@ async function deliverFlowEmail(
       .eq("business_id", run.business_id)
       .eq("id", docMatch[1])
       .maybeSingle();
-    // A lookup fault is transient — throw so the run retries; failing open
+    // A lookup fault is transient, throw so the run retries; failing open
     // here could only manifest as a false "document not found".
     if (docErr) throw new Error(`send_email: attachment lookup failed: ${docErr.message}`);
     const row = doc as {
@@ -6682,7 +6682,7 @@ async function deliverFlowEmail(
  * executes the transformation on central Gemini, meters the spend into the
  * shared AI budget, records the agent_runs history row (source='flow'),
  * optionally files the artifact into Business Documents, and returns the
- * artifact — stamped here into {{vars.<saveAs>}} (plus
+ * artifact, stamped here into {{vars.<saveAs>}} (plus
  * {{vars.<saveAs>_document_id}} / _document_title when filed).
  */
 /**
@@ -6722,7 +6722,7 @@ async function runAgentStep(
 ): Promise<StepOutcome> {
   const label = action.agentName ? `agent "${action.agentName}"` : "agent";
   // Templated input rendered to nothing: the lead/run simply has no content
-  // to transform — skip (var lands ""), don't fail the flow.
+  // to transform, skip (var lands ""), don't fail the flow.
   if (action.skipReason) {
     scope.vars[action.saveAs] = "";
     scope.vars[`${action.saveAs}_document_id`] = "";
@@ -7195,11 +7195,11 @@ async function notifyOwnerStep(
  * notify_lead_owner: text whoever this lead BELONGS to. Resolution order:
  *   1. contact matched by the resolved phone (alias-aware), else by a UNIQUE
  *      display-name match (realtor.com reply relays carry only a name);
- *   2. that contact's owning employee (contacts.owner_employee_id — stamped
+ *   2. that contact's owning employee (contacts.owner_employee_id, stamped
  *      when a teammate claims the lead) with an active roster row + phone;
  *   3. otherwise the business owner (the Jennifer Phillips case: owner-direct
  *      kept the lead, so no employee owns the contact).
- * Every resolution failure falls DOWN this ladder, never out — a forwarded
+ * Every resolution failure falls DOWN this ladder, never out, a forwarded
  * lead reply must reach someone. The decision is recorded on the step result
  * so run history shows who was picked and why.
  */
@@ -7236,7 +7236,7 @@ async function notifyLeadOwnerStep(
       }
     }
     if (!contactId && action.name) {
-      // Name matching requires EXACTLY one hit — two "John Smith"s means we
+      // Name matching requires EXACTLY one hit, two "John Smith"s means we
       // cannot know whose lead this is, so it goes to the business owner.
       const { data } = await supabase
         .from("contacts")
@@ -7321,7 +7321,7 @@ async function notifyLeadOwnerStep(
       let sent = false;
       try {
         // Operational teammate traffic, like owner notices: metered, never
-        // refused — a forwarded lead reply must not be dropped at the cap.
+        // refused, a forwarded lead reply must not be dropped at the cap.
         const send = await sendOperationalSms(supabase, run.business_id, {
           apiKey: cfg.apiKey,
           messagingProfileId: cfg.profile,
@@ -7524,7 +7524,7 @@ async function alertBroadcastTeam(
  * arm_voice_transfer: upsert the business's voice_expected_transfers window so
  * telnyx-voice-inbound bridges the next unmatched inbound call straight to the
  * target instead of the AI answering. One row per business (PK business_id):
- * re-arming extends the window and resets consumption — the latest cue wins.
+ * re-arming extends the window and resets consumption, the latest cue wins.
  * An unresolvable toRef FAILS the step (silently arming nothing would strand
  * the very call this step exists to catch).
  */
@@ -7832,7 +7832,7 @@ async function waitForCallStep(
   }
 
   // The call is over. Its captured fields are written by the bridge during
-  // teardown, so a call that ended moments ago may not have them yet — give it
+  // teardown, so a call that ended moments ago may not have them yet, give it
   // one short beat rather than hydrating an empty blob. Once only, so a call
   // that captured nothing at all still finishes promptly.
   const settleMarker = `${action.marker}_settled`;
@@ -7879,7 +7879,7 @@ async function httpCallStep(
  * Wait ceiling for a parked place_ai_call run: long enough for the longest
  * non-transferred AI call (session caps end those in minutes), short enough
  * that a lost hangup webhook only stalls the run briefly. A TRANSFERRED call
- * can outlive this (a human conversation has no cap) — that's fine, because
+ * can outlive this (a human conversation has no cap), that's fine, because
  * the bridge resumes the run with "transferred" the moment the transfer
  * starts, long before the ceiling.
  */
@@ -7894,7 +7894,7 @@ const PLACE_CALL_BUDGET_RETRY_MINUTES = 240;
  * Exactly-once dialing: the run state machine alone can't prevent a re-dial
  * when the worker crashes between the dial and the park write, so the same
  * voice_outbound_dial_log ledger the schedule sweep uses locks the (run,
- * step) occurrence FIRST — a 23505 means an earlier attempt already dialed,
+ * step) occurrence FIRST, a 23505 means an earlier attempt already dialed,
  * so we re-park and let the webhook/timeout resolve the outcome instead of
  * ringing the callee again.
  *
@@ -7940,7 +7940,7 @@ async function placeAiCallStep(
   };
 
   // Lead-data gap (no usable callee phone): resolve to the not_placed
-  // sentinel and continue — mirrors send_sms's skip semantics.
+  // sentinel and continue, mirrors send_sms's skip semantics.
   if (action.skipReason) return skipNotPlaced(action.skipReason);
 
   // Standard+ gate before the dial ledger: Starter never rings, and a
@@ -8007,7 +8007,7 @@ async function placeAiCallStep(
   }
 
   // Resolve dynamic refs to live numbers (resolve-before-dial). Failures are
-  // config errors — fail loudly rather than calling with a wrong target.
+  // config errors, fail loudly rather than calling with a wrong target.
   let notifyE164 = action.notifyE164 ?? "";
   if (action.notifyRef) {
     const resolved = await resolveContactRef(supabase, run.business_id, action.notifyRef);
@@ -8161,7 +8161,7 @@ async function placeAiCallStep(
   if (insErr) {
     if ((insErr as { code?: string }).code === "23505") {
       // A previous attempt already dialed this step (crash between dial and
-      // park). Never ring the callee again — park and let the webhook (or
+      // park). Never ring the callee again, park and let the webhook (or
       // the timeout sweep's no_answer sentinel) resolve it.
       return pause("");
     }
@@ -8210,14 +8210,14 @@ async function placeAiCallStep(
   }
 
   // Ambiguous no-response: the dial (and even the session write) may have
-  // landed. Keep the ledger lock and park — the webhook resumes a placed
+  // landed. Keep the ledger lock and park, the webhook resumes a placed
   // call, and the timeout sweep backstops a phantom one with no_answer.
   if (result.errorCode === "originate_unreachable") {
     return pause("");
   }
 
   if (result.retryable) {
-    // Refused BEFORE any dial — release the ledger lock so a later attempt
+    // Refused BEFORE any dial, release the ledger lock so a later attempt
     // (deferral retry, or a future flow occurrence) may dial.
     const { error: delErr } = await supabase
       .from("voice_outbound_dial_log")
@@ -8226,7 +8226,7 @@ async function placeAiCallStep(
       .eq("dedupe_key", dedupeKey);
     if (delErr) console.error("place_ai_call ledger release", delErr);
     if (result.errorCode === "budget") {
-      // Over the voice budget: defer the whole run and re-probe later — a
+      // Over the voice budget: defer the whole run and re-probe later, a
       // temporary budget block must not burn this follow-up attempt.
       return {
         kind: "defer",
@@ -8280,7 +8280,7 @@ async function placeAiCallStep(
   // lost call id): originate hung the leg up before the AI attached and no
   // session run-link was written, so no resume will ever arrive. Record the
   // failed outcome and continue; the ledger row stays terminal (the callee
-  // was rung — this occurrence never re-dials).
+  // was rung, this occurrence never re-dials).
   const { error: failUpdErr } = await supabase
     .from("voice_outbound_dial_log")
     .update({ status: "failed", reason: result.reason ?? null })
@@ -8311,8 +8311,8 @@ function approvalStep(
     scope.vars[BYPASS_QUIET_HOURS_VAR] = true;
     return { kind: "ok", result: { approved: true, quiet_hours_bypassed: true } };
   }
-  // "Skip": don't run the action this gate guards — the step immediately
-  // following the gate — but keep the rest of the workflow going (later
+  // "Skip": don't run the action this gate guards, the step immediately
+  // following the gate, but keep the rest of the workflow going (later
   // emails, team routing, timeline updates). A full stop is "cancel" (always
   // the LAST reply digit / dashboard Cancel), which never reaches the worker:
   // the decide paths set the run to canceled directly.
@@ -8341,8 +8341,8 @@ function approvalStep(
  */
 // Sentinel pinned-name used when an agentRef can't be resolved: it matches no
 // real roster row (names are compared trimmed/lower-cased), so the offer falls
-// through to the owner fallback — the same "pinned agent missing" path as a
-// stale agentName — instead of round-robin to an unintended teammate.
+// through to the owner fallback, the same "pinned agent missing" path as a
+// stale agentName, instead of round-robin to an unintended teammate.
 const UNRESOLVED_AGENT_REF = "\u0000__unresolved_agent_ref__";
 
 /**
@@ -8410,7 +8410,7 @@ async function resolveAgentNameVarPin(
 }
 
 /**
- * Is lead auto-assignment on for this business? (Truly Issue 7 — Employees
+ * Is lead auto-assignment on for this business? (Truly Issue 7, Employees
  * page toggle.) Fails CLOSED to offer-and-claim on any read error: wrongly
  * hard-assigning a lead is worse than wrongly asking for a claim.
  */
@@ -8437,7 +8437,7 @@ async function routeToTeamStep(
   run: RunRow,
   scope: Scope,
   action: Extract<StepAction, { kind: "route_to_team" }>,
-  // Typed contract shared with the inbound webhook — see
+  // Typed contract shared with the inbound webhook, see
   // _shared/ai_flows/routing.ts for each field's full lifecycle.
   routing: OfferRouting,
   // This step's index: auto-assignment stamps it as route_step_index so a
@@ -8453,7 +8453,7 @@ async function routeToTeamStep(
   // Owner-direct nudge park resume: this run's awaiting_agent state is the
   // OWNER acknowledging a high-value keep-for-owner alert, not a teammate
   // offer. Every event (the owner's "1" ack, a "2", or a nudge timeout) is
-  // consumed HERE — the claim/reject/escalation machinery below must never
+  // consumed HERE, the claim/reject/escalation machinery below must never
   // run for it, or the $1M+ lead it deliberately kept from the team would
   // fall into the roster loop.
   if (routing.owner_direct === true) {
@@ -8539,13 +8539,13 @@ async function routeToTeamStep(
     };
   }
 
-  // An agent claimed (inbound '1' — live, late, or first-to-claim yank):
+  // An agent claimed (inbound '1', live, late, or first-to-claim yank):
   // finalize and optionally tell the owner.
   if (routing.last_event === "claim") {
     // Late claim: the offer had already lapsed (and likely fallen back to the
     // owner) when the agent texted "1". Notify the owner the same way, then
     // finalize WITHOUT replaying the steps after route_to_team. ("86" is the
-    // OPPOSITE — a retroactive unclaim — handled above.)
+    // OPPOSITE, a retroactive unclaim, handled above.)
     const lateClaim = routing.late_claim === true;
     const claimedBy =
       typeof routing.reply_from === "string" && routing.reply_from
@@ -8560,7 +8560,7 @@ async function routeToTeamStep(
       (typeof routing.offered_name === "string" && routing.offered_name) ||
       routing.offered_names?.[claimedBy] ||
       "";
-    // BROADCAST: the OTHER live offerees lost the race — captured here (before
+    // BROADCAST: the OTHER live offerees lost the race, captured here (before
     // the routing cleanup below) so they can be texted a courtesy notice.
     const broadcastLosers = Array.isArray(routing.offered_all)
       ? routing.offered_all.filter((p) => p && p !== claimedBy)
@@ -8578,7 +8578,7 @@ async function routeToTeamStep(
     // scope.vars (which `when` guards read). Name preferred, phone as fallback.
     scope.vars.claimed_agent = claimedName || claimedBy || "none";
     // The claimer's E.164 (so a later wait_for_reply can park on THEIR next
-    // text) and their stated ETA as whole minutes ("0" when absent/vague) —
+    // text) and their stated ETA as whole minutes ("0" when absent/vague),
     // parsed here, while the timeframe is still in hand before it's cleared.
     scope.vars.claimed_agent_phone = claimedBy || "none";
     scope.vars.claimed_agent_eta_minutes = String(parseEtaMinutes(claimTimeframe));
@@ -8642,7 +8642,7 @@ async function routeToTeamStep(
       });
     }
     // BROADCAST losers: tell each still-live offeree the lead is taken so they
-    // stop watching for it. The owner's forward number is skipped — the
+    // stop watching for it. The owner's forward number is skipped, the
     // claimedNotifyTemplate owner notice above already covers the owner, and a
     // duplicate "X claimed it" would read like noise. Best-effort per
     // recipient: the claim is already durable; a Telnyx hiccup must not fail
@@ -8711,7 +8711,7 @@ async function routeToTeamStep(
     }
     appendActionTaken(
       scope,
-      // No "(86)" here: "86" is the retroactive UNCLAIM digit — a late claim
+      // No "(86)" here: "86" is the retroactive UNCLAIM digit, a late claim
       // arrives as a "1" on a lapsed offer. The old label taught owners the
       // wrong digit.
       `lead ${lateClaim ? "claimed late by" : "claimed by"} ${claimedName || claimedBy}` +
@@ -8746,8 +8746,8 @@ async function routeToTeamStep(
   }
 
   // A pass with a stated reason ("2, out of town"): the inbound webhook stamps
-  // routing.pass_reason on the reject. Record it — accumulated on
-  // routing.pass_reasons (one entry per passing teammate) and in actions_taken —
+  // routing.pass_reason on the reject. Record it, accumulated on
+  // routing.pass_reasons (one entry per passing teammate) and in actions_taken,
   // so the owner-fallback notice and the run summary say WHY the lead bounced.
   // Cleared afterwards so a later offer never inherits a stale reason.
   const passReason =
@@ -8772,7 +8772,7 @@ async function routeToTeamStep(
     const passerPhone = typeof routing.reply_from === "string" ? routing.reply_from : "";
     const passerName =
       (typeof routing.offered_name === "string" && routing.offered_name) ||
-      // Broadcast passes carry no offered_name — resolve via the fan-out's
+      // Broadcast passes carry no offered_name, resolve via the fan-out's
       // name map so the owner reads "Dave passed", not a bare phone number.
       (passerPhone && routing.offered_names?.[passerPhone]) ||
       passerPhone ||
@@ -8787,10 +8787,10 @@ async function routeToTeamStep(
   delete routing.pass_reason;
 
   // BROADCAST mode (agentNames, or broadcastAll = the whole active roster):
-  // its own park/resume state machine — one shared deadline, first "1" wins,
+  // its own park/resume state machine, one shared deadline, first "1" wins,
   // a "2" retires just the passer, and timeout/all-passed falls back to the
   // owner. Claims and unclaims never reach here (the shared blocks above
-  // consumed them — the webhook stamps the claimer into routing.offered);
+  // consumed them, the webhook stamps the claimer into routing.offered);
   // rejects, timeouts, and the first entry do. Broadcast never enters the
   // rotation loop below and deliberately ignores lead_auto_assign: the flow
   // explicitly says who to offer, and a hard assignment would defeat
@@ -8832,7 +8832,7 @@ async function routeToTeamStep(
   delete routing.last_event;
   delete routing.reply_from;
 
-  // Keep-for-owner rule (e.g. the $1M+ price band) — shared with the
+  // Keep-for-owner rule (e.g. the $1M+ price band), shared with the
   // broadcast path; see maybeOwnerDirect.
   {
     const ownerDirect = await maybeOwnerDirect(supabase, run, scope, action, routing, tried);
@@ -8853,7 +8853,7 @@ async function routeToTeamStep(
 
   const leadPhone = leadPhoneE164(scope);
   // Auto-assign mode (businesses.lead_auto_assign, Truly Issue 7): the
-  // rotation pick IS the assignment — no offer/claim handshake. Resolved
+  // rotation pick IS the assignment, no offer/claim handshake. Resolved
   // per entry (not cached) so a Settings flip applies to the next lead.
   // A read failure falls back to offer-and-claim, never the other way:
   // wrongly hard-assigning a lead is worse than wrongly asking for a claim.
@@ -8862,7 +8862,7 @@ async function routeToTeamStep(
   // already has an owning employee gets offered to "their" person first; the
   // normal cascade follows if they pass or time out (they land in `tried`).
   // A pinned agent (agentName/agentRef) wins over the preference, and a
-  // preferred owner already tried is a no-op — so this only shapes the FIRST
+  // preferred owner already tried is a no-op, so this only shapes the FIRST
   // offer and never loops.
   let preferredAgent: RoutedAgent | null = null;
   if (action.preferContactOwner && !pinnedAgentName) {
@@ -8878,7 +8878,7 @@ async function routeToTeamStep(
     // roster is exhausted.
     if (!agent) break;
     // Rowboat repeated an agent we already tried: don't end routing on one bad
-    // pick — consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
+    // pick, consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
     if (tried.includes(agent.phone)) continue;
     // Never offer the lead their own number: a hallucinated Rowboat pick (or a
     // corrupt roster row) must not text the lead an agent "offer".
@@ -8893,7 +8893,7 @@ async function routeToTeamStep(
     }
     if (autoAssign) {
       // Hard assignment: record the claim NOW (same state shape a "1" reply
-      // produces — claimed_by/claimed_name on routing, claimed_agent var for
+      // produces, claimed_by/claimed_name on routing, claimed_agent var for
       // claim-gated later steps, contact ownership, claimed goal) and send
       // the teammate an FYI instead of an offer. routing.offered is NOT set:
       // there is no live offer for the webhook's claim/yank machinery to act
@@ -8904,7 +8904,7 @@ async function routeToTeamStep(
       routing.auto_assigned = true;
       // Rewind target for a retroactive "86" unclaim: the webhook re-opens a
       // claimed-and-finished run at route_step_index, which offer mode stamps
-      // at park time — auto-assign never parks, so stamp it here or an
+      // at park time, auto-assign never parks, so stamp it here or an
       // auto-assigned lead could never be handed back (Bugbot on PR #580).
       routing.route_step_index = stepIndex;
       scope.vars.claimed_agent = agent.name || agent.phone;
@@ -9017,7 +9017,7 @@ async function routeToTeamStep(
     // If this teammate ALREADY holds a live offer from another run, lead with
     // a heads-up: a single "1" only answers the newest offer, so without it
     // they'd reasonably assume one reply took both leads (the Jul 2026 Dave
-    // two-leads confusion). Best-effort — a count failure never blocks the offer.
+    // two-leads confusion). Best-effort, a count failure never blocks the offer.
     const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
     if (alreadyPending > 0) {
       offerText = `${multiOfferHeadsUpLine(alreadyPending + 1, leadShortLabel(leadLabelFromVars(scope.vars)))}\n${offerText}`;
@@ -9057,7 +9057,7 @@ async function routeToTeamStep(
 
 /**
  * Keep-for-owner rule (e.g. the $1M+ price band): when the configured
- * condition matches on FIRST entry — before anyone was ever offered — the
+ * condition matches on FIRST entry, before anyone was ever offered, the
  * lead is never offered to the team. The owner gets the ownerDirect SMS with
  * the details, and claimed_agent="none" makes every claim-gated later step
  * skip (the flow's unclaimed/outcome notify still fires and its actions_taken
@@ -9100,7 +9100,7 @@ async function maybeOwnerDirect(
   });
   // Nudge mode (ownerDirectNudges): park on the OWNER's forward number so
   // the alert can be re-sent as ALL-CAPS reminders at 10 and 30 minutes
-  // unless the owner replies "1" (an ack, never a claim — see
+  // unless the owner replies "1" (an ack, never a claim, see
   // ownerDirectResume). Falls back to today's fire-and-forget alert when
   // no forward number is configured (nothing to park on).
   if (action.ownerDirectNudges) {
@@ -9126,9 +9126,9 @@ async function maybeOwnerDirect(
 
 /**
  * Owner fallback: nobody claimed the lead (roster/broadcast exhausted, every
- * offeree passed, or the deadline lapsed) — hand it to the owner so it is
+ * offeree passed, or the deadline lapsed), hand it to the owner so it is
  * never dropped. Marks claimed_agent="none" so claim-gated LATER steps (e.g.
- * the lead marketing text/email) are skipped — only ungated steps like
+ * the lead marketing text/email) are skipped, only ungated steps like
  * notify_owner still run.
  */
 /**
@@ -9306,11 +9306,11 @@ async function ownerFallbackOutcome(
 
 /**
  * BROADCAST offers (route_to_team.agentNames): every listed roster member is
- * texted the offer at once and shares ONE claim deadline — first "1" wins
+ * texted the offer at once and shares ONE claim deadline, first "1" wins
  * (the webhook's revision-gated write settles races), a "2" retires just the
  * passer, and the lead falls back to the owner when everyone passed or the
  * deadline lapsed. The list IS the offer set: broadcast never escalates into
- * the round-robin rotation. Claims/unclaims never reach here — the webhook
+ * the round-robin rotation. Claims/unclaims never reach here, the webhook
  * stamps the claimer into routing.offered, so routeToTeamStep's shared
  * claim/unclaim blocks (which also notify the losing offerees) consume those
  * events first. This function handles first entry (fan-out), rejects, and
@@ -9342,14 +9342,14 @@ async function routeBroadcastStep(
     }
     // A pass from the teammate whose CLAIM was still pending (they claimed,
     // then texted "2" before the worker ran) arrives via the single-offer
-    // webhook path — routing.offered is still stamped from their claim.
+    // webhook path, routing.offered is still stamped from their claim.
     // Clear it: a broadcast run must never re-park with a live single-offer
     // pointer, or that passer would keep matching `offered == sender` and
     // could claim a lead they just passed on.
     delete routing.offered;
     delete routing.offered_name;
     routing.offered_all = live;
-    // Re-park ONLY while the shared deadline is still in the future — a pass
+    // Re-park ONLY while the shared deadline is still in the future, a pass
     // must never extend it (the webhook nulled respond_by_at, so re-parking
     // past the deadline would also push the timeout sweep out). A pass that
     // raced the lapsed deadline falls through to the timeout handling below.
@@ -9358,7 +9358,7 @@ async function routeBroadcastStep(
     const remainingMs = deadlineMs - Date.now();
     if (live.length > 0 && remainingMs > 0) {
       // Someone can still claim: re-park for exactly the remaining window.
-      // Empty recipients — nobody is re-texted.
+      // Empty recipients, nobody is re-texted.
       return {
         kind: "pause_agent_broadcast",
         recipients: [],
@@ -9447,7 +9447,7 @@ async function routeBroadcastStep(
   routing.offered_all = sendable.map((a) => a.phone);
   routing.offered_names = Object.fromEntries(sendable.map((a) => [a.phone, a.name]));
   routing.offer_deadline_ms = deadlineMs;
-  // Everyone texted an offer joins offered_log — that's the late-claim/yank
+  // Everyone texted an offer joins offered_log, that's the late-claim/yank
   // eligibility list, same as the single-offer path.
   const offeredLog = Array.isArray(routing.offered_log)
     ? routing.offered_log.filter((x): x is string => typeof x === "string")
@@ -9495,7 +9495,7 @@ async function routeBroadcastStep(
 }
 
 /**
- * Cap on a broadcastAll fan-out — parity with the agentNames schema bound
+ * Cap on a broadcastAll fan-out, parity with the agentNames schema bound
  * (max 10): each recipient costs an offer SMS plus a courtesy SMS on claim,
  * and every simultaneous offer a teammate holds adds bare-digit reply
  * ambiguity. Members beyond the cap are covered by the owner fallback.
@@ -9690,7 +9690,7 @@ async function resolveBroadcastAgents(
 
 /**
  * How many OTHER runs of this business currently have a live offer out to
- * `agentPhone` (status awaiting_agent/queued with routing.offered stamped —
+ * `agentPhone` (status awaiting_agent/queued with routing.offered stamped,
  * the same bucket the inbound webhook matches replies against). Used for the
  * multi-offer heads-up line. Best-effort: returns 0 on a query error so a
  * counting hiccup never blocks the offer itself.
@@ -9711,7 +9711,7 @@ async function countOtherLiveOffers(
     console.error("countOtherLiveOffers", error);
     return 0;
   }
-  // Broadcast offers park with routing.offered UNSET — the live offerees are
+  // Broadcast offers park with routing.offered UNSET, the live offerees are
   // in routing.offered_all instead, so count those separately (JSONB
   // containment). A run in the claim-consumed window (the webhook stamped
   // routing.offered = this agent while offered_all is still intact) already
@@ -9917,7 +9917,7 @@ function ownershipContactPhone(scope: Scope): string | null {
  * out-of-schedule members, and members opted out of rotation are hard skips),
  * so ownership preference never routes around an owner's time off or their
  * standing "no rotation leads"; the normal cascade takes over.
- * Best-effort: a lookup error logs and returns null — ownership preference
+ * Best-effort: a lookup error logs and returns null, ownership preference
  * must never stall routing.
  */
 /**
@@ -10109,7 +10109,7 @@ async function contactOwnerAgent(
 
 /**
  * Claim-driven ownership: the teammate who claimed this lead becomes the
- * contact's owner — but ONLY when the contact is currently unowned (ownership
+ * contact's owner, but ONLY when the contact is currently unowned (ownership
  * is never stolen by a later claim). Best-effort: a failure logs and moves on;
  * the claim itself already succeeded.
  */
@@ -10147,7 +10147,7 @@ async function assignContactOwnerOnClaim(
         business_id: run.business_id,
         member_id: memberId
       });
-      // owner_assigned triggers: the claim just gave this lead an owner —
+      // owner_assigned triggers: the claim just gave this lead an owner,
       // that may start other flows (e.g. an intro text from the new owner).
       // Loop-guarded against the claiming flow; idempotent per run.
       const claimedName =
@@ -10181,7 +10181,7 @@ async function assignContactOwnerOnClaim(
  *
  * Selection is deterministic when the business has an `ai_flow_team_members`
  * roster: active members in `last_offered_at` order (nulls first), and the
- * picked row's cursor is stamped so rotation stays fair ACROSS runs — the
+ * picked row's cursor is stamped so rotation stays fair ACROSS runs, the
  * "least recently received a lead" rule computed instead of remembered.
  *
  * Only when no roster rows exist does the legacy path ask the tenant's
@@ -10211,7 +10211,7 @@ async function pickNextAgent(
   let roster = asRosterRows(rosterRows);
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
-  // that member; if they're missing/renamed — or there is no roster at all —
+  // that member; if they're missing/renamed, or there is no roster at all,
   // the offer falls through to the owner fallback, never to the legacy
   // Rowboat picker, which could offer the lead to a different teammate.
   if (pinnedAgentName) {
@@ -10232,11 +10232,11 @@ async function pickNextAgent(
   }
   if (roster.length > 0) {
     // Working-info rules (evaluated business-local): time off covering today
-    // and out-of-schedule members are hard skips — applied AFTER the pin
+    // and out-of-schedule members are hard skips, applied AFTER the pin
     // filter so time off supersedes pinned routing too. Preferred windows
     // only reorder. When every roster member is unavailable the offer falls
     // through to the owner fallback (null), never to the legacy Rowboat
-    // picker — the owner curated this roster; don't let the model improvise.
+    // picker, the owner curated this roster; don't let the model improvise.
     const [tzRes, offRes] = await Promise.all([
       supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
       supabase
@@ -10355,7 +10355,7 @@ async function pickNextAgent(
     price: typeof scope.vars.price === "string" ? scope.vars.price : "",
     type: typeof scope.vars.lead_type === "string" ? scope.vars.lead_type : ""
   };
-  // NOTE: a pinned step never reaches this legacy path — the pin guard above
+  // NOTE: a pinned step never reaches this legacy path, the pin guard above
   // either restricted the roster or already returned the owner fallback, so
   // the model can never be asked to (mis)pick a pinned lead's agent.
   // Real-estate / mortgage tenants keep the original "real-estate lead" wording
@@ -10391,7 +10391,7 @@ async function pickNextAgent(
       timeoutMs: ROWBOAT_ROUTE_TIMEOUT_MS,
       customerPreamble: preamble
     });
-    // The legacy agent-pick is a billed Gemini turn on the tenant's Rowboat —
+    // The legacy agent-pick is a billed Gemini turn on the tenant's Rowboat,
     // meter it into the shared pool (not gated: routing a live lead must not
     // be blocked by the fuse; it just counts toward it).
     await meterAiFlowSpend(
@@ -10499,7 +10499,7 @@ async function alertSmsCapOnce(
 
 /**
  * Send an owner-facing SMS (claim notice / roster-exhausted fallback) to the
- * configured forward number. No-op when the owner has no forward number set —
+ * configured forward number. No-op when the owner has no forward number set,
  * there is nowhere to route, so we log rather than throw and stall the run.
  */
 /** Owner-direct nudge cadence: first reminder at 10 min, final at 30 min. */
@@ -10533,8 +10533,8 @@ function ownerDirectNudgeText(alertBody: string, minutes: number, final: boolean
 /**
  * Resume an owner-direct nudge park (routing.owner_direct): the ONLY events
  * that can arrive are the owner's reply ("1" ack via the claim path, "2" via
- * the reject path) or a nudge timeout from the escalation sweep. A reply —
- * any reply — acknowledges the alert and stops the reminders; claimed_agent
+ * the reject path) or a nudge timeout from the escalation sweep. A reply,
+ * any reply, acknowledges the alert and stops the reminders; claimed_agent
  * stays "none" throughout (the owner acking is NOT a teammate claim, so
  * claim-gated later steps still skip). Timeouts send the 10-minute reminder
  * (re-park for 20 more) and then the 30-minute final reminder, after which
@@ -10643,7 +10643,7 @@ async function sendOwnerSms(
     return;
   }
   const body = prepareSmsBody(`[AiFlow] ${text}`);
-  // Metered (never refused) owner traffic — Jul 14 2026 policy.
+  // Metered (never refused) owner traffic, Jul 14 2026 policy.
   const send = await sendOperationalSms(supabase, run.business_id, {
     apiKey: cfg.apiKey,
     messagingProfileId: cfg.profile,
@@ -10821,7 +10821,7 @@ async function recordStep(
 
 /**
  * Persist a run-state patch. THROWS on failure so the caller (executeRun) does
- * not march on assuming a current_step/context/status write landed — a swallowed
+ * not march on assuming a current_step/context/status write landed, a swallowed
  * error here desyncs the run from its real progress and fights stale-run reclaim.
  * A thrown error propagates to handleRunThrow, which re-queues for retry. The
  * terminal/recovery callers (failRun, handleRunThrow) wrap this best-effort so a
@@ -10835,7 +10835,7 @@ async function updateRun(
   // `.neq(status, canceled)`: an owner "Stop this run" is terminal the moment
   // it lands. A worker mid-execution (or a late park/retry/terminal persist)
   // must never resurrect or overwrite a canceled run. Returns whether a row
-  // actually matched — FALSE means the run was canceled underneath us, and a
+  // actually matched, FALSE means the run was canceled underneath us, and a
   // caller about to perform post-persist side effects (the approval-prompt /
   // agent-offer sends) must bail instead of messaging on a stopped run.
   const { data, error } = await supabase
@@ -10886,7 +10886,7 @@ async function failRun(
     }
   });
   // Opt-in owner alert (aiflow_failure_alerts, default OFF): a dead-lettered
-  // lead-intake run is a lead that arrived and got silence — tell the owner
+  // lead-intake run is a lead that arrived and got silence, tell the owner
   // when they've asked to hear about it. Best-effort; scope (when the caller
   // had one) carries fresher vars than the persisted context.
   const ctx = run.context ?? {};
@@ -10956,7 +10956,7 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
  * Schedule sweep: enqueue a run for every enabled schedule-triggered flow that
  * is due this tick. Exactly-once per occurrence via dedupe_key (the unique
  * (flow_id, dedupe_key) index turns repeat ticks inside the due window into
- * benign 23505s). Never throws — a bad flow just logs and is skipped.
+ * benign 23505s). Never throws, a bad flow just logs and is skipped.
  */
 async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
   try {
@@ -10977,7 +10977,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
         .range(offset, offset + PAGE - 1);
       if (error) {
         console.error("schedule sweep list", error);
-        // A later page failing must not discard the flows already listed —
+        // A later page failing must not discard the flows already listed,
         // sweep those now; the next tick retries the full listing (dedupe
         // keys make any overlap benign).
         if (rows.length === 0) return;
@@ -11016,7 +11016,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
           current_step: 0,
           dedupe_key: dedupeKey
         });
-        // 23505 = this occurrence is already enqueued (earlier tick) — expected.
+        // 23505 = this occurrence is already enqueued (earlier tick), expected.
         if (insErr && (insErr as { code?: string }).code !== "23505") {
           console.error("schedule enqueue", insErr);
           continue;
@@ -11049,7 +11049,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
  * default business timezone) matches the contact's stored birthday and the
  * local time has reached the trigger's send time. Exactly-once via the
  * `bday:<contactId>:<year>` dedupe key. Failure-isolated like the schedule
- * sweep — never throws.
+ * sweep, never throws.
  */
 async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
   try {
@@ -11156,7 +11156,7 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
           const tz = flow.timezone || businessTz;
           // from_matches saved-person refs resolve ONCE per flow (not per
           // contact) to live identity values; a resolution failure fails
-          // CLOSED for this flow only — mirrors the calendar poller.
+          // CLOSED for this flow only, mirrors the calendar poller.
           let refValues: ReadonlyMap<string, string[]> | undefined;
           if (flow.conditions.some((c) => c.type === "from_matches" && c.ref)) {
             try {
@@ -11172,7 +11172,7 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
           }
           // Drip pacing (definition.drip): read the flow's latest scheduled
           // slot ONCE, then step forward locally for each contact enqueued
-          // this pass — many contacts sharing a birthday is exactly the
+          // this pass, many contacts sharing a birthday is exactly the
           // burst drip exists for. Best-effort: a read failure paces from
           // now.
           let nextDripMs: number | null = null;
@@ -11246,7 +11246,7 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
                 ? { earliest_claim_at: new Date(nextDripMs).toISOString() }
                 : {})
             });
-            // 23505 = this year's firing already enqueued — expected.
+            // 23505 = this year's firing already enqueued, expected.
             if (insErr && (insErr as { code?: string }).code !== "23505") {
               console.error("birthday enqueue", insErr);
               continue;
@@ -11338,7 +11338,7 @@ async function placeOutboundCall(
       retryable: out?.dialed === false
     };
   } catch (e) {
-    // No response: a dial MAY have gone through — never retry (could double-dial).
+    // No response: a dial MAY have gone through, never retry (could double-dial).
     console.error("placeOutboundCall", e);
     return { ok: false, reason: "originate_unreachable", errorCode: "originate_unreachable", retryable: false };
   } finally {
@@ -11354,7 +11354,7 @@ async function placeOutboundCall(
  * (unique flow_id, dedupe_key): insert the occurrence row FIRST (a 23505 means
  * "already dialed this occurrence" → skip), then call telnyx-voice-originate,
  * which runs the same pre-dial probe + post-dial reserve metering as the manual
- * "Place call". Never throws — a bad flow logs and is skipped.
+ * "Place call". Never throws, a bad flow logs and is skipped.
  */
 async function enqueueDueOutboundCalls(
   supabase: Supabase,
@@ -11419,7 +11419,7 @@ async function enqueueDueOutboundCalls(
         status: "placed"
       });
       if (insErr) {
-        // 23505 = this occurrence was already dialed on an earlier tick — expected.
+        // 23505 = this occurrence was already dialed on an earlier tick, expected.
         if ((insErr as { code?: string }).code !== "23505") {
           console.error("outbound sweep ledger insert", insErr);
         }
@@ -11434,9 +11434,9 @@ async function enqueueDueOutboundCalls(
       // The pre-inserted row is a dedupe LOCK that prevents overlapping ticks
       // from double-dialing. Resolve it by outcome:
       //   - placed (ok): keep the row terminal (at-most-once for a real call).
-      //   - failed AFTER a dial / ambiguous no-response: keep it terminal — the
+      //   - failed AFTER a dial / ambiguous no-response: keep it terminal, the
       //     callee was (or may have been) rung, so retrying would dial again.
-      //   - failed BEFORE any dial (originate reports dialed:false — a config/
+      //   - failed BEFORE any dial (originate reports dialed:false, a config/
       //     validation refusal, the pre-dial budget block, or Telnyx rejecting
       //     the dial so no leg exists): RELEASE the lock (delete the row) so a
       //     later tick retries this occurrence within its window. Budget blocks
@@ -11496,7 +11496,7 @@ async function enqueueDueOutboundCalls(
  * /api/internal/aiflow-email-poll and /api/internal/aiflow-calendar-poll
  * routes (cron-secret authed, same contract as this worker's own auth); this
  * just kicks one of them once per tick. The routes are cheap no-ops when no
- * enabled flow uses their channel. Failures only log — mailbox/calendar
+ * enabled flow uses their channel. Failures only log, mailbox/calendar
  * trouble must never stall SMS or scheduled runs.
  */
 async function kickTriggerPoll(routePath: string): Promise<void> {

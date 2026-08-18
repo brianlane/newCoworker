@@ -7,18 +7,18 @@
  * campaign, persist the outcome, and tell me what happened".
  *
  * Outcome semantics:
- *   - `registered`        — POST /phoneNumberCampaign returned 200 (or 409,
- *                           which means the pairing already exists — same
+ *   - `registered`, POST /phoneNumberCampaign returned 200 (or 409,
+ *                           which means the pairing already exists, same
  *                           net effect for the dashboard).
- *   - `pending`           — Skipped because (a) we don't have a campaign id
+ *   - `pending`, Skipped because (a) we don't have a campaign id
  *                           yet, (b) the campaign isn't ACTIVE, or (c) the
  *                           DID isn't reachable yet. Surface a user-friendly
  *                           reason; nothing fatal.
- *   - `rejected`          — Telnyx returned a hard error (4xx other than
+ *   - `rejected`, Telnyx returned a hard error (4xx other than
  *                           404/409). Captured verbatim in last_error so we
  *                           can show it in the banner / debug from the DB.
- *   - `error`             — Transient infrastructure failure (5xx, timeout,
- *                           DB write blew up). NOT persisted to status —
+ *   - `error`, Transient infrastructure failure (5xx, timeout,
+ *                           DB write blew up). NOT persisted to status,
  *                           the row stays in its current state and the
  *                           caller should retry later.
  *
@@ -59,14 +59,14 @@ export class MissingTendlcConfigError extends Error {
  * Read the platform 10DLC config from env. Returns `null` when 10DLC isn't
  * configured yet (initial bootstrap) so callers can fall back to "queue as
  * pending". Throws `MissingTendlcConfigError` when SOME but not all values
- * are set — that's almost always a misconfiguration we want loudly visible.
+ * are set, that's almost always a misconfiguration we want loudly visible.
  *
  * Why the cold-start gate ignores TELNYX_API_KEY:
- *   `TELNYX_API_KEY` is shared platform infrastructure — it's set in every
+ *   `TELNYX_API_KEY` is shared platform infrastructure, it's set in every
  *   environment because voice routing, admin tools, and outbound SMS all
  *   need it. If we required it to be missing for "cold start", every prod
  *   tenant would hit the partial-config branch (apiKey set, brandId/
- *   campaignId not yet) and throw — which the orchestrator then catches
+ *   campaignId not yet) and throw, which the orchestrator then catches
  *   with NO DB write, leaving `last_attempt_at` stale and the dashboard
  *   banner uninformative. Gate cold-start on the 10DLC-specific keys only;
  *   they're set together (or not at all) by the rollout that adds 10DLC.
@@ -111,7 +111,7 @@ export type AttachInput = {
   /** Skip the live `getCampaign` poll (for tests / when the orchestrator
    * already knows the campaign is ACTIVE). */
   skipCampaignStatusCheck?: boolean;
-  /** Inject the supabase client (test seam — DB writes are mocked). */
+  /** Inject the supabase client (test seam, DB writes are mocked). */
   dbClient?: SupabaseClient;
 };
 
@@ -159,7 +159,7 @@ export async function attachBusinessDidToCampaign(
       });
     }
     if (campaign.status !== "ACTIVE") {
-      // Carrier vetting still in progress — nothing for us to do.
+      // Carrier vetting still in progress, nothing for us to do.
       return persistAndReturn(input.businessId, input.dbClient, {
         kind: "pending",
         reason: `campaign_status:${campaign.status || "unknown"}`
@@ -175,7 +175,7 @@ export async function attachBusinessDidToCampaign(
   } catch (err) {
     if (err instanceof TendlcApiError) {
       if (err.conflict) {
-        // Already attached — we're done. Telnyx's 409 means "this exact
+        // Already attached, we're done. Telnyx's 409 means "this exact
         // pairing exists", not "different pairing exists" (which is 422).
         return persistAndReturn(input.businessId, input.dbClient, {
           kind: "registered",
@@ -212,7 +212,7 @@ async function persistAndReturn(
   dbClient: SupabaseClient | undefined,
   outcome: AttachOutcome
 ): Promise<AttachOutcome> {
-  // Transient infra errors don't update status — the row stays in its
+  // Transient infra errors don't update status, the row stays in its
   // current state so a re-run picks up where we left off.
   if (outcome.kind === "error") return outcome;
 

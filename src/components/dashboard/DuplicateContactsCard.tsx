@@ -6,7 +6,7 @@
  * Server-side detection (src/lib/customer-memory/dedup.ts) pairs customer
  * profiles that share an email and recommends a merge direction by data
  * completeness (BizBlasts CustomerLinker port). Nothing merges without the
- * owner clicking — the button drives the existing merge endpoint, which
+ * owner clicking, the button drives the existing merge endpoint, which
  * folds the duplicate's notes/counters into the survivor and records its
  * number as an alias so future texts/calls resolve correctly.
  */

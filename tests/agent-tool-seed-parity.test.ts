@@ -14,12 +14,12 @@ import { TOOL_GATES, baseToolKey, toolSurface } from "@/lib/agent-tools/rowboat-
  * DRIFT GUARD: the registry (what each coworker SHOULD have), the Rowboat
  * workflow seed (what a fresh provision actually declares), the dispatcher
  * allowlist (what /api/rowboat/tool-call will fulfil), and the voice
- * bridge's declarations must stay in lockstep — every past gap (missing
+ * bridge's declarations must stay in lockstep, every past gap (missing
  * scheduling tools on old boxes, the inline generate_image parity bug, the
  * send_whatsapp seed gap) was exactly this drift.
  *
  * The seed is validated by EXECUTING the WORKFLOW_JSON jq program extracted
- * from vps/scripts/deploy-client.sh (see debug/_workflow-seed.ts) — so a jq
+ * from vps/scripts/deploy-client.sh (see debug/_workflow-seed.ts), so a jq
  * syntax error or a stray apostrophe fails THIS test instead of the next
  * tenant's provision, and the assertions read structured JSON, not regexes.
  *
@@ -36,7 +36,7 @@ const workflowToolNames = new Set(seed.tools.map((t) => t.name));
 /** Registry toolKey → Rowboat seed name(s) per surface, with by-design exemptions. */
 const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // Fulfilled by the chat-worker's email adapter (/api/voice/tools/dashboard-email),
-  // not a Rowboat-declared tool — the worker intercepts email intents itself.
+  // not a Rowboat-declared tool, the worker intercepts email intents itself.
   send_email: null,
   send_sms: ["send_sms"],
   send_whatsapp: ["send_whatsapp"],
@@ -55,7 +55,7 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // INLINE-ONLY by design: irreversible opt-out suppression + run cancels
   // may only be declared on owner-verified surfaces (inline dashboard chat,
   // the owner-SMS operator turn). The Rowboat paths carry no caller
-  // identity, so neither agent gets a twin — the customer-facing texting
+  // identity, so neither agent gets a twin, the customer-facing texting
   // coworker especially must never hold this tool.
   flag_contact_spam: null,
   // INLINE-ONLY for the same reason: "stop texting X" is an owner decision
@@ -110,7 +110,7 @@ describe("workflow seed (deploy-client.sh) executes and has the expected shape",
 
   it("contains no apostrophes in the jq program (bash would truncate the seed)", () => {
     // extractWorkflowJqProgram throws when the program's first apostrophe is
-    // not the closing quote — rendering above already proved it, but assert
+    // not the closing quote, rendering above already proved it, but assert
     // explicitly so the failure message names the real constraint.
     const shText = fs.readFileSync(path.join(process.cwd(), DEPLOY_CLIENT_SH), "utf8");
     expect(() => extractWorkflowJqProgram(shText)).not.toThrow();

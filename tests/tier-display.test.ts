@@ -107,7 +107,7 @@ describe("tier-display", () => {
       );
       expect(ENTERPRISE_FEATURES).toContain("Team access with roles (managers & staff)");
       expect(ENTERPRISE_FEATURES).toContain("Choice of professional voices");
-      // Honesty guard: cloning was descoped to the prebuilt voice picker —
+      // Honesty guard: cloning was descoped to the prebuilt voice picker,
       // the pricing page must not promise it.
       expect(ENTERPRISE_FEATURES.join(" ")).not.toContain("cloning");
     });

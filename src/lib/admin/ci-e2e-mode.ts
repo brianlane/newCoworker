@@ -1,5 +1,5 @@
 /**
- * CI live-e2e mode — the admin cost toggle for the paid Gemini e2e suite.
+ * CI live-e2e mode, the admin cost toggle for the paid Gemini e2e suite.
  *
  * Two modes, stored as an admin_platform_settings row (key → jsonb string)
  * so flipping it needs no deploy:
@@ -8,12 +8,12 @@
  *    PRs and pushes to main (`.github/scripts/e2e-scope.sh` decides how
  *    much), and the nightly workflow is a drift safety net.
  *  - "nightly-only": the CI e2e job skips ALL paid model calls (the job
- *    still enforces the merge gate and reports SUCCESS — the merge policy
+ *    still enforces the merge gate and reports SUCCESS, the merge policy
  *    treats a skipped check as blocking); live coverage comes exclusively
  *    from the nightly full run, which emails the admin on failure.
  *
  * GitHub Actions reads the mode through GET /api/public/ci-e2e-mode (no
- *auth — the value is operational and non-sensitive) and FAILS OPEN to
+ *auth, the value is operational and non-sensitive) and FAILS OPEN to
  * "per-change" on any error, so an app outage can never silently drop the
  * merge-time suite while the admin believes it is on.
  */

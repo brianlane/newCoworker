@@ -5,7 +5,7 @@ vi.mock("@/lib/auth", () => ({
   requireBusinessRole: vi.fn()
 }));
 
-// Keep ByonValidationError real — the route branches on `instanceof`.
+// Keep ByonValidationError real, the route branches on `instanceof`.
 vi.mock("@/lib/byon/port-requests", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/byon/port-requests")>();
   return {

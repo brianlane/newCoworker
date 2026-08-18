@@ -326,7 +326,7 @@ describe("describeRowboatError", () => {
   });
 
   // 524 / 522 / 408 are infrastructure-level "no response in time"
-  // signals — Cloudflare 524 = origin idle timeout exceeded; 522 =
+  // signals, Cloudflare 524 = origin idle timeout exceeded; 522 =
   // origin connection timed out; 408 = request timeout. Pre-streaming
   // these fell through to the generic "having trouble (status 524)"
   // string, which was both unhelpful (the owner can't act on a status
@@ -364,7 +364,7 @@ describe("parseRowboatStreamEvent, pure parser", () => {
   // Bugbot HIGH fix on PR #76, so `ev?.type` no longer typechecks
   // when `ev` could be the "noop" sentinel. These tests always feed
   // payloads that produce typed events, so narrowing is purely for
-  // TS — the runtime assertion below makes the regression visible if
+  // TS, the runtime assertion below makes the regression visible if
   // a future parser change starts emitting noop for inputs we expect
   // to be typed events.
   function asEvent(r: ReturnType<typeof parseRowboatStreamEvent>) {
@@ -488,7 +488,7 @@ describe("parseRowboatStreamEvent, pure parser", () => {
   });
 
   it("falls back to a generic 'rowboat_stream_error' message when an error event omits the message field", async () => {
-    // Defensive — Rowboat (or an intermediary) might emit
+    // Defensive, Rowboat (or an intermediary) might emit
     // `{"type":"error"}` with no message. We MUST still surface a
     // non-empty error string so describeRowboatError can render
     // something to the owner.
@@ -498,7 +498,7 @@ describe("parseRowboatStreamEvent, pure parser", () => {
 
   it("returns ROWBOAT_STREAM_NOOP for a delta-typed event with no {content, text, delta}, be liberal in what we accept rather than tearing down the whole stream over a single malformed chunk (the next chunk usually carries real content)", () => {
     // Rowboat-native shape says this IS a delta event; we just don't
-    // have content to render. Skipping is safer than killing — a brief
+    // have content to render. Skipping is safer than killing, a brief
     // upstream hiccup that emits one bad chunk would otherwise lose
     // the entire reply. The idle timer still resets on the chunk
     // arrival, and if the upstream is genuinely broken the next event
@@ -528,13 +528,13 @@ describe("parseRowboatStreamEvent, pure parser", () => {
     // as a final keep-alive. The parser MUST treat this as a no-op
     // for the caller to skip rather than throwing on a null property
     // access OR returning hard-null (which the loop would surface as
-    // rowboat_invalid_json — see Codex P1 / Cursor Bugbot HIGH on PR #76).
+    // rowboat_invalid_json, see Codex P1 / Cursor Bugbot HIGH on PR #76).
     expect(parseRowboatStreamEvent('{"choices":[null]}')).toBe(ROWBOAT_STREAM_NOOP);
   });
 
   it("hypothesis-3 path: a final JSON with state but NO conversationId still yields done with conversationId=undefined and state preserved", async () => {
     // Rowboat is observed (in some builds) emitting a final JSON that
-    // carries `state` but omits `conversationId` — happens when the
+    // carries `state` but omits `conversationId`, happens when the
     // server already returned a fresh conversation id earlier as a
     // separate meta event. The parser must still extract the state
     // metadata in that case (the route relies on hasStateKey to know
@@ -597,7 +597,7 @@ describe("callRowboatChatStream", () => {
   }
 
   function pendingResponse(): Response {
-    // A response whose body never yields — used to trigger TTFB / idle
+    // A response whose body never yields, used to trigger TTFB / idle
     // timeouts. Stream stays open until the test aborts.
     const stream = new ReadableStream<Uint8Array>({
       start() {
@@ -851,7 +851,7 @@ describe("callRowboatChatStream", () => {
     });
     // The generator must terminate on the TTFB timeout, not hang.
     expect(events).toEqual([{ type: "error", message: "rowboat_timeout" }]);
-    // And the reader was actually cancelled — pre-fix only abort.abort()
+    // And the reader was actually cancelled, pre-fix only abort.abort()
     // ran, which doesn't propagate to the body stream once fetch
     // resolved (lines 617-622 of chat.ts already document this).
     expect(readerCancelled).toBe(true);
@@ -930,7 +930,7 @@ describe("callRowboatChatStream", () => {
   });
 
   it("yields rowboat_timeout when the TTFB timer fires DURING the fetch dial (signal aborts the in-flight fetch promise)", async () => {
-    // Distinct from the "no first chunk" case — here fetch() itself
+    // Distinct from the "no first chunk" case, here fetch() itself
     // hasn't even resolved yet. The AbortController triggers our
     // catch block on the fetch call, and we see signal.aborted=true,
     // so we surface rowboat_timeout (not the raw "AbortError"
@@ -978,7 +978,7 @@ describe("callRowboatChatStream", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((_: string, init: RequestInit) => {
-        // Hook the abort signal to error the body stream — simulates
+        // Hook the abort signal to error the body stream, simulates
         // a fetch implementation that surfaces abort by tearing down
         // the response body with an exception.
         const signal = init.signal as AbortSignal;
@@ -1102,7 +1102,7 @@ describe("callRowboatChatStream", () => {
     // Distinct from a 5xx response code: Rowboat opens the SSE pipe
     // (200 OK), starts streaming, then emits an `error` event as a
     // proper SSE chunk. The route uses this to decide whether the
-    // stateless retry is appropriate — must propagate the
+    // stateless retry is appropriate, must propagate the
     // `Error.message`-style code untouched.
     vi.stubGlobal(
       "fetch",
@@ -1235,7 +1235,7 @@ describe("callRowboatChatStream", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         sseResponse([
-          // Both forms in the same response — exercise the slice/replace
+          // Both forms in the same response, exercise the slice/replace
           // path that strips the leading space.
           'data: {"type":"delta","content":"a"}\n\n',
           'data:{"type":"delta","content":"b"}\n\n',
@@ -1307,9 +1307,9 @@ describe("callRowboatChatStream", () => {
     });
 
     // Pump the first iteration on a microtask, then trigger the
-    // external abort — the generator should yield rowboat_timeout
+    // external abort, the generator should yield rowboat_timeout
     // (the abort path goes through the same AbortController as the
-    // timer path, so the message is uniform — describeRowboatError
+    // timer path, so the message is uniform, describeRowboatError
     // already maps rowboat_timeout to a friendly "took too long").
     const next = gen.next();
     // Yield to the event loop so the fetch() promise resolves and the
@@ -1336,7 +1336,7 @@ describe("callRowboatChatStream", () => {
     // abort the fetch (otherwise the per-tenant Ollama still gets
     // the prompt and starts generating).
     // Refs (not `let` bindings) so TS doesn't narrow these to their
-    // initial null type after the callback assignment — a long-running
+    // initial null type after the callback assignment, a long-running
     // quirk with async writes from inside Promise executors.
     const signalRef: { current: AbortSignal | null } = { current: null };
     const resolveFetchRef: { current: ((r: Response) => void) | null } = {
@@ -1462,7 +1462,7 @@ describe("callRowboatChatStream", () => {
     // Defensive corner: a parent that re-uses an AbortController
     // across many turns might pass it after a prior turn already
     // aborted it. The internal abort fires synchronously, so the
-    // outgoing fetch carries an already-aborted signal — a compliant
+    // outgoing fetch carries an already-aborted signal, a compliant
     // fetch implementation rejects with AbortError immediately,
     // landing in the `catch` block and surfacing the uniform
     // rowboat_timeout error code (no Rowboat tokens consumed).

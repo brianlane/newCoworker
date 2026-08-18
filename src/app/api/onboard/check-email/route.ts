@@ -9,7 +9,7 @@ const schema = z.object({
 });
 
 // Durable (cross-isolate) limit: this endpoint leaks "has account / does not
-// have account" per email, so the per-IP quota must bind fleet-wide — the
+// have account" per email, so the per-IP quota must bind fleet-wide, the
 // in-memory proxy limiter is per-isolate and lets a distributed caller
 // enumerate far past the configured numbers (audit 2026-07, finding M3).
 const CHECK_EMAIL_RATE = { interval: 60 * 1000, maxRequests: 10 };
@@ -28,7 +28,7 @@ const CHECK_EMAIL_RATE = { interval: 60 * 1000, maxRequests: 10 };
  * strict `authUserExistsByEmail` helper that throws on lookup
  * failure). This endpoint uses the SOFT `findAuthUserIdByEmail`
  * helper and reports `available: true` whenever it cannot prove
- * the email is taken — fail-open is the right call here because
+ * the email is taken, fail-open is the right call here because
  * a transient lookup failure should not strand a legitimate
  * signup mid-questionnaire when the server-side gate downstream
  * will catch the rare bad case.

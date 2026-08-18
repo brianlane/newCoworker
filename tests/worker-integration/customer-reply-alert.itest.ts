@@ -14,14 +14,14 @@ import { SMS_STAFF_NOTIFICATION_SETTINGS_LINE } from "../../supabase/functions/_
 /**
  * Opt-in "client replied" owner alerts, end to end against the REAL
  * sms-inbound-worker + REAL notifications function (KYP, Jul 20 2026):
- * James — "You need to let me know when clients text back i didnt see his
+ * James, "You need to let me know when clients text back i didnt see his
  * texts". The AI promised immediate alerts, but no per-client-reply owner
  * notification existed; he missed Tim Tsai's replies while working the
  * thread live.
  *
  * The alert is DETERMINISTIC pipeline code, not a model tool: it fires when
  * a claimed job is identified as a customer inbound, BEFORE the reply
- * branches — so flow-suppressed inbounds, tapbacks, and bare "1" replies
+ * branches, so flow-suppressed inbounds, tapbacks, and bare "1" replies
  * alert too. Gated on `notification_preferences.customer_reply_alerts`
  * (default false, opt-in), with a per-contact coalescing window so a
  * multi-part text or rapid back-and-forth is ONE alert.

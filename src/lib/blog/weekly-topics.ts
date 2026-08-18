@@ -1,14 +1,14 @@
 /**
  * Rotating-category composers for the weekly auto post: Tutorial,
- * Business Tips, and Feature deep-dive. Same contract as the PR digest —
+ * Business Tips, and Feature deep-dive. Same contract as the PR digest,
  * Gemini JSON `{title, excerpt, content}`, the 700-word cap enforced with
  * one retry then a section-boundary truncation, excerpt doubling as the
- * Instagram caption — but grounded per category:
+ * Instagram caption, but grounded per category:
  *
- *   tutorial       — ONE recently shipped feature (the model may only use
+ *   tutorial, ONE recently shipped feature (the model may only use
  *                    the provided PR material; no invented UI steps).
- *   feature        — the single most impactful shipped feature, in depth.
- *   business-tips  — brand-voice advice for small-business owners; recent
+ *   feature, the single most impactful shipped feature, in depth.
+ *   business-tips, brand-voice advice for small-business owners; recent
  *                    business-tips titles are provided so topics never
  *                    repeat.
  */
@@ -138,7 +138,7 @@ export async function composeTopicWithGemini(
       maxOutputTokens: 4096
     });
     const parsed = JSON.parse(raw) as Partial<DigestDraft>;
-    // House rule: no em dashes in blog copy, ever — enforced (not just
+    // House rule: no em dashes in blog copy, ever, enforced (not just
     // prompted), and BEFORE the emptiness check so a dash-only field
     // counts as missing.
     const cleaned = stripEmDashesFromDraft({
@@ -321,7 +321,7 @@ export async function runWeeklyAuto(deps: WeeklyAutoDeps = {}): Promise<WeeklyAu
         featured_image_path: imagePath,
         featured_image_alt: imagePath ? draft.title : null,
         // scheduled_for records the run instant on every auto post (draft
-        // mode included) — same bookkeeping as the digest.
+        // mode included), same bookkeeping as the digest.
         status: settings.digest_as_draft ? ("draft" as const) : ("scheduled" as const),
         scheduled_for: nowDate.toISOString()
       },

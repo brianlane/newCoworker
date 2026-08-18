@@ -7,7 +7,7 @@
  * Settings → APIs & Webhooks page. On save the server verifies the
  * credentials (token exchange + service listing) and returns the service
  * catalog, so the default-service picker is populated immediately. The
- * card also surfaces the tenant's webhook URL — pasting it into Vagaro's
+ * card also surfaces the tenant's webhook URL, pasting it into Vagaro's
  * webhook settings streams appointment/customer events straight into
  * AiFlows and the contact list, no Zapier account needed.
  *

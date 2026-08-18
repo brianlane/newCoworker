@@ -53,7 +53,7 @@ const USER_RES = {
     }
   }
 };
-// Calendly's create response carries the resource but NO signing key — the
+// Calendly's create response carries the resource but NO signing key, the
 // platform supplies its own in the request (verified against the live API).
 const CREATED_RES = {
   data: {
@@ -139,7 +139,7 @@ describe("ensureCalendlyWebhookSubscription", () => {
     const request = vi.fn().mockResolvedValueOnce(USER_RES); // same user U1
     const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
     expect(out).toEqual({ status: "active", attempted: true });
-    // No delete, no create — one identity probe, then the row is re-stamped
+    // No delete, no create, one identity probe, then the row is re-stamped
     // under the new connection key.
     expect(request).toHaveBeenCalledTimes(1);
     expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(

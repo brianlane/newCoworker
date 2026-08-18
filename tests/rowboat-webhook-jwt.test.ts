@@ -152,7 +152,7 @@ describe("resolveRowboatWebhookClaims", () => {
   it("accepts the shared secret while the only token is PENDING (box still signs with shared mid-deploy)", async () => {
     // First migration: a pending token row exists but the VPS hasn't been redeployed
     // yet, so Rowboat is still signing tool-call JWTs with the shared secret. We must
-    // NOT 401 these — exclusivity engages only once a token is confirmed.
+    // NOT 401 these, exclusivity engages only once a token is confirmed.
     getActiveMock.mockResolvedValue({ tokens: ["pending-not-yet-live"], hasConfirmed: false });
     const tok = sign(validClaims()); // signed with shared SECRET
     expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });

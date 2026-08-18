@@ -5,7 +5,7 @@
  * POST → update toggle / threshold / window. Values are validated and
  *        clamped by the SAME parser the Edge cron uses
  *        (_shared/spend_velocity.ts), so what the admin saves is exactly
- *        what the watchdog enforces on its next 10-minute tick — no
+ *        what the watchdog enforces on its next 10-minute tick, no
  *        redeploy needed.
  */
 

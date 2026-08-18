@@ -8,8 +8,8 @@
  *     name, the conversation ref for lead capture, channel guidance).
  *   * TOOLS: the identical restricted customer-facing surface
  *     (knowledge lookup, lead capture, calendar find/book, document
- *     share) via executeWebchatEngineTool — including the SAME owner
- *     Settings gates — with lead capture swapped for the Messenger
+ *     share) via executeWebchatEngineTool, including the SAME owner
+ *     Settings gates, with lead capture swapped for the Messenger
  *     variant so attribution lands on the conversation row.
  *   * BUDGET: the shared AI spend fuse is checked BEFORE calling Google;
  *     over-cap turns refuse with the honest copy, and billed tokens meter
@@ -76,11 +76,11 @@ export function messengerOverCapRefusal(language?: "en" | "es" | null): string {
  * Default history: 2.5-flash-lite → 2.5-flash (2026-07-16) after the Truly
  * SMS incident (Jul 14, ignored a system preamble containing the answer)
  * and the KYP Ads dashboard-chat session (Jul 15, context-blind
- * non-sequiturs and invented policy) — Messenger is a conversational
+ * non-sequiturs and invented policy), Messenger is a conversational
  * lead-qualification surface, same stakes as SMS. Bumped again 2.5-flash →
  * gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
  * 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
- * far stronger context-following, 350 tok/s — matching the SMS/owner chat
+ * far stronger context-following, 350 tok/s, matching the SMS/owner chat
  * default bump. Webchat deliberately stays on 2.5-flash-lite (anonymous
  * public traffic; 3.5-flash-lite is 3-6x its price).
  */
@@ -95,7 +95,7 @@ export function messengerEngineModel(
 /** Tool rounds per turn (each round may carry several parallel calls). */
 export const MESSENGER_ENGINE_MAX_TOOL_ROUNDS = 4;
 
-/** Whole-turn deadline — the worker route budget leaves headroom. */
+/** Whole-turn deadline, the worker route budget leaves headroom. */
 export const MESSENGER_ENGINE_TURN_TIMEOUT_MS = 30_000;
 
 /** History window handed to the model (rapid leads write many rows). */
@@ -107,13 +107,13 @@ const PLATFORM_LABELS: Record<MessengerConversationRow["platform"], string> = {
   whatsapp: "WhatsApp"
 };
 
-/** Booking-context lookup budget — a Calendly hiccup must not stall a DM. */
+/** Booking-context lookup budget, a Calendly hiccup must not stall a DM. */
 export const MESSENGER_BOOKING_CONTEXT_TIMEOUT_MS = 5_000;
 
 /**
  * The phone the booking-status lookup may trust for this conversation:
  * WhatsApp's `psid` IS the Meta-verified `wa_id` (digits of the sender's
- * real number — stronger than anything self-asserted, so it wins even when
+ * real number, stronger than anything self-asserted, so it wins even when
  * a contact_phone was captured); Messenger/Instagram fall back to the
  * lead-captured contact_phone. Null = no usable identity, no lookup.
  */
@@ -150,7 +150,7 @@ export function buildMessengerPreamble(
     "You cannot send SMS or email from this conversation. If follow-up outside this chat is needed, capture their phone number with the lead tool.",
     // Grounded capture (messenger twin of the SMS worker's grounded-actions
     // line): the live e2e harness caught the model telling a visitor "I've
-    // captured your number — someone will text you shortly" with NO
+    // captured your number, someone will text you shortly" with NO
     // capture_lead call behind it, which silently loses the lead.
     "Recording a visitor's contact details for the team happens ONLY through the capture_lead tool, never tell them their details were noted, captured, or passed along unless that tool call succeeded in this conversation.",
     `sessionRef (pass verbatim to capture_lead): ${conversation.id}`,
@@ -241,9 +241,9 @@ export type MessengerGeminiTurnResult = {
  * Run one DM turn against Gemini directly.
  *
  * Throws (after metering whatever Google already billed) on:
- *   * `messenger_engine_no_key` — no GOOGLE_API_KEY/GEMINI_API_KEY in env
- *   * `messenger_engine_no_input` — no unanswered user turn in the window
- *   * `messenger_engine_no_reply` — the model never produced text
+ *   * `messenger_engine_no_key`, no GOOGLE_API_KEY/GEMINI_API_KEY in env
+ *   * `messenger_engine_no_input`, no unanswered user turn in the window
+ *   * `messenger_engine_no_reply`, the model never produced text
  *   * any `gemini_http_*` transport error from the step client
  * The caller maps a throw to the job's error path.
  */
@@ -290,10 +290,10 @@ export async function runMessengerGeminiTurn(
   const contents = buildMessengerContents(args.history);
   if (!contents) throw new Error("messenger_engine_no_input");
 
-  // Shared AI budget fuse FIRST — over-cap tenants must not bill Google.
+  // Shared AI budget fuse FIRST, over-cap tenants must not bill Google.
   // Language resolution runs before the refusal below so a capped thread is
   // refused in the same language a normal reply would use (owner override,
-  // stored thread language, or fresh detection) — DB reads are fine here,
+  // stored thread language, or fresh detection), DB reads are fine here,
   // only Gemini calls are fused.
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
   const overCap = snapshot.spendMicros >= snapshot.effectiveCapMicros;
@@ -302,7 +302,7 @@ export async function runMessengerGeminiTurn(
 
   // Owner override on the contact profile is authoritative across every
   // channel (same rule as the SMS worker). Only reachable once a phone was
-  // captured for this thread; best-effort — a read blip must not kill the
+  // captured for this thread; best-effort, a read blip must not kill the
   // turn.
   let ownerSetLanguage: "en" | "es" | null = null;
   if (args.conversation.contact_phone) {
@@ -369,7 +369,7 @@ export async function runMessengerGeminiTurn(
 
   // Booking-status line (parity with the SMS worker's preamble): the
   // customer's Calendly state so "was my reschedule received?" gets an
-  // informed answer instead of a confident denial. VERIFIED phone only —
+  // informed answer instead of a confident denial. VERIFIED phone only,
   // WhatsApp's wa_id, or the captured contact_phone on Messenger/IG
   // (messengerBookingPhone). Bounded and fail-open: a hung or failing
   // Calendly lookup answers null and the reply proceeds without the line.
@@ -460,7 +460,7 @@ export async function runMessengerGeminiTurn(
         tools: isFinalRound ? [] : WEBCHAT_TOOL_DECLARATIONS,
         temperature: 0.3,
         // Gemini 3 defaults to dynamic thinking that bills as output AND
-        // counts against the (default 1500) output cap — unconstrained it
+        // counts against the (default 1500) output cap, unconstrained it
         // can eat the whole budget and surface as messenger_engine_no_reply.
         // "low" keeps a little reasoning for tool choice at DM latency.
         // Gated on the family: Gemini 2.5 rejects thinkingLevel.
@@ -482,7 +482,7 @@ export async function runMessengerGeminiTurn(
           try {
             result = await executeTool(args.businessId, call.name, call.args);
           } catch (err) {
-            // One broken tool must not kill the turn — the model gets a
+            // One broken tool must not kill the turn, the model gets a
             // structured failure to explain.
             logger.warn("messenger engine: tool handler failed", {
               businessId: args.businessId,

@@ -3,7 +3,7 @@
  *
  * POST /api/admin/white-glove-intakes/<id>/apply { businessId } writes the
  * intake's answers into the tenant's configuration (vault marker blocks,
- * parsed business hours, and the follow-up flow — installed disabled on
+ * parsed business hours, and the follow-up flow, installed disabled on
  * first apply) via `applyWhiteGloveIntake`, then schedules the vault → VPS
  * re-seed so the tenant's live agent picks the new grounding up.
  */
@@ -54,7 +54,7 @@ export async function POST(
             : "CONFLICT";
         return errorResponse(status, err.message);
       }
-      // An untyped failure can land MID-apply — the vault write may already
+      // An untyped failure can land MID-apply, the vault write may already
       // be committed centrally. Re-seed anyway (idempotent) so the tenant
       // box never keeps serving pre-apply grounding behind a 500.
       scheduleVaultSync(body.businessId);

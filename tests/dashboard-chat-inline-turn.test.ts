@@ -1213,7 +1213,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
 
   it("a successful flag_contact_spam is side-effect pinned, the degraded wrap-up keeps the outcome", async () => {
     // Bugbot Medium (PR #884): the opt-out write is irreversible the moment
-    // the core returns ok — a wrap-up failure must degrade to the honest
+    // the core returns ok, a wrap-up failure must degrade to the honest
     // line, never fall back to Rowboat (which never declares this tool and
     // would deny an action that already happened).
     const runActionTool = vi.fn(async () => ({

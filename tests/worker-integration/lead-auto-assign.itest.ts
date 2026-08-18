@@ -15,14 +15,14 @@ import {
 /**
  * Lead auto-assignment (Truly feedback Issue 7): with
  * businesses.lead_auto_assign on, route_to_team hard-assigns the rotation
- * pick — the run records the claim immediately and continues instead of
+ * pick, the run records the claim immediately and continues instead of
  * parking awaiting_agent, and the contact gets an owner. Default (off)
  * keeps the offer-and-claim park, pinned here too so the flag can't leak
  * into existing tenants' behavior.
  *
  * The teammate FYI/offer SMS cannot leave this harness (no Telnyx env):
  * in auto-assign mode that send is best-effort by design (the assignment is
- * the durable fact), so the run still completes — which doubles as coverage
+ * the durable fact), so the run still completes, which doubles as coverage
  * for exactly that failure path.
  */
 
@@ -118,7 +118,7 @@ describe("lead auto-assignment (real worker)", () => {
     const route = steps.find((s) => s.step_type === "route_to_team");
     expect((route?.result as { routed?: string }).routed).toBe("auto_assigned");
     expect((route?.result as { claimed_by?: string }).claimed_by).toBe(AGENT_PHONE);
-    // Claim-gated later step ran — auto-assignment counts as a claim.
+    // Claim-gated later step ran, auto-assignment counts as a claim.
     expect(steps.find((s) => s.step_type === "update_contact")?.status).toBe("done");
 
     // Contact ownership followed the assignment.

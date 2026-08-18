@@ -12,7 +12,7 @@
  * Verification is delegated to supabase-js `auth.getClaims(token)`, which
  * validates expiry + signature locally against the project JWKS for
  * asymmetric keys and falls back to a `getUser` round-trip for legacy
- * HS256 projects — so the same code path works regardless of the
+ * HS256 projects, so the same code path works regardless of the
  * project's JWT signing configuration.
  */
 
@@ -54,8 +54,8 @@ export type McpAuthUser = {
 
 /**
  * Tool-facing failure: the message is returned to the model verbatim (as an
- * `isError` tool result), so keep it actionable — "call list_businesses",
- * "your role can't do this" — never internal detail.
+ * `isError` tool result), so keep it actionable, "call list_businesses",
+ * "your role can't do this", never internal detail.
  */
 export class McpToolError extends Error {
   constructor(message: string) {
@@ -67,7 +67,7 @@ export class McpToolError extends Error {
 /**
  * Verify a Supabase access token and extract the caller. Returns null for
  * anything that should 401: bad signature, expired, anon-role tokens (the
- * publishable key is itself a JWT on legacy projects — `role: "anon"`, no
+ * publishable key is itself a JWT on legacy projects, `role: "anon"`, no
  * sub), or tokens without an email (all business authz is email-based).
  */
 export async function verifySupabaseAccessToken(
@@ -102,7 +102,7 @@ export function toAuthUser(auth: McpAuthUser): AuthUser {
 
 /**
  * Role-gate one tool call on one business through the central permission
- * matrix — the MCP twin of `requireBusinessRole` (src/lib/auth.ts), minus
+ * matrix, the MCP twin of `requireBusinessRole` (src/lib/auth.ts), minus
  * the admin bypass (connector callers are always role-checked). Refusals
  * are security-logged like every other authorization surface.
  */
@@ -166,7 +166,7 @@ async function mcpBusinessRoleOutcome(
   //
   // ONLY for real connector sessions: `client` is set by authFromContext on
   // every MCP request, and deliberately absent when the inline Gemini
-  // surfaces run these handlers through the bridge — a dashboard turn must
+  // surfaces run these handlers through the bridge, a dashboard turn must
   // not light the Claude badge for an owner who never connected Claude
   // (and the bridge's synthetic caller ids would fail the uuid key).
   //

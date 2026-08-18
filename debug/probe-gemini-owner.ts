@@ -18,7 +18,7 @@
  *
  * Pass [businessId] [model] [reps] [--revert]. Default model
  * gemini-2.5-flash-lite. With --revert it sets OwnerCoworker BACK to the local
- * model (qwen3:4b-instruct) — actively rolling back a prior Gemini switch —
+ * model (qwen3:4b-instruct), actively rolling back a prior Gemini switch,
  * then runs the chat test against that local model.
  *
  * Usage: tsx debug/probe-gemini-owner.ts [businessId] [model] [reps] [--revert]

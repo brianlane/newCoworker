@@ -54,7 +54,7 @@ export async function recordSubscriptionRefund(
     .select()
     .single();
   if (error) {
-    // Idempotent: duplicate stripe_refund_id is fine — look up the existing row.
+    // Idempotent: duplicate stripe_refund_id is fine, look up the existing row.
     if (error.code === "23505") {
       const { data: existing, error: readErr } = await db
         .from("subscription_refunds")

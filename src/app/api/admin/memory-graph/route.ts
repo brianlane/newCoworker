@@ -2,11 +2,11 @@
  * Admin control for the memory knowledge-graph rollout.
  *
  * Two actions on one route (both admin-only):
- *   { businessId, mode }  — per-tenant override ('inherit' follows the
+ *   { businessId, mode }, per-tenant override ('inherit' follows the
  *     fleet default). Schedules a vault sync so the on-box projection
- *     ships (shadow/active) or wipes (off) immediately — the same step the
+ *     ships (shadow/active) or wipes (off) immediately, the same step the
  *     CLI flips ran manually.
- *   { defaultMode }       — the fleet-wide default every 'inherit' tenant
+ *   { defaultMode }, the fleet-wide default every 'inherit' tenant
  *     follows (admin_platform_settings key). Retrieval/ingest pick it up
  *     within the resolver's ~60s cache, and every inherit-mode tenant's
  *     on-box projection ships/wipes immediately via a scheduled vault sync
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
       // Ship/wipe every INHERIT tenant's on-box projection now instead of
       // waiting for each tenant's next organic vault sync. Best-effort: the
       // default is already persisted above. A tenant whose config read
-      // fails is treated as inherit, which errs toward syncing — the sync
+      // fails is treated as inherit, which errs toward syncing, the sync
       // itself resolves the true mode, so a spurious sync is harmless while
       // a skipped one would leave a stale projection.
       let synced = 0;

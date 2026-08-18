@@ -42,7 +42,7 @@ const booked = await bookCalendarAppointment(
 console.log("book result:", JSON.stringify(booked, null, 2));
 if (!booked.ok) throw new Error("booking failed");
 
-// Move the same event one hour later — the meeting-update leg of the
+// Move the same event one hour later, the meeting-update leg of the
 // reviewer test plan (provider sends an UPDATED invite, never a second one).
 const newStart = new Date(start.getTime() + 60 * 60 * 1000);
 const newEnd = new Date(end.getTime() + 60 * 60 * 1000);

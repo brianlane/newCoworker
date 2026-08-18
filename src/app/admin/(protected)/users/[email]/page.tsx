@@ -22,7 +22,7 @@ function segmentBadgeVariant(segment: string): "success" | "pending" | "neutral"
 }
 
 /**
- * Per-user admin detail page — the BizBlasts users-admin show page: auth
+ * Per-user admin detail page, the BizBlasts users-admin show page: auth
  * account facts, engagement segment, every business relationship (owned +
  * member), and the complete-delete action.
  */
@@ -69,10 +69,10 @@ export default async function AdminUserDetailPage({
   }
 
   // A user with no auth account AND no business relationship doesn't exist.
-  // Keyed on the ID lookup, not the profile fetch — an auth-only user whose
+  // Keyed on the ID lookup, not the profile fetch, an auth-only user whose
   // getUserById read transiently failed must still render, not 404. And a
   // null from findAuthUserIdByEmail (which swallows lookup failures) is only
-  // trusted after the STRICT variant (throws on failure) confirms the miss —
+  // trusted after the STRICT variant (throws on failure) confirms the miss,
   // same double-check the delete-user route uses.
   if (!authUserId && ownedBusinesses.length === 0 && memberships.length === 0) {
     const exists = await authUserExistsByEmail(email);
@@ -82,7 +82,7 @@ export default async function AdminUserDetailPage({
   const subscriptionMap = await listSubscriptionsByBusinessIds(ownedBusinesses.map((b) => b.id));
 
   // Same fallback chain the engagement table uses: auth account creation,
-  // else the OLDEST business/invite date — so an invite-only member reads
+  // else the OLDEST business/invite date, so an invite-only member reads
   // "new" here too instead of "quiet", and a long-time owner's recent second
   // business can't make the whole account look new (listBusinesses is
   // newest-first; memberships are already oldest-first). The notFound guard

@@ -6,14 +6,14 @@
  *
  *   * REQUEST-DERIVED (server-side, free): approximate location from
  *     Vercel's IP-geo headers and a coarse device summary from the
- *     User-Agent. THE IP ADDRESS ITSELF IS NEVER STORED — it is read
+ *     User-Agent. THE IP ADDRESS ITSELF IS NEVER STORED, it is read
  *     transiently for rate limiting and geo derivation only, and only the
  *     derived city/region/country/timezone persist (privacy posture:
  *     coarse facts, not identifiers).
  *   * CLIENT-REPORTED (the loader on the host page): page URL, referrer,
  *     UTM campaign parameters, browser language, screen size, local
  *     timezone, returning-visitor flag, and time-on-page before opening
- *     the chat. All untrusted — validated and length-capped here.
+ *     the chat. All untrusted, validated and length-capped here.
  *
  * The message route additionally appends the pages the visitor navigates
  * to while the chat is open (`pages`, capped).
@@ -23,13 +23,13 @@ import { z } from "zod";
 
 /** Longest URL we persist (page, referrer, page-trail entries). */
 export const VISITOR_META_MAX_URL_CHARS = 500;
-/** Page-trail cap — enough to see a journey, never unbounded. */
+/** Page-trail cap, enough to see a journey, never unbounded. */
 export const VISITOR_META_MAX_PAGES = 20;
 
 /**
  * Field parsers are individually FORGIVING: one malformed value (an empty
  * `screen`, an over-long language tag, a non-boolean flag) degrades to
- * undefined instead of failing the whole payload — a single bad field must
+ * undefined instead of failing the whole payload, a single bad field must
  * never drop everything else the loader collected (Bugbot Medium on PR
  * #653). Empty/whitespace strings become undefined; URLs are truncated,
  * never rejected, for length.
@@ -139,7 +139,7 @@ export function geoFromRequestHeaders(headers: Headers): WebchatVisitorGeo | und
 
 /**
  * Coarse browser/OS/mobile summary from the User-Agent. Deliberately a
- * handful of substring checks, not a UA-parser dependency — "Chrome on
+ * handful of substring checks, not a UA-parser dependency, "Chrome on
  * macOS, desktop" is the whole requirement.
  */
 export function deviceFromUserAgent(ua: string | null | undefined): WebchatVisitorDevice | undefined {
@@ -244,7 +244,7 @@ export function appendVisitorPage(
 // Display formatting (admin/owner views)
 // ---------------------------------------------------------------------
 
-/** "Phoenix, AZ, US" — most specific parts first, nothing invented. */
+/** "Phoenix, AZ, US", most specific parts first, nothing invented. */
 export function formatVisitorLocation(meta: WebchatVisitorMeta | null): string | null {
   const geo = meta?.geo;
   if (!geo) return null;
@@ -292,7 +292,7 @@ function formatDuration(ms: number): string {
 export type VisitorMetaRow = { label: string; value: string };
 
 /**
- * Everything we know, as label/value rows for the transcript header —
+ * Everything we know, as label/value rows for the transcript header,
  * the "display everything except IP" surface (there is no IP to display:
  * it is never stored).
  */
@@ -321,7 +321,7 @@ export function visitorMetaDisplayRows(meta: WebchatVisitorMeta | null): Visitor
     rows.push({ label: "Time on page before chat", value: formatDuration(c.timeOnPageMs) });
   }
   const trail = (meta.pages ?? []).filter((p) => typeof p === "string" && p.length > 0);
-  // Skip the first entry only when it duplicates the "Opened on" row —
+  // Skip the first entry only when it duplicates the "Opened on" row,
   // a trail built purely from message-time appends (session started
   // without client meta) must still show its first page.
   const shownTrail = trail[0] === c?.page ? trail.slice(1) : trail;

@@ -96,7 +96,7 @@ export async function POST(request: Request) {
           ? null
           : undefined;
     // Normalize the alert phone to E.164 BEFORE it persists. This field is
-    // handed verbatim to Telnyx as the SMS `to` — a raw "6026951142" saved
+    // handed verbatim to Telnyx as the SMS `to`, a raw "6026951142" saved
     // here sat dormant for a month and then failed the tenant's first urgent
     // alert with Telnyx 40310 "Invalid 'to' address" (Amy, July 2026). NANP
     // coercion (bare 10-digit → +1) keeps the common US/Canada input working;

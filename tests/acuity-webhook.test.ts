@@ -3,7 +3,7 @@
  *
  * Correctness does not depend on this module: the ~1/min poller already
  * observes every change, so webhooks buy latency. That shapes what is worth
- * pinning here — that a delivery we cannot make sense of is ABSORBED rather
+ * pinning here, that a delivery we cannot make sense of is ABSORBED rather
  * than retried (Acuity disables a webhook after five days of failure), that
  * a hydration failure is the one thing that IS retried, and that the events
  * this path produces are identical to the poller's so their shared `cal:`

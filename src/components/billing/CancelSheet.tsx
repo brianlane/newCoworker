@@ -9,7 +9,7 @@
  *     button when we know it's ineligible.
  *   - `period_end`: keep access until `current_period_end`; at that
  *     boundary the subscription flips to canceled + grace. Does NOT burn
- *     the refund right — if the user later decides to claim the refund
+ *     the refund right, if the user later decides to claim the refund
  *     within the lifetime window they still can (until they burn it).
  *
  * Calls `/api/billing/cancel`. Refresh is a hard nav so server-rendered

@@ -39,9 +39,9 @@ export type NoReplyReason = "shortcode_sender" | "no_text";
 /**
  * Decide what to do with a job the reply path cannot answer.
  *
- *   - `{ kind: "reply" }`            — normal: there is a sender and something to say.
- *   - `{ kind: "skip", reason }`     — expected and NOT a failure; complete the job.
- *   - `{ kind: "fail" }`             — genuinely broken: an unusable sender that is
+ *   - `{ kind: "reply" }`, normal: there is a sender and something to say.
+ *   - `{ kind: "skip", reason }`, expected and NOT a failure; complete the job.
+ *   - `{ kind: "fail" }`, genuinely broken: an unusable sender that is
  *                                      not a short code, so dead-lettering it is
  *                                      real signal worth surfacing in admin.
  */

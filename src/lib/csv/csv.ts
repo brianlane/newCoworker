@@ -3,7 +3,7 @@
  *
  * Deliberately dependency-free: the files we exchange are small (import is
  * capped at MAX_IMPORT_ROWS rows / MAX_IMPORT_BYTES bytes upstream) and the
- * dialect is fixed — comma separator, `"` quoting with `""` escapes, and
+ * dialect is fixed, comma separator, `"` quoting with `""` escapes, and
  * tolerant of both \n and \r\n line endings plus a UTF-8 BOM. Headers are
  * normalized (trim, lowercase, spaces→underscores) so a hand-edited sheet
  * with "First Name" still maps onto `first_name`-style keys.

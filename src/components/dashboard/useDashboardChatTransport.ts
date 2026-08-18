@@ -9,7 +9,7 @@
  *
  * What deliberately does NOT live here: composer state, attachment pickers,
  * draft-card rendering, confirms (window.confirm on the page,
- * i18n'd confirms in the companion), and scroll behavior — those are shell
+ * i18n'd confirms in the companion), and scroll behavior, those are shell
  * concerns, and the two shells differ on every one of them.
  */
 
@@ -56,7 +56,7 @@ type ChatPostResponse = {
   /**
    * "inline": the reply was generated on the platform and is already in
    * `messages` (plus any creation drafts). "worker"/absent: a job was
-   * enqueued to the VPS worker — watch `jobId` for the reply.
+   * enqueued to the VPS worker, watch `jobId` for the reply.
    */
   mode?: "inline" | "worker";
   jobId?: string;
@@ -101,12 +101,12 @@ type ThreadMessagesResponse = {
 
 // Reply delivery is a race between two parallel mechanisms:
 //
-//   (a) Supabase Realtime subscription on dashboard_chat_messages —
+//   (a) Supabase Realtime subscription on dashboard_chat_messages,
 //       sub-second on the happy path. Authorized via the RLS SELECT
 //       policy from migration 20260508000003 (matches owner_email
 //       against the JWT email claim).
 //
-//   (b) Polling /api/dashboard/chat/jobs/[id] — fires every
+//   (b) Polling /api/dashboard/chat/jobs/[id], fires every
 //       JOB_POLL_INTERVAL_MS. Catches:
 //         * websocket failures (corporate proxies, mobile network),
 //         * the rare Realtime drop on the way to the client,
@@ -135,7 +135,7 @@ const JOB_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 
 // Map an opaque worker-side error_code to a user-facing string.
 // Anything we don't recognize becomes the generic "couldn't generate
-// a reply" message — better than leaking internal codes to the
+// a reply" message, better than leaking internal codes to the
 // owner, who can't do anything with rowboat_http_500 anyway.
 function friendlyErrorMessage(code: string | null): string {
   if (!code) return "Your coworker couldn't generate a reply. Please try again.";
@@ -153,7 +153,7 @@ type SendOptions = {
   /**
    * Fired the moment the server has PERSISTED the user message (canonical
    * messages just replaced the optimistic echo). The page clears its
-   * attachment UI here — at the same point the pre-extraction code did —
+   * attachment UI here, at the same point the pre-extraction code did,
    * rather than after a worker reply settles.
    */
   onPersisted?: () => void;
@@ -164,7 +164,7 @@ type SendOutcome = {
   /**
    * True when the message never reached the server (rate limit, network),
    * so the shell should restore the composer text: a fresh Send is the
-   * correct retry. False once the turn is committed server-side — a
+   * correct retry. False once the turn is committed server-side, a
    * re-send would duplicate it.
    */
   restoreInput: boolean;
@@ -173,8 +173,8 @@ type SendOutcome = {
 /**
  * One flag per (tab session, business): has the user ENGAGED with chat this
  * session (sent a message, opened a past conversation, or explicitly
- * started a new one)? Until they have, the chat view opens FRESH — an empty
- * conversation with the suggestions showing, ChatGPT-style — while History
+ * started a new one)? Until they have, the chat view opens FRESH, an empty
+ * conversation with the suggestions showing, ChatGPT-style, while History
  * keeps every past thread reachable. sessionStorage scopes it to the tab
  * session, so a new login/tab starts clean and a mid-session reload keeps
  * continuity. Server state is untouched until the first send (the POST
@@ -286,7 +286,7 @@ export function useDashboardChatTransport(businessId: string) {
 
   // Settlement outcome: who delivered the assistant message, or what
   // went wrong. Realtime and polling both produce the same `ok` shape
-  // so the caller doesn't need to know which path won — they just
+  // so the caller doesn't need to know which path won, they just
   // refresh the message list.
   type SettleOutcome =
     | { ok: true; via: "realtime" | "poll" }
@@ -294,7 +294,7 @@ export function useDashboardChatTransport(businessId: string) {
 
   // Open a Realtime channel scoped to this thread and resolve when
   // the worker INSERTs an assistant message. Resolves with `ok:false`
-  // on subscribe failure or abort — the caller treats those as "this
+  // on subscribe failure or abort, the caller treats those as "this
   // path didn't win, defer to polling".
   function subscribeAssistantMessage(
     jobId: string,
@@ -342,13 +342,13 @@ export function useDashboardChatTransport(businessId: string) {
             // retry took two full ROWBOAT_TIMEOUT_MS windows). Without
             // this check the race could settle prematurely on the old
             // reply and the user's actual current-turn reply would
-            // never surface — Bugbot Medium-severity finding on
+            // never surface, Bugbot Medium-severity finding on
             // PR #79 round-6.
             //
             // Implementation: one-shot fetch of the job row's status.
             // If the worker has stamped this job's assistant_message_id
             // to match the INSERT we just observed, it's ours and we
-            // win the race. If not, keep listening — the next INSERT
+            // win the race. If not, keep listening, the next INSERT
             // (or the polling fallback) will land us correctly.
             void verifyAndFinish(row.id);
           }
@@ -372,7 +372,7 @@ export function useDashboardChatTransport(businessId: string) {
         // the job to status='done'. If our verification fetch lands
         // in that gap (microseconds in the happy path), we'd see
         // status='processing' with assistant_message_id null, fall
-        // through, and never re-fire — there's only one INSERT per
+        // through, and never re-fire, there's only one INSERT per
         // job. Retry briefly to cover that gap before giving up to
         // the polling fallback. Bugbot Medium-severity finding on
         // PR #79 round-7.
@@ -403,7 +403,7 @@ export function useDashboardChatTransport(businessId: string) {
               }
               if (job.status === "done") {
                 // This job is done, but the INSERT we observed isn't
-                // our assistant message — it's a stale write from
+                // our assistant message, it's a stale write from
                 // another turn. Stop trying: our actual write is
                 // pending and our next INSERT event will re-verify.
                 return;
@@ -433,7 +433,7 @@ export function useDashboardChatTransport(businessId: string) {
 
   // Poll the job-status endpoint until the worker reports done/error.
   // Returns the final assistant content (or null if errored). Caller
-  // is responsible for refreshing the message list afterwards — we
+  // is responsible for refreshing the message list afterwards, we
   // don't do it here so the success path can refresh once at the end
   // rather than racing the user message echo with the assistant write.
   async function pollJobUntilSettled(
@@ -448,7 +448,7 @@ export function useDashboardChatTransport(businessId: string) {
     // 20 ticks × 1.5s = 30s of completely-silent failures before we
     // surface a friendly error instead of grinding to the full
     // JOB_POLL_TIMEOUT_MS. Any single successful poll resets the
-    // counter — slow networks where 1-in-N requests fail still
+    // counter, slow networks where 1-in-N requests fail still
     // succeed eventually. Bugbot Low-severity finding on PR #79
     // round-4.
     const MAX_CONSECUTIVE_FAILURES = 20;
@@ -470,12 +470,12 @@ export function useDashboardChatTransport(businessId: string) {
         env = await parseEnvelope<ChatJobStatusResponse>(res);
       } catch (err) {
         if ((err as { name?: string } | null)?.name === "AbortError") {
-          // Caller cancelled — don't surface an error, the caller
+          // Caller cancelled, don't surface an error, the caller
           // already manages the UI for whatever it's switching to.
           return { ok: false, reason: "" };
         }
         // One transient network failure shouldn't kill the whole
-        // poll. Wait one tick and try again — the AbortController
+        // poll. Wait one tick and try again, the AbortController
         // will exit us if the user navigates away during the sleep.
         consecutiveFailures += 1;
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -510,7 +510,7 @@ export function useDashboardChatTransport(businessId: string) {
       if (job.status === "error") {
         return { ok: false, reason: friendlyErrorMessage(job.errorCode) };
       }
-      // queued | processing — keep waiting.
+      // queued | processing, keep waiting.
       await sleepWithAbort(JOB_POLL_INTERVAL_MS, signal);
     }
     return { ok: false, reason: "" };
@@ -519,7 +519,7 @@ export function useDashboardChatTransport(businessId: string) {
   // Promise wrapper around setTimeout that resolves early on abort.
   // Without the abort hook, an aborted poll loop would still wait the
   // full JOB_POLL_INTERVAL_MS before checking signal.aborted on the
-  // next iteration — slow shutdown on tab navigation.
+  // next iteration, slow shutdown on tab navigation.
   function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       if (signal.aborted) {
@@ -569,7 +569,7 @@ export function useDashboardChatTransport(businessId: string) {
       raceController.signal
     ).then((outcome) => {
       // Realtime path that didn't win (subscribe failure / abort)
-      // shouldn't terminate the race — block forever so the poll
+      // shouldn't terminate the race, block forever so the poll
       // path is the deciding voice.
       if (outcome.ok || outcome.reason) return outcome;
       return new Promise<SettleOutcome>(() => undefined);
@@ -583,7 +583,7 @@ export function useDashboardChatTransport(businessId: string) {
     raceController.abort();
 
     // If the user navigated away mid-race the outer signal fired,
-    // which cascaded into raceController.abort() — both paths
+    // which cascaded into raceController.abort(), both paths
     // returned ok:false with empty reason. Bail silently; the
     // navigation handler manages its own UI.
     if (controller.signal.aborted) {
@@ -607,8 +607,8 @@ export function useDashboardChatTransport(businessId: string) {
     // Worker reported done. Refresh the canonical message list for
     // OUR specific thread (threadId), not whatever thread the route
     // considers active right now. The active thread can have changed
-    // during the 5-30s worker window — another browser tab, a thread
-    // archive from elsewhere — and the generic
+    // during the 5-30s worker window, another browser tab, a thread
+    // archive from elsewhere, and the generic
     // GET /api/dashboard/chat?businessId would return that other
     // thread's messages, overwriting ours with the wrong content.
     // Bugbot Medium-severity finding on PR #79 round-8.
@@ -623,14 +623,14 @@ export function useDashboardChatTransport(businessId: string) {
         // Pin the view to the thread this job belongs to. If a
         // concurrent tab swapped the active thread, the user's
         // current view stays on the thread they were chatting in
-        // (correct behavior — the user will see the active-thread
+        // (correct behavior, the user will see the active-thread
         // change in the sidebar on the next refresh).
         setViewingThreadId(threadId);
       } else {
         // GET returned an error envelope (e.g. session expired
         // mid-chat, server issue between the worker write and our
-        // refresh). The assistant message IS persisted — the
-        // worker only marks the job done after the INSERT — so
+        // refresh). The assistant message IS persisted, the
+        // worker only marks the job done after the INSERT, so
         // surface a soft note rather than leaving the user staring
         // at a thinking indicator that has stopped without
         // explanation. Bugbot Medium-severity finding on PR #79
@@ -765,7 +765,7 @@ export function useDashboardChatTransport(businessId: string) {
       // (paused / safe mode), so we use it whenever we're loading the
       // currently-active thread (re-syncing flags is cheap insurance
       // for multi-tab drift). Archived threads hit the per-thread
-      // read endpoint. The composer is editable in BOTH cases — on
+      // read endpoint. The composer is editable in BOTH cases, on
       // submit, the POST includes whichever thread is being viewed
       // and the server reactivates if needed.
       setLoadingThread(true);
@@ -782,7 +782,7 @@ export function useDashboardChatTransport(businessId: string) {
           if (env.ok) {
             setMessages(env.data.messages);
             // Re-sync activeThreadId in case another tab archived this
-            // thread and minted a new one in the meantime — without
+            // thread and minted a new one in the meantime, without
             // this, viewingThreadId would point at a stale id.
             setActiveThreadId(env.data.threadId);
             setViewingThreadId(env.data.threadId);
@@ -903,7 +903,7 @@ export function useDashboardChatTransport(businessId: string) {
       }
       const env = await parseEnvelope<ChatPostResponse>(res);
       if (!env.ok) {
-        // Rate limit / paused / not found — surface the server's
+        // Rate limit / paused / not found, surface the server's
         // message verbatim, restore the textarea, drop the optimistic
         // user bubble. The user's typed message never made it to the
         // server, so a fresh Send is the correct retry.
@@ -945,7 +945,7 @@ export function useDashboardChatTransport(businessId: string) {
     void fetchThreads();
 
     // Inline turns already carry the assistant reply (and any creation
-    // drafts) in the response — nothing to watch.
+    // drafts) in the response, nothing to watch.
     if (post.mode === "inline" || !post.jobId) {
       setDrafts(post.drafts ?? []);
       setSending(false);
@@ -979,7 +979,7 @@ export function useDashboardChatTransport(businessId: string) {
         return;
       }
       // If the deleted thread was on screen (active or archived), reset the
-      // pane to "ready for a new conversation" — its messages are gone.
+      // pane to "ready for a new conversation", its messages are gone.
       if (viewingThreadId === threadId || activeThreadId === threadId) {
         setMessages([]);
         setViewingThreadId(null);
@@ -1016,8 +1016,8 @@ export function useDashboardChatTransport(businessId: string) {
         // The previous active thread is now archived; the next POST will
         // mint a fresh active thread (its id is unknown until that POST
         // resolves). Clearing the active id locally puts the input in
-        // "ready to start a new thread" mode rather than "archive view"
-        // — matches what the user just confirmed.
+        // "ready to start a new thread" mode rather than "archive view",
+        // matches what the user just confirmed.
         setActiveThreadId(null);
         setViewingThreadId(null);
         void fetchThreads();

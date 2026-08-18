@@ -24,12 +24,12 @@ import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
 
 // Vercel Pro ceiling (mirrors delete-client / migrate-size). The check does
 // one VM detail call per live tenant SEQUENTIALLY, and the HostingerClient's
-// per-request timeout is 30s — on Hostinger's slow days (30-60s responses
+// per-request timeout is 30s, on Hostinger's slow days (30-60s responses
 // have been observed under load, the very incident class this cron guards)
 // a 60s budget could abort mid-fleet before later tenants were checked or
 // the findings email was sent. 300s covers ~10 worst-case tenants; the
 // Edge bridge/pg_cron may stop awaiting the response sooner, which is
-// harmless — the function runs to completion and the email sends anyway.
+// harmless, the function runs to completion and the email sends anyway.
 export const maxDuration = 300;
 export const runtime = "nodejs";
 

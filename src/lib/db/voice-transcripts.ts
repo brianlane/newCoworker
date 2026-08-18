@@ -166,7 +166,7 @@ export async function getTranscriptByCallControlId(
  * Lookup a transcript by its row UUID, scoped to a business.
  *
  * The dashboard "Call history" UI links by row UUID rather than by Telnyx
- * `call_control_id` because the latter starts with `v3:` — and the literal
+ * `call_control_id` because the latter starts with `v3:`, and the literal
  * `:` is a URL sub-delim that Cloudflare/Vercel sometimes pre-decode before
  * Next.js matches the dynamic segment, producing a 404 on rows that exist
  * in the DB. UUID lookup avoids the encoding pitfall entirely.
@@ -206,7 +206,7 @@ export async function listTurns(
   options: {
     /**
      * Owning business, when the caller has it (both dashboard call pages
-     * do). Required for residency routing — turns have no business_id
+     * do). Required for residency routing, turns have no business_id
      * column of their own, so without it the read stays central (correct
      * until the Phase 4 purge; the purge runbook greps for bare calls).
      */
@@ -239,7 +239,7 @@ export async function listTurns(
  * Owner-facing delete of one call (transcript + its turns): SOFT
  * (deleted_at stamp on the transcript row, residency-aware,
  * admin-restorable) but indistinguishable from a hard delete in the
- * dashboard — every reader above filters the stamp, and turns are only
+ * dashboard, every reader above filters the stamp, and turns are only
  * ever reached through their (now hidden) parent. Returns the stamped-row
  * count (0 when unknown/already deleted; idempotent).
  */
@@ -263,7 +263,7 @@ export async function softDeleteTranscript(
  * Cross-link helper for the per-customer detail page (Phase 4b).
  *
  * Returns recent transcripts for one (business_id, caller_e164) pair,
- * newest first, capped at MAX_LIST_LIMIT. Only `caller_e164` matches —
+ * newest first, capped at MAX_LIST_LIMIT. Only `caller_e164` matches,
  * outbound calls (caller is the business) aren't customer-attributable
  * here.
  *
@@ -294,7 +294,7 @@ export async function listTranscriptsForCaller(
         { column: "caller_e164", op: "in", value: callers },
         { column: "deleted_at", op: "is", value: null }
       ],
-      // Match the central path's `nullsFirst: false` exactly — Postgres
+      // Match the central path's `nullsFirst: false` exactly, Postgres
       // defaults DESC to NULLS FIRST, which would float null-started calls
       // to the top for vps tenants only.
       order: [{ column: "started_at", ascending: false, nullsFirst: false }],
@@ -346,7 +346,7 @@ export async function listVoiceTurnsForCustomer(
     db
   );
   if (transcripts.length === 0) return [];
-  // One bulk SELECT for all transcript ids — much cheaper than N
+  // One bulk SELECT for all transcript ids, much cheaper than N
   // round trips on the summarizer hot path.
   const ids = transcripts.map((t) => t.id);
   type Row = {

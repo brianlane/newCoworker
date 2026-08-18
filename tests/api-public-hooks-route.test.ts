@@ -155,7 +155,7 @@ describe("POST /api/public/v1/hooks", () => {
   });
 
   it("409s when the DB cap trigger rejects a racing insert", async () => {
-    // Pre-check passed but the webhook_subscriptions_cap trigger fired — a
+    // Pre-check passed but the webhook_subscriptions_cap trigger fired, a
     // concurrent subscribe won the race.
     vi.mocked(createWebhookSubscription).mockRejectedValue(
       new Error("createWebhookSubscription: Webhook limit reached (25) for business biz-1")

@@ -1,5 +1,5 @@
 /**
- * kyp-lead-flow-definition.ts — the canonical KYP Ads "Lead follow-up
+ * kyp-lead-flow-definition.ts, the canonical KYP Ads "Lead follow-up
  * (white-glove build)" flow definition (previously kyp-offer-definition.ts).
  *
  * History: the flow shipped flat (apply-kyp-intake.ts, Jul 15 2026), gained

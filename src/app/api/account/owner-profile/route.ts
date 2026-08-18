@@ -76,8 +76,8 @@ export async function POST(request: Request) {
 
     const db = await createSupabaseServiceClient();
     // Owner-only (`manage_billing` = owner in the role policy): this card
-    // edits the OWNER's contact identity (alerts, handoff line, profile_md)
-    // — a manager must not be able to rewrite it.
+    // edits the OWNER's contact identity (alerts, handoff line, profile_md),
+    // a manager must not be able to rewrite it.
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: biz } = await db
       .from("businesses")
@@ -186,7 +186,7 @@ export async function POST(request: Request) {
 
     if (wroteAnything) {
       // Both facts appear in the rendered profile block the agent is
-      // grounded on — re-render and push so the coworker stops using the
+      // grounded on, re-render and push so the coworker stops using the
       // old primary-contact name/number immediately. Best-effort: never
       // fails the committed writes (and never masks writeError below).
       await refreshBusinessProfileMdAndLog(businessId, db);

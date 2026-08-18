@@ -3,7 +3,7 @@
  *
  * AiFlow settings store durations as MINUTES (sleep.minutes, timeoutMinutes,
  * everyMinutes, leadMinutes, ...), but "1440 min before a calendar event"
- * reads terribly — display copy converts to the largest exact units:
+ * reads terribly, display copy converts to the largest exact units:
  * years → months → weeks → days → hours → minutes ("1 day", "5 hours",
  * "1 hour 30 minutes"). The stored definition is never touched; every editor
  * input still reads/writes raw minutes.

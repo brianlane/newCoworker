@@ -9,7 +9,7 @@
  *        body: raw CSV text
  *        → { summary: { totalRows, created, updated, skipped, errors[] } }
  *
- * Imports run synchronously — files are capped (2000 rows / 1 MB) so a
+ * Imports run synchronously, files are capped (2000 rows / 1 MB) so a
  * background-job pipeline like BizBlasts' ActiveJob one is unnecessary.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass the ownership
@@ -43,7 +43,7 @@ export const maxDuration = 300;
 const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
 const IMPORT_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
-/** Import body cap — matches the row cap's order of magnitude. */
+/** Import body cap, matches the row cap's order of magnitude. */
 const MAX_IMPORT_BYTES = 1024 * 1024;
 
 const querySchema = z.object({

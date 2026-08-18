@@ -6,7 +6,7 @@ import {
 } from "../src/lib/employees/schedule-text";
 
 /**
- * Coverage for src/lib/employees/schedule-text.ts — the human text ⇄ jsonb
+ * Coverage for src/lib/employees/schedule-text.ts, the human text ⇄ jsonb
  * round-trip behind the Employees page schedule fields. Parsing is strict
  * (typos error in the form, never silently bench an employee); formatting
  * groups consecutive identical days back into ranges.

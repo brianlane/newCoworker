@@ -30,7 +30,7 @@ const CALL_TRANSCRIPT_RATE = { interval: 60 * 1000, maxRequests: 60 };
 const DELETE_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
 // Route segment is `callControlId` for backward-compatibility, but the
-// URL value is the transcript row UUID — see the list-page link for the
+// URL value is the transcript row UUID, see the list-page link for the
 // rationale around `:`-in-callControlId routing breakage.
 const paramsSchema = z.object({
   callControlId: z.string().trim().uuid()

@@ -487,7 +487,7 @@ describe("vps_inventory DB layer", () => {
         data: { vm_id: 42, state: "assigned" },
         error: null
       });
-      // The write chain is .update(...).eq(...).neq(...) — neq is terminal.
+      // The write chain is .update(...).eq(...).neq(...), neq is terminal.
       chain.neq.mockResolvedValueOnce({ error: null });
       const db = makeDb(chain);
       await releaseVpsToPool(
@@ -500,7 +500,7 @@ describe("vps_inventory DB layer", () => {
       expect(updateArg.assigned_at).toBeNull();
       expect(updateArg.hostinger_billing_subscription_id).toBe("sub-9");
       expect(updateArg.notes).toBe("canceled");
-      // The recorded plan (captured at purchase/adopt) is ground truth —
+      // The recorded plan (captured at purchase/adopt) is ground truth,
       // a cancel-time caller's inferred label must never clobber it.
       expect(updateArg.plan).toBeUndefined();
       // Race guard: the conditional write skips rows retired in between.

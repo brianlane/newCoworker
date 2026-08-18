@@ -1,6 +1,6 @@
 /**
  * Pure filter / sort / CSV logic behind the admin clients table
- * (src/components/admin/ClientsBatchTable.tsx) — the BizBlasts ActiveAdmin
+ * (src/components/admin/ClientsBatchTable.tsx), the BizBlasts ActiveAdmin
  * index-page affordances (filter sidebar, sortable columns, one-click CSV
  * export) ported as client-side state over the already-fully-loaded rows.
  */
@@ -18,17 +18,17 @@ export type AdminClientRow = {
   subscriptionStatus: string | null;
   /**
    * Owner hasn't signed in for 90+ days (the "quiet" band from
-   * src/lib/admin/user-engagement.ts) — surfaced as a churn-risk badge.
+   * src/lib/admin/user-engagement.ts), surfaced as a churn-risk badge.
    */
   ownerQuiet: boolean;
   /**
    * This month's margin from the engine (src/lib/admin/margin.ts); null
-   * when the margin load failed (column renders as —).
+   * when the margin load failed (column renders as, ).
    */
   marginCents: number | null;
   /**
    * Admin pin (businesses.admin_pinned): pinned rows always render at the
-   * top of the table, surviving column sorts — see {@link pinRowsFirst}.
+   * top of the table, surviving column sorts, see {@link pinRowsFirst}.
    */
   pinned: boolean;
   /**

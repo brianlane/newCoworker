@@ -151,7 +151,7 @@ describe("Telnyx webhook verifier parity (Node ↔ Deno)", () => {
     const d = await verifyTelnyxWebhook("{}", "not!!!valid!!!b64!!!", ts, pubB64);
     // Node's Buffer.from("...", "base64") silently ignores garbage rather than throwing,
     // so the failure classifies as crypto_mismatch on Node but malformed on Deno. Both
-    // are `ok: false`, and both refuse the request — that's the invariant we care about.
+    // are `ok: false`, and both refuse the request, that's the invariant we care about.
     expect(n.ok).toBe(false);
     expect(d.ok).toBe(false);
   });

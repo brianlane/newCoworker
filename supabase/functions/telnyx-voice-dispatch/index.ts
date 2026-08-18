@@ -5,15 +5,15 @@
  * URL per application, but this repo has separate handlers for
  * `call.initiated` (telnyx-voice-inbound) and `call.hangup` / `call.ended`
  * (telnyx-voice-call-end). Point Telnyx at this function; it extracts
- * `data.event_type` from the body and forwards the request — headers, raw
- * body, everything — to the correct handler on the same Supabase project.
+ * `data.event_type` from the body and forwards the request, headers, raw
+ * body, everything, to the correct handler on the same Supabase project.
  *
  * The target handler verifies the Ed25519 signature itself; we deliberately
  * do NOT verify here, so the canonical `{timestamp}|{rawBody}` still matches
  * (one internal hop does not mutate the body).
  *
  * Optional secret:
- *   DISPATCH_FORWARD_BEARER — Bearer token injected on the forwarded
+ *   DISPATCH_FORWARD_BEARER, Bearer token injected on the forwarded
  *     request. Set to the project anon key if the target Edge functions
  *     were deployed with JWT verification ON. Leave unset if deployed with
  *     `--no-verify-jwt` (the default for Telnyx webhooks).

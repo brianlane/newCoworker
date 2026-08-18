@@ -3,12 +3,12 @@
 import { useEffect } from "react";
 
 /**
- * Our own website chat widget — the same embeddable loader tenants paste
+ * Our own website chat widget, the same embeddable loader tenants paste
  * into their sites (public/widget.js), dogfooded on the marketing pages and
  * backed by the internal Residency Pilot tenant's WebchatCoworker.
  *
  * The site key comes from NEXT_PUBLIC_WEBCHAT_SITE_KEY (a PUBLIC widget key
- * by design — it ships in the page HTML either way; the env var just lets
+ * by design, it ships in the page HTML either way; the env var just lets
  * us rotate it without a code change). Unset ⇒ no bubble, so previews and
  * local dev are unaffected.
  *
@@ -39,7 +39,7 @@ export function SiteChatWidget() {
     if (!siteKey) return;
 
     if (window.__ncwWidget) {
-      // Already injected by a previous marketing page — just re-show.
+      // Already injected by a previous marketing page, just re-show.
       window.__ncwWidget.show();
     } else if (!window.__ncwWidgetLoaded) {
       const script = document.createElement("script");

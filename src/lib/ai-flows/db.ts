@@ -44,7 +44,7 @@ export type AiFlowRow = {
   /**
    * When `enabled` last flipped (stamped by the trg_ai_flows_enabled_changed
    * DB trigger only on an actual change). NULL = never toggled since
-   * creation — display falls back to created_at.
+   * creation, display falls back to created_at.
    */
   enabled_changed_at?: string | null;
 };
@@ -69,7 +69,7 @@ export type AiFlowRunRow = {
   current_step: number;
   /** Total worker claims, including benign re-claims (escalation/resume/defer). */
   attempt_count: number;
-  /** Transient-ERROR retries only — what dead-lettering and the UI key off. */
+  /** Transient-ERROR retries only, what dead-lettering and the UI key off. */
   error_retry_count: number;
   /** Quiet-hour deferral: the claim RPC skips the run until this passes. */
   earliest_claim_at: string | null;
@@ -101,7 +101,7 @@ export type AiFlowRunStepRow = {
    */
   screenshot_url?: string | null;
   /**
-   * Signed URL for the "before actions" screenshot — only present on a failed
+   * Signed URL for the "before actions" screenshot, only present on a failed
    * browse_action step. Pairs with `screenshot_url` (the stuck page) to show the
    * page state going into the step vs. where it broke.
    */
@@ -297,7 +297,7 @@ export async function deleteAiFlow(
       { enabled: false }
     );
     if (result.central === 0 && (result.box ?? 0) === 0) {
-      // Idempotent no-op when already gone / never existed — match the old
+      // Idempotent no-op when already gone / never existed, match the old
       // hard-delete's silent "0 rows" behavior.
       return;
     }
@@ -316,7 +316,7 @@ export type EnqueueAiFlowRunInput = {
   /**
    * Seed vars for `context.vars` (what {{vars.x}} renders from before any
    * extraction step runs). Used by callers that already KNOW the lead's
-   * identity — e.g. the texting coworker's start_aiflow_for_contact seeds
+   * identity, e.g. the texting coworker's start_aiflow_for_contact seeds
    * lead_phone so send steps work without an extract_text step.
    */
   vars?: Record<string, unknown>;
@@ -331,10 +331,10 @@ export type EnqueueAiFlowRunInput = {
 };
 
 /**
- * Insert a queued run for the worker to claim — the Node-side counterpart of
+ * Insert a queued run for the worker to claim, the Node-side counterpart of
  * the Telnyx webhook's enqueue (manual "Run now", inbound-email triggers).
  * Returns the row, or null when `dedupeKey` was already enqueued for this
- * flow (unique-violation 23505 — the benign "another poller tick got here
+ * flow (unique-violation 23505, the benign "another poller tick got here
  * first" outcome) or when the flow blocks re-entry and `trigger.from`
  * already has a run of it (same "already handled" outcome for callers).
  */
@@ -345,7 +345,7 @@ export async function enqueueAiFlowRun(
   const db = await resolveDb(client);
   // One definition read serves both flow-level enqueue gates below (re-entry
   // and drip). Best-effort: on a read failure both gates default to "no
-  // gate" — losing the lead is worse than a duplicate or a burst.
+  // gate", losing the lead is worse than a duplicate or a burst.
   let definition: { drip?: { intervalMinutes?: number } } | null = null;
   try {
     const { data: flowRow } = await db
@@ -368,7 +368,7 @@ export async function enqueueAiFlowRun(
 
   // Re-entry gate (options.allowReentry === false): a contact who already
   // has a (non-test) run of this flow is not enrolled again. Test runs
-  // bypass the gate entirely — testing must always work. The trigger sender
+  // bypass the gate entirely, testing must always work. The trigger sender
   // (phone OR email, depending on channel) is the identity key; the gate
   // expands it through the contact records for cross-channel matching.
   if (!isTestModeTrigger(input.trigger) && definition) {
@@ -382,7 +382,7 @@ export async function enqueueAiFlowRun(
   // the flow's latest already-scheduled run, so a bulk enqueue (backlog
   // import, webhook burst) trickles instead of bursting. An explicit
   // earliestClaimAt from the caller wins (the backlog import computes its
-  // own spacing). Best-effort: a read failure enqueues immediately — pacing
+  // own spacing). Best-effort: a read failure enqueues immediately, pacing
   // is a nicety, losing the lead is not. Two perfectly concurrent enqueues
   // may land on the same slot; the spacing is approximate by design.
   let dripClaimAt: string | null = null;
@@ -605,7 +605,7 @@ export async function decideAiFlowApproval(
 }
 
 /**
- * Run states an owner may STOP from the dashboard — every non-terminal state,
+ * Run states an owner may STOP from the dashboard, every non-terminal state,
  * including `running`. A running run cancels COOPERATIVELY: the worker
  * re-reads the run's status at each step boundary and quits when it sees
  * `canceled` (the step already in flight completes), and every worker state
@@ -660,7 +660,7 @@ export async function highestActiveRunStep(
 /**
  * Owner "Stop this run": flip a non-terminal run to `canceled` so nothing
  * further sends. Status-guarded at the DB (the update matches only cancelable
- * states), so racing a terminal write loses cleanly — the run either cancels
+ * states), so racing a terminal write loses cleanly, the run either cancels
  * or the caller gets a conflict to surface. Every resume path (claim RPC,
  * offer escalation, reply sweeps, inbound webhooks) filters on the waiting
  * status it owns, and the worker both checks for `canceled` at step

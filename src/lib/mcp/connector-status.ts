@@ -1,6 +1,6 @@
 /**
  * MCP connector (Claude / ChatGPT) connection status, per
- * (auth user, client, business) — `mcp_connector_status`.
+ * (auth user, client, business), `mcp_connector_status`.
  *
  * `recordMcpConnectorSeen` is called from the tool-call authorization path
  * (`mcpBusinessRoleOutcome`, src/lib/mcp/auth.ts) once a call is allowed. That
@@ -31,7 +31,7 @@ import { logger } from "@/lib/logger";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /**
- * Unconditional-await client resolution — an inline `client ?? (await …)`
+ * Unconditional-await client resolution, an inline `client ?? (await …)`
  * followed by branches makes v8 coverage mis-attribute the continuation
  * block (negative implicit-else counts).
  */
@@ -54,7 +54,7 @@ export const MCP_SEEN_DEBOUNCE_MS = 5 * 60_000;
  *
  * Nothing tells us a connector was removed on the assistant's side: revoking
  * it in Claude or ChatGPT is invisible here, so without this the badge stayed
- * green forever. Thirty days is deliberately long — this is an "it has gone
+ * green forever. Thirty days is deliberately long, this is an "it has gone
  * quiet" signal, not a session timeout, and a tenant who uses their coworker
  * monthly should not be nagged.
  */
@@ -135,7 +135,7 @@ export async function hasMcpConnectorRow(
 /**
  * Stamp "an authorized MCP call just touched this business" for this user.
  * Inserts the row on the first call; afterwards refreshes `last_seen_at` at
- * most once per debounce window. NEVER throws — status bookkeeping must not
+ * most once per debounce window. NEVER throws, status bookkeeping must not
  * fail a live tool call.
  */
 export async function recordMcpConnectorSeen(
@@ -166,7 +166,7 @@ export async function recordMcpConnectorSeen(
         first_connected_at: nowIso,
         last_seen_at: nowIso
       });
-      // A concurrent first request won the insert — same outcome, no retry.
+      // A concurrent first request won the insert, same outcome, no retry.
       if (insErr && insErr.code !== PG_UNIQUE_VIOLATION) {
         throw new Error(insErr.message);
       }

@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Settings hub (BizBlasts-style): a navigation grid of category cards, each
- * opening its own settings page. One flat, ordered list — Danger Zone is
+ * opening its own settings page. One flat, ordered list, Danger Zone is
  * deliberately the LAST card so destructive actions sit at the bottom of
  * the page. Copy lives under `dashboard.settings.hub*` in the catalogs.
  */

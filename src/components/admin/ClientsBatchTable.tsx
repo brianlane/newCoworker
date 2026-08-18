@@ -453,7 +453,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     prioritySupportDaysLeft(b.tier, b.prioritySupportUntil)
                   )}
                 </td>
-                {/* No "Details" link — the business name is the navigation. */}
+                {/* No "Details" link, the business name is the navigation. */}
                 <td className="py-3 px-4 whitespace-nowrap">
                   <ViewAsButton businessId={b.id} variant="link" />
                 </td>

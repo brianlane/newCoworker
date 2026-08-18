@@ -4,7 +4,7 @@
  *
  * Pure function: same inputs always yield the same string. Lets the
  * SMS worker, voice bridge, and dashboard chat all inject the SAME
- * shape of context regardless of channel — that's how voice and SMS
+ * shape of context regardless of channel, that's how voice and SMS
  * "share state" without a real-time pubsub: both rebuild the preamble
  * from customer_memories on every turn.
  *
@@ -17,7 +17,7 @@
  *   Rolling summary:
  *   <summary_md>
  *
- * If neither summary_md nor pinned_md is set we return null — callers
+ * If neither summary_md nor pinned_md is set we return null, callers
  * skip the system message entirely so a brand-new customer doesn't
  * get an empty "Customer profile:" header that the model treats as
  * salient.
@@ -32,12 +32,12 @@ import type { CustomerMemoryRow } from "./types";
  * Why (Truly, Jul 21 2026): lead forms deliver raw full names like
  * "shabir gulamhussein lukmanji", and the assistant parroted the entire
  * lowercase string in 9 of 12 replies. Casing is only corrected when the
- * token carries none of its own — all-lowercase, or all-UPPERCASE beyond
- * initials length — so "McKenna", "DeSouza", and initials like "JD"
+ * token carries none of its own, all-lowercase, or all-UPPERCASE beyond
+ * initials length, so "McKenna", "DeSouza", and initials like "JD"
  * survive untouched.
  *
  * Duplicated in supabase/functions/_shared/customer_memory_preamble.ts
- * (the Deno twin cannot import src/) — the parity test pins both.
+ * (the Deno twin cannot import src/), the parity test pins both.
  */
 export function politeFirstName(displayName: string): string {
   const trimmed = displayName.trim();

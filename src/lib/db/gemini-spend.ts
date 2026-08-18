@@ -2,16 +2,16 @@
  * Accessors for the Gemini spend observability tables
  * (migration 20260816020000_gemini_spend_ledger.sql):
  *
- *   - `gemini_spend_daily`  — roll-up VIEW over the append-only
+ *   - `gemini_spend_daily`, roll-up VIEW over the append-only
  *     `gemini_spend_events` ledger (one row per metered Gemini call,
  *     written inside the owner_chat_record_spend / owner_chat_ai_settle
  *     RPCs), per UTC day / tenant / surface / model / pricing source.
- *   - `gemini_billed_daily` — Google's ACTUAL billed cost per UTC day +
+ *   - `gemini_billed_daily`, Google's ACTUAL billed cost per UTC day +
  *     GCP project, synced from the Cloud Billing BigQuery export
  *     (src/lib/admin/gemini-billed-sync.ts).
  *
  * Everything is service-role only (RLS on, no policies). Nothing bills
- * from these rows — they feed the admin Gemini/Usage pages and the
+ * from these rows, they feed the admin Gemini/Usage pages and the
  * metered-vs-billed reconciliation.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -32,7 +32,7 @@ export type GeminiSpendDailyRow = {
 
 /**
  * All roll-up rows with `day >= sinceDay`, oldest first. Paged in 1000-row
- * chunks — PostgREST silently caps a single request at 1000 rows, which
+ * chunks, PostgREST silently caps a single request at 1000 rows, which
  * would drop the newest days without any error as history grows.
  */
 export async function listGeminiSpendDaily(

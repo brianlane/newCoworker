@@ -1,10 +1,10 @@
 /**
- * Email campaigns — the sending engine behind the per-minute
+ * Email campaigns, the sending engine behind the per-minute
  * email-campaign-sweep (pg_cron → Edge → /api/internal/email-campaign-sweep
  * → here).
  *
  * One pass:
- *   1. Promote due scheduled campaigns to `sending` (guarded transition —
+ *   1. Promote due scheduled campaigns to `sending` (guarded transition,
  *      an owner cancel racing the promotion wins cleanly) and snapshot
  *      their audience into email_campaign_recipients: customer contacts
  *      with an email, not marketing-unsubscribed, carrying the audience
@@ -51,7 +51,7 @@ import {
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Sends per campaign per sweep pass — the pace lever. */
+/** Sends per campaign per sweep pass, the pace lever. */
 export const CAMPAIGN_BATCH_PER_SWEEP = 50;
 
 /* c8 ignore next 2 -- key presence is environment wiring */
@@ -111,7 +111,7 @@ export const CAMPAIGN_AUDIENCE_SCAN_LIMIT = 5000;
 /**
  * Snapshot the audience for a due campaign. The tag filter runs in JS,
  * case-insensitively, because contact-tag normalization preserves the
- * owner's original casing — a campaign targeting "vip" must reach a
+ * owner's original casing, a campaign targeting "vip" must reach a
  * contact tagged "VIP".
  */
 async function snapshotRecipients(
@@ -161,7 +161,7 @@ async function snapshotRecipients(
   // Clear any UNSENT rows from an earlier partial snapshot first, so stale
   // pendings for since-unsubscribed / since-untagged contacts never survive
   // into the send. Only the claim winner (or a snapshot retry on a campaign
-  // whose snapshot never landed) reaches this — an overlapping sweep loses
+  // whose snapshot never landed) reaches this, an overlapping sweep loses
   // the guarded transition before it could touch a live queue.
   await deletePendingRecipients(campaign.id, db);
   await insertCampaignRecipients(rows, db);
@@ -170,7 +170,7 @@ async function snapshotRecipients(
 
 /**
  * Contacts in this batch suppressed AFTER the snapshot (late one-click
- * unsubscribes). Fails open on a lookup error — the snapshot already
+ * unsubscribes). Fails open on a lookup error, the snapshot already
  * filtered, this is the last-mile re-check.
  */
 async function suppressedContactIds(
@@ -219,12 +219,12 @@ export async function processCampaignSweep(
   const result: CampaignSweepResult = { promoted: 0, sent: 0, failed: 0, completed: 0, errors: [] };
 
   // 1) CLAIM-FIRST promotion: the guarded scheduled→sending transition is
-  //    the single-writer lock — exactly one sweep (and never a racing
+  //    the single-writer lock, exactly one sweep (and never a racing
   //    cancel loser) proceeds to snapshot, so an overlapping sweep working
   //    from a stale due-list can never touch a live campaign's recipient
   //    rows. Only the claim winner snapshots, then stamps snapshotted_at +
   //    recipients_total. A snapshot failure AFTER the claim leaves
-  //    snapshotted_at NULL — the drain phase below retries the snapshot
+  //    snapshotted_at NULL, the drain phase below retries the snapshot
   //    (idempotent) instead of completing the campaign empty.
   const due = await listDueScheduledCampaigns(now.toISOString(), db);
   for (const campaign of due) {
@@ -291,7 +291,7 @@ export async function processCampaignSweep(
     try {
       const business = await getBusiness(campaign.business_id, db);
       // Only abort when tier is known. A null lookup is a transient DB blip
-      // (getBusiness collapses errors to null) — leave the campaign for the
+      // (getBusiness collapses errors to null), leave the campaign for the
       // next pass instead of skipping recipients / closing as sent.
       if (!business) continue;
       if (!marketingAutomationAllowedForTier(business.tier)) {
@@ -318,7 +318,7 @@ export async function processCampaignSweep(
       }
 
       // A `sending` campaign without a landed snapshot crashed between its
-      // claim and the snapshot — retry the (idempotent) snapshot now so
+      // claim and the snapshot, retry the (idempotent) snapshot now so
       // the empty-pending check below can never complete it unsent.
       if (!campaign.snapshotted_at) {
         const total = await snapshotRecipients(db, campaign);
@@ -331,7 +331,7 @@ export async function processCampaignSweep(
       }
       const batch = await listPendingRecipients(campaign.id, CAMPAIGN_BATCH_PER_SWEEP, db);
       if (batch.length === 0) {
-        // Completion carries freshly derived counters — a prior batch that
+        // Completion carries freshly derived counters, a prior batch that
         // crashed between sending and its counter patch must not close the
         // campaign with stale zeros. Counted only when the guarded
         // transition actually moved the row (a racing sweep's completion
@@ -386,7 +386,7 @@ export async function processCampaignSweep(
             unsubscribeUrl,
             recipientEmail: recipient.email,
             // Campaign mail goes out under the TENANT's identity (coworker
-            // mailbox From) — never show the platform team signature here.
+            // mailbox From), never show the platform team signature here.
             platformSignature: false
           });
           await sendEmail(apiKey, recipient.email, campaign.subject, {
@@ -399,7 +399,7 @@ export async function processCampaignSweep(
           result.sent += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          // The downgrade must never be skipped by its own failure — a
+          // The downgrade must never be skipped by its own failure, a
           // claimed row left `sent` would read as delivered and never
           // retry. If even the downgrade write fails, record it loudly.
           try {
@@ -420,7 +420,7 @@ export async function processCampaignSweep(
           result.failed += 1;
         }
       }
-      // Convergent counters derived from the recipient rows — immune to
+      // Convergent counters derived from the recipient rows, immune to
       // concurrent-sweep read-modify-write drift.
       await patchEmailCampaign(
         campaign.business_id,

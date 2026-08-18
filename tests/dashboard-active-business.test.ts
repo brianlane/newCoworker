@@ -89,7 +89,7 @@ describe("listAccessibleBusinesses", () => {
       {
         data: [
           { business_id: MEMBER_BIZ.id, role: "manager", status: "active", businesses: MEMBER_BIZ },
-          // Also a member of an OWNED business — owner wins, no duplicate.
+          // Also a member of an OWNED business, owner wins, no duplicate.
           { business_id: OWNED_A.id, role: "staff", status: "active", businesses: OWNED_A },
           // Broken join row is skipped.
           { business_id: "dead", role: "staff", status: "active", businesses: null }

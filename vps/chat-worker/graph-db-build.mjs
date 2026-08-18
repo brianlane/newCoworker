@@ -1,14 +1,14 @@
 /**
  * Compile the on-box knowledge-graph projection (graph.jsonl, shipped by
- * the platform's vault sync) into a queryable SQLite database — the "real
+ * the platform's vault sync) into a queryable SQLite database, the "real
  * SQLite KG on the tenant's own box".
  *
  * Rebuilds are cheap and idempotent: we rebuild whenever graph.jsonl is
  * newer than graph.db (or the db is missing), writing to a temp file and
  * renaming so a crash mid-build never leaves a corrupt db. A box whose
- * tenant is not on the graph simply has no graph.jsonl — permanent no-op.
+ * tenant is not on the graph simply has no graph.jsonl, permanent no-op.
  *
- * Uses node:sqlite (built-in — no new dependency, no extra container).
+ * Uses node:sqlite (built-in, no new dependency, no extra container).
  * Wrapped defensively: any failure logs and skips; the worker's chat
  * duties are never affected.
  */

@@ -28,7 +28,7 @@ type Result = { data: unknown; error: unknown };
 /**
  * A thenable PostgREST-chain stub: every builder method returns the chain,
  * and awaiting it (at any depth, incl. single()/maybeSingle()) resolves to
- * the configured result — matching how the code under test terminates its
+ * the configured result, matching how the code under test terminates its
  * chains at different methods.
  */
 function chain(result: Result) {

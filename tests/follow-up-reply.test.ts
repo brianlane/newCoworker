@@ -168,7 +168,7 @@ describe("followUpCandidatesFrom", () => {
    * Shape only. Who counts as STAFF is decided by staffNumberCheck, because
    * owner numbers are usually derived (business phone, forward cell, the
    * coworker's DID) and the owner's contact row is very often typed
-   * "customer" — so an owner-typed row is passed THROUGH here for that check
+   * "customer", so an owner-typed row is passed THROUGH here for that check
    * to reject, rather than being the whole test (Bugbot, PR #1304).
    */
   it("drops only rows with no number and the sender's own row", () => {

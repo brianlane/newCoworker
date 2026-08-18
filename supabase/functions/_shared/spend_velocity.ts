@@ -1,5 +1,5 @@
 /**
- * Gemini spend-velocity alert — pure logic shared by the
+ * Gemini spend-velocity alert, pure logic shared by the
  * `chat-spend-velocity-alerts` Edge cron (compute + email copy) and the
  * Next.js admin settings route (config parsing/clamping), so the two
  * surfaces can never disagree about what the knobs mean.
@@ -7,7 +7,7 @@
  * The period cap (owner_chat_model_spend vs base+credit) bounds TOTAL
  * monthly spend; this watchdog bounds the RATE: "more than $X within Y
  * minutes" across any single business, computed from rolling snapshots the
- * cron takes each tick — no hot-path writes.
+ * cron takes each tick, no hot-path writes.
  */
 
 export const SPEND_VELOCITY_SETTINGS_KEY = "chat_spend_velocity_alert";
@@ -93,7 +93,7 @@ export type VelocityBreach = {
 
 /**
  * A business can hold spend rows for multiple periods (month windows);
- * velocity is only meaningful against the CURRENT one — the row with the
+ * velocity is only meaningful against the CURRENT one, the row with the
  * latest period_start per business.
  */
 export function latestSpendPerBusiness(rows: SpendRow[]): SpendRow[] {
@@ -114,7 +114,7 @@ export function latestSpendPerBusiness(rows: SpendRow[]): SpendRow[] {
  *   * baseline = the OLDEST snapshot inside the window with the SAME
  *     period_start (so a month/billing rollover never yields a negative or
  *     cross-period delta).
- *   * If the period itself started inside the window, baseline is 0 — all
+ *   * If the period itself started inside the window, baseline is 0, all
  *     of the row's spend happened within the window by definition.
  *   * No usable baseline (brand-new spend row, first tick after enabling)
  *     ⇒ skipped; the snapshot taken this tick makes the next tick

@@ -3,10 +3,10 @@
  *
  * When telnyx-voice-inbound refuses a call (all concurrent slots busy or
  * voice minutes exhausted), this helper follows up with ONE SMS from the
- * business's own number so the caller can continue over text — the reply
+ * business's own number so the caller can continue over text, the reply
  * flows through the normal inbound-SMS AI pipeline.
  *
- * Gate chain (each independently skips, fail-safe — a refused call must
+ * Gate chain (each independently skips, fail-safe, a refused call must
  * never error because of the follow-up text):
  *   1. caller is a real E.164 number (not anonymous / not the business DID)
  *   2. tier allows (standard/enterprise)
@@ -14,7 +14,7 @@
  *   4. CTIA opt-out (sms_is_opted_out)
  *   5. once-per-window dedup (try_mark_missed_call_autotext, 1h default)
  *   6. Telnyx messaging is configured for the tenant
- *   7. monthly SMS cap (try_reserve_sms_outbound_slot — customer-facing
+ *   7. monthly SMS cap (try_reserve_sms_outbound_slot, customer-facing
  *      sends are metered like any other outbound)
  *
  * Dependency-injected (structural supabase type + fetchFn) so this is
@@ -110,7 +110,7 @@ export async function sendMissedCallAutotext(
       return { status: "skipped", reason: "tier" };
     }
 
-    // Kill switch: a missing row (or read error) means default-on — the perk
+    // Kill switch: a missing row (or read error) means default-on, the perk
     // ships enabled for every entitled tenant.
     const { data: chData } = await supabase
       .from("business_channel_settings")
@@ -225,7 +225,7 @@ export async function sendMissedCallAutotext(
       };
     }
     if (!res.ok) {
-      // Give the metered slot back — the send never left Telnyx. The dedup
+      // Give the metered slot back, the send never left Telnyx. The dedup
       // ledger row intentionally stays: retrying a rejected send on the next
       // missed call within the window would just fail again and spam logs.
       await supabase.rpc("release_sms_outbound_slot", {

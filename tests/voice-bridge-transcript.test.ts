@@ -130,7 +130,7 @@ describe("voice-bridge transcript recorder", () => {
     // The row used to be created lazily on the first completed turn. On a
     // voicemail call the only "turn" is the machine's greeting, flushed at
     // stream teardown, so started_at (a column default stamped at insert)
-    // equalled ended_at and the dashboard showed 0s — and the AMD handler's
+    // equalled ended_at and the dashboard showed 0s, and the AMD handler's
     // mid-call answering_machine_result update silently matched zero rows.
     // Eager creation is the contract now: one row per attached call, stamped
     // when the call starts.
@@ -198,7 +198,7 @@ describe("voice-bridge transcript recorder", () => {
     expect(turns).toHaveLength(0);
   });
 
-  it("is idempotent once finalized — further ingest is a no-op", async () => {
+  it("is idempotent once finalized, further ingest is a no-op", async () => {
     const { adapter, turns } = makeAdapter();
     const r = createTranscriptRecorder(adapter, INIT);
     await r.ingest(frame({ caller: "hi", turnComplete: true }));
@@ -287,7 +287,7 @@ describe("voice-bridge transcript recorder", () => {
   it("preserves conversational ordering when two turnComplete frames race", async () => {
     // Regression: turnIndex used to be incremented at each `insertTurn` call,
     // so two concurrent flushes could interleave at each await boundary and
-    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3 — wrong,
+    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3, wrong,
     // because the UI sorts by turn_index. Indices must now be reserved
     // synchronously at flushTurn entry so order follows ingest order.
     let resolveCreate: ((id: string | null) => void) | null = null;
@@ -307,7 +307,7 @@ describe("voice-bridge transcript recorder", () => {
           content: input.content
         });
         // Force each insertTurn to wait a tick so the two flushes interleave
-        // between their caller-insert and assistant-insert steps — the exact
+        // between their caller-insert and assistant-insert steps, the exact
         // race described in the bug report.
         insertAttempt += 1;
         if (insertAttempt === 1) {
@@ -337,7 +337,7 @@ describe("voice-bridge transcript recorder", () => {
 
     await Promise.all([pA, pB]);
 
-    // The DB *insert* order here is [0,2,1,3] — flushB's caller insert fired
+    // The DB *insert* order here is [0,2,1,3], flushB's caller insert fired
     // between flushA's two inserts because we deliberately forced the await
     // interleaving. That's fine: the only thing that matters is that, sorted
     // by turn_index (how the UI renders), we get the correct conversation.
@@ -434,7 +434,7 @@ describe("voice-bridge transcript recorder", () => {
  * carries the no-em-dash line. This is the one surface that cannot reach:
  * `outputTranscription` is Gemini transcribing its OWN audio, so the
  * punctuation is the transcriber's, not the model following our instruction.
- * Chris Bartelot's Aug 3 2026 transcript has two, e.g. "Got that one.— And
+ * Chris Bartelot's Aug 3 2026 transcript has two, e.g. "Got that one., And
  * the other place?".
  */
 describe("stripEmDashes", () => {

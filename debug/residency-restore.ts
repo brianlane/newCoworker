@@ -3,7 +3,7 @@
  *
  * Downloads the newest (or a named) encrypted dump from Supabase Storage,
  * decrypts it with the tenant's escrowed passphrase, and applies it to a
- * box's residency Postgres over SSH — the recovery path when a box dies
+ * box's residency Postgres over SSH, the recovery path when a box dies
  * and is re-provisioned. The dump is `pg_dump --clean --if-exists`, so
  * applying onto the freshly-schema'd datastore converges to the backup
  * state.

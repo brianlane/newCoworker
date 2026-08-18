@@ -35,7 +35,7 @@ export async function insertCoworkerLog(
 
 export type FleetFeedOptions = {
   /**
-   * Businesses hidden from the fleet-wide feed (admin notification mutes —
+   * Businesses hidden from the fleet-wide feed (admin notification mutes,
    * see src/lib/db/admin-mutes.ts). Filtered in the query so a muted tenant
    * can't consume the row limit.
    */
@@ -50,7 +50,7 @@ export type FleetFeedOptions = {
 
 export type AlertFeedFilter = {
   /**
-   * Alert statuses to include (see-all filter chips) — a subset of
+   * Alert statuses to include (see-all filter chips), a subset of
    * `urgent_alert` / `error`. Undefined or empty = both.
    */
   statuses?: string[];

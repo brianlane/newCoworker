@@ -40,7 +40,7 @@ describe("isBareAcknowledgmentText", () => {
   it("emoji-only inbounds are acks; bare punctuation is not", () => {
     expect(isBareAcknowledgmentText("👍")).toBe(true);
     expect(isBareAcknowledgmentText("🙏🙏")).toBe(true);
-    // A bare "?" (or "??") is a nudge — the customer wants an answer.
+    // A bare "?" (or "??") is a nudge, the customer wants an answer.
     expect(isBareAcknowledgmentText("?")).toBe(false);
     expect(isBareAcknowledgmentText("??")).toBe(false);
     expect(isBareAcknowledgmentText("!!!")).toBe(false);

@@ -1,40 +1,40 @@
 /**
- * flag_contact_spam core — the machinery behind "he's spam".
+ * flag_contact_spam core, the machinery behind "he's spam".
  *
  * KYP Ads, Jul 23 2026: James texted "hes spam" about a junk Facebook lead
  * and the owner-operator turn REPLIED "I'll flag Hhh as spam and stop all
- * follow-ups" — but no tool on any owner surface could do either, so the
+ * follow-ups", but no tool on any owner surface could do either, so the
  * lead's follow-up run stayed parked with three nudges ahead of it. This
  * module makes the promise real. Shared by the inline dashboard-chat path
  * and the owner-SMS operator turn (both owner-verified surfaces; dashboard
- * chat additionally requires the caller's manage_settings role — the same
+ * chat additionally requires the caller's manage_settings role, the same
  * bar as /api/dashboard/sms-optouts); it is deliberately NOT seeded to the
- * Rowboat agents — the customer-facing texting coworker must never hold an
+ * Rowboat agents, the customer-facing texting coworker must never hold an
  * irreversible suppression tool (see the DASHBOARD_NAME_MAP exemption in
  * tests/agent-tool-seed-parity.test.ts).
  *
- * Everything operates on the lead's FULL identity set — the number the
+ * Everything operates on the lead's FULL identity set, the number the
  * owner gave, the matched contact's canonical customer_e164, and every
- * merged alias — since flows may hold runs (and send texts) under a
+ * merged alias, since flows may hold runs (and send texts) under a
  * different number than the one the owner quoted. What a flag does:
  *
- *   1. `sms_set_opt_out` for the given number — the same STOP-list every
+ *   1. `sms_set_opt_out` for the given number, the same STOP-list every
  *      send path already enforces (ai-flow-worker, sms-inbound-worker,
  *      scheduled sends, the Node send sites). This is the load-bearing
  *      step: if it fails, the whole call reports failure. Irreversible
- *      from chat by design — only the contact texting START lifts it.
+ *      from chat by design, only the contact texting START lifts it.
  *      The rest of the identity set is then suppressed best-effort.
  *   2. Cancel every pending AiFlow run for the lead across the identity
- *      set — every non-terminal state, `running` included (cooperative
- *      cancel, same set as the dashboard owner-stop) — with the owner-stop
+ *      set, every non-terminal state, `running` included (cooperative
+ *      cancel, same set as the dashboard owner-stop), with the owner-stop
  *      shape (`status: canceled` + `context.canceled` audit) so the runs
  *      page renders it natively. Best-effort AFTER the opt-out: even a
  *      missed cancel cannot text the lead (the worker re-checks the
  *      opt-out before every send).
  *   3. Tag the contact "spam" + append a pinned note (creating a minimal
  *      contact row when none exists). A contact already at the 25-tag cap
- *      (contacts_tags_cap_chk) gets the pinned note only — never a failed
- *      write after suppression already landed. Direct writes only —
+ *      (contacts_tags_cap_chk) gets the pinned note only, never a failed
+ *      write after suppression already landed. Direct writes only,
  *      deliberately NO tag_changed contact-event hook, a spam declaration
  *      must never start MORE automation.
  */
@@ -55,7 +55,7 @@ export const SPAM_CANCELED_BY = "owner_declared_spam";
 const CONTACT_TAGS_CAP = 25;
 
 /**
- * The pinned-note dedupe marker — the exact phrase every spam note carries.
+ * The pinned-note dedupe marker, the exact phrase every spam note carries.
  * Deliberately NOT the bare word "SPAM": unrelated pinned content ("gets
  * SPAM calls often") must not suppress the note, or a note_only outcome
  * could claim a record that was never written (Bugbot Low on PR #884).
@@ -109,7 +109,7 @@ type ContactRow = {
 };
 
 /**
- * Flag one lead as spam for a business. Never throws — the returned payload
+ * Flag one lead as spam for a business. Never throws, the returned payload
  * is a Gemini functionResponse and must always be relayable.
  */
 export async function flagContactSpam(
@@ -132,7 +132,7 @@ export async function flagContactSpam(
   }
   const phoneE164 = normalized.value;
 
-  // 1. Suppression of the given number — load-bearing, fails the whole call
+  // 1. Suppression of the given number, load-bearing, fails the whole call
   // honestly.
   try {
     // kind "owner_spam": auditable as owner-initiated, reversible by
@@ -152,7 +152,7 @@ export async function flagContactSpam(
   }
 
   // From here on the suppression is ACTIVE, so any unexpected blow-up
-  // degrades to an honest partial result — never a throw, never a false
+  // degrades to an honest partial result, never a throw, never a false
   // "nothing happened".
   let identitySet = [phoneE164];
   let suppressionComplete = true;
@@ -162,7 +162,7 @@ export async function flagContactSpam(
   try {
     const db = await createDb();
 
-    // Resolve the contact by the primary number OR a merged alias — the
+    // Resolve the contact by the primary number OR a merged alias, the
     // same resolution the interaction writes use, so a merged contact
     // still gets tagged instead of silently skipped.
     let contact: ContactRow | null = null;
@@ -183,7 +183,7 @@ export async function flagContactSpam(
 
     // The full identity set: flows may hold runs under the contact's
     // canonical number even when the owner quoted an alias (and vice
-    // versa) — suppression and cancels must cover them all.
+    // versa), suppression and cancels must cover them all.
     identitySet = [
       ...new Set(
         [
@@ -206,7 +206,7 @@ export async function flagContactSpam(
       }
     }
 
-    // 2. Cancel pending runs across the identity set (best-effort — the
+    // 2. Cancel pending runs across the identity set (best-effort, the
     // opt-outs above already block sends). Shared core with the
     // set_contact_reply_mode suppress path.
     const cancelResult = await cancelRuns(db, businessId, identitySet, SPAM_CANCELED_BY);
@@ -223,7 +223,7 @@ export async function flagContactSpam(
     runsSweepComplete = false;
   }
 
-  // The note must mirror what ACTUALLY happened — the model relays it
+  // The note must mirror what ACTUALLY happened, the model relays it
   // verbatim, and an owner told "tagged spam" when the tag write failed is
   // exactly the dishonesty this tool exists to end.
   const noteParts = [
@@ -258,7 +258,7 @@ export async function flagContactSpam(
 /**
  * Tag the (already-resolved) contact row `spam` and append a pinned note,
  * creating a minimal row when none exists so the flag is visible in the
- * dashboard. A contact at the tag cap gets the note only ("note_only") —
+ * dashboard. A contact at the tag cap gets the note only ("note_only"),
  * never a doomed write.
  */
 async function tagContactSpam(
@@ -288,7 +288,7 @@ async function tagContactSpam(
     const atCap = !tags.includes(SPAM_TAG) && tags.length >= CONTACT_TAGS_CAP;
     const updates: Record<string, unknown> = {};
     if (!tags.includes(SPAM_TAG) && !atCap) updates.tags = [...tags, SPAM_TAG];
-    // One spam note is enough — a re-flag must not stack duplicates. The
+    // One spam note is enough, a re-flag must not stack duplicates. The
     // precise marker (not the bare word) decides "already noted".
     if (!pinned.includes(SPAM_NOTE_MARKER)) {
       updates.pinned_md = pinned ? `${pinned.trimEnd()}\n- ${noteLine}` : `- ${noteLine}`;

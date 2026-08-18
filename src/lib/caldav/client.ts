@@ -1,22 +1,22 @@
 /**
- * Direct CalDAV client (iCloud, Nextcloud, generic CalDAV servers) —
+ * Direct CalDAV client (iCloud, Nextcloud, generic CalDAV servers),
  * concept ported from BizBlasts' Calendar::CaldavService/IcloudService.
  *
  * Speaks just enough of RFC 4791 for the calendar tools:
  *   - discoverEventCalendars: current-user-principal → calendar-home-set →
  *     calendar list (PROPFIND), filtered to VEVENT-capable collections.
  *   - fetchCaldavBusy: REPORT calendar-query with a time-range filter and
- *     server-side recurrence `expand` (RFC 4791 §9.6.5 — expanded instances
+ *     server-side recurrence `expand` (RFC 4791 §9.6.5, expanded instances
  *     come back in UTC), parsed into busy blocks.
  *   - createCaldavEvent: PUT a minimal VCALENDAR with `If-None-Match: *`.
  *
  * Transport safety: every request URL (including discovery hrefs and manual
- * redirect hops — iCloud bounces principals onto pNN-caldav partition hosts)
+ * redirect hops, iCloud bounces principals onto pNN-caldav partition hosts)
  * is re-validated as https + public host before it is fetched, so a
  * malicious server can never steer us at an internal address.
  *
  * XML/iCal parsing is deliberately regex-based over namespace-stripped text
- * (the same shapes BizBlasts parsed with Nokogiri) — the multistatus
+ * (the same shapes BizBlasts parsed with Nokogiri), the multistatus
  * documents involved are small and highly regular.
  */
 import { isPrivateOrLoopbackHost } from "@/lib/db/custom-integrations";
@@ -193,7 +193,7 @@ export function parseCalendarList(xml: string, baseUrl: string): CaldavCalendar[
 }
 
 /**
- * Preferred event calendar for bookings when the account has several —
+ * Preferred event calendar for bookings when the account has several,
  * BizBlasts' name heuristic ('work' first: 'home' can be read-only on some
  * iCloud setups), else the first listed.
  */
@@ -293,7 +293,7 @@ export function unfoldICalLines(ical: string): string[] {
     .split(/\r?\n/);
 }
 
-/** `YYYYMMDDTHHMMSSZ` for an instant — the shape CalDAV PUTs use. */
+/** `YYYYMMDDTHHMMSSZ` for an instant, the shape CalDAV PUTs use. */
 // Moved to the shared iCal module; imported for local use below and
 // re-exported so existing importers and tests keep working.
 export { icalUtcStamp, escapeICalText } from "@/lib/calendar-tools/ics";
@@ -324,7 +324,7 @@ export type BusyBlock = { start: Date; end: Date };
 /**
  * Busy blocks from raw iCal text: every VEVENT with a parseable DTSTART +
  * DTEND, skipping cancelled and transparent (free-time) events. Events
- * without a DTEND are skipped — with server-side `expand`, real events
+ * without a DTEND are skipped, with server-side `expand`, real events
  * carry both.
  */
 export function parseICalBusyBlocks(ical: string): BusyBlock[] {
@@ -389,7 +389,7 @@ function calendarQueryBody(windowStart: Date, windowEnd: Date): string {
   const start = icalUtcStamp(windowStart);
   const end = icalUtcStamp(windowEnd);
   // `expand` makes the server return recurrence INSTANCES in UTC
-  // (RFC 4791 §9.6.5) — without it a weekly standing meeting would never
+  // (RFC 4791 §9.6.5), without it a weekly standing meeting would never
   // block slots.
   return (
     '<?xml version="1.0" encoding="utf-8" ?>' +
@@ -457,7 +457,7 @@ export async function createCaldavEvent(
   event: CaldavEventInput,
   opts: CaldavRequestOptions = {}
 ): Promise<{ eventUid: string }> {
-  // The UID doubles as the resource filename — keep it path-safe.
+  // The UID doubles as the resource filename, keep it path-safe.
   assertSafeEventUid(event.uid);
   const ical =
     "BEGIN:VCALENDAR\r\n" +
@@ -515,8 +515,8 @@ function eventResourceUrl(calendarUrl: string, uid: string): string {
 /**
  * Move an existing event IN PLACE: GET the resource, rewrite DTSTART/DTEND
  * (bumping DTSTAMP and SEQUENCE so clients treat it as an update to the
- * SAME event), PUT it back. Every other property — SUMMARY, DESCRIPTION,
- * anything the server added — survives untouched.
+ * SAME event), PUT it back. Every other property, SUMMARY, DESCRIPTION,
+ * anything the server added, survives untouched.
  *
  * Throws CaldavApiError("request_failed", 404) when the resource is gone;
  * callers map that to booking_not_found.
@@ -547,7 +547,7 @@ export async function updateCaldavEventTime(
 
   // Rewrite ONLY inside the VEVENT block: servers routinely prepend a
   // VTIMEZONE component whose STANDARD/DAYLIGHT sub-components carry their
-  // own DTSTART lines — a whole-body replace would retime the TIMEZONE
+  // own DTSTART lines, a whole-body replace would retime the TIMEZONE
   // definition and leave the event untouched while still reporting success
   // (Bugbot High on PR #590). Property lines are matched with optional
   // parameters (DTSTART;TZID=…:); our own bookings write unfolded
@@ -595,7 +595,7 @@ export async function updateCaldavEventTime(
 }
 
 /**
- * Delete an event resource. A 404 counts as success — the event is gone
+ * Delete an event resource. A 404 counts as success, the event is gone
  * either way, and a retried cancel must not fail the second time.
  */
 export async function deleteCaldavEvent(
@@ -625,7 +625,7 @@ export type CaldavVerification =
 
 /**
  * End-to-end connection check for the connect flow: full discovery walk.
- * Never throws — the dashboard reports the outcome instead of 500ing.
+ * Never throws, the dashboard reports the outcome instead of 500ing.
  */
 export async function verifyCaldavConnection(
   creds: CaldavCredentials,

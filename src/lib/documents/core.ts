@@ -1,5 +1,5 @@
 /**
- * Business Documents — pure domain rules shared by every surface.
+ * Business Documents, pure domain rules shared by every surface.
  *
  * Everything here is side-effect free: eligibility (audience + expiration),
  * per-tier caps, title matching for tool calls, the vault digest, and the
@@ -62,7 +62,7 @@ export function isDocumentExpired(
 }
 
 /**
- * Whether a document's renewal date falls within `days` from `now` —
+ * Whether a document's renewal date falls within `days` from `now`,
  * including already-past dates, so an overdue renewal still reminds. Used
  * by the daily sweep and the dashboard renewal badges.
  */
@@ -80,13 +80,13 @@ export function isRenewalDueWithin(
 /**
  * Parse an owner-supplied expiration input into the stored ISO instant.
  *
- * A DATE-ONLY value ("2026-08-01" — what the dashboard date input and chat
+ * A DATE-ONLY value ("2026-08-01", what the dashboard date input and chat
  * phrasing produce) means "usable through that day", so it maps to the END
- * of that calendar day (23:59:59.999 UTC) — never the preceding midnight,
+ * of that calendar day (23:59:59.999 UTC), never the preceding midnight,
  * which would expire the document the prior evening in US timezones. A full
  * datetime is taken literally. Returns null when unparseable.
  */
-/** Bounds for record_fields — a flat { field: value } metadata object. */
+/** Bounds for record_fields, a flat { field: value } metadata object. */
 export const RECORD_FIELDS_MAX_KEYS = 20;
 export const RECORD_FIELD_VALUE_MAX_CHARS = 500;
 
@@ -169,7 +169,7 @@ export const DOCUMENTS_DIGEST_MAX_CHARS = 4_000;
 
 /**
  * Compact awareness digest of client-eligible documents for the on-VPS
- * vault (documents.md). Titles + summaries only — full content stays behind
+ * vault (documents.md). Titles + summaries only, full content stays behind
  * the business_knowledge_lookup / document_share tools so KVM2 prefill
  * stays bounded. Returns "" when no documents qualify, so vault composition
  * can skip the section entirely.
@@ -210,7 +210,7 @@ function questionTerms(question: string): string[] {
 
 /**
  * Relevance score: term overlap between the question and the document's
- * title / category / summary / content. Deterministic and cheap — the
+ * title / category / summary / content. Deterministic and cheap, the
  * knowledge lookup runs under a 3s voice deadline, so selection cannot
  * afford a second model round-trip.
  */

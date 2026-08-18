@@ -1,6 +1,6 @@
 /**
  * Owner-facing management for the business's DIRECT CalDAV connection
- * (iCloud app-specific password / Nextcloud / generic CalDAV — the
+ * (iCloud app-specific password / Nextcloud / generic CalDAV, the
  * zero-OAuth calendar path, mirroring /api/integrations/calendly).
  *
  *   GET    ?businessId=…   → connection state (masked; no secret material)
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     // Verify the stored credentials end-to-end (full discovery walk). On
     // success, persist the picked event calendar so tool calls run one
     // REPORT instead of the 3-step discovery; failure CLEARS the cached
-    // calendar — the card must never claim a calendar the credentials no
+    // calendar, the card must never claim a calendar the credentials no
     // longer reach.
     const conn = await getCaldavConnection(body.businessId);
     const verification = conn

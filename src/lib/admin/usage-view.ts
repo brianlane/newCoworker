@@ -66,7 +66,7 @@ export function computeUtilizationPct(params: {
   const ratios: number[] = [
     params.voiceMinutes / (limits.voiceIncludedSecondsPerStripePeriod / 60)
   ];
-  // smsPerMonth is Infinity (uncapped) or a positive finite cap — the
+  // smsPerMonth is Infinity (uncapped) or a positive finite cap, the
   // override schema rejects zero/negative values.
   if (Number.isFinite(limits.smsPerMonth)) {
     ratios.push(params.smsSent / limits.smsPerMonth);

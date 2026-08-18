@@ -2,7 +2,7 @@
  * Canonical owner-dashboard nav catalog (keys, labelKeys, hrefs) shared by the
  * sidebar component (which adds icons client-side), the per-user
  * customization prefs (src/lib/dashboard/sidebar-prefs.ts), and the Settings
- * editor. Keys are the stable identifiers stored in `user_sidebar_items` —
+ * editor. Keys are the stable identifiers stored in `user_sidebar_items`,
  * renaming a key orphans saved layouts, so treat them as append-only.
  */
 

@@ -26,7 +26,7 @@ export type TelnyxMessagingConfig = {
  * Tiers entitled to the RCS channel (mirror of _shared/channel_settings.ts).
  *
  * Enterprise-only (decided Jul 18 2026 after testing-phase findings): an RCS
- * inbound carries only the agent id — no recipient DID — so a shared agent
+ * inbound carries only the agent id, no recipient DID, so a shared agent
  * cannot route replies for more than one tenant, and the agent's verified
  * brand replaces the tenant's own identity on the handset. Tenant RCS
  * therefore requires a dedicated per-tenant agent (own Google verification,
@@ -57,8 +57,8 @@ export function readTelnyxMessagingConfig(
  * Pass `opts.resolveRcs: true` for CUSTOMER-FACING sends (dashboard composer,
  * assistant tool-calls, voice follow-up SMS) to also resolve the tenant's RCS
  * channel eligibility. Platform-operational sends (owner alerts, provisioning
- * notifications) omit it and stay plain SMS. The RCS gate is a three-way AND —
- * tier allows ∧ rcs_enabled ∧ agent id set — and any lookup error resolves to
+ * notifications) omit it and stay plain SMS. The RCS gate is a three-way AND,
+ * tier allows ∧ rcs_enabled ∧ agent id set, and any lookup error resolves to
  * no-RCS (fail-safe: SMS always works).
  */
 export async function getTelnyxMessagingForBusiness(
@@ -116,8 +116,8 @@ export async function resolveRcsAgentIdForBusiness(
 
 /**
  * Whether composer sends for this business will actually go RCS-first.
- * Mirrors the exact precondition in `sendTelnyxSms` — an approved agent id
- * AND a concrete from-number for the SMS fallback — so UI hints (channel
+ * Mirrors the exact precondition in `sendTelnyxSms`, an approved agent id
+ * AND a concrete from-number for the SMS fallback, so UI hints (channel
  * badge, segment warnings) never claim RCS while sends fall through to plain
  * SMS. Any config/lookup error resolves to false (plain-SMS hints are the
  * safe default).
@@ -145,7 +145,7 @@ export type SendTelnyxSmsOptions = {
    * fails after metering, the same units are released so quota is not
    * consumed.
    *
-   * NOTHING is exempt from metering (Jul 14 2026 policy) — the difference
+   * NOTHING is exempt from metering (Jul 14 2026 policy), the difference
    * between traffic classes is only what happens AT the cap, via
    * `meterMode`.
    */
@@ -153,13 +153,13 @@ export type SendTelnyxSmsOptions = {
   /**
    * How the cap applies to the metered send (requires `meterBusinessId`):
    *
-   *   - "reserve" (default) — customer-facing traffic: row-locked reserve
+   *   - "reserve" (default), customer-facing traffic: row-locked reserve
    *     via try_reserve_sms_outbound_slot; over-cap sends are REFUSED
    *     (throws "Monthly SMS limit reached").
-   *   - "operational" — owner/platform/compliance traffic (alerts,
+   *   - "operational", owner/platform/compliance traffic (alerts,
    *     provisioning notices, teammate acks): counts via
-   *     meter_sms_operational_send — plan slot, bonus spill, or explicit
-   *     overage — but is never refused and never throttled. The cap alert
+   *     meter_sms_operational_send, plan slot, bonus spill, or explicit
+   *     overage, but is never refused and never throttled. The cap alert
    *     must outrun the cap it reports, and STOP/HELP/START replies are
    *     legally required.
    */
@@ -229,7 +229,7 @@ export function reserveSlotFailureMessage(result: ReserveSlotResult | null): str
  * handsets. If the RCS endpoint itself rejects the request (agent revoked,
  * destination not RCS-routable, etc.) we re-send as plain SMS in the same
  * call so the customer never loses a message to channel plumbing. Metering
- * (`try_reserve_sms_outbound_slot`) is identical on both channels — one
+ * (`try_reserve_sms_outbound_slot`) is identical on both channels, one
  * monthly pool regardless of channel, per the plan.
  *
  * @returns Telnyx message id + the channel that accepted the send
@@ -398,7 +398,7 @@ export async function sendTelnyxSms(
       // Leave reservedSlot=true so any retry on this path (or an upstream wrapper calling
       // releaseIfNeeded again) re-attempts the release. Silently flipping it to false on
       // error would strand the monthly-quota slot on the `businesses` row in the DB with
-      // no client-side retry path — a long-lived quota leak until manual reconciliation.
+      // no client-side retry path, a long-lived quota leak until manual reconciliation.
       console.error("sendTelnyxSms: release_sms_outbound_slot failed (will keep slot flagged)", relErr.message);
       return;
     }
@@ -450,7 +450,7 @@ export async function sendTelnyxSms(
         }
         // 2xx without a message id: Telnyx did not durably create the message
         // (nothing to track or reconcile). Treat it like a rejection and
-        // deliver over plain SMS — same behavior as the inbound worker.
+        // deliver over plain SMS, same behavior as the inbound worker.
         console.warn("sendTelnyxSms: RCS 2xx with no message id, falling back to SMS");
       } else {
         // RCS API rejection (agent revoked, destination not routable, …): fall

@@ -1,14 +1,14 @@
 /**
- * Business Documents — access the original uploaded file.
+ * Business Documents, access the original uploaded file.
  *
  *   GET /api/dashboard/documents/:documentId/download?businessId=…
- *     → { url } — a short-lived signed URL on the private `business-docs`
+ *     → { url }, a short-lived signed URL on the private `business-docs`
  *       bucket with a Content-Disposition download filename (same pattern
  *       as the email-attachments route). Read-only, so view-as is allowed.
  *
  *   `?disposition=inline` signs WITHOUT the download filename so the
  *   browser renders the file in place (PDF viewer, plain text for
- *   .vtt/.md/.csv) — the "Open in browser" action.
+ *   .vtt/.md/.csv), the "Open in browser" action.
  */
 
 import { z } from "zod";
