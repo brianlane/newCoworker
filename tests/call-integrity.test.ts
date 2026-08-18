@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MIN_ASSISTANT_TURNS,
   detectCallIntegrity,
+  formatCallIntegrityAlert,
   hasRoleLeak,
-  looksMachineGenerated
+  looksMachineGenerated,
+  postCallIntegrityWebhook
 } from "../supabase/functions/_shared/call_integrity.ts";
 
 /**
@@ -136,5 +138,150 @@ describe("detectCallIntegrity", () => {
 
   it("defaults to three assistant turns", () => {
     expect(DEFAULT_MIN_ASSISTANT_TURNS).toBe(3);
+  });
+});
+
+/**
+ * Alerting. Findings used to land at `level: "warn"`, which keeps them off
+ * the fleet dashboard entirely: `src/lib/db/system-logs.ts` states that feed
+ * reads `level = 'error'` only. So a failure showed on one client's page and
+ * nowhere else, for something that happens about once every seven weeks.
+ * Nobody would ever have looked on the right day.
+ *
+ * The warn convention exists for a poll that fails once a minute and clears
+ * itself on the next run. This is the opposite: daily, deduped, and fired on
+ * a call that already went wrong and cannot be retried. It meets that file's
+ * own bar for `error`, "a claim that a human should look".
+ */
+describe("formatCallIntegrityAlert", () => {
+  const call = {
+    transcriptId: "28f9c228",
+    business: "Amy Laidlaw Real Estate",
+    caller: "+14159851909",
+    startedAt: "2026-08-14T17:26:54Z"
+  };
+
+  it("leads with the count so the summary is readable before expanding", () => {
+    const text = formatCallIntegrityAlert([
+      { ...call, kind: "role_leak", detail: "Is that correct?user Correct." }
+    ]);
+    expect(text).toContain("1 call-integrity failure");
+    expect(text).toContain("Amy Laidlaw Real Estate");
+    expect(text).toContain("28f9c228");
+  });
+
+  it("pluralises and names each distinct kind", () => {
+    const text = formatCallIntegrityAlert([
+      { ...call, kind: "role_leak", detail: "a" },
+      { ...call, transcriptId: "0f12d4ef", kind: "talked_to_recording", detail: "b" }
+    ]);
+    expect(text).toContain("2 call-integrity failures");
+    expect(text).toContain("spoke the caller's side");
+    expect(text).toContain("talked to a recording");
+  });
+
+  it("caps the body so one bad day cannot post a wall of text", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      ...call,
+      transcriptId: `t${i}`,
+      kind: "role_leak" as const,
+      detail: "x".repeat(400)
+    }));
+    const text = formatCallIntegrityAlert(many);
+    expect(text.length).toBeLessThan(4000);
+    expect(text).toContain("40 call-integrity failures");
+    expect(text).toContain("and 30 more");
+  });
+
+  it("names an unknown caller and time rather than printing null", () => {
+    // Both columns are nullable on voice_call_transcripts, and a call that
+    // arrives without caller id is exactly the odd one worth reading.
+    const text = formatCallIntegrityAlert([
+      { ...call, caller: null, startedAt: null, kind: "role_leak", detail: "x" }
+    ]);
+    expect(text).toContain("unknown caller");
+    expect(text).toContain("unknown time");
+    expect(text).not.toContain("null");
+  });
+
+  it("returns empty string for no findings, so callers cannot post nothing", () => {
+    expect(formatCallIntegrityAlert([])).toBe("");
+  });
+});
+
+describe("postCallIntegrityWebhook", () => {
+  const findings = [
+    {
+      transcriptId: "28f9c228",
+      business: "Amy Laidlaw Real Estate",
+      caller: "+14159851909",
+      startedAt: "2026-08-14T17:26:54Z",
+      kind: "role_leak" as const,
+      detail: "Is that correct?user Correct."
+    }
+  ];
+
+  it("posts a Slack-compatible body and reports success", async () => {
+    let seen: { url: string; body: string } | null = null;
+    const res = await postCallIntegrityWebhook(
+      async (url, init) => {
+        seen = { url, body: String(init?.body ?? "") };
+        return { ok: true, status: 200, text: async () => "" };
+      },
+      "https://hooks.example/x",
+      findings
+    );
+    expect(res).toEqual({ ok: true, status: 200 });
+    expect(seen!.url).toBe("https://hooks.example/x");
+    expect(JSON.parse(seen!.body).text).toContain("call-integrity failure");
+  });
+
+  it("reports a non-2xx without throwing, and clips the upstream body", async () => {
+    const res = await postCallIntegrityWebhook(
+      async () => ({ ok: false, status: 500, text: async () => "y".repeat(900) }),
+      "https://hooks.example/x",
+      findings
+    );
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(500);
+    expect(res.error!.length).toBeLessThanOrEqual(500);
+  });
+
+  it("survives a transport throw, because an alert must never break the sweep", async () => {
+    const res = await postCallIntegrityWebhook(
+      async () => {
+        throw new Error("dns");
+      },
+      "https://hooks.example/x",
+      findings
+    );
+    expect(res).toEqual({ ok: false, status: 0, error: "dns" });
+  });
+
+  it("survives a throw that is not an Error at all", async () => {
+    // fetch implementations reject with all sorts of things; String() keeps
+    // the telemetry readable instead of logging "[object Object]".
+    const res = await postCallIntegrityWebhook(
+      async () => {
+        throw "socket hang up";
+      },
+      "https://hooks.example/x",
+      findings
+    );
+    expect(res).toEqual({ ok: false, status: 0, error: "socket hang up" });
+  });
+
+  it("refuses to post when there is nothing to say", async () => {
+    let called = false;
+    const res = await postCallIntegrityWebhook(
+      async () => {
+        called = true;
+        return { ok: true, status: 200, text: async () => "" };
+      },
+      "https://hooks.example/x",
+      []
+    );
+    expect(called).toBe(false);
+    expect(res.ok).toBe(true);
   });
 });
