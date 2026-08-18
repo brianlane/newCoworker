@@ -1,19 +1,36 @@
 /**
- * Diagnose a business's direct Meta Lead Ads connection: decrypt the stored
- * user token and ask the Graph API what it actually carries — granted
- * permissions (with granular page targets via /debug_token) and the Pages
- * visible on /me/accounts. Never prints token material.
+ * Diagnose a business's direct Meta Lead Ads connection: decrypt its stored
+ * token and ask the Graph API what that token actually carries, chiefly the
+ * granted scopes and granular page targets from /debug_token. Never prints
+ * token material.
  *
  *   npx tsx debug/meta-connection-probe.ts [businessId]
  *
- * Defaults to the New Coworker HQ internal tenant.
+ * WHICH TOKEN: a connection keeps its user token only until it activates, at
+ * which point user_token_encrypted is cleared and the permanent PAGE token is
+ * all that remains. So on any live connection this probes the page token, and
+ * /me resolves to the Page rather than to a person. /me/permissions and
+ * /me/accounts exist only on a USER node, so they are skipped with a note
+ * instead of printing a Graph "nonexisting field" error that reads like a bug
+ * but is just the token type.
  */
 import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
-const businessId = process.argv[2] ?? HQ_BUSINESS_ID;
+/**
+ * "Meta Review Sandbox (internal)". Deliberately NOT the New Coworker HQ
+ * tenant (8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d), which has no
+ * meta_connections row at all: the sandbox tenant is the only holder of one,
+ * and the Page behind it is the real "New Coworker" Page (1202310049632520)
+ * with the real @newcoworker Instagram account.
+ *
+ * This used to default to the HQ id, so a bare run printed "no
+ * meta_connections row" and probed nothing unless you already knew to pass
+ * the sandbox uuid.
+ */
+const SANDBOX_BUSINESS_ID = "e2b7a1c4-0000-4000-8000-000000000002";
+const businessId = process.argv[2] ?? SANDBOX_BUSINESS_ID;
 
 async function main() {
   const { getMetaConnection } = await import("../src/lib/db/meta-connections.ts");
@@ -35,6 +52,8 @@ async function main() {
     console.log("no token to probe");
     return;
   }
+  // Everything below /me is user-token-only; see the file header.
+  const onUserToken = Boolean(conn.userToken);
 
   const get = async (path: string, params: Record<string, string> = {}) => {
     const url = new URL(`${META_GRAPH_BASE_URL}${path}`);
@@ -48,17 +67,22 @@ async function main() {
   console.log("\n== /me ==");
   console.log(JSON.stringify((await get("/me", { fields: "id,name" })).body));
 
-  console.log("\n== /me/permissions ==");
-  console.log(JSON.stringify((await get("/me/permissions")).body, null, 1));
+  if (onUserToken) {
+    console.log("\n== /me/permissions ==");
+    console.log(JSON.stringify((await get("/me/permissions")).body, null, 1));
 
-  console.log("\n== /me/accounts ==");
-  console.log(
-    JSON.stringify(
-      (await get("/me/accounts", { fields: "id,name,tasks" })).body,
-      null,
-      1
-    )
-  );
+    console.log("\n== /me/accounts ==");
+    console.log(
+      JSON.stringify((await get("/me/accounts", { fields: "id,name,tasks" })).body, null, 1)
+    );
+  } else {
+    console.log(
+      "\n== /me/permissions, /me/accounts ==\n" +
+        " skipped: this connection is active, so only its PAGE token is stored" +
+        " and both edges are USER-only.\n" +
+        " The scopes below come from /debug_token and cover the same ground."
+    );
+  }
 
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
