@@ -2637,7 +2637,13 @@ describe("planStep: upsert_customer", () => {
   it("refuses an address carrying a PostgREST filter metacharacter", () => {
     // The address is interpolated into an `.or()` filter by the duplicate-lead
     // guard, so a comma or paren would change which rows match.
-    for (const junk of ["a,b@example.com", "a(b@example.com", 'a"b@example.com']) {
+    for (const junk of [
+      "a,b@example.com",
+      "a(b@example.com",
+      'a"b@example.com',
+      // `*` is PostgREST's ilike wildcard alias and survives no escaping.
+      "a*b@example.com"
+    ]) {
       const r = planStep(base, { vars: { lead_phone: "none", lead_email: junk } });
       expect(r.ok && r.action.kind === "upsert_customer" && r.action.skipReason, junk).toBe(
         "no_contact_phone"

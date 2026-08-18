@@ -36,14 +36,22 @@ export const EMAIL_CONTACT_KEY_PREFIX = "email:";
  * RFC 5322: real addresses are too varied to validate strictly, and the cost of
  * refusing a valid address is higher than the cost of storing an odd one.
  *
- * The extra refusals are the PostgREST filter metacharacters: comma, parens and
- * double quote. A key carrying one of those could change which rows an `.or()`
- * filter string matches, and both {@link contactAliasOrFilter} and the
- * duplicate-lead guard interpolate the value directly. Real addresses do not
- * use them (parens are RFC 5322 comment syntax and effectively never appear),
- * so refusing costs nothing and removes a whole class of escaping bug.
+ * The extra refusals are the PostgREST filter metacharacters: comma, parens,
+ * double quote, and asterisk. A key carrying one of those could change which
+ * rows a filter matches, and both {@link contactAliasOrFilter} and the
+ * duplicate-lead guard interpolate the value directly.
+ *
+ * Asterisk is refused rather than escaped because it CANNOT be escaped:
+ * PostgREST translates `*` to `%` while parsing a like/ilike pattern, before
+ * SQL ever sees it, so a backslash does not survive the trip. `%` and `_` are
+ * different: they reach SQL intact and {@link emailIlikePattern} escapes them,
+ * which matters because an underscore is common in a real local part.
+ *
+ * Real addresses use none of these (parens are RFC 5322 comment syntax and
+ * effectively never appear), so refusing costs nothing and removes a whole
+ * class of escaping bug.
  */
-const EMAIL_KEY_RE = /^[^\s@,()"]+@[^\s@,()"]+\.[^\s@,()"]+$/;
+const EMAIL_KEY_RE = /^[^\s@,()"*]+@[^\s@,()"*]+\.[^\s@,()"*]+$/;
 
 /** E.164, or a bare 3-8 digit short code. Mirrors CONTACT_NUMBER_RE in src. */
 const NUMBER_KEY_RE = /^(\+[1-9]\d{6,15}|\d{3,8})$/;
@@ -146,8 +154,9 @@ export function isFilterSafeEmail(email: string | null | undefined): boolean {
  * `first_last@x.com` would otherwise also match `firstXlast@x.com` and could
  * suppress a DIFFERENT person's outreach.
  *
- * The address itself is already free of PostgREST filter metacharacters (see
- * EMAIL_KEY_RE), so the escaped result is safe to interpolate into a filter.
+ * The address itself is already free of the metacharacters that cannot be
+ * escaped, `*` among them (see EMAIL_KEY_RE), so the escaped result is safe to
+ * interpolate into a filter.
  */
 export function emailIlikePattern(address: string): string {
   return address.replace(/[%_\\]/g, (m) => `\\${m}`);

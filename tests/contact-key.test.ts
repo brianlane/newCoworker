@@ -64,6 +64,11 @@ describe("emailContactKey", () => {
     expect(emailContactKey("a(b@example.com")).toBeNull();
     expect(emailContactKey("a)b@example.com")).toBeNull();
     expect(emailContactKey('a"b@example.com')).toBeNull();
+    // Asterisk is refused rather than escaped, because it CANNOT be escaped:
+    // PostgREST turns `*` into `%` while parsing an ilike pattern, before SQL
+    // sees it, so a backslash does not survive. An address carrying one could
+    // wildcard-match other runs and suppress a different person's outreach.
+    expect(emailContactKey("a*b@example.com")).toBeNull();
   });
 
   it("refuses an address longer than the 254-char column limit", () => {
@@ -173,6 +178,7 @@ describe("isFilterSafeEmail", () => {
     expect(isFilterSafeEmail(ADDRESS)).toBe(true);
     expect(isFilterSafeEmail("a,b@example.com")).toBe(false);
     expect(isFilterSafeEmail("a(b@example.com")).toBe(false);
+    expect(isFilterSafeEmail("a*b@example.com")).toBe(false);
     expect(isFilterSafeEmail(null)).toBe(false);
   });
 });
