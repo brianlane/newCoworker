@@ -369,7 +369,12 @@ describe("instagramCommentTemplate", () => {
     // unlawful. Replying where they commented is the one channel they chose.
     const def = instagramCommentTemplate().definition;
     const types = def.steps.map((s) => s.type);
-    expect(types).toEqual(["extract_text", "reply_to_comment", "notify_owner"]);
+    expect(types).toEqual([
+      "extract_text",
+      "reply_to_comment",
+      "notify_owner",
+      "notify_owner"
+    ]);
     for (const banned of ["send_sms", "send_email", "send_whatsapp", "upsert_customer"]) {
       expect(types).not.toContain(banned);
     }
@@ -396,6 +401,27 @@ describe("instagramCommentTemplate", () => {
     // The brief used to tell the owner we could not reply. We can now.
     const brief = JSON.stringify(def.steps);
     expect(brief).not.toContain("can't reply to comments for you");
+  });
+
+  it("never tells the owner it replied on a comment the spam gate stopped", () => {
+    // The two briefs are complementary: the "I replied" one carries the SAME
+    // guard as the reply step, and the spam one is its exact inverse. Without
+    // that, the owner is told "I replied on the post" precisely for the
+    // comments we deliberately left alone.
+    const steps = instagramCommentTemplate().definition.steps;
+    const briefs = steps.filter((s) => s.type === "notify_owner") as {
+      message: string;
+      when?: { var: string; equals?: string; notEquals?: string };
+    }[];
+    expect(briefs).toHaveLength(2);
+
+    const claimsReply = briefs.find((b) => b.message.includes("I replied on the post"));
+    const spamBrief = briefs.find((b) => b !== claimsReply);
+    expect(claimsReply?.when).toEqual({ var: "comment_intent", notEquals: "spam" });
+    expect(spamBrief?.when).toEqual({ var: "comment_intent", equals: "spam" });
+    // The spam brief must not claim a reply of any kind.
+    expect(spamBrief?.message).not.toContain("I replied");
+    expect(spamBrief?.message).toContain("left it alone");
   });
 
   it("leaves no dangling punctuation when a var renders empty", () => {

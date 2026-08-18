@@ -302,7 +302,19 @@ export function instagramCommentTemplate(): LibraryStarterTemplate {
             // dangling comma in the owner's alert.
             "New Instagram comment from @{{vars.commenter_handle}}: " +
             "\"{{vars.comment_text}}\" Looks like: {{vars.comment_intent}}. " +
-            "I replied on the post so they know you saw it; the real answer is yours."
+            "I replied on the post so they know you saw it; the real answer is yours.",
+          // Guarded to MATCH the reply step above. Without this the owner is
+          // told "I replied" on exactly the comments the spam gate stopped us
+          // replying to.
+          when: { var: "comment_intent", notEquals: "spam" }
+        },
+        {
+          id: "s_notify_owner_spam",
+          type: "notify_owner",
+          message:
+            "New Instagram comment from @{{vars.commenter_handle}} looks like spam: " +
+            "\"{{vars.comment_text}}\" I left it alone rather than replying under your post.",
+          when: { var: "comment_intent", equals: "spam" }
         }
       ]
     }
