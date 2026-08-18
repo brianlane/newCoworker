@@ -1769,7 +1769,7 @@
     },
     "idleLogout": {
       "title": "Se cerrará tu sesión en breve",
-      "body": "Por la privacidad del paciente, este panel cierra la sesión tras 30 minutos de inactividad. Cierre en {seconds}s. Mueve el ratón o pulsa una tecla para continuar."
+      "body": "Por la privacidad del paciente, este panel cierra la sesión tras 30 minutos de inactividad. Cierre en {seconds}s. Mueve el ratón, desplázate o pulsa una tecla para continuar."
     },
     "nav": {
       "dashboard": "Panel",

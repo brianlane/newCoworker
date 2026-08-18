@@ -1769,7 +1769,7 @@
     },
     "idleLogout": {
       "title": "You will be signed out shortly",
-      "body": "For patient privacy, this dashboard signs out after 30 minutes of inactivity. Signing out in {seconds}s. Move the mouse or press a key to stay."
+      "body": "For patient privacy, this dashboard signs out after 30 minutes of inactivity. Signing out in {seconds}s. Move the mouse, scroll, or press a key to stay signed in."
     },
     "nav": {
       "dashboard": "Dashboard",

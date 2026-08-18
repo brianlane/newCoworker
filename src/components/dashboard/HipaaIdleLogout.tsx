@@ -37,17 +37,42 @@ export function HipaaIdleLogout({ timeoutMs = HIPAA_IDLE_TIMEOUT_MS }: { timeout
     // impure and React's lint rules reject it.
     lastActivityRef.current = Date.now();
 
-    const markActive = () => {
-      lastActivityRef.current = Date.now();
+    const expire = () => {
+      // Guard against a second trigger while the navigation is in flight.
+      if (signingOutRef.current) return;
+      signingOutRef.current = true;
+      clearConfidentialBrowserStorage();
+      formRef.current?.requestSubmit();
+    };
+
+    /**
+     * Activity only counts while the session is still alive. Checking expiry
+     * FIRST is what stops a returning tab from reviving a session that should
+     * already be gone: browsers throttle and often suspend timers in a hidden
+     * tab, so the interval below may never have fired past the deadline, and
+     * an unconditional "mark active" on focus would silently reset the clock
+     * in exactly the unattended-dashboard case this control exists for.
+     */
+    const handleActivity = () => {
+      const now = Date.now();
+      if (idleState(lastActivityRef.current, now, timeoutMs) === "expired") {
+        expire();
+        return;
+      }
+      lastActivityRef.current = now;
       setWarning((prev) => (prev === null ? prev : null));
     };
 
-    // Pointer, keyboard, scroll and tab focus all count as presence. Passive
-    // so this never delays scrolling.
-    const events = ["pointerdown", "keydown", "scroll", "focus"] as const;
-    for (const evt of events) window.addEventListener(evt, markActive, { passive: true });
+    // pointermove is included because the warning tells the reader to move the
+    // mouse; without it, following the instruction would not save the session.
+    const events = ["pointerdown", "pointermove", "keydown", "focus"] as const;
+    for (const evt of events) window.addEventListener(evt, handleActivity, { passive: true });
+    // Scroll needs CAPTURE: the dashboard's content lives in a
+    // `[data-app-main]` overflow container, and scroll does not bubble to
+    // window, so a reader scrolling a long thread would otherwise look idle.
+    window.addEventListener("scroll", handleActivity, { passive: true, capture: true });
     const onVisible = () => {
-      if (document.visibilityState === "visible") markActive();
+      if (document.visibilityState === "visible") handleActivity();
     };
     document.addEventListener("visibilitychange", onVisible);
 
@@ -55,11 +80,7 @@ export function HipaaIdleLogout({ timeoutMs = HIPAA_IDLE_TIMEOUT_MS }: { timeout
       const now = Date.now();
       const state = idleState(lastActivityRef.current, now, timeoutMs);
       if (state === "expired") {
-        // Guard against the interval firing again mid-navigation.
-        if (signingOutRef.current) return;
-        signingOutRef.current = true;
-        clearConfidentialBrowserStorage();
-        formRef.current?.requestSubmit();
+        expire();
         return;
       }
       setWarning(
@@ -68,7 +89,8 @@ export function HipaaIdleLogout({ timeoutMs = HIPAA_IDLE_TIMEOUT_MS }: { timeout
     }, 1000);
 
     return () => {
-      for (const evt of events) window.removeEventListener(evt, markActive);
+      for (const evt of events) window.removeEventListener(evt, handleActivity);
+      window.removeEventListener("scroll", handleActivity, { capture: true });
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(tick);
     };
