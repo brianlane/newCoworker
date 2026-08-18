@@ -256,3 +256,73 @@ re-run: several supersede each other.
 
 PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 #1400.
+
+## The agent dashboard, read live 2026-08-18
+
+Reachable now that the render service can do HomeLight's email-first login
+(PRs #1462, #1469). `agent.homelight.com/dashboard` returns ~294KB of
+authenticated content.
+
+**What is there**
+
+- Action item: "Provide feedback on N of your recent referrals" ->
+  `Submit Feedback`
+- Per referral: "Any updates for <Name>? ... Last Update: <Stage> (<age>)" ->
+  `Update Referral Stage`
+- `agent.homelight.com/referrals` lists every referral. Rows carry
+  `data-test="referralsList-row"` with `referralsList-rowClientName`,
+  `referralsList-rowStage`, `referralsList-rowAssignedTo`,
+  `referralsList-rowCreatedAt`, and a per-card `referralsList-card-<agentLeadId>`.
+
+**The stage vocabulary**, from the filter panel's own options
+(`referralsList-filterOption-<key>`):
+
+| Label | key |
+| --- | --- |
+| New | `introduced` |
+| Left Voicemail | `agent_left_vm` |
+| Connected | `connected` |
+| Meeting Scheduled | `meeting_scheduled` |
+| Met With Client | `met_in_person` |
+| Coming Soon | `coming_soon` |
+| Listed | `listing` |
+| Making Offer | `making_offer` |
+| In Escrow | `in_escrow` |
+| Offer Accepted | `offer_accepted` |
+| Failed | `failed` |
+| Closed | `closed` |
+
+That ordering is what a forward-only stage guard has to respect: never move a
+referral backwards, and never off `closed` or `failed`.
+
+**How navigation works, and the trap in it**
+
+Rows are `<a>` elements with **no href**; the SPA navigates on click. Clicking a
+client name lands on `agent.homelight.com/referrals/page/1?referralId=<leadId>`
+and opens a detail drawer. The `referralId` is the same `lead_id` carried in the
+row's "Request cash offer" link.
+
+Navigating DIRECTLY to that `?referralId=` url does NOT open the drawer: it is
+client-side state, so the flow has to click. And the drawer mounts
+asynchronously, so a read taken right after the click is a race. It appeared in
+one probe's control list and was absent from the next probe's markup, from the
+identical click. Use the probe's `--expect` flag (added for exactly this) to
+hold until the drawer is on the page.
+
+**What is NOT there, which blocks the stage write**
+
+Both routes, clicking a row and clicking the dashboard's
+`Update Referral Stage`, open the SAME **read-only** panel:
+
+```
+<Name> / Role / Property Address / Price / Client timeframe
+Date Received / Last Updated / Stage: <value> / [Done]
+```
+
+No `<select>`, no stage buttons, no editable control. So the update surface is
+one interaction further in than the panel, and it has not been found yet. Next
+step: click the panel's Stage value itself (and then `Done`) with `--expect` on
+a stage option label, since that is the only unexplored affordance on the panel.
+Do not author a `browse_action` against a guessed selector: this account has
+been bitten by that twice (`debug/update-amy-aiflow-re-update-actions.ts`, and
+the Aug 16 claim click that reported success and changed nothing).
