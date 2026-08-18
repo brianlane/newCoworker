@@ -55,17 +55,21 @@ export const LOGIN_SETTLE_MS = Number(process.env.AIFLOW_LOGIN_SETTLE_MS ?? 750)
 
 export const USERNAME_SELECTORS = [
   'input[type="email"]',
-  // Before the name/id guesses: a placeholder is often the only handle on a
-  // field that ships with none of them (HomeLight's email box has no name, no
-  // id and no autocomplete).
-  'input[placeholder*="email" i]',
   'input[autocomplete="email"]',
   'input[autocomplete="username"]',
   'input[name*="email" i]',
   'input[name*="login" i]',
   'input[name*="user" i]',
   'input[id*="email" i]',
-  'input[id*="user" i]'
+  'input[id*="user" i]',
+  // LAST RESORT, and the position is the point. A placeholder is the only
+  // handle on a field that ships with no type, name, id or autocomplete
+  // (HomeLight's email box), but it is also the weakest signal on the list: a
+  // newsletter or search box whose placeholder mentions email would otherwise
+  // outrank a real username field and receive the typed credentials.
+  // `firstSelector` returns the FIRST match, so ordering is the whole guard.
+  // Kept last in EMAIL_FIRST_SELECTORS for the same reason.
+  'input[placeholder*="email" i]'
 ];
 
 export const PASSWORD_SELECTORS = [

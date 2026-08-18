@@ -800,3 +800,53 @@ describe("selector lists cover markup that carries no useful attributes", () => 
     expect(await looksLikeLogin(page, undefined)).toBe(false);
   });
 });
+
+/**
+ * Ordering of the placeholder match (Bugbot, medium).
+ *
+ * `firstSelector` returns the FIRST candidate that matches, so position IS the
+ * guard. `input[placeholder*="email" i]` is the weakest signal on either list:
+ * it exists only because HomeLight's email box ships with no type, name, id or
+ * autocomplete. Placed early, a newsletter or search box whose placeholder
+ * mentions email would outrank a real username field on a genuine login page
+ * and receive the tenant's stored credentials.
+ */
+describe("the placeholder match is a last resort on both lists", () => {
+  it("sits last in USERNAME_SELECTORS", () => {
+    expect(USERNAME_SELECTORS.at(-1)).toBe('input[placeholder*="email" i]');
+  });
+
+  it("sits last in EMAIL_FIRST_SELECTORS", () => {
+    expect(EMAIL_FIRST_SELECTORS.at(-1)).toBe('input[placeholder*="email" i]');
+  });
+
+  it("loses to every stronger signal on the username list", () => {
+    const placeholderAt = USERNAME_SELECTORS.indexOf('input[placeholder*="email" i]');
+    for (const stronger of [
+      'input[type="email"]',
+      'input[autocomplete="email"]',
+      'input[autocomplete="username"]',
+      'input[name*="email" i]',
+      'input[name*="user" i]',
+      'input[id*="email" i]'
+    ]) {
+      expect(USERNAME_SELECTORS.indexOf(stronger)).toBeLessThan(placeholderAt);
+    }
+  });
+
+  it("gives a real username field the credentials when both are present", async () => {
+    // A login page that also carries a newsletter box in its footer.
+    const page = stubPage({
+      'input[name*="user" i]': { count: 1 },
+      'input[placeholder*="email" i]': { count: 1 },
+      'input[type="password"]': { count: 1 },
+      'button[type="submit"]': { count: 1 }
+    });
+
+    const diag = await performLogin(page, stubCreds(), undefined);
+
+    expect(diag.selectors.user).toBe('input[name*="user" i]');
+    const filled = page.calls.filled.map((f) => f.selector);
+    expect(filled).not.toContain('input[placeholder*="email" i]');
+  });
+});
