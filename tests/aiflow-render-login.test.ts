@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   ADVANCE_SELECTORS,
@@ -51,7 +52,7 @@ function stubPage(
   opts: {
     /** What `page.url()` returns. */
     url?: string;
-    /** What `document.body.innerText` returns. */
+    /** What the page's title + h1/h2/h3 text evaluates to. */
     text?: string;
     /**
      * Clicking this selector replaces the whole script with `then`, modelling
@@ -590,5 +591,117 @@ describe("waitForPasswordField", () => {
   it("returns null rather than hanging when the step never arrives", async () => {
     const page = stubPage({ 'input[type="password"]': { count: 0 } });
     expect(await waitForPasswordField(page, undefined, 0)).toBeNull();
+  });
+});
+
+/**
+ * The wording gate, tightened after Bugbot (high severity, twice).
+ *
+ * 1. `LOGIN_HINT_RE` had no word boundaries, so "signin" matched inside
+ *    "signing" and "designing" and "log in" matched inside "blog in".
+ * 2. It scanned 4000 characters of `document.body.innerText`, so a "Sign In"
+ *    link in a site header satisfied it on any ordinary page.
+ *
+ * Together those defeated the four-gate protection: a newsletter signup or a
+ * guest checkout has an email box and a Continue button, and would then have
+ * had the tenant's stored username typed into it and the button clicked.
+ */
+describe("LOGIN_HINT_RE word boundaries", () => {
+  const matches = ["Sign in with your email", "Sign In", "/client/sign-in", "/users/sign_in", "/users/login?email=x", "Log in to continue"];
+  const rejects = ["signing", "designing", "Redesigning our site", "blog in", "logging in", "Sign out", "Log out", "signature"];
+
+  for (const t of matches) {
+    it(`matches ${JSON.stringify(t)}`, () => expect(LOGIN_HINT_RE.test(t)).toBe(true));
+  }
+  for (const t of rejects) {
+    it(`rejects ${JSON.stringify(t)}`, () => expect(LOGIN_HINT_RE.test(t)).toBe(false));
+  }
+});
+
+describe("looksLikeLoginPage reads headlines, not body prose", () => {
+  it("asks for the title and headings, never document.body.innerText", async () => {
+    // The distinction is the fix: a "Sign In" link in a header lives in body
+    // text and must not count; a page whose own headline says it is asking you
+    // to sign in does.
+    let script = "";
+    const page = {
+      url: () => "https://x.example.com/products",
+      evaluate: async (fn: () => string) => {
+        script = String(fn);
+        return "";
+      }
+    };
+    await looksLikeLoginPage(page);
+    expect(script).toContain("document.title");
+    expect(script).toContain("h1, h2, h3");
+    expect(script).not.toContain("innerText");
+  });
+
+  it("refuses a shop page whose only sign-in wording is a header link", async () => {
+    const page = stubPage(
+      {
+        'input[type="email"]': { count: 1 },
+        'input[type="password"]': { count: 0 },
+        'button:has-text("Continue")': { count: 1 }
+      },
+      // Headline is the checkout, not a login. The header's "Sign In" link is
+      // body text and no longer reachable by this gate.
+      { url: "https://shop.example.com/checkout", text: "Checkout | Enter your email" }
+    );
+    expect(await looksLikeLogin(page, undefined)).toBe(false);
+  });
+
+  it("accepts HomeLight, whose headline is exactly the ask", async () => {
+    expect(await looksLikeLoginPage(stubPage({}, { url: "https://x/", text: "Sign in with your email" }))).toBe(true);
+  });
+});
+
+/**
+ * The caller's half of the stalled-advance fix (Bugbot, high severity).
+ *
+ * Making `performLogin` RETURN instead of throw removed a permanent
+ * `auth_config_error`, and on its own that reintroduced the very bug this work
+ * exists to close. `server.mjs` decided "did the login work?" by re-navigating
+ * and asking `looksLikeLogin` again. A logged-out portal does not reliably
+ * answer yes: HomeLight redirects to the `/referrals` marketing funnel, which
+ * has no login form at all. So a stalled advance would have read as success
+ * and the funnel would have gone to the extractor.
+ *
+ * `server.mjs` boots Express at import time, so it cannot be driven here. These
+ * assert on its source instead, the same approach
+ * `aiflow-render-dockerfile-copies-imports.test.ts` uses for the same reason.
+ */
+describe("server.mjs fails a stalled advance without asking the page", () => {
+  const source = readFileSync(new URL("../vps/aiflow-render/server.mjs", import.meta.url), "utf8");
+
+  it("treats passwordStepReached === false as a failure outright", () => {
+    expect(source).toContain("passwordStepReached === false");
+  });
+
+  it("short-circuits BEFORE the looksLikeLogin re-check, not after it", () => {
+    // Order matters: `||` with the flag first means the re-check never gets to
+    // overrule a login we know did not happen.
+    expect(source).toMatch(/stalledAdvance\s*\|\|\s*\(await looksLikeLogin/);
+  });
+
+  it("reports it as login_failed, which carries a screenshot and the page text", () => {
+    // Not auth_config_error: a stalled Continue is a login failure with
+    // evidence, not a missing form.
+    const guardAt = source.indexOf("const stalledAdvance");
+    expect(guardAt).toBeGreaterThan(-1);
+    const after = source.slice(guardAt, guardAt + 2500);
+    expect(after).toContain('error: "login_failed"');
+    expect(after).toContain("screenshotBase64");
+    expect(after).toContain("pageTextExcerpt");
+  });
+
+  it("names the advance and the step in the detail line", () => {
+    expect(source).toContain("passwordStep=");
+    expect(source).toContain("advance=");
+  });
+
+  it("drops the session, so the next call cannot reuse a logged-out context", () => {
+    const guardAt = source.indexOf("const stalledAdvance");
+    expect(source.slice(guardAt, guardAt + 200)).toContain("poisoned = true");
   });
 });

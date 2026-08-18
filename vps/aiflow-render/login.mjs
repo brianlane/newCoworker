@@ -147,8 +147,16 @@ export const EMAIL_FIRST_SELECTORS = [
   'input[autocomplete="username"]'
 ];
 
-/** Words that only appear on a page asking you to authenticate. */
-export const LOGIN_HINT_RE = /sign[\s._-]?in|log[\s._-]?in/i;
+/**
+ * Words that only appear on a page asking you to authenticate.
+ *
+ * The word boundaries are load-bearing. Without them "signin" matches inside
+ * "signing" and "designing", and "log in" matches inside "blog in", so any
+ * page carrying that prose would satisfy the wording gate. `\b` after "in"
+ * rejects all three while still accepting "sign-in", "sign_in", "login" and
+ * "Sign In".
+ */
+export const LOGIN_HINT_RE = /\b(?:sign|log)[\s._-]?in\b/i;
 
 /** First selector in `candidates` that matches an element on the page, else null. */
 export async function firstSelector(page, candidates) {
@@ -173,11 +181,20 @@ export async function looksLikeLoginPage(page) {
       return true;
     }
   } catch {
-    /* fall through to the text check */
+    /* fall through to the headline check */
   }
   try {
-    const text = await page.evaluate?.(() => document.body?.innerText ?? "");
-    return LOGIN_HINT_RE.test(String(text ?? "").slice(0, 4000));
+    // Deliberately the TITLE and HEADINGS, not `document.body.innerText`.
+    // Scanning body prose means a "Sign In" link in a site header, or a footer,
+    // satisfies the gate on any ordinary page that happens to carry an email
+    // box and a Continue button: a newsletter signup or a guest checkout. A
+    // page whose own headline says "Sign in with your email" (HomeLight's does)
+    // is actually asking you to authenticate.
+    const headline = await page.evaluate?.(() =>
+      [document.title ?? "", ...Array.from(document.querySelectorAll("h1, h2, h3"), (h) => h.textContent ?? "")]
+        .join(" \n ")
+    );
+    return LOGIN_HINT_RE.test(String(headline ?? "").slice(0, 2000));
   } catch {
     return false;
   }
