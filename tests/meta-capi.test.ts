@@ -225,3 +225,36 @@ describe("sha256Hex", () => {
     expect(sha256Hex("abc")).toBe(createHash("sha256").update("abc").digest("hex"));
   });
 });
+
+describe("Conversions API error codes", () => {
+  it("carries Meta's code through, so a dead token is visible on this path too", async () => {
+    // capi.ts hand-rolls its own fetch instead of using graphRequest, so it
+    // has to parse the codes itself. Without this the whole CAPI path was
+    // blind to 190 and just burned all ten upload attempts per event.
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({ error: { message: "Session expired", code: 190, error_subcode: 463 } }),
+      json: async () => ({})
+    } as never);
+    const err = await sendConversionLeadBody("ds-1", "tok", { data: [] } as never).catch(
+      (e) => e as MetaApiError
+    );
+    expect((err as MetaApiError).metaCode).toBe(190);
+    expect((err as MetaApiError).metaSubcode).toBe(463);
+  });
+
+  it("leaves the codes undefined on a non-JSON error body", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      text: async () => "<html>bad gateway</html>",
+      json: async () => ({})
+    } as never);
+    const err = await sendConversionLeadBody("ds-1", "tok", { data: [] } as never).catch(
+      (e) => e as MetaApiError
+    );
+    expect((err as MetaApiError).metaCode).toBeUndefined();
+  });
+});

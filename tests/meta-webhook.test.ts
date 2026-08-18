@@ -32,9 +32,16 @@ vi.mock("@/lib/db/whatsapp-connections", () => ({
 }));
 
 const fetchLeadMock = vi.fn();
-vi.mock("@/lib/meta/client", () => ({
-  fetchLead: (leadgenId: string, pageToken: string) =>
-    fetchLeadMock(leadgenId, pageToken)
+vi.mock("@/lib/meta/client", async (importOriginal) => ({
+  // Spread the real module: the dead-token classifier (isMetaTokenDead) is
+  // pure and must behave for real here, or a 190 in a lead fetch silently
+  // stops escalating.
+  ...(await importOriginal<typeof import("@/lib/meta/client")>()),
+  fetchLead: (leadgenId: string, pageToken: string) => fetchLeadMock(leadgenId, pageToken)
+}));
+vi.mock("@/lib/meta/token-health", () => ({
+  reportMetaCallFailure: vi.fn(async () => false),
+  clearMetaTokenInvalid: vi.fn(async () => undefined)
 }));
 
 const upsertMessengerConversationMock = vi.fn();
@@ -1041,5 +1048,35 @@ describe("Facebook Page comments (object page, field feed)", () => {
     }))!;
     expect(events.leadgen).toEqual([{ pageId: PAGE, leadgenId: "lg-1" }]);
     expect(events.comments).toHaveLength(1);
+  });
+});
+
+describe("a dead Meta token during a lead fetch", () => {
+  it("escalates, because Meta 200s and the lead is gone for good", async () => {
+    // There is no dead-letter row and Meta never redelivers, so this is the
+    // costliest place a silent token failure can happen.
+    const { reportMetaCallFailure, clearMetaTokenInvalid } = await import(
+      "@/lib/meta/token-health"
+    );
+    vi.mocked(reportMetaCallFailure).mockClear();
+    getActiveMetaConnectionByPageIdMock.mockResolvedValue({
+      business_id: BIZ,
+      pageToken: "tok"
+    });
+    fetchLeadMock.mockRejectedValue(new Error("Session has expired"));
+
+    expect(await processMetaLeadgenEvent({ pageId: "p1", leadgenId: "lg-1" })).toBe(false);
+    expect(vi.mocked(reportMetaCallFailure)).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(Error),
+      { surface: "lead_fetch" }
+    );
+
+    // And a successful fetch heals the flag without waiting for the owner.
+    vi.mocked(clearMetaTokenInvalid).mockClear();
+    fetchLeadMock.mockResolvedValue({ id: "lg-1", fields: {}, formId: null, adId: null, createdTime: null });
+    processWebhookFlowEventMock.mockResolvedValue({ enqueued: 1, flowsMatched: 1 });
+    await processMetaLeadgenEvent({ pageId: "p1", leadgenId: "lg-1" });
+    expect(vi.mocked(clearMetaTokenInvalid)).toHaveBeenCalledWith(BIZ);
   });
 });

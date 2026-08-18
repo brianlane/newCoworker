@@ -82,6 +82,23 @@ export const META_ERROR_CODE_UNKNOWN_OBJECT = 100;
 /** Meta's error code for an expired/invalidated access token. */
 export const META_ERROR_CODE_BAD_TOKEN = 190;
 
+/**
+ * True when Meta refused the call because the TOKEN is dead, rather than
+ * because of anything about the request.
+ *
+ * This is the one signal that means "the tenant must reconnect": a password
+ * change, a lost Page admin role, or the app being removed all surface here
+ * and nowhere else. Every other failure is about the call.
+ *
+ * Deliberately narrow. It matches ONLY code 190, never a 4xx in general and
+ * never a timeout, because acting on it tells a paying customer their
+ * integration is broken and asks them to redo their OAuth. A missed 190 costs
+ * one more failed call; a false one costs their trust.
+ */
+export function isMetaTokenDead(err: unknown): boolean {
+  return err instanceof MetaApiError && err.metaCode === META_ERROR_CODE_BAD_TOKEN;
+}
+
 export function getMetaAppId(): string {
   const id = process.env.META_APP_ID;
   if (!id) throw new Error("META_APP_ID is not configured");

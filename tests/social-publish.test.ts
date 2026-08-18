@@ -111,6 +111,7 @@ function connection(overrides: Partial<MetaConnectionRow> = {}): MetaConnectionR
     page_name: "Truly Insurance",
     account_name: "Owner",
     meta_user_id: null,
+    token_invalid_at: null,
     instagram_account_id: "ig-1",
     instagram_username: "trulyinsurance",
     dataset_id: null,

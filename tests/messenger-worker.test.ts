@@ -6,6 +6,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/meta/token-health", () => ({
+  reportMetaCallFailure: vi.fn(async () => false),
+  clearMetaTokenInvalid: vi.fn(async () => undefined)
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -457,5 +461,37 @@ describe("processMessengerJobs", () => {
       CONV_ID,
       NOW.toISOString()
     );
+  });
+});
+
+describe("a dead Meta token during a send", () => {
+  it("is TERMINAL, not a three-attempt transient", async () => {
+    // Retrying cannot mint a credential, so burning the retry budget just
+    // delays the job's death and hides the real cause from the owner.
+    const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
+    vi.mocked(reportMetaCallFailure).mockResolvedValue(true);
+
+    const deps = makeDeps({
+      claimJob: vi.fn().mockResolvedValueOnce(job({ attempts: 0 })).mockResolvedValue(null),
+      send: vi.fn(async () => {
+        throw new Error("Session has expired");
+      })
+    });
+    await processMessengerJobs({}, deps);
+
+    expect(vi.mocked(reportMetaCallFailure)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Error),
+      { surface: "messenger_send" }
+    );
+    expect(deps.fail).toHaveBeenCalledWith(
+      "job-1",
+      "meta_token_expired",
+      expect.any(String),
+      expect.any(String)
+    );
+    // First attempt, and it did NOT requeue.
+    expect(deps.requeue).not.toHaveBeenCalled();
+    vi.mocked(reportMetaCallFailure).mockResolvedValue(false);
   });
 });

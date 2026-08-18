@@ -27,6 +27,7 @@ import {
   sendInstagramPrivateReply
 } from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
+import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,6 +132,10 @@ export async function POST(request: Request): Promise<Response> {
         metaSubcode: meta.metaSubcode,
         message: meta.message
       });
+      // A dead token is not a per-comment refusal: every Meta call for this
+      // tenant is failing, so it escalates to the owner instead of being
+      // reported as "Instagram refused this comment".
+      await reportMetaCallFailure(body.businessId, err, { surface: "comment_reply" });
       const retryable =
         meta.code !== "request_failed" ||
         (meta.status ?? 0) >= 500 ||

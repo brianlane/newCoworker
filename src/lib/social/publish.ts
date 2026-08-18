@@ -44,6 +44,7 @@ import {
 } from "@/lib/meta/client";
 import { GENERATED_IMAGES_BUCKET, normalizeImageRef } from "@/lib/image-tools/handlers";
 import { logger } from "@/lib/logger";
+import { reportMetaCallFailure } from "@/lib/meta/token-health";
 import {
   listDueScheduledPosts,
   listPublishedPostsToRecheck,

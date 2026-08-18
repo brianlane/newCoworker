@@ -45,6 +45,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
 import { messengerAllowedForTier } from "@/lib/messenger/tier-gate";
 import { logger } from "@/lib/logger";
+import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 export const MESSENGER_WORKER_ID = "platform-messenger-worker";
 
@@ -296,6 +297,13 @@ export async function processMessengerJobs(
       // nothing to answer (e.g. the owner's manual reply is the newest
       // turn), no_key means the platform is misconfigured — retrying
       // cannot change either.
+      // A dead Meta token is terminal for every job on this tenant, not a
+      // transient worth three attempts: retrying cannot mint a credential.
+      // It also escalates to the owner, which no other failure here does.
+      if (await reportMetaCallFailure(job.business_id, err, { surface: "messenger_send" })) {
+        await failJob("meta_token_expired", detail);
+        continue;
+      }
       if (detail === "messenger_engine_no_input" || detail === "messenger_engine_no_key") {
         await failJob(detail === "messenger_engine_no_input" ? "no_input" : "no_api_key", detail);
         continue;
