@@ -22,6 +22,7 @@ import {
   deleteWhatsAppConnection,
   isWabaClaimedByOtherBusiness,
   getActiveWhatsAppConnectionByPhoneNumberId,
+  getWhatsAppConnectionByWabaId,
   getPublicWhatsAppConnection,
   getWhatsAppConnection,
   getWhatsAppPhoneNumberClaim,
@@ -134,6 +135,25 @@ describe("reads", () => {
     await expect(
       getActiveWhatsAppConnectionByPhoneNumberId("pn-9", makeDb(c3))
     ).rejects.toThrow(/route down/);
+  });
+
+  it("routes template status webhooks by waba_id, filtered to active", async () => {
+    // Template status changes name the WABA, not the phone number, so the
+    // phone-number lookup cannot serve them.
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: STORED, error: null });
+    const row = await getWhatsAppConnectionByWabaId("waba-9", makeDb(c));
+    expect(row?.accessToken).toBe("business-token");
+    expect(c.eq).toHaveBeenCalledWith("waba_id", "waba-9");
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+
+    const c2 = chain();
+    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getWhatsAppConnectionByWabaId("waba-9", makeDb(c2))).toBeNull();
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: null, error: { message: "waba down" } });
+    await expect(getWhatsAppConnectionByWabaId("waba-9", makeDb(c3))).rejects.toThrow(/waba down/);
   });
 
   it("isWabaClaimedByOtherBusiness detects sharing / exclusivity / errors", async () => {
@@ -280,6 +300,7 @@ describe("default service client", () => {
     expect(await getPublicWhatsAppConnection(BIZ)).toBeNull();
     expect(await getActiveWhatsAppConnectionByPhoneNumberId("pn-9")).toBeNull();
     expect(await getWhatsAppPhoneNumberClaim("pn-9")).toBeNull();
+    expect(await getWhatsAppConnectionByWabaId("waba-9")).toBeNull();
     await saveWhatsAppConnection(
       {
         businessId: BIZ,

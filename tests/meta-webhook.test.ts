@@ -39,6 +39,11 @@ vi.mock("@/lib/meta/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/meta/client")>()),
   fetchLead: (leadgenId: string, pageToken: string) => fetchLeadMock(leadgenId, pageToken)
 }));
+vi.mock("@/lib/meta/webhook-extras", () => ({
+  processMetaEchoEvent: vi.fn(async () => false),
+  processMetaReferralEvent: vi.fn(async () => false),
+  processMetaTemplateStatusEvent: vi.fn(async () => false)
+}));
 vi.mock("@/lib/meta/token-health", () => ({
   reportMetaCallFailure: vi.fn(async () => false),
   clearMetaTokenInvalid: vi.fn(async () => undefined)
@@ -77,7 +82,7 @@ describe("instagram_comment source parity", () => {
   it("the starter template's trigger matches the source this webhook emits", () => {
     // templates.ts duplicates the string rather than importing it (that module
     // reaches client bundles; this one is server-only). Drift here would mean
-    // comments arrive and the starter silently never matches — the exact
+    // comments arrive and the starter silently never matches: the exact
     // failure mode of shipping webhook plumbing with no consumer.
     expect(INSTAGRAM_COMMENT_SOURCE).toBe(INSTAGRAM_COMMENT_FLOW_SOURCE);
   });
@@ -106,17 +111,22 @@ describe("parseMetaWebhookBody", () => {
   });
 
   it("returns empty events for unknown objects and non-leadgen fields", () => {
-    expect(parseMetaWebhookBody({ object: "permissions", entry: [] })).toEqual({
+    const empty = {
       leadgen: [],
       messages: [],
-      comments: []
-    });
+      comments: [],
+      echoes: [],
+      referrals: [],
+      templateStatuses: []
+    };
+    expect(parseMetaWebhookBody({ object: "permissions", entry: [] })).toEqual(empty);
+    // A feed change with an empty value is not a comment: no item, no verb.
     expect(
       parseMetaWebhookBody({
         object: "page",
         entry: [{ id: "p1", changes: [{ field: "feed", value: {} }] }]
       })
-    ).toEqual({ leadgen: [], messages: [], comments: [] });
+    ).toEqual(empty);
   });
 
   it("extracts leadgen events, falling back to the entry id for the page", () => {
@@ -313,7 +323,7 @@ describe("parseMetaWebhookBody", () => {
                 media: { id: "m-1" }
               }
             },
-            // The account replying under its own post — never a flow event.
+            // The account replying under its own post: never a flow event.
             { field: "comments", value: { id: "c-2", from: { id: "ig-1" } } },
             // No comment id → skipped.
             { field: "comments", value: { text: "hi" } },
@@ -752,6 +762,9 @@ describe("processMetaWebhookEvents", () => {
     insertMessengerJobMock.mockResolvedValue({ id: "job-9" });
 
     const result = await processMetaWebhookEvents({
+      echoes: [],
+      referrals: [],
+      templateStatuses: [],
       leadgen: [
         { pageId: "p1", leadgenId: "lg-1" },
         { pageId: "p2", leadgenId: "lg-2" }
@@ -787,6 +800,9 @@ describe("processMetaWebhookEvents", () => {
   it("counts rate-limited message events separately (route flips to 429)", async () => {
     rateLimitMock.mockReturnValue({ success: false });
     const result = await processMetaWebhookEvents({
+      echoes: [],
+      referrals: [],
+      templateStatuses: [],
       leadgen: [],
       comments: [],
       messages: [
@@ -1078,5 +1094,393 @@ describe("a dead Meta token during a lead fetch", () => {
     processWebhookFlowEventMock.mockResolvedValue({ enqueued: 1, flowsMatched: 1 });
     await processMetaLeadgenEvent({ pageId: "p1", leadgenId: "lg-1" });
     expect(vi.mocked(clearMetaTokenInvalid)).toHaveBeenCalledWith(BIZ);
+  });
+});
+
+describe("Page-side echoes: a colleague in Meta's inbox", () => {
+  const PAGE = "p1";
+  const OUR_APP = "1554839372962421";
+
+  function echo(message: Record<string, unknown>) {
+    return parseMetaWebhookBody({
+      object: "page",
+      entry: [
+        {
+          id: PAGE,
+          messaging: [{ sender: { id: PAGE }, recipient: { id: "psid-1" }, message }]
+        }
+      ]
+    });
+  }
+
+  it("is parsed even though its sender IS the page", async () => {
+    // The sender-is-page guard exists to stop our sends looping back as
+    // INBOUND. Echoes have to be handled before it or they never arrive.
+    const events = (await echo({
+      is_echo: true,
+      mid: "m-echo",
+      text: "I can help with that",
+      app_id: 26390203743090
+    }))!;
+    expect(events.echoes).toEqual([
+      {
+        platform: "messenger",
+        accountId: PAGE,
+        recipientId: "psid-1",
+        mid: "m-echo",
+        text: "I can help with that",
+        appId: "26390203743090"
+      }
+    ]);
+    // And it is NOT also treated as an inbound customer message.
+    expect(events.messages).toEqual([]);
+  });
+
+  it("carries our own app id through, for the handler to drop", async () => {
+    const events = (await echo({
+      is_echo: true,
+      mid: "m-ours",
+      text: "hi",
+      app_id: OUR_APP
+    }))!;
+    expect(events.echoes[0].appId).toBe(OUR_APP);
+  });
+
+  it("drops an echo with no mid or no recipient", async () => {
+    expect((await echo({ is_echo: true, text: "x", app_id: 1 }))!.echoes).toEqual([]);
+    const noRecipient = (await parseMetaWebhookBody({
+      object: "page",
+      entry: [{ id: PAGE, messaging: [{ sender: { id: PAGE }, message: { is_echo: true, mid: "m" } }] }]
+    }))!;
+    expect(noRecipient.echoes).toEqual([]);
+  });
+
+  it("records an attachment-only echo with an empty text", async () => {
+    const events = (await echo({ is_echo: true, mid: "m-att", app_id: 26390203743090 }))!;
+    expect(events.echoes[0].text).toBe("");
+  });
+
+  it("reports an absent app id as empty, which the handler reads as not-ours", async () => {
+    const events = (await echo({ is_echo: true, mid: "m-noapp", text: "hi" }))!;
+    expect(events.echoes[0].appId).toBe("");
+  });
+});
+
+describe("Click-to-Messenger referrals", () => {
+  const PAGE = "p1";
+
+  function messagingItem(item: Record<string, unknown>) {
+    return parseMetaWebhookBody({
+      object: "page",
+      entry: [{ id: PAGE, messaging: [{ sender: { id: "psid-1" }, recipient: { id: PAGE }, ...item }] }]
+    });
+  }
+
+  const REF = {
+    ref: "SPRING_SALE",
+    source: "ADS",
+    type: "OPEN_THREAD",
+    ad_id: "120200000000000",
+    ads_context_data: { ad_title: "Spring roof special" }
+  };
+
+  it("reads a referral riding ALONE (existing thread reopened from an ad)", async () => {
+    expect((await messagingItem({ referral: REF }))!.referrals).toEqual([
+      {
+        platform: "messenger",
+        accountId: PAGE,
+        senderId: "psid-1",
+        ref: "SPRING_SALE",
+        source: "ADS",
+        type: "OPEN_THREAD",
+        adId: "120200000000000",
+        adTitle: "Spring roof special"
+      }
+    ]);
+  });
+
+  it("reads a referral nested on the FIRST MESSAGE of a new thread", async () => {
+    // The most common entry path, and the one that would have been missed by
+    // reading only the standalone form.
+    const events = (await messagingItem({
+      message: { mid: "m-1", text: "how much?", referral: REF }
+    }))!;
+    expect(events.referrals).toHaveLength(1);
+    // The message itself still lands as an ordinary inbound turn.
+    expect(events.messages).toHaveLength(1);
+  });
+
+  it("reads a referral nested on a Get Started POSTBACK", async () => {
+    const events = (await messagingItem({
+      postback: { mid: "m-2", title: "Get Started", payload: "GET_STARTED", referral: REF }
+    }))!;
+    expect(events.referrals).toHaveLength(1);
+  });
+
+  it("tolerates a referral with only a ref code and no ad", async () => {
+    const events = (await messagingItem({ referral: { ref: "flyer-qr", source: "SHORTLINK" } }))!;
+    expect(events.referrals[0]).toMatchObject({
+      ref: "flyer-qr",
+      source: "SHORTLINK",
+      type: "",
+      adId: "",
+      adTitle: ""
+    });
+  });
+
+  it("tolerates a referral with every field absent but still emits it", async () => {
+    // Covers each field's empty-string fallback: Meta omits what it has not
+    // got, and a half-populated referral is still attribution.
+    const events = (await messagingItem({ referral: { ad_id: 12345 } }))!;
+    expect(events.referrals[0]).toEqual({
+      platform: "messenger",
+      accountId: PAGE,
+      senderId: "psid-1",
+      ref: "",
+      source: "",
+      type: "",
+      adId: "12345",
+      adTitle: ""
+    });
+  });
+
+  it("emits nothing when there is no referral at all", async () => {
+    expect((await messagingItem({ message: { mid: "m", text: "hi" } }))!.referrals).toEqual([]);
+  });
+});
+
+describe("WhatsApp template status updates", () => {
+  function statusChange(value: Record<string, unknown>) {
+    return parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [{ id: "waba-1", changes: [{ field: "message_template_status_update", value }] }]
+    });
+  }
+
+  it("is parsed instead of dropped by the messages-only filter", async () => {
+    // Dropped until now, which is why a template PAUSED after approval kept
+    // being sent against: deliverWhatsApp gates on a stored status that
+    // nothing refreshed outside a manual reconnect.
+    expect(
+      (await statusChange({
+        message_template_name: "nc_contact_followup",
+        message_template_language: "en",
+        event: "PAUSED",
+        reason: "PACING"
+      }))!.templateStatuses
+    ).toEqual([
+      {
+        wabaId: "waba-1",
+        templateName: "nc_contact_followup",
+        language: "en",
+        status: "PAUSED",
+        reason: "PACING"
+      }
+    ]);
+  });
+
+  it("still drops the WABA fields we do not handle", async () => {
+    // The WABA subscription sends every field enabled on the app, so these
+    // arrive whether we want them or not. Handling template statuses must not
+    // accidentally start acting on quality or account updates.
+    for (const field of [
+      "phone_number_quality_update",
+      "account_update",
+      "account_alerts",
+      "template_category_update"
+    ]) {
+      const events = (await parseMetaWebhookBody({
+        object: "whatsapp_business_account",
+        entry: [{ id: "waba-1", changes: [{ field, value: { event: "FLAGGED" } }] }]
+      }))!;
+      expect(events.templateStatuses).toEqual([]);
+      expect(events.messages).toEqual([]);
+    }
+  });
+
+  it("tolerates an entry with no id", async () => {
+    const events = (await parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            { field: "message_template_status_update", value: { message_template_name: "t", event: "PAUSED" } }
+          ]
+        }
+      ]
+    }))!;
+    expect(events.templateStatuses[0].wabaId).toBe("");
+  });
+
+  it("drops a change whose fields are the wrong type", async () => {
+    // The outer schema guarantees an object, so the inner parse only fails on
+    // a type mismatch inside it.
+    expect(
+      (await statusChange({ message_template_name: 5, event: "PAUSED" }))!.templateStatuses
+    ).toEqual([]);
+  });
+
+  it("defaults the language and reason Meta omitted", async () => {
+    expect(
+      (await statusChange({ message_template_name: "t", event: "APPROVED" }))!.templateStatuses[0]
+    ).toEqual({
+      wabaId: "waba-1",
+      templateName: "t",
+      language: "",
+      status: "APPROVED",
+      reason: ""
+    });
+  });
+
+  it("drops a change with no template name or no status", async () => {
+    expect((await statusChange({ event: "PAUSED" }))!.templateStatuses).toEqual([]);
+    expect(
+      (await statusChange({ message_template_name: "nc_owner_alert" }))!.templateStatuses
+    ).toEqual([]);
+  });
+
+  it("still parses inbound WhatsApp messages on the same object", async () => {
+    const events = (await parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [
+            { field: "message_template_status_update", value: { message_template_name: "t", event: "APPROVED" } },
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "pn-1" },
+                messages: [{ id: "wamid.1", from: "15551230000", type: "text", text: { body: "hi" } }]
+              }
+            }
+          ]
+        }
+      ]
+    }))!;
+    expect(events.templateStatuses).toHaveLength(1);
+    expect(events.messages).toHaveLength(1);
+  });
+});
+
+describe("Instagram live_comments", () => {
+  it("is parsed by the same path as an ordinary comment", async () => {
+    // We shipped the Live private-reply half (the client documents the
+    // broadcast window) and never subscribed the trigger half.
+    const events = (await parseMetaWebhookBody({
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-1",
+          changes: [
+            {
+              field: "live_comments",
+              value: {
+                id: "lc-1",
+                text: "price?",
+                from: { id: "777", username: "viewer" },
+                media: { id: "live-9" }
+              }
+            }
+          ]
+        }
+      ]
+    }))!;
+    expect(events.comments).toEqual([
+      {
+        platform: "instagram",
+        accountId: "ig-1",
+        commentId: "lc-1",
+        mediaId: "live-9",
+        text: "price?",
+        fromId: "777",
+        fromUsername: "viewer"
+      }
+    ]);
+  });
+});
+
+describe("processMetaWebhookEvents: the new families are dispatched", () => {
+  it("routes echoes, referrals, and template statuses, counting each once", async () => {
+    // These three loops are the only thing between a parsed event and the
+    // handler that acts on it, so a missing loop is a silent no-op.
+    const extras = await import("@/lib/meta/webhook-extras");
+    vi.mocked(extras.processMetaEchoEvent).mockResolvedValue(true);
+    vi.mocked(extras.processMetaReferralEvent).mockResolvedValue(true);
+    vi.mocked(extras.processMetaTemplateStatusEvent).mockResolvedValue(true);
+
+    const result = await processMetaWebhookEvents({
+      leadgen: [],
+      messages: [],
+      comments: [],
+      echoes: [
+        {
+          platform: "messenger",
+          accountId: "p1",
+          recipientId: "psid-1",
+          mid: "m",
+          text: "hi",
+          appId: "26390203743090"
+        }
+      ],
+      referrals: [
+        {
+          platform: "messenger",
+          accountId: "p1",
+          senderId: "psid-1",
+          ref: "r",
+          source: "ADS",
+          type: "OPEN_THREAD",
+          adId: "1",
+          adTitle: "t"
+        }
+      ],
+      templateStatuses: [
+        { wabaId: "w1", templateName: "t", language: "en", status: "PAUSED", reason: "" }
+      ]
+    });
+    expect(extras.processMetaEchoEvent).toHaveBeenCalledTimes(1);
+    expect(extras.processMetaReferralEvent).toHaveBeenCalledTimes(1);
+    expect(extras.processMetaTemplateStatusEvent).toHaveBeenCalledTimes(1);
+    expect(result.handled).toBe(3);
+  });
+
+  it("counts only the events a handler actually acted on", async () => {
+    const extras = await import("@/lib/meta/webhook-extras");
+    vi.mocked(extras.processMetaEchoEvent).mockResolvedValue(false);
+    vi.mocked(extras.processMetaReferralEvent).mockResolvedValue(false);
+    vi.mocked(extras.processMetaTemplateStatusEvent).mockResolvedValue(false);
+
+    const result = await processMetaWebhookEvents({
+      leadgen: [],
+      messages: [],
+      comments: [],
+      echoes: [
+        {
+          platform: "messenger",
+          accountId: "p1",
+          recipientId: "psid-1",
+          mid: "m",
+          text: "hi",
+          appId: "x"
+        }
+      ],
+      referrals: [
+        {
+          platform: "messenger",
+          accountId: "p1",
+          senderId: "psid-1",
+          ref: "r",
+          source: "",
+          type: "",
+          adId: "",
+          adTitle: ""
+        }
+      ],
+      templateStatuses: [
+        { wabaId: "w1", templateName: "t", language: "", status: "PAUSED", reason: "" }
+      ]
+    });
+    expect(result.handled).toBe(0);
   });
 });

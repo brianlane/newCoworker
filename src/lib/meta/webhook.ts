@@ -5,18 +5,18 @@
  * verify-and-delegate layer, and everything after signature verification
  * lives here. Three event families arrive on the same callback:
  *
- *   * `entry[].changes[]` with field "leadgen" (object "page") — lead ads.
+ *   * `entry[].changes[]` with field "leadgen" (object "page"): lead ads.
  *     Each becomes a webhook flow event with source "facebook_lead_ads"
  *     and the leadgen id as the idempotency key.
  *   * `entry[].messaging[]` (object "page" = Messenger, object
  *     "instagram" = IG DMs) and `entry[].changes[].value.messages[]`
- *     (object "whatsapp_business_account" = WhatsApp) — conversation
+ *     (object "whatsapp_business_account" = WhatsApp): conversation
  *     messages. Each lands in messenger_conversations/messages (Meta
  *     `mid`/wamid dedupes redeliveries) and enqueues a messenger_jobs
  *     reply job; a NEW conversation also fires a first-contact webhook
  *     flow event (source "facebook_messenger" / "instagram_dm" /
  *     "whatsapp", conversation id as the idempotency key).
- *   * `entry[].changes[]` with field "comments" (object "instagram") —
+ *   * `entry[].changes[]` with field "comments" (object "instagram") ,
  *     comments on the linked IG professional account's posts. Each becomes
  *     a webhook flow event with source "instagram_comment" and the comment
  *     id as the idempotency key, so owners can build keyword-scoped
@@ -42,13 +42,50 @@ import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { rateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 import { clearMetaTokenInvalid, reportMetaCallFailure } from "@/lib/meta/token-health";
+import {
+  processMetaEchoEvent,
+  processMetaReferralEvent,
+  processMetaTemplateStatusEvent
+} from "@/lib/meta/webhook-extras";
 
-/** Serialized payload ceiling — a leadgen notification is tiny. */
+/** Serialized payload ceiling: a leadgen notification is tiny. */
 export const META_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 
 // Real lead volume is a handful a day per page; this absorbs Meta's
 // redelivery bursts while capping a runaway loop.
 const META_WEBHOOK_RATE = { interval: 60 * 1000, maxRequests: 240 };
+
+/**
+ * Meta's referral payload: which ad or link brought the person here.
+ * `ad_id` is the piece that matters for a lead-ads product.
+ */
+const referralSchema = z
+  .object({
+    ref: z.string().optional(),
+    source: z.string().optional(),
+    type: z.string().optional(),
+    ad_id: z.union([z.string(), z.number()]).optional(),
+    ads_context_data: z
+      .object({ ad_title: z.string().optional(), post_id: z.union([z.string(), z.number()]).optional() })
+      .passthrough()
+      .optional()
+  })
+  .passthrough();
+
+/**
+ * WhatsApp template status change (object "whatsapp_business_account", field
+ * "message_template_status_update"). `event` carries the new status:
+ * APPROVED, REJECTED, PAUSED, DISABLED, PENDING_DELETION.
+ */
+const templateStatusValueSchema = z
+  .object({
+    message_template_id: z.union([z.string(), z.number()]).optional(),
+    message_template_name: z.string().optional(),
+    message_template_language: z.string().optional(),
+    event: z.string().optional(),
+    reason: z.string().optional()
+  })
+  .passthrough();
 
 const webhookBodySchema = z.object({
   object: z.string(),
@@ -78,7 +115,10 @@ const webhookBodySchema = z.object({
                 mid: z.string().optional(),
                 text: z.string().optional(),
                 is_echo: z.boolean().optional(),
-                attachments: z.array(z.unknown()).optional()
+                /** Which app sent the echoed message; absent for a human. */
+                app_id: z.union([z.string(), z.number()]).optional(),
+                attachments: z.array(z.unknown()).optional(),
+                referral: referralSchema.optional()
               })
               .passthrough()
               .optional(),
@@ -86,10 +126,20 @@ const webhookBodySchema = z.object({
               .object({
                 mid: z.string().optional(),
                 title: z.string().optional(),
-                payload: z.string().optional()
+                payload: z.string().optional(),
+                referral: referralSchema.optional()
               })
               .passthrough()
-              .optional()
+              .optional(),
+            /**
+             * Click-to-Messenger / ig.me attribution. Arrives THREE ways: on
+             * its own when an existing thread is reopened from an ad, nested
+             * in `message.referral` on the first message of a new thread, and
+             * nested in `postback.referral` when Get Started came from an ad.
+             * Missing any one of them loses the attribution for that entry
+             * path, which is why all three are read.
+             */
+            referral: referralSchema.optional()
           })
         )
         .optional()
@@ -220,17 +270,70 @@ export type MetaMessageEvent = {
   accountId: string;
   /** The lead's page-/IG-scoped user id, or wa_id for WhatsApp. */
   senderId: string;
-  /** Meta message id (wamid for WhatsApp) — the redelivery dedupe key. */
+  /** Meta message id (wamid for WhatsApp): the redelivery dedupe key. */
   mid: string;
   text: string;
   /** Sender profile name when the delivery carried one (WhatsApp does). */
   displayName?: string | null;
 };
 
+/**
+ * A message the PAGE sent that our own system did not: a human replied from
+ * Meta's Page Inbox or the Business Suite app.
+ *
+ * Meta echoes every Page-side send back to us (once subscribed to
+ * `message_echoes`), including our own. Ours are recognizable because we
+ * record the message id Meta hands back; anything else is a person. Recording
+ * theirs as an `owner` turn is all it takes to stop the AI talking over them:
+ * buildMessengerContents already returns null when a model-side row trails the
+ * last user turn, which fails the job as `no_input`.
+ */
+export type MetaEchoEvent = {
+  platform: MessengerPlatform;
+  accountId: string;
+  /** The person the Page replied TO. */
+  recipientId: string;
+  mid: string;
+  text: string;
+  /**
+   * Which app sent it. Always present since Graph v12.0, and a send typed by
+   * a person in Meta's Page Inbox carries Meta's own inbox app id
+   * (META_PAGE_INBOX_APP_ID). Comparing it to OUR app id is what separates
+   * our own reply coming home from a colleague joining the thread, with no
+   * race against recording our outbound message ids.
+   */
+  appId: string;
+};
+
+/** Click-to-Messenger / ig.me attribution for one conversation. */
+export type MetaReferralEvent = {
+  platform: MessengerPlatform;
+  accountId: string;
+  senderId: string;
+  ref: string;
+  source: string;
+  type: string;
+  adId: string;
+  adTitle: string;
+};
+
+/** A WhatsApp template Meta approved, paused, rejected, or disabled. */
+export type MetaTemplateStatusEvent = {
+  wabaId: string;
+  templateName: string;
+  language: string;
+  status: string;
+  reason: string;
+};
+
 export type MetaWebhookEvents = {
   leadgen: MetaLeadgenEvent[];
   messages: MetaMessageEvent[];
   comments: MetaCommentEvent[];
+  /** Page-side sends we did not make: a human took the thread. */
+  echoes: MetaEchoEvent[];
+  referrals: MetaReferralEvent[];
+  templateStatuses: MetaTemplateStatusEvent[];
 };
 
 /** Shown in transcripts for image/audio/file messages we don't ingest. */
@@ -240,18 +343,44 @@ export const MESSENGER_ATTACHMENT_PLACEHOLDER = "[attachment]";
  * Extract the leadgen changes and conversation messages from a
  * (signature-verified) webhook body. Returns null for a body that isn't a
  * Meta webhook payload at all; empty arrays for valid payloads with
- * nothing to do (unknown objects, echoes, receipts) — those are
+ * nothing to do (unknown objects, echoes, receipts): those are
  * acknowledged, not errored.
  */
 export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
   const parsed = webhookBodySchema.safeParse(json);
   if (!parsed.success) return null;
 
-  const events: MetaWebhookEvents = { leadgen: [], messages: [], comments: [] };
+  const events: MetaWebhookEvents = {
+    leadgen: [],
+    messages: [],
+    comments: [],
+    echoes: [],
+    referrals: [],
+    templateStatuses: []
+  };
   const object = parsed.data.object;
   if (object === "whatsapp_business_account") {
     for (const entry of parsed.data.entry) {
       for (const change of entry.changes ?? []) {
+        if (change.field === "message_template_status_update") {
+          // Dropped until now, which meant a template PAUSED or REJECTED
+          // after approval kept being sent against: deliverWhatsApp gates on
+          // the stored status, and nothing ever refreshed it outside a manual
+          // reconnect.
+          const t = templateStatusValueSchema.safeParse(change.value);
+          if (!t.success) continue;
+          const templateName = String(t.data.message_template_name ?? "");
+          const status = String(t.data.event ?? "");
+          if (!templateName || !status) continue;
+          events.templateStatuses.push({
+            wabaId: String(entry.id ?? ""),
+            templateName,
+            language: String(t.data.message_template_language ?? ""),
+            status,
+            reason: String(t.data.reason ?? "")
+          });
+          continue;
+        }
         if (change.field !== "messages") continue;
         const value = whatsappChangeValueSchema.safeParse(change.value);
         if (!value.success) continue;
@@ -337,7 +466,10 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
 
     if (platform === "instagram") {
       for (const change of entry.changes ?? []) {
-        if (change.field !== "comments") continue;
+        // live_comments carries the same value shape as comments; the only
+        // difference is the reply window (during the broadcast only, which
+        // the reply route already reports honestly when Meta refuses).
+        if (change.field !== "comments" && change.field !== "live_comments") continue;
         const value = commentChangeValueSchema.safeParse(change.value);
         if (!value.success) continue;
         const commentId = String(value.data.id ?? "");
@@ -359,11 +491,50 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
 
     for (const item of entry.messaging ?? []) {
       const senderId = String(item.sender?.id ?? "");
+
+      // Echoes are handled BEFORE the sender-is-page guard below, because an
+      // echo's sender IS the page: the guard exists to stop our own sends
+      // looping back in as inbound, and it would drop these too.
+      if (item.message?.is_echo) {
+        // Every Page-side send echoes back, ours included. The handler tells
+        // them apart by app_id; see MetaEchoEvent.appId. What matters is the
+        // foreign ones: the AI would otherwise answer the next customer
+        // message on top of a colleague mid-conversation.
+        const echoMid = item.message.mid ?? "";
+        const echoTo = String(item.recipient?.id ?? "");
+        if (entryId && echoMid && echoTo) {
+          events.echoes.push({
+            platform,
+            accountId: entryId,
+            recipientId: echoTo,
+            mid: echoMid,
+            text: item.message.text?.trim() ?? "",
+            appId: String(item.message.app_id ?? "")
+          });
+        }
+        continue;
+      }
+
       // The page/IG account echoing its own sends must never loop back in.
       if (!entryId || !senderId || senderId === entryId) continue;
 
+      // Attribution first: a referral can ride alone, on the first message,
+      // or on a Get Started postback, and all three mean the same thing.
+      const referral = item.referral ?? item.message?.referral ?? item.postback?.referral;
+      if (referral && senderId) {
+        events.referrals.push({
+          platform,
+          accountId: entryId,
+          senderId,
+          ref: referral.ref?.trim() ?? "",
+          source: referral.source?.trim() ?? "",
+          type: referral.type?.trim() ?? "",
+          adId: String(referral.ad_id ?? ""),
+          adTitle: referral.ads_context_data?.ad_title?.trim() ?? ""
+        });
+      }
+
       if (item.message) {
-        if (item.message.is_echo) continue;
         const mid = item.message.mid ?? "";
         if (!mid) continue;
         const text = item.message.text?.trim() ?? "";
@@ -388,7 +559,7 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
 }
 
 /**
- * Resolve, fetch, and enqueue one leadgen event. Never throws — a failure
+ * Resolve, fetch, and enqueue one leadgen event. Never throws: a failure
  * for one lead must not fail the delivery batch (Meta redelivers, and the
  * dedupe key makes the retry safe). Returns true when a lead reached the
  * flow engine.
@@ -471,7 +642,7 @@ export const FACEBOOK_COMMENT_FLOW_SOURCE = "facebook_comment";
 
 /**
  * Resolve and enqueue one IG comment event as a webhook flow event. Never
- * throws — a failure for one comment must not fail the delivery batch
+ * throws: a failure for one comment must not fail the delivery batch
  * (Meta redelivers, and the comment-id dedupe key makes the retry safe).
  * Returns true when the comment reached the flow engine.
  */
@@ -570,7 +741,7 @@ async function resolveMessageAccount(
  * Ingest one conversation message: resolve the tenant, upsert the
  * conversation (bumping the 24h-window clock), append the message (Meta
  * `mid` dedupe), enqueue the reply job, and fire the first-contact flow
- * trigger for brand-new conversations. Never throws — one bad message
+ * trigger for brand-new conversations. Never throws: one bad message
  * must not fail the delivery batch. Returns true when a reply job was
  * enqueued.
  */
@@ -580,7 +751,7 @@ export async function processMetaMessageEvent(
   const { platform, accountId, senderId, mid, text } = event;
 
   // "rate_limited" (unlike a plain skip) makes the route answer non-200
-  // so Meta REDELIVERS the batch once the window clears — the mid dedupe
+  // so Meta REDELIVERS the batch once the window clears: the mid dedupe
   // makes reprocessing the already-ingested events a no-op, so nothing is
   // silently dropped and nothing double-enqueues.
   const limiter = rateLimit(`meta-webhook-msg:${accountId}`, META_WEBHOOK_RATE);
@@ -627,7 +798,7 @@ export async function processMetaMessageEvent(
       mid
     });
     if (!message) {
-      // Duplicate redelivery — the original already has a job.
+      // Duplicate redelivery: the original already has a job.
       return false;
     }
 
@@ -713,6 +884,18 @@ export async function processMetaWebhookEvents(
     const result = await processMetaMessageEvent(event);
     if (result === "rate_limited") messagesRateLimited += 1;
     else if (result) messagesEnqueued += 1;
+  }
+  // Echoes BEFORE referrals is deliberate only in that both must run after
+  // the messages above: a referral needs the conversation the first message
+  // creates, and an echo needs the thread to exist too.
+  for (const event of events.echoes) {
+    if (await processMetaEchoEvent(event)) handled += 1;
+  }
+  for (const event of events.referrals) {
+    if (await processMetaReferralEvent(event)) handled += 1;
+  }
+  for (const event of events.templateStatuses) {
+    if (await processMetaTemplateStatusEvent(event)) handled += 1;
   }
   return { handled, messagesEnqueued, messagesRateLimited };
 }

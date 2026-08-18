@@ -1,6 +1,6 @@
 /**
  * Service-role data access for per-tenant WhatsApp Business connections
- * (whatsapp_connections — migration 20260811210000_whatsapp_channel.sql).
+ * (whatsapp_connections: migration 20260811210000_whatsapp_channel.sql).
  *
  * The Embedded Signup business token is AES-256-GCM encrypted at rest via
  * src/lib/integrations/secrets.ts (calendly/meta pattern). RLS is on with
@@ -37,7 +37,7 @@ type StoredWhatsAppConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (Cloud API calls). */
+/** Decrypted row: server-side use only (Cloud API calls). */
 export type WhatsAppConnectionRow = Omit<
   StoredWhatsAppConnectionRow,
   "access_token_encrypted"
@@ -128,7 +128,27 @@ export async function getActiveWhatsAppConnectionByPhoneNumberId(
 }
 
 /**
- * Whoever holds this phone number's unique claim (active or paused) —
+ * The connection behind a WABA id. Template status webhooks name the WABA,
+ * not the phone number, so the phone-number lookup cannot serve them.
+ */
+export async function getWhatsAppConnectionByWabaId(
+  wabaId: string,
+  client?: SupabaseClient
+): Promise<WhatsAppConnectionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("whatsapp_connections")
+    .select(ALL_COLUMNS)
+    .eq("waba_id", wabaId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw new Error(`getWhatsAppConnectionByWabaId: ${error.message}`);
+  if (!data) return null;
+  return toDecryptedRow(data as unknown as StoredWhatsAppConnectionRow);
+}
+
+/**
+ * Whoever holds this phone number's unique claim (active or paused) ,
  * pre-insert conflict messaging for the connect route.
  */
 export async function getWhatsAppPhoneNumberClaim(
@@ -148,7 +168,7 @@ export async function getWhatsAppPhoneNumberClaim(
 /**
  * Whether any OTHER business also holds a connection on this WABA (a
  * multi-number WABA shared across tenants). Consulted before the
- * reconnect path unsubscribes an abandoned WABA — tearing down the app
+ * reconnect path unsubscribes an abandoned WABA: tearing down the app
  * subscription would silence every number under it.
  */
 export async function isWabaClaimedByOtherBusiness(

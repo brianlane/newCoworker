@@ -28,7 +28,9 @@ import {
   requeueMessengerJob,
   setMessengerConversationLanguage,
   updateMessengerConversationContact,
-  upsertMessengerConversation
+  upsertMessengerConversation,
+  findMessengerConversation,
+  setMessengerConversationReferral
 } from "@/lib/messenger/db";
 
 type Chain = {
@@ -36,6 +38,7 @@ type Chain = {
   insert: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
@@ -48,6 +51,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     insert: vi.fn(() => c),
     update: vi.fn(() => c),
     eq: vi.fn(() => c),
+    is: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
     single: vi.fn(),
@@ -603,6 +607,58 @@ describe("default service client", () => {
     c.eq.mockReturnValue(Promise.resolve({ error: null }));
     defaultClientSpy.mockReturnValue(makeDb(c));
     await setMessengerConversationLanguage(CONV_ID, "es");
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("findMessengerConversation / setMessengerConversationReferral", () => {
+  it("finds a thread by platform + psid, without needing the page id", async () => {
+    // A Page-side echo names the account and the recipient but not the page
+    // the conversation was filed under.
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "conv-1" }, error: null });
+    expect(await findMessengerConversation(BIZ, "messenger", "psid-1", makeDb(c))).toEqual({
+      id: "conv-1"
+    });
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("platform", "messenger");
+    expect(c.eq).toHaveBeenCalledWith("psid", "psid-1");
+  });
+
+  it("returns null for no thread and throws on error", async () => {
+    const miss = chain();
+    miss.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await findMessengerConversation(BIZ, "messenger", "x", makeDb(miss))).toBeNull();
+
+    const err = chain();
+    err.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(
+      findMessengerConversation(BIZ, "messenger", "x", makeDb(err))
+    ).rejects.toThrow(/boom/);
+  });
+
+  it("stamps attribution ONCE, guarded on the column being null", async () => {
+    // The referral that started the conversation must win over any later
+    // re-entry from a different ad.
+    const c = chain({ data: [{ id: "conv-1" }], error: null });
+    expect(await setMessengerConversationReferral("conv-1", { ad_id: "1" }, makeDb(c))).toBe(true);
+    expect(c.is).toHaveBeenCalledWith("referral", null);
+    expect(c.update.mock.calls[0][0]).toMatchObject({ referral: { ad_id: "1" } });
+
+    expect(
+      await setMessengerConversationReferral("conv-1", { ad_id: "1" }, makeDb(chain({ data: [], error: null })))
+    ).toBe(false);
+    await expect(
+      setMessengerConversationReferral("conv-1", {}, makeDb(chain({ data: null, error: { message: "r" } })))
+    ).rejects.toThrow(/r/);
+  });
+
+  it("resolves the service client when none is injected", async () => {
+    const c = chain({ data: [], error: null });
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await findMessengerConversation(BIZ, "messenger", "x");
+    await setMessengerConversationReferral("conv-1", {});
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
