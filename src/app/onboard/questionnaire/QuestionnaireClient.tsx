@@ -324,7 +324,7 @@ function QuestionnaireForm({
         DRAFT_STORAGE_KEY,
         JSON.stringify({ step, form, signupEmail, phonePrefix })
       );
-    } catch { /* quota exceeded — non-critical */ }
+    } catch { /* quota exceeded, non-critical */ }
   }, [step, form, signupEmail, phonePrefix, hydrated]);
 
   function update(field: keyof FormData, value: string | OnboardingAssistantChatDraftState | null) {

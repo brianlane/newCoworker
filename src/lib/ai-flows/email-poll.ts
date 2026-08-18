@@ -210,7 +210,7 @@ async function fetchGmailMessages(
     pages += 1;
     // The page guard lists more ids than the lookback window can ever drain
     // (see EMAIL_POLL_MAX_LIST_PAGES), so hitting it means mail is arriving
-    // faster than it can possibly be evaluated — flagged as overflow below.
+    // faster than it can possibly be evaluated, flagged as overflow below.
   } while (pageToken && pages < EMAIL_POLL_MAX_LIST_PAGES);
   let overflowed = pageToken !== undefined;
   // Already-evaluated messages must not consume the read budget, so a burst

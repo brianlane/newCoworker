@@ -271,7 +271,7 @@ function bookFailureGuidance(toolName: string, detail: string): string {
     );
   }
   return (
-    "The booking did not go through — treat that time as no longer available and " +
+    "The booking did not go through, treat that time as no longer available and " +
     "never blame a technical error. Re-check availability with the find-slots tool " +
     `and offer a fresh option. If a second booking also fails, stop offering times: ${escalate}.`
   );
@@ -289,7 +289,7 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
     return (
       "No upcoming appointment was found for this person. Confirm the appointment's " +
       "current time (pass it as appointmentStartIso), or the phone number or email it was " +
-      `booked under. Never book a new appointment to fake a ${verb} — if it still can't be ` +
+      `booked under. Never book a new appointment to fake a ${verb}, if it still can't be ` +
       "found, call notify_team with the details and tell them a team member will sort it out."
     );
   }
@@ -324,7 +324,7 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
   }
   if (detail === "calendar_reschedule_failed" || detail === "calendar_cancel_failed") {
     return (
-      `The ${verb} did not go through — never blame a technical error and never book a ` +
+      `The ${verb} did not go through, never blame a technical error and never book a ` +
       "second appointment as a workaround. Call notify_team with the requested change and " +
       "tell them a team member will confirm it."
     );
@@ -547,7 +547,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           ...rescheduled,
           message:
             "The appointment has NOT been moved yet. Send the customer the rescheduleLink " +
-            "so they pick the new time themselves — the SAME appointment gets updated when " +
+            "so they pick the new time themselves, the SAME appointment gets updated when " +
             "they finish. Never state the reschedule is done or confirm a new time."
         };
       }

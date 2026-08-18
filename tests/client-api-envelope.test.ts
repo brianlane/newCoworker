@@ -46,7 +46,7 @@ describe("parseEnvelope", () => {
     expect(parsed.error.message).not.toMatch(/unexpected/i);
   });
 
-  it("synthesises 'taking longer than usual' for 500 with non-JSON body — same friendly copy across the 5xx range", async () => {
+  it("synthesises 'taking longer than usual' for 500 with non-JSON body, same friendly copy across the 5xx range", async () => {
     const r = new Response("not-json", {
       status: 500,
       headers: { "Content-Type": "text/plain" }
@@ -66,7 +66,7 @@ describe("parseEnvelope", () => {
     expect(parsed.error.message).toMatch(/longer than usual/i);
   });
 
-  it("keeps the canonical 'Unexpected server response' copy for 4xx + non-JSON — different failure mode than a slow 5xx", async () => {
+  it("keeps the canonical 'Unexpected server response' copy for 4xx + non-JSON, different failure mode than a slow 5xx", async () => {
     // 4xx + non-JSON typically means a misconfigured proxy stripped a
     // valid JSON body, OR an upstream load balancer returned its own
     // HTML error page. Saying "your coworker is taking longer" there

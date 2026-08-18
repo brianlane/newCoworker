@@ -301,7 +301,7 @@ describe("billingSubCycleMonths", () => {
   });
 });
 
-describe("runContractUpgradeSweep — the happy path", () => {
+describe("runContractUpgradeSweep, the happy path", () => {
   it("moves a contract tenant off a monthly box onto a 2-year one", async () => {
     const deps = makeDeps();
     const result = await run(deps);
@@ -419,7 +419,7 @@ describe("runContractUpgradeSweep — the happy path", () => {
   });
 });
 
-describe("runContractUpgradeSweep — gate 1: refund exposure", () => {
+describe("runContractUpgradeSweep, gate 1: refund exposure", () => {
   // The whole reason this sweep exists. Buying a non-refundable 2-year box
   // for a customer who can still ask for their money back is exactly the
   // exposure the new strategy removes.
@@ -482,7 +482,7 @@ describe("runContractUpgradeSweep — gate 1: refund exposure", () => {
   });
 });
 
-describe("runContractUpgradeSweep — gate 2: contract coverage", () => {
+describe("runContractUpgradeSweep, gate 2: contract coverage", () => {
   it("ignores month-to-month tenants entirely", async () => {
     const deps = makeDeps({
       listSubscriptionsByBusinessIds: vi.fn(
@@ -569,7 +569,7 @@ describe("runContractUpgradeSweep — gate 2: contract coverage", () => {
   });
 });
 
-describe("runContractUpgradeSweep — gate 3: the renewal window", () => {
+describe("runContractUpgradeSweep, gate 3: the renewal window", () => {
   /**
    * The adopted-box case. Someone churned mid-contract, their box went to
    * the pool with a year of prepaid runway, and a new 24-month tenant
@@ -669,7 +669,7 @@ describe("runContractUpgradeSweep — gate 3: the renewal window", () => {
   });
 });
 
-describe("runContractUpgradeSweep — economics", () => {
+describe("runContractUpgradeSweep, economics", () => {
   /**
    * The trap this sweep was most likely to fall into. Compared as whole
    * periods, a $215.76 two-year first period against a $24.49 monthly
@@ -729,7 +729,7 @@ describe("runContractUpgradeSweep — economics", () => {
   });
 });
 
-describe("runContractUpgradeSweep — safety guards", () => {
+describe("runContractUpgradeSweep, safety guards", () => {
   it("skips a business that already holds a migration lease", async () => {
     const deps = makeDeps({ hasActiveVpsMigrationLock: vi.fn(async () => true) });
     const result = await run(deps);
@@ -862,7 +862,7 @@ describe("runContractUpgradeSweep — safety guards", () => {
   });
 });
 
-describe("runContractUpgradeSweep — run budget and ordering", () => {
+describe("runContractUpgradeSweep, run budget and ordering", () => {
   it("migrates at most one tenant per run", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn(async () => [biz(), biz({ id: BIZ2, hostinger_vps_id: "1800986" })]),
@@ -923,7 +923,7 @@ describe("runContractUpgradeSweep — run budget and ordering", () => {
   });
 });
 
-describe("runContractUpgradeSweep — failure handling", () => {
+describe("runContractUpgradeSweep, failure handling", () => {
   it("records a failed migration and still releases the lease", async () => {
     const deps = makeDeps({
       backupBusinessData: vi.fn(async () => {

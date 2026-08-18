@@ -96,13 +96,13 @@ if (!APPLY) {
   if (error) throw new Error(`business read: ${error.message}`);
   if (!biz) {
     throw new Error(
-      `HQ business ${FLOW_TEST_BUSINESS_ID} not found — run scripts/oneshot/onboard-hq-tenant.ts first`
+      `HQ business ${FLOW_TEST_BUSINESS_ID} not found, run scripts/oneshot/onboard-hq-tenant.ts first`
     );
   }
   const phone = (biz as { phone: string | null }).phone;
   if (phone && phone.replace(/[^\d]/g, "").endsWith(TESTER_E164.replace(/[^\d]/g, "").slice(-10))) {
     throw new Error(
-      "HQ business phone equals the tester's number — lead texts would get the staff persona"
+      "HQ business phone equals the tester's number, lead texts would get the staff persona"
     );
   }
   const { error: flagErr } = await db
@@ -141,7 +141,7 @@ if (!APPLY) {
   const existingRoute = await getTelnyxVoiceRouteForBusiness(FLOW_TEST_BUSINESS_ID);
   if (!existingRoute) {
     throw new Error(
-      "HQ tenant has no DID route — expected +16023131823 (see onboard-hq-tenant.ts)"
+      "HQ tenant has no DID route, expected +16023131823 (see onboard-hq-tenant.ts)"
     );
   }
   console.log(`[setup] DID: ${existingRoute.to_e164}`);

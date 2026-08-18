@@ -43,7 +43,7 @@ module.exports = {
         dict: true,
         required: true,
         helpText:
-          "The lead's details as name/value pairs — e.g. full_name, phone_number, email, " +
+          "The lead's details as name/value pairs, e.g. full_name, phone_number, email, " +
           "plus any custom form questions. Your AiFlow reads these exactly as entered."
       },
       {

@@ -44,7 +44,7 @@ describe("notificationCategoryEnabled", () => {
     expect(notificationCategoryEnabled("system", allOff)).toBe(false);
   });
 
-  it("general is always enabled — the escalation path can't be muted by category", () => {
+  it("general is always enabled, the escalation path can't be muted by category", () => {
     expect(notificationCategoryEnabled("general", allOff)).toBe(true);
   });
 });

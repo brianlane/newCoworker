@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe("buildCustomerPreamble", () => {
-  it("returns null when there is no summary, pinned note, OR stored name — no empty header in the prompt", () => {
+  it("returns null when there is no summary, pinned note, OR stored name, no empty header in the prompt", () => {
     expect(
       buildCustomerPreamble({
         memory: {
@@ -190,7 +190,7 @@ describe("buildCustomerPreamble", () => {
     expect(pinnedIdx).toBeLessThan(summaryIdx);
   });
 
-  it("explicitly tells the model NOT to leak the notes verbatim — leaking owner-internal notes back to the customer would be a privacy disaster", () => {
+  it("explicitly tells the model NOT to leak the notes verbatim, leaking owner-internal notes back to the customer would be a privacy disaster", () => {
     const out = buildCustomerPreamble({
       memory: {
         customer_e164: CUSTOMER,
@@ -206,18 +206,18 @@ describe("buildCustomerPreamble", () => {
   });
 });
 
-describe("shouldSummarize — gating decision", () => {
-  it("false when interaction_count is 0 — there's literally nothing to summarize yet", () => {
+describe("shouldSummarize, gating decision", () => {
+  it("false when interaction_count is 0, there's literally nothing to summarize yet", () => {
     expect(shouldSummarize(memory({ interaction_count: 0 }))).toBe(false);
   });
 
-  it("true on first eligible run when interaction_count >= 1 and no prior summary — owners need cross-channel continuity from the very first inbound message", () => {
+  it("true on first eligible run when interaction_count >= 1 and no prior summary, owners need cross-channel continuity from the very first inbound message", () => {
     expect(
       shouldSummarize(memory({ interaction_count: 1, last_summarized_at: null }))
     ).toBe(true);
   });
 
-  it("false within the 30s debounce window even at high interaction_count — prevents preempting live calls/texts", () => {
+  it("false within the 30s debounce window even at high interaction_count, prevents preempting live calls/texts", () => {
     const now = new Date("2026-05-06T12:00:00Z").getTime();
     const tenSecondsAgo = new Date(now - 10_000).toISOString();
     expect(
@@ -248,7 +248,7 @@ describe("shouldSummarize — gating decision", () => {
     ).toBe(true);
   });
 
-  it("constants match the gating spec — interaction threshold 1 (summary on first contact), debounce 30s, summary cap 2000", () => {
+  it("constants match the gating spec, interaction threshold 1 (summary on first contact), debounce 30s, summary cap 2000", () => {
     expect(SUMMARY_INTERACTION_THRESHOLD).toBe(1);
     expect(SUMMARY_DEBOUNCE_MS).toBe(30_000);
     expect(SUMMARY_MAX_CHARS).toBe(2000);
@@ -295,7 +295,7 @@ describe("summarizeCustomerMemory", () => {
     if (!result.ok) expect(result.reason).toBe("memory_not_found");
   });
 
-  it("returns below_threshold when interaction_count < 1 — even if the caller's gate let it through (guard against racing concurrent triggers)", async () => {
+  it("returns below_threshold when interaction_count < 1, even if the caller's gate let it through (guard against racing concurrent triggers)", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
@@ -321,7 +321,7 @@ describe("summarizeCustomerMemory", () => {
     if (!result.ok) expect(result.reason).toBe("debounced");
   });
 
-  it("force bypasses the below_threshold gate — the dashboard rename path must regenerate even though a rename adds no interaction", async () => {
+  it("force bypasses the below_threshold gate, the dashboard rename path must regenerate even though a rename adds no interaction", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
@@ -341,7 +341,7 @@ describe("summarizeCustomerMemory", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("force bypasses the debounce gate too — a rename right after a scheduled run must still correct the name", async () => {
+  it("force bypasses the debounce gate too, a rename right after a scheduled run must still correct the name", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
@@ -365,7 +365,7 @@ describe("summarizeCustomerMemory", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("force does NOT bypass the content gates — no inputs still means no fabricated summary", async () => {
+  it("force does NOT bypass the content gates, no inputs still means no fabricated summary", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
@@ -380,7 +380,7 @@ describe("summarizeCustomerMemory", () => {
     if (!result.ok) expect(result.reason).toBe("no_inputs");
   });
 
-  it("returns no_inputs when there is no source material AND no prior summary — never runs an empty prompt that could hallucinate", async () => {
+  it("returns no_inputs when there is no source material AND no prior summary, never runs an empty prompt that could hallucinate", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
@@ -409,7 +409,7 @@ describe("summarizeCustomerMemory", () => {
         {
           jobId: "j1",
           inboundText: "I need another spring",
-          assistantReply: "Sure — model #?",
+          assistantReply: "Sure, model #?",
           receivedAt: "2026-05-05T00:00:00Z"
         }
       ]) as never,
@@ -454,7 +454,7 @@ describe("summarizeCustomerMemory", () => {
     // Inputs include both SMS + voice content.
     expect(args.messages[1]?.content).toContain("How much for installation?");
     expect(args.messages[1]?.content).toContain("I need another spring");
-    expect(args.messages[1]?.content).toContain("Sure — model #?");
+    expect(args.messages[1]?.content).toContain("Sure, model #?");
 
     // Persistence resets the counter so the next gate fires only after
     // 3 *fresh* interactions.
@@ -465,7 +465,7 @@ describe("summarizeCustomerMemory", () => {
     );
   });
 
-  it("hard-truncates summaries longer than SUMMARY_MAX_CHARS — runaway model can't dominate every preamble", async () => {
+  it("hard-truncates summaries longer than SUMMARY_MAX_CHARS, runaway model can't dominate every preamble", async () => {
     const giant = "x".repeat(SUMMARY_MAX_CHARS + 500);
     const updateCustomerSummary = vi.fn(async () => {});
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
@@ -495,7 +495,7 @@ describe("summarizeCustomerMemory", () => {
     expect(persistArgs[2].summaryMd.length).toBe(SUMMARY_MAX_CHARS);
   });
 
-  it("returns rowboat_failed without writing to the DB when Rowboat throws — degraded summary acceptable, partial DB writes are not", async () => {
+  it("returns rowboat_failed without writing to the DB when Rowboat throws, degraded summary acceptable, partial DB writes are not", async () => {
     const updateCustomerSummary = vi.fn(async () => {});
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       callRowboatChat: (async () => {

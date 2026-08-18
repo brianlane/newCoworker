@@ -74,7 +74,7 @@ describe("isBareAcknowledgmentText", () => {
     }
   });
 
-  it("caps the length — a long message ending in thanks is a message", () => {
+  it("caps the length, a long message ending in thanks is a message", () => {
     expect(
       isBareAcknowledgmentText(
         "thanks thanks thanks thanks thanks thanks thanks thanks"
@@ -134,7 +134,7 @@ describe("assistantMessageInvitesReply", () => {
         "We're all set for your call with the broker tomorrow at 12:00 PM Eastern."
       )
     ).toBe(false);
-    expect(assistantMessageInvitesReply("Got it — looking forward to it!")).toBe(false);
+    expect(assistantMessageInvitesReply("Got it, looking forward to it!")).toBe(false);
     expect(assistantMessageInvitesReply("")).toBe(false);
   });
 });

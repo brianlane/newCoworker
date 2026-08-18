@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     auth: { persistSession: false }
   });
 
-  console.log(`\nTranslator mode verification — business ${businessId}`);
+  console.log(`\nTranslator mode verification, business ${businessId}`);
   console.log(`Window: since ${sinceIso}\n`);
 
   // 1. Is the tenant armed? Both halves have to be true: the column drives the

@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("sshExecPinned — pinned row (strict)", () => {
+describe("sshExecPinned, pinned row (strict)", () => {
   it("passes the pin through as strict policy and returns the result", async () => {
     const exec = vi.fn().mockResolvedValue(OK);
     const res = await sshExecPinned(
@@ -80,7 +80,7 @@ describe("sshExecPinned — pinned row (strict)", () => {
   });
 });
 
-describe("sshExecPinned — unpinned row (TOFU capture)", () => {
+describe("sshExecPinned, unpinned row (TOFU capture)", () => {
   it("captures, persists, and updates the row object in place", async () => {
     const exec = vi.fn(async (opts: { onHostKey?: (fp: string) => void }) => {
       opts.onHostKey?.("SHA256:first-connect");

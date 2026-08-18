@@ -39,7 +39,7 @@ describe("metaLeadFollowUpTemplate", () => {
     expect(tpl.name.length).toBeGreaterThan(0);
   });
 
-  it("extracts the lead, files it, texts back, and briefs the owner — in that order", () => {
+  it("extracts the lead, files it, texts back, and briefs the owner, in that order", () => {
     const def = metaLeadFollowUpTemplate().definition;
     expect(def.steps.map((s) => s.type)).toEqual([
       "extract_text",
@@ -74,7 +74,7 @@ describe("metaLeadFollowUpTemplate", () => {
     }
   });
 
-  it("only fires for the facebook_lead_ads source — it auto-texts, so scraped prospects must never reach it", () => {
+  it("only fires for the facebook_lead_ads source, it auto-texts, so scraped prospects must never reach it", () => {
     const def = metaLeadFollowUpTemplate().definition;
     expect(def.trigger).toMatchObject({
       channel: "webhook",
@@ -108,7 +108,7 @@ describe("instagramProspectTemplate", () => {
     expect(evaluateTriggerConditions(conditions, "any text", "facebook_lead_ads")).toBe(false);
   });
 
-  it("extracts, briefs the owner FIRST, then files + tags the prospect — never texts or emails", () => {
+  it("extracts, briefs the owner FIRST, then files + tags the prospect, never texts or emails", () => {
     const def = instagramProspectTemplate().definition;
     // The brief precedes the phone-gated filing so it always reaches the
     // owner and can never claim a contact/tag a skipped step didn't create.

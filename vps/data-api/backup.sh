@@ -53,7 +53,7 @@ chmod 600 "${OUT}"
 
 SIZE=$(stat -c%s "${OUT}")
 if [[ "${SIZE}" -lt 128 ]]; then
-  echo "FATAL: backup suspiciously small (${SIZE} bytes) — refusing to upload/prune" >&2
+  echo "FATAL: backup suspiciously small (${SIZE} bytes), refusing to upload/prune" >&2
   exit 1
 fi
 

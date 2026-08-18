@@ -97,15 +97,15 @@ function parseArgs(argv: readonly string[]): Args {
 const DEFAULT_BUYER =
   "Hi {{vars.lead_name}}, I saw you're looking to buy in {{vars.location}} " +
   "(around {{vars.price}}). Are you still searching for a home? " +
-  "I'd love to help — reply here.";
+  "I'd love to help, reply here.";
 
 const DEFAULT_SELLER =
   "Hi {{vars.lead_name}}, I saw your {{vars.location}} listing. " +
-  "Are you still looking for an agent to help you sell? — reply here.";
+  "Are you still looking for an agent to help you sell? Reply here.";
 
 const DEFAULT_BOTH =
   "Hi {{vars.lead_name}}, I saw you're looking to both buy and sell in " +
-  "{{vars.location}}. I'd love to help with both sides of your move — " +
+  "{{vars.location}}. I'd love to help with both sides of your move, " +
   "are you still looking for an agent? Reply here.";
 
 const DEFAULT_OFFER =
@@ -222,7 +222,7 @@ function buildDefinition(opts: {
         // instead and claim-gated steps skip (claimed_agent="none").
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate:
-          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
+          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you, not offered to the team.\n" +
           "{{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}, around {{vars.price}}.\n" +
           "Lead source: ReferralExchange (referralexchange.com)"
       },

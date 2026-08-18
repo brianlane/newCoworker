@@ -145,7 +145,7 @@ describe("branded-html", () => {
     expect(html).toContain("This link expires in 1 hour.");
   });
 
-  it("always renders the platform signature block (team, founder, HQ line, website — no address)", () => {
+  it("always renders the platform signature block (team, founder, HQ line, website, no address)", () => {
     const html = buildBrandedEmailHtml({
       siteUrl: "https://app.test",
       documentTitle: "T",

@@ -108,7 +108,7 @@ export function normalizeDialableNumber(
   if (/[a-z]/i.test(trimmed)) {
     return {
       ok: false,
-      reason: "Enter digits only, without extensions — e.g. 602-555-1234"
+      reason: "Enter digits only, without extensions, e.g. 602-555-1234"
     };
   }
   const normalized = normalizeContactNumber(trimmed);

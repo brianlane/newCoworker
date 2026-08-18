@@ -239,7 +239,7 @@ export default async function AdminCostsPage({
             Telnyx Balance
           </p>
           <p className="text-3xl font-bold text-parchment">
-            {balance ? `$${balance.balanceUsd.toFixed(2)}` : "—"}
+            {balance ? `$${balance.balanceUsd.toFixed(2)}` : "-"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             {balance
@@ -626,9 +626,9 @@ export default async function AdminCostsPage({
                   return (
                     <tr key={row.subscription_id}>
                       <td className="py-2 font-mono text-parchment/80">
-                        {row.hostname ?? (row.vm_id !== null ? `VM ${row.vm_id}` : "—")}
+                        {row.hostname ?? (row.vm_id !== null ? `VM ${row.vm_id}` : "-")}
                       </td>
-                      <td className="py-2 text-parchment/60 uppercase">{row.plan ?? "—"}</td>
+                      <td className="py-2 text-parchment/60 uppercase">{row.plan ?? "-"}</td>
                       <td className="py-2">
                         {row.assigned_business_id ? (
                           <a
@@ -643,7 +643,7 @@ export default async function AdminCostsPage({
                         )}
                       </td>
                       <td className="py-2 text-right text-parchment font-medium">
-                        {row.monthly_price_cents !== null ? money(row.monthly_price_cents) : "—"}
+                        {row.monthly_price_cents !== null ? money(row.monthly_price_cents) : "-"}
                       </td>
                       <td className="py-2">
                         <Badge variant={notRenewing ? "pending" : "success"}>
@@ -651,7 +651,7 @@ export default async function AdminCostsPage({
                         </Badge>
                       </td>
                       <td className="py-2 text-parchment/60">
-                        {at ? <LocalDateTime iso={at} style="date" /> : "—"}
+                        {at ? <LocalDateTime iso={at} style="date" /> : "-"}
                       </td>
                     </tr>
                   );
@@ -745,7 +745,7 @@ export default async function AdminCostsPage({
                     </p>
                   </div>
                   <span className="text-xs text-spark-orange font-semibold shrink-0">
-                    {box.monthlyCents !== null ? `${money(box.monthlyCents)}/mo` : "—"}
+                    {box.monthlyCents !== null ? `${money(box.monthlyCents)}/mo` : "-"}
                   </span>
                 </li>
               ))}

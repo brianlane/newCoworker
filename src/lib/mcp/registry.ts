@@ -119,7 +119,7 @@ export function registerMcpTools(server: McpServer): void {
       },
       async (args: Record<string, unknown>, ctx: unknown): Promise<McpTextResult> => {
         const auth = authFromContext(ctx);
-        if (!auth) return errorResult("Unauthenticated — reconnect the New Coworker connector.");
+        if (!auth) return errorResult("Unauthenticated, reconnect the New Coworker connector.");
         return runMcpTool(def, args, auth);
       }
     );

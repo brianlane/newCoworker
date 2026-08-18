@@ -83,7 +83,7 @@ export function CalendlyIntegrationCard({ businessId, initialConnections }: Prop
       }
       if (!json.data?.verified || !json.data.connection) {
         setBanner(
-          "Calendly rejected the token — double-check it and make sure it was created " +
+          "Calendly rejected the token, double-check it and make sure it was created " +
             "with the user profile, event types, and scheduling links scopes. Nothing was saved."
         );
         return;
@@ -151,7 +151,7 @@ export function CalendlyIntegrationCard({ businessId, initialConnections }: Prop
           <h3 className="text-sm font-semibold text-parchment">Calendly</h3>
           <p className="text-xs text-parchment/50 mt-1">
             Let your coworker offer your Calendly availability and text customers a
-            booking link — they confirm the time on your Calendly page. Link more than
+            booking link, they confirm the time on your Calendly page. Link more than
             one account and bookings on any of them are seen.
           </p>
         </div>
@@ -250,7 +250,7 @@ export function CalendlyIntegrationCard({ businessId, initialConnections }: Prop
             permissions (scopes) to grant, include{" "}
             <span className="text-parchment/60">user profile (read)</span>,{" "}
             <span className="text-parchment/60">event types (read)</span>, and{" "}
-            <span className="text-parchment/60">scheduling links (write)</span> — a token
+            <span className="text-parchment/60">scheduling links (write)</span>, a token
             without them will fail verification here. Each teammate creates the token in
             their own Calendly account.
           </p>

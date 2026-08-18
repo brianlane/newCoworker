@@ -251,7 +251,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
         <div>
           <h1 className="text-2xl font-bold text-parchment">Chat with your coworker</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Private chat with {businessName}&rsquo;s AI — attach a file to work on it, or ask it
+            Private chat with {businessName}&rsquo;s AI, attach a file to work on it, or ask it
             to draft an automation or agent
           </p>
         </div>
@@ -430,12 +430,12 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     <p className="text-xs text-parchment/60 mt-0.5">
                       {draft.kind === "aiflow"
                         ? "Review the drafted automation in the builder, then save it there. Nothing runs until you save."
-                        : `"${draft.name}" — review and save it on the Agents page. Nothing is saved yet.`}
+                        : `"${draft.name}", review and save it on the Agents page. Nothing is saved yet.`}
                     </p>
                     {draft.kind === "aiflow" && draft.warnings.length > 0 && (
                       <p className="text-[11px] text-spark-orange mt-1">
                         {draft.warnings.length} thing{draft.warnings.length === 1 ? "" : "s"} to
-                        review — shown in the builder.
+                        review, shown in the builder.
                       </p>
                     )}
                     <button
@@ -491,7 +491,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                 }
               >
                 {trimmedInputLength.toLocaleString()}/{MAX_MESSAGE_CHARS.toLocaleString()}
-                {inputTooLong && " — too long to send; trim it or attach it as a file"}
+                {inputTooLong && ", too long to send; trim it or attach it as a file"}
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 <input

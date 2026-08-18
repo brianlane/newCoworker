@@ -68,7 +68,7 @@ const TRACKING_EMAIL = [
   "Interested in: Home insurance quote",
   "Note: The lead did not provide a phone number.",
   "",
-  "Their previous docs were mailed — USPS Tracking: 9400111202555842332999",
+  "Their previous docs were mailed, USPS Tracking: 9400111202555842332999",
   "",
   "Sent via Privyr"
 ].join("\n");
@@ -219,7 +219,7 @@ const TRULY_CATEGORIES = [
 const CLASSIFY_QUESTION =
   "A new insurance lead was just asked what prompted them to shop around today. This is their reply.";
 
-const OPT_OUT_LINE = "Actually you know what, please stop texting me. I'm all set — not interested.";
+const OPT_OUT_LINE = "Actually you know what, please stop texting me. I'm all set, not interested.";
 
 /**
  * A realistic long correlation window: the lead pasted their policy
@@ -237,7 +237,7 @@ const POLICY_PASTE =
 const LONG_WINDOW_TEXT =
   POLICY_PASTE.repeat(Math.ceil(4200 / POLICY_PASTE.length)) + "\n" + OPT_OUT_LINE;
 
-describe("BUG 3 (fixed): classify keeps the tail of a long window — the message being classified", () => {
+describe("BUG 3 (fixed): classify keeps the tail of a long window, the message being classified", () => {
   it("the built prompt contains the newest message (root cause)", () => {
     const prompt = buildClassifyPrompt(TRULY_CATEGORIES, LONG_WINDOW_TEXT, CLASSIFY_QUESTION);
     expect(prompt.includes("stop texting me")).toBe(true);

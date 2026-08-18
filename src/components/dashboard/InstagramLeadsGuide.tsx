@@ -185,18 +185,18 @@ export function InstagramLeadsGuide({
               <strong>Scraped prospects never consented.</strong> U.S. law requires prior
               express written consent before marketing texts (TCPA), and marketing email to
               scraped addresses invites spam complaints (CAN-SPAM). The starter flow below
-              deliberately <strong>never texts or emails</strong> — it files each prospect
+              deliberately <strong>never texts or emails</strong>, it files each prospect
               tagged <code className="font-mono text-xs">{INSTAGRAM_PROSPECT_TAG}</code> for
               you to review and reach out personally.
             </li>
             <li>
               <strong>Scraping tools are third-party.</strong> Automated scraping is against
               Instagram&apos;s terms; accounts you run scrapers with can be restricted. You
-              choose and operate the tool — we just receive what it sends.
+              choose and operate the tool, we just receive what it sends.
             </li>
             <li>
               <strong>Running Instagram or Facebook ads?</strong> Ad leads gave you their
-              details on purpose — use the{" "}
+              details on purpose, use the{" "}
               <Link
                 href="/dashboard/aiflows/guides/meta-leads"
                 className="text-signal-teal hover:underline"
@@ -251,7 +251,7 @@ export function InstagramLeadsGuide({
             <p className="text-xs text-parchment/70">
               <strong>Check your other webhook flows first.</strong> Your flow “
               {otherWebhookFlow.name}” (and any other enabled webhook flow without a
-              source filter) will <em>also</em> fire for every prospect delivered here —
+              source filter) will <em>also</em> fire for every prospect delivered here,
               if it sends texts or emails, it could contact scraped prospects who never
               consented. Before sending anything, open each webhook flow and add a
               trigger condition scoping it to its own source (e.g. “sender matches{" "}
@@ -278,7 +278,7 @@ export function InstagramLeadsGuide({
               Import leads page
             </Link>{" "}
             and set the <strong>source label</strong> to{" "}
-            <code className="font-mono text-xs">{INSTAGRAM_SCRAPER_SOURCE}</code> — each row
+            <code className="font-mono text-xs">{INSTAGRAM_SCRAPER_SOURCE}</code>, each row
             then triggers the flow from step 1 exactly like a live delivery, drip-paced so a
             big list lands gradually. No bridge, no API key needed.
           </p>
@@ -290,13 +290,13 @@ export function InstagramLeadsGuide({
         <StepHeading n={3} title="Live path: create your connection key" />
         <p className="mt-2 text-sm text-parchment/60">
           Running scrapes on a schedule? A bridge can deliver every result the moment a run
-          finishes. The bridge proves it&apos;s yours with an API key — create one here.
+          finishes. The bridge proves it&apos;s yours with an API key, create one here.
           It&apos;s shown once, so copy it somewhere safe before you leave this page.
         </p>
         {freshKey ? (
           <div className="mt-3 rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3 space-y-2">
             <p className="text-xs text-parchment/80">
-              Your key is ready — copy it now, it won&apos;t be shown again:
+              Your key is ready, copy it now, it won&apos;t be shown again:
             </p>
             <CopyField value={freshKey} label="API key" />
           </div>
@@ -381,9 +381,9 @@ export function InstagramLeadsGuide({
                   {`{"source": "${INSTAGRAM_SCRAPER_SOURCE}", "event_id": "{{username}}", "data": {"full_name": "{{fullName}}", "username": "{{username}}", "email": "{{email}}", "phone_number": "{{phone}}", "bio": "{{biography}}", "followers": "{{followersCount}}"}}`}
                 </code>
                 <span className="text-xs">
-                  — clicking into each {"{{…}}"} spot lets you pick the matching field from
+, clicking into each {"{{…}}"} spot lets you pick the matching field from
                   the Apify dataset. Keep{" "}
-                  <code className="font-mono text-[11px]">source</code> exactly as shown — the
+                  <code className="font-mono text-[11px]">source</code> exactly as shown, the
                   flow from step 1 only fires for it. The{" "}
                   <code className="font-mono text-[11px]">event_id</code> makes redeliveries
                   of the same profile land only once.
@@ -399,7 +399,7 @@ export function InstagramLeadsGuide({
             Apify itself, under Actor → Integrations → Add webhook) can POST run results to
             a URL without Make. Point them at your webhook address with the same{" "}
             <code className="font-mono text-[11px]">Authorization</code> header and JSON
-            shape — one request per prospect.
+            shape, one request per prospect.
           </p>
         </div>
       </Card>
@@ -421,7 +421,7 @@ export function InstagramLeadsGuide({
         </div>
         {recentEvents.length === 0 ? (
           <p className="mt-2 rounded-md border border-dashed border-parchment/15 p-4 text-center text-xs text-parchment/45">
-            Nothing yet — events appear here the moment your bridge or import delivers one.
+            Nothing yet, events appear here the moment your bridge or import delivers one.
           </p>
         ) : (
           <ul className="mt-2 divide-y divide-parchment/10">
@@ -461,7 +461,7 @@ export function InstagramLeadsGuide({
             Contacts page
           </Link>{" "}
           under the <code className="font-mono text-[11px]">{INSTAGRAM_PROSPECT_TAG}</code>{" "}
-          tag — and reach out on your own terms.
+          tag, and reach out on your own terms.
         </p>
       </Card>
     </div>

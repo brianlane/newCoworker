@@ -81,7 +81,7 @@ async function alertRows(biz: string) {
 describe("customer reply alerts (opt-in, real worker + real notifications function)", () => {
   it("opted in: a customer inbound pages the owner with the preview (fails pre-fix)", async () => {
     const biz = await seedOptedInBusiness("IT reply-alert on");
-    rowboat.scriptReply("No problem at all, Tim — here to help.");
+    rowboat.scriptReply("No problem at all, Tim, here to help.");
     const jobId = await enqueueSmsJob(db, biz, LEAD, INBOUND_TEXT);
     await tickSmsWorker();
 
@@ -119,7 +119,7 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     expect((await alertRows(biz)).length).toBe(countAfterFirst);
   });
 
-  it("alerts even when the AI reply is suppressed (tapback) — the alert is not tied to a reply", async () => {
+  it("alerts even when the AI reply is suppressed (tapback), the alert is not tied to a reply", async () => {
     const biz = await seedOptedInBusiness("IT reply-alert tapback");
     // NO scripted Rowboat reply: tapback suppression fires before any model
     // call, so an unexpected /chat would fail loudly on the empty script.
@@ -135,7 +135,7 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     expect(job.last_error).toBe("suppressed_tapback");
   });
 
-  it("a PAUSED tenant's client text still pages — silence is exactly when the owner needs it", async () => {
+  it("a PAUSED tenant's client text still pages, silence is exactly when the owner needs it", async () => {
     const biz = await seedOptedInBusiness("IT reply-alert paused");
     const { error } = await db.from("businesses").update({ is_paused: true }).eq("id", biz);
     if (error) throw new Error(error.message);

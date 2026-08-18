@@ -83,7 +83,7 @@ function patchDefinition(def: AiFlowDefinition): string[] {
 }
 
 async function main() {
-  console.log(`${APPLY ? "APPLY" : "dry-run"} — Truly Privyr first-name templates`);
+  console.log(`${APPLY ? "APPLY" : "dry-run"}, Truly Privyr first-name templates`);
   const patchedFlows: Array<{ id: string; name: string; steps: string[] }> = [];
 
   for (const name of FLOW_NAMES) {
@@ -123,7 +123,7 @@ async function main() {
       details: { flows: patchedFlows, replaced: `${FULL} -> ${FIRST}` }
     });
   }
-  console.log(APPLY ? "Done." : "Dry-run complete — re-run with --apply to write.");
+  console.log(APPLY ? "Done." : "Dry-run complete, re-run with --apply to write.");
 }
 
 main().catch((err) => {

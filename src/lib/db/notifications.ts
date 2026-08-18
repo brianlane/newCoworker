@@ -236,7 +236,7 @@ export async function markAllNotificationsRead(
     .update({ read_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .is("read_at", null)
-    // Soft-deleted rows are out of the owner's view — "mark all read" must
+    // Soft-deleted rows are out of the owner's view, "mark all read" must
     // not silently mutate them (they'd come back to an admin restore with a
     // read stamp the owner never made).
     .is("deleted_at", null)

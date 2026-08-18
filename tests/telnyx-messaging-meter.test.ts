@@ -60,7 +60,7 @@ describe("sendTelnyxSms meterMode: operational (count always, never refuse)", ()
       json: () => Promise.resolve({ data: { id: "m1" } })
     });
 
-  it("counts via the operational RPC and sends — no reserve, no throttle", async () => {
+  it("counts via the operational RPC and sends, no reserve, no throttle", async () => {
     const fetchMock = okFetch();
     const { id } = await sendTelnyxSms(
       { apiKey: "k", messagingProfileId: "p" },

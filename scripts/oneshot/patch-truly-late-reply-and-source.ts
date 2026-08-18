@@ -214,7 +214,7 @@ function buildLateReplyElse(nudge1: AnyStep, wait2: AnyStep): AnyStep[] {
           id: "nudge2",
           type: "send_sms",
           to: "{{vars.lead_phone}}",
-          body: "Hi {{vars.lead_name}}, one of our licensed brokers would be happy to review your options whenever it suits you — no pressure at all. Would a quick call this week work?",
+          body: "Hi {{vars.lead_name}}, one of our licensed brokers would be happy to review your options whenever it suits you, no pressure at all. Would a quick call this week work?",
           quietHours: QUIET_HOURS
         },
         {
@@ -237,7 +237,7 @@ function buildLateReplyElse(nudge1: AnyStep, wait2: AnyStep): AnyStep[] {
           type: "send_sms",
           when: { var: "reply3", equals: "no_reply" },
           to: "{{vars.lead_phone}}",
-          body: "Hi {{vars.lead_name}}, we'll leave you be for now — if you'd ever like a no-pressure review of your insurance options, just reply here and we'll pick up right where we left off. Thanks for considering Truly Insurance!",
+          body: "Hi {{vars.lead_name}}, we'll leave you be for now, if you'd ever like a no-pressure review of your insurance options, just reply here and we'll pick up right where we left off. Thanks for considering Truly Insurance!",
           quietHours: QUIET_HOURS
         },
         {
@@ -287,7 +287,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changed: string
 
   // 1. Rebuild the reply_fork else-arm unless already patched.
   const replyFork = steps.find((s) => s.id === "reply_fork" && s.type === "branch");
-  if (!replyFork) throw new Error("reply_fork branch step not found — flow shape changed?");
+  if (!replyFork) throw new Error("reply_fork branch step not found, flow shape changed?");
   const elseSteps = (replyFork.else ?? []) as AnyStep[];
   const alreadyPatched = elseSteps.some((s) => s.id === "late_fork");
   if (!alreadyPatched) {
@@ -325,7 +325,7 @@ for (const name of FLOW_NAMES) {
 for (const { row, next, changed } of targets) {
   console.log(`\n=== ${row.name} (id=${row.id}, enabled=${row.enabled}) ===`);
   if (changed.length === 0) {
-    console.log("  already patched — no changes");
+    console.log("  already patched, no changes");
     continue;
   }
   for (const c of changed) console.log(`  - ${c}`);
@@ -358,7 +358,7 @@ if (patchedIds.length > 0) {
   });
 }
 if (failures.length > 0) {
-  console.error(`\n${failures.length} flow(s) failed: ${failures.join(", ")} — re-run with --apply.`);
+  console.error(`\n${failures.length} flow(s) failed: ${failures.join(", ")}, re-run with --apply.`);
   process.exit(1);
 }
 console.log("\nDone. No runs were enqueued; the next real Privyr lead exercises the new arm.");

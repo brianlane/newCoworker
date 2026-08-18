@@ -79,12 +79,12 @@ describe("parseRowboatChatJson", () => {
   });
 });
 
-describe("retry-error classes — deliberately bounded sets", () => {
+describe("retry-error classes, deliberately bounded sets", () => {
   // The sets are intentionally small. Adding entries without updating the
   // dashboard chat path's mirror concept (or vice-versa) creates skew
   // between SMS and dashboard retry behaviour. These tests pin the surface
   // so a casual edit triggers a visible diff.
-  it("conversation-state codes (always stateless-eligible) — no more, no less", () => {
+  it("conversation-state codes (always stateless-eligible), no more, no less", () => {
     expect([...CONVERSATION_STATE_RETRY_ERRORS].sort()).toEqual([
       "rowboat_empty_assistant",
       "rowboat_http_400",
@@ -93,7 +93,7 @@ describe("retry-error classes — deliberately bounded sets", () => {
     ]);
   });
 
-  it("transient 5xx codes (stateless only via allowStatelessOnServerErrors) — no more, no less", () => {
+  it("transient 5xx codes (stateless only via allowStatelessOnServerErrors), no more, no less", () => {
     // A 5xx is usually an upstream model outage (2026-07-13: Gemini 503s
     // surfaced as Rowboat 500s); dropping the continuation for it discards
     // the SMS thread. Callers must opt in explicitly.
@@ -110,17 +110,17 @@ describe("retry-error classes — deliberately bounded sets", () => {
     );
   });
 
-  it("EXCLUDES rowboat_timeout — retrying a slow VPS doubles load without diagnostic value", () => {
+  it("EXCLUDES rowboat_timeout, retrying a slow VPS doubles load without diagnostic value", () => {
     expect(STATELESS_RETRY_ERRORS.has("rowboat_timeout")).toBe(false);
   });
 
-  it("EXCLUDES rowboat_http_401/403 — auth is global; same bearer fails identically", () => {
+  it("EXCLUDES rowboat_http_401/403, auth is global; same bearer fails identically", () => {
     expect(STATELESS_RETRY_ERRORS.has("rowboat_http_401")).toBe(false);
     expect(STATELESS_RETRY_ERRORS.has("rowboat_http_403")).toBe(false);
   });
 });
 
-describe("callSmsRowboatWithStatelessFallback — happy path", () => {
+describe("callSmsRowboatWithStatelessFallback, happy path", () => {
   it("succeeds on the first call and does NOT retry", async () => {
     const fetchStub = vi
       .fn<typeof fetch>()
@@ -194,7 +194,7 @@ describe("callSmsRowboatWithStatelessFallback — happy path", () => {
         timeoutMs: 60_000,
         customerPreamble: "Automation context: ...",
         userTurnNote:
-          '(Note: the last automated message to this texter was: "when does your policy renew?" — read their message below as a likely answer to it.)'
+          '(Note: the last automated message to this texter was: "when does your policy renew?", read their message below as a likely answer to it.)'
       },
       fetchStub
     );
@@ -204,7 +204,7 @@ describe("callSmsRowboatWithStatelessFallback — happy path", () => {
       {
         role: "user",
         content:
-          '(Note: the last automated message to this texter was: "when does your policy renew?" — read their message below as a likely answer to it.)' +
+          '(Note: the last automated message to this texter was: "when does your policy renew?", read their message below as a likely answer to it.)' +
           "\n\n[SMS] July 23, 2026"
       }
     ]);
@@ -231,7 +231,7 @@ describe("callSmsRowboatWithStatelessFallback — happy path", () => {
   });
 });
 
-describe("callSmsRowboatWithStatelessFallback — stateless retry on stale continuation", () => {
+describe("callSmsRowboatWithStatelessFallback, stateless retry on stale continuation", () => {
   it("retries WITHOUT conversationId/state on rowboat_http_400 and reports retriedStateless=true", async () => {
     const fetchStub = vi
       .fn<typeof fetch>()
@@ -286,7 +286,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     ["rowboat_http_502", 502],
     ["rowboat_http_503", 503]
   ])(
-    "does NOT retry on %s by default — a transient upstream outage must not cost the thread its history (2026-07-13 incident)",
+    "does NOT retry on %s by default, a transient upstream outage must not cost the thread its history (2026-07-13 incident)",
     async (label, status) => {
       const fetchStub = vi
         .fn<typeof fetch>()
@@ -409,7 +409,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     expect(result.reply).toBe("fresh");
   });
 
-  it("does NOT retry when there was no continuation to drop — nothing for a stateless retry to undo", async () => {
+  it("does NOT retry when there was no continuation to drop, nothing for a stateless retry to undo", async () => {
     const fetchStub = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({}, { status: 400 }));
@@ -429,7 +429,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT retry on rowboat_timeout — slow VPS won't suddenly become fast", async () => {
+  it("does NOT retry on rowboat_timeout, slow VPS won't suddenly become fast", async () => {
     const fetchStub = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
       return new Promise<Response>((_, reject) => {
         const signal = init?.signal as AbortSignal | undefined;
@@ -504,7 +504,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT retry on rowboat_http_401 — auth failures aren't conversation-state-related", async () => {
+  it("does NOT retry on rowboat_http_401, auth failures aren't conversation-state-related", async () => {
     const fetchStub = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({}, { status: 401 }));
@@ -524,7 +524,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
-  it("when retry ALSO fails, surfaces the retry's error (more recent diagnostic) — not the first call's", async () => {
+  it("when retry ALSO fails, surfaces the retry's error (more recent diagnostic), not the first call's", async () => {
     const fetchStub = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({}, { status: 400 }))
@@ -546,7 +546,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
   });
 });
 
-describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)", () => {
+describe("callSmsRowboatWithStatelessFallback, combined budget bound (P1 fix)", () => {
   // The bug being pinned: a slow first call (~60s timeoutMs) followed
   // by a fresh full-window retry (another 60s) put the SMS worker at
   // ~120s wall time total — but pg_cron caps the worker HTTP

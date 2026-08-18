@@ -49,7 +49,7 @@ export async function draftBlogPostWithAi(
     systemInstruction:
       `You write posts for the New Coworker blog. ${BRAND_CONTEXT} ` +
       "Structure the body with '## ' section headings and keep it focused " +
-      "(500-900 words). Markdown pipe tables are supported — use one when " +
+      "(500-900 words). Markdown pipe tables are supported, use one when " +
       "comparing options or listing structured facts. Never use em dashes; " +
       "use commas or periods instead. The excerpt is 1-2 " +
       "friendly sentences (it doubles as " +

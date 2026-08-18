@@ -83,7 +83,7 @@ const KOLTON_REPLY =
   "Looking for preferably minimum 3 bed 2 bath. 2 car carport, 3 would be " +
   "best. Looking anywhere east valley, preferably Mesa, AJ, or Gilbert";
 
-describe("Amy availability-window replay — Kolton 2026-07-31 (generic path, real builders)", () => {
+describe("Amy availability-window replay, Kolton 2026-07-31 (generic path, real builders)", () => {
   let reply = "";
   let verdict: JudgeVerdict;
 

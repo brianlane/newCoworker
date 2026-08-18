@@ -115,9 +115,9 @@ describe("POST /api/internal/tendlc-attach-retry", () => {
       .mockResolvedValueOnce({ kind: "registered", campaignId: "c" })
       .mockResolvedValueOnce({ kind: "pending", reason: "vetting" })
       .mockResolvedValueOnce({ kind: "rejected", reason: "rate" })
-      // Transient infra error — must NOT be counted as rejected.
+      // Transient infra error, must NOT be counted as rejected.
       .mockResolvedValueOnce({ kind: "error", reason: "telnyx 503" })
-      // Per-row throw — must be caught and recorded as an error.
+      // Per-row throw, must be caught and recorded as an error.
       .mockRejectedValueOnce(new Error("attach throw"));
 
     const res = await POST(makeRequest());

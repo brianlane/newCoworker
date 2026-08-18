@@ -84,7 +84,7 @@ export async function POST(request: Request) {
         ? {
             ...result,
             message:
-              "The booking did not go through — treat that time as no longer available and " +
+              "The booking did not go through, treat that time as no longer available and " +
               "never blame a technical error. Re-check availability with calendar_find_slots " +
               "and offer a fresh option. If a second booking also fails, stop offering times: " +
               "call notify_team with their preferred day/time and tell the caller a team " +
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
           ? {
               ...result,
               message:
-                "Your earlier booking attempt for this exact time is STILL COMPLETING — it " +
+                "Your earlier booking attempt for this exact time is STILL COMPLETING, it " +
                 "has not failed. Do NOT tell the caller the time is unavailable and do NOT " +
                 "offer other times. Say you're just confirming, wait a moment, then call " +
                 "calendar_book_appointment once more with the SAME arguments to get the " +
@@ -105,7 +105,7 @@ export async function POST(request: Request) {
                 ...result,
                 message:
                   "This exact appointment was ALREADY booked successfully (an earlier attempt " +
-                  "completed after a slow response). Treat it as confirmed — never book it " +
+                  "completed after a slow response). Treat it as confirmed, never book it " +
                   "again and never tell the caller the time was unavailable."
               }
             : result;

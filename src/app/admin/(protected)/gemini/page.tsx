@@ -117,11 +117,11 @@ export default async function AdminGeminiPage({
                     <span className="text-spark-orange">{billedStatus.error}</span>
                   )
                 ) : (
-                  "not configured — metered ledger only (docs/GEMINI-SPEND.md)"
+                  "not configured, metered ledger only (docs/GEMINI-SPEND.md)"
                 )}
               </>
             ) : (
-              "Billed sync has never run — Google actuals appear after the next daily sync (or Costs → Sync now)."
+              "Billed sync has never run, Google actuals appear after the next daily sync (or Costs → Sync now)."
             )}
           </p>
         </div>
@@ -159,7 +159,7 @@ export default async function AdminGeminiPage({
           <p className="text-3xl font-bold text-parchment">
             {reconciliation.latestBilledDay !== null
               ? microsToMoney(reconciliation.billedTotalMicros)
-              : "—"}
+              : "-"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             {reconciliation.latestBilledDay !== null
@@ -180,7 +180,7 @@ export default async function AdminGeminiPage({
           >
             {reconciliation.latestBilledDay !== null
               ? microsToMoney(reconciliation.deltaMicros)
-              : "—"}
+              : "-"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             {reconciliation.latestBilledDay !== null
@@ -208,7 +208,7 @@ export default async function AdminGeminiPage({
         </h2>
         {series.totalMicros === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">
-            No metered Gemini calls in this range. The ledger collects from the day this shipped —
+            No metered Gemini calls in this range. The ledger collects from the day this shipped,
             older spend exists only in the period fuse totals.
           </p>
         ) : (
@@ -298,7 +298,7 @@ export default async function AdminGeminiPage({
             {reconciliation.deltaMicros > 0 && (
               <p className="text-xs text-spark-orange/80">
                 Google billed {microsToMoney(reconciliation.deltaMicros)} more than the ledger
-                metered on the same days — internal-project (CI/debug) traffic is expected here;
+                metered on the same days, internal-project (CI/debug) traffic is expected here;
                 anything on the production project means an unmetered surface or price drift.
               </p>
             )}

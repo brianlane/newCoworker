@@ -122,7 +122,7 @@ export default async function MessengerConversationPage({
       ) : (
         <Card>
           <p className="text-xs text-parchment/50">
-            Meta&apos;s 24-hour reply window has closed for this conversation — it
+            Meta&apos;s 24-hour reply window has closed for this conversation, it
             reopens the moment the lead messages again.
             {conversation.contact_phone
               ? " You can still text them from the Texts page."

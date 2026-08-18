@@ -107,7 +107,7 @@ describe("KYP no-show recovery definition (wrong-offer-link regression)", () => 
     expect(upsert.when).toEqual({ var: "invitee_phone", notEquals: "none" });
   });
 
-  it("a '| 2' ($200) no-show is offered the $200 link — and never the $100 one", () => {
+  it("a '| 2' ($200) no-show is offered the $200 link, and never the $100 one", () => {
     const arm = armFor("KYP Ads | Free Strategy Call | 2");
     const sends = armSends(arm);
     expect(sends.length).toBeGreaterThanOrEqual(1);
@@ -117,7 +117,7 @@ describe("KYP no-show recovery definition (wrong-offer-link regression)", () => 
     }
   });
 
-  it("a plain Free Strategy Call ($100) no-show is offered the $100 link — Tim's case", () => {
+  it("a plain Free Strategy Call ($100) no-show is offered the $100 link, Tim's case", () => {
     const arm = armFor("KYP Ads | Free Strategy Call");
     const sends = armSends(arm);
     expect(sends.length).toBeGreaterThanOrEqual(1);

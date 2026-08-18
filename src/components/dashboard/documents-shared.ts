@@ -123,6 +123,6 @@ export async function openOriginalFile(
     a.remove();
     return null;
   } catch {
-    return "Could not create the link — try again.";
+    return "Could not create the link, try again.";
   }
 }

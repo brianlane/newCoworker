@@ -82,7 +82,7 @@ beforeAll(async () => {
   });
 }, 120_000);
 
-describe("Truly Privyr flow replay — Alex 2026-07-14 (full flow, live decisions)", () => {
+describe("Truly Privyr flow replay, Alex 2026-07-14 (full flow, live decisions)", () => {
   it("replays production's intake decisions (fidelity check)", () => {
     // Live extraction pulled Alex out of the noisy Privyr alert.
     expect(String(walk.vars.lead_name)).toMatch(/alex/i);
@@ -122,7 +122,7 @@ describe("Truly Privyr flow replay — Alex 2026-07-14 (full flow, live decision
   });
 });
 
-describe("generic-path fallback turn — the incident turn's exact prompt", () => {
+describe("generic-path fallback turn, the incident turn's exact prompt", () => {
   // The EXACT production preamble of the incident turn (verified against
   // the stored Rowboat conversation 6a566d80a138dbaf59c8db5f), rebuilt from
   // the same production builders the SMS worker uses, with the flow state
@@ -236,7 +236,7 @@ describe("generic-path fallback turn — the incident turn's exact prompt", () =
       // log the RAW shape (trailer-only? bracket-blob-swallowed? truly
       // empty?) so a repeat CI failure names the class.
       console.error(
-        `truly-renewal turn: re-rolling draw ${attempt} — raw=${JSON.stringify(raw)}`
+        `truly-renewal turn: re-rolling draw ${attempt}, raw=${JSON.stringify(raw)}`
       );
     }
     reply = split.reply;
@@ -248,14 +248,14 @@ describe("generic-path fallback turn — the incident turn's exact prompt", () =
       {
         asks_what_date_means:
           "Does the message ask the customer to clarify, provide more context, or " +
-          "explain what the date refers to or what they need — i.e. does it fail to " +
+          "explain what the date refers to or what they need, i.e. does it fail to " +
           "recognize the date as an answer to a question? A reply that acknowledges " +
           "the date and moves forward is false.",
         acknowledges_answer:
-          "Does the message accept the customer's date as an answer it received — " +
+          "Does the message accept the customer's date as an answer it received, " +
           "acknowledging, confirming, noting it (any phrasing: thanks them for it, " +
           "says it was noted/recorded/added to notes, or names it as their renewal " +
-          "timing) — and continue the conversation forward (a next step, offer, or " +
+          "timing), and continue the conversation forward (a next step, offer, or " +
           "confirmation)?",
         restarts_conversation:
           "Does the message greet or introduce the sender as if the conversation were " +

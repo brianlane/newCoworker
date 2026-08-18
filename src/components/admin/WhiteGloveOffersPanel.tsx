@@ -143,7 +143,7 @@ export function WhiteGloveOffersPanel({
       setCopiedId(offer.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      setError("Copy failed — the link is shown below the offer");
+      setError("Copy failed, the link is shown below the offer");
     }
   }
 
@@ -215,7 +215,7 @@ export function WhiteGloveOffersPanel({
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm text-parchment truncate">
-                    {o.name} — {usd(o.amount_cents)}
+                    {o.name}, {usd(o.amount_cents)}
                     {o.recipient_email && (
                       <span className="ml-2 text-xs text-parchment/40">{o.recipient_email}</span>
                     )}

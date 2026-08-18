@@ -162,7 +162,7 @@ describe("ingestBulletsIntoGraph", () => {
     expect(deps.apply).not.toHaveBeenCalled();
   });
 
-  it("never throws — a mode-read failure resolves to a no-op (non-Error too)", async () => {
+  it("never throws, a mode-read failure resolves to a no-op (non-Error too)", async () => {
     const deps = makeDeps({
       getMode: vi.fn(async () => {
         throw new Error("db down");

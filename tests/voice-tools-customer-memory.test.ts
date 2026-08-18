@@ -155,7 +155,7 @@ describe("POST /api/voice/tools/customer-lookup", () => {
     expect(getCustomerMemory).toHaveBeenCalledWith(BIZ, PHONE);
   });
 
-  it("found:true returns voice-safe projection — display_name + summary_md but NEVER pinned_md", async () => {
+  it("found:true returns voice-safe projection, display_name + summary_md but NEVER pinned_md", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValueOnce(
       memory({
         display_name: "Joe Plumber",
@@ -479,7 +479,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     expect(updateCustomerOwnerFields).toHaveBeenCalled();
   });
 
-  it("force-create degrades gracefully when the second getCustomerMemory still returns null (RPC raced or RLS quirk) — still attempts the UPDATE so we don't fail closed", async () => {
+  it("force-create degrades gracefully when the second getCustomerMemory still returns null (RPC raced or RLS quirk), still attempts the UPDATE so we don't fail closed", async () => {
     // Defensive path: record_customer_interaction succeeded but the
     // re-read came back null (rare race or RLS). Rather than abort,
     // we still UPDATE — if the row really doesn't exist we'll just
@@ -537,7 +537,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     expect(body.data.pinnedChars).toBeLessThanOrEqual(4000);
   });
 
-  it("truncates from the OLDEST end when combined exceeds PINNED_MAX_CHARS — most recent guidance survives", async () => {
+  it("truncates from the OLDEST end when combined exceeds PINNED_MAX_CHARS, most recent guidance survives", async () => {
     // Build a prior 3500-char note; new note ~1000 chars should make
     // combined ~4500 chars and the implementation should trim to 4000
     // by dropping from the start.

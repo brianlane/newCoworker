@@ -58,7 +58,7 @@ const JSONL = [
     object_id: null,
     object_value: "602-695-1142"
   }),
-  "not json — torn line",
+  "not json, torn line",
   JSON.stringify({ type: "fact", id: "", subject_id: "", predicate: "" }) // invalid, dropped
 ].join("\n");
 
@@ -106,7 +106,7 @@ describe("maybeBuildGraphDb", () => {
     });
   });
 
-  it("rebuilds when graph.jsonl CONTENT changes — even with an older mtime (tar ships epoch mtimes)", async () => {
+  it("rebuilds when graph.jsonl CONTENT changes, even with an older mtime (tar ships epoch mtimes)", async () => {
     const dir = tmpDir();
     writeFileSync(join(dir, "graph.jsonl"), JSONL);
     expect((await maybeBuildGraphDb({ memoryDir: dir })).built).toBe(true);
@@ -141,7 +141,7 @@ describe("maybeBuildGraphDb", () => {
     expect(result.built).toBe(true);
   });
 
-  it("never throws — a failure logs and reports error (default log no-ops)", async () => {
+  it("never throws, a failure logs and reports error (default log no-ops)", async () => {
     const dir = tmpDir();
     // A directory named graph.jsonl makes readFileSync throw after stat passes.
     const result = await maybeBuildGraphDb({ memoryDir: join(dir, "missing", "deeper") });

@@ -313,7 +313,7 @@ export default async function BusinessDetailPage({
             ))}
           </ul>
           <p className="text-xs text-parchment/30 mt-3">
-            Engine: src/lib/admin/margin.ts — renewal-aware revenue, vendor actuals where synced
+            Engine: src/lib/admin/margin.ts, renewal-aware revenue, vendor actuals where synced
             (see <Link href="/admin/costs" className="hover:text-signal-teal">Costs</Link>),
             per-unit estimates otherwise. Nothing bills from this card.
           </p>

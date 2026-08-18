@@ -159,7 +159,7 @@ async function runTimezoneTurn(): Promise<{
     reply,
     {
       resolves_time_zone:
-        "Does the message answer the time zone question — naming the zone the " +
+        "Does the message answer the time zone question, naming the zone the " +
         "1:00 PM is in (e.g. Eastern) and/or giving the customer's local " +
         "equivalent (e.g. 11:00 AM Mountain / their time)? A reply that gives " +
         "neither a zone nor an equivalence is false.",
@@ -172,7 +172,7 @@ async function runTimezoneTurn(): Promise<{
       asks_which_call:
         "Does the message ask the customer to clarify which call, appointment, " +
         "or message they are referring to, or say it doesn't have enough " +
-        "context to answer — i.e. does it fail to recognize the question is " +
+        "context to answer, i.e. does it fail to recognize the question is " +
         "about the 1:00 PM confirmation it just sent? A confident direct " +
         "answer is false.",
       restarts_conversation:
@@ -184,7 +184,7 @@ async function runTimezoneTurn(): Promise<{
   return { reply, reasoningPresent, verdict };
 }
 
-describe("KYP timezone turn — 'What time zone is that?' (fresh thread, live model)", () => {
+describe("KYP timezone turn, 'What time zone is that?' (fresh thread, live model)", () => {
   // One retried test instead of beforeAll + four tests (the suite-standard
   // de-flake shape, same restructure as the voice-booking and kyp-operator
   // suites): a single marginal draw — the 2026-07-23 hammer run drew one

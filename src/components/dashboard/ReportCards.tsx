@@ -120,7 +120,7 @@ export function ResponseTimeCard({ stats }: { stats: ResponseTimeStats }) {
       <h2 className="text-sm font-semibold text-parchment">Response times</h2>
       <p className="text-xs text-parchment/50 mt-0.5 mb-3">
         How fast inbound texts got answered (30 days)
-        {stats.clipped ? " — most recent texts only" : ""}
+        {stats.clipped ? ", most recent texts only" : ""}
       </p>
       {stats.repliedCount === 0 ? (
         <>
@@ -181,7 +181,7 @@ export function RetentionCard({ retention }: { retention: RetentionOverview }) {
           <div className="grid grid-cols-3 gap-2">
             <div className="rounded-lg border border-parchment/10 px-2 py-2 text-center">
               <p className="text-lg font-bold text-claw-green">
-                {rate !== null ? `${Math.round(rate * 100)}%` : "—"}
+                {rate !== null ? `${Math.round(rate * 100)}%` : "-"}
               </p>
               <p className="text-[10px] uppercase tracking-wide text-parchment/40">Retained</p>
             </div>
@@ -244,7 +244,7 @@ export function QuoteFunnelCard({ funnel }: { funnel: QuoteFunnel }) {
     <Card>
       <h2 className="text-sm font-semibold text-parchment">Quote funnel</h2>
       <p className="text-xs text-parchment/50 mt-0.5 mb-3">
-        Contacts by quote stage — each counted at their furthest stage
+        Contacts by quote stage, each counted at their furthest stage
         {funnel.clipped ? " (directory capped)" : ""}
       </p>
       <div className="space-y-1.5">
@@ -289,7 +289,7 @@ export function MonthlySummaryCard({ summary }: { summary: MonthlySummary }) {
     <Card>
       <h2 className="text-sm font-semibold text-parchment">Monthly summary</h2>
       <p className="text-xs text-parchment/50 mt-0.5 mb-3">
-        This month so far vs last month (nightly rollup — today lands tomorrow)
+        This month so far vs last month (nightly rollup, today lands tomorrow)
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <MonthColumn label="This month" month={summary.current} emphasize />

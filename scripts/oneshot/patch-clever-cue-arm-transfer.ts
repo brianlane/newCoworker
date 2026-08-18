@@ -68,7 +68,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changes: string
     // is confirmed (Clever calls "within 5 minutes"; observed at ~7).
     const replyIdx = steps.findIndex((s) => s.type === "send_sms");
     if (replyIdx < 0) {
-      throw new Error('no send_sms ("Y" reply) step found — is this the Clever Cue flow?');
+      throw new Error('no send_sms ("Y" reply) step found, is this the Clever Cue flow?');
     }
     steps.splice(replyIdx + 1, 0, {
       id: "arm_transfer",

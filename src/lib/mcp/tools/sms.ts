@@ -36,7 +36,7 @@ const CONTACT_NAME_ARG = z
   .max(120)
   .optional()
   .describe(
-    "The recipient's name, when known — files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
+    "The recipient's name, when known, files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
   );
 
 /**
@@ -102,7 +102,7 @@ export const sendSmsTool = defineMcpTool({
 
     const limiter = rateLimit(`mcp-sms:${businessId}`, MCP_SMS_SEND_RATE);
     if (!limiter.success) {
-      throw new McpToolError("SMS rate limit exceeded — retry in a minute.");
+      throw new McpToolError("SMS rate limit exceeded, retry in a minute.");
     }
 
     const db = await createSupabaseServiceClient();
@@ -182,7 +182,7 @@ export const sendWhatsAppTool = defineMcpTool({
 
     const limiter = rateLimit(`mcp-whatsapp:${businessId}`, MCP_SMS_SEND_RATE);
     if (!limiter.success) {
-      throw new McpToolError("WhatsApp rate limit exceeded — retry in a minute.");
+      throw new McpToolError("WhatsApp rate limit exceeded, retry in a minute.");
     }
 
     const { deliverWhatsApp } = await import("@/lib/whatsapp/deliver");
@@ -195,7 +195,7 @@ export const sendWhatsAppTool = defineMcpTool({
     if (!delivered.ok) {
       if (delivered.reason === "not_connected") {
         throw new McpToolError(
-          "WhatsApp is not connected for this business — connect it under Dashboard → Integrations → WhatsApp Business."
+          "WhatsApp is not connected for this business, connect it under Dashboard → Integrations → WhatsApp Business."
         );
       }
       if (delivered.reason === "connection_inactive") {
@@ -205,7 +205,7 @@ export const sendWhatsAppTool = defineMcpTool({
       }
       if (delivered.reason === "template_not_approved") {
         throw new McpToolError(
-          "The recipient hasn't messaged on WhatsApp in the last 24 hours and the message template is still in Meta review — use send_sms instead."
+          "The recipient hasn't messaged on WhatsApp in the last 24 hours and the message template is still in Meta review, use send_sms instead."
         );
       }
       throw new McpToolError(

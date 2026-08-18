@@ -62,7 +62,7 @@ if (!conn || conn.provider !== "calendly") {
 const userRes = await calendlyRequest(BUSINESS_ID, conn, { endpoint: "/users/me", method: "GET" });
 const userUri = (userRes?.data as { resource?: { uri?: string } } | undefined)?.resource?.uri;
 if (typeof userUri !== "string" || !userUri) {
-  console.error("[oneshot] Calendly refused /users/me — token rejected?");
+  console.error("[oneshot] Calendly refused /users/me, token rejected?");
   process.exit(1);
 }
 
@@ -100,7 +100,7 @@ const allInvitees: RawInvitee[] = [];
 for (const ev of events) {
   const createdMs = Date.parse(ev.created_at ?? "");
   if (Number.isFinite(createdMs) && createdMs < minCreatedMs) {
-    console.log(`[oneshot]   skip "${ev.name}" (created ${ev.created_at} — beyond --days ${BACK_DAYS})`);
+    console.log(`[oneshot]   skip "${ev.name}" (created ${ev.created_at}, beyond --days ${BACK_DAYS})`);
     continue;
   }
   const uuid = ev.uri.slice(ev.uri.lastIndexOf("/") + 1);
@@ -110,7 +110,7 @@ for (const ev of events) {
     params: { count: "10" }
   });
   if (!invRes) {
-    console.error(`[oneshot]   invitee fetch refused for "${ev.name}" — skipping event`);
+    console.error(`[oneshot]   invitee fetch refused for "${ev.name}", skipping event`);
     continue;
   }
   const invitees = ((invRes.data as { collection?: RawInvitee[] })?.collection ?? []).filter(
@@ -126,7 +126,7 @@ for (const ev of events) {
 }
 
 if (allInvitees.length === 0) {
-  console.log("[oneshot] no invitees inside the window — nothing to fire.");
+  console.log("[oneshot] no invitees inside the window, nothing to fire.");
   process.exit(0);
 }
 
@@ -174,7 +174,7 @@ for (const number of fireNumbers) {
   }>) {
     previewJumpable += 1;
     console.log(
-      `[oneshot]   candidate run ${r.id} (flow ${r.flow_id}) status=${r.status} step=${r.current_step} — would receive appointment_booked`
+      `[oneshot]   candidate run ${r.id} (flow ${r.flow_id}) status=${r.status} step=${r.current_step}, would receive appointment_booked`
     );
   }
 }

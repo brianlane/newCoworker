@@ -95,7 +95,7 @@ export function ByosEnrollmentPanel({
         attestProviderDiskEncryption: attestEncryption
       });
       setNotice(
-        `SSH probe + preflight on ${data.host} passed — provisioning started. Follow progress in the provisioning logs below.`
+        `SSH probe + preflight on ${data.host} passed, provisioning started. Follow progress in the provisioning logs below.`
       );
       router.refresh();
     } catch (err) {
@@ -121,7 +121,7 @@ export function ByosEnrollmentPanel({
 
       <p className="text-xs text-parchment/50">
         Customer box requirements: fresh Ubuntu 24.04, root SSH on port 22, outbound 443
-        open, no other workloads. Enrollment pins this tenant to their own box — no
+        open, no other workloads. Enrollment pins this tenant to their own box, no
         Hostinger purchase, pool, or teardown applies afterward.
       </p>
 
@@ -160,7 +160,7 @@ export function ByosEnrollmentPanel({
       {enrollment && (
         <div className="space-y-2 rounded-lg border border-parchment/15 bg-deep-ink/60 p-3">
           <p className="text-xs text-parchment/60">
-            Customer step — append this public key to <code>/root/.ssh/authorized_keys</code> on
+            Customer step, append this public key to <code>/root/.ssh/authorized_keys</code> on
             the box (fingerprint <span className="font-mono">{enrollment.fingerprintSha256}</span>):
           </p>
           <pre className="max-h-24 overflow-auto rounded-md bg-deep-ink p-2 text-[10px] font-mono text-parchment/80 whitespace-pre-wrap break-all">
@@ -175,7 +175,7 @@ export function ByosEnrollmentPanel({
             />
             <span>
               I attest the box has provider-level encryption at rest (required when the
-              preflight finds no dm-crypt/LUKS on the box — PII must not land on an
+              preflight finds no dm-crypt/LUKS on the box, PII must not land on an
               unencrypted disk).
             </span>
           </label>

@@ -89,7 +89,7 @@ function FitCheckNotice({ preview, flowId }: { preview: Preview; flowId: string 
             <span className="font-semibold">{f.name}</span> reads{" "}
             {f.expectedFields.join(", ")} from each lead, but this sheet doesn&apos;t seem
             to include{" "}
-            <span className="font-semibold">{f.missingFields.join(", ")}</span> — the AI
+            <span className="font-semibold">{f.missingFields.join(", ")}</span>, the AI
             may leave those blank or guess wrong. Double-check this is the right file.
           </p>
         ))}
@@ -260,7 +260,7 @@ export function LeadBacklogImport({ businessId }: Props) {
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>
                 {preview.flows.length > 0
-                  ? "No enabled AiFlow starts from a webhook event — pick the flow to run for each lead below."
+                  ? "No enabled AiFlow starts from a webhook event, pick the flow to run for each lead below."
                   : "No enabled AiFlow can run these leads. Create (or enable) a flow first, then come back."}
               </span>
             </p>
@@ -347,7 +347,7 @@ export function LeadBacklogImport({ businessId }: Props) {
             </ul>
           )}
           <p className="mt-1 text-[11px] text-parchment/50">
-            Runs release on the schedule you picked —{" "}
+            Runs release on the schedule you picked,{" "}
             <Link href="/dashboard/aiflows/runs" className="text-signal-teal hover:underline">
               watch them in Runs →
             </Link>

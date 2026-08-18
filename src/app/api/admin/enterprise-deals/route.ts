@@ -63,7 +63,7 @@ export async function POST(request: Request) {
       if (msg.includes("enterprise_deals_one_live_per_business_idx")) {
         return errorResponse(
           "CONFLICT",
-          "This business already has an open or active deal — revoke it before creating a new one"
+          "This business already has an open or active deal, revoke it before creating a new one"
         );
       }
       throw err;

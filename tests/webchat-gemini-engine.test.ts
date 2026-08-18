@@ -39,7 +39,7 @@ const SNAPSHOT_UNDER: ChatSpendSnapshot = {
 };
 
 const INPUT: WebchatJobInputMessage[] = [
-  { role: "system", content: "WEBSITE CHAT MODE — READ FIRST ..." },
+  { role: "system", content: "WEBSITE CHAT MODE, READ FIRST ..." },
   { role: "system", content: "Current date/time: Tuesday, July 14, 2026" },
   { role: "user", content: "[Webchat] How much is the Standard plan?" }
 ];
@@ -355,7 +355,7 @@ describe("runWebchatGeminiTurn", () => {
     expect(finalCall.tools).toEqual([]);
   });
 
-  it("throws webchat_engine_no_reply when the final round still produces no text — after metering", async () => {
+  it("throws webchat_engine_no_reply when the final round still produces no text, after metering", async () => {
     const always = toolStep("webchat_business_knowledge_lookup", { question: "q" });
     const deps = makeDeps({ chatStep: vi.fn(async () => always) });
     await expect(runWebchatGeminiTurn(ARGS, deps)).rejects.toThrow("webchat_engine_no_reply");

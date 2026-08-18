@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       return errorResponse(
         "CONFLICT",
         `Business already has a provisioned box (${business.hostinger_vps_id}) on ` +
-          `'${currentProvider}' — the provider pin only affects the NEXT provision. ` +
+          `'${currentProvider}', the provider pin only affects the NEXT provision. ` +
           "Tear down / wipe the existing box first."
       );
     }

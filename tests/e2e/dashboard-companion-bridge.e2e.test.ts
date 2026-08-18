@@ -231,7 +231,7 @@ beforeAll(async () => {
     .join("\n\n");
 });
 
-describe("scenario 1 — L: 'look at david's texts' chains contact search into the thread read", () => {
+describe("scenario 1, L: 'look at david's texts' chains contact search into the thread read", () => {
   it(
     "reads the real thread and answers from it, inventing nothing",
     { retry: 1, timeout: 180_000 },
@@ -271,7 +271,7 @@ describe("scenario 1 — L: 'look at david's texts' chains contact search into t
   );
 });
 
-describe("scenario 2 — L: 'did you not get this lead' answers grounded yes/no", () => {
+describe("scenario 2, L: 'did you not get this lead' answers grounded yes/no", () => {
   it(
     "checks the data and answers from it",
     { retry: 1, timeout: 180_000 },
@@ -311,7 +311,7 @@ describe("scenario 2 — L: 'did you not get this lead' answers grounded yes/no"
   );
 });
 
-describe("scenario 3 — L+write: 'text ally again' resolves the number before sending", () => {
+describe("scenario 3, L+write: 'text ally again' resolves the number before sending", () => {
   it(
     "sends to exactly the number the search returned, never a guess",
     { retry: 1, timeout: 180_000 },
@@ -379,7 +379,7 @@ describe("scenario 3 — L+write: 'text ally again' resolves the number before s
   );
 });
 
-describe("scenario 4 — boundary: phone-number changes are out of scope for every tool", () => {
+describe("scenario 4, boundary: phone-number changes are out of scope for every tool", () => {
   it(
     "calls no tool for it and points at Settings/support",
     { retry: 1, timeout: 120_000 },
@@ -420,7 +420,7 @@ describe("scenario 4 — boundary: phone-number changes are out of scope for eve
   );
 });
 
-describe("scenario 5 — C: the Scar Fairy greeting repair edits ONE section", () => {
+describe("scenario 5, C: the Scar Fairy greeting repair edits ONE section", () => {
   it(
     "reads the knowledge, then splices exactly one section",
     { retry: 1, timeout: 180_000 },
@@ -432,7 +432,7 @@ describe("scenario 5 — C: the Scar Fairy greeting repair edits ONE section", (
       ];
       const out = await companionTurn(
         [],
-        'your greeting still says the placeholder "Hi name." — make the intro say "Hi, this is Scar Fairy! Thanks for reaching out." instead',
+        'your greeting still says the placeholder "Hi name.", make the intro say "Hi, this is Scar Fairy! Thanks for reaching out." instead',
         (name, args) => {
           if (name === "get_business_knowledge") {
             return bridged({ sections, total_chars: 120 });
@@ -461,7 +461,7 @@ describe("scenario 5 — C: the Scar Fairy greeting repair edits ONE section", (
   );
 });
 
-describe("scenario 6 — A: cadence edits go through edit_aiflow", () => {
+describe("scenario 6, A: cadence edits go through edit_aiflow", () => {
   it(
     "uses the validated plain-English edit, and states the change",
     { retry: 1, timeout: 180_000 },
@@ -554,7 +554,7 @@ describe("scenario 6 — A: cadence edits go through edit_aiflow", () => {
   );
 });
 
-describe("scenario 7 — D: channel tool policy through update_coworker_tool_settings", () => {
+describe("scenario 7, D: channel tool policy through update_coworker_tool_settings", () => {
   it(
     "disables cancellation on the texting surface (at least sms), honestly reported",
     { retry: 1, timeout: 180_000 },
@@ -585,7 +585,7 @@ describe("scenario 7 — D: channel tool policy through update_coworker_tool_set
   );
 });
 
-describe("scenario 8 — sweep honesty: partial progress is reported as partial", () => {
+describe("scenario 8, sweep honesty: partial progress is reported as partial", () => {
   it(
     "never claims every flow is done when the tool results show only some",
     { retry: 1, timeout: 240_000 },

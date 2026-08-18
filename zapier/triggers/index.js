@@ -33,7 +33,7 @@ const smsOutbound = makeHookTrigger({
   noun: "Text Message",
   label: "New Outbound Text",
   description:
-    "Triggers when your coworker (or you) sends a text — useful for logging conversations to a CRM or spreadsheet.",
+    "Triggers when your coworker (or you) sends a text, useful for logging conversations to a CRM or spreadsheet.",
   sample: {
     event: "sms.outbound",
     business_id: "3f2a1b4c-0000-0000-0000-000000000001",

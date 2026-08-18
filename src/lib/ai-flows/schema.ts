@@ -3573,7 +3573,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   } else {
     trigger = { channel: "manual" };
     warnings.push(
-      'The trigger could not be understood, so this flow starts from the Run-now button for now — pick the right "Starts when" in the editor.'
+      'The trigger could not be understood, so this flow starts from the Run-now button for now, pick the right "Starts when" in the editor.'
     );
   }
 
@@ -3682,7 +3682,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
         id: "s1",
         type: "notify_owner",
         message:
-          "Your automation ran. (The AI draft needed manual attention — open this flow in the editor to finish it.)"
+          "Your automation ran. (The AI draft needed manual attention, open this flow in the editor to finish it.)"
       });
       warnings.push(
         "No usable steps survived, so a simple notify-me step was added as a starting point."
@@ -3729,7 +3729,7 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
     trigger = { channel: "manual" };
     triggers = undefined;
     warnings.push(
-      `The trigger setup couldn't be repaired (${issue}) — the flow starts from the Run-now button for now.`
+      `The trigger setup couldn't be repaired (${issue}), the flow starts from the Run-now button for now.`
     );
   }
   /* c8 ignore next 2 -- the loop always converges (every pass removes something) */

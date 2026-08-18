@@ -1010,7 +1010,7 @@ describe("runChangePlanFromCheckout", () => {
       );
     });
 
-    it("never checks the cycle for a month-to-month target — the box keeps its current billing", async () => {
+    it("never checks the cycle for a month-to-month target, the box keeps its current billing", async () => {
       await runChangePlanFromCheckout(sameTierSession("monthly"), "evt_term_align_monthly");
       expect(hostingerListBillingSubscriptionsMock).not.toHaveBeenCalled();
       expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
@@ -1893,7 +1893,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("aborts resubscribe (fail-closed) when restoreBusinessData throws — prevents silent empty-workspace activation after grace-sweep partial-execute", async () => {
+  it("aborts resubscribe (fail-closed) when restoreBusinessData throws, prevents silent empty-workspace activation after grace-sweep partial-execute", async () => {
     // Regression: the orchestrator previously caught and swallowed
     // restoreBusinessData errors (logging "customer may need manual
     // recovery") and continued to the optimistic write. The
@@ -1946,7 +1946,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("aborts resubscribe on restore failure even when the Stripe sub id is missing — only the lifetime rollback runs (no Stripe.cancel call)", async () => {
+  it("aborts resubscribe on restore failure even when the Stripe sub id is missing, only the lifetime rollback runs (no Stripe.cancel call)", async () => {
     // Branch coverage for the restore-throw abort: `if
     // (stripeSubscriptionId)` false. A checkout session with no
     // `subscription` field should still trigger the lifetime rollback
@@ -1981,7 +1981,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("aborts resubscribe on restore failure even when no customer profile is resolvable — only Stripe.cancel runs (no rollback call)", async () => {
+  it("aborts resubscribe on restore failure even when no customer profile is resolvable, only Stripe.cancel runs (no rollback call)", async () => {
     // Branch coverage for the restore-throw abort: `if
     // (customerProfileId)` false. With no profile id resolvable from
     // metadata, the old sub, business row, OR session email upsert,
@@ -2023,7 +2023,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
   });
 
-  it("aborts resubscribe on unresolvable VPS host even when the Stripe sub id is missing — only the lifetime rollback runs", async () => {
+  it("aborts resubscribe on unresolvable VPS host even when the Stripe sub id is missing, only the lifetime rollback runs", async () => {
     // Branch coverage for the host-unresolvable abort: `if
     // (stripeSubscriptionId)` false. Same defense-in-depth reasoning
     // as the restore-throw branch, but for the unreachable-VM path.
@@ -2056,7 +2056,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("aborts resubscribe on unresolvable VPS host even when no customer profile is resolvable — only Stripe.cancel runs", async () => {
+  it("aborts resubscribe on unresolvable VPS host even when no customer profile is resolvable, only Stripe.cancel runs", async () => {
     // Branch coverage for the host-unresolvable abort: `if
     // (customerProfileId)` false.
     getSubscriptionMock.mockResolvedValue({
@@ -2615,7 +2615,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
   });
 
-  it("aborts resubscribe (fail-closed) when the new VPS host cannot be resolved (no IP) — prevents charging for unreachable workspace", async () => {
+  it("aborts resubscribe (fail-closed) when the new VPS host cannot be resolved (no IP), prevents charging for unreachable workspace", async () => {
     // Same fail-closed reasoning as the restore-throw branch: the
     // customer can't be served from a VM we can't reach, so we must
     // not flip the row to active + bill them. Cancel the new Stripe
@@ -2652,7 +2652,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("aborts resubscribe (fail-closed) when the new provisioning id is not numeric — same prevent-silent-empty-workspace contract", async () => {
+  it("aborts resubscribe (fail-closed) when the new provisioning id is not numeric, same prevent-silent-empty-workspace contract", async () => {
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",

@@ -60,7 +60,7 @@ export function FlowSafetySettings({
           <span className="block text-xs text-parchment/40 mt-1">
             When on (recommended), AiFlow &quot;update the contact&apos;s tags&quot; steps skip the
             owner and roster employees, so lead-status tags like &quot;New Lead&quot; never land on
-            your team — for example when a teammate tests a flow with their own number. Turn off
+            your team, for example when a teammate tests a flow with their own number. Turn off
             only if you intentionally run automations over your own team&apos;s contacts.
           </span>
         </span>

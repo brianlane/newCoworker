@@ -428,7 +428,7 @@ describe("buildActivityFeed", () => {
     expect(item.label).toBe("Urgent: call");
   });
 
-  it("ranks alerts by recency like any other kind — newer routine events crowd out an old alert", () => {
+  it("ranks alerts by recency like any other kind, newer routine events crowd out an old alert", () => {
     const items = buildActivityFeed(
       emptyInput({
         // One old urgent alert plus three newer routine calls, limit 2: the
@@ -503,7 +503,7 @@ describe("buildActivityFeed", () => {
   });
 });
 
-describe("collectActivityItems — contactE164 attribution", () => {
+describe("collectActivityItems, contactE164 attribution", () => {
   it("stamps the person's number on calls, texts, customers, and lead-stamped flows", () => {
     const items = collectActivityItems(
       emptyInput({
@@ -568,7 +568,7 @@ describe("collectActivityItems", () => {
   });
 });
 
-describe("paginateFullActivityFeed — ranking", () => {
+describe("paginateFullActivityFeed, ranking", () => {
   it("ranks strictly by recency, same as the card", () => {
     const { items } = paginateFullActivityFeed(
       emptyInput({
@@ -932,7 +932,7 @@ describe("getActivityFeedPage", () => {
   });
 });
 
-describe("getActivityFeedPage — filters", () => {
+describe("getActivityFeedPage, filters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());

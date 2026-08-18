@@ -55,7 +55,7 @@ export function ReleaseVpsPoolButton({
   if (done) {
     return (
       <span className="text-xs text-claw-green">
-        ✓ VPS {vpsId} released to pool — this account will be deleted when a new signup adopts it
+        ✓ VPS {vpsId} released to pool, this account will be deleted when a new signup adopts it
       </span>
     );
   }
@@ -65,7 +65,7 @@ export function ReleaseVpsPoolButton({
       <div className="space-y-2">
         <p className="text-xs text-spark-orange">
           Make VPS <strong>{vpsId}</strong> available for new signups?{" "}
-          <strong>{businessName}</strong> keeps running on it for now — but the moment a new
+          <strong>{businessName}</strong> keeps running on it for now, but the moment a new
           account adopts the box it is wiped and reinstalled, and this account (all data + owner
           login) is <strong>permanently deleted</strong>. Releasing also cancels this
           account&apos;s internal subscription and turns off the box&apos;s Hostinger

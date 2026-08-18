@@ -80,7 +80,7 @@ async function audit(): Promise<void> {
   console.log(`${dupes.length} attendee(s) with 2+ upcoming confirmed bookings:`);
   for (const [k, v] of dupes) {
     const [biz, attendee] = k.split("|");
-    console.log(`\n  ${bizName.get(biz) ?? biz} — ${attendee}`);
+    console.log(`\n  ${bizName.get(biz) ?? biz}, ${attendee}`);
     for (const r of v) {
       console.log(`    ${r.start_at}  event ${r.event_id!.slice(0, 12)}…${r.event_id!.slice(-8)}`);
     }
@@ -128,7 +128,7 @@ async function cancelGhost(): Promise<void> {
   );
   if (!conn) {
     throw new Error(
-      `No Microsoft workspace connection for ${businessId} — found: ${(conns ?? [])
+      `No Microsoft workspace connection for ${businessId}, found: ${(conns ?? [])
         .map((c) => c.provider_config_key)
         .join(", ") || "(none)"}`
     );
@@ -168,7 +168,7 @@ async function cancelGhost(): Promise<void> {
   // refuse rather than guess (fail closed — Bugbot Medium on PR #814).
   if ((ev.start?.timeZone ?? "") !== "UTC" || !ev.start?.dateTime) {
     throw new Error(
-      `Provider start not verifiable (timeZone=${ev.start?.timeZone ?? "?"}) — refusing`
+      `Provider start not verifiable (timeZone=${ev.start?.timeZone ?? "?"}), refusing`
     );
   }
   const providerStart = new Date(
@@ -177,7 +177,7 @@ async function cancelGhost(): Promise<void> {
       : `${ev.start.dateTime}Z`
   ).toISOString();
   if (providerStart !== startIso) {
-    throw new Error(`Provider start ${providerStart} != ledger start ${startIso} — refusing`);
+    throw new Error(`Provider start ${providerStart} != ledger start ${startIso}, refusing`);
   }
 
   if (!APPLY) {

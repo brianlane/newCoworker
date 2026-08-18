@@ -77,7 +77,7 @@ export async function wipeByosBox(
   const key = await getActiveVpsSshKeyForBusiness(input.businessId);
   if (!key) {
     throw new Error(
-      `wipeByosBox: no active SSH key for business ${input.businessId} — cannot reach the box`
+      `wipeByosBox: no active SSH key for business ${input.businessId}, cannot reach the box`
     );
   }
   const b64 = Buffer.from(BYOS_WIPE_SCRIPT, "utf8").toString("base64");

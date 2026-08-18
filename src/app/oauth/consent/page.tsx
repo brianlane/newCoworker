@@ -103,8 +103,8 @@ export default async function OAuthConsentPage({
             .
           </p>
           <p className="text-xs text-parchment/50">
-            It will be able to act with your role on your businesses — reading contacts,
-            messages and calls, sending texts, booking appointments, and managing AiFlows —
+            It will be able to act with your role on your businesses, reading contacts,
+            messages and calls, sending texts, booking appointments, and managing AiFlows,
             until you disconnect it.
           </p>
           {scopes.length > 0 ? (

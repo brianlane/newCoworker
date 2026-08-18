@@ -70,7 +70,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
   };
 }
 
-describe("summarizeCustomerMemory — default listEmailLogForAddress path", () => {
+describe("summarizeCustomerMemory, default listEmailLogForAddress path", () => {
   it("uses the imported listEmailLogForAddress when no dep override is supplied", async () => {
     const callRowboatChat = vi.fn(async () => ({
       reply: "Joe emailed asking for a quote.",

@@ -156,7 +156,7 @@ if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
   # Without this, `modprobe zram` FATALs and (under `set -euo pipefail`)
   # kills the whole bootstrap before Docker/Ollama/Rowboat ever install.
   if ! modprobe zram 2>/dev/null; then
-    log "zram module missing — installing linux-modules-extra-$(uname -r)..."
+    log "zram module missing, installing linux-modules-extra-$(uname -r)..."
     apt-get "${APT_LOCK_OPTS[@]}" install -y -qq "linux-modules-extra-$(uname -r)"
     modprobe zram
   fi
@@ -165,7 +165,7 @@ if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
   # writing comp_algorithm to an initialized device fails EBUSY and would
   # kill the whole re-run under `set -euo pipefail`.
   if swapon --show=NAME --noheadings 2>/dev/null | grep -q '^/dev/zram0$'; then
-    log "ZRAM swap already active on /dev/zram0 — skipping device init."
+    log "ZRAM swap already active on /dev/zram0, skipping device init."
   else
     echo lz4 > /sys/block/zram0/comp_algorithm
     echo 4G > /sys/block/zram0/disksize

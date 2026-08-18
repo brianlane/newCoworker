@@ -55,7 +55,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("checkVpsBillingPosture — tenant direction", () => {
+describe("checkVpsBillingPosture, tenant direction", () => {
   it("reports nothing when the tenant's box renews", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1" })]),
@@ -120,7 +120,7 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     );
   });
 
-  it("reports (without healing) when the re-enable call fails — Error and non-Error", async () => {
+  it("reports (without healing) when the re-enable call fails, Error and non-Error", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1" }), biz({ id: "b2", hostinger_vps_id: "222" })]),
       getVirtualMachine: vi
@@ -174,7 +174,7 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     );
   });
 
-  it("reports an unreachable VM — Error and non-Error lookups", async () => {
+  it("reports an unreachable VM, Error and non-Error lookups", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1" }), biz({ id: "b2", hostinger_vps_id: "222" })]),
       getVirtualMachine: vi
@@ -227,7 +227,7 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     );
   });
 
-  it("reports (never heals) a Stripe-less live tenant — the Residency Pilot regression", async () => {
+  it("reports (never heals) a Stripe-less live tenant, the Residency Pilot regression", async () => {
     // Jul 9 2026 production incident: the pilot's internal subscription is
     // status=active but has NO Stripe payment behind it, and its box was
     // deliberately parked non-renewing to lapse Aug 2. The first posture
@@ -402,7 +402,7 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     expect(deps.enableAutoRenewal).toHaveBeenCalledWith("hsub-live");
   });
 
-  it("never heals a never_renew box — reports migration-needed instead (lapsing sub)", async () => {
+  it("never heals a never_renew box, reports migration-needed instead (lapsing sub)", async () => {
     // srv1632631 case: KVM8 hardware pooled under the kvm2 label. A paying
     // tenant adopted it, but its $73.99/mo renewal must never be paid — the
     // cron nags ops to migrate the tenant, it does NOT re-enable renewal.
@@ -476,18 +476,18 @@ describe("checkVpsBillingPosture — tenant direction", () => {
         kind: "never_renew_tenant_migration_needed",
         vmId: 1632631,
         expiresAt: "2026-07-30T00:00:00Z",
-        detail: expect.stringContaining("still auto-renewing — disable renewal in hPanel")
+        detail: expect.stringContaining("still auto-renewing, disable renewal in hPanel")
       }),
       expect.objectContaining({
         kind: "never_renew_tenant_migration_needed",
         vmId: 103,
         expiresAt: null,
-        detail: expect.stringContaining("still auto-renewing — disable renewal in hPanel")
+        detail: expect.stringContaining("still auto-renewing, disable renewal in hPanel")
       })
     ]);
   });
 
-  it("never_renew reporting works without a resolvable subscription — VM id fallback and null", async () => {
+  it("never_renew reporting works without a resolvable subscription, VM id fallback and null", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([
         biz({ id: "b1", hostinger_vps_id: "101" }),
@@ -554,7 +554,7 @@ describe("checkVpsBillingPosture — tenant direction", () => {
   });
 });
 
-describe("checkVpsBillingPosture — pool direction", () => {
+describe("checkVpsBillingPosture, pool direction", () => {
   it("reports an available pool box that is still auto-renewing (report-only)", async () => {
     const deps = makeDeps({
       listInventory: vi.fn().mockResolvedValue([poolRow({ vm_id: 999 })]),
@@ -646,7 +646,7 @@ describe("checkVpsBillingPosture — pool direction", () => {
  * tenants, but nothing anywhere fires when a business is `online` with no
  * hostinger_vps_id at all, and a failed migration can produce exactly that.
  */
-describe("checkVpsBillingPosture — fleet consistency", () => {
+describe("checkVpsBillingPosture, fleet consistency", () => {
   it("flags a Hostinger VM that is absent from vps_inventory", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([]),

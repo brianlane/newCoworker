@@ -722,7 +722,7 @@ async function runTelnyxOp(
     await sendOpsDidReleaseFailedEmail({
       businessId: op.businessId,
       e164: op.e164,
-      reason: "TELNYX_API_KEY missing — release never attempted"
+      reason: "TELNYX_API_KEY missing, release never attempted"
     });
     return;
   }

@@ -16,16 +16,16 @@ import {
 import { TENANT_OUTBOUND_DIAL_HEADROOM_DEFAULT } from "../supabase/functions/_shared/voice_reservation_limits";
 
 describe("resolveSmsCampaignCopy", () => {
-  it("returns null when status is missing (unknown/uninitialized — don't show a banner)", () => {
+  it("returns null when status is missing (unknown/uninitialized, don't show a banner)", () => {
     expect(resolveSmsCampaignCopy(null)).toBeNull();
     expect(resolveSmsCampaignCopy(undefined)).toBeNull();
   });
 
-  it("returns null when registered (happy path — no UI noise)", () => {
+  it("returns null when registered (happy path, no UI noise)", () => {
     expect(resolveSmsCampaignCopy("registered")).toBeNull();
   });
 
-  it("returns null when unregistered (explicit detach — no banner)", () => {
+  it("returns null when unregistered (explicit detach, no banner)", () => {
     expect(resolveSmsCampaignCopy("unregistered")).toBeNull();
   });
 

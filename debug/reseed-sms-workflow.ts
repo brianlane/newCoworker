@@ -37,7 +37,7 @@ SMS_MODEL="${TARGET_MODEL}"
 case "\$SMS_MODEL" in
   gemini-*)
     if [ -z "\$GK" ]; then
-      echo "WARNING: target \$SMS_MODEL needs GOOGLE_API_KEY but none in \$RB_ENV — Coworker will stay on local \$OLM (keyless)"
+      echo "WARNING: target \$SMS_MODEL needs GOOGLE_API_KEY but none in \$RB_ENV, Coworker will stay on local \$OLM (keyless)"
       SMS_MODEL="\$OLM"
     fi
     ;;

@@ -81,7 +81,7 @@ export const SUMMARY_INPUT_SMS_TURNS = 30;
  */
 export const SUMMARY_INPUT_EMAILS = 10;
 
-const SUMMARIZER_SYSTEM_INSTRUCTION = `SUMMARIZER MODE — DO NOT respond as the persona, agent, or assistant.
+const SUMMARIZER_SYSTEM_INSTRUCTION = `SUMMARIZER MODE, DO NOT respond as the persona, agent, or assistant.
 
 You will receive context about a customer's prior interactions with a business across SMS, voice, and email. Produce a concise factual digest the agent can use to maintain continuity in future interactions across any of those channels.
 
@@ -89,17 +89,17 @@ Output ONLY the summary text. Do NOT include preamble, sign-offs, or meta-commen
 
 Cover, in order:
 1. Identifying details the customer has shared (name, business, what they buy or want).
-2. History of past interactions (high-level — what was discussed, what was promised, what was decided).
+2. History of past interactions (high-level, what was discussed, what was promised, what was decided).
 3. Stylistic preferences for replies (formal/casual, channel preference, do-not-call windows, etc.).
 4. Open commitments or follow-ups still pending on either side.
 
 DATES MUST BE ABSOLUTE. This summary is read on later days, so relative words rot: "tomorrow" written on July 13 is wrong by July 14. Express every date/time as an absolute date (e.g. "July 14, 1:00 PM EDT"), never "today", "tomorrow", "yesterday", "next week", or similar. When the source material uses a relative word, resolve it against that message's own timestamp (every transcript line above is timestamped) before writing it down.
 
-THE DISPLAY NAME IN THE REQUEST IS AUTHORITATIVE. The customer name given in the "Update the rolling summary for customer …" line (when present) is the business owner's own label for this contact. If the existing summary or the source material uses a different or fuller name, correct the summary to the owner's name — do not carry the old name forward.
+THE DISPLAY NAME IN THE REQUEST IS AUTHORITATIVE. The customer name given in the "Update the rolling summary for customer …" line (when present) is the business owner's own label for this contact. If the existing summary or the source material uses a different or fuller name, correct the summary to the owner's name, do not carry the old name forward.
 
 Do NOT invent details. If the available context is sparse, output the shortest faithful summary possible. Never speculate about the customer's identity or motives beyond what the source material directly supports.
 
-Do NOT call any tools in this mode — never set a display name, pin a note, send a message, or take any other action. Your ONLY output is the summary text.`;
+Do NOT call any tools in this mode, never set a display name, pin a note, send a message, or take any other action. Your ONLY output is the summary text.`;
 
 export type SummarizeFailureReason =
   | "memory_not_found"

@@ -52,7 +52,7 @@ const querySchema = z.object({
 
 /** Visitor-facing copy for a failed turn — never the raw error taxonomy. */
 const JOB_ERROR_MESSAGE =
-  "Sorry — I couldn't get a reply just now. Please try sending that again.";
+  "Sorry, I couldn't get a reply just now. Please try sending that again.";
 
 /**
  * Claim + answer one queued job with the direct-Gemini engine. Returns the
@@ -72,7 +72,7 @@ async function runPlatformEngineTurn(
     job.status === "queued"
       ? await claimWebchatJobForPlatform(job.id)
       : await reclaimStaleWebchatJobForPlatform(job.id);
-  if (!claimed) return null; // lost the race / claim still healthy — re-read below
+  if (!claimed) return null; // lost the race / claim still healthy, re-read below
 
   const t0 = Date.now();
   let outcome: "done" | "error" = "error";

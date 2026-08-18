@@ -183,7 +183,7 @@ export async function updateThreadSummary(
       updated_at: new Date().toISOString()
     })
     .eq("id", threadId)
-    // Last-writer-wins is wrong here — the LATEST writer wins. If
+    // Last-writer-wins is wrong here, the LATEST writer wins. If
     // another summarizer has already persisted at a higher message
     // count, our row goes nowhere. Surfaces as zero rows updated, no
     // error, which is the intended outcome.

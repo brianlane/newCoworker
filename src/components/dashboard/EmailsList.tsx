@@ -279,7 +279,7 @@ function ReadingPane({
         try {
           sessionStorage.setItem(`emails-skip-autoread:${row.id}`, "1");
         } catch {
-          /* private mode / quota — best-effort */
+          /* private mode / quota, best-effort */
         }
       } else if (actions.markRead === true) {
         try {
@@ -493,7 +493,7 @@ function ReadingPane({
         </div>
       )}
       {deleteState === "error" && (
-        <p className="mb-3 text-xs text-spark-orange">Couldn&apos;t delete — try again.</p>
+        <p className="mb-3 text-xs text-spark-orange">Couldn&apos;t delete, try again.</p>
       )}
 
       <h2 className="text-lg font-bold text-parchment mb-4 break-words">
@@ -694,7 +694,7 @@ function ReplayPanel({
       if (!res.ok || !json?.data?.summary) {
         setState({
           status: "error",
-          message: json?.error?.message ?? "Replay failed — try again in a minute."
+          message: json?.error?.message ?? "Replay failed, try again in a minute."
         });
         return;
       }
@@ -709,7 +709,7 @@ function ReplayPanel({
       });
       onReplayed();
     } catch {
-      setState({ status: "error", message: "Replay failed — try again in a minute." });
+      setState({ status: "error", message: "Replay failed, try again in a minute." });
     }
   }
 
@@ -728,7 +728,7 @@ function ReplayPanel({
           <span className="font-semibold text-parchment">
             {unmatchedIds.length} inbox email{unmatchedIds.length === 1 ? "" : "s"}
           </span>{" "}
-          arrived without an active flow — no contact was created and nobody was texted.
+          arrived without an active flow, no contact was created and nobody was texted.
         </p>
         {(state.status === "idle" || state.status === "error") && (
           <button

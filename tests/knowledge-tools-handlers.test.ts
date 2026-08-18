@@ -221,7 +221,7 @@ describe("lookupBusinessKnowledge", () => {
       memory_graph_mode: "active"
     } as never);
     vi.mocked(retrieveGraphContext).mockResolvedValue({
-      context: "- Amy Laidlaw (person) — phone 602-695-1142",
+      context: "- Amy Laidlaw (person), phone 602-695-1142",
       matchedEntities: 1,
       facts: 1
     });
@@ -289,7 +289,7 @@ describe("lookupBusinessKnowledge", () => {
     vi.mocked(retrieveGraphContext).mockResolvedValue({
       context:
         "- Amy Laidlaw phone: 602-695-1142\n" +
-        "- Bryan Buyer roof_status: replaced 2019 — claimed by +14805551234 (unverified)",
+        "- Bryan Buyer roof_status: replaced 2019, claimed by +14805551234 (unverified)",
       matchedEntities: 2,
       facts: 2
     });

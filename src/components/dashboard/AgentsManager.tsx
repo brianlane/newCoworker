@@ -132,7 +132,7 @@ export function AgentsManager({
         setShowCreate(true);
       }
     } catch {
-      /* malformed/absent draft — fall back to the normal list view */
+      /* malformed/absent draft, fall back to the normal list view */
     }
   }, [initialDraft, retypesetAvailable]);
 
@@ -231,7 +231,7 @@ export function AgentsManager({
       setShowCreate(false);
       await refresh();
     } catch {
-      setError("Creating the agent failed — try again.");
+      setError("Creating the agent failed, try again.");
     } finally {
       setCreating(false);
     }
@@ -259,7 +259,7 @@ export function AgentsManager({
       setNotice("Agent saved.");
       await refresh();
     } catch {
-      setError("Saving failed — try again.");
+      setError("Saving failed, try again.");
     } finally {
       setSavingAgent(false);
     }
@@ -277,7 +277,7 @@ export function AgentsManager({
       if (!json.ok) setError(json.error?.message ?? "Update failed");
       await refresh();
     } catch {
-      setError("Update failed — try again.");
+      setError("Update failed, try again.");
     }
   }
 
@@ -300,7 +300,7 @@ export function AgentsManager({
       }
       await refresh();
     } catch {
-      setError("Delete failed — try again.");
+      setError("Delete failed, try again.");
     }
   }
 
@@ -355,7 +355,7 @@ export function AgentsManager({
       }
       await refreshRuns(agent.id);
     } catch {
-      setError("Run failed — try again.");
+      setError("Run failed, try again.");
     } finally {
       setRunning(false);
     }
@@ -366,7 +366,7 @@ export function AgentsManager({
       await navigator.clipboard.writeText(run.output_md);
       setNotice("Output copied to clipboard.");
     } catch {
-      setError("Copy failed — select the text manually.");
+      setError("Copy failed, select the text manually.");
     }
   }
 
@@ -387,7 +387,7 @@ export function AgentsManager({
       }
       setNotice("Saved to Documents (Memory page) as an internal document.");
     } catch {
-      setError("Saving as a document failed — try again.");
+      setError("Saving as a document failed, try again.");
     } finally {
       setSavingRunDoc(null);
     }
@@ -400,7 +400,7 @@ export function AgentsManager({
           <div>
             <h2 className="text-base font-semibold text-parchment">Your agents</h2>
             <p className="text-xs text-parchment/50 mt-0.5">
-              Example: &ldquo;Turn this intake form into a clean client summary&rdquo; — save it
+              Example: &ldquo;Turn this intake form into a clean client summary&rdquo;, save it
               once, run it on every new form.
             </p>
           </div>
@@ -434,7 +434,7 @@ export function AgentsManager({
                 ))}
               </div>
               <p className="mt-1 text-[11px] text-parchment/40">
-                Templates prefill the form below — review and adjust before creating. The quote
+                Templates prefill the form below, review and adjust before creating. The quote
                 templates organize and compare information only; they never make recommendations.
               </p>
             </div>
@@ -505,7 +505,7 @@ export function AgentsManager({
       ) : agents.length === 0 ? (
         <Card>
           <p className="text-sm text-parchment/60">
-            No agents yet. Create one above — save the instructions once, then run it on any
+            No agents yet. Create one above, save the instructions once, then run it on any
             attachment.
           </p>
         </Card>
@@ -608,7 +608,7 @@ export function AgentsManager({
                     </div>
                   )}
                   <p className="text-[11px] text-parchment/40">
-                    PDF, Word (.docx), text, markdown, or CSV — up to {AGENT_RUN_MAX_FILES} files, 10 MB each.
+                    PDF, Word (.docx), text, markdown, or CSV, up to {AGENT_RUN_MAX_FILES} files, 10 MB each.
                     Attach several to work across them in one run (e.g. compare quotes). Runs use
                     your plan&rsquo;s shared AI budget.
                   </p>

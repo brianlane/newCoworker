@@ -43,7 +43,7 @@ export function recordGeminiUsage(
       }) + "\n"
     );
   } catch {
-    // Observability only — never fail a test over the log.
+    // Observability only, never fail a test over the log.
   }
 }
 

@@ -66,7 +66,7 @@ export function DeleteItemButton({
         {state === "deleting" ? "Deleting…" : label}
       </button>
       {state === "error" && (
-        <span className="text-xs text-spark-orange">Couldn&apos;t delete — try again.</span>
+        <span className="text-xs text-spark-orange">Couldn&apos;t delete, try again.</span>
       )}
     </span>
   );

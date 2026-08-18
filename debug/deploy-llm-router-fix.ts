@@ -40,7 +40,7 @@ DC="docker compose -f /opt/rowboat/docker-compose.yml"
 
 write_pair () {
   d="\$1"
-  [ -d "\$d" ] || { echo "(skip \$d — not present)"; return 0; }
+  [ -d "\$d" ] || { echo "(skip \$d, not present)"; return 0; }
   mkdir -p "\$d/src"
   echo '${indexB64}'   | base64 -d > "\$d/src/index.js"
   echo '${routingB64}' | base64 -d > "\$d/src/routing.js"

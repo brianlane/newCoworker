@@ -107,7 +107,7 @@ export function OwnerProfileForm({
     <Card>
       <h2 className="text-sm font-semibold text-parchment mb-1">Your profile</h2>
       <p className="text-xs text-parchment/40 mb-4">
-        Your name and phone number — used for alerts and as the human callback line your
+        Your name and phone number, used for alerts and as the human callback line your
         coworker can hand off to.
       </p>
       <form onSubmit={save} className="space-y-3">

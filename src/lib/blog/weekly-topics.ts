@@ -54,7 +54,7 @@ const BRAND_CONTEXT =
   "New Coworker is an AI coworker for businesses: it answers calls and texts, " +
   "books appointments, and follows up with leads so owners never miss business. " +
   "Audience: busy small-business owners. Write in plain English a 12-year-old could " +
-  "understand — short sentences, zero jargon, benefit first. Never call the product " +
+  "understand, short sentences, zero jargon, benefit first. Never call the product " +
   "an answering service.";
 
 const SHARED_RULES =
@@ -71,7 +71,7 @@ function topicSystemInstruction(category: TopicCategory): string {
       `You write a step-by-step tutorial for the New Coworker blog. ${BRAND_CONTEXT} ` +
       "Pick ONE feature from the shipped-features list the user provides and teach " +
       "owners how to get value from it: what it does, when to use it, and how to " +
-      "get started. Ground every claim in the provided material — if the material " +
+      "get started. Ground every claim in the provided material, if the material " +
       "does not describe an exact button or menu, describe the outcome instead of " +
       "inventing UI steps. " +
       SHARED_RULES
@@ -92,7 +92,7 @@ function topicSystemInstruction(category: TopicCategory): string {
     "Topic areas: never missing calls or leads, faster follow-up, booking more " +
     "appointments, delegating to an AI coworker, simple marketing habits. Give " +
     "specific, actionable advice an owner can apply this week. The user lists the " +
-    "titles of recent business-tips posts — choose a topic that clearly differs " +
+    "titles of recent business-tips posts, choose a topic that clearly differs " +
     "from all of them. " +
     SHARED_RULES
   );
@@ -108,7 +108,7 @@ function topicUserText(
       ? `Recent business-tips posts (do NOT repeat these topics):\n${recentTitles
           .map((t) => `- ${t}`)
           .join("\n")}`
-      : "This is the first business-tips post — pick any strong topic.";
+      : "This is the first business-tips post, pick any strong topic.";
   }
   return `Recently shipped features:\n${features
     .map((p) => `- ${p.title}${p.body ? `: ${p.body.slice(0, 300).replace(/\s+/g, " ")}` : ""}`)
@@ -155,7 +155,7 @@ export async function composeTopicWithGemini(
   let draft = await generateOnce("");
   if (countWords(draft.content) > DIGEST_MAX_WORDS) {
     draft = await generateOnce(
-      ` Your previous attempt was too long — keep the content body strictly under ${DIGEST_MAX_WORDS} words this time.`
+      ` Your previous attempt was too long, keep the content body strictly under ${DIGEST_MAX_WORDS} words this time.`
     );
     if (countWords(draft.content) > DIGEST_MAX_WORDS) {
       draft = { ...draft, content: truncateAtSectionBoundary(draft.content, DIGEST_MAX_WORDS) };
@@ -262,7 +262,7 @@ export async function runWeeklyAuto(deps: WeeklyAutoDeps = {}): Promise<WeeklyAu
     return { ...base, outcome: "already_exists" };
   }
   if (!topicToggle(settings, rotation)) {
-    logger.info("weekly-auto: rotation category disabled — falling back to the digest", {
+    logger.info("weekly-auto: rotation category disabled, falling back to the digest", {
       weekKey,
       rotation
     });
@@ -279,7 +279,7 @@ export async function runWeeklyAuto(deps: WeeklyAutoDeps = {}): Promise<WeeklyAu
     ).toISOString();
     features = await selectFeaturePrs(await fetchMergedPrs(sinceIso, untilIso), classify);
     if (features.length === 0) {
-      logger.info("weekly-auto: no feature grounding — falling back to the digest", {
+      logger.info("weekly-auto: no feature grounding, falling back to the digest", {
         weekKey,
         rotation
       });
@@ -293,7 +293,7 @@ export async function runWeeklyAuto(deps: WeeklyAutoDeps = {}): Promise<WeeklyAu
 
   const draft = await composeTopic(rotation, features, recentTitles);
   if (countWords(draft.content) < DIGEST_MIN_WORDS) {
-    logger.info("weekly-auto: composed topic too thin — falling back to the digest", {
+    logger.info("weekly-auto: composed topic too thin, falling back to the digest", {
       weekKey,
       rotation,
       words: countWords(draft.content)

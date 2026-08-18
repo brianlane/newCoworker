@@ -56,7 +56,7 @@ describe("buildSlideModel", () => {
     expect(deck.slides[0].bullets[0].text).toBe("call Jane about old code plan");
   });
 
-  it("caps slides, bullets per slide, and bullet length — flagging truncation", () => {
+  it("caps slides, bullets per slide, and bullet length, flagging truncation", () => {
     const manySlides = Array.from({ length: PPTX_MAX_SLIDES + 5 }, (_, i) => `# S${i}`).join("\n");
     const deckA = buildSlideModel(manySlides, "big");
     expect(deckA.slides).toHaveLength(PPTX_MAX_SLIDES);

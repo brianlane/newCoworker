@@ -154,7 +154,7 @@ export function evaluate(rows: TelemetryRow[], args: RolloutArgs): CheckResult[]
     ok: answered != null,
     detail: answered
       ? `found at ${answered.created_at}`
-      : "no matching row — Edge never minted a stream URL"
+      : "no matching row, Edge never minted a stream URL"
   });
 
   // --- 2. Rollout guard didn't silently block streaming. -------------------
@@ -167,7 +167,7 @@ export function evaluate(rows: TelemetryRow[], args: RolloutArgs): CheckResult[]
     detail:
       streamDisabled === 0
         ? "rollout flag is on (or not fired)"
-        : `fired ${streamDisabled}× — VOICE_AI_STREAM_ENABLED is likely off`
+        : `fired ${streamDisabled}×, VOICE_AI_STREAM_ENABLED is likely off`
   });
 
   // --- 3. At least one settlement finalized in the window. -----------------
@@ -181,7 +181,7 @@ export function evaluate(rows: TelemetryRow[], args: RolloutArgs): CheckResult[]
     detail:
       finalized > 0
         ? `${finalized} finalized`
-        : "no settlements finalized — call may still be live or bridge is stuck"
+        : "no settlements finalized, call may still be live or bridge is stuck"
   });
 
   // --- 4. Bridge health is green (latest report in window). ----------------
@@ -200,7 +200,7 @@ export function evaluate(rows: TelemetryRow[], args: RolloutArgs): CheckResult[]
       name: "voice_bridge_health_check is green",
       ok: false,
       detail:
-        "no voice_bridge_health_check in window — alerts cron not running yet? schedule migration applied?"
+        "no voice_bridge_health_check in window, alerts cron not running yet? schedule migration applied?"
     });
   }
 
@@ -214,7 +214,7 @@ export function evaluate(rows: TelemetryRow[], args: RolloutArgs): CheckResult[]
     detail:
       answerFails === 0
         ? "no answer failures"
-        : `${answerFails} answer failures — check telnyx_call_actions logs`
+        : `${answerFails} answer failures, check telnyx_call_actions logs`
   });
 
   const rejections = countByType(rows, "edge_webhook_rejected");
@@ -289,7 +289,7 @@ async function main(): Promise<void> {
       `[rollout-verify] window ${report.sinceIso} → ${report.now} (${passed}/${report.checks.length} checks green)`
     );
     for (const c of report.checks) {
-      console.log(`  ${c.ok ? "[ok]  " : "[FAIL]"} ${c.name} — ${c.detail}`);
+      console.log(`  ${c.ok ? "[ok]  " : "[FAIL]"} ${c.name}, ${c.detail}`);
     }
   }
   process.exit(report.ok ? 0 : 1);

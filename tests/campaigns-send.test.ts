@@ -181,7 +181,7 @@ describe("unsubscribe tokens", () => {
   });
 });
 
-describe("processCampaignSweep — promotion", () => {
+describe("processCampaignSweep, promotion", () => {
   it("claims FIRST (single writer), then snapshots a suppressed/de-duped audience", async () => {
     const { db, calls } = makeDb([
       { id: "a", email: "jane@x.test" },
@@ -262,7 +262,7 @@ describe("processCampaignSweep — promotion", () => {
   });
 });
 
-describe("processCampaignSweep — sending", () => {
+describe("processCampaignSweep, sending", () => {
   it("claims then sends from the tenant mailbox with unsubscribe wiring, deriving counters", async () => {
     const sendEmail = vi.fn(async () => "resend-id");
     listSending.mockResolvedValue([campaign({ status: "sending" })]);
@@ -584,7 +584,7 @@ describe("processCampaignSweep — sending", () => {
  * permanently due detonates months-stale content within a minute of an
  * upgrade. Unschedule instead: back to draft with send_at cleared.
  */
-describe("processCampaignSweep — Starter scheduled rows", () => {
+describe("processCampaignSweep, Starter scheduled rows", () => {
   it("unschedules a blocked campaign back to draft instead of leaving it due", async () => {
     vi.mocked(getBusiness).mockResolvedValue({
       name: "Starter Co",

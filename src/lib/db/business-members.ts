@@ -242,7 +242,7 @@ export async function bindBusinessMemberUser(
     .eq("status", "invited")
     // The column is lowercase BY SCHEMA (CHECK email = lower(email)) and
     // indexed as a plain column, so this equality predicate is an index
-    // lookup — not a scan — on every dashboard render.
+    // lookup, not a scan, on every dashboard render.
     .eq("email", normalized)
     .select("id");
   if (error) throw new Error(`bindBusinessMemberUser: ${error.message}`);

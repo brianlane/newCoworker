@@ -140,7 +140,7 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
             .slice()
             .reverse()
             .map(
-              (m) => `${m.direction}: ${m.subject ?? ""} — ${(m.body_preview ?? "").slice(0, 500)}`
+              (m) => `${m.direction}: ${m.subject ?? ""}, ${(m.body_preview ?? "").slice(0, 500)}`
             )
             .join("\n")
         );
@@ -193,7 +193,7 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
   console.log(
     APPLY
       ? "[kg-backfill] conversational replay DONE"
-      : "[kg-backfill] conversational dry run complete — re-run with --apply to write"
+      : "[kg-backfill] conversational dry run complete, re-run with --apply to write"
   );
 }
 
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
       `(archive=${archiveBullets.length}, active=${activeBullets.length}) apply=${APPLY}`
   );
   if (bullets.length === 0) {
-    console.log("[kg-backfill] nothing to do — memory holds no bullet lines");
+    console.log("[kg-backfill] nothing to do, memory holds no bullet lines");
     return;
   }
 
@@ -309,7 +309,7 @@ async function main(): Promise<void> {
   if (APPLY) {
     console.log(`[kg-backfill] DONE ${JSON.stringify(totals)}`);
   } else {
-    console.log("[kg-backfill] dry run complete — re-run with --apply to write");
+    console.log("[kg-backfill] dry run complete, re-run with --apply to write");
   }
 }
 

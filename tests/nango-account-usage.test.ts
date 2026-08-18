@@ -129,7 +129,7 @@ describe("maybeSendNangoQuotaAlert", () => {
     expect(mockSendOpsNangoQuotaEmail).not.toHaveBeenCalled();
   });
 
-  it("never throws — a limiter failure is swallowed", async () => {
+  it("never throws, a limiter failure is swallowed", async () => {
     mockListConnections.mockResolvedValue(connections(10));
     mockRateLimitDurable.mockRejectedValue(new Error("rpc down"));
 

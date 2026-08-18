@@ -101,7 +101,7 @@ beforeEach(() => {
 });
 
 describe("provider registry parity (the future-integration guard)", () => {
-  it("every provider resolveCalendarConnection can return is registered — adapter or explicit ledger_only", () => {
+  it("every provider resolveCalendarConnection can return is registered, adapter or explicit ledger_only", () => {
     // Parse the provider union straight out of the connections module's
     // source (same spirit as the agent-tool seed parity test): a new
     // provider added to ResolvedVoiceConnection without a registry decision
@@ -566,7 +566,7 @@ describe("findUpcomingBookingsForAttendee", () => {
     expect(out.map((b) => b.provider)).toEqual(["ledger"]);
   });
 
-  it("fails open (with a warning) when the provider lookup throws — Error and string shapes", async () => {
+  it("fails open (with a warning) when the provider lookup throws, Error and string shapes", async () => {
     const d = deps({
       findLedgerClaim: vi.fn().mockResolvedValue(LEDGER_CLAIM),
       resolveConnection: vi.fn().mockResolvedValue(VAGARO_CONN),

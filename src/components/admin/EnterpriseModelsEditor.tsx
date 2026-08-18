@@ -73,7 +73,7 @@ export function EnterpriseModelsEditor({
       <p className="text-parchment/50 text-xs">
         Per-tenant model overrides (empty = platform default). Chat slots take non-live
         gemini-* ids; voice takes a live-flavored, non-translate model. Changes apply on
-        the NEXT deploy/redeploy of the tenant box — they are not live-applied. The voice
+        the NEXT deploy/redeploy of the tenant box, they are not live-applied. The voice
         itself is picked on the Voice &amp; SMS DID card and applies immediately.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -130,7 +130,7 @@ export function EnterpriseModelsEditor({
         >
           Clear overrides
         </Button>
-        {saved && <span className="text-xs text-claw-green">Saved — applies at next redeploy</span>}
+        {saved && <span className="text-xs text-claw-green">Saved, applies at next redeploy</span>}
       </div>
       {error && <p className="text-xs text-spark-orange">{error}</p>}
     </div>

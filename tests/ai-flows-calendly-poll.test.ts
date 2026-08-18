@@ -491,10 +491,10 @@ describe("fetchCalendlyCandidateEvents", () => {
       events: () => ({ collection: many }),
       invitees: (uuid) => {
         inviteeCalls += 1;
-        if (uuid === "EV0") return null; // transport refusal — deferred
-        if (uuid === "EV1") throw new Error("calendly 500"); // thrown Error — deferred
-        if (uuid === "EV2") throw "calendly string blast"; // thrown non-Error — deferred
-        if (uuid === "EV3") return {}; // no collection = zero invitees — a SUCCESS, fires
+        if (uuid === "EV0") return null; // transport refusal, deferred
+        if (uuid === "EV1") throw new Error("calendly 500"); // thrown Error, deferred
+        if (uuid === "EV2") throw "calendly string blast"; // thrown non-Error, deferred
+        if (uuid === "EV3") return {}; // no collection = zero invitees, a SUCCESS, fires
         return { collection: [{ name: "I", email: "i@x.co" }] };
       }
     });
@@ -516,7 +516,7 @@ describe("fetchCalendlyCandidateEvents", () => {
     expect(res.events.map((e) => e.id)).not.toContain("EV0");
     expect(res.events.map((e) => e.id)).not.toContain("EV25");
     expect(res.events[0].id).toBe("EV3");
-    expect(res.events[0].attendees).toBeUndefined(); // zero invitees — still fires
+    expect(res.events[0].attendees).toBeUndefined(); // zero invitees, still fires
     expect(res.events[1].attendees).toEqual(["I <i@x.co>"]);
   });
 

@@ -79,7 +79,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("db/voice-transcripts — listTranscriptsForBusiness", () => {
+describe("db/voice-transcripts, listTranscriptsForBusiness", () => {
   it("orders desc by created_at and respects the default limit", async () => {
     const c = chain();
     c.limit.mockResolvedValue({ data: [TRANSCRIPT], error: null });
@@ -134,7 +134,7 @@ describe("db/voice-transcripts — listTranscriptsForBusiness", () => {
   });
 });
 
-describe("db/voice-transcripts — getTranscriptByCallControlId", () => {
+describe("db/voice-transcripts, getTranscriptByCallControlId", () => {
   it("scopes by business_id + call_control_id and returns the row", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: TRANSCRIPT, error: null });
@@ -171,7 +171,7 @@ describe("db/voice-transcripts — getTranscriptByCallControlId", () => {
   });
 });
 
-describe("db/voice-transcripts — getTranscriptById", () => {
+describe("db/voice-transcripts, getTranscriptById", () => {
   it("scopes by business_id + id (UUID) and returns the row", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: TRANSCRIPT, error: null });
@@ -211,7 +211,7 @@ describe("db/voice-transcripts — getTranscriptById", () => {
   });
 });
 
-describe("db/voice-transcripts — softDeleteTranscript", () => {
+describe("db/voice-transcripts, softDeleteTranscript", () => {
   it("delegates to the residency-aware soft delete with an id filter", async () => {
     vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 1, box: null });
     const db = makeDb(chain());
@@ -238,7 +238,7 @@ describe("db/voice-transcripts — softDeleteTranscript", () => {
   });
 });
 
-describe("db/voice-transcripts — listTurns", () => {
+describe("db/voice-transcripts, listTurns", () => {
   it("orders by turn_index ascending", async () => {
     const c = chain();
     c.order.mockResolvedValue({ data: [{ id: 1, turn_index: 0 }], error: null });
@@ -272,7 +272,7 @@ describe("db/voice-transcripts — listTurns", () => {
   });
 });
 
-describe("db/voice-transcripts — listTranscriptsForCaller (Phase 4b)", () => {
+describe("db/voice-transcripts, listTranscriptsForCaller (Phase 4b)", () => {
   // Cross-link helper for the per-customer dashboard page. Scopes by
   // caller_e164 (NOT call_control_id / id) and orders by started_at —
   // started_at is more meaningful than created_at on the customers
@@ -351,7 +351,7 @@ describe("db/voice-transcripts — listTranscriptsForCaller (Phase 4b)", () => {
   });
 });
 
-describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-channel summarizer)", () => {
+describe("db/voice-transcripts, listVoiceTurnsForCustomer (Phase 2 cross-channel summarizer)", () => {
   const CALLER = "+15555550199";
   const TRANSCRIPT_A = {
     ...TRANSCRIPT,
@@ -401,7 +401,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     return { db, transcriptsChain, turnsChain };
   }
 
-  it("returns [] when there are no transcripts (early return — no bulk SELECT issued)", async () => {
+  it("returns [] when there are no transcripts (early return, no bulk SELECT issued)", async () => {
     const { db } = setupDb({ transcripts: [] });
     const result = await listVoiceTurnsForCustomer(BIZ, CALLER, {}, db as never);
     expect(result).toEqual([]);
@@ -434,7 +434,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     expect(second.turnsChain.limit).toHaveBeenCalledWith(1);
   });
 
-  it("issues ONE bulk SELECT for all transcript ids — never N+1 round-trips on the summarizer hot path", async () => {
+  it("issues ONE bulk SELECT for all transcript ids, never N+1 round-trips on the summarizer hot path", async () => {
     const { db, turnsChain } = setupDb({
       transcripts: [TRANSCRIPT_A, TRANSCRIPT_B],
       turns: [
@@ -510,7 +510,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     expect(result[0]?.callStartedAt).toBe(TRANSCRIPT_A.started_at);
   });
 
-  it("preserves DB ordering (turn_index) when two turns share a callStartedAt — the sort comparator returns 0 (equal-key path)", async () => {
+  it("preserves DB ordering (turn_index) when two turns share a callStartedAt, the sort comparator returns 0 (equal-key path)", async () => {
     // Two turns from the same transcript necessarily share the same
     // callStartedAt, so the inter-call sort should be a no-op and
     // turn_index ordering wins. This pins the `return 0;` arm of
@@ -593,7 +593,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     expect(result[0]?.callStartedAt).toBeNull();
   });
 
-  it("propagates errors from the bulk turns SELECT (RLS / planner blowup) — never silently returns []", async () => {
+  it("propagates errors from the bulk turns SELECT (RLS / planner blowup), never silently returns []", async () => {
     const { db } = setupDb({
       transcripts: [TRANSCRIPT_A],
       turns: [],
@@ -611,7 +611,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 
-  it("returns [] when the bulk turns SELECT yields null data (transcripts existed but turns table query returned null — Supabase quirk)", async () => {
+  it("returns [] when the bulk turns SELECT yields null data (transcripts existed but turns table query returned null, Supabase quirk)", async () => {
     // Pin the `(data as Row[] | null) ?? []` fallback in
     // listVoiceTurnsForCustomer's terminal map. Without it, a
     // null-data response would propagate into `.map` and crash.
@@ -636,7 +636,7 @@ describe("db/voice-transcripts — listVoiceTurnsForCustomer (Phase 2 cross-chan
     expect(result).toEqual([]);
   });
 
-  it("sort comparator's `?? \"\"` fallback fires when BOTH turns lack a callStartedAt — neither in turn nor on the parent transcript", async () => {
+  it("sort comparator's `?? \"\"` fallback fires when BOTH turns lack a callStartedAt, neither in turn nor on the parent transcript", async () => {
     // Two turns with NO timestamp anywhere — exercises the
     // `aTs = a.callStartedAt ?? ""` and matching `bTs ?? ""` arms in
     // the comparator on lines 214-215. Returns `0` (equal-key) so

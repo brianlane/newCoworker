@@ -132,7 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("migrateBusinessVpsSize — guards", () => {
+describe("migrateBusinessVpsSize, guards", () => {
   it("fails at load when the business does not exist", async () => {
     const deps = makeDeps({ getBusiness: vi.fn(async () => null) });
     const out = await migrateBusinessVpsSize(input, deps);
@@ -254,7 +254,7 @@ describe("migrateBusinessVpsSize — guards", () => {
   });
 });
 
-describe("migrateBusinessVpsSize — backup stage (fail-closed)", () => {
+describe("migrateBusinessVpsSize, backup stage (fail-closed)", () => {
   it("aborts when the old VM has no resolvable IP", async () => {
     const deps = makeDeps({
       hostinger: {
@@ -351,7 +351,7 @@ describe("migrateBusinessVpsSize — backup stage (fail-closed)", () => {
   });
 });
 
-describe("migrateBusinessVpsSize — provision + pin", () => {
+describe("migrateBusinessVpsSize, provision + pin", () => {
   it("fails at provision and leaves the pin unwritten", async () => {
     const deps = makeDeps({
       orchestrateProvisioning: vi.fn(async () => {
@@ -478,7 +478,7 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
   });
 });
 
-describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
+describe("migrateBusinessVpsSize, restore stage (fail-closed)", () => {
   it("fails when the new VM's IP cannot be resolved", async () => {
     const base = makeDeps();
     const deps = makeDeps({
@@ -560,7 +560,7 @@ describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
   });
 });
 
-describe("migrateBusinessVpsSize — billing repoint (fail-closed)", () => {
+describe("migrateBusinessVpsSize, billing repoint (fail-closed)", () => {
   it("fails when the repoint update throws, leaving the old box renewing", async () => {
     const deps = makeDeps({
       updateSubscription: vi.fn(async () => {
@@ -656,7 +656,7 @@ describe("migrateBusinessVpsSize — billing repoint (fail-closed)", () => {
   });
 });
 
-describe("migrateBusinessVpsSize — old-box teardown + completion", () => {
+describe("migrateBusinessVpsSize, old-box teardown + completion", () => {
   it("stops the old box, disables auto-renew, and reports success", async () => {
     const deps = makeDeps();
     const out = await migrateBusinessVpsSize(input, deps);

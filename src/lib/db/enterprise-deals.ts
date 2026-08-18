@@ -176,7 +176,7 @@ export async function markEnterpriseDealActive(
     })
     .eq("id", dealId)
     // Retry idempotency (the and() arm) applies only while the deal is still
-    // ACTIVE — a late retry of the original completion must not resurrect a
+    // ACTIVE, a late retry of the original completion must not resurrect a
     // deal that has since been revoked/canceled.
     .or(`status.eq.open,and(status.eq.active,stripe_session_id.eq.${data.stripeSessionId})`)
     .select("id");

@@ -156,7 +156,7 @@ describe("applyWhiteGloveIntake", () => {
     expect(patchBusinessConfig).not.toHaveBeenCalled();
   });
 
-  it("loses the atomic claim race cleanly — nothing is written", async () => {
+  it("loses the atomic claim race cleanly, nothing is written", async () => {
     // Two overlapping applies to different tenants both pass the read-time
     // mismatch check; the conditional-UPDATE claim lets exactly one through.
     vi.mocked(claimWhiteGloveIntakeForBusiness).mockResolvedValue(false);

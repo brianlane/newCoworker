@@ -88,7 +88,7 @@ describe("readMovedRows", () => {
     ).toEqual([{ id: "r1" }]);
   });
 
-  it("throws a typed error on a structured failure — no fallback", async () => {
+  it("throws a typed error on a structured failure, no fallback", async () => {
     const api = apiStub(async () => ({ ok: false, error: "internal", message: "pg down" }));
     await expect(
       readMovedRows(BIZ, { table: "email_log" }, { makeDataApi: () => api })

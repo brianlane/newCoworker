@@ -563,7 +563,7 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         responseMinutes: 10,
         ownerFallbackTemplate:
           "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you."
-        // claimedNotifyTemplate is optional and omitted by default — an empty
+        // claimedNotifyTemplate is optional and omitted by default, an empty
         // string would fail the schema's min(1)-when-present rule on save.
       };
     case "browse_action":
@@ -623,7 +623,7 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         type,
         toVar: examples.contactVar,
         personaTemplate:
-          "Hi, I'm calling with the office. How are you today? We're following up — is now a good time to talk?",
+          "Hi, I'm calling with the office. How are you today? We're following up, is now a good time to talk?",
         notifyE164: "",
         saveAs: "call_outcome"
       };
@@ -1134,7 +1134,7 @@ export function AiFlowsManager({
         setEditorModeState("classic");
       }
     } catch {
-      /* storage unavailable — keep the default */
+      /* storage unavailable, keep the default */
     }
   }, []);
   const setEditorMode = (mode: "visual" | "classic") => {
@@ -1173,14 +1173,14 @@ export function AiFlowsManager({
             }
           }
         } catch {
-          /* warnings are advisory — never block the draft on them */
+          /* warnings are advisory, never block the draft on them */
         }
         setEditor(editorFromDefinition(def, "Adapted automation"));
         // An adapted draft is unsaved AI work — dirty until saved.
         setEditorBaseline(null);
       }
     } catch {
-      /* malformed/absent draft — fall back to the normal list view */
+      /* malformed/absent draft, fall back to the normal list view */
     }
   }, [initialAdaptDraft]);
 
@@ -1612,7 +1612,7 @@ export function AiFlowsManager({
         return;
       }
       setRunNotice(
-        "Test run queued — nothing is actually sent. See View runs for what each step WOULD have done."
+        "Test run queued, nothing is actually sent. See View runs for what each step WOULD have done."
       );
       setTestInput("");
       setTestFor(null);
@@ -1766,7 +1766,7 @@ export function AiFlowsManager({
                   disabled={m === "classic" && flowHasBranch}
                   title={
                     m === "classic" && flowHasBranch
-                      ? "This flow uses branching — edit it in Visual."
+                      ? "This flow uses branching, edit it in Visual."
                       : undefined
                   }
                   className={`rounded px-2.5 py-1 font-medium transition-colors ${
@@ -1816,7 +1816,7 @@ export function AiFlowsManager({
         {aiWarnings.length > 0 && (
           <div className="rounded-md border border-amber-300/40 bg-amber-300/5 px-3 py-2 text-sm text-amber-200">
             <p className="font-medium">
-              Loaded a best-effort draft — a few things need your eyes:
+              Loaded a best-effort draft, a few things need your eyes:
             </p>
             <ul className="mt-1 list-disc pl-5 text-xs space-y-0.5">
               {aiWarnings.map((w, i) => (
@@ -1867,7 +1867,7 @@ export function AiFlowsManager({
           <section className="space-y-3">
             <p className="text-[11px] text-parchment/40">
               Click the trigger or a step to configure it; use the + between steps to add one.
-              Each step&apos;s panel lists the variables you can use — e.g.{" "}
+              Each step&apos;s panel lists the variables you can use, e.g.{" "}
               {`{{vars.${examples.tipVar}}}`}, or {"{{vars.lead_name.first}}"} for just a first
               name.
             </p>
@@ -2283,7 +2283,7 @@ export function AiFlowsManager({
                     }
                   />
                   <p className="mt-1 text-[11px] text-parchment/40">
-                    Anchored to the event&apos;s actual end time — a 30-minute and a 2-hour
+                    Anchored to the event&apos;s actual end time, a 30-minute and a 2-hour
                     appointment both follow up on schedule, no guessed wait needed.
                   </p>
                 </div>
@@ -2318,7 +2318,7 @@ export function AiFlowsManager({
           )}
           {editor.channel === "contact_created" && (
             <p className="text-[11px] text-parchment/40">
-              Runs when a NEW contact lands on your Contacts page — added by hand, imported,
+              Runs when a NEW contact lands on your Contacts page, added by hand, imported,
               or filed by another workflow&apos;s &quot;Save / update a customer contact&quot; step.
               Conditions below match the contact&apos;s name, phone, email, and tags.
             </p>
@@ -2353,7 +2353,7 @@ export function AiFlowsManager({
                 </div>
               </div>
               <p className="text-[11px] text-parchment/40">
-                Fires for dashboard tag edits AND tags other workflows set — chain workflows
+                Fires for dashboard tag edits AND tags other workflows set, chain workflows
                 off your lead statuses. A workflow never retriggers itself through its own tag
                 changes.
               </p>
@@ -2361,7 +2361,7 @@ export function AiFlowsManager({
           )}
           {editor.channel === "owner_assigned" && (
             <p className="text-[11px] text-parchment/40">
-              Runs when a contact gets an owning team member — a teammate claims the lead, or
+              Runs when a contact gets an owning team member, a teammate claims the lead, or
               you assign one on the contact page.
             </p>
           )}
@@ -2659,7 +2659,7 @@ export function AiFlowsManager({
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
           <p className="text-[11px] text-parchment/40">
-            Steps run top to bottom. Each step lists the variables you can use — e.g.{" "}
+            Steps run top to bottom. Each step lists the variables you can use, e.g.{" "}
             {`{{vars.${examples.tipVar}}}`} to reuse a detail an earlier step found,{" "}
             {"{{vars.lead_name.first}}"} for just a first name, or {"{{trigger.url}}"} for the link
             from the text that started the workflow.
@@ -2870,7 +2870,7 @@ export function AiFlowsManager({
               Allow contacts to go through this flow more than once
             </label>
             <p className="mt-1 pl-6 text-[11px] text-parchment/40">
-              Uncheck to enroll each contact at most once — a lead who already ran this
+              Uncheck to enroll each contact at most once, a lead who already ran this
               flow won&apos;t be re-enrolled when it triggers for them again. Test runs
               never count.
             </p>
@@ -3219,8 +3219,8 @@ export function AiFlowsManager({
                   </button>
                 </div>
                 <p className="text-[11px] text-parchment/40">
-                  A test run plays the whole flow through instantly with NOTHING actually sent
-                  — texts, emails, team offers, and contact updates are recorded as &quot;what
+                  A test run plays the whole flow through instantly with NOTHING actually
+                  sent, texts, emails, team offers, and contact updates are recorded as &quot;what
                   would have happened&quot; on the runs page. The contact must exist on your
                   Contacts page.
                 </p>
@@ -3380,7 +3380,7 @@ function VariablesPalette({
       setCopied(placeholder);
       window.setTimeout(() => setCopied((c) => (c === placeholder ? null : c)), 1200);
     } catch {
-      /* clipboard blocked — the chip still shows the exact placeholder to retype */
+      /* clipboard blocked, the chip still shows the exact placeholder to retype */
     }
   };
   const chip = (text: string, key: string, hint?: string) => (
@@ -3388,7 +3388,7 @@ function VariablesPalette({
       key={key}
       type="button"
       onClick={() => copy(text)}
-      title={hint ? `${hint} — click to copy` : "Click to copy"}
+      title={hint ? `${hint}, click to copy` : "Click to copy"}
       className="rounded border border-parchment/15 bg-deep-ink/40 px-1.5 py-0.5 font-mono text-[10px] text-parchment/70 hover:border-signal-teal/60 hover:text-parchment"
     >
       {copied === text ? "Copied!" : text}
@@ -3418,14 +3418,14 @@ function VariablesPalette({
   return (
     <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-2 space-y-2">
       <p className="text-[11px] text-parchment/50">
-        Variables you can use in this step&apos;s text fields — click one to copy it, then paste it
+        Variables you can use in this step&apos;s text fields, click one to copy it, then paste it
         where the value should appear.
       </p>
       {section("From the trigger", groups.trigger)}
       {section(
         "From earlier steps",
         groups.earlier,
-        'No variables yet — add a "read details" step above this one to capture things like the lead\'s name and phone.'
+        'No variables yet, add a "read details" step above this one to capture things like the lead\'s name and phone.'
       )}
       {section("Always available", groups.always)}
     </div>
@@ -3734,7 +3734,7 @@ function StepFields({
               label="Document title"
               value={step.fileAs.titleTemplate}
               onChange={(v) => patchStep(index, { fileAs: { ...step.fileAs, titleTemplate: v } })}
-              help="Templates work, e.g. Renewal — {{vars.customer_name}}."
+              help="Templates work, e.g. Renewal, {{vars.customer_name}}."
             />
             <div>
               <label className={labelClass}>Who can it answer for</label>
@@ -3763,7 +3763,7 @@ function StepFields({
                   fileAs: { ...step.fileAs, contactPhoneVar: v.trim() ? v.trim() : undefined }
                 })
               }
-              help="A variable name — from an earlier step (e.g. lead_phone) or one of this step's own fields. The filed document becomes a record on that contact."
+              help="A variable name, from an earlier step (e.g. lead_phone) or one of this step's own fields. The filed document becomes a record on that contact."
             />
             <label className="flex items-center gap-2 text-xs text-parchment/70">
               <input
@@ -3794,7 +3794,7 @@ function StepFields({
                   })
                 }
               >
-                <option value="">— don&apos;t set a renewal date —</option>
+                <option value="">not set</option>
                 {step.fields
                   .filter((f) => f.name.trim())
                   .map((f) => (
@@ -4265,7 +4265,7 @@ function StepFields({
           help={
             'A document ref like business-docs:{{vars.summary_document_id}} (from a "Run an agent" ' +
             "step that saves its result as a document), or business-docs:<document id> for a fixed " +
-            "library document. AI coworker email only — if the ref comes up empty the email still " +
+            "library document. AI coworker email only, if the ref comes up empty the email still " +
             "sends, just without the attachment."
           }
         />
@@ -4760,7 +4760,7 @@ function StepFields({
                         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
                         ownerDirectTemplate:
                           step.ownerDirectTemplate ??
-                          "HIGH-VALUE lead kept for you — not offered to the team."
+                          "HIGH-VALUE lead kept for you, not offered to the team."
                       }
                     : {
                         ownerDirectWhen: undefined,
@@ -5423,7 +5423,7 @@ function StepFields({
           onChange={(v) => patchStep(index, { saveAs: v })}
         />
         <p className="text-[11px] text-parchment/40">
-          The chosen category (or &quot;unclear&quot; when nothing fits) lands in this variable —
+          The chosen category (or &quot;unclear&quot; when nothing fits) lands in this variable,
           add a Branch step after this one with an arm per category to take the right path.
         </p>
       </div>
@@ -5449,13 +5449,13 @@ function StepFields({
             {documents.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.title}
-                {d.expired ? " (expired — extend it first)" : ""}
+                {d.expired ? " (expired, extend it first)" : ""}
               </option>
             ))}
           </select>
           {documents.length === 0 && (
             <p className="mt-1 text-[11px] text-parchment/40">
-              No shareable documents on file yet — upload one under Memory → Documents first.
+              No shareable documents on file yet, upload one under Memory → Documents first.
             </p>
           )}
         </div>
@@ -5516,13 +5516,13 @@ function StepFields({
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
-                {a.enabled ? "" : " (disabled — enable it first)"}
+                {a.enabled ? "" : " (disabled, enable it first)"}
               </option>
             ))}
           </select>
           {agents.length === 0 && (
             <p className="mt-1 text-[11px] text-parchment/40">
-              No agents saved yet — create one on the Agents page first.
+              No agents saved yet, create one on the Agents page first.
             </p>
           )}
         </div>
@@ -5556,7 +5556,7 @@ function StepFields({
             value={step.input ?? ""}
             onChange={(v) => patchStep(index, { input: v })}
             textarea
-            help="The text handed to the agent — e.g. {{trigger.windowText}} (the triggering message/email) or a variable an earlier step extracted."
+            help="The text handed to the agent, e.g. {{trigger.windowText}} (the triggering message/email) or a variable an earlier step extracted."
           />
         )}
         <label className="flex items-center gap-2 text-xs text-parchment/70">
@@ -5566,7 +5566,7 @@ function StepFields({
             onChange={(ev) =>
               patchStep(index, {
                 saveDocument: ev.target.checked
-                  ? { titleTemplate: "Agent output — {{trigger.document_name}}" }
+                  ? { titleTemplate: "Agent output, {{trigger.document_name}}" }
                   : undefined
               })
             }
@@ -5579,7 +5579,7 @@ function StepFields({
               label="Document title"
               value={step.saveDocument.titleTemplate}
               onChange={(v) => patchStep(index, { saveDocument: { titleTemplate: v } })}
-              help="Templates work, e.g. Quote comparison — {{trigger.document_name}}."
+              help="Templates work, e.g. Quote comparison, {{trigger.document_name}}."
             />
           </div>
         )}
@@ -5647,13 +5647,13 @@ function StepFields({
           label="Add tags (comma-separated)"
           value={(step.addTags ?? []).join(", ")}
           onChange={(v) => patchStep(index, { addTags: parseTags(v) })}
-          help='e.g. "Contacted" — tags show on the Contacts page and power its filters.'
+          help='e.g. "Contacted", tags show on the Contacts page and power its filters.'
         />
         <Field
           label="Remove tags (comma-separated)"
           value={(step.removeTags ?? []).join(", ")}
           onChange={(v) => patchStep(index, { removeTags: parseTags(v) })}
-          help='e.g. "New Lead" — removals apply before additions, so one step moves a lead between statuses.'
+          help='e.g. "New Lead", removals apply before additions, so one step moves a lead between statuses.'
         />
         <Field
           label="Event note (optional)"
@@ -5740,7 +5740,7 @@ function StepFields({
             label="Continue on this date (a variable or ISO date)"
             value={step.untilDateTemplate ?? ""}
             onChange={(v) => patchStep(index, { untilDateTemplate: v })}
-            help="e.g. {{vars.renewal_date}} — a date an earlier step extracted. An unreadable date skips the wait instead of failing."
+            help="e.g. {{vars.renewal_date}}, a date an earlier step extracted. An unreadable date skips the wait instead of failing."
           />
         )}
         {sleepMode === "relativeTo" && (
@@ -5868,7 +5868,7 @@ function StepFields({
         <p className="text-[11px] text-parchment/40">
           While waiting, their next text is captured by this workflow (the AI&apos;s normal
           conversational reply stays quiet for that message). If they don&apos;t reply in time,
-          the saved reply becomes &quot;no_reply&quot; — add a follow-up step with the condition
+          the saved reply becomes &quot;no_reply&quot;, add a follow-up step with the condition
           &quot;{step.saveAs ?? "reply_text"} equals no_reply&quot; to send a nudge, and another
           with &quot;not equals no_reply&quot; for when they did reply.
         </p>
@@ -6227,7 +6227,7 @@ function StepFields({
         )}
         <p className="text-[11px] text-parchment/40">
           When the milestone happens, this lead&apos;s run skips everything between where it is
-          and this checkpoint — so someone who already converted stops getting follow-ups. If
+          and this checkpoint, so someone who already converted stops getting follow-ups. If
           the run reaches this step normally, it just passes through.
         </p>
       </div>
@@ -6882,7 +6882,7 @@ function BranchFields({
           />
           {arm.steps.length > 0 && (
             <p className="text-[11px] text-parchment/40">
-              {arm.steps.length} step(s) on this path — edit them on the canvas above.
+              {arm.steps.length} step(s) on this path, edit them on the canvas above.
             </p>
           )}
         </div>
@@ -6908,7 +6908,7 @@ function BranchFields({
         </button>
       )}
       <p className="text-[11px] text-parchment/40">
-        Paths are checked top to bottom — the first match wins; no match runs the “None
+        Paths are checked top to bottom, the first match wins; no match runs the “None
         matched” path.
       </p>
     </div>

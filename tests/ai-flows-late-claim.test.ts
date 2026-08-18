@@ -78,7 +78,7 @@ function yankableRow(extraRouting: Record<string, unknown> = {}): LateClaimCandi
   });
 }
 
-describe("matchLateClaimReply — buckets", () => {
+describe("matchLateClaimReply, buckets", () => {
   it("live: the sender's own active offer matches (bare or with ETA)", () => {
     const live = row({ routing: { offered: JASON, step_index: 5 } });
     expect(match([live])).toEqual({ kind: "live", row: live, stepIndex: 5 });
@@ -113,7 +113,7 @@ describe("matchLateClaimReply — buckets", () => {
   });
 });
 
-describe("matchLateClaimReply — precedence (live → late → yank → mine)", () => {
+describe("matchLateClaimReply, precedence (live → late → yank → mine)", () => {
   it("prefers the sender's own live offer over everything else", () => {
     const mine = row({ status: "done", routing: { claimed_by: JASON } });
     const late = row({ status: "done", routing: { tried: [JASON], step_index: 5 } });
@@ -144,7 +144,7 @@ describe("matchLateClaimReply — precedence (live → late → yank → mine)",
   });
 });
 
-describe("matchLateClaimReply — eligibility rules", () => {
+describe("matchLateClaimReply, eligibility rules", () => {
   it("only digit '1' ever matches", () => {
     const live = row({ routing: { offered: JASON, step_index: 5 } });
     expect(match([live], { digit: "2" })).toBeNull();
@@ -186,7 +186,7 @@ describe("matchLateClaimReply — eligibility rules", () => {
   });
 });
 
-describe("matchLateClaimReply — scan mechanics", () => {
+describe("matchLateClaimReply, scan mechanics", () => {
   it("stops scanning once all four buckets are filled and keeps the newest of each", () => {
     // Duplicates of already-filled buckets appear BEFORE the last bucket fills
     // (so they're actually scanned and ignored); the trailing row after all
@@ -214,7 +214,7 @@ describe("matchLateClaimReply — scan mechanics", () => {
   });
 });
 
-describe("matchLateClaimReply — first-to-claim yank rules", () => {
+describe("matchLateClaimReply, first-to-claim yank rules", () => {
   it("refuses a yank with an ETA ('1, a few hours' must not preempt the countdown)", () => {
     expect(match([yankableRow()], { timeframe: "a few hours" })).toBeNull();
   });
@@ -236,7 +236,7 @@ describe("matchLateClaimReply — first-to-claim yank rules", () => {
   });
 });
 
-describe("matchLateClaimReply — a NAMED claim after the offer lapsed", () => {
+describe("matchLateClaimReply, a NAMED claim after the offer lapsed", () => {
   /**
    * The Amy Laidlaw incident of 2026-08-17. Dave was offered Aurora Anthony at
    * 10:43 and the run completed unclaimed at 10:54. A different lead's run

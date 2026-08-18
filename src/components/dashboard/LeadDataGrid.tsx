@@ -388,8 +388,8 @@ export function LeadDataGrid({
                       row.name
                     )}
                   </td>
-                  <td className="px-3 py-2 text-parchment/70">{row.e164 ?? "—"}</td>
-                  <td className="px-3 py-2 text-parchment/70">{row.email ?? "—"}</td>
+                  <td className="px-3 py-2 text-parchment/70">{row.e164 ?? "-"}</td>
+                  <td className="px-3 py-2 text-parchment/70">{row.email ?? "-"}</td>
                   <td className="px-3 py-2">
                     {!pipeline ? (
                       <span className="text-parchment/40">{t("stageNoPipeline")}</span>
@@ -415,14 +415,14 @@ export function LeadDataGrid({
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-parchment/70">{row.source ?? "—"}</td>
-                  <td className="px-3 py-2 text-parchment/70">{row.ownerName ?? "—"}</td>
+                  <td className="px-3 py-2 text-parchment/70">{row.source ?? "-"}</td>
+                  <td className="px-3 py-2 text-parchment/70">{row.ownerName ?? "-"}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-parchment/50">
                     <LocalDateTime iso={row.createdAt} />
                   </td>
                   {columns.map((c) => (
                     <td key={c} className="max-w-56 truncate px-3 py-2 text-parchment/70">
-                      {row.fields[c] ?? "—"}
+                      {row.fields[c] ?? "-"}
                     </td>
                   ))}
                 </tr>

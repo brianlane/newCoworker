@@ -125,7 +125,7 @@ export type DocExtractDeps = {
 export function buildDocExtractionPrompt(fields: DocExtractField[]): string {
   const lines = [
     "Read the attached/business document and extract these fields.",
-    'Reply with EXACTLY one JSON object — no prose, no code fences — of the shape:',
+    'Reply with EXACTLY one JSON object, no prose, no code fences, of the shape:',
     "{",
     ...fields.map(
       (f) =>

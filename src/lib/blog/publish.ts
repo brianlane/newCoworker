@@ -112,7 +112,7 @@ export async function runBlogPublishSideEffects(
   // --- Subscriber email fan-out -------------------------------------------
   const resendKey = (process.env.RESEND_API_KEY ?? "").trim();
   if (!resendKey) {
-    logger.warn("blog-publish: RESEND_API_KEY unset — skipping subscriber email", {
+    logger.warn("blog-publish: RESEND_API_KEY unset, skipping subscriber email", {
       postId: post.id
     });
   } else {
@@ -171,7 +171,7 @@ export async function runBlogPublishSideEffects(
       });
     } else if (!mediaUrl) {
       // Instagram feed posts require an image — a post without one skips.
-      logger.info("blog-publish: post has no featured image — skipping cross-post", {
+      logger.info("blog-publish: post has no featured image, skipping cross-post", {
         postId: post.id
       });
     } else {

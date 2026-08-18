@@ -31,7 +31,7 @@ async function main() {
 
   const conn = await getMetaConnection(businessId);
   if (!conn?.userToken) {
-    throw new Error("no pending connection with a user token — run the OAuth connect first");
+    throw new Error("no pending connection with a user token, run the OAuth connect first");
   }
   if (conn.status !== "pending") {
     throw new Error(`connection status is ${conn.status}, expected pending`);
@@ -52,7 +52,7 @@ async function main() {
   if (!res.ok || !page.access_token) {
     throw new Error(`page fetch failed (${res.status}): ${page.error?.message ?? "no token"}`);
   }
-  console.log(`page: ${page.id} "${page.name}" — token acquired`);
+  console.log(`page: ${page.id} "${page.name}", token acquired`);
 
   await subscribePageToLeadgen(page.id!, page.access_token);
   console.log("leadgen+messaging subscription confirmed");
@@ -78,9 +78,9 @@ async function main() {
     const claim = await getMetaPageClaim(page.id!).catch(() => null);
     if (!claim || claim.business_id === businessId) {
       await unsubscribePage(page.id!, page.access_token);
-      console.error("activation failed — rolled back the page subscription");
+      console.error("activation failed, rolled back the page subscription");
     } else {
-      console.error("activation failed — page kept subscribed (another tenant claims it)");
+      console.error("activation failed, page kept subscribed (another tenant claims it)");
     }
     throw err;
   }

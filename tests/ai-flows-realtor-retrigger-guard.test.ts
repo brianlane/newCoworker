@@ -59,7 +59,7 @@ function leadFlowDef(): Record<string, unknown> {
         ownerFallbackTemplate: "No agent claimed {{vars.lead_name}}",
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate:
-          "HIGH-VALUE Realtor.com lead ($1M+) kept for you — not offered to the team.\n{{vars.lead_name}} {{vars.lead_phone}}"
+          "HIGH-VALUE Realtor.com lead ($1M+) kept for you, not offered to the team.\n{{vars.lead_name}} {{vars.lead_phone}}"
       }
     ],
     options: { suppressDefaultReply: true }
@@ -122,7 +122,7 @@ describe("hardenOwnerDirectAlerts", () => {
     parseAiFlowDefinition(def);
   });
 
-  it("is idempotent — an already-hardened step is left byte-identical", () => {
+  it("is idempotent, an already-hardened step is left byte-identical", () => {
     const def = leadFlowDef();
     hardenOwnerDirectAlerts(def);
     const frozen = JSON.stringify(def);

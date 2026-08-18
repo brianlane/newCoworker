@@ -59,7 +59,7 @@ const minted = ["Zr", randomBytes(12).toString("base64url")].join("-");
   if (existing) {
     const { error } = await db.auth.admin.updateUserById(existing.id, { password: minted });
     if (error) throw new Error(`update user: ${error.message}`);
-    console.log("[setup] auth user exists — password rotated");
+    console.log("[setup] auth user exists, password rotated");
   } else {
     const { error } = await db.auth.admin.createUser({
       email: REVIEWER_EMAIL,

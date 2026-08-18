@@ -46,7 +46,7 @@ describe("assertPlatformTelnyxDefaults", () => {
     ).not.toThrow();
   });
 
-  it("does NOT require bridgeMediaWssOrigin — bridges can come up after DID assignment", () => {
+  it("does NOT require bridgeMediaWssOrigin, bridges can come up after DID assignment", () => {
     // Stricter validation here would block bootstrapping orders since
     // the per-tenant tunnel + bridge are stood up AFTER the DID assigns
     // routing on Telnyx. The Edge dispatcher resolves the WSS origin
@@ -61,7 +61,7 @@ describe("assertPlatformTelnyxDefaults", () => {
     ).not.toThrow();
   });
 
-  it("throws MissingTelnyxDefaultsError listing connectionId when it's missing — root cause of the unwired-DID outage", () => {
+  it("throws MissingTelnyxDefaultsError listing connectionId when it's missing, root cause of the unwired-DID outage", () => {
     try {
       assertPlatformTelnyxDefaults({
         connectionId: undefined,
@@ -77,7 +77,7 @@ describe("assertPlatformTelnyxDefaults", () => {
     }
   });
 
-  it("treats whitespace-only connectionId as missing — caller env is sometimes a stray blank", () => {
+  it("treats whitespace-only connectionId as missing, caller env is sometimes a stray blank", () => {
     try {
       assertPlatformTelnyxDefaults({
         connectionId: "   ",

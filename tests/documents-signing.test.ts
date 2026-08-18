@@ -288,7 +288,7 @@ describe("markSignatureRequestOpened", () => {
     expect(markSignatureRequestViewed).toHaveBeenCalledWith(requestRow().id);
   });
 
-  it("swallows stamp failures (Error and non-Error) — rendering must not block", async () => {
+  it("swallows stamp failures (Error and non-Error), rendering must not block", async () => {
     vi.mocked(markSignatureRequestViewed).mockRejectedValueOnce(new Error("db down"));
     await expect(markSignatureRequestOpened(requestRow())).resolves.toBeUndefined();
     vi.mocked(markSignatureRequestViewed).mockRejectedValueOnce("string failure");

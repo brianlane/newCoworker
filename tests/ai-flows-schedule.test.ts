@@ -28,7 +28,7 @@ describe("zonedDate", () => {
   });
 });
 
-describe("scheduleDue — daily mode", () => {
+describe("scheduleDue, daily mode", () => {
   const cfg = { timezone: PHX, time: "08:30" };
   it("is due from the scheduled time through the catch-up window", () => {
     const at = scheduleDue(phx(8, 30, 5), cfg);
@@ -80,7 +80,7 @@ describe("scheduleDue — daily mode", () => {
   });
 });
 
-describe("scheduleDue — interval mode", () => {
+describe("scheduleDue, interval mode", () => {
   it("buckets the epoch clock into one occurrence per interval", () => {
     const now = Date.UTC(2026, 5, 9, 15, 17, 3);
     const due = scheduleDue(now, { everyMinutes: 60 });

@@ -94,9 +94,9 @@ async function main(): Promise<void> {
     console.error(`Read failed: ${error.message}`);
     process.exit(1);
   }
-  console.log(`\nRoster for ${businessId} (rotation order — next offer goes to the top):`);
+  console.log(`\nRoster for ${businessId} (rotation order, next offer goes to the top):`);
   if (!data?.length) {
-    console.log("  (empty — route_to_team uses the legacy Rowboat memory pick)");
+    console.log("  (empty, route_to_team uses the legacy Rowboat memory pick)");
     return;
   }
   for (const r of data) {

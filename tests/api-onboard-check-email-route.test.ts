@@ -57,7 +57,7 @@ describe("api/onboard/check-email route (UX preflight)", () => {
     expect(body.data.available).toBe(false);
   });
 
-  it("fails OPEN — reports `available: true` when the soft lookup throws", async () => {
+  it("fails OPEN, reports `available: true` when the soft lookup throws", async () => {
     // Critical UX choice: a transient lookup error during step 1 of
     // the questionnaire must NOT strand a legitimate signup. The
     // server-side gate at /api/checkout uses the strict

@@ -31,7 +31,7 @@ export function intakeOpener(
   const configured = persona && persona.trim();
   if (configured) return configured;
   return mode === "outbound"
-    ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up — do you have a moment?`
+    ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up, do you have a moment?`
     : `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
 }
 
@@ -165,11 +165,11 @@ export function intakeSystemInstruction(
   // callee's "Hello?" lands mid-greeting (or right after), which callers hear
   // as being greeted twice (first live test, Jul 15 2026).
   const greetOnce =
-    "Say your opening line only ONCE. If they speak while you're saying it, or you were interrupted, never restart it — acknowledge what they said and continue from where the conversation actually is.";
+    "Say your opening line only ONCE. If they speak while you're saying it, or you were interrupted, never restart it, acknowledge what they said and continue from where the conversation actually is.";
   // On a call WE placed, the number is by definition reachable — asking for
   // it reads as a bot non-sequitur.
   const noNumberAsk =
-    "You called them on their own phone just now, so NEVER ask for their phone number — only note a different number if they volunteer one.";
+    "You called them on their own phone just now, so NEVER ask for their phone number, only note a different number if they volunteer one.";
   const lines: string[] = [];
   if (transfer) {
     const agent = transfer.agentName?.trim() || "the team member handling this";
@@ -177,12 +177,12 @@ export function intakeSystemInstruction(
       `You are the phone assistant for ${businessName}, making a follow-up call the office asked you to place. The person has just answered.`,
       `Open with this, warmly and naturally: "${opener}"`,
       greetOnce,
-      "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure — this is a real person who didn't expect a call, so let them respond before moving on.",
+      "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure, this is a real person who didn't expect a call, so let them respond before moving on.",
       noNumberAsk,
       `Your goal: after your opening and their response, explain what you're following up about (as your opening line describes) and ask whether now is a good time to talk. If they say YES, tell them "one moment while I get ${agent} on the line", then call the \`transfer_to_owner\` tool to connect them.`,
-      `If it's NOT a good time, ask when would work better, note it via the \`capture_lead\` tool (fields: ${fields.join(", ")} — record whatever you learn), thank them, and wrap up politely. Never pressure them.`,
+      `If it's NOT a good time, ask when would work better, note it via the \`capture_lead\` tool (fields: ${fields.join(", ")}, record whatever you learn), thank them, and wrap up politely. Never pressure them.`,
       "If they ask to stop being contacted, apologize briefly, promise to pass that on, capture it in `capture_lead` notes, and end the call.",
-      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud."
+      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked, keep it light and steer back to helping. Never read a tool's raw response aloud."
     );
   } else {
     lines.push(
@@ -192,13 +192,13 @@ export function intakeSystemInstruction(
       `Open with this, warmly and naturally: "${opener}"`,
       greetOnce,
       outboundCall
-        ? "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure — this is a real person who didn't expect a call, so let them respond before moving on."
-        : "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
+        ? "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure, this is a real person who didn't expect a call, so let them respond before moving on."
+        : "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient, this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
       outboundCall
         ? `Collect these details naturally, one or two at a time, confirming as you go: ${fields.join(", ")}. ${noNumberAsk}`
         : `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
       "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
-      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
+      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked, keep it light and steer back to helping. Never read a tool's raw response aloud.",
       outboundCall
         ? `When you have what you need (or they're not interested), thank them for their time and wrap up politely.`
         : `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
@@ -249,13 +249,13 @@ export function intakeSystemInstruction(
   if (contextNote && contextNote.trim()) {
     lines.push(
       `What you ALREADY KNOW about this person: ${contextNote.trim()}`,
-      "This OVERRIDES any collect list above, INCLUDING the phone-number priority: NEVER ask for a detail listed there — you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
+      "This OVERRIDES any collect list above, INCLUDING the phone-number priority: NEVER ask for a detail listed there, you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
     );
   }
   if (hasEndCall) {
     lines.push(
       transfer
-        ? "After you've said your goodbye (when no transfer happened), call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over, and never after a successful transfer — the human conversation continues without you."
+        ? "After you've said your goodbye (when no transfer happened), call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over, and never after a successful transfer, the human conversation continues without you."
         : "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
     );
   }
@@ -350,7 +350,7 @@ export function composeIntakeLeadSms(input: {
   starFrame?: boolean;
 }): string {
   const lines: string[] = [
-    `${input.businessName}: New live-transfer lead (AI intake) — the team missed the warm handoff, so I captured this on the call.`
+    `${input.businessName}: New live-transfer lead (AI intake), the team missed the warm handoff, so I captured this on the call.`
   ];
   // Render known fields first in a stable order, then any custom captured
   // fields (capture_lead honors the chain's ai_takeover.capture_fields, so the

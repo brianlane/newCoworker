@@ -452,7 +452,7 @@ describe("replayInboundSms", () => {
         jobId: "j1",
         status: "error",
         reason:
-          "an earlier run for this text failed and still holds its slot — check the flow's runs page"
+          "an earlier run for this text failed and still holds its slot, check the flow's runs page"
       });
     }
   });

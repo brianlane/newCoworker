@@ -1793,7 +1793,7 @@ describe("poll failure escalation + owner alert", () => {
     await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger())], null, [
         { data: [], error: null }, // cadence gate: no recent tick
-        { data: [{ id: 1 }, { id: 2 }], error: null } // 2 priors — third strike
+        { data: [{ id: 1 }, { id: 2 }], error: null } // 2 priors, third strike
       ])
     );
     // Persistent, so it logs at error — but flows on the primary calendar
@@ -1888,7 +1888,7 @@ describe("poll cadence gate (inside pollCalendarTriggers)", () => {
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
 
-  it("a short event_start lead disables the gate — the poll runs every tick", async () => {
+  it("a short event_start lead disables the gate, the poll runs every tick", async () => {
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
     const res = await pollCalendarTriggers(
       // leadMinutes 3 < the gate threshold: its due window could fit
@@ -1924,7 +1924,7 @@ describe("poll cadence gate (inside pollCalendarTriggers)", () => {
 describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("runs when no recent poll exists — the marker is NOT written by the check", async () => {
+  it("runs when no recent poll exists, the marker is NOT written by the check", async () => {
     const should = await shouldRunCalendarPoll(
       dbWith([], null, [{ data: null, error: null }]) as never
     );
@@ -1939,7 +1939,7 @@ describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
     expect(should).toBe(false);
   });
 
-  it("fails OPEN when the marker read errors — gate trouble must never stall triggers", async () => {
+  it("fails OPEN when the marker read errors, gate trouble must never stall triggers", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const should = await shouldRunCalendarPoll(
       dbWith([], null, [{ data: null, error: { message: "denied" } }]) as never

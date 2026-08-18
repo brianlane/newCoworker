@@ -131,7 +131,7 @@ type RunRow = {
 };
 const canceled = (canceledRows ?? []) as RunRow[];
 if (canceled.length === 0) {
-  console.log("[oneshot] no edit-canceled runs found — nothing to do.");
+  console.log("[oneshot] no edit-canceled runs found, nothing to do.");
   process.exit(0);
 }
 
@@ -167,7 +167,7 @@ for (const run of canceled) {
   // A lead who actually REPLIED must never be re-automated.
   const engaged = REPLY_VARS.some((v) => typeof vars[v] === "string" && vars[v] !== NO_REPLY);
   if (engaged) {
-    skips.push({ runId: run.id, leadName, reason: "lead replied at some point — leave to humans" });
+    skips.push({ runId: run.id, leadName, reason: "lead replied at some point, leave to humans" });
     continue;
   }
 
@@ -202,7 +202,7 @@ for (const run of canceled) {
   } else {
     const recorded = REPLY_VARS.filter((v) => vars[v] === NO_REPLY).length;
     if (recorded === 0) {
-      skips.push({ runId: run.id, leadName, reason: "no reply vars recorded — position unclear" });
+      skips.push({ runId: run.id, leadName, reason: "no reply vars recorded, position unclear" });
       continue;
     }
     if (actualPriorSends === recorded) {
@@ -235,7 +235,7 @@ for (const run of canceled) {
       skips.push({
         runId: run.id,
         leadName,
-        reason: `send-count mismatch (${recorded} no-reply wait(s) recorded but ${actualPriorSends} text(s) sent) — resolve by hand`
+        reason: `send-count mismatch (${recorded} no-reply wait(s) recorded but ${actualPriorSends} text(s) sent), resolve by hand`
       });
       continue;
     }
@@ -247,7 +247,7 @@ for (const run of canceled) {
     skips.push({
       runId: run.id,
       leadName,
-      reason: `send-count mismatch (expected ${expectedPriorSends} prior texts, found ${actualPriorSends}) — resolve by hand`
+      reason: `send-count mismatch (expected ${expectedPriorSends} prior texts, found ${actualPriorSends}), resolve by hand`
     });
     continue;
   }
@@ -299,14 +299,14 @@ for (const run of canceled) {
   });
 }
 
-console.log(`[oneshot] flow "${flowRow.name}" — ${canceled.length} edit-canceled run(s) examined`);
+console.log(`[oneshot] flow "${flowRow.name}", ${canceled.length} edit-canceled run(s) examined`);
 for (const s of skips) {
   console.log(`[oneshot] skip   ${s.leadName} (run ${s.runId}): ${s.reason}`);
 }
 for (const p of plans) {
   console.log(
     `[oneshot] resume ${p.leadName} ${p.leadPhone}: ${p.actualPriorSends} text(s) already sent → ` +
-      `step "${p.resumeStepId}" (#${p.resumeIndex}) — ${p.nextAction}`
+      `step "${p.resumeStepId}" (#${p.resumeIndex}), ${p.nextAction}`
   );
 }
 

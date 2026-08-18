@@ -47,7 +47,7 @@ console.log("[oneshot] business:", {
 if (business.status === "online" || business.hostinger_vps_id) {
   console.error(
     `[oneshot] refusing to provision: status=${business.status}, ` +
-      `hostinger_vps_id=${business.hostinger_vps_id ?? "null"} — use the admin re-provision flow instead`
+      `hostinger_vps_id=${business.hostinger_vps_id ?? "null"}, use the admin re-provision flow instead`
   );
   process.exit(1);
 }

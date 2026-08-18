@@ -70,7 +70,7 @@ describe("adminAlertSummary", () => {
           callerPhone: "+16025550100"
         })
       )
-    ).toBe("Caller follow-up: John Doe (+16025550100) — Wants a quote for a 20ft fence");
+    ).toBe("Caller follow-up: John Doe (+16025550100), Wants a quote for a 20ft fence");
   });
 
   it("falls back to 'a caller' when voice notify_team has no person", () => {
@@ -89,7 +89,7 @@ describe("adminAlertSummary", () => {
           customerPhone: "+14805550111"
         })
       )
-    ).toBe("Texter follow-up: Tim Tsai (+14805550111) — Needs pricing today");
+    ).toBe("Texter follow-up: Tim Tsai (+14805550111), Needs pricing today");
   });
 
   it("falls back to 'a texter' when sms notify_team has no person", () => {
@@ -107,7 +107,7 @@ describe("adminAlertSummary", () => {
           reason: "pipe burst, needs callback ASAP"
         })
       )
-    ).toBe("Urgent caller: Raina — pipe burst, needs callback ASAP");
+    ).toBe("Urgent caller: Raina, pipe burst, needs callback ASAP");
   });
 
   it("falls back to notes, then to no detail, for voice captures", () => {
@@ -119,7 +119,7 @@ describe("adminAlertSummary", () => {
           notes: "left voicemail earlier"
         })
       )
-    ).toBe("Urgent caller: +16025550122 — left voicemail earlier");
+    ).toBe("Urgent caller: +16025550122, left voicemail earlier");
     expect(
       adminAlertSummary(log("call", "urgent_alert", { source: "voice_tool_capture" }))
     ).toBe("Urgent caller: unknown caller");
@@ -134,7 +134,7 @@ describe("adminAlertSummary", () => {
           reason: "wants a quote"
         })
       )
-    ).toBe("Caller captured: Jane — wants a quote");
+    ).toBe("Caller captured: Jane, wants a quote");
   });
 
   it("summarizes provisioning rows with phase and message", () => {
@@ -184,7 +184,7 @@ describe("adminAlertSummary", () => {
           inbound_preview: "sounds good, what time?"
         })
       )
-    ).toBe("Tim Tsai — sounds good, what time?");
+    ).toBe("Tim Tsai, sounds good, what time?");
   });
 
   it("shows the person alone when the row has no detail text", () => {

@@ -81,7 +81,7 @@ describe("addPassOptionCopy", () => {
   });
 
   it("leaves an offer without a pass option untouched", () => {
-    const def = routeDef("Take this lead by {{offer.deadline}} — reply 1 to claim.");
+    const def = routeDef("Take this lead by {{offer.deadline}}, reply 1 to claim.");
     const before = JSON.stringify(def);
     expect(addPassOptionCopy(def)).toBe(false);
     expect(JSON.stringify(def)).toBe(before);

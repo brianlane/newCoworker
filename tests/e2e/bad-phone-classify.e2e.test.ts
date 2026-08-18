@@ -34,7 +34,7 @@ const CLASSIFY = buildBadPhoneSteps(FLOW_CONFIGS[0]).find(
 const CASES: Array<[reply: string, want: string]> = [
   // Real bad-number reports → bad_phone_number.
   ["that number is disconnected", "bad_phone_number"],
-  ["wrong number — some other guy answered", "bad_phone_number"],
+  ["wrong number, some other guy answered", "bad_phone_number"],
   ["the number's no good, it says no longer in service", "bad_phone_number"],
   ["bad number", "bad_phone_number"],
   ["line is dead, couldn't get through at all", "bad_phone_number"],

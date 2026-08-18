@@ -192,7 +192,7 @@ export async function setContactTextingMode(
       ? `Tell the owner: the coworker will no longer text this contact (no auto-replies), ` +
         (runsSweepComplete
           ? `${canceledRuns} pending automation run(s) for them were stopped. `
-          : "but some of their pending automation runs could not be confirmed as stopped — those may still send their scheduled texts. ") +
+          : "but some of their pending automation runs could not be confirmed as stopped, those may still send their scheduled texts. ") +
         "Their inbound texts are still received, manual texts from the dashboard still work, and this is reversible (ask to resume texting them)."
       : "Tell the owner: the coworker will reply to this contact again (normal automatic replies are back on).";
 

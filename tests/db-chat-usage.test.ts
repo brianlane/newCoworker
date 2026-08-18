@@ -263,7 +263,7 @@ describe("getFleetCurrentAiSpendMicros", () => {
     ).resolves.toBe(0);
   });
 
-  it("returns 0 for null data and 0 when the first page fails (best effort — dashboard must render)", async () => {
+  it("returns 0 for null data and 0 when the first page fails (best effort, dashboard must render)", async () => {
     const { from: emptyFrom } = fleetSpendDb({ data: null, error: null });
     await expect(getFleetCurrentAiSpendMicros({ from: emptyFrom } as never)).resolves.toBe(0);
 

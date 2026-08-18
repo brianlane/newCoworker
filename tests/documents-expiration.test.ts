@@ -445,7 +445,7 @@ describe("sweepDocumentExpirations", () => {
     expect(processFlowEvent).toHaveBeenCalledTimes(1);
   });
 
-  it("handles a doc that is both expired and renewal-due — both notices fire", async () => {
+  it("handles a doc that is both expired and renewal-due, both notices fire", async () => {
     const both = doc({
       expires_at: "2026-07-10T00:00:00Z",
       renewal_date: "2026-07-20T00:00:00Z"

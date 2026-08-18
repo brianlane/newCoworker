@@ -141,12 +141,12 @@ describe("coerceOwnerPhoneToE164", () => {
     ["11 digits starting with 1", "16026866672", "+16026866672"],
     ["already E.164", "+16026866672", "+16026866672"],
     ["+ with international", "+447911123456", "+447911123456"],
-    ["7-digit local — refuses to guess country code", "5551234", null],
-    ["8 digits — refuses to guess country code", "55512345", null],
+    ["7-digit local, refuses to guess country code", "5551234", null],
+    ["8 digits, refuses to guess country code", "55512345", null],
     ["13 digits without +", "1234567890123", null],
     ["leading-zero country code via +", "+012345678", null],
     [
-      "NANP coercion accepts a leading-zero area code — that's Telnyx's job to reject, not ours",
+      "NANP coercion accepts a leading-zero area code, that's Telnyx's job to reject, not ours",
       "0234567890",
       "+10234567890"
     ]

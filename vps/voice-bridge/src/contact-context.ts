@@ -66,7 +66,7 @@ export function formatVoiceContactTimeline(events: ContactTimelineEvent[]): stri
   return [
     "Recent interactions with this caller across ALL channels (oldest " +
       "first; SMS lines are verbatim, phone calls are summaries). This has " +
-      "already happened — treat it as the live conversation state: never " +
+      "already happened, treat it as the live conversation state: never " +
       "re-ask anything answered below, never repeat something the business " +
       "already sent them, and expect the call to continue that thread.",
     ...lines

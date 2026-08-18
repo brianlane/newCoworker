@@ -22,10 +22,10 @@ const businessIdField = z
 /** Model-facing failure text per calendar-core detail code. */
 export function calendarFailureMessage(detail: string | undefined): string {
   if (detail === "calendar_not_connected") {
-    return "No calendar is connected to this business — connect one on the Integrations page first.";
+    return "No calendar is connected to this business, connect one on the Integrations page first.";
   }
   if (detail === "calendar_book_failed") {
-    return "The booking did not go through — treat that time as no longer available, re-check with calendar_find_slots, and offer a fresh option.";
+    return "The booking did not go through, treat that time as no longer available, re-check with calendar_find_slots, and offer a fresh option.";
   }
   return `Calendar request failed${detail ? ` (${detail})` : ""}.`;
 }
@@ -100,8 +100,8 @@ export const calendarBookAppointmentTool = defineMcpTool({
     "Book an appointment on the business's connected calendar. Use calendar_find_slots first and book one of the returned slots. Confirm the booked day/time from the result's startLocal field verbatim. If it fails because the person already has an upcoming appointment (attendee_already_booked), offer to keep, reschedule, or cancel the existing one instead of booking again. Note: with Calendly, this returns a single-use scheduling link to send the customer instead of a confirmed booking.",
   schema: {
     business_id: businessIdField,
-    startIso: z.string().describe("Appointment start — ISO 8601 with timezone offset."),
-    endIso: z.string().describe("Appointment end — ISO 8601 with timezone offset."),
+    startIso: z.string().describe("Appointment start, ISO 8601 with timezone offset."),
+    endIso: z.string().describe("Appointment end, ISO 8601 with timezone offset."),
     summary: z.string().min(1).max(200).describe("Calendar event title."),
     attendeeName: z.string().min(1).max(200).describe("Customer's name."),
     attendeeEmail: z.string().email().optional(),

@@ -46,11 +46,11 @@ function liveShape(): Record<string, unknown> & { steps: Record<string, unknown>
         agentName: DAVE,
         responseMinutes: 5,
         offerTemplate:
-          "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
+          "New HomeLight referral: {{vars.lead_first_name}}, {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\nReply 1 to claim or 2 to pass by {{offer.deadline}}.",
         ownerFallbackTemplate:
           "Dave didn't claim the HomeLight referral {{vars.lead_first_name}} " +
-          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time — it's back to you.",
+          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time, it's back to you.",
         claimedNotifyTemplate: "{{agent.name}} claimed the HomeLight referral.",
         ownerDirectWhen: { var: "price_band", equals: "over_1m" },
         ownerDirectTemplate: "HIGH-VALUE kept for you",

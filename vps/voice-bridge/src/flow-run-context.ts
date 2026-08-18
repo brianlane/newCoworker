@@ -117,7 +117,7 @@ export function formatVoiceFlowContext(
 
   const lines: string[] = [
     "Automation context: this business's automated workflows recently handled this caller over text. " +
-      "Facts the automation already collected are listed below — treat them as KNOWN. " +
+      "Facts the automation already collected are listed below, treat them as KNOWN. " +
       "Do NOT ask for or re-confirm any of them (including their phone number: they are calling from it)."
   ];
   if (messages.length > 0) {
@@ -127,9 +127,9 @@ export function formatVoiceFlowContext(
       lines.push(`${i + 1}. "${truncate(m, MAX_LAST_MESSAGE_CHARS)}"`);
     });
     lines.push(
-      "These were already delivered — never repeat them or re-ask a question they contain. " +
+      "These were already delivered, never repeat them or re-ask a question they contain. " +
         "If the caller brings one up or seems to be responding to it, continue THAT " +
-        "conversation naturally — acknowledge and move forward; never restart intake."
+        "conversation naturally, acknowledge and move forward; never restart intake."
     );
   }
   for (const run of shown) {

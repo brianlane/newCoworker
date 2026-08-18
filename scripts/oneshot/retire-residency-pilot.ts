@@ -71,7 +71,7 @@ async function assertGuards(db: SupabaseClient): Promise<void> {
     .eq("id", BUSINESS_ID)
     .maybeSingle();
   if (error) throw new Error(`businesses read failed: ${error.message}`);
-  if (!biz) throw new Error(`business ${BUSINESS_ID} not found — already retired?`);
+  if (!biz) throw new Error(`business ${BUSINESS_ID} not found, already retired?`);
   if (biz.name !== EXPECTED_NAME) {
     throw new Error(`guard: name is ${JSON.stringify(biz.name)}, expected ${JSON.stringify(EXPECTED_NAME)}`);
   }
@@ -246,9 +246,9 @@ async function main() {
         cloudflareTunnelDeleted: cfResult.tunnelDeleted
       }
     });
-    console.log("APPLY complete — Residency Pilot fully retired.");
+    console.log("APPLY complete, Residency Pilot fully retired.");
   } else {
-    console.log("DRY run complete — re-run with --apply to execute.");
+    console.log("DRY run complete, re-run with --apply to execute.");
   }
 }
 

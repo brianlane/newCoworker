@@ -423,7 +423,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                 </td>
                 <td className="py-3 px-4 whitespace-nowrap">
                   {b.marginCents === null ? (
-                    <span className="text-xs text-parchment/30">—</span>
+                    <span className="text-xs text-parchment/30">-</span>
                   ) : (
                     <span
                       className={`text-xs font-semibold ${

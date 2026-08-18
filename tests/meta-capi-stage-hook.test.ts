@@ -132,7 +132,7 @@ describe("recordStageChangeForMeta", () => {
     expect(errSpy).not.toHaveBeenCalled();
   });
 
-  it("logs and returns false on lookup/insert errors — never throws", async () => {
+  it("logs and returns false on lookup/insert errors, never throws", async () => {
     const connErr = makeDb([{ data: null, error: { message: "conn down" } }]);
     expect(await recordStageChangeForMeta(connErr.db, BIZ, INPUT)).toBe(false);
 

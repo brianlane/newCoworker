@@ -816,7 +816,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
       virtualMachineId: ctx.virtualMachineId,
       plan: pooledPlanFor(sub.tier, ctx.vpsSize),
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
-      notes: `returned by grace-expired wipe of business ${sub.business_id}; auto-renew off — lapses at period end unless adopted`
+      notes: `returned by grace-expired wipe of business ${sub.business_id}; auto-renew off, lapses at period end unless adopted`
     });
   }
   // Stamp `wiped_at` BEFORE deleting the durable backup artifact. Order
@@ -892,7 +892,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
       // doesn't misreport "no Stripe refund" to the operator.
       refundIssued: sub.stripe_refund_id !== null,
       cancelReason: sub.cancel_reason ?? "user_period_end",
-      vmState: "grace expired — VM stopped, snapshot deleted, auto-renew disabled"
+      vmState: "grace expired, VM stopped, snapshot deleted, auto-renew disabled"
     });
   }
 
@@ -1065,7 +1065,7 @@ function buildCancelPlan(args: {
       virtualMachineId: ctx.virtualMachineId,
       plan: pooledPlanFor(sub.tier, ctx.vpsSize),
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
-      notes: `returned by ${cancelReason} cancel of business ${sub.business_id}; auto-renew off — lapses at period end unless adopted`
+      notes: `returned by ${cancelReason} cancel of business ${sub.business_id}; auto-renew off, lapses at period end unless adopted`
     });
   }
   if (includeRefund && profileId) {

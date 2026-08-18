@@ -25,12 +25,12 @@ export function escapeAttr(url: string): string {
 
 export type BrandedBodyBlock =
   | { kind: "text"; text: string }
-  /** Fixed markup only — never pass untrusted strings. */
+  /** Fixed markup only, never pass untrusted strings. */
   | { kind: "html"; html: string }
   /**
    * Block-level markup emitted UNWRAPPED (the `html` kind wraps in a <p>,
    * which is invalid around h2/ul/table). Pass only markup that was built
-   * from escaped input — e.g. the blog renderer's output.
+   * from escaped input, e.g. the blog renderer's output.
    */
   | { kind: "raw"; html: string };
 

@@ -697,7 +697,7 @@ ROWBOAT_TOOL_WEBHOOK_URL=""
 if [[ -n "${APP_BASE_URL:-}" ]]; then
   ROWBOAT_TOOL_WEBHOOK_URL="${APP_BASE_URL%/}/api/rowboat/tool-call"
 else
-  log "WARN: APP_BASE_URL unset — Rowboat workflow tools stay mocked (no tool webhook)"
+  log "WARN: APP_BASE_URL unset, Rowboat workflow tools stay mocked (no tool webhook)"
 fi
 
 # On a no-local-model host (kvm1) the Local twin agents are seeded DISABLED
@@ -1039,7 +1039,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "send_email",
-      description: "Send a short plain-text follow-up email to a customer from the owner connected mailbox. This is a plain email only — it is NOT a calendar invite and must never be described as one. Use ONLY when the customer asks for information by email or agrees to receive one. Never invent recipients — use only an address the customer gave you.",
+      description: "Send a short plain-text follow-up email to a customer from the owner connected mailbox. This is a plain email only, it is NOT a calendar invite and must never be described as one. Use ONLY when the customer asks for information by email or agrees to receive one. Never invent recipients, use only an address the customer gave you.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1095,7 +1095,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "update_notification_preferences",
-      description: "Turn owner alert toggles ON. Use ONLY when the texter is the business owner or a teammate (your context says so — Team SMS mode) and they explicitly ask to be alerted about something, e.g. customer_reply_alerts to be texted the moment a client texts the business. ENABLE-ONLY over text: you can never turn alerts off or change the alert phone/email — that is done from the dashboard under Settings then Notifications; say so when asked. Never call this for a customer. After success, confirm exactly which alerts were turned on.",
+      description: "Turn owner alert toggles ON. Use ONLY when the texter is the business owner or a teammate (your context says so, Team SMS mode) and they explicitly ask to be alerted about something, e.g. customer_reply_alerts to be texted the moment a client texts the business. ENABLE-ONLY over text: you can never turn alerts off or change the alert phone/email, that is done from the dashboard under Settings then Notifications; say so when asked. Never call this for a customer. After success, confirm exactly which alerts were turned on.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1158,7 +1158,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "start_aiflow_for_contact",
-      description: "Enroll the customer you are texting with into one of the automations listed in your context under Automations you may start — ONLY when their request clearly matches what that automation does (e.g. they want to rebook and a rebook follow-up automation is listed). Use the exact automation name from that list; never invent one, never mention automation names to the customer, and never call this when no such list is in your context. The automation follows up on its own — after a success, do NOT repeat or promise what it will send, just answer their message naturally.",
+      description: "Enroll the customer you are texting with into one of the automations listed in your context under Automations you may start, ONLY when their request clearly matches what that automation does (e.g. they want to rebook and a rebook follow-up automation is listed). Use the exact automation name from that list; never invent one, never mention automation names to the customer, and never call this when no such list is in your context. The automation follows up on its own, after a success, do NOT repeat or promise what it will send, just answer their message naturally.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1181,7 +1181,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "generate_image",
-      description: "Create an AI-generated image and text it to the customer as a picture message (MMS). Can also EDIT a photo the customer sent: when your context notes include an image reference for a photo they attached, pass it as inputImageRef and describe the edit in the prompt. ONLY use this when the customer explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the customer plainly.",
+      description: "Create an AI-generated image and text it to the customer as a picture message (MMS). Can also EDIT a photo the customer sent: when your context notes include an image reference for a photo they attached, pass it as inputImageRef and describe the edit in the prompt. ONLY use this when the customer explicitly asks you to create, generate, edit, or make an image, never call it proactively or as decoration. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the customer plainly.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1239,7 +1239,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar. This tool is the ONLY way an appointment gets created — never tell the customer an appointment is booked or confirmed unless this call returned success. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim — never derive the day yourself. If it fails with detail attendee_already_booked, the customer ALREADY has an upcoming appointment: tell them its existingStartLocal time and follow the result message (keep it, move it with calendar_reschedule_appointment, or cancel it); only retry with allowAdditional true after they explicitly confirm they want a separate additional appointment.",
+      description: "Book an appointment on the owner connected calendar. This tool is the ONLY way an appointment gets created, never tell the customer an appointment is booked or confirmed unless this call returned success. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim, never derive the day yourself. If it fails with detail attendee_already_booked, the customer ALREADY has an upcoming appointment: tell them its existingStartLocal time and follow the result message (keep it, move it with calendar_reschedule_appointment, or cancel it); only retry with allowAdditional true after they explicitly confirm they want a separate additional appointment.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1259,7 +1259,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_reschedule_appointment",
-      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — send that link so the customer picks the new time themselves; never state the reschedule is done.",
+      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation, this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match, ask which one using the start times in data.candidates, then call again with appointmentStartIso. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet, send that link so the customer picks the new time themselves; never state the reschedule is done.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1277,7 +1277,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_cancel_appointment",
-      description: "Cancel the customer existing upcoming appointment. The event is deleted and the customer receives ONE cancellation notice. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Only call when the customer clearly asks to cancel; confirm before calling. This is the ONLY way an appointment gets canceled — never just say it is canceled.",
+      description: "Cancel the customer existing upcoming appointment. The event is deleted and the customer receives ONE cancellation notice. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match, ask which one using the start times in data.candidates, then call again with appointmentStartIso. Only call when the customer clearly asks to cancel; confirm before calling. This is the ONLY way an appointment gets canceled, never just say it is canceled.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1308,7 +1308,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "document_share",
-      description: "Text the customer an expiring link to one of the business documents on file (price sheet, policy, contract) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
+      description: "Text the customer an expiring link to one of the business documents on file (price sheet, policy, contract) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side, if the tool fails, say the team will follow up with a copy and never invent a link.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1364,7 +1364,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar when the owner asks for it in dashboard chat. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the attendee ALREADY has an upcoming appointment — follow the result message (keep, reschedule, or cancel it) and only retry with allowAdditional true after the owner explicitly confirms an additional appointment.",
+      description: "Book an appointment on the owner connected calendar when the owner asks for it in dashboard chat. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the attendee ALREADY has an upcoming appointment, follow the result message (keep, reschedule, or cancel it) and only retry with allowAdditional true after the owner explicitly confirms an additional appointment.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1384,7 +1384,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_reschedule_appointment",
-      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time, as in move John Smith Tuesday 4pm appointment. If the result detail is multiple_matches, several appointments match that name — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — share that link so the invitee picks the new time themselves.",
+      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place, never book a second appointment to change a time. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time, as in move John Smith Tuesday 4pm appointment. If the result detail is multiple_matches, several appointments match that name, ask which one using the start times in data.candidates, then call again with appointmentStartIso. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet, share that link so the invitee picks the new time themselves.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1402,7 +1402,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_cancel_appointment",
-      description: "Cancel an existing upcoming appointment when the owner asks in dashboard chat. The event is deleted and the attendee receives ONE cancellation notice. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time. If the result detail is multiple_matches, several appointments match that name — ask which one using the start times in data.candidates, then call again with appointmentStartIso.",
+      description: "Cancel an existing upcoming appointment when the owner asks in dashboard chat. The event is deleted and the attendee receives ONE cancellation notice. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time. If the result detail is multiple_matches, several appointments match that name, ask which one using the start times in data.candidates, then call again with appointmentStartIso.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1433,7 +1433,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_generate_image",
-      description: "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
+      description: "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image, never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1524,7 +1524,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_document_share",
-      description: "Create an expiring share link for one of the business documents and deliver it. Provide phone to text it, email to email it, or neither to get the link back for the owner to copy. Works for internal documents too — the owner may share anything.",
+      description: "Create an expiring share link for one of the business documents and deliver it. Provide phone to text it, email to email it, or neither to get the link back for the owner to copy. Works for internal documents too, the owner may share anything.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1624,7 +1624,7 @@ WORKFLOW_JSON=$(jq -nc \
     # toggle.
     {
       name: "dashboard_list_aiflows",
-      description: "List this business AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking — when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
+      description: "List this business AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking, when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1634,7 +1634,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_run_aiflow",
-      description: "Run one of the business ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. flow is the flow id or its exact-enough name; input is the context text handed to the flow (contact details, notes — whatever the owner supplied). Disabled flows cannot be run — tell the owner to review and enable them at /dashboard/aiflows first.",
+      description: "Run one of the business ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. flow is the flow id or its exact-enough name; input is the context text handed to the flow (contact details, notes, whatever the owner supplied). Disabled flows cannot be run, tell the owner to review and enable them at /dashboard/aiflows first.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1672,7 +1672,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "webchat_capture_lead",
-      description: "Record a website visitor as a lead so the team can follow up. Call when the visitor shares contact details or asks to be contacted. Include whatever they provided — never invent details.",
+      description: "Record a website visitor as a lead so the team can follow up. Call when the visitor shares contact details or asks to be contacted. Include whatever they provided, never invent details.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1680,7 +1680,7 @@ WORKFLOW_JSON=$(jq -nc \
           name: { type: "string", description: "Visitor name, if given." },
           phone: { type: "string", description: "Visitor phone number, if given." },
           email: { type: "string", description: "Visitor email address, if given." },
-          interest: { type: "string", description: "What the visitor wants — service, question, timeline." },
+          interest: { type: "string", description: "What the visitor wants, service, question, timeline." },
           notes: { type: "string", description: "Any other useful context from the conversation." },
           sessionRef: { type: "string", description: "The session reference from your system prompt, passed verbatim." }
         },
@@ -1705,7 +1705,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "webchat_calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment — tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
+      description: "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created, never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment, tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1724,7 +1724,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "webchat_document_share",
-      description: "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, policy, contract) when they ask for a copy. Returns the link — include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
+      description: "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, policy, contract) when they ask for a copy. Returns the link, include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1777,7 +1777,7 @@ db.projects.insertOne({
   // gateway token the platform already holds (ROWBOAT_GATEWAY_TOKEN) so
   // /api/rowboat/tool-call can verify with one env var. Falls back to the
   // legacy per-deploy string when the token is absent (webhook tools are
-  // also disabled in that case — see ROWBOAT_TOOL_WEBHOOK_URL above).
+  // also disabled in that case, see ROWBOAT_TOOL_WEBHOOK_URL above).
   secret: "${ROWBOAT_GATEWAY_TOKEN:-deploy-${BUSINESS_ID}}",
   // Project-level tool webhook: Rowboat POSTs isWebhook tool calls here.
   // Empty string when APP_BASE_URL is unknown (tools stay mocked).
@@ -1861,7 +1861,7 @@ if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
       systemctl enable cloudflared || true
       systemctl restart cloudflared || true
     else
-      log "cloudflared unit exists but token differs (adopted/rotated box) — reinstalling with this tenant's tunnel token"
+      log "cloudflared unit exists but token differs (adopted/rotated box), reinstalling with this tenant's tunnel token"
       cloudflared service uninstall || true
       systemctl daemon-reload || true
       cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
@@ -2148,7 +2148,7 @@ VBENV_EOF
     fi
   )
 else
-  log "No ${VOICE_BRIDGE_DEST}/docker-compose.yml and no source at ${VOICE_BRIDGE_SRC} — skipping voice bridge container"
+  log "No ${VOICE_BRIDGE_DEST}/docker-compose.yml and no source at ${VOICE_BRIDGE_SRC}, skipping voice bridge container"
 fi
 
 # ------------------------------------------------------------------
@@ -2225,7 +2225,7 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
           if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
             # kvm1 has no local tag to degrade capture to; capture is a
             # best-effort background step, so disable it rather than fail.
-            log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY and this host has no local model — disabling owner-rule capture."
+            log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY and this host has no local model, disabling owner-rule capture."
             MEMORY_CAPTURE_ENABLED="false"
           else
             log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
@@ -2301,7 +2301,7 @@ CWENV_EOF
     fi
   )
 else
-  log "No ${CHAT_WORKER_DEST}/docker-compose.yml and no source at ${CHAT_WORKER_SRC} — skipping chat-worker container (dashboard chat will not function until provisioned)"
+  log "No ${CHAT_WORKER_DEST}/docker-compose.yml and no source at ${CHAT_WORKER_SRC}, skipping chat-worker container (dashboard chat will not function until provisioned)"
 fi
 
 # ------------------------------------------------------------------
@@ -2364,7 +2364,7 @@ AIRENV_EOF
     fi
   )
 else
-  log "No aiflow-render source at ${AIFLOW_RENDER_SRC} — skipping render sidecar"
+  log "No aiflow-render source at ${AIFLOW_RENDER_SRC}, skipping render sidecar"
 fi
 
 # ------------------------------------------------------------------
@@ -2522,7 +2522,7 @@ RBTMR_EOF
         # Schema apply failed above: also stop any EXISTING timer so a
         # stale unit can't keep dumping a datastore in an unknown layout.
         systemctl disable --now residency-backup.timer 2>/dev/null || true
-        log "WARN: schema apply failed — residency backups NOT (re)installed this deploy (no dump of an unverified layout)"
+        log "WARN: schema apply failed, residency backups NOT (re)installed this deploy (no dump of an unverified layout)"
         report_progress 98 "residency_backup_skipped_schema" "backups skipped: datastore schema apply failed"
       else
         # No escrow key this deploy: also STOP a previously-installed timer
@@ -2531,7 +2531,7 @@ RBTMR_EOF
         systemctl disable --now residency-backup.timer 2>/dev/null || true
         rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer /opt/data-api/backup.env
         systemctl daemon-reload 2>/dev/null || true
-        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap); any prior timer stopped"
+        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset, residency backups NOT installed (DR gap); any prior timer stopped"
         report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped (prior timer stopped)"
       fi
 
@@ -2551,7 +2551,7 @@ RBTMR_EOF
         # box may be serving an OLD layout, which is stale-data risk, not
         # health. Keep the terminal event non-ready so provisioning surfaces
         # it instead of declaring the data plane good.
-        log "WARN: data-api answers ok:true but this deploy's schema apply failed — layout may be stale"
+        log "WARN: data-api answers ok:true but this deploy's schema apply failed, layout may be stale"
         report_progress 98 "data_api_schema_stale" "data-api healthy but schema apply failed (layout may be stale)"
       else
         log "WARN: data-api container started but /v1/health never reported ok:true within 40s (transport up with ok:false = datastore unreachable)"
@@ -2566,7 +2566,7 @@ RBTMR_EOF
     fi
   )
 else
-  log "WARN: DATA_RESIDENCY_ENABLED=true but no data-api source at ${DATA_API_SRC} — skipping"
+  log "WARN: DATA_RESIDENCY_ENABLED=true but no data-api source at ${DATA_API_SRC}, skipping"
 fi
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

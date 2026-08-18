@@ -54,7 +54,7 @@ button:disabled {
 }
 
 /* Horizontal-scroll wrapper for wide content (tables, button rows) on small
-   screens. Desktop is unaffected — this is opt-in via the class. */
+   screens. Desktop is unaffected, this is opt-in via the class. */
 .mobile-scroll-x {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;

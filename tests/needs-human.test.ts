@@ -514,7 +514,7 @@ describe("escalateToHuman", () => {
       err.mockRestore();
     });
 
-    it("an untaggable contact (no row) never consults the toggle — legacy path", async () => {
+    it("an untaggable contact (no row) never consults the toggle, legacy path", async () => {
       const fetchFn = okFetch();
       const { db, calls } = makeDb([
         { data: null }, // no contact row

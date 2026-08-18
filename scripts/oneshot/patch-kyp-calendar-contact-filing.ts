@@ -85,7 +85,7 @@ if (precallErr) {
 }
 if ((precallRows ?? []).length !== 1) {
   console.error(
-    `[oneshot] expected exactly one "${PRECALL_NAME_PREFIX}…" flow, found ${(precallRows ?? []).length} — refusing to guess`
+    `[oneshot] expected exactly one "${PRECALL_NAME_PREFIX}…" flow, found ${(precallRows ?? []).length}, refusing to guess`
   );
   process.exit(1);
 }
@@ -100,14 +100,14 @@ const patched: DefinitionJson = structuredClone(precall.definition);
 const steps = Array.isArray(patched.steps) ? patched.steps : [];
 const extractIdx = steps.findIndex((s) => s.type === "extract_text");
 if (extractIdx === -1) {
-  console.error("[oneshot] pre-call flow has no extract_text step — shape changed, refusing");
+  console.error("[oneshot] pre-call flow has no extract_text step, shape changed, refusing");
   process.exit(1);
 }
 const extract = steps[extractIdx] as { fields?: Array<{ name?: string }> };
 const fieldNames = (extract.fields ?? []).map((f) => f.name);
 if (!fieldNames.includes("invitee_phone") || !fieldNames.includes("invitee_first_name")) {
   console.error(
-    "[oneshot] pre-call extraction no longer produces invitee_phone/invitee_first_name — refusing"
+    "[oneshot] pre-call extraction no longer produces invitee_phone/invitee_first_name, refusing"
   );
   process.exit(1);
 }
@@ -143,7 +143,7 @@ console.log(
       ? `will add ${[addedEmailField ? "invitee_email field" : null, addedUpsert ? "file_invitee upsert step" : null]
           .filter(Boolean)
           .join(" + ")}`
-      : "already files the invitee — no change")
+      : "already files the invitee, no change")
 );
 if (precallDirty) {
   console.log("[oneshot] pre-call patched summary:", summarizeDefinition(precallDefinition));
@@ -172,7 +172,7 @@ const noshowAlreadyFiled = Array.isArray((noshowRow.definition as DefinitionJson
 console.log(
   `[oneshot] no-show flow ${noshowRow.id} (enabled=${noshowRow.enabled}): ` +
     (noshowAlreadyFiled
-      ? "already files the invitee — canonical re-apply is a no-op refresh"
+      ? "already files the invitee, canonical re-apply is a no-op refresh"
       : "will re-apply the canonical definition with the file_invitee step")
 );
 console.log("[oneshot] no-show canonical summary:", summarizeDefinition(noshowDefinition));

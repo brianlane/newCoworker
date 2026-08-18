@@ -39,7 +39,7 @@ const FLOW_CONTEXT = formatVoiceFlowContext(
 const SYSTEM = systemInstructionForBusiness(
   "Truly Insurance",
   false, // no transfer configured
-  false, // no tools (hard rules only — tool calls can't run here)
+  false, // no tools (hard rules only, tool calls can't run here)
   undefined,
   "Dwight Colclough; auto-insurance lead; no-fault accident dispute.",
   "America/New_York",
@@ -61,7 +61,7 @@ describe("voice persona live (bridge system instruction, text-mode stand-in)", (
       {
         role: "user",
         text:
-          "Hi, I got your text asking when my policy renews — it was supposed to renew " +
+          "Hi, I got your text asking when my policy renews, it was supposed to renew " +
           "April 17th but they refused to renew it. That's why I'm calling."
       }
     ]);

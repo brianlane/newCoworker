@@ -162,7 +162,7 @@ export async function runGeminiBilledSync(
   let windowStartDay: string | null = null;
   if (!configured) {
     error =
-      "not configured — set GCP_BILLING_SA_KEY_JSON + GCP_BILLING_EXPORT_TABLE (see docs/GEMINI-SPEND.md)";
+      "not configured, set GCP_BILLING_SA_KEY_JSON + GCP_BILLING_EXPORT_TABLE (see docs/GEMINI-SPEND.md)";
   } else {
     try {
       windowStartDay = billedWindowStartDayUtc(now);

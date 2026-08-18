@@ -105,8 +105,8 @@ function ApplyIntakeSection({
         const hoursApplied: boolean = json.data?.businessHoursApplied ?? false;
         onApplied(
           (flowCreated
-            ? "Build applied — the follow-up flow was installed DISABLED; enable it after the owner approves the wording."
-            : "Build re-applied — the existing follow-up flow was updated in place.") +
+            ? "Build applied, the follow-up flow was installed DISABLED; enable it after the owner approves the wording."
+            : "Build re-applied, the existing follow-up flow was updated in place.") +
             (hoursApplied ? "" : " (Business hours couldn't be parsed; they were written to memory only.)")
         );
       }
@@ -120,13 +120,13 @@ function ApplyIntakeSection({
   if (!plan) {
     return (
       <p className="text-xs text-clay-red">
-        These answers can&apos;t be turned into a build plan — apply manually from the
+        These answers can&apos;t be turned into a build plan, apply manually from the
         build document.
       </p>
     );
   }
 
-  const flowSummary = `${plan.flow.name} — ${plan.flow.definition.steps.length} steps, installed disabled for review`;
+  const flowSummary = `${plan.flow.name}, ${plan.flow.definition.steps.length} steps, installed disabled for review`;
 
   return (
     <div className="space-y-2 rounded-md border border-parchment/10 bg-deep-ink/50 p-2">
@@ -154,7 +154,7 @@ function ApplyIntakeSection({
       {intake.applied_at && (
         <p className="text-xs text-parchment/40">
           Re-applying replaces the previous white-glove block and updates the installed
-          flow in place — the owner&apos;s own edits outside the block are untouched.
+          flow in place, the owner&apos;s own edits outside the block are untouched.
         </p>
       )}
       <details className="text-xs text-parchment/60">
@@ -167,7 +167,7 @@ function ApplyIntakeSection({
             Business hours:{" "}
             {plan.businessHours
               ? "parsed and applied to the business profile"
-              : "couldn't be parsed — kept as text in memory only"}
+              : "couldn't be parsed, kept as text in memory only"}
           </p>
           <p className="text-parchment/40">soul.md block:</p>
           <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
@@ -239,8 +239,8 @@ export function WhiteGloveIntakesPanel({
           emailedTo
             ? `Questionnaire emailed to ${emailedTo}.`
             : email.trim()
-              ? "Questionnaire created — the email couldn't be sent automatically, so copy the link below and send it yourself."
-              : "Questionnaire created — copy the link below and share it with the prospect."
+              ? "Questionnaire created, the email couldn't be sent automatically, so copy the link below and send it yourself."
+              : "Questionnaire created, copy the link below and share it with the prospect."
         );
         setBusinessName("");
         setIndustry("other");
@@ -300,7 +300,7 @@ export function WhiteGloveIntakesPanel({
       setCopiedId(intake.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      setError("Copy failed — the link is shown below the intake");
+      setError("Copy failed, the link is shown below the intake");
     }
   }
 
@@ -308,7 +308,7 @@ export function WhiteGloveIntakesPanel({
     <div className="space-y-3">
       <p className="text-xs text-parchment/40">
         Create the setup questionnaire for a prospective white-glove client (about 5
-        minutes, mostly multiple choice — no account needed). Add their email to send it
+        minutes, mostly multiple choice, no account needed). Add their email to send it
         automatically, or leave it blank to just get a shareable link. Their answers fill
         out the build document our team installs from.
       </p>
@@ -380,12 +380,12 @@ export function WhiteGloveIntakesPanel({
                           i.completed_at ? new Date(i.completed_at).toLocaleDateString() : ""
                         }${
                           i.applied_at
-                            ? ` — applied ${new Date(i.applied_at).toLocaleDateString()}`
+                            ? `, applied ${new Date(i.applied_at).toLocaleDateString()}`
                             : ""
                         }`
                       : i.status === "revoked"
                         ? "Revoked"
-                        : `Created ${new Date(i.created_at).toLocaleDateString()} — waiting for answers`}
+                        : `Created ${new Date(i.created_at).toLocaleDateString()}, waiting for answers`}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">

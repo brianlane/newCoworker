@@ -140,7 +140,7 @@ describe("insertChatJob", () => {
     expect(insertedPayload.rowboat_state).toBeNull();
   });
 
-  it("throws when supabase returns an error — caller can rely on a thrown Error to surface as a 500", async () => {
+  it("throws when supabase returns an error, caller can rely on a thrown Error to surface as a 500", async () => {
     const c = chain();
     c.single.mockResolvedValue({ data: null, error: { message: "boom" } });
     defaultClientSpy.mockReturnValue(makeDb(c));

@@ -56,7 +56,7 @@ async function handle(request: Request): Promise<Response> {
 
   const limiter = rateLimit(`marketing-unsub:${bid}`, RATE);
   if (!limiter.success) {
-    return page("Too many requests — try again in a minute.", 429);
+    return page("Too many requests, try again in a minute.", 429);
   }
 
   try {
@@ -74,7 +74,7 @@ async function handle(request: Request): Promise<Response> {
       businessId: bid,
       error: err instanceof Error ? err.message : String(err)
     });
-    return page("Something went wrong — please try the link again.", 500);
+    return page("Something went wrong, please try the link again.", 500);
   }
 
   return page("You're unsubscribed from marketing emails. Replies and appointment messages still reach you.", 200);

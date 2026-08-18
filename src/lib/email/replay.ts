@@ -371,7 +371,7 @@ export async function replayInboundEmails(
             emailLogId: id,
             status: "error",
             reason:
-              "an earlier run for this email failed and still holds its slot — check the flow's runs page"
+              "an earlier run for this email failed and still holds its slot, check the flow's runs page"
           });
           continue;
         }

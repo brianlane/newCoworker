@@ -85,7 +85,7 @@ async function main(): Promise<void> {
     }
   }
   if (!swappedId && !steps.some((s) => s.type === "extract_text")) {
-    console.error("No browse_extract (or existing extract_text) step found — nothing to swap");
+    console.error("No browse_extract (or existing extract_text) step found, nothing to swap");
     process.exit(1);
   }
 
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
 
   console.log(`Flow                : ${row.id} (${row.name}, enabled=${row.enabled})`);
   console.log(`Summary             : ${summarizeDefinition(validated)}`);
-  console.log(`Swapped to extract_text: ${swappedId ?? "(none — already extract_text)"}`);
+  console.log(`Swapped to extract_text: ${swappedId ?? "(none, already extract_text)"}`);
   console.log(`suppressDefaultReply: ${validated.options?.suppressDefaultReply === true}`);
 
   if (!apply) {

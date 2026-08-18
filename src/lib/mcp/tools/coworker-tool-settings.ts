@@ -56,7 +56,7 @@ export const updateCoworkerToolSettingsTool = defineMcpTool({
     note: z.string()
   }),
   description:
-    'Enable or disable one coworker tool on specific channels (surfaces): dashboard, voice, sms, webchat, email, slack. A policy applies ONLY to the channels you list — disabling appointment cancellation on sms still leaves voice able to cancel — so list every channel the owner means. Use the exact tool_key from Settings → Coworker tools (e.g. "calendar_cancel_appointment", "send_sms"); an unknown key is refused with the valid keys listed.',
+    'Enable or disable one coworker tool on specific channels (surfaces): dashboard, voice, sms, webchat, email, slack. A policy applies ONLY to the channels you list, disabling appointment cancellation on sms still leaves voice able to cancel, so list every channel the owner means. Use the exact tool_key from Settings → Coworker tools (e.g. "calendar_cancel_appointment", "send_sms"); an unknown key is refused with the valid keys listed.',
   schema: {
     business_id: z
       .string()

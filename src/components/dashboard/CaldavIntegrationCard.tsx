@@ -83,7 +83,7 @@ export function CaldavIntegrationCard({ businessId, initialConnection }: Props) 
       setBanner(
         json.data?.verified
           ? null
-          : "Saved, but the CalDAV server rejected the credentials — for iCloud, use an " +
+          : "Saved, but the CalDAV server rejected the credentials, for iCloud, use an " +
               "app-specific password from appleid.apple.com (not your Apple ID password)."
       );
     } finally {
@@ -141,8 +141,7 @@ export function CaldavIntegrationCard({ businessId, initialConnection }: Props) 
             <span className="text-parchment/40"> · {connection.server_url}</span>
             {connection.calendar_name ? (
               <>
-                {" "}
-                — bookings land on{" "}
+                , bookings land on{" "}
                 <span className="text-parchment/90">{connection.calendar_name}</span>
               </>
             ) : null}

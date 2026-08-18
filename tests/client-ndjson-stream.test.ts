@@ -45,7 +45,7 @@ describe("consumeNdjsonChunk", () => {
     expect(r.parseErrorCount).toBe(0);
   });
 
-  it("counts parse errors but never throws — losing one garbled event must not kill the stream", () => {
+  it("counts parse errors but never throws, losing one garbled event must not kill the stream", () => {
     const state: NdjsonBuffer = { buffer: "" };
     const r = consumeNdjsonChunk<Ev>(state, "not json\n{\"type\":\"ok\"}\n");
     expect(r.events).toEqual([{ type: "ok" }]);

@@ -69,7 +69,7 @@ const FLOW_NAMES = [
 
 const FIELD_NAME = "seller_first_name";
 const NEW_DESCRIPTION =
-  "The seller's first name — the person Clever greets at the START of the " +
+  "The seller's first name, the person Clever greets at the START of the " +
   'message ("Hi <name>") and asks the agent to call. ' +
   `NEVER "${AGENT_FIRST}" or "${AGENT_DISPLAY}": that is our own agent being ` +
   "introduced TO the seller, not the seller.";
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
       .maybeSingle();
     if (error) throw new Error(`read "${flowName}": ${error.message}`);
     if (!data) {
-      console.log(`No "${flowName}" flow for business ${BUSINESS_ID} — skipping.`);
+      console.log(`No "${flowName}" flow for business ${BUSINESS_ID}, skipping.`);
       continue;
     }
     const row = data as { id: string; name: string; enabled: boolean; definition: unknown };

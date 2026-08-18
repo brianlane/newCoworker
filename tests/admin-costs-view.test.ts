@@ -174,7 +174,7 @@ describe("buildRenewalCalendar", () => {
   it("includes renewals, lapses, and term rollovers inside the horizon, soonest first", () => {
     const events = buildRenewalCalendar({
       hostingerRows: [
-        hostingerRow(), // renews Aug 2 — in window
+        hostingerRow(), // renews Aug 2, in window
         hostingerRow({
           subscription_id: "sub-lapse",
           vm_id: 1800985,
@@ -354,7 +354,7 @@ describe("buildRenewalCalendar", () => {
 
   it("respects a custom horizon", () => {
     const events = buildRenewalCalendar({
-      hostingerRows: [hostingerRow()], // Aug 2 — 21 days out
+      hostingerRows: [hostingerRow()], // Aug 2, 21 days out
       subscriptions: [],
       businessNames: names,
       now: NOW,
@@ -373,7 +373,7 @@ describe("buildPoolBoxBurn", () => {
         inventoryRow({ vm_id: 42, hostname: null, plan: "kvm1", hostinger_billing_subscription_id: null }),
         // Unknown plan and no billing → null price.
         inventoryRow({ vm_id: 43, plan: "weird-plan", hostinger_billing_subscription_id: null }),
-        inventoryRow({ vm_id: 44, state: "assigned" }), // not idle — skipped
+        inventoryRow({ vm_id: 44, state: "assigned" }), // not idle, skipped
         inventoryRow({ vm_id: 45, state: "retired" }),
         // Cancelled billing = sunk cost until lapse, NOT recurring burn
         // (same rule as the fleet KPI excluding cancelled subs).
@@ -462,7 +462,7 @@ describe("buildPoolBoxBurn", () => {
       now: NOW
     });
     const detached = burn.find((b) => b.vmId === 1800985)!;
-    expect(detached.monthlyCents).toBeNull(); // cancelled — no recurring burn
+    expect(detached.monthlyCents).toBeNull(); // cancelled, no recurring burn
     expect(detached.endsAt).toBe("2026-08-20T00:00:00.000Z");
     // No subscription id at all → SKU estimate fallback.
     expect(burn.find((b) => b.vmId === 47)?.monthlySource).toBe("estimate");

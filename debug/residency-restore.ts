@@ -86,7 +86,7 @@ const storedPassphrase = (keyRow as { passphrase: string | null; custody?: strin
   .passphrase;
 if (storedPassphrase === null) {
   console.error(
-    "passphrase is customer_held (platform escrow dropped) — the customer owns DR for these dumps"
+    "passphrase is customer_held (platform escrow dropped), the customer owns DR for these dumps"
   );
   process.exit(1);
 }
@@ -106,7 +106,7 @@ if (dec.status !== 0) {
 }
 const gzTest = spawnSync("gzip", ["-t", sqlGzPath]);
 if (gzTest.status !== 0) {
-  console.error("decrypted payload failed gzip integrity check — wrong key or corrupt object");
+  console.error("decrypted payload failed gzip integrity check, wrong key or corrupt object");
   process.exit(1);
 }
 console.log(`[restore] decrypted + verified: ${sqlGzPath}`);
@@ -139,7 +139,7 @@ const ssh = spawnSync(
 );
 fs.rmSync(keyPath, { force: true });
 if (ssh.status !== 0) {
-  console.error(`[restore] psql apply FAILED (exit ${ssh.status}) — datastore may be partial; re-run`);
+  console.error(`[restore] psql apply FAILED (exit ${ssh.status}), datastore may be partial; re-run`);
   process.exit(1);
 }
-console.log("[restore] DONE — datastore restored from encrypted backup");
+console.log("[restore] DONE, datastore restored from encrypted backup");

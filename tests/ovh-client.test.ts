@@ -400,7 +400,7 @@ describe("OvhClient error handling", () => {
       applicationSecret: "b",
       consumerKey: "c",
       fetchImpl
-      // `now` deliberately omitted — the default Date.now clock is used for
+      // `now` deliberately omitted, the default Date.now clock is used for
       // the signature below.
     });
     expect(DEFAULT_OVH_BASE_URL).toContain("api.us.ovhcloud.com");

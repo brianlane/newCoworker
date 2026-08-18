@@ -508,7 +508,7 @@ describe("vps_inventory DB layer", () => {
       expect(chain.insert).not.toHaveBeenCalled();
     });
 
-    it("never resurrects a retired row — a box gone upstream stays gone", async () => {
+    it("never resurrects a retired row, a box gone upstream stays gone", async () => {
       const chain = makeChain();
       chain.maybeSingle.mockResolvedValueOnce({
         data: { vm_id: 42, state: "retired" },

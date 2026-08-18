@@ -582,7 +582,7 @@ function defaultOvhProvisioner(): VpsProvisioner {
 function defaultDidProvisioner(): DidProvisioner {
   return async ({ businessId, platformDefaults, search }) => {
     const apiKey = process.env.TELNYX_API_KEY ?? "";
-    if (!apiKey) throw new Error("TELNYX_API_KEY missing — cannot auto-purchase DID");
+    if (!apiKey) throw new Error("TELNYX_API_KEY missing, cannot auto-purchase DID");
     const telnyxNumbers = new TelnyxNumbersClient({ apiKey });
     const result = await orderAndAssignDidForBusiness(
       { businessId, platformDefaults, search },
@@ -597,11 +597,11 @@ function defaultDidProvisioner(): DidProvisioner {
 function defaultTenantVoiceInfraProvisioner(): TenantVoiceInfraProvisioner {
   return async (input) => {
     const apiKey = process.env.TELNYX_API_KEY ?? "";
-    if (!apiKey) throw new Error("TELNYX_API_KEY missing — cannot create tenant voice infra");
+    if (!apiKey) throw new Error("TELNYX_API_KEY missing, cannot create tenant voice infra");
     const supabaseUrl =
       process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
     if (!supabaseUrl) {
-      throw new Error("SUPABASE_URL missing — cannot derive the voice dispatch webhook URL");
+      throw new Error("SUPABASE_URL missing, cannot derive the voice dispatch webhook URL");
     }
     const infra = new TelnyxVoiceInfraClient({ apiKey });
     return ensureTenantVoiceInfra(
@@ -1262,7 +1262,7 @@ async function tryAdoptFromPool(args: {
   try {
     claimed = await vpsPool.claim(vpsSize, businessId);
   } catch (err) {
-    logger.warn("vps pool claim failed — falling back to purchase", {
+    logger.warn("vps pool claim failed, falling back to purchase", {
       businessId,
       vpsSize,
       error: err instanceof Error ? err.message : String(err)
@@ -1270,7 +1270,7 @@ async function tryAdoptFromPool(args: {
   }
   if (!claimed) return null;
 
-  logger.info("vps pool hit — adopting owned box instead of purchasing", {
+  logger.info("vps pool hit, adopting owned box instead of purchasing", {
     businessId,
     virtualMachineId: claimed.vm_id,
     vpsSize
@@ -1317,7 +1317,7 @@ async function tryAdoptFromPool(args: {
     // attaching, terminal VM state, 404 = already lapsed/deleted) is not
     // safe to hand to the next signup either — retire it for the audit
     // trail and buy fresh.
-    logger.warn("vps adopt failed — retiring pooled box and purchasing", {
+    logger.warn("vps adopt failed, retiring pooled box and purchasing", {
       businessId,
       virtualMachineId: claimed.vm_id,
       error: err instanceof Error ? err.message : String(err)
@@ -1426,7 +1426,7 @@ async function tryAdoptSpecificVm(args: {
     }
     return adopted;
   } catch (err) {
-    logger.warn("specific orphan adopt failed — retiring box and surfacing purchase error", {
+    logger.warn("specific orphan adopt failed, retiring box and surfacing purchase error", {
       businessId,
       virtualMachineId,
       error: err instanceof Error ? err.message : String(err)
@@ -1584,7 +1584,7 @@ async function acquireVps(args: {
             });
             if (adopted) {
               logger.warn(
-                "Hostinger term purchase failed but the paid VM was reconciled — adopted that specific orphan",
+                "Hostinger term purchase failed but the paid VM was reconciled, adopted that specific orphan",
                 {
                   businessId,
                   adoptedVirtualMachineId: adopted.virtualMachineId,
@@ -1608,7 +1608,7 @@ async function acquireVps(args: {
               // already-owned box instead of failing, and the orphan stays
               // pooled for the next one.
               logger.warn(
-                "Hostinger purchase failed but a paid VM was reconciled into the pool — adopted a pooled box instead",
+                "Hostinger purchase failed but a paid VM was reconciled into the pool, adopted a pooled box instead",
                 {
                   businessId,
                   adoptedVirtualMachineId: adopted.virtualMachineId,
@@ -1825,7 +1825,7 @@ async function runOrchestrator(
   // re-use the orchestrator's top-level `failed` recorder via \`throw\`.
   const bootstrapMessage = provisioned.postInstallScriptId
     ? `Verifying VPS bootstrap over SSH (Hostinger PIS attached, id=${provisioned.postInstallScriptId})`
-    : "Bootstrapping VPS over SSH (PIS not eligible — running full bootstrap)";
+    : "Bootstrapping VPS over SSH (PIS not eligible, running full bootstrap)";
 
   await recordProvisioningProgress({
     businessId,

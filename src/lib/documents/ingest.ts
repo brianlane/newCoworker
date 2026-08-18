@@ -151,7 +151,7 @@ function buildCondensePrompt(args: {
     "Reply in EXACTLY this layout:",
     "SUMMARY: <one or two sentences describing what this document covers>",
     "---",
-    "<clean markdown with every concrete fact from the document — prices, durations, policies, dates. Prefer bullet points. No preamble.>"
+    "<clean markdown with every concrete fact from the document, prices, durations, policies, dates. Prefer bullet points. No preamble.>"
   ];
   if (args.rawText !== undefined) {
     lines.push("", "Document text (may be truncated):", "---", args.rawText, "---");

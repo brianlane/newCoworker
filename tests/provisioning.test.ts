@@ -3050,7 +3050,7 @@ describe("provisioning/orchestrate", () => {
       expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).toHaveBeenCalledWith("biz-did-null");
     });
 
-    it("refuses to call didProvisioner when TELNYX_CONNECTION_ID is missing — root cause of the May 2026 unwired-DID outage", async () => {
+    it("refuses to call didProvisioner when TELNYX_CONNECTION_ID is missing, root cause of the May 2026 unwired-DID outage", async () => {
       // The bug: orchestrate.ts spread readPlatformTelnyxDefaults() into
       // platformDefaults; if connectionId was undefined the order went
       // through anyway and Telnyx filed the number with `connection_id: ""`,
@@ -3081,7 +3081,7 @@ describe("provisioning/orchestrate", () => {
       expect(remoteExec).toHaveBeenCalled();
     });
 
-    it("refuses when TELNYX_MESSAGING_PROFILE_ID is missing — SMS would route nowhere even if voice were wired", async () => {
+    it("refuses when TELNYX_MESSAGING_PROFILE_ID is missing, SMS would route nowhere even if voice were wired", async () => {
       delete process.env.TELNYX_MESSAGING_PROFILE_ID;
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550001010" });

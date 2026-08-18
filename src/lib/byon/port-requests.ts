@@ -121,7 +121,7 @@ function getPorting(deps: ByonDeps): PortingClientLike {
   if (deps.porting) return deps.porting;
   const apiKey = process.env.TELNYX_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("TELNYX_API_KEY missing — cannot talk to the Telnyx porting API");
+    throw new Error("TELNYX_API_KEY missing, cannot talk to the Telnyx porting API");
   }
   return new TelnyxPortingClient({ apiKey, userAgent: "newcoworker-byon" });
 }

@@ -508,8 +508,8 @@ export async function generateImageForSms(
       ok: false,
       detail: isQuota ? "sms_quota_blocked" : "mms_send_failed",
       message: isQuota
-        ? "The image was created but the monthly text-message limit is reached, so it could not be delivered. Do NOT call this tool again — tell the user plainly."
-        : "The image was created but the picture message failed to send. Do NOT call this tool again (each attempt is billed) — tell the user delivery failed."
+        ? "The image was created but the monthly text-message limit is reached, so it could not be delivered. Do NOT call this tool again, tell the user plainly."
+        : "The image was created but the picture message failed to send. Do NOT call this tool again (each attempt is billed), tell the user delivery failed."
     };
   }
 }

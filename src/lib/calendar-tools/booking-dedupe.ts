@@ -233,7 +233,7 @@ export async function confirmBookingDedupe(
       await new Promise((r) => setTimeout(r, CONFIRM_RETRY_DELAY_MS));
     }
   }
-  logger.error("booking-dedupe: confirm exhausted retries — slot re-opens after in-flight TTL", {
+  logger.error("booking-dedupe: confirm exhausted retries, slot re-opens after in-flight TTL", {
     claimId,
     eventId
   });

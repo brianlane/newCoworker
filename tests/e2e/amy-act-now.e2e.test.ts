@@ -54,7 +54,7 @@ const CLEVER_MESSAGE =
   "cash offers?\n\n" +
   "Thanks, Amy Laidlaw ~ HomeSmart 😊";
 
-describe("Amy act-now replay — Bryan 2026-07-14 (generic path, real builders)", () => {
+describe("Amy act-now replay, Bryan 2026-07-14 (generic path, real builders)", () => {
   let reply = "";
   let verdict: JudgeVerdict;
 
@@ -111,16 +111,16 @@ describe("Amy act-now replay — Bryan 2026-07-14 (generic path, real builders)"
       reply,
       {
         defers_to_scheduling:
-          "Does the message ask the customer to pick or agree on a LATER time — " +
+          "Does the message ask the customer to pick or agree on a LATER time, " +
           "asking what time works best, offering to check available times, or " +
           "proposing to book a future slot? Saying a person will reach out / call " +
           "them now, shortly, or right away is NOT scheduling and counts as false; " +
           "continuing the discussion in this conversation right away is also false.",
         reasks_answered_question:
           "Does the message re-ask, in any phrasing, when the customer would be " +
-          "available or what time is good — the exact question they just answered?",
+          "available or what time is good, the exact question they just answered?",
         acts_now:
-          "Does the message act on the customer's immediate availability — either " +
+          "Does the message act on the customer's immediate availability, either " +
           "continuing the substantive conversation right now (asking about their " +
           "property/needs, discussing next steps) OR telling them a person will " +
           "contact them now / shortly / right away (immediate human follow-up " +

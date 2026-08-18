@@ -142,7 +142,7 @@ describe("api/billing/auto-renew route", () => {
     expect(updateSubscription).not.toHaveBeenCalled();
   });
 
-  it("409s when the commitment has already elapsed (rollover phase — start a new contract instead)", async () => {
+  it("409s when the commitment has already elapsed (rollover phase, start a new contract instead)", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
       ...ACTIVE_TERM_SUB,
       // Term ended yesterday; the live Stripe period is now a single month.

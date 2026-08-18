@@ -111,7 +111,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changes: string
   const idx = findAcceptStep(steps);
   if (idx < 0) {
     throw new Error(
-      'no browse_action with a click_text "Accept" found — is this the Clever accept flow?'
+      'no browse_action with a click_text "Accept" found, is this the Clever accept flow?'
     );
   }
   const step = steps[idx] as Extract<FlowStep, { type: "browse_action" }>;

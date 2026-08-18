@@ -184,7 +184,7 @@ for (const businessId of await targetBusinessIds()) {
   console.log(`\n== Rowboat scheduling-tools reseed: ${businessId} ==`);
   const key = await getActiveVpsSshKeyForBusiness(businessId);
   if (!key) {
-    console.error(`no active ssh key for business ${businessId} — skipping`);
+    console.error(`no active ssh key for business ${businessId}, skipping`);
     failures += 1;
     continue;
   }

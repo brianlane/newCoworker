@@ -112,7 +112,7 @@ const KYP_MEMORY = [
 /** Flow fixtures — response shapes byte-matched to the executor's. */
 const CONFIRMATION_FLOW_ID = "11111111-aaaa-4aaa-8aaa-111111111111";
 const LIST_NOTE =
-  "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run — the owner reviews/enables them at /dashboard/aiflows.";
+  "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run, the owner reviews/enables them at /dashboard/aiflows.";
 
 function flowsFixture(confirmationEnabled: boolean) {
   return {
@@ -122,7 +122,7 @@ function flowsFixture(confirmationEnabled: boolean) {
         id: CONFIRMATION_FLOW_ID,
         name: confirmationEnabled
           ? "Booking confirmation text (Calendly)"
-          : "Booking confirmation text (Calendly) — awaiting James's approval",
+          : "Booking confirmation text (Calendly), awaiting James's approval",
         enabled: confirmationEnabled,
         trigger: "calendar (event_start)"
       },
@@ -152,7 +152,7 @@ function runAiflowSuccess(flowName: string) {
     ok: true,
     runId: "e2e-run-1",
     flowName,
-    note: `Run enqueued — it starts within about a minute. Tell the owner "${flowName}" is running and they can watch it at /dashboard/aiflows.`
+    note: `Run enqueued, it starts within about a minute. Tell the owner "${flowName}" is running and they can watch it at /dashboard/aiflows.`
   };
 }
 
@@ -298,7 +298,7 @@ beforeAll(async () => {
     .join("\n\n");
 });
 
-describe("scenario 1 — James's exact request, confirmation flow still disabled (production state)", () => {
+describe("scenario 1, James's exact request, confirmation flow still disabled (production state)", () => {
   // One retried test instead of beforeAll + two tests (the suite-standard
   // de-flake shape): a marginal draw must re-roll the WHOLE turn, and
   // vitest retry cannot re-run a beforeAll.
@@ -360,7 +360,7 @@ describe("scenario 1 — James's exact request, confirmation flow still disabled
   );
 });
 
-describe("scenario 2 — flow ENABLED: presents both options, then executes the owner's choice", () => {
+describe("scenario 2, flow ENABLED: presents both options, then executes the owner's choice", () => {
   // One retried test instead of beforeAll + three tests: a marginal round-1
   // draw (the model committing an action before asking — seen once on PR
   // #729's CI run) must re-roll the WHOLE exchange, and vitest retry cannot
@@ -421,11 +421,11 @@ describe("scenario 2 — flow ENABLED: presents both options, then executes the 
   );
 });
 
-describe("scenario 3 — 'didnt receie anything' re-sends the INTENDED body, never the chat reply", () => {
+describe("scenario 3, 'didnt receie anything' re-sends the INTENDED body, never the chat reply", () => {
   // Same retried single-test shape as scenarios 1 and 2: the whole turn
   // re-rolls together on a marginal draw.
   it(
-    "re-sends the SAME intended message to James — not its own previous reply",
+    "re-sends the SAME intended message to James, not its own previous reply",
     { retry: 1, timeout: 120_000 },
     async () => {
       // The prior exchange, as the transcript would replay it: James asked
@@ -437,7 +437,7 @@ describe("scenario 3 — 'didnt receie anything' re-sends the INTENDED body, nev
           role: "model",
           parts: [
             {
-              text: `Done — I texted you at ${JAMES_E164}: "This is a test message." Let me know when it lands.`
+              text: `Done, I texted you at ${JAMES_E164}: "This is a test message." Let me know when it lands.`
             }
           ]
         }

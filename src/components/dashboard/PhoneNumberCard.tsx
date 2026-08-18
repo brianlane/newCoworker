@@ -58,7 +58,7 @@ export function resolveSmsCampaignCopy(
   status: BusinessTelnyxMessagingCampaignStatus | null | undefined
 ): { variant: "neutral" | "success" | "error" | "pending"; label: string; hint: string } | null {
   if (!status) return null;
-  if (status === "registered") return null; // happy path — no banner
+  if (status === "registered") return null; // happy path, no banner
   if (status === "unregistered") return null;
   if (status === "rejected") {
     return {

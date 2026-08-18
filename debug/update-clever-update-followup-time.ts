@@ -89,7 +89,7 @@ async function main(): Promise<void> {
       continue;
     }
     if (!row) {
-      console.error(`[${FLOW_NAME}] no flow for business ${BUSINESS_ID} — skipping`);
+      console.error(`[${FLOW_NAME}] no flow for business ${BUSINESS_ID}, skipping`);
       continue;
     }
 
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     const steps: FlowStep[] = def.steps.map((s) => ({ ...s }));
     const idx = steps.findIndex((s) => s.type === "browse_action");
     if (idx === -1) {
-      console.error(`[${FLOW_NAME}] no browse_action step — skipping`);
+      console.error(`[${FLOW_NAME}] no browse_action step, skipping`);
       continue;
     }
     const step = steps[idx];
@@ -106,13 +106,13 @@ async function main(): Promise<void> {
     const actions = step.actions.map((a) => ({ ...a }));
     const dayIdx = actions.findIndex(isDayPick);
     if (dayIdx === -1) {
-      console.error(`[${FLOW_NAME}] no day-picking click_role action — skipping`);
+      console.error(`[${FLOW_NAME}] no day-picking click_role action, skipping`);
       continue;
     }
     const before = JSON.stringify(step.actions);
 
     if (actions.some((a) => isTimePick(a, FOLLOWUP_TIME))) {
-      console.log(`[${FLOW_NAME}] already has a "${FOLLOWUP_TIME}" time pick — no change`);
+      console.log(`[${FLOW_NAME}] already has a "${FOLLOWUP_TIME}" time pick, no change`);
       continue;
     }
     actions.splice(dayIdx + 1, 0, { ...timePick });

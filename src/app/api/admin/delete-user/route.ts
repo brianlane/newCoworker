@@ -72,7 +72,7 @@ export async function DELETE(request: Request) {
     if (stripeLinked.size > 0) {
       return errorResponse(
         "CONFLICT",
-        "A business owned by this user has live Stripe billing — force-cancel it first",
+        "A business owned by this user has live Stripe billing, force-cancel it first",
         409
       );
     }
@@ -123,7 +123,7 @@ export async function DELETE(request: Request) {
     if (!authUserId && (await authUserExistsByEmail(email))) {
       return errorResponse(
         "INTERNAL_SERVER_ERROR",
-        "Auth-user lookup was inconsistent; nothing was removed — retry",
+        "Auth-user lookup was inconsistent; nothing was removed, retry",
         500
       );
     }
@@ -172,7 +172,7 @@ export async function DELETE(request: Request) {
         });
         return errorResponse(
           "INTERNAL_SERVER_ERROR",
-          "Business data removed but the login could not be deleted — retry to finish",
+          "Business data removed but the login could not be deleted, retry to finish",
           500
         );
       }

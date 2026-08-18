@@ -34,7 +34,7 @@ export function WhiteGloveDocActions({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard unavailable (permissions) — download still works.
+      // Clipboard unavailable (permissions), download still works.
     }
   }
 

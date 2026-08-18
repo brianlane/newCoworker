@@ -103,7 +103,7 @@ export async function POST(request: Request) {
     if (body.data.publishAt && Date.parse(body.data.publishAt) < Date.now() - 60_000) {
       return errorResponse(
         "VALIDATION_ERROR",
-        'That time is in the past — pick a future time, or use "Publish now"'
+        'That time is in the past, pick a future time, or use "Publish now"'
       );
     }
 

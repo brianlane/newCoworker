@@ -88,8 +88,8 @@ function testDefinition(): Record<string, unknown> {
         type: "route_to_team",
         offerTemplate:
           "TEST (bad-phone verify): lead {{vars.lead_name}} {{vars.lead_phone}}. " +
-          "Reply 1 to claim or 2 to pass by {{offer.deadline}}. (No action needed — automated test.)",
-        ownerFallbackTemplate: "TEST: nobody claimed {{vars.lead_name}} — back to you.",
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}. (No action needed, automated test.)",
+        ownerFallbackTemplate: "TEST: nobody claimed {{vars.lead_name}}, back to you.",
         responseMinutes: 60
       },
       {
@@ -147,24 +147,24 @@ function testDefinition(): Record<string, unknown> {
                 id: "bp_email_amy",
                 type: "send_email",
                 to: OWNER_EMAIL,
-                subject: "TEST BAD PHONE NUMBER — {{vars.lead_name}} (owner notification)",
+                subject: "TEST BAD PHONE NUMBER, {{vars.lead_name}} (owner notification)",
                 body:
                   "{{vars.claimed_agent}} tried calling the test lead and reported the phone " +
                   'number is bad.\nTheir exact words: "{{vars.agent_report}}"\n\n' +
                   "Lead info:\nName: {{vars.lead_name}}\nPhone on file (bad): {{vars.lead_phone}}\n" +
                   "Email: {{vars.lead_email}}\nAddress: {{vars.lead_address}}\n\n" +
-                  "(Verification of the bad-phone-report path — owner-notification analog.)"
+                  "(Verification of the bad-phone-report path, owner-notification analog.)"
               },
               {
                 id: "bp_email_lead",
                 type: "send_email",
                 to: "{{vars.lead_email}}",
-                subject: "TEST — Re: your recent inquiry (lead email analog)",
+                subject: "TEST, Re: your recent inquiry (lead email analog)",
                 body:
                   "Hi {{vars.lead_name}},\n\nWe tried to give you a call, but the phone number " +
                   "we have on file doesn't seem to be working. Could you reply with your best " +
                   "phone number so we can connect?\n\n(Verification of the bad-phone-report " +
-                  "path — lead-email analog.)"
+                  "path, lead-email analog.)"
               }
             ]
           }
@@ -277,7 +277,7 @@ if (cmd === "setup") {
   // tester is claimable — never a queued run whose offer isn't live yet.
   if (routing.offered !== TESTER) {
     throw new Error(
-      `run isn't offered to the tester yet (offered: ${JSON.stringify(routing.offered ?? null)}) — ` +
+      `run isn't offered to the tester yet (offered: ${JSON.stringify(routing.offered ?? null)}), ` +
         "wait for the route_to_team offer SMS before claiming"
     );
   }

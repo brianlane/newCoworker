@@ -608,7 +608,7 @@ describe("image-tools handlers", () => {
       expect(mockGenerateImage).not.toHaveBeenCalled();
     });
 
-    it("returns image_store_failed when the upload errors — and does not charge for it", async () => {
+    it("returns image_store_failed when the upload errors, and does not charge for it", async () => {
       budgetOk();
       generationOk();
       const db = stubDb({ uploadError: { message: "bucket missing" } });

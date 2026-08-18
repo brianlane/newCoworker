@@ -74,7 +74,7 @@ export function extractWorkflowJqProgram(deployScriptText: string): string {
   // there too).
   if (deployScriptText[closeQuote + 1] !== ")") {
     throw new Error(
-      "the jq program contains an apostrophe (bash would truncate it exactly like this extractor did) — remove it"
+      "the jq program contains an apostrophe (bash would truncate it exactly like this extractor did), remove it"
     );
   }
   return program;

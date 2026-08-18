@@ -100,7 +100,7 @@ async function clickRows(linkId: string): Promise<Array<{ likely_prefetch: boole
   return data as Array<{ likely_prefetch: boolean }>;
 }
 
-describe("sms_link_click RPC (real Postgres) — the triple-notification incident pattern", () => {
+describe("sms_link_click RPC (real Postgres), the triple-notification incident pattern", () => {
   it("a delivery-time prefetch burst never notifies; the first human tap notifies exactly once", async () => {
     const biz = await seedBusiness(db, "IT link clicks incident");
     const link = await mintLink(biz);

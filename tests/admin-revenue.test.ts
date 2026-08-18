@@ -310,7 +310,7 @@ describe("computeTopBusinessRevenue", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("counts a business with duplicate active rows once (newest wins) — ARPU, top clients, trend", () => {
+  it("counts a business with duplicate active rows once (newest wins), ARPU, top clients, trend", () => {
     const dupes = [
       sub({ business_id: "b1", created_at: "2026-05-01T00:00:00Z" }),
       sub({ business_id: "b1", created_at: "2026-06-01T00:00:00Z" })

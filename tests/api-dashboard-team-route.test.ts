@@ -165,7 +165,7 @@ describe("api/dashboard/team route", () => {
     expect(mockInviteUserByEmail).not.toHaveBeenCalled();
   });
 
-  it("POST reports delivery 'none' when email fails — the grant still stands", async () => {
+  it("POST reports delivery 'none' when email fails, the grant still stands", async () => {
     vi.mocked(inviteBusinessMember).mockResolvedValue(MEMBER as never);
     vi.mocked(authUserExistsByEmail).mockRejectedValue(new Error("auth API down"));
 

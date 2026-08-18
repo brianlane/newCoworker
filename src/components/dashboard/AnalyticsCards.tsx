@@ -99,7 +99,7 @@ function BarColumn({
  * meaningless percentage; flat metrics render muted.
  */
 export function PeriodDeltaLine({ change }: { change: PeriodChange }) {
-  const arrow = change.direction === "up" ? "▲" : change.direction === "down" ? "▼" : "—";
+  const arrow = change.direction === "up" ? "▲" : change.direction === "down" ? "▼" : "-";
   const tone =
     change.direction === "up"
       ? "text-claw-green"
@@ -483,14 +483,14 @@ export function EngagementCard({ view }: { view: EngagementView }) {
       </div>
       {view.clipped ? (
         <p className="text-[11px] text-amber-300/80 mt-2">
-          Large directory — segment counts cover the first{" "}
+          Large directory, segment counts cover the first{" "}
           {view.total.toLocaleString()} customers scanned.
         </p>
       ) : null}
       {view.quietCustomers.length > 0 ? (
         <div className="mt-4">
           <p className="text-xs text-parchment/50 mb-2">
-            Gone quiet — your best win-back candidates:
+            Gone quiet, your best win-back candidates:
           </p>
           <ul className="space-y-1.5">
             {view.quietCustomers.map((c) => (
@@ -518,7 +518,7 @@ export function EngagementCard({ view }: { view: EngagementView }) {
         </div>
       ) : (
         <p className="text-xs text-parchment/40 mt-3">
-          Nobody has gone quiet — every customer has been in touch recently.
+          Nobody has gone quiet, every customer has been in touch recently.
         </p>
       )}
     </Card>
@@ -543,7 +543,7 @@ export type LeadSourcesView = {
 
 function LeadSourceTable({ title, rows }: { title: string; rows: LeadSourceRowView[] }) {
   const pct = (part: number, whole: number) =>
-    whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+    whole > 0 ? `${Math.round((part / whole) * 100)}%` : "-";
   return (
     <div className="min-w-0 flex-1">
       <p className="text-xs text-parchment/50 mb-1.5">{title}</p>
@@ -601,7 +601,7 @@ export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
       </div>
       {view.clipped ? (
         <p className="text-[11px] text-amber-300/80 mt-2">
-          Large window — counts cover the{" "}
+          Large window, counts cover the{" "}
           {view.totalNewContacts.toLocaleString()} most recent new contacts.
         </p>
       ) : null}
@@ -638,7 +638,7 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
   return (
     <Card>
       <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
-        Team performance (30 days) — owner view
+        Team performance (30 days), owner view
       </p>
       <div className="mt-3 space-y-2">
         {/* Same asymmetric grid as FlowFunnelCard: an equal 5-way split made
@@ -676,7 +676,7 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
               ) : null}
             </span>
             <span className="text-right text-parchment/70">
-              {row.medianClaimMs !== null ? humanizeMs(row.medianClaimMs) : "—"}
+              {row.medianClaimMs !== null ? humanizeMs(row.medianClaimMs) : "-"}
             </span>
             <span className="text-right text-parchment/70">
               {row.forwardedCalls.toLocaleString()}
@@ -858,7 +858,7 @@ export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clip
       <p className="text-[10px] text-parchment/35 mt-3">
         Link clicks count tracked short links in flow texts; goals count runs an external
         milestone (reply, booking, claim, tag) fast-forwarded to a goal step.
-        {clipped ? " High volume this window — counts cover the most recent activity only." : ""}
+        {clipped ? " High volume this window, counts cover the most recent activity only." : ""}
       </p>
     </Card>
   );
@@ -905,7 +905,7 @@ export function SmsLinkStatsCard({
       <p className="text-[10px] text-parchment/35 mt-3">
         Each row is a tracked short link embedded in an outbound text.
         {clipped
-          ? " High volume this window — this list covers the most recent links only; the flow performance totals above count all activity."
+          ? " High volume this window, this list covers the most recent links only; the flow performance totals above count all activity."
           : ""}
       </p>
     </Card>
@@ -955,7 +955,7 @@ export function AnswerRateCard({
                     : "text-parchment/40"
               }`}
             >
-              {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "—"} {Math.abs(deltaPts)} pts{" "}
+              {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "-"} {Math.abs(deltaPts)} pts{" "}
               <span className="text-parchment/35">vs prior 30 days</span>
             </p>
           ) : null}

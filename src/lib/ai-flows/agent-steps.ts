@@ -60,13 +60,13 @@ export async function validateRunAgentSteps(
     const agent = byId.get(ref.agentId);
     if (!agent) {
       issues.push(
-        `Step "${ref.stepId}" runs an agent that doesn't exist — pick one of your agents from /dashboard/agents.`
+        `Step "${ref.stepId}" runs an agent that doesn't exist, pick one of your agents from /dashboard/agents.`
       );
       continue;
     }
     if (!agent.enabled) {
       issues.push(
-        `Step "${ref.stepId}" runs the agent "${agent.name}", which is disabled — enable it on /dashboard/agents first.`
+        `Step "${ref.stepId}" runs the agent "${agent.name}", which is disabled, enable it on /dashboard/agents first.`
       );
     }
   }

@@ -377,7 +377,7 @@ describe("db/usage", () => {
               { business_id: "biz-1", sms_sent: 3 },
               { business_id: "biz-1", sms_sent: 2 },
               { business_id: "biz-2", sms_sent: 7 },
-              { sms_sent: 99 } // no business_id — skipped
+              { sms_sent: 99 } // no business_id, skipped
             ],
             error: null
           }
@@ -388,7 +388,7 @@ describe("db/usage", () => {
               { business_id: "biz-1", billable_seconds: 600 },
               { business_id: "biz-1", billable_seconds: 30 },
               { business_id: "biz-3", billable_seconds: 90 },
-              { billable_seconds: 999 } // no business_id — skipped
+              { billable_seconds: 999 } // no business_id, skipped
             ],
             error: null
           }

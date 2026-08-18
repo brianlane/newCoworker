@@ -1241,7 +1241,7 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(setDeleteAtExpiration).toHaveBeenCalledWith("vps-abc.vps.ovh.ca", true);
   });
 
-  it("slow phase logs (but survives) ovh op failures — Error and non-Error", async () => {
+  it("slow phase logs (but survives) ovh op failures, Error and non-Error", async () => {
     const setDeleteAtExpiration = vi
       .fn()
       .mockRejectedValueOnce(new Error("ovh 403"))
@@ -1960,7 +1960,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       expect(releaseVpsToPoolMock.mock.calls[0][0]).not.toHaveProperty("expiresAt");
     });
 
-    it("swallows a pool write failure — inventory is an optimization, never a cancel blocker", async () => {
+    it("swallows a pool write failure, inventory is an optimization, never a cancel blocker", async () => {
       releaseVpsToPoolMock.mockRejectedValueOnce(new Error("pool db down"));
       await expect(
         executeLifecyclePlan(poolPlan(), { businessId: "biz_1", vpsHost: null }, stubDeps)
@@ -1975,7 +1975,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       ).resolves.toEqual({});
     });
 
-    it("fast phase DEFERS the pool return — the box must not be claimable before backup + stop", async () => {
+    it("fast phase DEFERS the pool return, the box must not be claimable before backup + stop", async () => {
       // A box marked `available` is immediately claimable by a concurrent
       // signup, whose adopt path RECREATES (wipes) the VM. The fast phase
       // runs before the SSH backup and stop_vm, so it must skip this op.
@@ -2106,7 +2106,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     });
 
 
-    it("swallows routing-cleanup failures — a wipe must not fail over a $1 number", async () => {
+    it("swallows routing-cleanup failures, a wipe must not fail over a $1 number", async () => {
       const del = vi.fn().mockResolvedValue({ id: "pn_1" });
       deleteTelnyxVoiceRouteMock.mockRejectedValueOnce(new Error("db down"));
       await expect(

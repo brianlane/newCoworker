@@ -695,7 +695,7 @@ async function fetchActivityFeedInput(
         : beforeLt(
             db
               .from("contacts")
-              // Only real customer profiles count as "new customer" activity — folded
+              // Only real customer profiles count as "new customer" activity, folded
               // manual contacts (vendors, services, testers) are not interactions.
               .select("display_name, customer_e164, created_at")
               .eq("business_id", businessId)

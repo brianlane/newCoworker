@@ -46,7 +46,7 @@ export const updateNotificationPreferencesTool = defineMcpTool({
     settings: z.record(z.string(), z.boolean())
   }),
   description:
-    "Turn the business's notification/alert toggles on or off (e.g. customer_reply_alerts to text the owner the moment a client texts the business). Managers and owners only. Booleans only — the alert phone number and email cannot be changed here (dashboard Settings → Notifications). Pass only the toggles the user asked to change.",
+    "Turn the business's notification/alert toggles on or off (e.g. customer_reply_alerts to text the owner the moment a client texts the business). Managers and owners only. Booleans only, the alert phone number and email cannot be changed here (dashboard Settings → Notifications). Pass only the toggles the user asked to change.",
   schema: {
     business_id: z
       .string()

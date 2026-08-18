@@ -124,7 +124,7 @@ if (JUNK_E164) {
 
 if (!real) {
   console.error(
-    `[oneshot] no contact row for ${REAL_E164} — nothing to name. If the Texts thread exists, ` +
+    `[oneshot] no contact row for ${REAL_E164}, nothing to name. If the Texts thread exists, ` +
       "the row should too (interaction rollup); investigate before re-running."
   );
   process.exit(1);
@@ -153,7 +153,7 @@ console.log(
     (junk
       ? junkDeletable
         ? `delete orphan ${junk.id}`
-        : `orphan ${junk.id} no longer matches the known shape — SKIP delete`
+        : `orphan ${junk.id} no longer matches the known shape, SKIP delete`
       : "no orphan to delete")
 );
 

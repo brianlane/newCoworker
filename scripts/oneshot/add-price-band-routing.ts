@@ -90,8 +90,8 @@ export const PRICE_BAND_FLOWS: Record<
     priceBandSource: "Based on the listing/asking price in the alert.",
     ownerDirectTemplates: {
       route:
-        "HIGH-VALUE HomeLight referral ($1M+) kept for you — not offered to the team.\n" +
-        "{{vars.lead_first_name}} — {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\n" +
+        "HIGH-VALUE HomeLight referral ($1M+) kept for you, not offered to the team.\n" +
+        "{{vars.lead_first_name}}, {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\n" +
         "Tap to claim: {{vars.leadUrl}}"
     }
   },
@@ -100,7 +100,7 @@ export const PRICE_BAND_FLOWS: Record<
     priceBandSource: "Based on the property price in the message text.",
     ownerDirectTemplates: {
       s4:
-        "HIGH-VALUE Realtor.com lead ($1M+) kept for you — not offered to the team.\n" +
+        "HIGH-VALUE Realtor.com lead ($1M+) kept for you, not offered to the team.\n" +
         "{{vars.lead_name}} {{vars.lead_phone}} {{vars.lead_email}}\n" +
         "{{vars.lead_address}} {{vars.lead_price_details}}\n" +
         "( {{vars.lead_url}} )"
@@ -117,14 +117,14 @@ export const PRICE_BAND_FLOWS: Record<
       ...Object.fromEntries(
         ["route_buyer", "route_seller", "route_both"].map((id) => [
           id,
-          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
+          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you, not offered to the team.\n" +
             "{{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}) in " +
             "{{vars.location}}, around {{vars.price}}. Contact: {{vars.contact_note}}.\n" +
             "Lead source: {{vars.web_source}}"
         ])
       ),
       route:
-        "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
+        "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you, not offered to the team.\n" +
         "{{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}, around {{vars.price}}.\n" +
         "Lead source: ReferralExchange (referralexchange.com)"
     }
@@ -135,7 +135,7 @@ export const PRICE_BAND_FLOWS: Record<
       "Based on the estimated home value / price shown on the lead page.",
     ownerDirectTemplates: {
       route:
-        "HIGH-VALUE Clever lead ($1M+) kept for you — not offered to the team.\n" +
+        "HIGH-VALUE Clever lead ($1M+) kept for you, not offered to the team.\n" +
         "{{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
         "Address: {{vars.lead_address}}\n" +
         "Lead source: Clever (listwithclever.com)"
@@ -181,7 +181,7 @@ export function addPriceBandRouting(def: Definition, flowName: string): boolean 
   );
   if (!producesPriceBand) {
     console.warn(
-      `  [warn] ${flowName}: extraction step "${wiring.extractStepId}" not found — ` +
+      `  [warn] ${flowName}: extraction step "${wiring.extractStepId}" not found, ` +
         "price_band has no producer, so the keep-for-owner rule was NOT stamped."
     );
     return changed;
@@ -240,7 +240,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — aborting before any write:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, aborting before any write:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);
@@ -264,7 +264,7 @@ async function main(): Promise<void> {
         console.error(`Update failed for ${p.id}: ${upErr.message}`);
         console.error(
           patched.length > 0
-            ? `Already written before the failure: ${patched.map((x) => x.name).join(", ")} — re-run after fixing; the patcher is idempotent.`
+            ? `Already written before the failure: ${patched.map((x) => x.name).join(", ")}, re-run after fixing; the patcher is idempotent.`
             : "Nothing had been written yet."
         );
         process.exit(1);

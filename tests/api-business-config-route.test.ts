@@ -110,7 +110,7 @@ beforeEach(() => {
   vi.mocked(patchBusinessConfig).mockResolvedValue(undefined as never);
 });
 
-describe("api/business/config — compliance module survives soul edits", () => {
+describe("api/business/config, compliance module survives soul edits", () => {
   it("re-applies the enterprise module block when a soul save dropped it", async () => {
     supabaseStub.maybeSingle.mockResolvedValue({
       data: {
@@ -179,7 +179,7 @@ describe("api/business/config — compliance module survives soul edits", () => 
   });
 });
 
-describe("api/business/config — websiteUrl persistence", () => {
+describe("api/business/config, websiteUrl persistence", () => {
   it("persists a trimmed, normalized websiteUrl when the dashboard saves a non-empty value", async () => {
     const res = await POST(jsonRequest(baseBody({ websiteUrl: "  https://example.com/  " })));
     expect(res.status).toBe(200);
@@ -259,7 +259,7 @@ describe("api/business/config — websiteUrl persistence", () => {
   });
 });
 
-describe("api/business/config — vault markdown limits", () => {
+describe("api/business/config, vault markdown limits", () => {
   it("rejects soulMd over the configured max before patching", async () => {
     const hugeSoul = "s".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS + 1);
     const res = await POST(jsonRequest(baseBody({ soulMd: hugeSoul })));
@@ -277,7 +277,7 @@ describe("api/business/config — vault markdown limits", () => {
   });
 });
 
-describe("api/business/config — VPS vault sync", () => {
+describe("api/business/config, VPS vault sync", () => {
   // The dashboard's Save button used to land in Supabase ONLY — the per-tenant
   // Rowboat vault on the VPS and the MongoDB agent.instructions field stayed
   // frozen at the provision-time snapshot. Owner edits never reached chat /

@@ -91,7 +91,7 @@ export async function startAiFlowForContactTool(
       ok: false,
       message:
         `No automation you may start matches "${ref}". Only use the exact names listed in your ` +
-        `"Automations you may start" context — never invent one. If none fits (or the list is absent), just reply normally.`
+        `"Automations you may start" context, never invent one. If none fits (or the list is absent), just reply normally.`
     };
   }
   if (matches.length > 1) {
@@ -107,7 +107,7 @@ export async function startAiFlowForContactTool(
   if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
     return {
       ok: false,
-      message: `"${flow.name}" is a voice flow — it runs on live calls and cannot enroll a texter.`
+      message: `"${flow.name}" is a voice flow, it runs on live calls and cannot enroll a texter.`
     };
   }
   // Loop guard: never re-enroll someone who is currently inside the flow.
@@ -115,7 +115,7 @@ export async function startAiFlowForContactTool(
     return {
       ok: false,
       message:
-        `This customer is already in "${flow.name}" — do not enroll them again. ` +
+        `This customer is already in "${flow.name}", do not enroll them again. ` +
         `Reply to their message normally; the automation continues on its own.`
     };
   }
@@ -147,7 +147,7 @@ export async function startAiFlowForContactTool(
     // guard.
     return {
       ok: false,
-      message: `This customer was already enrolled in "${flow.name}" — reply normally.`
+      message: `This customer was already enrolled in "${flow.name}", reply normally.`
     };
   }
   await recordSystemLog({
@@ -169,6 +169,6 @@ export async function startAiFlowForContactTool(
     flowName: flow.name,
     note:
       `"${flow.name}" is now running for this customer (starts within about a minute). ` +
-      `Do NOT repeat what the automation will send — just answer their message naturally.`
+      `Do NOT repeat what the automation will send, just answer their message naturally.`
   };
 }

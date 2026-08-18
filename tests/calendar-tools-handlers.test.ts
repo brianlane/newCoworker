@@ -743,7 +743,7 @@ describe("findCalendarSlots", () => {
   });
 });
 
-describe("bookCalendarAppointment — unassigned-booking owner alert (Truly, Jul 21 2026)", () => {
+describe("bookCalendarAppointment, unassigned-booking owner alert (Truly, Jul 21 2026)", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",
@@ -839,7 +839,7 @@ describe("bookCalendarAppointment — unassigned-booking owner alert (Truly, Jul
   });
 });
 
-describe("bookCalendarAppointment — attendee duplicate guard (Truly double-booking, Jul 21 2026)", () => {
+describe("bookCalendarAppointment, attendee duplicate guard (Truly double-booking, Jul 21 2026)", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",
@@ -906,7 +906,7 @@ describe("bookCalendarAppointment — attendee duplicate guard (Truly double-boo
     expect(result.detail).toBe("already_booked");
   });
 
-  it("a retry of ONE of multiple held slots is still a retry — other slots never trip the guard (Bugbot on PR #824)", async () => {
+  it("a retry of ONE of multiple held slots is still a retry, other slots never trip the guard (Bugbot on PR #824)", async () => {
     // The attendee legitimately holds TWO upcoming slots (allowAdditional);
     // a timeout retry repeats one of them exactly. The other slot must not
     // convert the retry into attendee_already_booked.
@@ -1469,7 +1469,7 @@ describe("bookCalendarAppointment", () => {
   });
 });
 
-describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadruple-booking incident)", () => {
+describe("bookCalendarAppointment, retry idempotency guard (2026-07-13 quadruple-booking incident)", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",
@@ -1598,7 +1598,7 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
   });
 
-  it("a null claim (ledger unavailable) books without dedupe — fail-open", async () => {
+  it("a null claim (ledger unavailable) books without dedupe, fail-open", async () => {
     vi.mocked(claimBookingDedupe).mockResolvedValue(null);
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
@@ -1609,7 +1609,7 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
   });
 });
 
-describe("bookCalendarAppointment — Zoom decorator", () => {
+describe("bookCalendarAppointment, Zoom decorator", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",
@@ -1757,7 +1757,7 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
   });
 });
 
-describe("bookCalendarAppointment — stored display name wins (Truly Issue 6)", () => {
+describe("bookCalendarAppointment, stored display name wins (Truly Issue 6)", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",
@@ -1801,7 +1801,7 @@ describe("bookCalendarAppointment — stored display name wins (Truly Issue 6)",
     expect(vi.mocked(getCustomerMemory)).not.toHaveBeenCalled();
   });
 
-  it("a lookup failure (Error or not) books with the model-supplied name — never blocks", async () => {
+  it("a lookup failure (Error or not) books with the model-supplied name, never blocks", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
 
@@ -1813,7 +1813,7 @@ describe("bookCalendarAppointment — stored display name wins (Truly Issue 6)",
   });
 });
 
-describe("bookCalendarAppointment — stored contact EMAIL backfill (Truly, Jul 15 2026)", () => {
+describe("bookCalendarAppointment, stored contact EMAIL backfill (Truly, Jul 15 2026)", () => {
   // The voice model rarely collects an email mid-call, so bookings shipped
   // with no attendee: the provider sent NO invite while the assistant told
   // the caller "a calendar invite will be sent to you shortly".
@@ -1925,7 +1925,7 @@ describe("bookCalendarAppointment trustProvidedName (public booking page)", () =
   });
 });
 
-describe("getWorkspaceBusyBlocks (direct — the booking page's busy fetch)", () => {
+describe("getWorkspaceBusyBlocks (direct, the booking page's busy fetch)", () => {
   const WINDOW_START = new Date("2026-01-05T00:00:00Z");
   const WINDOW_END = new Date("2026-01-06T00:00:00Z");
 
@@ -2246,7 +2246,7 @@ describe("getWorkspaceBusyBlocks: calendarView paging", () => {
   });
 });
 
-describe("bookCalendarAppointment — Google Meet decorator", () => {
+describe("bookCalendarAppointment, Google Meet decorator", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
     endIso: "2026-06-12T17:30:00.000Z",

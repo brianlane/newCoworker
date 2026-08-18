@@ -138,7 +138,7 @@ export async function postRowboatChat(
     if (e instanceof Error && e.name === "AbortError") {
       console.error(
         `[integration] Rowboat /chat AbortError after ${elapsed}ms (cap ${ROWBOAT_CHAT_MS}ms) model=${logCtx?.ollamaModel ?? "?"} ` +
-          `— likely Rowboat/Ollama still working; see docker logs. Try INTEGRATION_OLLAMA_CHAT_TIMEOUT_SEC or a smaller/faster model.`
+          `, likely Rowboat/Ollama still working; see docker logs. Try INTEGRATION_OLLAMA_CHAT_TIMEOUT_SEC or a smaller/faster model.`
       );
     } else if (!(e instanceof Error && e.message.startsWith("Rowboat chat "))) {
       console.error(

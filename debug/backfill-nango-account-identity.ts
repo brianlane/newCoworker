@@ -100,7 +100,7 @@ async function main() {
     const metaPatch = providerAccountMetadata(identity);
     if (Object.keys(metaPatch).length === 0) {
       unresolved += 1;
-      console.log(`  ??     ${row.business_id} ${row.provider_config_key} …${tail} — no identity resolved (missing scope or unsupported provider)`);
+      console.log(`  ??     ${row.business_id} ${row.provider_config_key} …${tail}, no identity resolved (missing scope or unsupported provider)`);
       continue;
     }
 

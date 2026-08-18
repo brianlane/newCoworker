@@ -117,7 +117,7 @@ describe("decodeTelnyxMediaPayload", () => {
     expect(out.payloadType).toBe(96);
   });
 
-  it("skips a zero-word extension header (X=1, length=0 — header only)", () => {
+  it("skips a zero-word extension header (X=1, length=0, header only)", () => {
     // L16 payloads are always a whole number of 16-bit samples (even length);
     // use 2 bytes so the decoder's even-length plausibility gate accepts it.
     const audio = Buffer.from([0x99, 0xaa]);
@@ -242,10 +242,10 @@ describe("RtpEncoder", () => {
 
   it("clamps adoptPayloadType to 1..127 (PT spans 7 bits)", () => {
     const enc = new RtpEncoder({ payloadType: 11 });
-    enc.adoptPayloadType(0); // out of range — keep current
+    enc.adoptPayloadType(0); // out of range, keep current
     expect((enc.encode(new Int16Array([0]))[1] ?? 0) & 0x7f).toBe(11);
 
-    enc.adoptPayloadType(128); // out of range — keep current
+    enc.adoptPayloadType(128); // out of range, keep current
     expect((enc.encode(new Int16Array([0]))[1] ?? 0) & 0x7f).toBe(11);
 
     enc.adoptPayloadType(96);

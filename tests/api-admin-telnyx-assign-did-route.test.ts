@@ -38,7 +38,7 @@ function request(body: unknown): Request {
 
 const ORIGINAL_ENV = process.env;
 
-describe("POST /api/admin/telnyx/assign-did — platform-defaults assertion guard", () => {
+describe("POST /api/admin/telnyx/assign-did, platform-defaults assertion guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = {
@@ -75,7 +75,7 @@ describe("POST /api/admin/telnyx/assign-did — platform-defaults assertion guar
     );
   });
 
-  it("returns 400 VALIDATION_ERROR with associate=true and TELNYX_CONNECTION_ID unset — won't PATCH a number into a void", async () => {
+  it("returns 400 VALIDATION_ERROR with associate=true and TELNYX_CONNECTION_ID unset, won't PATCH a number into a void", async () => {
     delete process.env.TELNYX_CONNECTION_ID;
     const res = await POST(
       request({ businessId: BIZ, toE164: "+15550009999", associateWithPlatform: true })
@@ -87,7 +87,7 @@ describe("POST /api/admin/telnyx/assign-did — platform-defaults assertion guar
     expect(assignExistingDidToBusiness).not.toHaveBeenCalled();
   });
 
-  it("PERMITS associate=false even when platform defaults are unset — manual reroute path must stay open for recovery", async () => {
+  it("PERMITS associate=false even when platform defaults are unset, manual reroute path must stay open for recovery", async () => {
     // The May 2026 outage was recovered by an admin manually re-binding
     // (602) 805-3377 directly via the Telnyx API + updating DB rows.
     // Forcing `associate=false` admin actions to also have
@@ -118,7 +118,7 @@ describe("POST /api/admin/telnyx/assign-did — platform-defaults assertion guar
     expect(res.status).toBe(404);
   });
 
-  it("returns 400 when TELNYX_API_KEY is missing on associate=true — pre-existing guard, kept intact by the assertion change", async () => {
+  it("returns 400 when TELNYX_API_KEY is missing on associate=true, pre-existing guard, kept intact by the assertion change", async () => {
     delete process.env.TELNYX_API_KEY;
     const res = await POST(
       request({ businessId: BIZ, toE164: "+15550009999", associateWithPlatform: true })

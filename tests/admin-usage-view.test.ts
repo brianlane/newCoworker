@@ -85,7 +85,7 @@ describe("computeUtilizationPct", () => {
     const pct = computeUtilizationPct({
       tier: "enterprise",
       voiceMinutes: voiceCapMin / 4,
-      smsSent: 999_999, // no cap — must not count
+      smsSent: 999_999, // no cap, must not count
       aiSpendMicros: null,
       aiCapMicros: DEFAULT_CHAT_SPEND_CAP_MICROS
     });

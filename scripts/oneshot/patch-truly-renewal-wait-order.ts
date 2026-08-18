@@ -68,7 +68,7 @@ const FLOW_NAMES = [
 const ALEX_E164 = "+15199560528";
 const ALEX_PINNED_FACT =
   "Auto policy renews July 23, 2026 (their SMS answer on 2026-07-14; " +
-  "the automated thread dropped it — recovered manually).";
+  "the automated thread dropped it, recovered manually).";
 
 const WAIT_RENEWAL_TIMEOUT_MINUTES = 30;
 
@@ -113,7 +113,7 @@ function buildRenewalAck(): AnyStep {
     type: "send_sms",
     to: "{{vars.lead_phone}}",
     body:
-      "Perfect, thank you {{vars.lead_name}} — I've noted that for your broker. " +
+      "Perfect, thank you {{vars.lead_name}}, I've noted that for your broker. " +
       "One of our licensed brokers will reach out shortly to review your options. " +
       "If a specific day or time works best for a call, just reply here and let me know.",
     when: { var: "renewal_timing", notEquals: "no_reply" },
@@ -249,7 +249,7 @@ for (const name of FLOW_NAMES) {
 for (const { row, next, changed } of targets) {
   console.log(`\n=== ${row.name} (id=${row.id}, enabled=${row.enabled}) ===`);
   if (changed.length === 0) {
-    console.log("  already patched — no changes");
+    console.log("  already patched, no changes");
     continue;
   }
   for (const c of changed) console.log(`  - ${c}`);
@@ -286,7 +286,7 @@ if (patchedIds.length > 0) {
   });
 }
 if (failures.length > 0) {
-  console.error(`\n${failures.length} flow(s) failed: ${failures.join(", ")} — re-run with --apply.`);
+  console.error(`\n${failures.length} flow(s) failed: ${failures.join(", ")}, re-run with --apply.`);
   process.exit(1);
 }
 console.log("\nDone. No runs were enqueued; the next Privyr lead exercises the fixed ordering.");

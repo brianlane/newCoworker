@@ -12,7 +12,7 @@ LOG="test-results/e2e-gemini-usage.jsonl"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 
 if [ ! -s "$LOG" ]; then
-  echo "No Gemini usage log at $LOG — the suite made no recorded paid calls." | tee -a "$SUMMARY"
+  echo "No Gemini usage log at $LOG, the suite made no recorded paid calls." | tee -a "$SUMMARY"
   exit 0
 fi
 
@@ -30,7 +30,7 @@ TABLE=$(jq -rs '
      | join("\n"))
     + "\n| **total** | **\(map(.calls) | add)** | **\(map(.prompt) | add)** | **\(map(.output) | add)** |"
 ' "$LOG" 2>/dev/null) || {
-  echo "Could not parse $LOG — skipping the usage summary." | tee -a "$SUMMARY"
+  echo "Could not parse $LOG, skipping the usage summary." | tee -a "$SUMMARY"
   exit 0
 }
 

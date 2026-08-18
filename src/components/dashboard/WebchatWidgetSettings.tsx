@@ -95,7 +95,7 @@ export function WebchatWidgetSettings({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setStatus("Copy failed — select the snippet and copy manually.");
+      setStatus("Copy failed, select the snippet and copy manually.");
     }
   };
 
@@ -149,7 +149,7 @@ export function WebchatWidgetSettings({
       </div>
       <p className="text-xs text-parchment/40 mb-4">
         Add your coworker to your own website as a chat bubble. It answers visitor questions
-        from your business knowledge and captures leads — it can&apos;t send texts or emails
+        from your business knowledge and captures leads, it can&apos;t send texts or emails
         or place calls from this surface.
       </p>
 

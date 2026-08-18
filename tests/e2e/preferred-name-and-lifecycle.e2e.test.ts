@@ -39,7 +39,7 @@ const LEAD = "+15485773546";
  */
 const LIFECYCLE_QUESTIONS = {
   claims_moved:
-    "Does the message state or imply the appointment HAS BEEN successfully rescheduled/moved/updated to a new time, as an accomplished fact? Saying it has NOT been moved, that the sender cannot move it, that the original time still stands, or that the team will confirm the change is false. Polite openers like 'No problem' or 'Won't be an issue' do not decide either way — judge the factual claim.",
+    "Does the message state or imply the appointment HAS BEEN successfully rescheduled/moved/updated to a new time, as an accomplished fact? Saying it has NOT been moved, that the sender cannot move it, that the original time still stands, or that the team will confirm the change is false. Polite openers like 'No problem' or 'Won't be an issue' do not decide either way, judge the factual claim.",
   claims_canceled:
     "Does the message state or imply the appointment HAS BEEN canceled, as an accomplished fact? Saying it cannot be canceled by the sender or is still in place is false.",
   offers_new_booking:
@@ -89,7 +89,7 @@ describe("stored display name wins over the lead-form name (Issue 6, real preamb
   beforeAll(async () => {
     // A turn that naturally invites a by-name greeting.
     const raw = await geminiChatReply(SYSTEM, [
-      { role: "user", text: "[SMS] Hi, it's me again — do you still have my details on file?" }
+      { role: "user", text: "[SMS] Hi, it's me again, do you still have my details on file?" }
     ]);
     reply = splitReplyReasoning(raw).reply;
   }, 120_000);

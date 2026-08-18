@@ -123,7 +123,7 @@ export function PrivacyPanel({
         <h3 className="text-xs font-medium text-parchment/60">Content retention window</h3>
         <p className="text-xs text-parchment/50">
           Content history (messages, transcripts, email log) older than the window is pruned by
-          the daily sweep — on the tenant box too for residency tenants. Contacts are never
+          the daily sweep, on the tenant box too for residency tenants. Contacts are never
           pruned. Blank = keep forever. Minimum {MIN_RETENTION_DAYS} days.
         </p>
         <div className="flex items-center gap-2">
@@ -151,7 +151,7 @@ export function PrivacyPanel({
       <div className="space-y-2 border-t border-parchment/10 pt-4">
         <h3 className="text-xs font-medium text-parchment/60">End-user data deletion</h3>
         <p className="text-xs text-parchment/50">
-          Erases one person&apos;s rows across contacts, SMS, voice transcripts, and email log —
+          Erases one person&apos;s rows across contacts, SMS, voice transcripts, and email log,
           central and the tenant box. Unrecoverable. Use for verified privacy requests (PIPEDA /
           Law 25 / CCPA); the audit log stores a fingerprint, not the identifier.
         </p>
@@ -195,7 +195,7 @@ export function PrivacyPanel({
           <div className="space-y-2 rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-3">
             <p className="text-xs text-parchment/70">
               This permanently deletes every row matching{" "}
-              {[e164.trim(), email.trim()].filter(Boolean).join(" / ")} for this tenant — central
+              {[e164.trim(), email.trim()].filter(Boolean).join(" / ")} for this tenant, central
               and box. There is no undo.
             </p>
             <div className="flex gap-2">

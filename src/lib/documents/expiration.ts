@@ -199,7 +199,7 @@ export async function sweepDocumentExpirations(
               `"${doc.title}" expired on ${formatDate(doc.expires_at as string)}. ` +
               `Your coworker no longer answers from it or shares it. ` +
               `Upload a replacement or extend the date under Dashboard → Memory → Documents.`,
-            smsBody: `[Coworker] Document "${doc.title}" expired — your coworker stopped using it. Update it from the dashboard.`
+            smsBody: `[Coworker] Document "${doc.title}" expired, your coworker stopped using it. Update it from the dashboard.`
           });
           await patchBusinessDocument(
             doc.business_id,
@@ -224,7 +224,7 @@ export async function sweepDocumentExpirations(
               `Upload a replacement or extend the date under Dashboard → Memory → Documents.`,
             smsBody: `[Coworker] Document "${doc.title}" expires ${formatDate(
               doc.expires_at
-            )} — extend or replace it from the dashboard.`
+            )}, extend or replace it from the dashboard.`
           });
           await patchBusinessDocument(
             doc.business_id,

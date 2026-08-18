@@ -168,7 +168,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, skipping:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);

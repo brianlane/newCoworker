@@ -188,14 +188,14 @@ describe("renderBusinessProfileMd", () => {
         { name: "Zero duration", durationMinutes: 0, priceText: "$5" }
       ]
     });
-    expect(md).toContain("### Services (name — duration — price)");
+    expect(md).toContain("### Services (name, duration, price)");
     expect(md).toContain("use its listed duration");
-    expect(md).toContain("- Haircut — 30 min — $40 — Classic cut");
+    expect(md).toContain("- Haircut, 30 min, $40, Classic cut");
     expect(md).toContain("- Consultation");
     expect(md).not.toContain("- Consultation —");
     // Blank names are dropped; zero durations render without a duration part.
     expect(md).not.toContain("-  —");
-    expect(md).toContain("- Zero duration — $5");
+    expect(md).toContain("- Zero duration, $5");
   });
 
   it("renders a services-only profile and omits the section when services is empty", () => {
@@ -303,7 +303,7 @@ describe("refreshBusinessProfileMd", () => {
       }
     ]);
     const md = await refreshBusinessProfileMd("biz-4");
-    expect(md).toContain("- Haircut — 30 min — $40 — Classic cut");
+    expect(md).toContain("- Haircut, 30 min, $40, Classic cut");
     expect(md).not.toContain("Retired promo");
   });
 

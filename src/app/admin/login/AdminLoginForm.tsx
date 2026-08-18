@@ -32,7 +32,7 @@ export default function AdminLoginForm({
         const supabase = getSupabaseBrowserClient();
         await supabase.auth.signOut();
       } catch {
-        // ignore — may fail if no session exists
+        // ignore, may fail if no session exists
       }
       setError("This account is not authorized for admin access.");
     };

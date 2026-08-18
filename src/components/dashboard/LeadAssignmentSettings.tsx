@@ -58,7 +58,7 @@ export function LeadAssignmentSettings({
           Assign new leads automatically (round robin)
           <span className="block text-xs text-parchment/40 mt-1">
             When on, each new lead is assigned straight to the next available employee in
-            rotation — they get a text with the details and the lead shows as theirs
+            rotation, they get a text with the details and the lead shows as theirs
             immediately. When off (default), the employee is offered the lead and accepts by
             replying &quot;1&quot;, so a lead is never assigned to someone who can&apos;t take
             it right now. Rotation, working hours, and time off are respected either way.

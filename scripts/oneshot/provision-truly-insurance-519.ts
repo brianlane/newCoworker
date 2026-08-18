@@ -51,7 +51,7 @@ console.log("[oneshot] DID search override:", DID_SEARCH);
 if (business.status === "online" || business.hostinger_vps_id) {
   console.error(
     `[oneshot] refusing to provision: status=${business.status}, ` +
-      `hostinger_vps_id=${business.hostinger_vps_id ?? "null"} — use the admin re-provision flow instead`
+      `hostinger_vps_id=${business.hostinger_vps_id ?? "null"}, use the admin re-provision flow instead`
   );
   process.exit(1);
 }
@@ -79,7 +79,7 @@ const result = await orchestrateProvisioning(
     // 416, or the US/602 env defaults) are intentionally ignored.
     didProvisioner: async ({ businessId, platformDefaults }) => {
       const apiKey = process.env.TELNYX_API_KEY ?? "";
-      if (!apiKey) throw new Error("TELNYX_API_KEY missing — cannot auto-purchase DID");
+      if (!apiKey) throw new Error("TELNYX_API_KEY missing, cannot auto-purchase DID");
       const telnyxNumbers = new TelnyxNumbersClient({ apiKey });
       const didResult = await orderAndAssignDidForBusiness(
         { businessId, platformDefaults, search: DID_SEARCH },

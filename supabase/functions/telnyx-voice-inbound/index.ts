@@ -245,7 +245,7 @@ async function notifyOwnerCustomerCalled(
     if (!s?.forward_to_e164 || !s.telnyx_messaging_profile_id) return;
     const text =
       `[AiFlow] Lead ${params.callerE164} just called in while an automation was ` +
-      `waiting on them. Their follow-up texts are paused for 2 hours — the phone ` +
+      `waiting on them. Their follow-up texts are paused for 2 hours, the phone ` +
       `conversation owns this lead now.`;
     const res = await telnyxSendSms({
       apiKey: params.apiKey,
@@ -1072,7 +1072,7 @@ serve(async (req: Request) => {
         });
         const handled = await runHandoffChain(plan.context);
         if (handled) return handled;
-        // Could not start (no steps / session write) — fall through to legacy.
+        // Could not start (no steps / session write), fall through to legacy.
       }
     }
   }

@@ -47,7 +47,7 @@ describe("KVM Rowboat correctness (HTTP + JSON shape; kvm8 default `qwen3:4b-ins
             responsesDoc.generatedAt = new Date().toISOString();
             writeIntegrationCorrectnessResponsesFile(responsesDoc);
             console.log(
-              `[integration correctness] ${runLabel} OK — appended to test-results/${INTEGRATION_CORRECTNESS_RESPONSES_BASENAME}`
+              `[integration correctness] ${runLabel} OK, appended to test-results/${INTEGRATION_CORRECTNESS_RESPONSES_BASENAME}`
             );
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);

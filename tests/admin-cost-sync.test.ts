@@ -709,7 +709,7 @@ describe("runPlatformCostSync", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       listTenantDids: vi.fn(async () => [
         { businessId: "biz-1", e164: "+16025551234" },
-        { businessId: "biz-1", e164: "+1" } // unusable suffix — skipped
+        { businessId: "biz-1", e164: "+1" } // unusable suffix, skipped
       ])
     });
     const status = await runPlatformCostSync(deps);

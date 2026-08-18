@@ -123,7 +123,7 @@ export async function cleanupStaleTenantsForVm(
   for (const business of stale) {
     if (stripeLinkedNow.has(business.id)) {
       logger.error(
-        "stale-tenant cleanup: SKIPPED delete — business resubscribed via Stripe after its box was released; reconcile manually",
+        "stale-tenant cleanup: SKIPPED delete, business resubscribed via Stripe after its box was released; reconcile manually",
         {
           staleBusinessId: business.id,
           staleBusinessName: business.name,
@@ -150,7 +150,7 @@ export async function cleanupStaleTenantsForVm(
       // pointing at the box is dangerous (see module header), so this error
       // is the operator's cue to delete it manually. Skip the auth-user step
       // entirely — the login must survive while its business row does.
-      logger.error("stale-tenant cleanup: business delete FAILED — stale row still references the adopted box", {
+      logger.error("stale-tenant cleanup: business delete FAILED, stale row still references the adopted box", {
         staleBusinessId: business.id,
         vpsId,
         adoptedByBusinessId: args.newBusinessId,

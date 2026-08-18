@@ -326,7 +326,7 @@ describe("resolvePath", () => {
   });
 });
 
-describe("resolvePlaceholder — .first/.last name parts", () => {
+describe("resolvePlaceholder, .first/.last name parts", () => {
   const scope = {
     vars: { lead_name: "Mary Jane de la Cruz", solo: "Cher", padded: "  Ana  Cruz ", n: 5 },
     trigger: { full_name: "James Kyp" }
@@ -365,7 +365,7 @@ describe("resolvePlaceholder — .first/.last name parts", () => {
   it("an empty/whitespace value yields empty parts", () => {
     expect(resolvePlaceholder({ vars: { blank: "  " } }, "vars.blank.first")).toBe("");
   });
-  it("a direct hit wins — real object properties are never shadowed", () => {
+  it("a direct hit wins, real object properties are never shadowed", () => {
     const s = { vars: { name: { first: "Real" } } };
     expect(resolvePlaceholder(s, "vars.name.first")).toBe("Real");
   });
@@ -737,7 +737,7 @@ describe("extractLabeledPhones", () => {
     expect(extractLabeledPhones("Phone: 123-456-7890")).toEqual([]);
   });
 
-  it("ignores unlabeled numbers — the vendor-footer incident", () => {
+  it("ignores unlabeled numbers, the vendor-footer incident", () => {
     // A phoneless lead email whose footer said "Call Privyr support at
     // (415) 555-0126" had the SUPPORT LINE backfilled into lead_phone and
     // got texted the lead greeting (bug-hunt round 3). Third-party numbers
@@ -1078,7 +1078,7 @@ describe("buildClassifyPrompt / parseClassifyChoice", () => {
     expect(buildClassifyPrompt(categories, "x".repeat(9000)).length).toBeLessThan(6000);
   });
 
-  it("clips long text keeping the TAIL — the newest message is what's classified", () => {
+  it("clips long text keeping the TAIL, the newest message is what's classified", () => {
     // windowText is oldest-first; head-keeping used to clip a lead's final
     // "stop texting me" out of the prompt entirely, misrouting the opt-out.
     const long = "old chatter. ".repeat(400) + "FINAL: please stop texting me";

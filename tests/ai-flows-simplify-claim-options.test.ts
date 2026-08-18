@@ -23,10 +23,10 @@ function referralExchangeDef() {
           "Lead source: realestateagents.com\n" +
           "Reply 3 with a timeframe to claim and tell us when you'll reach out " +
           '(e.g. "3, 20 min").\n' +
-          'Lapsed lead? Reply "4, <ETA>" to claim it after its window — ' +
+          'Lapsed lead? Reply "4, <ETA>" to claim it after its window, ' +
           'ETA of when you can please triple tap this lead? (e.g. "4, tomorrow am").',
         responseMinutes: 10,
-        ownerFallbackTemplate: "No one claimed it — back to you."
+        ownerFallbackTemplate: "No one claimed it, back to you."
       }
     ]
   };
@@ -78,7 +78,7 @@ describe("simplifyClaimOptions", () => {
             "Reply 1 to confirm you're taking it by {{offer.deadline}}.\n" +
             "Reply 2 with a timeframe to claim and tell us when you'll reach out " +
             '(e.g. "2, 20 min").\n' +
-            'Lapsed lead? Reply "3, <ETA>" to claim it after its window — ' +
+            'Lapsed lead? Reply "3, <ETA>" to claim it after its window, ' +
             'ETA of when you can please triple tap this lead? (e.g. "3, tomorrow am").',
           responseMinutes: 5,
           ownerFallbackTemplate: "Back to you."

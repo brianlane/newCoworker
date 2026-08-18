@@ -178,7 +178,7 @@ export function WhatsAppIntegrationCard({
           setConnecting(false);
         }
       } catch {
-        // Non-JSON messages from other facebook.com frames — ignore.
+        // Non-JSON messages from other facebook.com frames, ignore.
       }
     };
     window.addEventListener("message", onMessage);
@@ -198,7 +198,7 @@ export function WhatsAppIntegrationCard({
       codeRef.current = null;
       sessionInfoRef.current = null;
       setConnecting(false);
-      setBanner("WhatsApp setup didn't complete — close any leftover popup and try again.");
+      setBanner("WhatsApp setup didn't complete, close any leftover popup and try again.");
     }, 120_000);
     window.FB.login(
       (response) => {
@@ -281,7 +281,7 @@ export function WhatsAppIntegrationCard({
         <div>
           <h3 className="text-base font-semibold text-parchment">WhatsApp Business</h3>
           <p className="text-sm text-parchment/50 mt-0.5">
-            Chat with leads on WhatsApp — your coworker answers automatically, and
+            Chat with leads on WhatsApp, your coworker answers automatically, and
             AiFlows and owner alerts can message contacts there too.
           </p>
         </div>
@@ -298,7 +298,7 @@ export function WhatsAppIntegrationCard({
         <div className="mt-4 space-y-3">
           {!configured ? (
             <p className="text-xs text-parchment/40">
-              WhatsApp isn&apos;t available yet — the platform&apos;s Meta app is still
+              WhatsApp isn&apos;t available yet, the platform&apos;s Meta app is still
               being configured.
             </p>
           ) : (
@@ -340,7 +340,7 @@ export function WhatsAppIntegrationCard({
                 .map(([name, t]) => `${name.replace(/^nc_/, "")} (${t.status.toLowerCase()})`)
                 .join(" · ")}
               {templatesPending
-                ? " — templates awaiting Meta review only send inside an open 24-hour conversation window."
+                ? ", templates awaiting Meta review only send inside an open 24-hour conversation window."
                 : ""}
             </p>
           ) : null}

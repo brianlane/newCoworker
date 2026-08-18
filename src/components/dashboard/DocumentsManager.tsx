@@ -229,7 +229,7 @@ export function DocumentsManager({
       setUploadOpen(false);
       await refresh();
     } catch {
-      setError("Upload failed — try again.");
+      setError("Upload failed, try again.");
     } finally {
       setUploading(false);
     }
@@ -257,7 +257,7 @@ export function DocumentsManager({
       setRenameTarget(null);
       setMoveTarget(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed — try again.");
+      setError(err instanceof Error ? err.message : "Save failed, try again.");
     } finally {
       setModalSaving(false);
     }
@@ -280,7 +280,7 @@ export function DocumentsManager({
       }
       await refresh();
     } catch {
-      setError("Delete failed — try again.");
+      setError("Delete failed, try again.");
     }
   }
 
@@ -495,7 +495,7 @@ export function DocumentsManager({
           <p className="text-sm text-parchment/40">Loading documents…</p>
         ) : documents.length === 0 ? (
           <p className="text-sm text-parchment/40">
-            No documents yet — upload price sheets, policies, contracts, SOPs, or meeting
+            No documents yet, upload price sheets, policies, contracts, SOPs, or meeting
             transcripts and your coworker answers from them.
           </p>
         ) : searching && visibleDocs.length === 0 ? (
@@ -646,7 +646,7 @@ export function DocumentsManager({
           }}
         >
           <label className={labelClass}>
-            {renameTarget ? "New title" : "Folder (category) — new names create the folder"}
+            {renameTarget ? "New title" : "Folder (category), new names create the folder"}
           </label>
           <input
             className={inputClass}
@@ -688,7 +688,7 @@ export function DocumentsManager({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className={labelClass}>
-                File (PDF, Word .docx, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
+                File (PDF, Word .docx, text, markdown, CSV, or a meeting transcript .vtt, max 10 MB)
               </label>
               <input
                 ref={fileRef}
@@ -698,7 +698,7 @@ export function DocumentsManager({
               />
             </div>
             <div>
-              <label className={labelClass}>Title (optional — defaults to the file name)</label>
+              <label className={labelClass}>Title (optional, defaults to the file name)</label>
               <input
                 className={inputClass}
                 value={uploadTitle}
@@ -737,7 +737,7 @@ export function DocumentsManager({
               />
             </div>
             <div>
-              <label className={labelClass}>Renewal date (optional — reminds ahead)</label>
+              <label className={labelClass}>Renewal date (optional, reminds ahead)</label>
               <input
                 type="date"
                 className={inputClass}

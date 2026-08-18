@@ -62,8 +62,8 @@ function badPhoneFlow(): Record<string, unknown> {
       {
         id: "route",
         type: "route_to_team",
-        offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim or 2 to pass.",
-        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}} — back to you.",
+        offerTemplate: "New lead {{vars.lead_phone}}, reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}}, back to you.",
         responseMinutes: 10
       },
       ...BP_STEPS

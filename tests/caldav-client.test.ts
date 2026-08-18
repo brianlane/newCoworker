@@ -299,7 +299,7 @@ describe("iCal helpers", () => {
     const ical = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
-      "DTSTART:19700101T000000Z", // outside any VEVENT — ignored
+      "DTSTART:19700101T000000Z", // outside any VEVENT, ignored
       "BEGIN:VEVENT",
       "UID:1",
       "DTSTART:20260711T090000Z",
@@ -325,11 +325,11 @@ describe("iCal helpers", () => {
       "BEGIN:VEVENT",
       "UID:5",
       "DTSTART:20260711T160000Z",
-      "DTEND:20260711T160000Z", // zero length — skipped
+      "DTEND:20260711T160000Z", // zero length, skipped
       "END:VEVENT",
       "BEGIN:VEVENT",
       "UID:6",
-      "DTSTART;TZID=America/Phoenix:garbage", // unparseable value — skipped
+      "DTSTART;TZID=America/Phoenix:garbage", // unparseable value, skipped
       "DTEND:20260711T180000Z",
       "END:VEVENT",
       "END:VCALENDAR"
@@ -612,7 +612,7 @@ describe("updateCaldavEventTime", () => {
     await expect(
       updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
     ).rejects.toMatchObject({ code: "request_failed" });
-    expect(calls).toHaveLength(1); // GET only — no PUT went out
+    expect(calls).toHaveLength(1); // GET only, no PUT went out
   });
 
   it("rejects a path-unsafe UID before any request", async () => {
@@ -640,7 +640,7 @@ describe("updateCaldavEventTime", () => {
     await expect(
       updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
     ).rejects.toMatchObject({ code: "request_failed" });
-    expect(calls).toHaveLength(1); // GET only — no PUT went out
+    expect(calls).toHaveLength(1); // GET only, no PUT went out
   });
 
   it("throws when the server refuses the PUT", async () => {

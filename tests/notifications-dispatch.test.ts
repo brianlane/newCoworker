@@ -226,7 +226,7 @@ describe("notifications/dispatch", () => {
     expect(t.phone).toBe("+15555550199");
   });
 
-  it("resolveNotificationTargets coerces a stored bare 10-digit phone to E.164 at read time (pre-validation rows must still deliver — Amy's '6026951142', July 2026)", async () => {
+  it("resolveNotificationTargets coerces a stored bare 10-digit phone to E.164 at read time (pre-validation rows must still deliver, Amy's '6026951142', July 2026)", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
       ...PREFS_ON,
       phone_number: "6026951142"
@@ -679,7 +679,7 @@ describe("notifications/dispatch", () => {
     });
   });
 
-  it("does not crash when prefs lookup throws — falls through to env defaults", async () => {
+  it("does not crash when prefs lookup throws, falls through to env defaults", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockRejectedValue(new Error("db blip"));
     await dispatchUrgentNotification({
       businessId: BIZ,

@@ -96,7 +96,7 @@ const DOCX_TARGET: AgentOutputTarget = {
  */
 const RETYPESET_FORMAT_WORD =
   "one complete, self-contained HTML document that visually mirrors the attached document's " +
-  "original design — colors, headings, tables, spacing, and layout — with the instructions " +
+  "original design, colors, headings, tables, spacing, and layout, with the instructions " +
   "applied. Use inline CSS only (a <style> block in <head> is fine). No <script> tags, no " +
   "event handlers, and no external resources (images, fonts, or stylesheets); small images " +
   "may be inline data: URIs. Start the reply with <!DOCTYPE html> and reply with ONLY the " +

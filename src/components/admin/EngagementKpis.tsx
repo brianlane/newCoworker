@@ -74,7 +74,7 @@ export function EngagementKpis({
         </p>
         <p className="text-xs text-parchment/30 mt-1">
           {quietOwnerCount === null
-            ? "unknown — partial auth scan"
+            ? "unknown, partial auth scan"
             : `churn-risk businesses · ${quietRowCount} quiet users total`}
         </p>
       </Card>

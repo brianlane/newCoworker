@@ -315,7 +315,7 @@ export async function importDocumentsCsv(
         .maybeSingle();
       if (contactErr) throw new Error(contactErr.message);
       if (!contact) {
-        throw new Error(`No contact with number ${phone} — import your contacts first.`);
+        throw new Error(`No contact with number ${phone}, import your contacts first.`);
       }
       const contactRow = contact as { id: string; display_name: string | null; customer_e164: string };
       const contactLabel = contactRow.display_name?.trim() || contactRow.customer_e164;

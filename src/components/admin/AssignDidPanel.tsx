@@ -367,12 +367,12 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
             onChange={(e) => setVoiceName(e.target.value)}
           >
             <option value="">
-              Platform default ({DEFAULT_GEMINI_LIVE_VOICE} —{" "}
+              Platform default ({DEFAULT_GEMINI_LIVE_VOICE},{" "}
               {GEMINI_LIVE_VOICE_LABELS[DEFAULT_GEMINI_LIVE_VOICE]})
             </option>
             {GEMINI_LIVE_VOICES.map((v) => (
               <option key={v} value={v}>
-                {v} — {GEMINI_LIVE_VOICE_LABELS[v]}
+                {v}, {GEMINI_LIVE_VOICE_LABELS[v]}
               </option>
             ))}
           </select>

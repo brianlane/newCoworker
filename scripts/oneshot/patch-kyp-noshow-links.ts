@@ -76,7 +76,7 @@ console.log(
   '[oneshot] routing: title contains "free strategy call | 2" → $200 link; ' +
     'plain "free strategy call" → $100 link; unrecognized → owner-only note (no lead text)'
 );
-console.log("[oneshot] enabled state untouched (stays", row.enabled, "— James re-approves)");
+console.log("[oneshot] enabled state untouched (stays", row.enabled, ", James re-approves)");
 
 if (!APPLY) {
   console.log("[oneshot] dry run complete. Re-run with --apply to write.");

@@ -175,7 +175,7 @@ export function StripeDiagnosticsPanel({ businessId }: { businessId: string }) {
                 <ul className="text-xs text-parchment/60 list-disc list-inside">
                   {(data.subscription.items ?? []).map((item) => (
                     <li key={item.priceId} className="font-mono">
-                      {item.priceId} {item.nickname ? `(${item.nickname})` : ""} — {item.amount ?? "?"}
+                      {item.priceId} {item.nickname ? `(${item.nickname})` : ""}, {item.amount ?? "?"}
                       {item.interval ? ` / ${item.interval}` : ""} ×{item.quantity}
                     </li>
                   ))}

@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   );
 
   if (!args.apply) {
-    console.log("Dry run — re-run with --apply to enable client reply alerts.");
+    console.log("Dry run, re-run with --apply to enable client reply alerts.");
     return;
   }
 

@@ -86,7 +86,7 @@ export const CARD_FIELD_DESCRIPTIONS: Record<string, string> = {
     "The lead's email from the portal contact card. NEVER the agent's own " +
     "email. If the page shows no lead contact card with an email, answer 'none'.",
   lead_address:
-    "The property address from the portal contact card — the FULL address " +
+    "The property address from the portal contact card, the FULL address " +
     "including street, city, state, and ZIP code. If the page shows no lead " +
     "contact card, answer 'none'."
 };
@@ -159,7 +159,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, skipping:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);

@@ -108,7 +108,7 @@ export const HOMELIGHT_NOTIFY_UNCLAIMED_STEP: Step = {
   type: "notify_owner",
   message:
     "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\n" +
-    "Not claimed — full details in the portal: {{vars.leadUrl}}\n" +
+    "Not claimed, full details in the portal: {{vars.leadUrl}}\n" +
     "Outcome: {{vars.actions_taken}}.",
   when: { var: "claimed_agent", equals: "none" }
 };
@@ -125,7 +125,7 @@ export const CLEVER_NOTIFY_STEP: Step = {
 };
 
 /** Suffix demanding the full address; also the idempotency marker ("ZIP"). */
-const FULL_ADDRESS_SUFFIX = " — the FULL address including street, city, state, and ZIP code";
+const FULL_ADDRESS_SUFFIX = ", the FULL address including street, city, state, and ZIP code";
 
 /**
  * Apply all three edits to one flow definition. Returns whether anything
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID, skipping:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);

@@ -160,7 +160,7 @@ describe("adoptVpsForBusiness", () => {
     expect(scriptContent).toContain(`echo '${keyRow.public_key}' >> /root/.ssh/authorized_keys`);
   });
 
-  it("reassigns a previous tenant's key row AND still recreates — inherited keys never skip the wipe", async () => {
+  it("reassigns a previous tenant's key row AND still recreates, inherited keys never skip the wipe", async () => {
     // Two guarantees in one path: (a) business-scoped lookups (backup/
     // restore, admin console) resolve keys via business_id, so the row must
     // move to the adopting business; (b) the previous tenant's key
@@ -644,7 +644,7 @@ describe("adoptVpsForBusiness", () => {
     expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
   });
 
-  it("re-enables renewal when the never_renew lookup fails — tenant safety wins over the flag", async () => {
+  it("re-enables renewal when the never_renew lookup fails, tenant safety wins over the flag", async () => {
     const client = makeClient({
       getVirtualMachine: vi
         .fn()

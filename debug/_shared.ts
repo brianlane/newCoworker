@@ -196,13 +196,13 @@ echo "== reconcile capture env =="
 RB_ENV=/opt/rowboat/.env
 CW_ENV=/opt/chat-worker/.env
 if [ ! -f "$CW_ENV" ]; then
-  echo "WARN: $CW_ENV missing — skipping env reconcile (deploy-client.sh has not run on this box)"
+  echo "WARN: $CW_ENV missing, skipping env reconcile (deploy-client.sh has not run on this box)"
 else
   # Authoritative per-tenant secrets/config live in /opt/rowboat/.env.
   GK=$(grep -m1 '^GOOGLE_API_KEY=' "$RB_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
   OLM=$(grep -m1 '^OLLAMA_MODEL=' "$RB_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
   OLM=\${OLM:-qwen3:4b-instruct}
-  # upsert KEY VALUE — replace any existing line(s), then append exactly one.
+  # upsert KEY VALUE, replace any existing line(s), then append exactly one.
   upsert() { local k="$1"; shift; sed -i "/^\${k}=/d" "$CW_ENV"; printf '%s=%s\\n' "$k" "$*" >> "$CW_ENV"; }
   # Dead since the worker calls Google directly (POST to the co-located router
   # black-holes on the cross-network worker container).
@@ -234,7 +234,7 @@ fi
 echo "== rebuild chat-worker =="
 cd /opt/chat-worker && docker compose up -d --build --force-recreate
 echo "== worker env (capture vars; key redacted) =="
-grep -E "MEMORY_CAPTURE|OLLAMA_BASE_URL|WORKER_VERCEL_BASE_URL|GOOGLE_API_KEY" /opt/chat-worker/.env | sed 's/^GOOGLE_API_KEY=.*/GOOGLE_API_KEY=<set>/' || echo "(none — relying on code defaults)"
+grep -E "MEMORY_CAPTURE|OLLAMA_BASE_URL|WORKER_VERCEL_BASE_URL|GOOGLE_API_KEY" /opt/chat-worker/.env | sed 's/^GOOGLE_API_KEY=.*/GOOGLE_API_KEY=<set>/' || echo "(none, relying on code defaults)"
 sleep 4
 echo "== worker logs (tail) =="
 docker logs chat-worker --tail 20 2>&1 | tail -20

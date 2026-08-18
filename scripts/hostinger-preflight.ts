@@ -100,7 +100,7 @@ function humanLogger(): Logger {
   return {
     step(name, ok, detail) {
       const tag = ok ? "OK  " : "FAIL";
-      const suffix = detail ? ` — ${detail}` : "";
+      const suffix = detail ? `, ${detail}` : "";
       console.log(`[preflight] ${tag}  ${name}${suffix}`);
     }
   };
@@ -277,7 +277,7 @@ export async function runPreflight(
     logger.step(
       "vps.deletePublicKey(throwaway)",
       true,
-      `skipped (--keep) — id=${createdKey.id}`
+      `skipped (--keep), id=${createdKey.id}`
     );
   }
 
@@ -297,7 +297,7 @@ export async function runPreflight(
     logger.step(
       "vps.deletePostInstallScript(throwaway)",
       true,
-      `skipped (--keep) — id=${createdScript.id}`
+      `skipped (--keep), id=${createdScript.id}`
     );
   }
 

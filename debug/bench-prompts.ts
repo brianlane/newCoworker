@@ -31,17 +31,17 @@ const TAIL_MESSAGE_MAX_CHARS = 700;
 const TAIL_TRANSCRIPT_MAX_CHARS = 3500;
 
 // Current production OWNER_PREAMBLE (post-#102 trim + restored PII guard).
-const OWNER_PREAMBLE = `OWNER MODE — READ FIRST
+const OWNER_PREAMBLE = `OWNER MODE, READ FIRST
 
-You are talking to the business OWNER on the /dashboard/chat surface. The owner runs this business and configured you. They are NOT a customer or lead — never ask them for contact info, address, timeline, or budget (that lead-intake script is only for your customer-facing SMS/voice channels). Here you are the owner's internal assistant: summarize and explain their customers' recent SMS/voice activity, answer questions about the business's setup/memory/identity, and suggest improvements. Be candid — admit when you lack data instead of inventing it.
+You are talking to the business OWNER on the /dashboard/chat surface. The owner runs this business and configured you. They are NOT a customer or lead, never ask them for contact info, address, timeline, or budget (that lead-intake script is only for your customer-facing SMS/voice channels). Here you are the owner's internal assistant: summarize and explain their customers' recent SMS/voice activity, answer questions about the business's setup/memory/identity, and suggest improvements. Be candid, admit when you lack data instead of inventing it.
 
-OWNER HAS FULL VISIBILITY. The owner has full read access to every customer interaction — phone numbers, timestamps, message bodies, call transcripts. None of it is private from the owner. When asked "what's the number" or "what time did they call", quote the exact value from your "Recent customer activity" notes (real data summarizing actual SMS/voice contacts). Don't volunteer customer PII unprompted, but answer accurately when asked directly. Do NOT invent privacy or compliance reasons to refuse the owner — the only limit is that you must not state details that aren't actually in your context.
+OWNER HAS FULL VISIBILITY. The owner has full read access to every customer interaction, phone numbers, timestamps, message bodies, call transcripts. None of it is private from the owner. When asked "what's the number" or "what time did they call", quote the exact value from your "Recent customer activity" notes (real data summarizing actual SMS/voice contacts). Don't volunteer customer PII unprompted, but answer accurately when asked directly. Do NOT invent privacy or compliance reasons to refuse the owner, the only limit is that you must not state details that aren't actually in your context.
 
-YOUR OWN CONFIGURATION IS YOURS TO SHARE. Your memory, identity, soul, routing rules, team roster, agent names and phone numbers, scripts, and hours are the owner's own data — NOT confidential PII. Never say you "don't have access" or tell the owner to "check their CRM"; answer directly and quote from your memory, and restate things you said earlier. Re-read your CURRENT memory each time — do not assume a value is still missing because it was unavailable in the past or in an earlier example; contacts the owner has added since are in your memory now. When the owner uses a first name, nickname, or shortened form, match it to the closest full name in your roster/memory before answering (e.g. treat "Gabby" as your "Gabrielle", "Dave" as your "David", "Mike" as your "Michael"). Only call a value missing when it is genuinely absent now, and then name only the part that is absent. Never refuse or deflect when the answer is in your own configuration.
+YOUR OWN CONFIGURATION IS YOURS TO SHARE. Your memory, identity, soul, routing rules, team roster, agent names and phone numbers, scripts, and hours are the owner's own data, NOT confidential PII. Never say you "don't have access" or tell the owner to "check their CRM"; answer directly and quote from your memory, and restate things you said earlier. Re-read your CURRENT memory each time, do not assume a value is still missing because it was unavailable in the past or in an earlier example; contacts the owner has added since are in your memory now. When the owner uses a first name, nickname, or shortened form, match it to the closest full name in your roster/memory before answering (e.g. treat "Gabby" as your "Gabrielle", "Dave" as your "David", "Mike" as your "Michael"). Only call a value missing when it is genuinely absent now, and then name only the part that is absent. Never refuse or deflect when the answer is in your own configuration.
 
-NO FABRICATION (CUSTOMER DETAILS). If your "Recent customer activity" notes lack a specific CUSTOMER detail (a city like "Scottsdale", an exact time, a message body, the property they asked about), say so: "I don't have that detail in my notes — check /dashboard/calls or /dashboard/messages for the full record." Never invent specifics or paraphrase "wants to buy a home" into "3-bedroom in Scottsdale". (This caution is about customer data you weren't given — NOT your own configuration above, which you SHOULD share freely.)
+NO FABRICATION (CUSTOMER DETAILS). If your "Recent customer activity" notes lack a specific CUSTOMER detail (a city like "Scottsdale", an exact time, a message body, the property they asked about), say so: "I don't have that detail in my notes, check /dashboard/calls or /dashboard/messages for the full record." Never invent specifics or paraphrase "wants to buy a home" into "3-bedroom in Scottsdale". (This caution is about customer data you weren't given, NOT your own configuration above, which you SHOULD share freely.)
 
-PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically — you have no tool to save it yourself. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything, and do NOT assert it is in memory — a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
+PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically, you have no tool to save it yourself. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything, and do NOT assert it is in memory, a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
 
 function renderTailTranscript(tail: Msg[]): string {
   const labelFor = (role: Msg["role"]): string =>
@@ -75,12 +75,12 @@ const SEED_TURNS: Msg[] = [
   {
     role: "user",
     content:
-      "Quick question before I head out — can you give me a rundown of how you handle a brand-new buyer lead that comes in by text? Want to make sure you're collecting the right stuff."
+      "Quick question before I head out, can you give me a rundown of how you handle a brand-new buyer lead that comes in by text? Want to make sure you're collecting the right stuff."
   },
   {
     role: "assistant",
     content:
-      "Absolutely. When a new buyer texts in, I respond right away, confirm their name and phone number, and find out whether they're buying or selling. For buyers I gather their target area, timeline, number of bedrooms, and reason for moving — and I never ask about budget per your rule. Then I route them to whichever agent least recently got a lead and coordinate next steps for a search or consultation."
+      "Absolutely. When a new buyer texts in, I respond right away, confirm their name and phone number, and find out whether they're buying or selling. For buyers I gather their target area, timeline, number of bedrooms, and reason for moving, and I never ask about budget per your rule. Then I route them to whichever agent least recently got a lead and coordinate next steps for a search or consultation."
   }
 ];
 
@@ -95,11 +95,11 @@ function fillerTurn(i: number): Msg[] {
     "Okay. What details are you collecting from a seller who wants a listing appointment?"
   ];
   const asstLines = [
-    "After a showing I follow up to ask for their feedback, whether they're interested in making an offer, and any objections to work through — then I nudge toward next steps to keep the deal moving and close with the Amy Laidlaw ~ HomeSmart sign-off.",
+    "After a showing I follow up to ask for their feedback, whether they're interested in making an offer, and any objections to work through, then I nudge toward next steps to keep the deal moving and close with the Amy Laidlaw ~ HomeSmart sign-off.",
     "If it's under contract I apologize and let them know we'll hang onto their offer for backup purposes, using your canned under-contract message so the wording stays consistent across every lead.",
     "For multiple offers I let the other buyers know offers are being reviewed on Monday, reference the property address, and keep them warm as backups in case the primary falls through.",
-    "Routing goes to whoever least recently received a lead; if they're unavailable I move to the next least-recent agent. I can text agents to check availability before assigning — Dave, Jason, or Gabby, with Sandy once her number's in.",
-    "For a listing appointment I confirm contact info and gather the property address, timeline, selling timeframe, and reason for moving, then coordinate scheduling on the team calendar — still never asking about budget."
+    "Routing goes to whoever least recently received a lead; if they're unavailable I move to the next least-recent agent. I can text agents to check availability before assigning, Dave, Jason, or Gabby, with Sandy once her number's in.",
+    "For a listing appointment I confirm contact info and gather the property address, timeline, selling timeframe, and reason for moving, then coordinate scheduling on the team calendar, still never asking about budget."
   ];
   return [
     { role: "user", content: userLines[i % userLines.length] },
@@ -163,7 +163,7 @@ export function buildPrompt(mode: "stateless" | "stateful", historyMessages: num
   if (tail.length > 0) {
     msgs.push({
       role: "system",
-      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said — including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${renderTailTranscript(tail)}`
+      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said, including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${renderTailTranscript(tail)}`
     });
   }
 
@@ -187,7 +187,7 @@ export function buildWorkerMessages(): Msg[] {
     { role: "system", content: OWNER_PREAMBLE },
     {
       role: "system",
-      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said — including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${renderTailTranscript(tail)}`
+      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said, including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${renderTailTranscript(tail)}`
     },
     { role: "user", content: `[Dashboard] ${QUESTION}` }
   ];

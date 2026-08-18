@@ -83,7 +83,7 @@ function daveRouteDef(offer: string) {
         agentName: "Dave Lane",
         offerTemplate: offer,
         responseMinutes: 5,
-        ownerFallbackTemplate: "No one claimed it — back to you."
+        ownerFallbackTemplate: "No one claimed it, back to you."
       }
     ]
   };

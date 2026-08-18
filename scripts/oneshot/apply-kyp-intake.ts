@@ -135,14 +135,14 @@ if (result) {
 if (applyError || !sync.ok) {
   console.error(
     applyError
-      ? "[oneshot] FAILED: the apply threw — fix the cause and re-run (idempotent)."
-      : "[oneshot] INCOMPLETE: central config is written but the box re-seed failed — " +
+      ? "[oneshot] FAILED: the apply threw, fix the cause and re-run (idempotent)."
+      : "[oneshot] INCOMPLETE: central config is written but the box re-seed failed, " +
           "re-run this script (or any vault-touching save) once the box is reachable."
   );
   process.exit(1);
 }
 
 console.log(
-  "[oneshot] done. Flow is installed DISABLED — enable it from /dashboard/aiflows " +
+  "[oneshot] done. Flow is installed DISABLED, enable it from /dashboard/aiflows " +
     "after James approves the wording (go-live checklist)."
 );

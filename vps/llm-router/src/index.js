@@ -292,7 +292,7 @@ async function handleRoutedRequest(req, res) {
     });
     if (!first.empty) return;
     console.warn(
-      `llm-router: empty gemini completion (model=${parsed?.model}, finish_reason=${first.finishReason ?? "unknown"}, 0 output tokens) — retrying once`
+      `llm-router: empty gemini completion (model=${parsed?.model}, finish_reason=${first.finishReason ?? "unknown"}, 0 output tokens), retrying once`
     );
     // The dropped attempt's prompt tokens were still billed by Google; meter
     // them so the AI budget stays honest.

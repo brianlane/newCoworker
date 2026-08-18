@@ -394,7 +394,7 @@ describe("membership pack add-on mirroring", () => {
  * accepted any positive integer, so the membership path lost that defense:
  * unitSize x qty(<=20) x months(<=24) multiplied an unbounded number.
  */
-describe("parseMembershipPackAddonMetadata — per-kind unit ceilings", () => {
+describe("parseMembershipPackAddonMetadata, per-kind unit ceilings", () => {
   it("drops a voice entry whose unit size exceeds a year of seconds", () => {
     const parsed = parseMembershipPackAddonMetadata({
       addonVoice: `min_30:1:${60 * 60 * 24 * 365 + 1}`

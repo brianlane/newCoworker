@@ -305,7 +305,7 @@ describe("updateTeamMember", () => {
     expect(eqs[1]?.args).toEqual(["id", MEMBER_ID]);
   });
 
-  it("writes schedule fields when present — including explicit null to clear them", async () => {
+  it("writes schedule fields when present, including explicit null to clear them", async () => {
     const { client, fromCalls } = makeClient({ data: memberRow(), error: null });
     await updateTeamMember(
       BIZ,

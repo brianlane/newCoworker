@@ -32,7 +32,7 @@ describe("phoneDigitsMatch", () => {
     expect(phoneDigitsMatch("15485773546", "15495773547")).toBe(false);
   });
 
-  it("short strings only match on exact equality — never as a suffix", () => {
+  it("short strings only match on exact equality, never as a suffix", () => {
     const short = "773546"; // below MIN_PHONE_MATCH_DIGITS
     expect(short.length).toBeLessThan(MIN_PHONE_MATCH_DIGITS);
     expect(phoneDigitsMatch(short, "15485773546")).toBe(false);

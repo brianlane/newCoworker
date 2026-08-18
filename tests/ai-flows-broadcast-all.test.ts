@@ -15,7 +15,7 @@ import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 const routeStep = (over: Record<string, unknown> = {}) => ({
   id: "offer",
   type: "route_to_team",
-  offerTemplate: "Customer needs a human — reply 1 to take it or 2 to pass.",
+  offerTemplate: "Customer needs a human, reply 1 to take it or 2 to pass.",
   responseMinutes: 10,
   ownerFallbackTemplate: "Nobody claimed the handoff.",
   ...over
@@ -27,7 +27,7 @@ const definition = (step: Record<string, unknown>) => ({
   steps: [step]
 });
 
-describe("route_to_team broadcastAll — schema", () => {
+describe("route_to_team broadcastAll, schema", () => {
   it("accepts broadcastAll: true on its own", () => {
     const def = parseAiFlowDefinition(definition(routeStep({ broadcastAll: true })));
     const step = def.steps[0] as { broadcastAll?: boolean };
@@ -61,7 +61,7 @@ describe("route_to_team broadcastAll — schema", () => {
   });
 });
 
-describe("route_to_team broadcastAll — planner", () => {
+describe("route_to_team broadcastAll, planner", () => {
   const scope = { vars: {}, trigger: { channel: "tag_changed", from: "+14165550100" } };
 
   it("carries broadcastAll: true into the action", () => {

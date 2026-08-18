@@ -233,7 +233,7 @@ describe("computeDayCurrentMrr", () => {
   });
 });
 
-describe("computeDayCurrentMrr — recurring pack add-ons", () => {
+describe("computeDayCurrentMrr, recurring pack add-ons", () => {
   const options = [
     { category: "voice" as const, id: "min_30", label: "30 minutes", listPriceCents: 6000 },
     { category: "sms" as const, id: "texts_500", label: "500 texts", listPriceCents: 2000 }

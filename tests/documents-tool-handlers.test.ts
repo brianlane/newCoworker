@@ -232,7 +232,7 @@ describe("shareDocumentTool", () => {
     );
   });
 
-  it("fails closed when the opt-out check errors — BEFORE any link is minted", async () => {
+  it("fails closed when the opt-out check errors, BEFORE any link is minted", async () => {
     optOut.mockResolvedValue({ ok: false, error: "rpc down" });
     const res = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms");
     expect(res).toEqual({ ok: false, detail: "opt_out_check_failed" });
@@ -331,7 +331,7 @@ describe("shareDocumentTool", () => {
     expect(emailSend).not.toHaveBeenCalled();
   });
 
-  it("webchat is ALWAYS inline — no sends even when a phone is supplied", async () => {
+  it("webchat is ALWAYS inline, no sends even when a phone is supplied", async () => {
     const res = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "webchat");
     expect(res.data).toMatchObject({ delivered: "inline" });
     expect(smsSend).not.toHaveBeenCalled();

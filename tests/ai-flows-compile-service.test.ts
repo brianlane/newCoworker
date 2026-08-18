@@ -113,7 +113,7 @@ function generateSeq(...texts: string[]) {
 
 const noDocs = vi.fn(async () => [] as BusinessDocumentRow[]);
 
-describe("compileAiFlowFromDescription — configuration & happy path", () => {
+describe("compileAiFlowFromDescription, configuration & happy path", () => {
   it("reports not_configured without an API key (and accepts GEMINI_API_KEY alone)", async () => {
     delete process.env.GOOGLE_API_KEY;
     const res = await compileAiFlowFromDescription(
@@ -296,7 +296,7 @@ describe("compileAiFlowFromDescription — configuration & happy path", () => {
   });
 });
 
-describe("compileAiFlowFromDescription — failure classes", () => {
+describe("compileAiFlowFromDescription, failure classes", () => {
   it("meters a billed-but-empty first call then rethrows", async () => {
     const generate = vi.fn(async () => {
       throw new GeminiEmptyError({ promptTokens: 500, outputTokens: 100 });
@@ -364,7 +364,7 @@ describe("compileAiFlowFromDescription — failure classes", () => {
   });
 });
 
-describe("compileAiFlowFromDescription — self-repair & salvage", () => {
+describe("compileAiFlowFromDescription, self-repair & salvage", () => {
   it("repairs an invalid first draft on the second model call (usage may be absent)", async () => {
     const generate = vi
       .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()
@@ -595,7 +595,7 @@ function editArgs(instructions = "change the message to 'updated'") {
   };
 }
 
-describe("editAiFlowDefinition — configuration & happy path", () => {
+describe("editAiFlowDefinition, configuration & happy path", () => {
   it("reports not_configured without an API key", async () => {
     delete process.env.GOOGLE_API_KEY;
     const res = await editAiFlowDefinition(editArgs(), {
@@ -637,7 +637,7 @@ describe("editAiFlowDefinition — configuration & happy path", () => {
   });
 });
 
-describe("editAiFlowDefinition — the questions envelope", () => {
+describe("editAiFlowDefinition, the questions envelope", () => {
   it("returns the questions the model surfaced alongside the definition", async () => {
     const generate = generateSeq(
       JSON.stringify({
@@ -666,7 +666,7 @@ describe("editAiFlowDefinition — the questions envelope", () => {
   });
 });
 
-describe("editAiFlowDefinition — failure classes", () => {
+describe("editAiFlowDefinition, failure classes", () => {
   it("meters a billed-but-empty first call then rethrows", async () => {
     const generate = vi.fn(async () => {
       throw new GeminiEmptyError({ promptTokens: 500, outputTokens: 100 });
@@ -687,7 +687,7 @@ describe("editAiFlowDefinition — failure classes", () => {
     expect(meter).not.toHaveBeenCalled();
   });
 
-  it("classifies unparseable output — refused with 'not changed', logged", async () => {
+  it("classifies unparseable output, refused with 'not changed', logged", async () => {
     const generate = vi.fn(async () => ({ text: "total garbage no json", usage: null }));
     const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
     expect(res).toMatchObject({ ok: false, error: "unparseable" });
@@ -723,7 +723,7 @@ describe("editAiFlowDefinition — failure classes", () => {
   });
 });
 
-describe("editAiFlowDefinition — self-repair, NO salvage", () => {
+describe("editAiFlowDefinition, self-repair, NO salvage", () => {
   it("repairs an invalid first edit on the second model call (usage may be absent)", async () => {
     const generate = vi
       .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()

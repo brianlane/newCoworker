@@ -46,8 +46,8 @@ function broadcastFlow(): Record<string, unknown> {
         id: "route",
         type: "route_to_team",
         agentNames: ["Dave Lane", "Amy Laidlaw"],
-        offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim or 2 to pass.",
-        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}} — back to you.",
+        offerTemplate: "New lead {{vars.lead_phone}}, reply 1 to claim or 2 to pass.",
+        ownerFallbackTemplate: "No one claimed {{vars.lead_phone}}, back to you.",
         responseMinutes: 10
       },
       {
@@ -244,7 +244,7 @@ describe("broadcast route_to_team offers (real worker)", () => {
     expect(steps.find((s) => s.step_type === "update_contact")?.status).toBe("skipped");
   });
 
-  it("a claim-then-pass clears the claimer's pointer — they can't re-claim the re-parked broadcast", async () => {
+  it("a claim-then-pass clears the claimer's pointer, they can't re-claim the re-parked broadcast", async () => {
     const { runId } = await seedBroadcastRun("IT broadcast claim-then-pass");
     await tickWorker();
 
@@ -289,7 +289,7 @@ describe("broadcast route_to_team offers (real worker)", () => {
     expect(routing.tried).toEqual([AMY]);
   });
 
-  it("a pass that raced the lapsed deadline never extends the offer — owner fallback instead", async () => {
+  it("a pass that raced the lapsed deadline never extends the offer, owner fallback instead", async () => {
     const { runId } = await seedBroadcastRun("IT broadcast pass-after-deadline");
     await tickWorker();
 

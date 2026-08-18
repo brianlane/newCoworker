@@ -42,7 +42,7 @@ const res = await fetch(`${baseUrl}/api/aiflows/send-owner-email`, {
     businessId: BUSINESS_ID,
     connectionId: CONNECTION_ID,
     toEmail: TO,
-    subject: "NewCoworker smoke test — owner mailbox send",
+    subject: "NewCoworker smoke test, owner mailbox send",
     bodyText:
       "This is a working smoke test of the AiFlow owner-mailbox email path " +
       "(send_email.fromConnectionId / quiet-hours email fallback)."

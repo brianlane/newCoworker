@@ -235,7 +235,7 @@ export async function resolveMcpBusinessId(
   }
   if (accessible.length > 1) {
     throw new McpToolError(
-      "This account can access multiple businesses — call list_businesses and pass business_id explicitly."
+      "This account can access multiple businesses, call list_businesses and pass business_id explicitly."
     );
   }
   return accessible[0].businessId;

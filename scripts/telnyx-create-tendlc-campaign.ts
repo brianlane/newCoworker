@@ -63,7 +63,7 @@ function buildPayload(brandId: string): TendlcCampaignSubmit {
       "Newcoworker is an AI customer-service assistant for small business owners. " +
       "After a customer initiates contact by texting the business's published phone number, " +
       "our AI replies on behalf of the business to answer questions about products, hours, " +
-      "scheduling, and routing — across industries including local services, retail, healthcare, " +
+      "scheduling, and routing, across industries including local services, retail, healthcare, " +
       "real estate, fitness, and professional services. Two-way conversational; STOP supported.",
     messageFlow:
       "Customers initiate every conversation by texting the small-business owner's published " +
@@ -96,7 +96,7 @@ function buildPayload(brandId: string): TendlcCampaignSubmit {
       "Thanks for the inquiry! Our hourly rate is $85. I'll have Sarah call you back within " +
       "the hour to confirm the visit. Reply STOP to opt out.",
     sample4:
-      "Got it — your appointment is set for Tue 2:30 PM. We'll send a reminder the morning " +
+      "Got it, your appointment is set for Tue 2:30 PM. We'll send a reminder the morning " +
       "of. Reply STOP to opt out.",
     sample5:
       "Sorry to hear about the leak. Can you send a photo so we can quote accurately? Or " +
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
   console.log("\n=== Payload ===");
   console.log(JSON.stringify(payload, null, 2));
   if (args.dryRun) {
-    console.log("\nDry run — not submitting.");
+    console.log("\nDry run, not submitting.");
     process.exit(0);
   }
 

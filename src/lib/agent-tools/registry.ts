@@ -80,7 +80,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "generate_image",
         label: "Generate images",
         description:
-          "Create an AI-generated image — or edit a photo you attach — in chat when you explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
+          "Create an AI-generated image, or edit a photo you attach, in chat when you explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },
@@ -103,7 +103,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "edit_aiflow",
         label: "Edit automations",
         description:
-          "Change an existing AiFlow from chat (or by texting your coworker) — small tweaks or full edits, applied in place after you confirm the exact changes. Every edit is validated before it's saved.",
+          "Change an existing AiFlow from chat (or by texting your coworker), small tweaks or full edits, applied in place after you confirm the exact changes. Every edit is validated before it's saved.",
         defaultEnabled: true,
         configurable: true
       },
@@ -125,7 +125,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_reschedule_appointment",
         label: "Reschedule appointments",
         description:
-          "Move an existing appointment to a new time from chat — the invitation is updated in place, never duplicated.",
+          "Move an existing appointment to a new time from chat, the invitation is updated in place, never duplicated.",
         defaultEnabled: true,
         configurable: true
       },
@@ -133,7 +133,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_cancel_appointment",
         label: "Cancel appointments",
         description:
-          "Cancel an existing appointment from chat — the attendee gets a single cancellation notice.",
+          "Cancel an existing appointment from chat, the attendee gets a single cancellation notice.",
         defaultEnabled: true,
         configurable: true
       },
@@ -185,7 +185,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "document_update",
         label: "Edit documents",
         description:
-          "Apply your plain-language edits (\"haircuts are now $40\") to a document's knowledge content. Dashboard only — customers can never change your documents.",
+          "Apply your plain-language edits (\"haircuts are now $40\") to a document's knowledge content. Dashboard only, customers can never change your documents.",
         defaultEnabled: true,
         configurable: true
       },
@@ -201,7 +201,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "document_request_signature",
         label: "Request signatures",
         description:
-          "Send a document for a legal e-signature when you ask: the signer gets a link, types their name to sign, and you're notified with a full audit record. Dashboard only — sending contracts is always your call.",
+          "Send a document for a legal e-signature when you ask: the signer gets a link, types their name to sign, and you're notified with a full audit record. Dashboard only, sending contracts is always your call.",
         defaultEnabled: true,
         configurable: true
       },
@@ -225,7 +225,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "set_contact_reply_mode",
         label: "Stop or resume texting a contact",
         description:
-          "When you ask your coworker (in chat or by text) to stop texting a specific contact, it turns off its automatic replies to them and stops their pending automations — you can still text them yourself, and asking to resume turns replies back on.",
+          "When you ask your coworker (in chat or by text) to stop texting a specific contact, it turns off its automatic replies to them and stops their pending automations, you can still text them yourself, and asking to resume turns replies back on.",
         defaultEnabled: true,
         configurable: true
       },
@@ -435,7 +435,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_reschedule_appointment",
         label: "Reschedule appointments",
         description:
-          "Move a texter's existing appointment to a new time — the invitation is updated in place, never duplicated.",
+          "Move a texter's existing appointment to a new time, the invitation is updated in place, never duplicated.",
         defaultEnabled: true,
         configurable: true
       },
@@ -443,7 +443,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_cancel_appointment",
         label: "Cancel appointments",
         description:
-          "Cancel a texter's existing appointment — they get a single cancellation notice.",
+          "Cancel a texter's existing appointment, they get a single cancellation notice.",
         defaultEnabled: true,
         configurable: true
       },
@@ -474,7 +474,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "generate_image",
         label: "Generate images",
         description:
-          "Text an AI-generated image (MMS) — or edit a photo the texter sends — when they explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
+          "Text an AI-generated image (MMS), or edit a photo the texter sends, when they explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },
@@ -521,7 +521,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "update_notification_preferences",
         label: "Turn alerts on by text",
         description:
-          "When you (or a teammate) text the assistant asking to be alerted about something, it can turn the matching alert toggle ON. Enable-only over text — turning alerts off or changing your alert phone/email is done from the dashboard.",
+          "When you (or a teammate) text the assistant asking to be alerted about something, it can turn the matching alert toggle ON. Enable-only over text, turning alerts off or changing your alert phone/email is done from the dashboard.",
         defaultEnabled: true,
         configurable: true
       }

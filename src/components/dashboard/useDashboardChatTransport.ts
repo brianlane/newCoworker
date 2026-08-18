@@ -412,7 +412,7 @@ export function useDashboardChatTransport(businessId: string) {
                 finish({ ok: false, reason: friendlyErrorMessage(job.errorCode) });
                 return;
               }
-              // queued | processing — the worker hasn't stamped the
+              // queued | processing, the worker hasn't stamped the
               // job yet. Brief backoff and retry; covers the
               // INSERT-then-UPDATE gap.
             }
@@ -423,7 +423,7 @@ export function useDashboardChatTransport(businessId: string) {
           await sleepWithAbort(VERIFY_DELAY_MS, signal);
         }
         // Verification ran out without observing a matching done.
-        // Stay subscribed — a later qualifying INSERT (e.g. a
+        // Stay subscribed, a later qualifying INSERT (e.g. a
         // worker-side stateless retry that wrote a different message)
         // will re-trigger this. The polling path is independent and
         // unchanged.

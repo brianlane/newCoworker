@@ -104,7 +104,7 @@ export default async function IntakeDocPage({
         </div>
 
         <footer className="mt-10 border-t border-neutral-300 pt-4 text-xs text-neutral-500">
-          NewCoworker white-glove build document — keep with the customer&apos;s account
+          NewCoworker white-glove build document, keep with the customer&apos;s account
           records.
         </footer>
       </div>

@@ -25,8 +25,8 @@ export type TeamMemberView = {
 export type EmployeeOption = { id: string; name: string };
 
 const ROLE_LABEL: Record<MemberRole, string> = {
-  manager: "Manager — settings, AiFlows, team",
-  staff: "Staff — dashboard, messages, calls"
+  manager: "Manager, settings, AiFlows, team",
+  staff: "Staff, dashboard, messages, calls"
 };
 
 export function TeamAccessManager({
@@ -79,10 +79,10 @@ export function TeamAccessManager({
         const delivery = json.data?.delivery as string | undefined;
         setNotice(
           delivery === "auth_invite"
-            ? "Invited — they'll get an email with a link to set their password."
+            ? "Invited, they'll get an email with a link to set their password."
             : delivery === "notice_email"
-              ? "Added — they already have a login and were emailed a heads-up."
-              : "Added — email couldn't be sent automatically, so let them know to sign in with that address."
+              ? "Added, they already have a login and were emailed a heads-up."
+              : "Added, email couldn't be sent automatically, so let them know to sign in with that address."
         );
         setEmail("");
         setEmployeeId("");
@@ -197,7 +197,7 @@ export function TeamAccessManager({
       {notice && <p className="text-xs text-claw-green mb-2">{notice}</p>}
 
       {visible.length === 0 ? (
-        <p className="text-xs text-parchment/40">No team members yet — just the owner.</p>
+        <p className="text-xs text-parchment/40">No team members yet, just the owner.</p>
       ) : (
         <ul className="space-y-1.5">
           {visible.map((m) => (
@@ -208,7 +208,7 @@ export function TeamAccessManager({
               <div className="min-w-0">
                 <p className="text-sm text-parchment truncate">{m.email}</p>
                 <p className="text-xs text-parchment/40">
-                  {m.status === "invited" ? "Invited — hasn't signed in yet" : "Active"}
+                  {m.status === "invited" ? "Invited, hasn't signed in yet" : "Active"}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">

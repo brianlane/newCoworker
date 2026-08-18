@@ -286,7 +286,7 @@ export async function adoptVpsForBusiness(
       const vm = await client.getVirtualMachine(vmId);
       if (vm.state !== preRecreateState) break;
       if (now() > leaveDeadline) {
-        logger.warn("adoptVps: VM never left pre-recreate state — assuming transition missed", {
+        logger.warn("adoptVps: VM never left pre-recreate state, assuming transition missed", {
           virtualMachineId: vmId,
           preRecreateState
         });
@@ -308,7 +308,7 @@ export async function adoptVpsForBusiness(
   const preIp = preState.ipv4?.[0]?.address ?? null;
   let publicIp: string;
   if (sameBusinessRetry && preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
-    logger.info("adoptVps: key from this business's prior attempt already attached — skipping recreate", {
+    logger.info("adoptVps: key from this business's prior attempt already attached, skipping recreate", {
       virtualMachineId: vmId
     });
     publicIp = preIp;
@@ -323,7 +323,7 @@ export async function adoptVpsForBusiness(
       sshKeyRow = { ...sshKeyRow, host_key_fingerprint: null };
     }
     if (!(await sshAuthOk(publicIp))) {
-      logger.warn("adoptVps: key did not attach on first recreate — retrying once", {
+      logger.warn("adoptVps: key did not attach on first recreate, retrying once", {
         virtualMachineId: vmId
       });
       publicIp = await recreateOnce();
@@ -339,7 +339,7 @@ export async function adoptVpsForBusiness(
   for (;;) {
     if (await pisQuiescentProbe(publicIp, privateKeyPem)) break;
     if (now() > quiescenceDeadline) {
-      logger.warn("adoptVps: post-install quiescence wait timed out — proceeding", {
+      logger.warn("adoptVps: post-install quiescence wait timed out, proceeding", {
         virtualMachineId: vmId
       });
       break;
@@ -404,14 +404,14 @@ export async function adoptVpsForBusiness(
     // Fail toward tenant safety: with the flag unknowable, re-enable renewal
     // so the box can't lapse under the tenant. The posture cron reads the
     // flag on its next run and surfaces the conflict for a manual flip.
-    logger.warn("adoptVps: never_renew lookup failed — proceeding with auto-renew re-enable", {
+    logger.warn("adoptVps: never_renew lookup failed, proceeding with auto-renew re-enable", {
       virtualMachineId: vmId,
       error: err instanceof Error ? err.message : String(err)
     });
   }
   if (neverRenew) {
     logger.warn(
-      "adoptVps: box is flagged never_renew — auto-renew stays OFF; migrate this tenant to its correct size before the paid period ends (the billing-posture cron will nag daily)",
+      "adoptVps: box is flagged never_renew, auto-renew stays OFF; migrate this tenant to its correct size before the paid period ends (the billing-posture cron will nag daily)",
       { virtualMachineId: vmId, hostingerBillingSubscriptionId }
     );
   } else if (hostingerBillingSubscriptionId) {
@@ -423,7 +423,7 @@ export async function adoptVpsForBusiness(
       });
     } catch (err) {
       logger.error(
-        "adoptVps: FAILED to re-enable auto-renew on adopted box — enable it in hPanel or the VM lapses at period end",
+        "adoptVps: FAILED to re-enable auto-renew on adopted box, enable it in hPanel or the VM lapses at period end",
         {
           virtualMachineId: vmId,
           hostingerBillingSubscriptionId,
@@ -433,7 +433,7 @@ export async function adoptVpsForBusiness(
     }
   } else {
     logger.error(
-      "adoptVps: no billing subscription id resolved — verify auto-renew is ON in hPanel or the adopted VM lapses at period end",
+      "adoptVps: no billing subscription id resolved, verify auto-renew is ON in hPanel or the adopted VM lapses at period end",
       { virtualMachineId: vmId }
     );
   }

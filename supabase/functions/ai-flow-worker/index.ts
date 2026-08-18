@@ -2051,7 +2051,7 @@ type StepOutcome =
       operational?: boolean;
     }
   // BROADCAST offer (route_to_team.agentNames): every recipient is texted the
-  // offer at once and shares ONE deadline — first "1" wins. Parked exactly
+  // offer at once and shares ONE deadline, first "1" wins. Parked exactly
   // like pause_agent (state before side effect) but with awaiting_agent_e164
   // NULL: the inbound webhook matches replies via routing.offered_all instead.
   // An empty recipients list re-parks WITHOUT re-texting anyone (used after a
@@ -2068,15 +2068,15 @@ type StepOutcome =
     }
   // Quiet hours: this step (and the rest of the run) must wait until
   // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
-  // claim RPC skips it until then — no attempt burned, nothing sent.
+  // claim RPC skips it until then, no attempt burned, nothing sent.
   | { kind: "defer"; resumeAtMs: number; reason: string }
   // wait_for_reply: park until `e164` texts back (the inbound webhook writes
   // the reply into context.vars[saveAs] and re-queues) or respond_by_at lapses
   // (resume_overdue_reply_waits writes the no_reply sentinel and re-queues).
-  // Both paths also stamp vars[marker] so the step completes on re-entry —
+  // Both paths also stamp vars[marker] so the step completes on re-entry,
   // per step, so a later wait sharing the same saveAs still parks.
   | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string; marker: string }
-  // place_ai_call: the call was dialed — park until the voice path resumes the
+  // place_ai_call: the call was dialed, park until the voice path resumes the
   // run with the outcome (bridge transfer tool / call-end hangup handler) or
   // respond_by_at lapses (resume_overdue_call_waits writes the no_answer
   // sentinel). Same marker semantics as pause_reply.
@@ -9526,7 +9526,7 @@ async function resolveBroadcastAgents(
     .eq("business_id", run.business_id)
     .eq("active", true)
     // Rotation order (matters for the broadcastAll clamp): least recently
-    // offered first, ties by seniority — the same ordering pickNextAgent
+    // offered first, ties by seniority, the same ordering pickNextAgent
     // uses, so a clamped broadcast rotates fairly across big rosters.
     .order("last_offered_at", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true });

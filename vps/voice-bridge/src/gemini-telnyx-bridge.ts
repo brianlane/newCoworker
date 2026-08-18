@@ -81,7 +81,7 @@ const GENAI_SDK_VERSION: string = (() => {
       dir = parent;
     }
   } catch {
-    // ignore — reported as "unknown" below
+    // ignore, reported as "unknown" below
   }
   return "unknown";
 })();
@@ -134,7 +134,7 @@ const TOOL_CALL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
  */
 const TOOL_TIMEOUT_MESSAGES: Record<string, string> = {
   calendar_book_appointment:
-    "The booking system was slow to respond — the booking may still have completed. Do NOT " +
+    "The booking system was slow to respond, the booking may still have completed. Do NOT " +
     "tell the caller the time is unavailable and do NOT pick a different time. Tell the " +
     "caller you're just confirming, then call calendar_book_appointment ONCE more with " +
     "exactly the same arguments: if the first attempt went through you'll get " +
@@ -550,7 +550,7 @@ function sendPcmToTelnyx(
     if (now - telemetry.lastDropWarnAtMs > 5_000) {
       telemetry.lastDropWarnAtMs = now;
       console.warn(
-        "gemini-bridge: downlink backpressure — dropping frames",
+        "gemini-bridge: downlink backpressure, dropping frames",
         { bufferedAmount: ws.bufferedAmount, droppedFrames: telemetry.droppedFrames }
       );
     }
@@ -1165,10 +1165,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         // checklist WITHOUT the callback-number ask (we just dialed their
         // number); the inbound seller intake keeps the full checklist.
         greetingText = intake.allowTransfer
-          ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and follow your call script.`
+          ? `[Coordinator, speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen, never repeat the opener, even if they talk over it, and follow your call script.`
           : opts.direction === "outbound"
-            ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and continue per your instructions, calling capture_lead as you learn details. Never ask for their phone number.`
-            : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") — say it only once, never restart it — and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+            ? `[Coordinator, speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen, never repeat the opener, even if they talk over it, and continue per your instructions, calling capture_lead as you learn details. Never ask for their phone number.`
+            : `[Coordinator, speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}"), say it only once, never restart it, and begin the short intake, get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
       } else if (greetIsStaff) {
         // Owner vs team wording, and handle staff WITHOUT a stored name
         // (otherwise they'd get the customer receptionist greeting that
@@ -1182,9 +1182,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         const example = staffName
           ? `e.g. "Hey ${staffName}, what can I do for you?"`
           : `e.g. "Hey, what can I do for you?"`;
-        greetingText = `[Coordinator — speak aloud now] ${subject} has just connected. Greet them warmly${staffName ? " by name" : ""} in one short sentence (${example}) — do not run the customer intake script — and wait for their reply.`;
+        greetingText = `[Coordinator, speak aloud now] ${subject} has just connected. Greet them warmly${staffName ? " by name" : ""} in one short sentence (${example}), do not run the customer intake script, and wait for their reply.`;
       } else {
-        greetingText = `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
+        greetingText = `[Coordinator, speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName}, how can I help?") and wait for their reply.`;
       }
       session.sendRealtimeInput({ text: greetingText });
       console.log("gemini-bridge: greeting prompt sent", {
@@ -1289,7 +1289,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       phone: "Best callback phone number.",
       address: "Property address they're selling.",
       timeframe: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months').",
-      notes: "Anything else useful — price expectations, motivation, condition, constraints."
+      notes: "Anything else useful, price expectations, motivation, condition, constraints."
     };
     const captureProperties: Record<string, { type: Type; description: string }> = {};
     for (const field of intakeCaptureFields) {
@@ -1301,7 +1301,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     declarations.push({
       name: "capture_lead",
       description: intakeIsOutbound
-        ? "Record details you learn on this call for the office's follow-up notes. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye. Never ask for their phone number — you called them on it."
+        ? "Record details you learn on this call for the office's follow-up notes. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye. Never ask for their phone number, you called them on it."
         : "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
       parameters: {
         type: Type.OBJECT,
@@ -2233,14 +2233,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // will help you right after" — the AI genuinely can't continue — so we frame
   // it as the owner being unavailable and steer the caller to text instead.
   const warnText = budgetCapped
-    ? `[Coordinator — speak aloud] You need to start wrapping up this call now. Warmly let the caller know you have to go shortly and that the owner isn't available right now, and invite them to send ${name} a text message so someone can follow up.`
-    : `[Coordinator — speak aloud] The AI session will end in about ${Math.max(1, Math.round(effWarnBeforeMs / 60000))} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`;
+    ? `[Coordinator, speak aloud] You need to start wrapping up this call now. Warmly let the caller know you have to go shortly and that the owner isn't available right now, and invite them to send ${name} a text message so someone can follow up.`
+    : `[Coordinator, speak aloud] The AI session will end in about ${Math.max(1, Math.round(effWarnBeforeMs / 60000))} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`;
   const nudgeText = budgetCapped
-    ? `[Coordinator — speak aloud] Finish your thought and give a very brief, warm goodbye now. Let them know the owner isn't available right now and that they can text ${name} and someone will get back to them.`
-    : `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`;
+    ? `[Coordinator, speak aloud] Finish your thought and give a very brief, warm goodbye now. Let them know the owner isn't available right now and that they can text ${name} and someone will get back to them.`
+    : `[Coordinator, speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`;
   const finalText = budgetCapped
-    ? `[Coordinator — speak aloud] Wrap up immediately. Say one short, friendly goodbye — the owner isn't available right now, so invite them to text ${name} — and thank them for calling.`
-    : `[Coordinator — speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`;
+    ? `[Coordinator, speak aloud] Wrap up immediately. Say one short, friendly goodbye, the owner isn't available right now, so invite them to text ${name}, and thank them for calling.`
+    : `[Coordinator, speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`;
 
   // Diagnostic heartbeat so production logs show the audio pipeline is still
   // alive throughout the call (or, more usefully, when it stalls). Fires

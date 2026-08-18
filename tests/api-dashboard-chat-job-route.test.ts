@@ -75,7 +75,7 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
+describe("GET /api/dashboard/chat/jobs/[jobId], polling endpoint", () => {
   it("returns the serialized job status for the owner", async () => {
     const res = await GET(reqWith(JOB_ID), paramsOf(JOB_ID));
     expect(res.status).toBe(200);
@@ -88,7 +88,7 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
     });
   });
 
-  it("never exposes worker-internal fields (input_messages, stateless_input_messages, attempts, claimed_*) — they contain system preambles the user shouldn't see", async () => {
+  it("never exposes worker-internal fields (input_messages, stateless_input_messages, attempts, claimed_*), they contain system preambles the user shouldn't see", async () => {
     const res = await GET(reqWith(JOB_ID), paramsOf(JOB_ID));
     const env = await readEnvelope(res);
     expect(env.data).not.toHaveProperty("input_messages");
@@ -109,7 +109,7 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
     expect(env.error?.code).toBe("NOT_FOUND");
   });
 
-  it("returns 401 when not signed in — no row read attempted", async () => {
+  it("returns 401 when not signed in, no row read attempted", async () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce(null as never);
     const res = await GET(reqWith(JOB_ID), paramsOf(JOB_ID));
     expect(res.status).toBe(401);
@@ -122,7 +122,7 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
     expect(getChatJobById).not.toHaveBeenCalled();
   });
 
-  it("IDOR: gates ownership against the row's business_id, NEVER a caller-supplied parameter — a stolen jobId can't be read by the owner of a different tenant", async () => {
+  it("IDOR: gates ownership against the row's business_id, NEVER a caller-supplied parameter, a stolen jobId can't be read by the owner of a different tenant", async () => {
     vi.mocked(getChatJobById).mockResolvedValueOnce({
       ...FAKE_JOB,
       business_id: OTHER_BIZ
@@ -163,7 +163,7 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
     });
   });
 
-  it("surfaces assistantMessageId once the worker has marked status='done' — client uses it for the success-path message refresh", async () => {
+  it("surfaces assistantMessageId once the worker has marked status='done', client uses it for the success-path message refresh", async () => {
     vi.mocked(getChatJobById).mockResolvedValueOnce({
       ...FAKE_JOB,
       status: "done",

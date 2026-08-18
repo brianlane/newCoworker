@@ -175,7 +175,7 @@ export async function recordMcpConnectorSeen(
 
     const lastSeenMs = Date.parse(row.last_seen_at);
     if (Number.isFinite(lastSeenMs) && nowMs - lastSeenMs < MCP_SEEN_DEBOUNCE_MS) {
-      return; // fresh enough — reads stay the common case
+      return; // fresh enough, reads stay the common case
     }
     const { error: updErr } = await db
       .from("mcp_connector_status")

@@ -266,7 +266,7 @@ export async function processCampaignSweep(
         { status: "sending", started_at: now.toISOString() },
         db
       );
-      if (!moved) continue; // cancelled (or promoted) under us — their win
+      if (!moved) continue; // cancelled (or promoted) under us, their win
       result.promoted += 1;
       const total = await snapshotRecipients(db, campaign);
       await patchEmailCampaign(

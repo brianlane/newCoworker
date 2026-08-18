@@ -86,7 +86,7 @@ export function ServicesManager() {
       setDescription("");
       await refresh();
     } catch {
-      setError("Could not add the service — try again.");
+      setError("Could not add the service, try again.");
     } finally {
       setSaving(false);
     }

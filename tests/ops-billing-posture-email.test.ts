@@ -65,7 +65,7 @@ describe("buildOpsBillingPostureEmail", () => {
   });
 });
 
-describe("buildOpsBillingPostureEmail — tenant-level findings", () => {
+describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
   // online_tenant_no_box is about a tenant, not a box, so rendering the
   // shared "VM <id> / ..." prefix would print "VM null".
   // "pool" is the pool direction's label. An orphan VM is the opposite: not

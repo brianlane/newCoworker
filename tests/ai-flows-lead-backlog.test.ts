@@ -263,7 +263,7 @@ describe("importLeadBacklog", () => {
     expect(secondIds).toEqual(firstIds);
   });
 
-  it("rows sharing an EXPLICIT id are the same lead — no occurrence suffix", async () => {
+  it("rows sharing an EXPLICIT id are the same lead, no occurrence suffix", async () => {
     const rows: Record<string, string>[] = [
       { lead_id: "L-1", name: "a" },
       { lead_id: "L-1", name: "a-updated" }
@@ -343,7 +343,7 @@ describe("importLeadBacklog", () => {
     expect(summary.rows.map((r) => r.status)).toEqual(["duplicate", "no_match", "enqueued"]);
   });
 
-  it("duplicate/unmatched rows do NOT consume a drip slot — the next new lead fires immediately", async () => {
+  it("duplicate/unmatched rows do NOT consume a drip slot, the next new lead fires immediately", async () => {
     processWebhookFlowEvent
       .mockResolvedValueOnce(DUPLICATE)
       .mockResolvedValueOnce(NO_MATCH)

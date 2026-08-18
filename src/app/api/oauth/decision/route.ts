@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "OAUTH_DECISION_FAILED",
-        message: error?.message ?? "Could not record the decision — start the flow again."
+        message: error?.message ?? "Could not record the decision, start the flow again."
       },
       { status: 400 }
     );

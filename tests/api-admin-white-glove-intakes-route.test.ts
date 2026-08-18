@@ -83,7 +83,7 @@ describe("api/admin/white-glove-intakes route", () => {
     expect(body.data.intakeUrl).toContain("/intake/tok-1");
   });
 
-  it("POST works with just a business name (no email) — link only, nothing emailed", async () => {
+  it("POST works with just a business name (no email), link only, nothing emailed", async () => {
     process.env.RESEND_API_KEY = "resend_test";
     try {
       vi.mocked(createWhiteGloveIntake).mockResolvedValue({

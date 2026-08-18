@@ -80,7 +80,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
   };
 }
 
-describe("summarizer constants — pin shape against accidental tightening", () => {
+describe("summarizer constants, pin shape against accidental tightening", () => {
   it("input limits are sized below the dashboard chat's so per-customer preambles can be stacked into one prompt", () => {
     expect(SUMMARY_INPUT_VOICE_CALLS).toBeGreaterThan(0);
     expect(SUMMARY_INPUT_SMS_TURNS).toBeGreaterThan(0);
@@ -88,7 +88,7 @@ describe("summarizer constants — pin shape against accidental tightening", () 
   });
 });
 
-describe("summarizeCustomerMemory — db_failed paths (every read/write surface)", () => {
+describe("summarizeCustomerMemory, db_failed paths (every read/write surface)", () => {
   it("getCustomerMemory throw -> reason: db_failed (caller can decide whether to retry)", async () => {
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       getCustomerMemory: (async () => {
@@ -282,7 +282,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
   });
 });
 
-describe("summarizeCustomerMemory — degraded business config paths", () => {
+describe("summarizeCustomerMemory, degraded business config paths", () => {
   it("no project id (config null AND no env fallback) -> reason: no_project_id", async () => {
     delete process.env.ROWBOAT_DEFAULT_PROJECT_ID;
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
@@ -313,8 +313,8 @@ describe("summarizeCustomerMemory — degraded business config paths", () => {
   });
 });
 
-describe("summarizeCustomerMemory — empty/whitespace Rowboat reply", () => {
-  it("returns empty_summary when the model only emits whitespace — never persist a useless rolling summary", async () => {
+describe("summarizeCustomerMemory, empty/whitespace Rowboat reply", () => {
+  it("returns empty_summary when the model only emits whitespace, never persist a useless rolling summary", async () => {
     const updateCustomerSummary = vi.fn(async () => {});
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
@@ -339,7 +339,7 @@ describe("summarizeCustomerMemory — empty/whitespace Rowboat reply", () => {
   });
 });
 
-describe("summarizeCustomerMemory — input rendering shape", () => {
+describe("summarizeCustomerMemory, input rendering shape", () => {
   it("includes existing summary_md as 'carry forward' when set", async () => {
     const callRowboatChat = vi.fn(async () => ({
       reply: "refined",
@@ -453,7 +453,7 @@ describe("summarizeCustomerMemory — input rendering shape", () => {
   });
 });
 
-describe("summarizeCustomerMemoryAndLog — logging branches", () => {
+describe("summarizeCustomerMemoryAndLog, logging branches", () => {
   // The wrapper's only job is to call the inner summarizer and log
   // the structured outcome at the right level. We pin exactly that:
   // success goes through info, expected skips (below_threshold,
@@ -527,7 +527,7 @@ describe("summarizeCustomerMemoryAndLog — logging branches", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not throw when the inner summarizer returns ok:false (rowboat_failed) — true non-expected failure path", async () => {
+  it("does not throw when the inner summarizer returns ok:false (rowboat_failed), true non-expected failure path", async () => {
     await expect(
       summarizeCustomerMemoryAndLog(BIZ, CUSTOMER, {
         getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
@@ -555,7 +555,7 @@ describe("summarizeCustomerMemoryAndLog — logging branches", () => {
   });
 });
 
-describe("summarizeCustomerMemory — bearer fallback and parse-edge gates", () => {
+describe("summarizeCustomerMemory, bearer fallback and parse-edge gates", () => {
   it("falls back to ROWBOAT_VPS_CHAT_BEARER from env when no explicit bearer is supplied", async () => {
     const prior = process.env.ROWBOAT_VPS_CHAT_BEARER;
     process.env.ROWBOAT_VPS_CHAT_BEARER = "env_bearer_a";
@@ -648,7 +648,7 @@ describe("summarizeCustomerMemory — bearer fallback and parse-edge gates", () 
     }
   });
 
-  it("treats unparseable last_summarized_at as 'no debounce' rather than throwing — degraded data must not crash the summarizer", async () => {
+  it("treats unparseable last_summarized_at as 'no debounce' rather than throwing, degraded data must not crash the summarizer", async () => {
     // Pin the `Number.isFinite(lastMs)` false arm at line ~192. If we
     // accidentally swapped the guard order to crash on `Date.parse`
     // returning NaN, summarizer would erupt every time a downstream
@@ -681,7 +681,7 @@ describe("summarizeCustomerMemory — bearer fallback and parse-edge gates", () 
   });
 });
 
-describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
+describe("summarizeCustomerMemory, joinSmsHistory branch coverage", () => {
   it("renders SMS turns with NO assistant reply yet (covers the `if (r.assistantReply)` false arm in joinSmsHistory)", async () => {
     // History rows where the customer texted but Rowboat hasn't
     // produced a reply yet (in-flight job, retry exhausted, etc.).
@@ -775,7 +775,7 @@ describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
   });
 });
 
-describe("summarizeCustomerMemory — per-contact email feed (scoped, never business-wide)", () => {
+describe("summarizeCustomerMemory, per-contact email feed (scoped, never business-wide)", () => {
   const emailRow = (overrides: Record<string, unknown> = {}) => ({
     id: "e1",
     business_id: BIZ,
@@ -903,7 +903,7 @@ describe("summarizeCustomerMemory — per-contact email feed (scoped, never busi
   });
 });
 
-describe("summarizeCustomerMemory — no_customer_content gate", () => {
+describe("summarizeCustomerMemory, no_customer_content gate", () => {
   // Regression: a 2-second call whose only transcript turn was the AI's own
   // greeting produced a summarizer run with zero customer-authored material.
   // The model fabricated an entire identity ("Brenda ... interested in buying
@@ -930,7 +930,7 @@ describe("summarizeCustomerMemory — no_customer_content gate", () => {
         {
           callStartedAt: "2026-06-23T14:16:45Z",
           role: "assistant" as const,
-          content: "Hi, thanks for calling — how can I help?"
+          content: "Hi, thanks for calling, how can I help?"
         }
       ])
     }));
@@ -1008,7 +1008,7 @@ describe("summarizeCustomerMemory — no_customer_content gate", () => {
   });
 });
 
-describe("summarizer system instruction — tool prohibition", () => {
+describe("summarizer system instruction, tool prohibition", () => {
   it("forbids tool calls in summarizer mode (the SMS agent's live customer tools must not fire)", async () => {
     // The nightly summarizer runs through the tenant's SMS agent, which has
     // customer_set_display_name / customer_append_pinned_note tools wired.
@@ -1038,8 +1038,8 @@ describe("summarizer system instruction — tool prohibition", () => {
   });
 });
 
-describe("shouldSummarize — supplemental branch coverage", () => {
-  it("default `now` arg is Date.now() — caller can rely on omission for live decisions", () => {
+describe("shouldSummarize, supplemental branch coverage", () => {
+  it("default `now` arg is Date.now(), caller can rely on omission for live decisions", () => {
     // Call without the second arg; behaviour depends on
     // `last_summarized_at` being far in the past.
     const wayBack = "2020-01-01T00:00:00Z";
@@ -1048,7 +1048,7 @@ describe("shouldSummarize — supplemental branch coverage", () => {
     ).toBe(true);
   });
 
-  it("interaction_count exactly at threshold (1) triggers summarize — gate is inclusive on the boundary, ensuring a customer's first SMS/call produces a summary on the next eligible run", () => {
+  it("interaction_count exactly at threshold (1) triggers summarize, gate is inclusive on the boundary, ensuring a customer's first SMS/call produces a summary on the next eligible run", () => {
     expect(
       shouldSummarize(memory({ interaction_count: 1, last_summarized_at: null }))
     ).toBe(true);

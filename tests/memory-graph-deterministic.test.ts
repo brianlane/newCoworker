@@ -84,7 +84,7 @@ describe("ingestDeterministic (shared gate)", () => {
     expect(d.getMode).not.toHaveBeenCalled();
   });
 
-  it("never throws — mode-read and apply failures degrade to ran:false (non-Error too)", async () => {
+  it("never throws, mode-read and apply failures degrade to ran:false (non-Error too)", async () => {
     const modeFail = {
       getMode: vi.fn(async () => {
         throw new Error("db down");

@@ -558,7 +558,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.firstToClaim === false && (
             <Row
               label="First to claim"
-              value="Off — only the currently offered teammate can claim a live offer"
+              value="Off, only the currently offered teammate can claim a live offer"
             />
           )}
           {step.preferContactOwner === true && (
@@ -769,7 +769,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2"
             >
               <div className="text-xs font-semibold text-parchment/60">
-                {arm.label} — when {conditionText(arm.condition)}
+                {arm.label}, when {conditionText(arm.condition)}
               </div>
               {arm.steps.length === 0 ? (
                 <div className="text-xs text-parchment/40">No steps on this path.</div>
@@ -1091,7 +1091,7 @@ export function AiFlowView({
       )}
       {definition.options?.stopOnResponse && (
         <p className="text-xs text-parchment/50">
-          Stops for a contact when they reply — their pending runs of this flow end
+          Stops for a contact when they reply, their pending runs of this flow end
           instead of sending the remaining follow-ups.
         </p>
       )}

@@ -131,7 +131,7 @@ export async function getFlowFunnels(
       .eq("source", "ai_flow")
       .not("flow_id", "is", null)
       .gte("created_at", cutoffIso)
-      // Newest-first so a capped scan keeps the MOST RECENT activity — the
+      // Newest-first so a capped scan keeps the MOST RECENT activity, the
       // exact claim the clipped footnote makes.
       .order("created_at", { ascending: false })
       .limit(FLOW_FUNNEL_SCAN_LIMIT);

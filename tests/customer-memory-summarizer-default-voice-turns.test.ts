@@ -71,7 +71,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
   };
 }
 
-describe("summarizeCustomerMemory — default listVoiceTurnsForCustomer path", () => {
+describe("summarizeCustomerMemory, default listVoiceTurnsForCustomer path", () => {
   it("uses the imported listVoiceTurnsForCustomer when no dep override is supplied AND maps null callStartedAt to ISO epoch (no literal 'null' in the prompt)", async () => {
     const callRowboatChat = vi.fn(async () => ({
       reply: "Joe called once and asked about garage doors.",

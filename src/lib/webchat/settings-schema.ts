@@ -69,7 +69,7 @@ export function normalizeAllowedOrigins(input: string[]): string[] {
     if (!entry.trim()) continue;
     const normalized = normalizeOrigin(entry);
     if (!normalized) {
-      throw new Error(`Invalid origin: "${entry.trim()}" — use a URL like https://example.com`);
+      throw new Error(`Invalid origin: "${entry.trim()}", use a URL like https://example.com`);
     }
     if (!out.includes(normalized)) out.push(normalized);
   }

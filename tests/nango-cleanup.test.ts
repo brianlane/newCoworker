@@ -173,7 +173,7 @@ describe("revokeNangoConnectionsForBusiness (wipe path)", () => {
     });
   });
 
-  it("never throws — a listing failure returns 0 (Error and non-Error)", async () => {
+  it("never throws, a listing failure returns 0 (Error and non-Error)", async () => {
     const db = mockDb();
     mockListConnections.mockRejectedValue(new Error("db offline"));
     await expect(revokeNangoConnectionsForBusiness("biz-1", db as never)).resolves.toBe(0);

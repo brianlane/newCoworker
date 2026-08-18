@@ -87,7 +87,7 @@ export function SmsOptOutsCard({ businessId }: { businessId: string }) {
       <h2 className="text-sm font-semibold text-parchment mb-1">Text opt-outs</h2>
       <p className="text-xs text-parchment/40 mb-4">
         Numbers that replied STOP (or that you suppressed) never receive texts from your
-        coworker — including AiFlows and manual sends. A customer can text START to opt back
+        coworker, including AiFlows and manual sends. A customer can text START to opt back
         in; you can&apos;t re-enable them yourself.
       </p>
 

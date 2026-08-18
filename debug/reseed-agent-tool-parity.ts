@@ -207,7 +207,7 @@ type WorkflowReport = {
  */
 function summarizeWorkflow(project: string, which: "live" | "draft", wf: WorkflowReport): boolean {
   if (!wf) {
-    console.log(`  project ${project}: NO ${which}Workflow — needs a full redeploy`);
+    console.log(`  project ${project}: NO ${which}Workflow, needs a full redeploy`);
     return true;
   }
   const agentIssues = Object.entries(wf.agents);
@@ -216,7 +216,7 @@ function summarizeWorkflow(project: string, which: "live" | "draft", wf: Workflo
   }
   if (wf.missingAgents.length > 0) {
     console.log(
-      `  project ${project} [${which}]: MISSING AGENTS ${wf.missingAgents.join(", ")} — run scripts/redeploy-deploy-client.ts for this business`
+      `  project ${project} [${which}]: MISSING AGENTS ${wf.missingAgents.join(", ")}, run scripts/redeploy-deploy-client.ts for this business`
     );
   }
   if (wf.missingTools.length > 0) {
@@ -263,10 +263,10 @@ function summarize(businessId: string, output: string): { clean: boolean } {
   const bridgeSection = output.split("===BRIDGE===")[1] ?? "";
   const shaMatch = /^([0-9a-f]{64})\s/m.exec(bridgeSection);
   if (!shaMatch) {
-    console.log("  voice bridge: tool-declarations source NOT FOUND on box — old bridge layout; redeploy the voice bridge");
+    console.log("  voice bridge: tool-declarations source NOT FOUND on box, old bridge layout; redeploy the voice bridge");
     clean = false;
   } else if (shaMatch[1] !== localBridgeSha) {
-    console.log("  voice bridge: tool-declarations STALE vs repo — redeploy the voice bridge to ship the current voice tools");
+    console.log("  voice bridge: tool-declarations STALE vs repo, redeploy the voice bridge to ship the current voice tools");
     clean = false;
   } else {
     console.log("  voice bridge: tool-declarations current");
@@ -281,7 +281,7 @@ for (const businessId of await targetBusinessIds()) {
   console.log(`\n== agent-tool parity ${APPLY ? "(APPLY)" : "(report-only)"}: ${businessId} ==`);
   const key = await getActiveVpsSshKeyForBusiness(businessId);
   if (!key) {
-    console.error(`no active ssh key for business ${businessId} — skipping`);
+    console.error(`no active ssh key for business ${businessId}, skipping`);
     failures += 1;
     continue;
   }

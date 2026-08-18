@@ -172,7 +172,7 @@ async function main(): Promise<void> {
         "id, business_id, stripe_subscription_id, stripe_current_period_end, stripe_subscription_cached_at, status"
       )
       .not("stripe_subscription_id", "is", null)
-      // Deterministic ordering is required for range-based pagination — without
+      // Deterministic ordering is required for range-based pagination, without
       // it PostgREST may emit overlapping/missing rows across pages.
       .order("id", { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1);
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
     if (typeof rawStart !== "number" || typeof rawEnd !== "number") {
       counts.skippedNoPeriods += 1;
       console.warn(
-        `[backfill] ${row.business_id} sub=${row.stripe_subscription_id} status=${sub.status} — no current_period_start/end on Stripe subscription or its items; skipping (items=${items.length})`
+        `[backfill] ${row.business_id} sub=${row.stripe_subscription_id} status=${sub.status}, no current_period_start/end on Stripe subscription or its items; skipping (items=${items.length})`
       );
       continue;
     }
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
     );
     if (counts.verifiedDrift > 0 || counts.verifiedMissing > 0) {
       console.log(
-        "[backfill] NOTE: drift/missing rows detected — re-run with --apply (no --verify-only) to sync them."
+        "[backfill] NOTE: drift/missing rows detected, re-run with --apply (no --verify-only) to sync them."
       );
     }
     return;

@@ -23,7 +23,7 @@ function stubDb() {
   return chain as never;
 }
 
-describe("fireBookingGoalsForIdentities — KG booking ingest", () => {
+describe("fireBookingGoalsForIdentities, KG booking ingest", () => {
   it("ingests once per original identity (kg-source: booking) and skips identity-less entries", async () => {
     const ingestBookingEvent = vi.fn(async () => ({ ran: true }));
     const applyGoal = vi.fn(async () => ({ jumpedRuns: 1 }));

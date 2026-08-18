@@ -115,7 +115,7 @@ describe("GET /api/dashboard/customers (list)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("calls requireBusinessRole for non-admin owners — IDOR guard", async () => {
+  it("calls requireBusinessRole for non-admin owners, IDOR guard", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -126,7 +126,7 @@ describe("GET /api/dashboard/customers (list)", () => {
     expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 
-  it("returns a summary projection — no summary_md/pinned_md leakage in the list view", async () => {
+  it("returns a summary projection, no summary_md/pinned_md leakage in the list view", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -247,7 +247,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     });
   }
 
-  it("returns 400 when the body provides neither displayName nor pinnedMd — protects against accidental empty saves clobbering nothing but still bumping updated_at", async () => {
+  it("returns 400 when the body provides neither displayName nor pinnedMd, protects against accidental empty saves clobbering nothing but still bumping updated_at", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -257,7 +257,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 404 when the memory row is gone (e.g. another tab deleted it) — UI must not show 'Saved' for a no-op write", async () => {
+  it("returns 404 when the memory row is gone (e.g. another tab deleted it), UI must not show 'Saved' for a no-op write", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -272,7 +272,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 
-  it("forwards partial updates — only the fields the owner edited", async () => {
+  it("forwards partial updates, only the fields the owner edited", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -284,13 +284,13 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       customer_e164: CUSTOMER
     } as never);
     const res = await DETAIL_PATCH(
-      patchReq({ pinnedMd: "VIP — escalate to owner" }),
+      patchReq({ pinnedMd: "VIP, escalate to owner" }),
       params(encodeURIComponent(CUSTOMER))
     );
     expect(res.status).toBe(200);
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
       displayName: undefined,
-      pinnedMd: "VIP — escalate to owner"
+      pinnedMd: "VIP, escalate to owner"
     });
   });
 
@@ -610,7 +610,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
 });
 
 describe("DELETE /api/dashboard/customers/:e164", () => {
-  it("calls deleteCustomerMemory and returns 200 (idempotent — no 404 if already gone)", async () => {
+  it("calls deleteCustomerMemory and returns 200 (idempotent, no 404 if already gone)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",

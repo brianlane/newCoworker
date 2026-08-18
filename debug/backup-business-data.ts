@@ -60,7 +60,7 @@ const targetVmId =
       ? Number.parseInt(biz.hostinger_vps_id, 10)
       : null;
 if (targetVmId === null) {
-  console.error("no resolvable VM id — pass --vm <id>");
+  console.error("no resolvable VM id, pass --vm <id>");
   process.exit(1);
 }
 

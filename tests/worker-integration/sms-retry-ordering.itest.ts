@@ -77,7 +77,7 @@ async function seedJob(
 }
 
 describe("5xx retry semantics (history preservation, PR #566 fix 2)", () => {
-  it("an early-attempt 500 gets NO stateless retry — one stateful call, job requeued", async () => {
+  it("an early-attempt 500 gets NO stateless retry, one stateful call, job requeued", async () => {
     const biz = await seedBusiness(db, "IT 5xx early stateful");
     await seedThread(biz, "conv-KEEP");
     const jobId = await seedJob(biz, "Please book July 13 4pm");
@@ -124,7 +124,7 @@ describe("5xx retry semantics (history preservation, PR #566 fix 2)", () => {
 
     const before = rowboat.calls.length;
     rowboat.scriptError(500);
-    rowboat.scriptReply("Ok — booking your July 13 4:00 PM call now.");
+    rowboat.scriptReply("Ok, booking your July 13 4:00 PM call now.");
     await tickSmsWorker();
 
     expect(rowboat.calls.length).toBe(before + 2);
@@ -160,7 +160,7 @@ describe("per-contact FIFO claim (PR #566 fix 4)", () => {
     });
 
     const before = rowboat.calls.length;
-    rowboat.scriptReply("Noted — August 1st renewal.");
+    rowboat.scriptReply("Noted, August 1st renewal.");
     await tickSmsWorker();
 
     // Tick 1: only the OLDER job ran (pre-fix: both claimed in one batch).
