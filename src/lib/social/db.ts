@@ -233,7 +233,10 @@ export async function listPublishedPostsToRecheck(
     .is("removed_at", null)
     .not("ig_media_id", "is", null)
     .gte("published_at", publishedSinceIso)
-    .or(`removed_check_at.is.null,removed_check_at.lt.${checkedBeforeIso}`)
+    // Quote the ISO value: `.` and `:` are reserved in PostgREST's filter
+    // grammar, so the safe form is the quoted one (same convention as
+    // claimAvailableVps in src/lib/db/vps-inventory.ts).
+    .or(`removed_check_at.is.null,removed_check_at.lt."${checkedBeforeIso}"`)
     .order("removed_check_at", { ascending: true, nullsFirst: true })
     .limit(limit);
   if (error) throw new Error(`listPublishedPostsToRecheck: ${error.message}`);

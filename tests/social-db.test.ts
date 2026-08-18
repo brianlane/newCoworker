@@ -177,7 +177,7 @@ describe("listPublishedPostsToRecheck", () => {
     // Rested long enough since the last look, stalest first: this rotation
     // is what stops one tenant's backlog from filling every batch.
     expect(c.or).toHaveBeenCalledWith(
-      "removed_check_at.is.null,removed_check_at.lt.2026-07-18T11:00:00Z"
+      'removed_check_at.is.null,removed_check_at.lt."2026-07-18T11:00:00Z"'
     );
     expect(c.order).toHaveBeenCalledWith("removed_check_at", {
       ascending: true,
