@@ -143,3 +143,94 @@ export function detectCallIntegrity(
 
   return findings;
 }
+
+/**
+ * A finding with enough call context to name it in an alert. The sweep knows
+ * these columns; the pure detector does not, which is why this is a separate
+ * shape rather than a field on CallIntegrityFinding.
+ */
+export type CallIntegrityAlertItem = CallIntegrityFinding & {
+  transcriptId: string;
+  business: string;
+  caller: string | null;
+  startedAt: string | null;
+};
+
+/** How many findings the alert body names before it starts counting. */
+const ALERT_MAX_ITEMS = 10;
+
+/** Per-finding evidence clip, so one long turn cannot dominate the post. */
+const ALERT_DETAIL_CHARS = 160;
+
+function kindPhrase(kind: CallIntegrityKind): string {
+  return kind === "role_leak" ? "spoke the caller's side" : "talked to a recording";
+}
+
+/**
+ * The alert body. Leads with the count because that is the part read on a
+ * phone screen, then names each call with its transcript id so it can be
+ * pulled up directly.
+ *
+ * Capped at ALERT_MAX_ITEMS with an "and N more" tail: a single bad day must
+ * not post a wall of text, since an alert nobody can skim is an alert that
+ * gets muted, and a muted alert is the same as none.
+ *
+ * Returns "" for no findings, so a caller cannot accidentally announce
+ * nothing.
+ */
+export function formatCallIntegrityAlert(items: readonly CallIntegrityAlertItem[]): string {
+  if (items.length === 0) return "";
+  const noun = items.length === 1 ? "failure" : "failures";
+  const head = `${items.length} call-integrity ${noun} in the last day`;
+  const lines = items.slice(0, ALERT_MAX_ITEMS).map((i) => {
+    const when = i.startedAt ?? "unknown time";
+    const who = i.caller ?? "unknown caller";
+    const detail = i.detail.slice(0, ALERT_DETAIL_CHARS);
+    return `• ${i.business}: the AI ${kindPhrase(i.kind)} (${who}, ${when}, ${i.transcriptId}) ${detail}`;
+  });
+  const rest = items.length - Math.min(items.length, ALERT_MAX_ITEMS);
+  if (rest > 0) lines.push(`• and ${rest} more`);
+  return [head, ...lines].join("\n");
+}
+
+/** Minimal fetch shape, injected so the transport is testable. */
+export type CallIntegrityFetch = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string }
+) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+
+/**
+ * POST the alert to a Slack-compatible webhook.
+ *
+ * Never throws and never rejects: this runs at the end of a sweep that has
+ * already done its real work (the system_logs rows), and a webhook outage
+ * must not turn a successful detection run into a 500. The caller records the
+ * failure as telemetry instead.
+ *
+ * The upstream body is clipped to 500 chars on a non-2xx. It can carry
+ * provider error text, which is the sort of thing that ends up in a log and
+ * then in a screenshot.
+ */
+export async function postCallIntegrityWebhook(
+  fetchImpl: CallIntegrityFetch,
+  url: string,
+  items: readonly CallIntegrityAlertItem[]
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const text = formatCallIntegrityAlert(items);
+  // Nothing to say. Reported as ok so a quiet day is not logged as a failure.
+  if (!text) return { ok: true, status: 0 };
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      return { ok: false, status: res.status, error: body.slice(0, 500) };
+    }
+    return { ok: true, status: res.status };
+  } catch (err) {
+    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+}

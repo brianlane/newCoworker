@@ -26,6 +26,9 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   detectCallIntegrity,
+  formatCallIntegrityAlert,
+  postCallIntegrityWebhook,
+  type CallIntegrityAlertItem,
   type CallIntegrityFinding,
   type IntegrityTurn
 } from "../_shared/call_integrity.ts";
@@ -56,6 +59,18 @@ serve(async (req: Request) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3600_000).toISOString();
+
+  // Names for the alert body. A webhook line reading "621a5b0d..." tells the
+  // reader nothing; the tenant's name is the whole point of pushing it.
+  // Best-effort: a failed lookup falls back to the id rather than losing the
+  // finding.
+  const businessName = new Map<string, string>();
+  {
+    const { data } = await supabase.from("businesses").select("id, name");
+    for (const b of data ?? []) {
+      if (typeof b.name === "string" && b.name) businessName.set(b.id as string, b.name);
+    }
+  }
 
   // Paged, and ordered by (started_at, id). A bare `.limit()` on an ascending
   // window would silently drop the NEWEST calls, and range paging without a
@@ -117,7 +132,7 @@ serve(async (req: Request) => {
   }
 
   let scanned = 0;
-  let found = 0;
+  const alerts: CallIntegrityAlertItem[] = [];
   for (const call of calls) {
     if (reported.has(call.id)) continue;
     scanned++;
@@ -143,11 +158,26 @@ serve(async (req: Request) => {
 
     const findings: CallIntegrityFinding[] = detectCallIntegrity(turns);
     for (const finding of findings) {
-      found++;
+      alerts.push({
+        ...finding,
+        transcriptId: call.id,
+        business: businessName.get(call.business_id) ?? call.business_id,
+        caller: call.caller_e164,
+        startedAt: call.started_at
+      });
       await systemLog(supabase, {
         businessId: call.business_id,
         source: "voice",
-        level: "warn",
+        // `error`, not `warn`, and deliberately so. The fleet dashboard
+        // reads level = 'error' ONLY (src/lib/db/system-logs.ts), so a warn
+        // shows on one client's page and nowhere anyone looks daily. The
+        // warn convention is for a poll that fails once a minute and clears
+        // itself on the next run; this is the opposite, a daily deduped
+        // sweep firing on a call that already went wrong and cannot be
+        // retried. That is this file's own bar for error: "a claim that a
+        // human should look". Two findings in 120 days, so the volume
+        // argument for warn does not apply either.
+        level: "error",
         event: EVENT,
         message:
           finding.kind === "role_leak"
@@ -168,11 +198,42 @@ serve(async (req: Request) => {
     lookback_hours: LOOKBACK_HOURS,
     calls_in_window: calls.length,
     scanned,
-    findings: found
+    findings: alerts.length
   });
 
-  return new Response(JSON.stringify({ ok: true, scanned, findings: found }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" }
-  });
+  // Push, so a finding reaches someone instead of waiting to be found. Only
+  // when there is something to say and a webhook is configured; the sweep is
+  // fully functional without one.
+  const webhookUrl = Deno.env.get("ALERT_WEBHOOK_URL") ?? "";
+  let webhook: { ok: boolean; status: number } | null = null;
+  if (alerts.length > 0 && webhookUrl) {
+    const result = await postCallIntegrityWebhook(
+      (url, init) => fetch(url, init),
+      webhookUrl,
+      alerts
+    );
+    webhook = { ok: result.ok, status: result.status };
+    if (!result.ok) {
+      // The system_logs rows are already written, so a webhook outage is not
+      // a failed run. Record it and answer 200.
+      await telemetryRecord(supabase, "call_integrity_sweep_webhook_failed", {
+        status: result.status,
+        error: result.error ?? null
+      });
+    }
+  }
+
+  // Webhook error text stays out of the HTTP response: it can carry upstream
+  // provider messages, and CodeQL flags that as information exposure. The
+  // detail is in the telemetry event above.
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      scanned,
+      findings: alerts.length,
+      webhook,
+      summary: formatCallIntegrityAlert(alerts)
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 });
