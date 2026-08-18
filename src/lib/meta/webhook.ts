@@ -41,6 +41,7 @@ import {
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { rateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
+import { clearMetaTokenInvalid, reportMetaCallFailure } from "@/lib/meta/token-health";
 
 /** Serialized payload ceiling — a leadgen notification is tiny. */
 export const META_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
@@ -430,6 +431,9 @@ export async function processMetaLeadgenEvent(
         page_id: pageId
       }
     });
+    // The token demonstrably works, so heal the card without waiting for the
+    // owner to notice. Cheap: the write is a no-op when nothing was flagged.
+    await clearMetaTokenInvalid(connection.business_id);
     logger.info("meta lead processed", {
       businessId: connection.business_id,
       pageId,
@@ -439,6 +443,11 @@ export async function processMetaLeadgenEvent(
     });
     return true;
   } catch (err) {
+    // A dead token here loses the lead permanently: Meta gets a 200 and never
+    // redelivers, and there is no dead-letter row to replay from. Awaited, not
+    // fire-and-forget: this runs in a serverless handler that may freeze the
+    // moment it returns.
+    await reportMetaCallFailure(connection.business_id, err, { surface: "lead_fetch" });
     logger.warn("meta lead processing failed", {
       businessId: connection.business_id,
       pageId,

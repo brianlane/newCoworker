@@ -141,7 +141,12 @@ export function notificationLink(n: NotificationLike): NotificationLink {
   if (kind === "email_coworker_handoff") {
     return { href: "/dashboard/emails", label: "Open Emails" };
   }
-  if (kind === "byon_port" || kind === "byon_activation" || kind === "calendar_connection_broken") {
+  if (
+    kind === "byon_port" ||
+    kind === "byon_activation" ||
+    kind === "calendar_connection_broken" ||
+    kind === "meta_connection_broken"
+  ) {
     return { href: "/dashboard/integrations", label: "Open Integrations" };
   }
   if (

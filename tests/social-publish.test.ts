@@ -4,6 +4,7 @@
  * guidance, stale-publishing dead-lettering, and per-post error isolation.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MetaApiError } from "@/lib/meta/client";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => {
@@ -17,6 +18,10 @@ vi.mock("@/lib/social/db", async (importOriginal) => ({
   listPublishedPostsToRecheck: vi.fn(),
   patchSocialPost: vi.fn(),
   transitionSocialPost: vi.fn()
+}));
+vi.mock("@/lib/meta/token-health", () => ({
+  reportMetaCallFailure: vi.fn(async () => false),
+  clearMetaTokenInvalid: vi.fn(async () => undefined)
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -111,6 +116,7 @@ function connection(overrides: Partial<MetaConnectionRow> = {}): MetaConnectionR
     page_name: "Truly Insurance",
     account_name: "Owner",
     meta_user_id: null,
+    token_invalid_at: null,
     instagram_account_id: "ig-1",
     instagram_username: "trulyinsurance",
     dataset_id: null,
@@ -158,7 +164,7 @@ beforeEach(() => {
   mediaState.mockResolvedValue("exists");
 });
 
-describe("processSocialPostSweep — publish", () => {
+describe("processSocialPostSweep: publish", () => {
   it("fails a blocked scheduled row instead of promoting it", async () => {
     // Was "skips promotion", which left the row permanently due and let it
     // crowd the LIMIT page ahead of every other tenant (see the Starter
@@ -247,7 +253,7 @@ describe("processSocialPostSweep — publish", () => {
     listDue.mockResolvedValue([post()]);
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ promoted: 1, published: 1, failed: 0, staled: 0 });
-    // Claim precedes any Graph call — the guarded transition is the lock.
+    // Claim precedes any Graph call , the guarded transition is the lock.
     expect(transition).toHaveBeenCalledWith(
       BIZ,
       "p-1",
@@ -488,10 +494,10 @@ describe("processSocialPostSweep — publish", () => {
     expect(result.errors[0].message).toBe("string-throw");
   });
 
-  it("an ambiguous publish-call failure leaves the row unsettled — never stamps failed", async () => {
+  it("an ambiguous publish-call failure leaves the row unsettled , never stamps failed", async () => {
     // media_publish threw AFTER the container was ready: Meta may already
     // have published (Bugbot 220ce8d1). The row must stay `publishing` for
-    // container-status resolution — a failed stamp would invite a duplicate
+    // container-status resolution , a failed stamp would invite a duplicate
     // re-schedule. Both Error and non-Error throws.
     for (const thrown of [new Error("publish timeout"), "publish string throw"]) {
       vi.clearAllMocks();
@@ -512,7 +518,7 @@ describe("processSocialPostSweep — publish", () => {
 
   it("isolates a published-stamp crash to its post; the row stays resolvable", async () => {
     listDue.mockResolvedValue([post(), post({ id: "p-2" })]);
-    // Post 1: claim wins, the PUBLISHED stamp transition blows up — the
+    // Post 1: claim wins, the PUBLISHED stamp transition blows up , the
     // row stays `publishing` with its container id, for the stale sweep's
     // container-status check to settle. Post 2 sails through.
     transition
@@ -540,7 +546,7 @@ describe("processSocialPostSweep — publish", () => {
   });
 });
 
-describe("processSocialPostSweep — in-flight resolution", () => {
+describe("processSocialPostSweep: in-flight resolution", () => {
   /** An in-flight `publishing` row; started_at picks the resolution regime. */
   function inFlight(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     return post({ id: "p-old", status: "publishing", started_at: STARTED_STALE, ...overrides });
@@ -600,9 +606,9 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     );
   });
 
-  it("keeps waiting when the resolution publish call itself throws (ambiguous — even past stale)", async () => {
+  it("keeps waiting when the resolution publish call itself throws (ambiguous , even past stale)", async () => {
     // Same ambiguity rule as the live path: the throw may have surfaced
-    // after Meta published, so never dead-letter on it — the next pass
+    // after Meta published, so never dead-letter on it , the next pass
     // re-reads status_code, and a dead container expires to ERROR/EXPIRED.
     for (const thrown of [new Error("publish timeout"), "publish string throw"]) {
       vi.clearAllMocks();
@@ -618,7 +624,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     }
   });
 
-  it("completes a FINISHED container one cron beat later — no 15-minute wait, no duplicate risk", async () => {
+  it("completes a FINISHED container one cron beat later , no 15-minute wait, no duplicate risk", async () => {
     listInFlight.mockResolvedValue([
       inFlight({ started_at: STARTED_RESUMABLE, ig_creation_id: "container-7" })
     ]);
@@ -688,7 +694,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     );
   });
 
-  it("cannot complete a FINISHED container without a linked IG account — stale rules apply", async () => {
+  it("cannot complete a FINISHED container without a linked IG account , stale rules apply", async () => {
     listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     containerStatus.mockResolvedValue("FINISHED");
     loadConnection.mockResolvedValue(connection({ instagram_account_id: null }));
@@ -755,7 +761,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     loadConnection.mockResolvedValue(null);
     expect((await processSocialPostSweep(deps())).staled).toBe(1);
 
-    // The status check itself throws (Error and non-Error) — warn + failed.
+    // The status check itself throws (Error and non-Error) , warn + failed.
     for (const thrown of [new Error("graph down"), "graph string throw"]) {
       vi.clearAllMocks();
       listDue.mockResolvedValue([]);
@@ -799,7 +805,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
  * comments call the worse outcome. Settle truthfully instead, and only
  * refuse the half that would put NEW content live.
  */
-describe("processSocialPostSweep — Starter in-flight rows settle truthfully", () => {
+describe("processSocialPostSweep: Starter in-flight rows settle truthfully", () => {
   it("stamps published when Meta says the post already went live", async () => {
     vi.mocked(getBusiness).mockResolvedValue({
       id: BIZ,
@@ -907,7 +913,30 @@ describe("processSocialPostSweep — Starter in-flight rows settle truthfully", 
   });
 });
 
-describe("processSocialPostSweep — deleted-post re-check", () => {
+describe("processSocialPostSweep: a dead Meta token during publish", () => {
+  it("reports the dead token, not just an error string on the post row", async () => {
+    // This wiring silently never landed the first time: the import was added
+    // and the call was not, so a 190 here only ever became error_detail text
+    // and nothing flagged the connection or told the owner.
+    const { reportMetaCallFailure } = await import("@/lib/meta/token-health");
+    vi.mocked(reportMetaCallFailure).mockClear();
+
+    listDue.mockResolvedValue([post()]);
+    transition.mockResolvedValue(true);
+    createContainer.mockRejectedValue(
+      new MetaApiError("request_failed", "Session has expired", 400, 190)
+    );
+
+    await processSocialPostSweep(deps());
+    expect(vi.mocked(reportMetaCallFailure)).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(MetaApiError),
+      { surface: "instagram_publish" }
+    );
+  });
+});
+
+describe("processSocialPostSweep: deleted-post re-check", () => {
   /** A live published row, the shape the re-check pass reads. */
   function live(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     return post({

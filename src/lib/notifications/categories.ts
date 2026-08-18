@@ -21,6 +21,7 @@ export function resolveNotificationCategory(kind: string): NotificationCategory 
       return "team";
     case "byon_port":
     case "calendar_connection_broken":
+    case "meta_connection_broken":
       return "system";
     default:
       return "general";

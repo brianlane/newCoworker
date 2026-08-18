@@ -31,7 +31,8 @@ import {
   toPublicMetaConnection,
   listMetaConnectionsByMetaUserId,
   deleteMetaConnectionById,
-  setMetaConnectionUserId
+  setMetaConnectionUserId,
+  setMetaTokenInvalid
 } from "@/lib/db/meta-connections";
 
 type Chain = {
@@ -78,6 +79,7 @@ const PENDING = {
   page_token_encrypted: null,
   account_name: "Brian Lane",
   meta_user_id: null,
+  token_invalid_at: null,
   instagram_account_id: null,
   instagram_username: null,
   is_active: true,
@@ -482,7 +484,8 @@ describe("default service client", () => {
     await listMetaConnectionsByMetaUserId("asid-1");
     await deleteMetaConnectionById("mc-1");
     await setMetaConnectionUserId("mc-1", "asid-1");
-    expect(defaultClientSpy).toHaveBeenCalledTimes(13);
+    await setMetaTokenInvalid(BIZ, false);
+    expect(defaultClientSpy).toHaveBeenCalledTimes(14);
   });
 });
 
@@ -578,5 +581,75 @@ describe("setMetaConnectionUserId", () => {
     await expect(
       setMetaConnectionUserId("mc-1", "42", makeDb(chain({ data: null, error: { message: "u" } })))
     ).rejects.toThrow(/u/);
+  });
+});
+
+describe("setMetaTokenInvalid (the dead-token flag)", () => {
+  it("stamps only a connection that is not already flagged", async () => {
+    // Guarded so a fleet of failing calls cannot keep moving the timestamp
+    // forward and re-arming the owner alert.
+    const c = chain({ data: [{ id: "mc-1" }], error: null });
+    expect(await setMetaTokenInvalid(BIZ, true, makeDb(c))).toBe(true);
+    expect(c.is).toHaveBeenCalledWith("token_invalid_at", null);
+    expect(c.update.mock.calls[0][0]).toMatchObject({
+      token_invalid_at: expect.any(String)
+    });
+  });
+
+  it("reports false when it was already flagged, so only the first alerts", async () => {
+    expect(await setMetaTokenInvalid(BIZ, true, makeDb(chain({ data: [], error: null })))).toBe(
+      false
+    );
+  });
+
+  it("clears UNCONDITIONALLY, so a reconnect always heals", async () => {
+    const c = chain({ data: [{ id: "mc-1" }], error: null });
+    expect(await setMetaTokenInvalid(BIZ, false, makeDb(c))).toBe(true);
+    expect(c.update.mock.calls[0][0]).toMatchObject({ token_invalid_at: null });
+    // No is() guard on the clear path: it must work from any state.
+    expect(c.is).not.toHaveBeenCalled();
+  });
+
+  it("throws on error", async () => {
+    await expect(
+      setMetaTokenInvalid(BIZ, true, makeDb(chain({ data: null, error: { message: "t" } })))
+    ).rejects.toThrow(/t/);
+  });
+});
+
+describe("needs_reconnect is derived, never stored twice", () => {
+  it("is true exactly when token_invalid_at is set", () => {
+    const base = { ...ACTIVE, page_token_encrypted: "enc(x)" };
+    expect(
+      toPublicMetaConnection({ ...base, token_invalid_at: null } as never).needs_reconnect
+    ).toBe(false);
+    expect(
+      toPublicMetaConnection({
+        ...base,
+        token_invalid_at: "2026-08-18T00:00:00Z"
+      } as never).needs_reconnect
+    ).toBe(true);
+  });
+
+  it("is independent of is_active, the owner's own pause switch", () => {
+    // Conflating them would tell an owner who paused their connection that
+    // their token died, and make a dead token look like a deliberate pause.
+    const paused = toPublicMetaConnection({
+      ...ACTIVE,
+      page_token_encrypted: "enc(x)",
+      is_active: false,
+      token_invalid_at: null
+    } as never);
+    expect(paused.needs_reconnect).toBe(false);
+    expect(paused.is_active).toBe(false);
+
+    const dead = toPublicMetaConnection({
+      ...ACTIVE,
+      page_token_encrypted: "enc(x)",
+      is_active: true,
+      token_invalid_at: "2026-08-18T00:00:00Z"
+    } as never);
+    expect(dead.needs_reconnect).toBe(true);
+    expect(dead.is_active).toBe(true);
   });
 });

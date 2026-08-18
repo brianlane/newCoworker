@@ -147,10 +147,29 @@ export async function sendConversionLeadBody(
       status: res.status,
       body: text.slice(0, 300)
     });
+    // This path hand-rolls its own fetch instead of going through
+    // graphRequest, so it has to parse Meta's error codes itself. Without
+    // this the whole CAPI path is blind to code 190 and a dead token just
+    // burns all 10 upload attempts per event, silently.
+    let metaCode: number | undefined;
+    let metaSubcode: number | undefined;
+    try {
+      const parsed = JSON.parse(text) as {
+        error?: { code?: unknown; error_subcode?: unknown };
+      };
+      if (typeof parsed?.error?.code === "number") metaCode = parsed.error.code;
+      if (typeof parsed?.error?.error_subcode === "number") {
+        metaSubcode = parsed.error.error_subcode;
+      }
+    } catch {
+      // Non-JSON body: codes stay undefined, which callers read as "unknown".
+    }
     throw new MetaApiError(
       "request_failed",
       `Meta Conversions API POST /${datasetId}/events failed (${res.status})`,
-      res.status
+      res.status,
+      metaCode,
+      metaSubcode
     );
   }
   const payload = (await res.json().catch(() => null)) as {

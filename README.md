@@ -2475,6 +2475,52 @@ user token holding `ads_management` + `business_management`, and
 privilege list. Without a dataset the stage events simply defer, then expire
 at Meta's 7-day window; nothing errors.
 
+### When a Meta token dies, somebody gets told
+
+A page token can stop working with nobody touching New Coworker: the owner
+changes their Facebook password, loses their Page admin role, or removes the
+app. Every call then fails with Meta error code **190**.
+
+Until this shipped, nothing noticed. `META_ERROR_CODE_BAD_TOKEN` had **zero
+call sites**, so leads were dropped (Meta gets a 200 and never redelivers, and
+there is no dead-letter row), Messenger and Instagram replies burned three
+retries each and dead-lettered, Instagram publishing stamped the raw Graph
+error onto the post, and CAPI uploads burned all ten attempts per event and
+then expired at Meta's 7-day window. The integrations card said "Connected"
+the whole time.
+
+`isMetaTokenDead(err)` is the classifier, and it matches **only** code 190,
+never a timeout and never a 4xx in general: acting on it tells a paying
+customer their integration is broken and asks them to redo their OAuth, so a
+missed 190 costs one more failed call while a false one costs their trust.
+
+`reportMetaCallFailure(businessId, err, { surface })` is what catch blocks
+call. It ignores anything that is not a dead token, flags
+`meta_connections.token_invalid_at`, and escalates **once** via
+`dispatchUrgentNotification` (kind `meta_connection_broken`), following the
+`calendar_connection_broken` pattern: marker log written BEFORE the dispatch,
+because the failure mode of at-least-once here is repeatedly texting someone
+that their integration is broken. Wired at five surfaces: lead fetch,
+messenger send, comment reply, Instagram publish, CAPI upload.
+
+**`token_invalid_at` is a new column, not a reuse of `is_active`.** That flag
+is the OWNER'S PAUSE SWITCH: it renders as "paused" on the card, and both the
+publish sweep and the CAPI drain read it as "defer, do not fail". Overloading
+it would tell an owner who paused their own connection that their token died,
+and make a dead token look like a deliberate pause to two sweeps. The card
+reads a derived `needs_reconnect`, shows "Needs reconnect" (the same wording
+and tone Zoom and Slack use for a dead grant), and outranks "Connected",
+which is the whole point: the connection LOOKS complete.
+
+A dead token is terminal in the messenger worker (`meta_token_expired`, no
+retries: retrying cannot mint a credential), and a successful lead fetch
+clears the flag so a reconnect heals the card without waiting.
+
+**One thing that had to be fixed first:** `src/lib/meta/capi.ts` hand-rolls
+its own fetch instead of going through `graphRequest`, so it never carried
+Meta's error codes at all and the entire CAPI path was blind to 190. It now
+parses them the same way.
+
 ### The two required Meta app callbacks (deauthorize, data deletion)
 
 Meta requires every app that touches user data to answer two POSTs, and we

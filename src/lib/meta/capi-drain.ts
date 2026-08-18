@@ -24,6 +24,7 @@ import {
   sendConversionLeadBody
 } from "@/lib/meta/capi";
 import { logger } from "@/lib/logger";
+import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -289,6 +290,12 @@ export async function drainMetaCapiEvents(
     } catch (err) {
       const attempts = row.attempts + 1;
       const message = err instanceof Error ? err.message : String(err);
+      // Until capi.ts started parsing Meta's error codes this path could not
+      // see a dead token at all, so every queued event quietly burned all ten
+      // attempts and then expired at Meta's 7-day window. Now the first one
+      // tells the owner; the row still follows the normal attempt ladder,
+      // because a reconnect inside the window should still deliver it.
+      await reportMetaCallFailure(row.business_id, err, { surface: "capi_upload" });
       if (attempts >= CAPI_MAX_ATTEMPTS) {
         await markRow(db, row.id, {
           status: "failed",

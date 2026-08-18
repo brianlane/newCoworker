@@ -39,6 +39,12 @@ type StoredMetaConnectionRow = {
    * the backfill could not reach.
    */
   meta_user_id: string | null;
+  /**
+   * When Meta first answered code 190 for this connection. Null while the
+   * token is believed good. NOT the same as is_active, which is the owner's
+   * own pause switch: this one means the credential died.
+   */
+  token_invalid_at: string | null;
   /** IG professional account linked to the Page (null when none). */
   instagram_account_id: string | null;
   instagram_username: string | null;
@@ -66,11 +72,18 @@ export type PublicMetaConnectionRow = Omit<
   "user_token_encrypted" | "page_token_encrypted"
 > & {
   has_page_token: boolean;
+  /**
+   * Meta is refusing this connection's token and the owner must reconnect.
+   * Derived so the card never has to know about the column, and kept
+   * separate from is_active, which is the owner's own pause switch.
+   */
+  needs_reconnect: boolean;
 };
 
 const ALL_COLUMNS =
   "id,business_id,status,user_token_encrypted,page_id,page_name," +
-  "page_token_encrypted,account_name,meta_user_id,instagram_account_id,instagram_username," +
+  "page_token_encrypted,account_name,meta_user_id,token_invalid_at," +
+  "instagram_account_id,instagram_username," +
   "dataset_id,capi_enabled,is_active,created_at,updated_at";
 
 function toDecryptedRow(row: StoredMetaConnectionRow): MetaConnectionRow {
@@ -91,7 +104,11 @@ export function toPublicMetaConnection(
 ): PublicMetaConnectionRow {
   const { user_token_encrypted, page_token_encrypted, ...rest } = row;
   void user_token_encrypted;
-  return { ...rest, has_page_token: (page_token_encrypted ?? "").length > 0 };
+  return {
+    ...rest,
+    has_page_token: (page_token_encrypted ?? "").length > 0,
+    needs_reconnect: Boolean(row.token_invalid_at)
+  };
 }
 
 /** The business's connection with tokens decrypted, or null. */
@@ -237,6 +254,9 @@ export async function savePendingMetaConnection(
     // the page token always is — a pending row must never be able to send.
     page_token_encrypted: null,
     account_name: input.accountName,
+    // A fresh OAuth grant is exactly the fix for a dead token, so clear the
+    // flag here rather than making the owner wait for the next success.
+    token_invalid_at: null,
     // Only ever overwrite with a real value: a reconnect whose /me lookup
     // failed must not erase the id the callbacks depend on.
     ...(input.metaUserId ? { meta_user_id: input.metaUserId } : {}),
@@ -304,6 +324,7 @@ export async function activateMetaConnection(
       instagram_account_id: input.instagramAccountId ?? null,
       instagram_username: input.instagramUsername ?? null,
       dataset_id: input.datasetId ?? null,
+      token_invalid_at: null,
       is_active: true,
       updated_at: new Date().toISOString()
     })
@@ -422,6 +443,36 @@ export async function setMetaConnectionUserId(
     .eq("id", connectionId)
     .select("id");
   if (error) throw new Error(`setMetaConnectionUserId: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Flag or clear a connection's dead-token state.
+ *
+ * Idempotent on the way IN: the first 190 stamps the time and later ones
+ * leave it, so `token_invalid_at` answers "since when", which is what the
+ * owner alert's once-a-day guard and the card's copy both want. Returns
+ * whether this call was the one that flipped it, so only the first failure
+ * escalates to the owner.
+ */
+export async function setMetaTokenInvalid(
+  businessId: string,
+  invalid: boolean,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const query = db
+    .from("meta_connections")
+    .update({
+      token_invalid_at: invalid ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId);
+  // Only stamp a connection that is not already flagged, so a fleet of
+  // failing calls cannot keep moving the timestamp forward and re-arming the
+  // alert. Clearing is unconditional.
+  const { data, error } = await (invalid ? query.is("token_invalid_at", null) : query).select("id");
+  if (error) throw new Error(`setMetaTokenInvalid: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 

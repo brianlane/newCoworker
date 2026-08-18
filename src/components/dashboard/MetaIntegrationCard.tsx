@@ -33,6 +33,8 @@ type MetaConnection = {
   dataset_id: string | null;
   capi_enabled: boolean;
   is_active: boolean;
+  /** Meta is refusing the token; the owner must reconnect. */
+  needs_reconnect?: boolean;
   has_page_token: boolean;
   created_at: string;
   updated_at: string;
@@ -179,8 +181,13 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
     }
   }
 
-  const statusLabel =
-    connection?.status === "active"
+  // A rejected token outranks every other state: the connection LOOKS
+  // complete, which is exactly why "Connected" here is the wrong thing to
+  // show. Same wording and badge tone Zoom and Slack use for a dead grant.
+  const needsReconnect = Boolean(connection?.needs_reconnect);
+  const statusLabel = needsReconnect
+    ? "Needs reconnect"
+    : connection?.status === "active"
       ? "Connected"
       : connection
         ? "Almost there"
@@ -201,12 +208,27 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
         <Badge
           className="whitespace-nowrap"
           variant={
-            connection?.status === "active" ? "success" : connection ? "pending" : "neutral"
+            needsReconnect
+              ? "pending"
+              : connection?.status === "active"
+                ? "success"
+                : connection
+                  ? "pending"
+                  : "neutral"
           }
         >
           {statusLabel}
         </Badge>
       </div>
+
+      {needsReconnect ? (
+        <p className="text-xs text-spark-orange mt-3">
+          Facebook stopped accepting our requests for this account, so leads, replies, and
+          scheduled posts are paused. This usually means the Facebook password changed, the
+          Page role was removed, or the app was removed. Reconnect below to resume; nothing
+          is lost.
+        </p>
+      ) : null}
 
       {banner ? <p className="text-xs text-spark-orange mt-3">{banner}</p> : null}
 
