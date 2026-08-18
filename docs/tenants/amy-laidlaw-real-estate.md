@@ -391,6 +391,138 @@ These are mistakes already made on this account. Do not remake them.
   runs disturbed (none were parked at the time, and any that had been would
   resume by id).
 
+## Owner notification policy (Aug 17 2026)
+
+Amy's rule, in her words: "Notify owner on all appointments booked. Notify
+owner when a lead is not claimed with Red exclamation marks. Turn off all
+other notifications to owner (notify owner step if lead was routed to a team
+member aka owner isn't needed)."
+
+Applied by `scripts/oneshot/amy-owner-notice-policy.ts` across nine flows. It
+edits existing steps and appends sibling branch arms only: nothing is deleted
+and nothing is reordered, so no parked run changes instruction. Verified
+before applying by flattening live vs patched with the engine's own
+`flattenSteps`: the two flows that had runs in flight (the cadence with 9, the
+Clever spoke check with 8) came out IDENTICAL, and the five flows gaining an
+arm append at the end of the flattened order and had zero parked runs anyway.
+
+**Unclaimed notices carry `‼️‼️‼️‼️‼️`.** Every `ownerFallbackTemplate` (29 of
+them) plus the three unclaimed notices that are their own step: HomeLight
+`notify_unclaimed`, and the two `notify_no_phone` steps (ReferralExchange, New
+Lead Intake) where no phone means nobody was ever offered the lead. Same five
+characters as `FINAL_REMINDER_BANNER` in
+`supabase/functions/_shared/ai_flows/offer_reminders.ts`, and a test pins them
+equal so the account never grows a second "urgent" marker.
+
+**Seventeen routed notices are off**, by an unsatisfiable `when` rather than a
+deletion. ReferralExchange `notify`/`notify_both`/`notify_buyer`/`bp_forward`;
+Realtor.com `s5`/`bp_forward`; HomeLight `notify`/`lost_notify`/`late_notify`/
+`late2_notify`/`bp_forward`/`bp_eta_notify`; New Lead Intake `notify`; Clever
+Accept `notify`/`bp_forward`; Clever spoke check `wrap_up`; Clever Group Reply
+Connected `notify`.
+
+The guard is the var the step already reads, compared against
+`owner-notice-disabled-by-amy-2026-08-17`. It borrows an existing var because
+`parseAiFlowDefinition` rejects a `when` naming a var no earlier step
+produces, so an invented flag cannot be written at all. To switch one back on,
+delete its `when` in the builder.
+
+**Still ON**, because each means Amy has to do something: every unclaimed
+notice, the two `notify_no_phone` steps, Clever Accept `call_gap_alert` and
+`call_fail_alert` (the AI never dialled / the call failed), Clever Update
+Leads `capacity_notify`, HomeLight `late2_never_notify` (HomeLight never sent
+the contact details, so no outreach happened at all), and every
+`notify_lead_owner` step (those address a teammate, not Amy).
+
+**$1M+ leads.** `ownerDirectTemplate` now opens and closes with the same
+`‼️‼️‼️‼️‼️` banner instead of a row of asterisks, and the headline is
+capitalised to Amy's wording: `HIGH DOLLAR LEAD ($1M+) KEPT FOR YOU, NOT
+OFFERED TO THE TEAM.` (the source name survives where the template had one, so
+Realtor.com and HomeLight read `HIGH DOLLAR REALTOR.COM LEAD` and `HIGH DOLLAR
+HOMELIGHT REFERRAL`).
+
+The three attempts Amy asked for already existed: `ownerDirectNudges` re-sends
+in ALL CAPS at 10 and 30 minutes. What did NOT exist was anything afterwards.
+Each `*_team_unclaimed` branch carried one arm (`price_under_1m notEquals
+"no"`) and an empty `else`, so a $1M+ lead Amy never claimed fell out of the
+flow with no follow-up. A `*_tu_high` arm now tags "Needs Follow Up" so the
+cadence picks it up. Added to ReferralExchange, Realtor.com, New Lead Intake,
+Clever Accept and Follow Up Requested.
+
+**"Unclaimed by owner" is NOT `claimed_agent`, and this is the trap in the
+whole feature.** `ownerDirectResume` says it outright: an owner reply "stops
+the reminders; claimed_agent stays 'none' throughout (the owner acking is NOT
+a teammate claim)". A takeover gated on `claimed_agent == "none"` would
+therefore have swept every $1M+ lead Amy DID acknowledge into the AI cadence.
+The arm gates on the marker the worker appends to `actions_taken` when the
+alert and both reminders all went unanswered ("owner did not acknowledge the
+high-value alert after two reminders"), which is exactly Amy's "three attempts
+to owner and unclaimed by owner". A test pins that literal against the worker
+source, since a copied string that drifts would stop matching with no failure
+anywhere.
+
+That also removes the need for any waiting step on the owner-direct flows: the
+park holds the run until she replies or the second reminder lapses at 30
+minutes, so the verdict is already in `actions_taken` when the branch
+evaluates. A late "1" cannot change it either, because the exhaustion path
+deletes `step_index` and the late-claim matcher then skips the run entirely.
+
+**Follow Up Requested is the exception, in two ways.** It has no
+`ownerDirectTemplate`, so its $1M+ leads really are offered to the team, the
+exhaustion marker can never appear, and its arm gates on `claimed_agent ==
+"none"` in the normal way. Because it IS a team offer, it also keeps the
+120-minute grace wait its sibling under-$1M arm uses (copied from that arm,
+not hardcoded): the wait is what leaves room for a late claim, and tagging the
+moment the offer resolves would start the AI cadence while a teammate could
+still be picking the lead up.
+
+**HomeLight is exempt from that arm**, same reason it is exempt from the
+under-$500K gate: it withholds the lead's phone and email until a claim
+happens, so a text-and-call cadence would have nothing to dial. Its banner and
+capitals still apply.
+
+**Under $1M needed no change.** `price_under_1m` already gated the takeover in
+every flow that has one, and buyers reach it (they always read `price_gate:
+"team"`, so they clear the `notEquals "ai"` guard).
+
+## Booking alerts
+
+`maybeAlertUnassignedBooking` already fired on EVERY confirmed booking, not
+only unowned ones: it resolves an ownership state (`solo` / `covered` /
+`unowned`) and dispatches on all three. The flag name
+`unassigned_booking_alerts` is the misleading part. Amy's row has it ON, so
+"notify owner on all appointments booked" needed no flow change.
+
+What it could not do was tell anyone except the owner. Two new columns on
+`notification_preferences` (migration `20260822180406_booking_alert_audience`):
+
+- `booking_alert_audience`: `owner` (default, and exactly today's behavior for
+  every tenant) / `employees` / `both`.
+- `booking_alert_member_ids`: null or empty means every active member,
+  otherwise just those ids.
+
+The employee leg is an SMS, resolved by
+`src/lib/calendar-tools/booking-alert-recipients.ts`. Inactive members are
+dropped even when named explicitly, members with no phone are dropped (this
+leg is SMS only), and two roster rows sharing a number get one message. A send
+that fails is logged per member so one dead number does not cost the others
+theirs. Amy is left on the `owner` default; the capability is what shipped.
+
+On `both`, a member whose number is the owner's alert number is dropped from
+the employee leg: they already got this booking as the owner alert. **That is
+Amy specifically**: she is an active row on her own roster carrying the same
+mobile number her `notification_preferences.phone_number` holds, so without
+the rule she would get two texts per booking. On `employees` no owner alert
+goes out, so the same person IS texted.
+
+**Her AI still cannot book.** `calendar_book_appointment` is enabled only for
+`agent_key = "dashboard"` and is FALSE for sms, voice, webchat and email, so
+no customer-facing surface can create an appointment. Dashboard bookings are
+also excluded from this alert at the call site
+(`bookSurface === "dashboard"` passes no `alertSurface`), on the reasoning
+that the owner already knows what they just booked. That leaves the public
+booking page as the only producer of a booking alert on this tenant today.
+
 ## One-shots
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
@@ -404,6 +536,10 @@ Whether it has run is in the applied_oneshots ledger.
 Which of these actually ran, and when, is in the ledger, not here:
 `select script, applied_at from applied_oneshots where business_id =
 '621a5b0d-c2ad-449f-9d74-9d50e7b27fa3' order by applied_at desc`.
+
+Account-wide owner notices: `amy-owner-notice-policy.ts` (Aug 17 2026, nine
+flows: banners, silenced routed notices, the $1M+ path; `--revert --apply`
+restores every definition from the ledger).
 
 Clever: `seed-clever-lead-accept-aiflow.ts`,
 `seed-clever-lead-group-reply-aiflow.ts`, `seed-clever-cue-aiflow.ts`,

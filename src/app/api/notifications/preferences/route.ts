@@ -23,6 +23,9 @@ const patchSchema = z.object({
   aiflow_failure_alerts: z.boolean().optional(),
   customer_reply_alerts: z.boolean().optional(),
   unassigned_booking_alerts: z.boolean().optional(),
+  booking_alert_audience: z.enum(["owner", "employees", "both"]).optional(),
+  /** Null (or an empty array) means every active member. */
+  booking_alert_member_ids: z.array(z.string().uuid()).nullable().optional(),
   category_leads: z.boolean().optional(),
   category_team: z.boolean().optional(),
   category_system: z.boolean().optional(),
