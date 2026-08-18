@@ -233,6 +233,15 @@ export type UpdateAiFlowInput = {
   name?: string;
   enabled?: boolean;
   definition?: unknown;
+  /**
+   * Provenance handed to the ai_flows_snapshot_definition trigger, which
+   * copies it onto the version row it writes and then clears it (migration
+   * 20260822182135), so the columns are a write-only carrier, never readable
+   * state. Best effort: the snapshot happens either way, an unstamped edit
+   * just lands in the history with a null source.
+   */
+  editSource?: string;
+  editActor?: string | null;
 };
 
 export async function updateAiFlow(
@@ -248,6 +257,11 @@ export async function updateAiFlow(
   if (Object.keys(patch).length === 0) {
     throw new Error("updateAiFlow: nothing to update");
   }
+  // Stamped alongside the change, never counted as a change itself: an
+  // update carrying ONLY provenance would rewrite the attribution of an edit
+  // that already happened, so the emptiness check above runs first.
+  if (input.editSource !== undefined) patch.edit_source = input.editSource;
+  if (input.editActor !== undefined) patch.edit_actor = input.editActor;
   const db = await resolveDb(client);
   const { data, error } = await db
     .from("ai_flows")

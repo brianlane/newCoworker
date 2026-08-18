@@ -33,6 +33,7 @@ const ALL_ON: ActionToolGates = {
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,
+  undo_aiflow_edit: true,
   generate_image: true,
   update_notification_preferences: true,
   flag_contact_spam: true,
@@ -230,6 +231,7 @@ describe("declarations & naming", () => {
       list_aiflows: false,
       run_aiflow: false,
       edit_aiflow: false,
+      undo_aiflow_edit: false,
       generate_image: false,
       update_notification_preferences: false,
       flag_contact_spam: false,
@@ -1058,6 +1060,73 @@ describe("list_aiflows / run_aiflow", () => {
   });
 });
 
+describe("undo_aiflow_edit", () => {
+  const FLOW = {
+    id: "11111111-aaaa-4aaa-8aaa-111111111111",
+    name: "Lead follow-up",
+    enabled: true,
+    definition: { version: 1, trigger: { channel: "manual" }, steps: [] }
+  };
+
+  it("delegates to the shared core and carries the turn's provenance", async () => {
+    const undoFlowEdit = vi.fn(async () => ({
+      ok: true as const,
+      flowId: FLOW.id,
+      flowName: FLOW.name,
+      restoredFrom: "2026-08-18T04:00:00Z",
+      undoneSource: "ai_edit_sms",
+      note: "reverted"
+    }));
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      undoFlowEdit: undoFlowEdit as never,
+      flowEditSource: "ai_edit_sms",
+      flowEditActor: "+15555550100"
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "undo_aiflow_edit", args: { flow: "Lead follow-up" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: true, flowId: FLOW.id });
+    expect(undoFlowEdit).toHaveBeenCalledWith(
+      BIZ,
+      { flow: "Lead follow-up" },
+      expect.objectContaining({ editSource: "ai_edit_sms", editActor: "+15555550100" })
+    );
+  });
+
+  it("omits provenance keys entirely when the surface supplied none", async () => {
+    const undoFlowEdit = vi.fn(
+      async (_biz: string, _args: { flow: string }, _deps?: Record<string, unknown>) => ({
+        ok: true as const,
+        flowId: FLOW.id,
+        flowName: FLOW.name,
+        restoredFrom: "2026-08-18T04:00:00Z",
+        undoneSource: null,
+        note: "reverted"
+      })
+    );
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      undoFlowEdit: undoFlowEdit as never
+    });
+    await executeActionTool(BIZ, { name: "undo_aiflow_edit", args: { flow: FLOW.id } }, deps);
+    const passed = (undoFlowEdit.mock.calls[0][2] ?? {}) as Record<string, unknown>;
+    expect(passed).not.toHaveProperty("editSource");
+    expect(passed).not.toHaveProperty("editActor");
+  });
+
+  it("refuses invalid args without touching the core", async () => {
+    const undoFlowEdit = vi.fn();
+    const deps = happyDeps({ undoFlowEdit: undoFlowEdit as never });
+    const res = await executeActionTool(BIZ, { name: "undo_aiflow_edit", args: {} }, deps);
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { message: string }).message).toMatch(/^invalid_args:/);
+    expect(undoFlowEdit).not.toHaveBeenCalled();
+  });
+});
+
 describe("edit_aiflow", () => {
   const FLOW = {
     id: "11111111-aaaa-4aaa-8aaa-111111111111",
@@ -1074,6 +1143,31 @@ describe("edit_aiflow", () => {
     trigger: { channel: "manual" },
     steps: [{ id: "s1", type: "notify_owner", message: "updated" }]
   };
+
+  it("stamps the turn's provenance onto the persisted edit", async () => {
+    // Attribution is the difference between "something rewrote this flow at
+    // 1am" and "the SMS coworker did". It must not come from the model.
+    const persistFlowUpdate = vi.fn(async () => ({ ...FLOW, definition: EDITED }));
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: EDITED as never,
+        warnings: []
+      })) as never,
+      persistFlowUpdate: persistFlowUpdate as never,
+      flowEditSource: "ai_edit_sms",
+      flowEditActor: "+15555550100"
+    });
+    await executeActionTool(
+      BIZ,
+      { name: "edit_aiflow", args: { flow: FLOW.id, instructions: "reword it" } },
+      deps
+    );
+    expect(persistFlowUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ editSource: "ai_edit_sms", editActor: "+15555550100" })
+    );
+  });
 
   it("delegates to the shared core: compile against the current definition, then persist in place", async () => {
     const compileFlowEdit = vi.fn(async () => ({

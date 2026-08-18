@@ -65,6 +65,7 @@ const ALL_ACTION_GATES: ActionToolGates = {
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,
+  undo_aiflow_edit: true,
   generate_image: false,
   update_notification_preferences: true,
   flag_contact_spam: true,

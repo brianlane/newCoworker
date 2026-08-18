@@ -337,6 +337,45 @@ describe("updateAiFlow", () => {
     );
     expect(builder.is).toHaveBeenCalledWith("deleted_at", null);
   });
+  it("stamps edit provenance alongside the change", async () => {
+    const { db, builder } = makeDb({ single: FLOW_ROW });
+    await updateAiFlow(
+      {
+        businessId: "biz-1",
+        id: "flow-1",
+        definition: VALID_DEF,
+        editSource: "ai_edit_sms",
+        editActor: "+16025551212"
+      },
+       
+      db as any
+    );
+    expect(builder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        edit_source: "ai_edit_sms",
+        edit_actor: "+16025551212"
+      })
+    );
+  });
+  it("a null actor is still stamped, so the history says 'unattributed', not 'unstamped'", async () => {
+    const { db, builder } = makeDb({ single: FLOW_ROW });
+    await updateAiFlow(
+      { businessId: "biz-1", id: "flow-1", definition: VALID_DEF, editActor: null },
+       
+      db as any
+    );
+    expect(builder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ edit_actor: null })
+    );
+    expect(builder.update.mock.calls[0][0]).not.toHaveProperty("edit_source");
+  });
+  it("provenance alone is NOT a change: it never rewrites an already-applied edit's attribution", async () => {
+    const { db } = makeDb({ single: FLOW_ROW });
+    await expect(
+       
+      updateAiFlow({ businessId: "biz-1", id: "flow-1", editSource: "mcp" }, db as any)
+    ).rejects.toThrow("nothing to update");
+  });
   it("throws when nothing to update", async () => {
     const { db } = makeDb({ single: FLOW_ROW });
     await expect(

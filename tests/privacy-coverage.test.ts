@@ -86,6 +86,8 @@ const EXEMPT: Record<string, string> = {
 
   // Tenant/platform configuration: no end-customer person rows.
   agent_tool_settings: "per-tenant tool toggles",
+  ai_flow_definition_versions:
+    "prior versions of the same owner-authored flow definitions ai_flows is exempted for; FK cascades from ai_flows",
   ai_flow_library_downloads: "library install ledger",
   ai_flows: "flow definitions authored by the owner",
   aiflow_url_memory: "flow URL fetch cache keyed by URL",

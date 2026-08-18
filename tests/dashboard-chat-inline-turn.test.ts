@@ -593,6 +593,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     list_aiflows: true,
     run_aiflow: true,
     edit_aiflow: true,
+    undo_aiflow_edit: true,
     generate_image: true,
     update_notification_preferences: true,
     flag_contact_spam: true,
@@ -617,12 +618,35 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       "list_aiflows",
       "run_aiflow",
       "edit_aiflow",
+      "undo_aiflow_edit",
       "generate_image",
       "update_notification_preferences",
       "flag_contact_spam",
       "set_contact_reply_mode",
       "manage_employee"
     ]);
+  });
+
+  it("passes the surface's flow-edit provenance to every action tool call", async () => {
+    const runActionTool = vi.fn(
+      async (_biz: string, _call: unknown, _deps?: Record<string, unknown>) => ({ ok: true })
+    );
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("edit_aiflow", { flow: "f", instructions: "i" }))
+      .mockResolvedValueOnce(textStep("done"));
+    await runInlineChatTurn(
+      baseArgs({
+        actionToolGates: ALL_ON,
+        flowEditSource: "ai_edit_sms",
+        flowEditActor: "+15555550100"
+      }),
+      { chatStep, runActionTool }
+    );
+    expect(runActionTool.mock.calls[0][2]).toMatchObject({
+      flowEditSource: "ai_edit_sms",
+      flowEditActor: "+15555550100"
+    });
   });
 
   it("omits Settings-disabled action tools and declares none without gates", async () => {
@@ -658,10 +682,16 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       runActionTool
     });
     expect(res).toMatchObject({ ok: true, content: 'Sent: "This is a test message."' });
-    expect(runActionTool).toHaveBeenCalledWith(BIZ, {
-      name: "send_sms",
-      args: { toE164: "+15145188192", body: "This is a test message." }
-    });
+    expect(runActionTool).toHaveBeenCalledWith(
+      BIZ,
+      {
+        name: "send_sms",
+        args: { toE164: "+15145188192", body: "This is a test message." }
+      },
+      // Flow-edit provenance rides the deps on EVERY call, so an edit made
+      // in a turn is attributable without the model being asked who it is.
+      { flowEditSource: "ai_edit", flowEditActor: null }
+    );
     const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
       functionResponse: { name: string; response: { result: { messageId: string } } };
     };
@@ -960,6 +990,46 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) expect(res2.content).toContain("Automation was updated as requested");
+  });
+
+  it("a successful undo_aiflow_edit is side-effect pinned, wrap-up failure keeps ok:true with the restore note", async () => {
+    // A restore overwrites the live definition as irreversibly as an edit
+    // writes one. Unpinned, a fallback rerun would undo a SECOND time and
+    // step back past the change the owner meant to keep.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      flowId: "flow-1",
+      flowName: "Lead follow-up"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("undo_aiflow_edit", { flow: "Lead follow-up" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain(
+        'Automation "Lead follow-up" was put back to the version before the last change'
+      );
+    }
+
+    // Nameless result (defensive arm): the note still lands, without quotes.
+    const namelessTool = vi.fn(async () => ({ ok: true, flowId: "flow-1" }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("undo_aiflow_edit", { flow: "Lead follow-up" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: namelessTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) {
+      expect(res2.content).toContain("Automation was put back to the version before the last change");
+    }
   });
 
   it("a successful update_notification_preferences is side-effect pinned, wrap-up failure keeps ok:true with the changes", async () => {

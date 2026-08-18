@@ -75,7 +75,8 @@ export async function PATCH(request: Request, { params }: Ctx) {
       id,
       name: body.name,
       enabled: body.enabled,
-      definition: body.definition
+      definition: body.definition,
+      editSource: "dashboard"
     });
     return successResponse(row);
   } catch (err) {

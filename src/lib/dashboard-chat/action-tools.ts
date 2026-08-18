@@ -38,6 +38,10 @@ import {
 import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { listAiFlows, enqueueAiFlowRun, updateAiFlow } from "@/lib/ai-flows/db";
 import {
+  undoAiFlowEditTool,
+  undoAiflowToolArgsSchema
+} from "@/lib/ai-flows/undo-flow-tool";
+import {
   listAiFlowsTool,
   runAiFlowTool,
   runAiflowToolArgsSchema
@@ -68,6 +72,7 @@ export const ACTION_TOOL_NAMES = [
   "list_aiflows",
   "run_aiflow",
   "edit_aiflow",
+  "undo_aiflow_edit",
   "generate_image",
   "update_notification_preferences",
   "flag_contact_spam",
@@ -109,6 +114,14 @@ export type ActionToolGates = {
    * automations") separate from run_aiflow.
    */
   edit_aiflow: boolean;
+  /**
+   * Put back the definition the last edit replaced. Shares the `edit_aiflow`
+   * Settings toggle rather than carrying its own (the same way list_aiflows
+   * shares run_aiflow's): a surface allowed to rewrite a live automation
+   * must always be allowed to take that rewrite back, and a toggle that
+   * could disable only the undo would be a footgun with no use case.
+   */
+  undo_aiflow_edit: boolean;
   /**
    * The dashboard `generate_image` Settings toggle. The Rowboat
    * OwnerCoworker has had `dashboard_generate_image` since the tool
@@ -384,6 +397,19 @@ const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const UNDO_AIFLOW_EDIT_DECLARATION: GeminiFunctionDeclaration = {
+  name: "undo_aiflow_edit",
+  description:
+    "Undo the LAST change made to one of the business's existing AiFlow automations, putting the exact previous version back. Use this when the owner says a recent edit was wrong, not what they asked for, or should be reverted (\"put that back\", \"undo what you just changed\", \"that broke it\"). Do NOT try to reverse an edit by calling edit_aiflow with the opposite instruction: that generates a THIRD version rather than restoring the original. Takes effect immediately, and is itself reversible (the undo is recorded too). `flow` is the flow's id or its exact-enough name. Restores the definition and the name; it deliberately does NOT switch the automation on or off.",
+  parameters: {
+    type: "object",
+    properties: {
+      flow: { type: "string", description: "Flow id (uuid) or name (case-insensitive match)." }
+    },
+    required: ["flow"]
+  }
+};
+
 const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
   name: "generate_image",
   description:
@@ -548,6 +574,7 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   list_aiflows: LIST_AIFLOWS_DECLARATION,
   run_aiflow: RUN_AIFLOW_DECLARATION,
   edit_aiflow: EDIT_AIFLOW_DECLARATION,
+  undo_aiflow_edit: UNDO_AIFLOW_EDIT_DECLARATION,
   generate_image: GENERATE_IMAGE_DECLARATION,
   update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION,
   flag_contact_spam: FLAG_CONTACT_SPAM_DECLARATION,
@@ -643,6 +670,8 @@ const joinWaitlistArgsSchema = z.object({
 // edit-flow-tool.ts) so every caller accepts identical shapes.
 const runAiflowArgsSchema = runAiflowToolArgsSchema;
 const editAiflowArgsSchema = editAiflowToolArgsSchema;
+
+const undoAiflowArgsSchema = undoAiflowToolArgsSchema;
 
 const flagContactSpamArgsSchema = z.object({
   phone: z.string().min(5).max(32),
@@ -749,6 +778,10 @@ export type ActionToolDeps = {
   flagSpam?: typeof flagContactSpam;
   setReplyMode?: typeof setContactTextingMode;
   manageRoster?: typeof manageEmployee;
+  undoFlowEdit?: typeof undoAiFlowEditTool;
+  /** Flow-edit provenance for the snapshot trigger; see edit-flow-tool.ts. */
+  flowEditSource?: string;
+  flowEditActor?: string | null;
 };
 
 /**
@@ -782,6 +815,7 @@ export async function executeActionTool(
   const flagSpam = deps.flagSpam ?? flagContactSpam;
   const setReplyMode = deps.setReplyMode ?? setContactTextingMode;
   const manageRoster = deps.manageRoster ?? manageEmployee;
+  const undoAiFlowEdit = deps.undoFlowEdit ?? undoAiFlowEditTool;
   /* c8 ignore stop */
 
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
@@ -1031,7 +1065,23 @@ export async function executeActionTool(
         return await editAiFlowTool(businessId, parsed.data, {
           listFlows,
           compileEdit: compileFlowEdit,
-          persistUpdate: persistFlowUpdate
+          persistUpdate: persistFlowUpdate,
+          ...(deps.flowEditSource !== undefined ? { editSource: deps.flowEditSource } : {}),
+          ...(deps.flowEditActor !== undefined ? { editActor: deps.flowEditActor } : {})
+        });
+      }
+      case "undo_aiflow_edit": {
+        const parsed = undoAiflowArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // Shared core (undo-flow-tool.ts): restore the previous definition
+        // through updateAiFlow, so the restore validates and is snapshotted
+        // like any other edit.
+        return await undoAiFlowEdit(businessId, parsed.data, {
+          listFlows,
+          ...(deps.flowEditSource !== undefined ? { editSource: deps.flowEditSource } : {}),
+          ...(deps.flowEditActor !== undefined ? { editActor: deps.flowEditActor } : {})
         });
       }
       case "generate_image": {

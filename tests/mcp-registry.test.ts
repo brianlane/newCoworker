@@ -63,6 +63,8 @@ describe("allMcpTools", () => {
         "update_coworker_tool_settings",
         "update_employee",
         "update_flow",
+        "list_flow_versions",
+        "restore_flow_version",
         "update_notification_preferences"
       ].sort()
     );

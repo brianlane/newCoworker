@@ -33,6 +33,10 @@ vi.mock("@/lib/ai-flows/db", () => ({
 }));
 vi.mock("@/lib/ai-flows/webhook-events", () => ({ processWebhookFlowEvent: vi.fn() }));
 vi.mock("@/lib/ai-flows/manual-run-tool", () => ({ runAiFlowTool: vi.fn() }));
+vi.mock("@/lib/ai-flows/versions", () => ({
+  listFlowVersions: vi.fn(),
+  restoreFlowVersion: vi.fn()
+}));
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn() }));
 
 import { McpToolError, requireMcpBusinessRole } from "@/lib/mcp/auth";
@@ -42,6 +46,8 @@ import {
   getFlowTool,
   listFlowsTool,
   runFlowTool,
+  listFlowVersionsTool,
+  restoreFlowVersionTool,
   setFlowEnabledTool,
   triggerFlowTool,
   updateFlowTool,
@@ -59,6 +65,7 @@ import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
 import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flows/db";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
+import { listFlowVersions, restoreFlowVersion } from "@/lib/ai-flows/versions";
 import { rateLimit } from "@/lib/rate-limit";
 import { runTool } from "./helpers/run-mcp-tool";
 
@@ -238,7 +245,9 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
     expect(updateAiFlow).toHaveBeenCalledWith({
       businessId: "biz-1",
       id: FLOW_ID,
-      name: "Renamed"
+      name: "Renamed",
+      editSource: "mcp",
+      editActor: "user-1"
     });
   });
 
@@ -252,7 +261,11 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
     expect(updateAiFlow).toHaveBeenCalledWith({
       businessId: "biz-1",
       id: FLOW_ID,
-      definition: DEFINITION
+      definition: DEFINITION,
+      // Stamped so the definition history can say a connector made this
+      // whole-definition replace, not the owner in the dashboard.
+      editSource: "mcp",
+      editActor: "user-1"
     });
     expect(result).toMatchObject({ updated: true, flow_id: FLOW_ID });
   });
@@ -395,5 +408,88 @@ describe("run_flow", () => {
     vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 1, remaining: 0, reset: 0 });
     await expect(runTool(runFlowTool, { flow: "F" }, AUTH)).rejects.toBeInstanceOf(McpToolError);
     expect(runAiFlowTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("list_flow_versions / restore_flow_version", () => {
+  const VERSION = {
+    id: 9,
+    flow_id: FLOW_ID,
+    business_id: "biz-1",
+    definition: { version: 1, trigger: { channel: "manual" }, steps: [{ id: "s1" }] },
+    name: "Lead follow-up",
+    enabled: true,
+    source: "ai_edit_sms",
+    actor: "+15555550100",
+    replaced_at: "2026-08-18T04:00:00Z"
+  };
+
+  it("lists history newest-first with the step count and the surface that changed it", async () => {
+    vi.mocked(listFlowVersions).mockResolvedValue([VERSION] as never);
+    const res = await runTool(listFlowVersionsTool, { flow_id: FLOW_ID }, AUTH);
+    expect(res).toEqual({
+      versions: [
+        {
+          version_id: 9,
+          replaced_at: "2026-08-18T04:00:00Z",
+          source: "ai_edit_sms",
+          actor: "+15555550100",
+          name: "Lead follow-up",
+          step_count: 1
+        }
+      ]
+    });
+  });
+
+  it("restores the most recent version when no version_id is given", async () => {
+    vi.mocked(restoreFlowVersion).mockResolvedValue({
+      ok: true,
+      flowId: FLOW_ID,
+      flowName: "Lead follow-up",
+      versionId: 9,
+      replacedAt: "2026-08-18T04:00:00Z",
+      undoneSource: "ai_edit_sms"
+    } as never);
+    const res = await runTool(restoreFlowVersionTool, { flow_id: FLOW_ID }, AUTH);
+    expect(res).toMatchObject({ restored: true, flow_id: FLOW_ID });
+    expect(restoreFlowVersion).toHaveBeenCalledWith(
+      "biz-1",
+      FLOW_ID,
+      expect.objectContaining({ editSource: "mcp_restore", editActor: "user-1" })
+    );
+    // The restore is itself an edit, so it must be attributed too.
+    expect(vi.mocked(restoreFlowVersion).mock.calls[0][2]).not.toHaveProperty("versionId");
+  });
+
+  it("targets an explicit version_id when given", async () => {
+    vi.mocked(restoreFlowVersion).mockResolvedValue({
+      ok: true,
+      flowId: FLOW_ID,
+      flowName: "Lead follow-up",
+      versionId: 4,
+      replacedAt: "2026-08-17T04:00:00Z",
+      undoneSource: null
+    } as never);
+    await runTool(restoreFlowVersionTool, { flow_id: FLOW_ID, version_id: 4 }, AUTH);
+    expect(vi.mocked(restoreFlowVersion).mock.calls[0][2]).toMatchObject({ versionId: 4 });
+  });
+
+  it("surfaces a refusal as a tool error rather than a silent no-op", async () => {
+    vi.mocked(restoreFlowVersion).mockResolvedValue({
+      ok: false,
+      message: "This automation has no earlier version recorded, so there is nothing to undo."
+    } as never);
+    await expect(
+      runTool(restoreFlowVersionTool, { flow_id: FLOW_ID }, AUTH)
+    ).rejects.toThrow(/nothing to undo/);
+  });
+
+  it("both tools require the manage_aiflows role", async () => {
+    vi.mocked(requireMcpBusinessRole).mockRejectedValueOnce(new McpToolError("nope"));
+    await expect(runTool(listFlowVersionsTool, { flow_id: FLOW_ID }, AUTH)).rejects.toThrow("nope");
+    vi.mocked(requireMcpBusinessRole).mockRejectedValueOnce(new McpToolError("nope"));
+    await expect(
+      runTool(restoreFlowVersionTool, { flow_id: FLOW_ID }, AUTH)
+    ).rejects.toThrow("nope");
   });
 });

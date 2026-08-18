@@ -259,6 +259,12 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // An edit_aiflow update is persisted to the live flow the moment the
   // core returns ok — a fallback rerun would re-apply (or double-apply) it.
   "edit_aiflow",
+  // An undo restores a definition over the live one just as irreversibly as
+  // an edit writes one. Unpinned, a wrap-up failure would let the worker
+  // fallback re-run the message and undo a SECOND time (stepping back past
+  // the change the owner actually meant to keep), or answer as though
+  // nothing had happened when it already had.
+  "undo_aiflow_edit",
   // A generated image is stored, metered against the AI budget, and burns
   // one of the 3 per-conversation slots the moment the core returns ok —
   // a worker-fallback rerun would bill and consume a slot all over again.
@@ -326,6 +332,10 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   if (name === "edit_aiflow") {
     const flowName = (r as { flowName?: unknown }).flowName;
     return `Automation${typeof flowName === "string" ? ` "${flowName}"` : ""} was updated as requested, it can be reviewed at /dashboard/aiflows.`;
+  }
+  if (name === "undo_aiflow_edit") {
+    const flowName = (r as { flowName?: unknown }).flowName;
+    return `Automation${typeof flowName === "string" ? ` "${flowName}"` : ""} was put back to the version before the last change, it can be reviewed at /dashboard/aiflows.`;
   }
   if (name === "generate_image") {
     // The markdown IS the deliverable: without it a degraded wrap-up
@@ -627,6 +637,14 @@ export async function runInlineChatTurn(
      * card attributes the burn honestly.
      */
     spendSurface?: string;
+    /**
+     * Provenance stamped onto any AiFlow this turn edits, so the definition
+     * history says which surface made the change (migration 20260822182135).
+     * Per-turn context rather than a tool argument: the model supplies what
+     * to change, never who is changing it.
+     */
+    flowEditSource?: string;
+    flowEditActor?: string | null;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -634,7 +652,13 @@ export async function runInlineChatTurn(
   const chatStep = deps.chatStep ?? geminiChatStep;
   const compileFlow = deps.compileFlow ?? compileAiFlowFromDescription;
   const lookupKnowledge = deps.lookupKnowledge ?? lookupBusinessKnowledge;
-  const runActionTool = deps.runActionTool ?? executeActionTool;
+  const baseRunActionTool = deps.runActionTool ?? executeActionTool;
+  // Wrap rather than widen executeToolCall's parameter list: provenance is
+  // the same for every call in the turn, so it belongs on the bound dep.
+  const flowEditSource = args.flowEditSource ?? "ai_edit";
+  const flowEditActor = args.flowEditActor ?? null;
+  const runActionTool: typeof executeActionTool = (targetBusinessId, call, callDeps) =>
+    baseRunActionTool(targetBusinessId, call, { ...callDeps, flowEditSource, flowEditActor });
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };

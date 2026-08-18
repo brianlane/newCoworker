@@ -205,7 +205,8 @@ async function performApplyWrites(args: {
         businessId: args.businessId,
         id: existingFlowId,
         name: plan.flow.name,
-        definition: plan.flow.definition
+        definition: plan.flow.definition,
+        editSource: "white_glove"
       },
       db
     );
