@@ -11,6 +11,10 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
+import { extendPrioritySupport } from "@/lib/db/white-glove-offers";
+import { clearPrioritySupportNudgeStamp } from "@/lib/db/businesses";
+import { WHITE_GLOVE_PRIORITY_SUPPORT_DAYS } from "@/lib/plans/white-glove";
+import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -40,6 +44,8 @@ export type WhiteGloveIntakeRow = {
   applied_flow_id: string | null;
   /** Apply-in-progress lease stamp; see claimWhiteGloveIntakeForBusiness. */
   apply_started_at: string | null;
+  /** When this completed questionnaire opened a priority support window; NULL = never. */
+  priority_support_granted_at: string | null;
 };
 
 /**
@@ -225,4 +231,124 @@ export async function markWhiteGloveIntakeApplied(
 export function whiteGloveIntakeUrl(intake: Pick<WhiteGloveIntakeRow, "token">): string {
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   return `${appUrl}/intake/${intake.token}`;
+}
+
+/** Days of priority support a COMPLETED questionnaire opens, matching the packages. */
+export const INTAKE_PRIORITY_SUPPORT_DAYS = WHITE_GLOVE_PRIORITY_SUPPORT_DAYS;
+
+/**
+ * Open the priority support window for a business whose owner completed a
+ * white-glove questionnaire, whether or not they ever bought a package.
+ *
+ * The copy an onboarding prospect reads promises a 30-day priority line off the
+ * back of the questionnaire, but the window used to open only on a PAID package
+ * or custom offer. Plenty of prospects complete the questionnaire without
+ * paying, and they were told they had support they did not have.
+ *
+ * Called from the same two places as the prospect-offer attach: account
+ * creation, and the Stripe-first path where the real owner email only lands
+ * later. Best-effort by contract, like its neighbour: a hiccup here must never
+ * fail account creation.
+ *
+ * **Idempotent by compare-and-swap.** The claim UPDATE matches only rows whose
+ * `priority_support_granted_at` is still NULL and returns what it claimed, so
+ * two concurrent callers cannot both grant, and re-running the attach is a
+ * no-op. If the grant itself then fails the claim is released, so a later retry
+ * can still pick the questionnaire up rather than silently losing the month.
+ *
+ * Returns the number of questionnaires that opened a window (0 or more).
+ */
+export async function attachIntakePrioritySupportToBusiness(
+  businessId: string,
+  ownerEmail: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const email = ownerEmail.trim();
+  if (!email) return 0;
+  // Production default; unit tests inject the client.
+  const db = client ?? (await createSupabaseServiceClient());
+
+  // ONE statement links the questionnaire to the business AND claims the
+  // grant, so there is no window where a row is linked but unclaimed.
+  //
+  // Keyed by recipient_email (case-insensitive), mirroring
+  // attachProspectWhiteGloveOffersToBusiness. LIKE metacharacters in real
+  // addresses (john_doe@x.com) are escaped, so one prospect's questionnaire can
+  // never match a different tenant. The business_id guard means an intake
+  // already belonging to ANOTHER business is never stolen.
+  //
+  // `is("priority_support_granted_at", null)` is the compare-and-swap: it is
+  // what makes re-running this a no-op instead of a second window.
+  const grantedAt = new Date();
+  const { data: claimed, error: claimError } = await db
+    .from("white_glove_intakes")
+    .update({ business_id: businessId, priority_support_granted_at: grantedAt.toISOString() })
+    .eq("status", "completed")
+    .is("priority_support_granted_at", null)
+    .or(`business_id.is.null,business_id.eq.${businessId}`)
+    .ilike("recipient_email", escapeIntakeLikePattern(email))
+    .select("id");
+  if (claimError) {
+    throw new Error(`attachIntakePrioritySupportToBusiness: ${claimError.message}`);
+  }
+  const rows = (claimed ?? []) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
+
+  try {
+    // FROM NOW, not from questionnaire submission: a prospect who filled it in
+    // weeks before signing up should still get a full month. Monotonic, so it
+    // can never shorten a window a paid package already opened.
+    await extendPrioritySupport(
+      businessId,
+      new Date(grantedAt.getTime() + INTAKE_PRIORITY_SUPPORT_DAYS * 24 * 60 * 60 * 1000),
+      db
+    );
+  } catch (err) {
+    // ONLY the window write rolls the claim back. Releasing on any later
+    // failure would clear the stamp for a window that did open, letting a
+    // retry re-claim an already-granted questionnaire.
+    const { error: releaseError } = await db
+      .from("white_glove_intakes")
+      .update({ priority_support_granted_at: null })
+      .in(
+        "id",
+        rows.map((r) => r.id)
+      );
+    if (releaseError) {
+      // Both writes failed, so the questionnaire is stamped as granted with no
+      // window behind it and the compare-and-swap will never match it again:
+      // the promised month is stranded until someone comps it by hand. Loud on
+      // purpose, because nothing downstream can detect this state.
+      logger.error("intake priority support: claim release FAILED, grant stranded", {
+        businessId,
+        intakeIds: rows.map((r) => r.id),
+        releaseError: releaseError.message,
+        grantError: err instanceof Error ? err.message : String(err)
+      });
+    }
+    throw err;
+  }
+
+  // Best-effort, and deliberately OUTSIDE the rollback: re-arming the expiry
+  // warning is a nicety, and failing it must never undo a window that is
+  // already open.
+  try {
+    await clearPrioritySupportNudgeStamp(businessId, db);
+  } catch (err) {
+    logger.warn("intake priority support: could not re-arm the expiry nudge", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  return rows.length;
+}
+
+/**
+ * Escape LIKE/ILIKE metacharacters. `_` is a single-character wildcard and is
+ * common in real email addresses, so without this john_doe@x.com would also
+ * match johnXdoe@x.com. Same guard the offers table uses.
+ */
+function escapeIntakeLikePattern(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }

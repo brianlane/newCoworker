@@ -100,6 +100,7 @@ function intakeRow(overrides: Partial<WhiteGloveIntakeRow> = {}): WhiteGloveInta
     applied_at: null,
     applied_flow_id: null,
     apply_started_at: null,
+    priority_support_granted_at: null,
     ...overrides
   };
 }
