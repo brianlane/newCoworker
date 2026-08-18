@@ -350,6 +350,8 @@ import {
   type CallerIdentity,
   type VoiceLanguagePrefs
 } from "./system-instruction.js";
+import { createCallerSpeechLog } from "./caller-speech.js";
+import { resolveInterpretDecision } from "./translator-gate.js";
 
 export type GeminiBridgeOptions = {
   ws: WebSocket;
@@ -887,6 +889,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
+
+  /**
+   * What the caller has said, kept for the translator gate's language
+   * judgment at transfer time. Independent of the transcript adapter: the
+   * decision is live and synchronous, and must not wait on a DB write.
+   */
+  const callerSpeech = createCallerSpeechLog();
 
   const transcriptRecorder: TranscriptRecorder | null = opts.transcriptAdapter
     ? createTranscriptRecorder(opts.transcriptAdapter, {
@@ -1582,6 +1591,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             greetingPending = true;
           }
         }
+        // BEFORE the tool handler: transfer_to_owner arrives in the same
+        // message batch as the caller's closing words, and the translator gate
+        // reads those words. Ingesting afterwards would judge the language on a
+        // transcript missing the sentence that prompted the transfer.
+        callerSpeech.ingest(message);
         handleModelToolCalls(message);
         if (transcriptRecorder) {
           void transcriptRecorder.ingest(message);
@@ -1901,6 +1915,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         }
         translatorActive = true;
         translatorEntry = "staff_request";
+        // Same marker as the transfer path: whoever the colleague adds to the
+        // call arrives on the same undiarized stream they are already on.
+        void transcriptRecorder?.markInterpreting();
         emitDiag("voice_bridge_translator_mode_entered", {
           entry: "staff_request",
           other_language: otherLanguage ?? null
@@ -1960,43 +1977,71 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           // an unarmed call's fork can only reach the caller, so staying would
           // mean talking over the caller while the human hears nothing.
           if (result.ok && opts.transfer!.translatorMode === true && !transferDetachRequested) {
-            // Set BEFORE the cue so the wind-down timers (which check this) can
-            // never fire between arming and the cue landing.
-            translatorActive = true;
-            translatorEntry = "transfer";
-            try {
-              session.sendRealtimeInput({
-                text: translatorModeCue({
-                  callerLanguage: opts.languagePrefs?.established ?? null,
-                  humanName: opts.transfer!.humanName,
-                  discloseToHuman: opts.transfer!.discloseToHuman !== false
-                })
+            // Armed is only half the question. Being armed says the human CAN
+            // hear us; this says somebody actually needs an interpreter. On
+            // 2026-08-18 (call 5634b7f0) the flag alone let the AI stay on an
+            // all-English call and translate a teammate's "Hello" into "Hola".
+            const interpret = resolveInterpretDecision({
+              established: opts.languagePrefs?.established ?? null,
+              defaultLang: opts.languagePrefs?.defaultLang ?? "en",
+              callerTurns: callerSpeech.turns()
+            });
+            if (!interpret.engage || interpret.callerLanguage === null) {
+              emitDiag("voice_bridge_translator_mode_skipped", {
+                reason: interpret.reason,
+                colleague_language: interpret.colleagueLanguage,
+                turns_considered: interpret.turnsConsidered
               });
-              emitDiag("voice_bridge_translator_mode_entered", {
-                reason: reason ?? null,
-                caller_language: opts.languagePrefs?.established ?? null
+              console.log("gemini-bridge: interpreting not needed, detaching", {
+                callControlId: opts.callControlId,
+                reason: interpret.reason
               });
-              console.log("gemini-bridge: translator mode entered", {
-                callControlId: opts.callControlId
-              });
-            } catch (err) {
-              // The cue is the whole feature: without it the model keeps its
-              // receptionist reflexes while audible to both parties. Fall back
-              // to the normal detach so we degrade to today's behavior rather
-              // than leaving a receptionist in the middle of their call.
-              console.error("gemini-bridge: translator cue failed, detaching", err);
-              emitDiag("voice_bridge_translator_cue_failed", {
-                error: err instanceof Error ? err.message : String(err)
-              });
-              translatorActive = false;
-              translatorEntry = null;
-            }
-            if (translatorActive) {
-              // Hold the session open for the human conversation, then leave
-              // cleanly when the interpreter ceiling is reached. Returning
-              // (not falling through) is what keeps the fork attached.
-              scheduleTranslatorCeiling();
-              return;
+            } else {
+              // Set BEFORE the cue so the wind-down timers (which check this) can
+              // never fire between arming and the cue landing.
+              translatorActive = true;
+              translatorEntry = "transfer";
+              try {
+                session.sendRealtimeInput({
+                  text: translatorModeCue({
+                    callerLanguage: interpret.callerLanguage,
+                    colleagueLanguage: interpret.colleagueLanguage,
+                    humanName: opts.transfer!.humanName,
+                    discloseToHuman: opts.transfer!.discloseToHuman !== false
+                  })
+                });
+                // Mark the transcript so the call view can say the AI stayed
+                // on the line, and stop attributing post-bridge turns to the
+                // caller alone (both humans arrive on one undiarized stream).
+                void transcriptRecorder?.markInterpreting();
+                emitDiag("voice_bridge_translator_mode_entered", {
+                  reason: reason ?? null,
+                  caller_language: interpret.callerLanguage,
+                  colleague_language: interpret.colleagueLanguage,
+                  decided_by: interpret.reason
+                });
+                console.log("gemini-bridge: translator mode entered", {
+                  callControlId: opts.callControlId
+                });
+              } catch (err) {
+                // The cue is the whole feature: without it the model keeps its
+                // receptionist reflexes while audible to both parties. Fall back
+                // to the normal detach so we degrade to today's behavior rather
+                // than leaving a receptionist in the middle of their call.
+                console.error("gemini-bridge: translator cue failed, detaching", err);
+                emitDiag("voice_bridge_translator_cue_failed", {
+                  error: err instanceof Error ? err.message : String(err)
+                });
+                translatorActive = false;
+                translatorEntry = null;
+              }
+              if (translatorActive) {
+                // Hold the session open for the human conversation, then leave
+                // cleanly when the interpreter ceiling is reached. Returning
+                // (not falling through) is what keeps the fork attached.
+                scheduleTranslatorCeiling();
+                return;
+              }
             }
           }
           // On a SUCCESSFUL warm transfer the caller is now bridged to a human,

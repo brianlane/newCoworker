@@ -376,25 +376,43 @@ export function systemInstructionForBusiness(
  * reflexes will answer questions itself, which is worse than not interpreting at
  * all: the listener believes they are hearing the other person.
  */
-export function translatorModeCue(opts: {
-  /** What the caller has been speaking, when we know it. */
-  callerLanguage?: VoiceCustomerLanguage | null;
-  /** Name of the person who just picked up (transfer) or who asked (staff). */
-  humanName?: string;
-  /** Speak a one-line disclosure to the human as they join. */
-  discloseToHuman?: boolean;
-  /** How interpreting began. Defaults to the post-transfer path. */
-  entry?: "transfer" | "staff_request";
-  /** Language the staff member named for the other party, when they did. */
-  otherLanguage?: string;
-}): string {
+/**
+ * The post-transfer cue REQUIRES both languages, and that is the fix for the
+ * Aug 18 defect (call 5634b7f0). It used to take an optional caller language
+ * and fall back to "say what they said in the caller's language" when it had
+ * none, which on an all-English call left the model to invent a pair: it
+ * translated a teammate's "Hello" into "Hola" for an English-speaking lead.
+ * The gate (translator-gate.ts) now proves a language difference before this
+ * cue is built, so the ambiguous phrasing is deleted rather than unused, and
+ * the type stops a future caller from reintroducing it.
+ */
+export type TranslatorModeCueOpts =
+  | {
+      entry?: "transfer";
+      /** What the caller speaks. Decided by the gate, never guessed here. */
+      callerLanguage: VoiceCustomerLanguage;
+      /** What the teammate who just picked up speaks (the tenant default). */
+      colleagueLanguage?: VoiceCustomerLanguage;
+      /** Name of the person who just picked up. */
+      humanName?: string;
+      /** Speak a one-line disclosure to the human as they join. */
+      discloseToHuman?: boolean;
+    }
+  | {
+      entry: "staff_request";
+      /** Name of the colleague who asked for an interpreter. */
+      humanName?: string;
+      /** Language the staff member named for the other party, when they did. */
+      otherLanguage?: string;
+    };
+
+const LANGUAGE_NAMES: Record<VoiceCustomerLanguage, string> = {
+  en: "English",
+  es: "Spanish"
+};
+
+export function translatorModeCue(opts: TranslatorModeCueOpts): string {
   const human = opts.humanName?.trim();
-  const callerLang =
-    opts.callerLanguage === "es"
-      ? "Spanish"
-      : opts.callerLanguage === "en"
-        ? "English"
-        : null;
   if (opts.entry === "staff_request") {
     // Staff asked directly: the OTHER party is whoever they are adding, the
     // language we know is the one they named, and the AI must wait through the
@@ -422,14 +440,16 @@ export function translatorModeCue(opts: {
     ];
     return staffParts.join(" ");
   }
+  const callerLang = LANGUAGE_NAMES[opts.callerLanguage];
+  const colleagueLang = LANGUAGE_NAMES[opts.colleagueLanguage ?? "en"];
   const parts: string[] = [
     "[Coordinator] The call has just been connected to a colleague" +
       (human ? ` (${human})` : "") +
       ". From this moment on you are ONLY an interpreter between the two of them. Both of them can hear you.",
     "Interpret each turn, in both directions, and do nothing else. When the caller speaks, say what they said" +
-      (callerLang ? ` in English` : " in the colleague's language") +
+      ` in ${colleagueLang}` +
       ". When your colleague speaks, say what they said" +
-      (callerLang ? ` in ${callerLang}` : " in the caller's language") +
+      ` in ${callerLang}` +
       ".",
     "Speak in the FIRST PERSON as whoever you are interpreting, the way a professional interpreter does: if the caller says they need to reschedule, you say I need to reschedule. Never say things like he says or she is asking.",
     "Never answer a question yourself, never add, explain, soften, summarize, or leave anything out, and never take a side. If a question is directed at you rather than at the other person, interpret it anyway. You have no other job on this call.",

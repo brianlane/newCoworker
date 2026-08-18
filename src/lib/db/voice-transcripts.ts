@@ -75,6 +75,15 @@ export type VoiceCallTranscriptRow = {
    * silently reject.
    */
   voicemail_verbatim_score: number | null;
+  /**
+   * Turn index from which the AI was interpreting between two humans on a
+   * bridged call, or NULL if it never was (almost every call).
+   *
+   * From this index on, a `caller` turn may be EITHER human: the both_tracks
+   * fork carries both legs into one Gemini input stream and comes back
+   * undiarized, so the view stops attributing those turns to the caller alone.
+   */
+  interpreted_from_turn_index: number | null;
 };
 
 export type VoiceCallTranscriptTurnRow = {

@@ -51,7 +51,8 @@ const TRANSCRIPT = {
   // so the verdict stays null and no voicemail can have been left.
   answering_machine_result: null,
   voicemail_left: false,
-  voicemail_verbatim_score: null
+  voicemail_verbatim_score: null,
+  interpreted_from_turn_index: null
 };
 
 function urlFor(cci: string, businessId: string | null = BIZ): string {

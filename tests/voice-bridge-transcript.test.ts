@@ -499,3 +499,88 @@ describe("em dashes in persisted turns", () => {
     );
   });
 });
+
+/**
+ * Marking WHERE the AI stopped being the receptionist and became an
+ * interpreter, so the call view can stop attributing the teammate's words to
+ * the caller (Amy Laidlaw, call 5634b7f0, 2026-08-18).
+ */
+describe("markInterpreting", () => {
+  function adapterSpy() {
+    const marks: { transcriptId: string; fromTurnIndex: number }[] = [];
+    const adapter: TranscriptAdapter = {
+      createTranscript: async () => "t-1",
+      insertTurn: async () => {},
+      finalizeTranscript: async () => {},
+      markInterpretedFrom: async (input) => {
+        marks.push(input);
+      }
+    };
+    return { adapter, marks };
+  }
+
+  const init = {
+    businessId: "biz",
+    callControlId: "v3:abc",
+    callerE164: "+15551234567",
+    model: "gemini-live",
+    direction: "outbound" as const
+  };
+
+  const frame = (callerText: string, assistantText: string) => ({
+    serverContent: {
+      inputTranscription: { text: callerText },
+      outputTranscription: { text: assistantText },
+      turnComplete: true
+    }
+  });
+
+  it("marks the next turn index, so earlier turns keep their exact labels", async () => {
+    const { adapter, marks } = adapterSpy();
+    const rec = createTranscriptRecorder(adapter, init);
+    await rec.ingest(frame("hola", "hello"));
+    await rec.ingest(frame("necesito ayuda", "one moment"));
+    await rec.markInterpreting();
+    // Four turns already written (two caller, two assistant), so interpreting
+    // starts at index 4: everything before it is unambiguous.
+    expect(marks).toEqual([{ transcriptId: "t-1", fromTurnIndex: 4 }]);
+  });
+
+  it("is idempotent, because the model can retry the transfer", async () => {
+    const { adapter, marks } = adapterSpy();
+    const rec = createTranscriptRecorder(adapter, init);
+    await rec.ingest(frame("hola", "hello"));
+    await rec.markInterpreting();
+    await rec.markInterpreting();
+    expect(marks).toHaveLength(1);
+  });
+
+  it("never breaks the call when the adapter cannot write", async () => {
+    // Same contract as every other write here: losing the marker is worse than
+    // nothing, but hanging up on two people mid-conversation is far worse.
+    const rec = createTranscriptRecorder(
+      {
+        createTranscript: async () => "t-1",
+        insertTurn: async () => {},
+        finalizeTranscript: async () => {},
+        markInterpretedFrom: async () => {
+          throw new Error("db down");
+        }
+      },
+      init
+    );
+    await expect(rec.markInterpreting()).resolves.toBeUndefined();
+  });
+
+  it("does nothing on an adapter that predates the marker", async () => {
+    const rec = createTranscriptRecorder(
+      {
+        createTranscript: async () => "t-1",
+        insertTurn: async () => {},
+        finalizeTranscript: async () => {}
+      },
+      init
+    );
+    await expect(rec.markInterpreting()).resolves.toBeUndefined();
+  });
+});

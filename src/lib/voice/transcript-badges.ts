@@ -56,3 +56,61 @@ export function verbatimBadgeState(
     drifted: n < VERBATIM_ALERT_THRESHOLD
   };
 }
+
+/**
+ * Which notice the call view should show above a forwarded call's transcript,
+ * or null for a call that was never forwarded. The caller maps these to copy;
+ * the decision lives here so it is testable and so the two claims below cannot
+ * drift apart again.
+ *
+ * `transferred` is the ordinary warm transfer: the AI handed the call over and
+ * removed its media fork, so the transcript genuinely stops at the handover.
+ *
+ * `interpreted` is the case that made the old single message a lie. With
+ * translator mode the AI stays on the bridged call, so the conversation AFTER
+ * the transfer is transcribed too, and the owner is reading turns their
+ * assistant was still part of.
+ */
+export function forwardedCallNotice(input: {
+  callKind: string | null | undefined;
+  status: string;
+  turnCount: number;
+  interpretedFromTurnIndex?: number | null;
+}): "missed" | "noTranscript" | "transferred" | "interpreted" | null {
+  if (input.callKind !== "forwarded") return null;
+  if (input.status === "missed") return "missed";
+  if (input.turnCount === 0) return "noTranscript";
+  // Explicit null check, not truthiness: turn 0 is a legitimate index, and a
+  // falsy test would report the earliest possible interpretation as an
+  // ordinary transfer.
+  return input.interpretedFromTurnIndex === null || input.interpretedFromTurnIndex === undefined
+    ? "transferred"
+    : "interpreted";
+}
+
+/**
+ * Who a transcript turn should be attributed to.
+ *
+ * Before a bridge there are only two parties and the roles are exact. Once the
+ * AI is interpreting there are three, and the platform can no longer tell the
+ * two humans apart: Telnyx's `both_tracks` fork carries the caller's leg and
+ * the bridged leg, the voice bridge forwards both into ONE Gemini input stream
+ * (it reads `media.payload` and ignores `media.track`), and Gemini returns a
+ * single undifferentiated `inputTranscription`. Distinguishing them would need
+ * per-track diarization that does not exist today.
+ *
+ * So from that point on an inbound turn is labelled as either party. On call
+ * 5634b7f0 the confident "Caller" label put the teammate's words in the lead's
+ * mouth, which is worse than admitting the ambiguity.
+ */
+export function turnSpeaker(input: {
+  role: string;
+  turnIndex: number;
+  interpretedFromTurnIndex?: number | null;
+}): "assistant" | "caller" | "callerOrTeammate" {
+  // Our own speech is never ambiguous, whoever else is on the line.
+  if (input.role !== "caller") return "assistant";
+  const from = input.interpretedFromTurnIndex;
+  if (from === null || from === undefined) return "caller";
+  return input.turnIndex >= from ? "callerOrTeammate" : "caller";
+}

@@ -30,6 +30,19 @@
  */
 
 type Rows = { data: unknown[] | null; error: { message: string } | null };
+type Row = { data: unknown; error: { message: string } | null };
+
+/**
+ * The sentinel this module writes into the NOT NULL `model` column. Its other
+ * job is to identify our own rows: anything else in that column means the
+ * voice bridge wrote the row for a call the AI actually handled.
+ */
+const FORWARDED_MODEL = "forwarded";
+
+type ExistingTranscript = {
+  model?: string | null;
+  status?: string | null;
+};
 
 export interface ForwardedCallLogSupabase {
   from(table: string): {
@@ -37,6 +50,12 @@ export interface ForwardedCallLogSupabase {
       values: Record<string, unknown>,
       opts: { onConflict: string; ignoreDuplicates?: boolean }
     ): { select(columns: string): PromiseLike<Rows> };
+    update(values: Record<string, unknown>): {
+      eq(column: string, value: string): { select(columns: string): PromiseLike<Rows> };
+    };
+    select(columns: string): {
+      eq(column: string, value: string): { maybeSingle(): PromiseLike<Row> };
+    };
   };
 }
 
@@ -55,6 +74,33 @@ export type ForwardedCallLogResult = {
  * maps to status 'missed' with no ended_at (nobody ever picked up). See the
  * module docstring for the answered-over-missed precedence semantics.
  */
+/**
+ * The existing row for this call, or null when there is none (or when the read
+ * itself failed).
+ *
+ * A failed read deliberately reports "no row", which sends the caller down the
+ * upsert path it used before this check existed. The alternative, skipping the
+ * write, would permanently drop a plain forwarded call out of Call history, and
+ * that is both the common case and unrecoverable; an overwrite needs a failed
+ * read AND an AI-handled call, and only costs fields a backfill can restore.
+ */
+async function readExistingTranscript(
+  supabase: ForwardedCallLogSupabase,
+  callControlId: string
+): Promise<ExistingTranscript | null> {
+  try {
+    const { data, error } = await supabase
+      .from("voice_call_transcripts")
+      .select("model, status")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    if (error) return null;
+    return (data as ExistingTranscript | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function recordForwardedCall(
   supabase: ForwardedCallLogSupabase,
   opts: {
@@ -79,6 +125,40 @@ export async function recordForwardedCall(
     const caller = (opts.callerE164 ?? "").trim();
     const forwardedTo = (opts.forwardedToE164 ?? "").trim();
 
+    // An AI-handled call that was then warm-transferred already HAS a row,
+    // written by the voice bridge, carrying the real model, the real direction,
+    // and the transcript turns. The answered upsert below replaces a whole row,
+    // so running it here would relabel an outbound AI call as incoming, drop
+    // the model id, and stamp `summarized_at` so the summary sweep skips a call
+    // that has plenty to summarize (Amy Laidlaw, call 5634b7f0, 2026-08-18).
+    // Patch the forwarded facts onto that row instead.
+    if (answered) {
+      const existing = await readExistingTranscript(supabase, opts.callControlId);
+      if (existing && existing.model !== FORWARDED_MODEL) {
+        const patch: Record<string, unknown> = {
+          call_kind: "forwarded",
+          forwarded_to_e164: forwardedTo || null,
+          // The hangup is the true end of the CALL. The bridge's teardown stamp
+          // predates it by however long the AI stayed on (an interpreted call
+          // runs through the whole human conversation), so refreshing this is
+          // what makes the dashboard's duration right.
+          ended_at: now,
+          updated_at: now
+        };
+        // 'in_progress' means the bridge never finalized; a human answered, so
+        // the call is over. An 'errored' session stays errored: a human picking
+        // up afterwards does not make the AI's failure untrue.
+        if (existing.status === "in_progress") patch.status = "completed";
+        const { error } = await supabase
+          .from("voice_call_transcripts")
+          .update(patch)
+          .eq("call_control_id", opts.callControlId)
+          .select("call_control_id");
+        if (error) return { status: "failed", reason: error.message };
+        return { status: "recorded" };
+      }
+    }
+
     const row: Record<string, unknown> = {
       business_id: opts.businessId,
       call_control_id: opts.callControlId,
@@ -88,7 +168,7 @@ export async function recordForwardedCall(
       direction: "inbound",
       // `model` is NOT NULL on the table; there's no AI model for a forwarded
       // call, so use a sentinel the UI can special-case.
-      model: "forwarded",
+      model: FORWARDED_MODEL,
       caller_e164: caller || null,
       forwarded_to_e164: forwardedTo || null,
       status: answered ? "completed" : "missed",
