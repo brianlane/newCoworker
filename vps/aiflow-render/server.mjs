@@ -786,10 +786,16 @@ app.post("/render", async (req, res) => {
       // Same reason as above: settle before the second login check, or a slow
       // re-render reads as "logged in" and the extractor gets the shell.
       await settlePage(page);
-      // Login can still fail (bad creds / MFA / captcha). Surface it AND drop the
-      // logged-out session so the next call doesn't reuse a poisoned context and
-      // hand the extractor a login page.
-      if (await looksLikeLogin(page, auth?.login)) {
+      // An email-first login that never reached its password step did NOT
+      // authenticate, and the re-check below cannot be trusted to notice: a
+      // logged-out portal often redirects to a marketing page that is not
+      // login-shaped at all (HomeLight sends you to the /referrals signup
+      // funnel). Without this, a stalled advance falls through as success and
+      // the funnel goes to the extractor, which is precisely the silent-success
+      // bug the email-first support exists to close. We KNOW we did not log in,
+      // so say so rather than asking the page.
+      const stalledAdvance = loginDiagnostics?.passwordStepReached === false;
+      if (stalledAdvance || (await looksLikeLogin(page, auth?.login))) {
         poisoned = true;
         // Say WHY. A bare `login_failed` sent someone reading portal markup by
         // hand for a day (Clever, 2026-08-17) to discover that the submit
@@ -797,7 +803,11 @@ app.post("/render", async (req, res) => {
         // already persist a screenshot and page source; login failures used to
         // persist nothing, and that asymmetry was the actual bug.
         const detail = loginDiagnostics
-          ? `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
+          ? (loginDiagnostics.steps === 2
+              ? `steps=2 advance=${loginDiagnostics.selectors.advance ?? "none"} ` +
+                `passwordStep=${loginDiagnostics.passwordStepReached} `
+              : "") +
+            `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
             `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
             (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "")
           : "no login diagnostics";

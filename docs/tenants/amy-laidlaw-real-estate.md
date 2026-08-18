@@ -94,25 +94,29 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
-- **HomeLight cannot be logged into with the stored credential, and a failed
-  read looks like a successful one.** HomeLight's agent sign-in
-  (`homelight.com/users/sign_in` redirects to `sales.homelight.com/users/login`)
-  has an email field and a submit and **no password field**: it is passwordless.
-  The render service only attempts a login when `looksLikeLogin` finds BOTH a
-  password and a username field (`vps/aiflow-render/login.mjs`), so for
-  HomeLight it never attempts one at all. Every HomeLight browse step therefore
-  works *only* because the `hmlt.co` referral link authenticates itself.
-  When that link has expired or been consumed, the step lands on
-  `/client/sign-in` or on the logged-out `/referrals` marketing funnel and
-  **returns that page as a successful read**, with no `login_failed` and no
-  `auth_config_error`. Observed Aug 17 2026 on two referral links (`c9887591`,
-  `d2b56290`): "Go back to my dashboard" was gone and the probe read a signup
-  page. Two consequences: (1) a HomeLight browse step needs a
-  `skipWhenText`/`continueWhenText` guard on a marker only the real referral
-  page shows, or a stale link silently feeds a marketing page into extraction;
-  (2) anything that needs the AGENT DASHBOARD rather than a referral link (a
-  per-client status update, the search overlay path) is not reachable through
-  the credential at all, which is what blocks the HomeLight update flow.
+- **HomeLight's login is EMAIL-FIRST, and until Aug 18 2026 the render service
+  could not see it at all.** `homelight.com/client/sign-in` asks only for the
+  email; **Continue** hands off to `homelight.com/users/login?email=<addr>`,
+  which carries the password field; signing in lands on
+  `agent.homelight.com/dashboard`. `looksLikeLogin` required a password AND a
+  username field on the SAME page, so **neither** HomeLight page qualified and
+  no login was ever attempted. Every HomeLight browse step therefore worked
+  only because the `hmlt.co` referral link authenticates itself, and once a link
+  expired the step landed on `/client/sign-in` or the logged-out `/referrals`
+  funnel and **returned that page as a successful read**: no `login_failed`, no
+  `auth_config_error`, a marketing page fed straight into extraction. Fixed by
+  teaching `vps/aiflow-render/login.mjs` the email-first shape (fill, blur,
+  advance, wait for the password step). Do not confuse
+  `homelight.com/users/sign_in`, which redirects to a SALES-side page carrying
+  only an email box, with the agent login above; that redirect is what made this
+  look passwordless.
+- **The HomeLight agent dashboard is `agent.homelight.com/dashboard`**, not
+  `homelight.com/referrals` (which is a logged-out signup funnel). It carries
+  the two surfaces a status flow needs: "Provide feedback on N of your recent
+  referrals" -> **Submit Feedback**, and per-referral
+  "Any updates for <Name>?" with a **Update Referral Stage** button and a
+  "Last Update: <stage> (<age>)" line. So HomeLight DOES expose a factual stage
+  control, contrary to the earlier read of the referral page alone.
 - **ReferralExchange's timeline status was always "no interaction yet".**
   `re_update` posts to the referral timeline with a fixed status
   ("No interaction yet" -> "I am still trying to contact <First>"), so the same
