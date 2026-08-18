@@ -309,20 +309,41 @@ one probe's control list and was absent from the next probe's markup, from the
 identical click. Use the probe's `--expect` flag (added for exactly this) to
 hold until the drawer is on the page.
 
-**What is NOT there, which blocks the stage write**
+**Where the stage editor actually is**
 
-Both routes, clicking a row and clicking the dashboard's
-`Update Referral Stage`, open the SAME **read-only** panel:
+Both routes, clicking a row and clicking the dashboard's `Update Referral
+Stage`, open the same panel. Its visible text reads as read-only:
 
 ```
 <Name> / Role / Property Address / Price / Client timeframe
 Date Received / Last Updated / Stage: <value> / [Done]
 ```
 
-No `<select>`, no stage buttons, no editable control. So the update surface is
-one interaction further in than the panel, and it has not been found yet. Next
-step: click the panel's Stage value itself (and then `Done`) with `--expect` on
-a stage option label, since that is the only unexplored affordance on the panel.
-Do not author a `browse_action` against a guessed selector: this account has
-been bitten by that twice (`debug/update-amy-aiflow-re-update-actions.ts`, and
-the Aug 16 claim click that reported success and changed nothing).
+But the markup shows the controls ARE there and simply had not hydrated when
+the probe read. Directly below the Stage row:
+
+```html
+<div class="... MygTT">
+  <div class="... Udsyj"><p>Stage</p><p>Failed</p></div>
+  <span class="--skeleton" style="width:100%; height:40px;  margin-top:32px;"></span>
+  <span class="--skeleton" style="width:100%; height:200px; margin-top:24px;"></span>
+</div>
+<button type="button"><span>Done</span></button>
+```
+
+A 40px-tall control (the stage picker) and a 200px-tall one (notes or the
+activity feed), both still `--skeleton`. The date values above them are wrapped
+in `--skeleton` spans too, which is the tell: the panel paints its text first
+and swaps in its interactive children afterwards.
+
+So `expectText "Last Updated"` is NOT a sufficient wait: that text is present
+while still inside a skeleton. The panel needs a marker that only exists after
+hydration before the editor can be read, and until it is read, no
+`browse_action` should be authored against it. This account has been bitten
+twice by selectors written from a guess
+(`debug/update-amy-aiflow-re-update-actions.ts`, and the Aug 16 claim click
+that reported success and changed nothing).
+
+Next step: re-probe with `--expect` on a marker from the hydrated editor rather
+than from the static text, and capture the 40px control's real selector and its
+option labels.
