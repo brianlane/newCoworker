@@ -43,7 +43,6 @@ import { listSmsLinksForContact } from "@/lib/db/sms-links";
 import {
   classifyContactKey,
   formatContactKey,
-  isDialableContactKey,
   isEmailContactKey
 } from "../../../../../supabase/functions/_shared/contact_key";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
@@ -275,9 +274,11 @@ export default async function CustomerDetailPage({ params }: Props) {
         teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
       />
 
-      {/* SMS reply mode: only meaningful for a contact who can receive a text.
-          An email-keyed contact has no inbound SMS to answer automatically. */}
-      {isDialableContactKey(memory.customer_e164) && (
+      {/* SMS reply mode governs auto-replies to INBOUND texts, so a short code
+          belongs here (a lead source texting us is the classic suppress
+          target). Only an email-keyed contact, which has no inbound text at
+          all, is excluded. */}
+      {!isEmailContactKey(memory.customer_e164) && (
         <ContactReplyModeToggle
           businessId={business.id}
           customerE164={memory.customer_e164}
