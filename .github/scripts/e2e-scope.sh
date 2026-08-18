@@ -127,9 +127,16 @@ tests/e2e/messenger-engine.e2e.test.ts
 "
 
 # Voice bridge: system instruction + tool declarations.
+#
+# translator-interpret imports systemInstruction's translatorModeCue and the
+# intake persona, so a change to either has to schedule it. Listing it matters
+# more than most: the interpreter cue is only exercised by the live model (a
+# cue that names both languages is still only WORDS until a model acts on
+# them), and the defect it pins shipped past a fully green unit suite.
 VOICE_TESTS="
 tests/e2e/voice-persona.e2e.test.ts
 tests/e2e/voice-tools.e2e.test.ts
+tests/e2e/translator-interpret.e2e.test.ts
 "
 
 # The Truly Insurance production-flow fixture feeds two suites.
