@@ -2126,7 +2126,7 @@
       "emailSupportUpsell": "Tu plan incluye soporte por correo. Agrega onboarding white-glove abajo para soporte en vivo por llamada y video con un especialista.",
       "prioritySupport": {
         "title": "Soporte prioritario",
-        "blurb": "Soporte prioritario por llamada y video con un especialista, además del soporte por correo que incluye tu plan.",
+        "blurb": "Soporte prioritario por teléfono y video con un especialista, además del soporte por correo que incluye tu plan.",
         "daysLeft": "{days, plural, one {# día restante} other {# días restantes}}",
         "endsToday": "Termina hoy",
         "through": "hasta el {date}",
@@ -2149,7 +2149,7 @@
         "checkoutCancelled": "Pago cancelado. No se cobró nada."
       },
       "whiteGloveTitle": "Onboarding white-glove",
-      "whiteGloveBlurb": "Onboarding único y práctico con un especialista. Cualquiera de los paquetes abre una línea prioritaria de llamada y video por 30 días. Cuéntanos que te interesa y un especialista te contactará con una cotización.",
+      "whiteGloveBlurb": "Onboarding único y práctico con un especialista. Cualquiera de los paquetes abre una línea prioritaria de teléfono y video por 30 días. Cuéntanos que te interesa y un especialista te contactará con una cotización.",
       "contactUs": "Contáctanos",
       "customOfferTitle": "Tu oferta personalizada",
       "customOfferBlurb": "Preparada para tu negocio por nuestro equipo. Pago único; incluye una línea prioritaria de llamada y video por 30 días.",
