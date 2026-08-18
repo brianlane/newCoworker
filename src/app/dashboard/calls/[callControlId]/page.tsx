@@ -10,6 +10,7 @@ import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { notFound, redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { phiAccessRequestContext, recordPhiAccess } from "@/lib/hipaa/access-log";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
@@ -83,7 +84,7 @@ export default async function CallTranscriptPage({
   const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, hipaa_mode")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
@@ -92,6 +93,18 @@ export default async function CallTranscriptPage({
 
   const transcript = await getTranscriptById(business.id, transcriptId);
   if (!transcript) notFound();
+
+  // HIPAA 164.312(b): this workforce member opened this call transcript.
+  const phiCtx = await phiAccessRequestContext();
+  await recordPhiAccess((business as { hipaa_mode?: boolean }).hipaa_mode, {
+    businessId: business.id,
+    userId: user.userId,
+    userEmail: user.email,
+    resource: "voice_transcript",
+    resourceId: transcriptId,
+    action: "view",
+    ...phiCtx
+  });
 
   // Everything below depends only on the transcript — one parallel group
   // instead of three serial awaits (for residency tenants each is a tunnel

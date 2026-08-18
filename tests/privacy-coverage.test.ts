@@ -83,6 +83,8 @@ const EXEMPT: Record<string, string> = {
     "STOP suppression must survive erasure; deleting the row would let the platform text the person again",
   terms_acceptances:
     "the tenant's own clickwrap evidence (account scope, not end-customer data); like signed signature requests, acceptance proof must survive erasure",
+  phi_access_log:
+    "HIPAA 164.312(b) audit trail: WHO viewed a record, which is evidence about workforce access rather than customer content. Append-only by grant (no update/delete is granted at all, so a sweep could not trim it), retained 6 years per 164.316(b)(2). Erasing it on request would destroy the proof that the erasure duty was met",
 
   // Tenant/platform configuration: no end-customer person rows.
   agent_tool_settings: "per-tenant tool toggles",

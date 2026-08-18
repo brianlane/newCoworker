@@ -13,6 +13,7 @@ import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { phiAccessRequestContext, recordPhiAccess } from "@/lib/hipaa/access-log";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
@@ -78,7 +79,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, hipaa_mode")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
@@ -91,6 +92,21 @@ export default async function CustomerDetailPage({ params }: Props) {
 
   const memory = await getCustomerMemory(business.id, customerE164);
   if (!memory) notFound();
+
+  // HIPAA 164.312(b): record that this workforce member opened this contact's
+  // record. Deliberately AFTER the notFound above, so the trail logs records
+  // actually shown rather than probes for ones that do not exist. Best-effort
+  // and never throws; no-ops entirely unless the tenant is in HIPAA mode.
+  const phiCtx = await phiAccessRequestContext();
+  await recordPhiAccess((business as { hipaa_mode?: boolean }).hipaa_mode, {
+    businessId: business.id,
+    userId: user.userId,
+    userEmail: user.email,
+    resource: "contact",
+    resourceId: memory.customer_e164,
+    action: "view",
+    ...phiCtx
+  });
 
   const contactLanguage = await getContactLanguage(business.id, memory.customer_e164);
 
