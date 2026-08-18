@@ -44,8 +44,15 @@ vi.mock("@/lib/db/white-glove-offers", () => ({
   attachProspectWhiteGloveOffersToBusiness: vi.fn().mockResolvedValue(0)
 }));
 
+// Dynamically imported by createBusiness / updateBusinessOwnerEmailIfPending;
+// its own behavior lives in tests/white-glove-intake-priority-support.test.ts.
+vi.mock("@/lib/white-glove/intake", () => ({
+  attachIntakePrioritySupportToBusiness: vi.fn().mockResolvedValue(0)
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { attachProspectWhiteGloveOffersToBusiness } from "@/lib/db/white-glove-offers";
+import { attachIntakePrioritySupportToBusiness } from "@/lib/white-glove/intake";
 
 function mockDb(overrides: Record<string, unknown> = {}) {
   const base = {
@@ -123,6 +130,48 @@ describe("db/businesses", () => {
       expect(errSpy).toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
+    }
+  });
+
+  it("createBusiness grants intake priority support for a completed questionnaire", async () => {
+    // A prospect who filled in the questionnaire but never paid still gets the
+    // 30-day window the onboarding copy promises them.
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await createBusiness({
+      id: "uuid-biz-1",
+      name: "Sunrise Realty",
+      ownerEmail: "owner@test.com",
+      tier: "starter"
+    });
+    expect(attachIntakePrioritySupportToBusiness).toHaveBeenCalledWith(
+      MOCK_BUSINESS.id,
+      "owner@test.com",
+      db
+    );
+  });
+
+  it("createBusiness survives a failing intake grant (best-effort, both error shapes)", async () => {
+    // Account creation must never fail over a support-window grant.
+    for (const thrown of [new Error("grant down"), "string failure"]) {
+      const db = mockDb({
+        single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      vi.mocked(attachIntakePrioritySupportToBusiness).mockRejectedValueOnce(thrown as never);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await createBusiness({
+          id: "uuid-biz-1",
+          name: "Sunrise Realty",
+          ownerEmail: "owner@test.com",
+          tier: "starter"
+        });
+        expect(result.name).toBe("Sunrise Realty");
+        expect(errSpy).toHaveBeenCalled();
+      } finally {
+        errSpy.mockRestore();
+      }
     }
   });
 
@@ -669,6 +718,47 @@ describe("db/businesses", () => {
       "paid@test.com",
       db
     );
+  });
+
+  it("updateBusinessOwnerEmailIfPending re-runs the intake grant once the real email lands", async () => {
+    // Stripe-first onboarding creates the row with a sentinel email, so
+    // createBusiness found no questionnaire. The grant claim makes this repeat
+    // safe: it opens a window only if one was never opened.
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "uuid-biz-1" }], error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(updateQuery) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com");
+    expect(attachIntakePrioritySupportToBusiness).toHaveBeenCalledWith(
+      "uuid-biz-1",
+      "paid@test.com",
+      db
+    );
+  });
+
+  it("updateBusinessOwnerEmailIfPending survives a failing intake grant (both error shapes)", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "uuid-biz-1" }], error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(updateQuery) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const thrown of [new Error("grant down"), "string fail"]) {
+        vi.mocked(attachIntakePrioritySupportToBusiness).mockRejectedValueOnce(thrown as never);
+        await expect(
+          updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")
+        ).resolves.toBe(true);
+      }
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("updateBusinessOwnerEmailIfPending survives a failing prospect attach (best-effort)", async () => {

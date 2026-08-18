@@ -254,6 +254,20 @@ export async function createBusiness(
       }`
     );
   }
+
+  // A prospect who COMPLETED the white-glove questionnaire gets the 30-day
+  // priority support window even if they never bought a package: that is what
+  // the onboarding copy promises them. Idempotent, so re-running this is safe.
+  try {
+    const { attachIntakePrioritySupportToBusiness } = await import("@/lib/white-glove/intake");
+    await attachIntakePrioritySupportToBusiness(business.id, data.ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `createBusiness: intake priority support grant failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
   return business;
 }
 
@@ -951,6 +965,20 @@ export async function updateBusinessOwnerEmailIfPending(
   } catch (err) {
     console.error(
       `updateBusinessOwnerEmailIfPending: prospect white-glove attach failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+
+  // Same reason as the offer attach above: createBusiness ran against the
+  // pending sentinel email and found no questionnaire, so re-run now that the
+  // real address has landed. The grant claim makes the repeat a no-op.
+  try {
+    const { attachIntakePrioritySupportToBusiness } = await import("@/lib/white-glove/intake");
+    await attachIntakePrioritySupportToBusiness(id, ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `updateBusinessOwnerEmailIfPending: intake priority support grant failed (non-fatal): ${
         err instanceof Error ? err.message : String(err)
       }`
     );
