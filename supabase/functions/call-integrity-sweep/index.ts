@@ -71,6 +71,13 @@ serve(async (req: Request) => {
     const { data, error } = await supabase
       .from("voice_call_transcripts")
       .select("id, business_id, caller_e164, started_at")
+      // Finished calls only. A call still in progress can be mid-IVR with a
+      // couple of greetings behind it, which scores as talked_to_recording
+      // right up until a human joins and it completes perfectly normally.
+      // The dedupe below would then freeze that wrong verdict forever, since
+      // the call is never looked at again. A call in flight at sweep time is
+      // simply picked up by tomorrow's run, which the 26h lookback covers.
+      .eq("status", "completed")
       .gte("started_at", since)
       .order("started_at", { ascending: true })
       .order("id", { ascending: true })

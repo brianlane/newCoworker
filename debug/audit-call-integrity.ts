@@ -108,6 +108,10 @@ async function main(): Promise<void> {
       let q = db
         .from("voice_call_transcripts")
         .select("id, business_id, caller_e164, started_at")
+        // Finished calls only, matching the sweep: a verdict taken mid-call
+        // is unreliable, because an in-progress call can be sitting on an
+        // IVR with a greeting or two behind it and complete normally.
+        .eq("status", "completed")
         .gte("started_at", since)
         // `id` is the tiebreaker, and it is required, not tidiness. Range
         // paging re-runs the query per page and Postgres does not guarantee
