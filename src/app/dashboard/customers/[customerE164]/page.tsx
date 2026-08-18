@@ -40,6 +40,11 @@ import { listBusinessDocumentsForContact } from "@/lib/documents/db";
 import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { listSmsLinksForContact } from "@/lib/db/sms-links";
+import {
+  classifyContactKey,
+  formatContactKey,
+  isEmailContactKey
+} from "../../../../../supabase/functions/_shared/contact_key";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
 export const dynamic = "force-dynamic";
@@ -59,8 +64,10 @@ export default async function CustomerDetailPage({ params }: Props) {
   } catch {
     customerE164 = raw;
   }
-  // E.164 or a 3-8 digit short code (service/lead-source contacts).
-  if (!/^(\+[1-9]\d{6,15}|\d{3,8})$/.test(customerE164)) {
+  // The route segment is the contact KEY: an E.164 number, a 3-8 digit short
+  // code (service / lead-source contacts), or an `email:` key for a contact we
+  // only know by address. Anything else is not a contact this page can open.
+  if (classifyContactKey(customerE164) === null) {
     notFound();
   }
 
@@ -156,8 +163,18 @@ export default async function CustomerDetailPage({ params }: Props) {
   // customer. Exclude self and any non-customer directory row (company short
   // codes, vendors, testers, owner/employee) so an irreversible merge can never
   // collapse a real person into a lead-source or vendor entry.
+  // Merge is number-shaped: merge_customer_memories records the folded-away
+  // key in `alias_e164s`, and alias matching only ever resolves NUMBERS, so an
+  // email-keyed contact on either side would vanish rather than redirect. Both
+  // the target list and the control below are restricted to number keys until
+  // the RPC learns about email keys.
   const mergeCandidates = allCustomers
-    .filter((c) => c.customer_e164 !== memory.customer_e164 && c.type === "customer")
+    .filter(
+      (c) =>
+        c.customer_e164 !== memory.customer_e164 &&
+        c.type === "customer" &&
+        !isEmailContactKey(c.customer_e164)
+    )
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
   // The URL number can be a merged-in alias, and the owner/override identity
@@ -169,8 +186,10 @@ export default async function CustomerDetailPage({ params }: Props) {
     (memory.alias_e164s ?? [])
       .map((a) => contactNames.get(a))
       .find((c): c is ContactName => Boolean(c));
-  const headerName =
-    headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
+  // The key is the last-resort label, and for an email-keyed contact the label
+  // is the bare address: nobody should be shown the internal `email:` prefix.
+  const contactLabel = formatContactKey(memory.customer_e164);
+  const headerName = headerContact?.name ?? (memory.display_name?.trim() || contactLabel);
   // Overlaid identity wins for the badge; otherwise show the stored type.
   const headerBadge =
     headerContact?.kind === "owner" || headerContact?.kind === "employee"
@@ -195,10 +214,8 @@ export default async function CustomerDetailPage({ params }: Props) {
             </span>
           )}
         </div>
-        {headerName !== memory.customer_e164 && (
-          <p className="text-sm text-parchment/50 font-mono mt-0.5">
-            {memory.customer_e164}
-          </p>
+        {headerName !== contactLabel && (
+          <p className="text-sm text-parchment/50 font-mono mt-0.5">{contactLabel}</p>
         )}
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
           {channelLabel && (
@@ -257,11 +274,17 @@ export default async function CustomerDetailPage({ params }: Props) {
         teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
       />
 
-      <ContactReplyModeToggle
-        businessId={business.id}
-        customerE164={memory.customer_e164}
-        initialMode={memory.sms_reply_mode}
-      />
+      {/* SMS reply mode governs auto-replies to INBOUND texts, so a short code
+          belongs here (a lead source texting us is the classic suppress
+          target). Only an email-keyed contact, which has no inbound text at
+          all, is excluded. */}
+      {!isEmailContactKey(memory.customer_e164) && (
+        <ContactReplyModeToggle
+          businessId={business.id}
+          customerE164={memory.customer_e164}
+          initialMode={memory.sms_reply_mode}
+        />
+      )}
 
       {/* Document request: customers with a real (textable) number only —
           short-code/service rows can't receive the request SMS. */}
@@ -281,7 +304,7 @@ export default async function CustomerDetailPage({ params }: Props) {
           non-customer (company short code, vendor, tester, owner/employee) so a
           directory row can never be folded into a customer and deleted — the
           target list is already restricted to customers above. */}
-      {memory.type === "customer" && (
+      {memory.type === "customer" && !isEmailContactKey(memory.customer_e164) && (
         <CustomerMergeAction
           businessId={business.id}
           customerE164={memory.customer_e164}

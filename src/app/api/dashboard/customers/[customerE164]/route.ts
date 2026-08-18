@@ -26,6 +26,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import {
   deleteCustomerMemory,
+  EmailKeyedContactError,
   getCustomerMemory,
   listSmsHistoryForCustomer,
   setContactSmsReplyMode,
@@ -42,16 +43,21 @@ import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
+import { classifyContactKey } from "../../../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 60 };
 const WRITE_RATE = { interval: 60 * 1000, maxRequests: 20 };
 
-// E.164 or a bare 3-8 digit short code — service/lead-source contacts (folded
-// from the old overrides) are keyed by short codes and must be viewable too.
+// Any contact KEY: an E.164 number, a bare 3-8 digit short code
+// (service/lead-source contacts, folded from the old overrides), or an
+// `email:` key for a contact we only know by address. All three open a profile
+// page, so all three must be editable, taggable, assignable and deletable.
 const paramsSchema = z.object({
-  customerE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/)
+  customerE164: z.string().refine((v) => classifyContactKey(v) !== null, {
+    message: "Not a contact key"
+  })
 });
 
 const querySchema = z.object({
@@ -305,6 +311,11 @@ export async function PATCH(
 
     return successResponse({ ok: true });
   } catch (err) {
+    // Editing away the address an email-keyed contact IS: a refusal the owner
+    // can act on, not a 500 from the underlying constraint.
+    if (err instanceof EmailKeyedContactError) {
+      return errorResponse("VALIDATION_ERROR", err.message);
+    }
     return handleRouteError(err);
   }
 }

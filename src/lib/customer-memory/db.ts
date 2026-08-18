@@ -23,6 +23,23 @@ import {
   ingestPinnedNote,
   retirePinnedNote
 } from "@/lib/memory/graph-deterministic";
+// The contact-key vocabulary lives in the Deno _shared tree so the AiFlow
+// worker and this app share ONE definition (same direction as
+// capture-contact.ts importing the flow engine).
+//
+// contactAliasOrFilter is "this key, or a number merged away into it" as a
+// PostgREST filter. Number keys keep the alias-aware `.or()` every call site
+// used before; an EMAIL key returns null and is matched with a plain `.eq()`
+// instead, because `alias_e164s` only ever collects the NUMBERS a merge folded
+// away (so the alias arm can never match an address) and an address is not
+// worth interpolating into a comma-delimited filter string. The branch is
+// spelled out at each call site rather than wrapped in a generic helper: a
+// generic over the PostgREST builder blows TypeScript's instantiation depth.
+import {
+  contactAliasOrFilter,
+  contactKeyEmail,
+  emailContactKey
+} from "../../../supabase/functions/_shared/contact_key";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -42,12 +59,12 @@ export async function getCustomerMemory(
   // strictly `+digits`, so the value is safe inside the PostgREST filter
   // string (no commas/dots/braces to escape). `cs` = array contains, served
   // by the GIN index on alias_e164s.
-  const { data, error } = await db
-    .from("contacts")
-    .select(ALL_COLUMNS)
-    .eq("business_id", businessId)
-    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
-    .maybeSingle();
+  const base = db.from("contacts").select(ALL_COLUMNS).eq("business_id", businessId);
+  const filter = contactAliasOrFilter(customerE164);
+  const { data, error } = await (filter
+    ? base.or(filter)
+    : base.eq("customer_e164", customerE164)
+  ).maybeSingle();
   if (error) throw new Error(`getCustomerMemory: ${error.message}`);
   return (data as CustomerMemoryRow | null) ?? null;
 }
@@ -85,6 +102,13 @@ export async function createCustomerMemory(
 ): Promise<CustomerMemoryRow> {
   const db = client ?? (await createSupabaseServiceClient());
   const trimmedName = input.displayName?.trim() || null;
+  // An email-keyed contact MUST carry its address in `email` too. That is the
+  // DB invariant (contacts_email_key_matches_email) that keeps every existing
+  // email lookup working without a special case. Derive it from the key rather
+  // than trusting the caller to pass both, and let the key win when they
+  // disagree (the key is the identity; the column is the projection of it).
+  const keyEmail = contactKeyEmail(input.customerE164);
+  const email = keyEmail ?? input.email?.trim() ?? null;
   const { data, error } = await db
     .from("contacts")
     .insert({
@@ -95,7 +119,7 @@ export async function createCustomerMemory(
       // it wins over the read-time owner/employee overlay (name_source='manual').
       // A nameless add stays 'auto' (the DB default) — nothing to protect yet.
       ...(trimmedName ? { name_source: "manual" satisfies ContactNameSource } : {}),
-      email: input.email?.trim() || null,
+      email: email || null,
       pinned_md: input.pinnedMd?.trim() || null,
       ...(input.type ? { type: input.type } : {})
     })
@@ -113,7 +137,7 @@ export async function createCustomerMemory(
   await ingestContact(businessId, {
     displayName: trimmedName,
     e164: input.customerE164,
-    email: input.email?.trim() || null
+    email: email || null
   });
   if (input.pinnedMd?.trim()) {
     await ingestPinnedNote(businessId, {
@@ -123,6 +147,95 @@ export async function createCustomerMemory(
     });
   }
   return data as unknown as CustomerMemoryRow;
+}
+
+export type EnsureEmailContactInput = {
+  displayName?: string | null;
+  /** Owner-authored sticky note, applied only when this call creates the row. */
+  pinnedMd?: string | null;
+  /** Classification for a NEWLY created row; defaults to the DB default ('customer'). */
+  type?: ContactType;
+  /** Tag stamped on a NEWLY created row only; an existing contact's tags are untouched. */
+  sourceTag?: string;
+};
+
+export type EnsureEmailContactResult = {
+  row: CustomerMemoryRow;
+  /** True when THIS call created the row (the caller fires contact_created). */
+  created: boolean;
+};
+
+/**
+ * Ensure a contact exists for an email address, keyed by that address.
+ *
+ * This is the entry point for a lead we only know by email: a ReferralExchange
+ * or Realtor.com alert with an address and no number. Before this existed such
+ * a lead had no contact row at all, so it could not be tagged, owned, listed,
+ * or reached by any tag-triggered follow-up.
+ *
+ * Resolution order matters, and it is "reuse before create":
+ *   1. An existing contact that already carries this address wins, WHATEVER
+ *      its key. Usually that is a phone-keyed customer who told us their email
+ *      earlier; creating a second, email-keyed row for the same person would
+ *      split their history in half. This is the case that makes the whole
+ *      feature safe to turn on for tenants who already link emails.
+ *   2. Otherwise insert a fresh row keyed `email:<address>`.
+ *
+ * Throws only on an unexpected database error. A lost create race resolves to
+ * the winner's row with created=false, so `contact_created` fires exactly once.
+ */
+export async function ensureEmailContact(
+  businessId: string,
+  email: string,
+  input: EnsureEmailContactInput = {},
+  client?: SupabaseClient
+): Promise<EnsureEmailContactResult | null> {
+  const key = emailContactKey(email);
+  if (!key) return null;
+  const address = contactKeyEmail(key) as string;
+  const db = client ?? (await createSupabaseServiceClient());
+
+  // 1) Reuse: does any contact already carry this address?
+  const existingByEmail = await findCustomerByEmail(businessId, address, db);
+  if (existingByEmail) {
+    const row = await getCustomerMemory(businessId, existingByEmail.customerE164, db);
+    if (row) return { row, created: false };
+  }
+
+  // 2) Create, keyed by the address.
+  const trimmedName = input.displayName?.trim() || null;
+  try {
+    const row = await createCustomerMemory(
+      businessId,
+      {
+        customerE164: key,
+        displayName: trimmedName,
+        email: address,
+        pinnedMd: input.pinnedMd ?? null,
+        ...(input.type ? { type: input.type } : {})
+      },
+      db
+    );
+    const sourceTag = input.sourceTag?.trim();
+    if (!sourceTag) return { row, created: true };
+    // Origin tag on the NEW row only, mirroring ensureCapturedContact. Tagging
+    // is a nice-to-have: a failure here must not turn a created contact into a
+    // reported failure, so the row is returned either way.
+    const { data: tagged } = await db
+      .from("contacts")
+      .update({ tags: [sourceTag], updated_at: new Date().toISOString() })
+      .eq("id", row.id)
+      .select(ALL_COLUMNS)
+      .maybeSingle();
+    return { row: (tagged as unknown as CustomerMemoryRow | null) ?? row, created: true };
+  } catch (err) {
+    if (!(err instanceof CustomerExistsError)) throw err;
+    // Raced: a concurrent writer created the same key between our lookup and
+    // our insert. Theirs is the creation; ours is a no-op read.
+    const row = await getCustomerMemory(businessId, key, db);
+    if (!row) throw err;
+    return { row, created: false };
+  }
 }
 
 /**
@@ -212,12 +325,12 @@ export async function linkCustomerEmail(
   //    `customer_e164`. Matching only the raw number would miss that row and
   //    (below) insert a duplicate profile, splitting voice/SMS identity from
   //    the email rollup. Mirror getCustomerMemory's (e164 OR alias) filter.
-  const { data: existing, error: selErr } = await db
-    .from("contacts")
-    .select("id, email")
-    .eq("business_id", businessId)
-    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
-    .maybeSingle();
+  const lookup = db.from("contacts").select("id, email").eq("business_id", businessId);
+  const filter = contactAliasOrFilter(customerE164);
+  const { data: existing, error: selErr } = await (filter
+    ? lookup.or(filter)
+    : lookup.eq("customer_e164", customerE164)
+  ).maybeSingle();
   if (selErr) throw new Error(`linkCustomerEmail: ${selErr.message}`);
   if (existing) {
     // Never clobber an address the OWNER (or an earlier capture) already set.
@@ -243,12 +356,14 @@ export async function linkCustomerEmail(
   // created the profile between our SELECT and INSERT — almost certainly with
   // a null email. Don't drop the captured address: fill it now, alias-aware,
   // but only while still empty so we never clobber an owner-set value.
-  const { error: raceErr } = await db
+  const raceUpdate = db
     .from("contacts")
     .update({ email: normalized, updated_at: new Date().toISOString() })
-    .eq("business_id", businessId)
-    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
-    .is("email", null);
+    .eq("business_id", businessId);
+  const { error: raceErr } = await (filter
+    ? raceUpdate.or(filter)
+    : raceUpdate.eq("customer_e164", customerE164)
+  ).is("email", null);
   if (raceErr) throw new Error(`linkCustomerEmail: ${raceErr.message}`);
 }
 
@@ -437,6 +552,26 @@ export type CustomerOwnerEdit = {
   nameSource?: ContactNameSource;
 };
 
+/**
+ * Thrown when an edit would change the address an email-keyed contact IS.
+ *
+ * For a phone-keyed contact `email` is a linked detail the owner may edit or
+ * clear freely. For an email-keyed one it is the identity: the DB invariant
+ * contacts_email_key_matches_email ties the column to the key, so a "clear the
+ * email" save would come back as a raw constraint violation. This is the
+ * controlled refusal instead, and it says what to do (the address a contact is
+ * keyed by changes by adding the new contact, not by editing the old one).
+ */
+export class EmailKeyedContactError extends Error {
+  constructor(public readonly customerE164: string) {
+    super(
+      "This contact is identified by their email address, so the address cannot be changed or " +
+        "removed here. Add a contact with the new address instead."
+    );
+    this.name = "EmailKeyedContactError";
+  }
+}
+
 /** Owner-driven edit (contacts page). Only writes the fields the owner controls. */
 export async function updateCustomerOwnerFields(
   businessId: string,
@@ -444,6 +579,13 @@ export async function updateCustomerOwnerFields(
   edit: CustomerOwnerEdit,
   client?: SupabaseClient
 ): Promise<void> {
+  // The key's own address is the one email value that is not editable. A save
+  // that merely re-sends the SAME address (the edit form posts every field) is
+  // a no-op, not a refusal.
+  const keyEmail = contactKeyEmail(customerE164);
+  if (keyEmail && "email" in edit && (edit.email ?? "").trim().toLowerCase() !== keyEmail) {
+    throw new EmailKeyedContactError(customerE164);
+  }
   const db = client ?? (await createSupabaseServiceClient());
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -519,12 +661,15 @@ export async function setContactSmsReplyMode(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data: updated, error: updErr } = await db
+  const filter = contactAliasOrFilter(customerE164);
+  const modeUpdate = db
     .from("contacts")
     .update({ sms_reply_mode: mode, updated_at: new Date().toISOString() })
-    .eq("business_id", businessId)
-    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
-    .select("id");
+    .eq("business_id", businessId);
+  const { data: updated, error: updErr } = await (filter
+    ? modeUpdate.or(filter)
+    : modeUpdate.eq("customer_e164", customerE164)
+  ).select("id");
   if (updErr) throw new Error(`setContactSmsReplyMode: ${updErr.message}`);
   if ((updated ?? []).length > 0) return;
   const { error: insErr } = await db.from("contacts").insert({
@@ -537,11 +682,13 @@ export async function setContactSmsReplyMode(
   }
   if (insErr) {
     // Raced by a concurrent profile create — apply the mode to the winner.
-    const { error: raceErr } = await db
+    const raceUpdate = db
       .from("contacts")
       .update({ sms_reply_mode: mode, updated_at: new Date().toISOString() })
-      .eq("business_id", businessId)
-      .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`);
+      .eq("business_id", businessId);
+    const { error: raceErr } = await (filter
+      ? raceUpdate.or(filter)
+      : raceUpdate.eq("customer_e164", customerE164));
     if (raceErr) throw new Error(`setContactSmsReplyMode: ${raceErr.message}`);
   }
 }

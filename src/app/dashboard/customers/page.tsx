@@ -30,6 +30,7 @@ import {
   CustomersList,
   type CustomerListRow
 } from "@/components/dashboard/CustomersList";
+import { formatContactKey } from "../../../../supabase/functions/_shared/contact_key";
 
 export const dynamic = "force-dynamic";
 
@@ -116,9 +117,14 @@ export default async function DashboardCustomersPage() {
     const contact = contactNames.get(c.customer_e164);
     const type =
       contact?.kind === "owner" || contact?.kind === "employee" ? contact.kind : c.type;
+    // `e164` stays the contact KEY (it is the row's link target and its
+    // identity); `label` is the human-readable form of that key, which for an
+    // email-keyed contact is the bare address without the `email:` prefix.
+    const label = formatContactKey(c.customer_e164);
     return {
       e164: c.customer_e164,
-      name: contact?.name ?? c.display_name ?? c.customer_e164,
+      label,
+      name: contact?.name ?? c.display_name ?? label,
       type,
       lastChannel: c.last_channel,
       pinned: Boolean(c.pinned_md?.trim()),

@@ -6,8 +6,11 @@
  * ignores everything else, so a previously exported file re-imports cleanly.
  *
  * Import semantics (row-by-row, never all-or-nothing):
- *   * `phone` is required and normalized like the Add-customer form
- *     (10-digit → +1…, `00`/`+` international, short codes allowed).
+ *   * A row is identified by `phone` OR `email`. `phone` is normalized like
+ *     the Add-customer form (10-digit → +1…, `00`/`+` international, short
+ *     codes allowed). A row with no usable number but a valid address is keyed
+ *     by that address instead, which is also how a previously EXPORTED
+ *     email-keyed contact round-trips (its `phone` cell holds the `email:` key).
  *   * Existing contact (primary number OR merged-away alias) → update, but
  *     only with non-empty cells — a blank cell means "leave as is", never
  *     "clear". A CSV name is a deliberate label (name_source='manual').
@@ -38,6 +41,12 @@ import {
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { escapeLikeLiteral } from "@/lib/privacy/deletion";
+import {
+  contactAliasOrFilter,
+  contactKeyEmail,
+  emailContactKey,
+  isEmailContactKey
+} from "../../../supabase/functions/_shared/contact_key";
 import { parseCsv, serializeCsv } from "./csv";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -130,7 +139,11 @@ export async function exportContactsCsv(
   ]);
 }
 
-/** Header + one example row showing the importable columns. */
+/**
+ * Header + example rows showing the importable columns. Two rows, because the
+ * second one is the discoverable part: a contact identified only by an email
+ * address, with the phone cell left blank.
+ */
 export function contactsCsvTemplate(): string {
   return serializeCsv([
     ["phone", "name", "type", "email", "sms_reply_mode", "pinned_notes"],
@@ -141,7 +154,8 @@ export function contactsCsvTemplate(): string {
       "jane@example.com",
       "auto",
       "Prefers texts over calls"
-    ]
+    ],
+    ["", "Sam Okoye", "customer", "sam@example.com", "auto", "Email only, no number yet"]
   ]);
 }
 
@@ -168,8 +182,10 @@ export async function importContactsCsv(
     summary.errors.push({ row: 0, message: parsed.error });
     return summary;
   }
-  if (!parsed.headers.includes("phone")) {
-    summary.errors.push({ row: 1, message: 'Missing required column: "phone".' });
+  // Either identity column is enough. A file with only addresses is the shape
+  // a lead source exports when it never had numbers to give.
+  if (!parsed.headers.includes("phone") && !parsed.headers.includes("email")) {
+    summary.errors.push({ row: 1, message: 'Missing required column: "phone" or "email".' });
     return summary;
   }
   if (parsed.rows.length > MAX_IMPORT_ROWS) {
@@ -186,25 +202,46 @@ export async function importContactsCsv(
     const row = parsed.rows[i];
     // 1-based file row: +1 for the header line, +1 for 0-index.
     const fileRow = i + 2;
-    const normalized = normalizeContactNumber(row.phone);
-    if (!normalized.ok) {
-      summary.errors.push({ row: fileRow, message: `phone: ${normalized.reason}` });
-      summary.skipped += 1;
-      continue;
-    }
-    const phone = normalized.value;
-
     const name = (row.name ?? "").trim();
     const email = (row.email ?? "").trim();
     const type = (row.type ?? "").trim().toLowerCase();
     const replyMode = (row.sms_reply_mode ?? "").trim().toLowerCase();
     const pinned = (row.pinned_notes ?? "").trim();
 
+    // Address validation runs FIRST because the address can be the row's
+    // identity, not just one of its fields.
     if (email && !EMAIL_RE.test(email)) {
       summary.errors.push({ row: fileRow, message: `email: "${email}" is not a valid address.` });
       summary.skipped += 1;
       continue;
     }
+
+    // The row's contact key: a number when the phone cell holds one, otherwise
+    // an address. The phone cell is also checked for an address so a file we
+    // exported (whose phone column carries the `email:` key of an email-keyed
+    // contact) re-imports as the same contact rather than as an error row.
+    const phoneCell = (row.phone ?? "").trim();
+    const normalized = normalizeContactNumber(phoneCell);
+    // The address to key by when the phone cell holds no number: the phone cell
+    // itself (already an `email:` key from an export, or a bare address someone
+    // typed into the wrong column), else the email column.
+    const addressKey =
+      emailContactKey(contactKeyEmail(phoneCell) ?? phoneCell) ?? emailContactKey(email);
+    if (!normalized.ok && !addressKey) {
+      summary.errors.push({
+        row: fileRow,
+        message: phoneCell
+          ? `phone: ${normalized.reason}`
+          : "phone: missing, and no email address to identify this contact by."
+      });
+      summary.skipped += 1;
+      continue;
+    }
+    const phone = normalized.ok ? normalized.value : (addressKey as string);
+    // An email-keyed row must carry its address in `email` too (the DB
+    // constraint contacts_email_key_matches_email), whatever the file said.
+    const keyEmail = contactKeyEmail(phone);
+    const rowEmail = keyEmail ?? email;
     if (type && !(CONTACT_TYPES as readonly string[]).includes(type)) {
       summary.errors.push({
         row: fileRow,
@@ -227,7 +264,7 @@ export async function importContactsCsv(
       const patch: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
         ...(name ? { display_name: name, name_source: "manual" } : {}),
-        ...(email ? { email } : {}),
+        ...(rowEmail ? { email: rowEmail } : {}),
         ...(type ? { type: type as ContactType } : {}),
         ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
         ...(pinned ? { pinned_md: pinned } : {})
@@ -235,12 +272,12 @@ export async function importContactsCsv(
       // Alias-aware update-by-phone so a merged-away number updates the
       // surviving profile instead of recreating the one the owner just merged.
       const applyUpdate = async (): Promise<boolean> => {
-        const { data: existing, error: selErr } = await db
-          .from("contacts")
-          .select("id")
-          .eq("business_id", businessId)
-          .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
-          .maybeSingle();
+        const lookup = db.from("contacts").select("id").eq("business_id", businessId);
+        const aliasFilter = contactAliasOrFilter(phone);
+        const { data: existing, error: selErr } = await (aliasFilter
+          ? lookup.or(aliasFilter)
+          : lookup.eq("customer_e164", phone)
+        ).maybeSingle();
         if (selErr) throw new Error(selErr.message);
         if (!existing) return false;
         const { error: updErr } = await db.from("contacts").update(patch).eq("id", existing.id);
@@ -254,7 +291,7 @@ export async function importContactsCsv(
           customer_e164: phone,
           display_name: name || null,
           ...(name ? { name_source: "manual" } : {}),
-          email: email || null,
+          email: rowEmail || null,
           ...(type ? { type: type as ContactType } : {}),
           ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
           pinned_md: pinned || null
@@ -278,13 +315,13 @@ export async function importContactsCsv(
       const tryEmailFold = async (): Promise<
         "no_match" | "raced" | "folded" | "created_unfolded"
       > => {
-        if (!email) return "no_match";
+        if (!rowEmail) return "no_match";
         if (type && type !== "customer") return "no_match";
         const { data: matches, error: matchErr } = await db
           .from("contacts")
           .select("id, customer_e164, type")
           .eq("business_id", businessId)
-          .ilike("email", escapeLikeLiteral(email))
+          .ilike("email", escapeLikeLiteral(rowEmail))
           .limit(2);
         if (matchErr) throw new Error(matchErr.message);
         const rows = (matches ?? []) as Array<{
@@ -293,6 +330,21 @@ export async function importContactsCsv(
           type: string;
         }>;
         if (rows.length !== 1 || rows[0].type !== "customer") return "no_match";
+
+        // An EMAIL-keyed row has no second number to fold in: the address IS
+        // its identity, and the match already carries that address. So this is
+        // not a merge, it is the same contact reached the same way. Patch them
+        // and stop, rather than creating a second row for one person.
+        // (applyUpdate ran first and missed, so the match is a different,
+        // phone-keyed contact who gave us this address earlier.)
+        if (isEmailContactKey(phone)) {
+          const { error: patchOnlyErr } = await db
+            .from("contacts")
+            .update(patch)
+            .eq("id", rows[0].id);
+          if (patchOnlyErr) throw new Error(patchOnlyErr.message);
+          return "folded";
+        }
 
         const { error: insErr } = await db.from("contacts").insert({
           business_id: businessId,
@@ -352,7 +404,7 @@ export async function importContactsCsv(
           contact: {
             e164: phone,
             ...(name ? { name } : {}),
-            ...(email ? { email } : {})
+            ...(rowEmail ? { email: rowEmail } : {})
           },
           dedupeKey: `ce:created:${phone}:${Date.now()}`
         });

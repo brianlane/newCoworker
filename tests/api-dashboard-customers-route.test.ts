@@ -9,6 +9,10 @@ vi.mock("@/lib/documents/cleanup", () => ({
   deleteContactLinkedDocuments: vi.fn(async () => ({ deleted: 0, keptSigned: 0 }))
 }));
 
+// The routes branch on `err instanceof <Error class>`, so the mock has to carry
+// real classes, not stubs: an undefined right-hand side makes every error path
+// throw a TypeError instead of returning its response. They are declared inside
+// the factory because vi.mock is hoisted above every module-level binding.
 vi.mock("@/lib/customer-memory/db", () => ({
   listCustomerMemories: vi.fn(),
   getCustomerMemory: vi.fn(),
@@ -16,6 +20,20 @@ vi.mock("@/lib/customer-memory/db", () => ({
   updateCustomerOwnerFields: vi.fn(),
   setContactSmsReplyMode: vi.fn(),
   deleteCustomerMemory: vi.fn(),
+  createCustomerMemory: vi.fn(),
+  ensureEmailContact: vi.fn(),
+  EmailKeyedContactError: class EmailKeyedContactError extends Error {
+    constructor(public readonly customerE164: string) {
+      super("This contact is identified by their email address");
+      this.name = "EmailKeyedContactError";
+    }
+  },
+  CustomerExistsError: class CustomerExistsError extends Error {
+    constructor(public readonly customerE164: string) {
+      super(`A customer profile already exists for ${customerE164}`);
+      this.name = "CustomerExistsError";
+    }
+  },
   DEFAULT_LIST_LIMIT: 50,
   MAX_LIST_LIMIT: 200
 }));
@@ -40,6 +58,7 @@ import {
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   deleteCustomerMemory,
+  EmailKeyedContactError,
   getCustomerMemory,
   listCustomerMemories,
   listSmsHistoryForCustomer,
@@ -167,6 +186,17 @@ describe("GET /api/dashboard/customers/:e164 (detail)", () => {
     });
     const res = await DETAIL_GET(detailUrl("not-a-phone"), params("not-a-phone"));
     expect(res.status).toBe(400);
+  });
+
+  it("accepts an email: contact key as the path segment", async () => {
+    // An email-keyed contact opens a profile page, so every action on that page
+    // has to reach this route rather than 400 before any business logic runs.
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(null);
+    const key = "email:valm0417@gmail.com";
+    const res = await DETAIL_GET(detailUrl(key), params(encodeURIComponent(key)));
+    // 404 (no such row in this stub), NOT 400: the key itself was accepted.
+    expect(res.status).toBe(404);
   });
 
   it("returns the full memory payload + recent SMS history when found", async () => {
@@ -339,6 +369,31 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(res.status).toBe(200);
     expect(setContactSmsReplyMode).toHaveBeenCalledWith(BIZ, CUSTOMER, "forward_owner");
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+  });
+
+  it("returns 400, not a raw constraint error, when an edit would change the address an email-keyed contact IS", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    const key = "email:valm0417@gmail.com";
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "c1",
+      business_id: BIZ,
+      customer_e164: key,
+      email: "valm0417@gmail.com"
+    } as never);
+    vi.mocked(updateCustomerOwnerFields).mockRejectedValueOnce(
+      new EmailKeyedContactError(key)
+    );
+    const res = await DETAIL_PATCH(
+      new Request(detailUrl(key).url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "someone.else@example.com" })
+      }),
+      params(encodeURIComponent(key))
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.message).toMatch(/identified by their email address/);
   });
 
   it("forwards tag edits (replace-the-set) for an existing contact", async () => {
