@@ -130,7 +130,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "Other 3rd Party Connections",
     category: "Workspace",
     benefit:
-      "Connect Drive, OneDrive, and the rest of the long tail through the Nango Connect flow. Google and Microsoft 365 have their own pages.",
+      "Connect OneDrive, 1Password, and the rest of the long tail connections through the Nango Connect flow. Google and Microsoft 365 have their own pages.",
     icon: Plug
   },
   {
