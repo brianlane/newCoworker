@@ -3606,6 +3606,22 @@ discovered fleet **exactly** in both directions: a sweep missing from it is
 never watched, and a stale entry pages forever about a job that no longer
 exists.
 
+**Shipping a NEW daily or weekly sweep: merge it BEFORE its UTC slot, not
+after.** The watchdog starts expecting a sweep the moment its migration
+lands, but the sweep cannot record a run until its first scheduled tick. A
+daily sweep merged after its slot has already passed that day therefore
+produces exactly one "STOPPED: no run recorded" ACTION REQUIRED email at the
+next 03:30 UTC check, self-resolving at its first real tick. This happened
+twice in the watchdog's first ten days (vps-contract-upgrade-sweep, merged
+16:00 UTC against a 10:30 slot; priority-support-nudge-sweep, merged 20:49
+UTC against a 15:35 slot); both ran clean on their first tick. This is a
+known cost, not a bug: a "no rows ever means awaiting first run" grace was
+considered and rejected, because it would permanently mute a sweep whose
+recording never worked, and that silence is worse than one honest email.
+When the email arrives anyway, the check is one query: the sweep's row in
+`cron_sweep_runs` after its first tick, or `tsx debug/read-cron-jobs.ts` to
+confirm the job is live and waiting.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
