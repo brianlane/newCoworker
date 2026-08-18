@@ -14,6 +14,7 @@ import type { IntakeAnswers } from "@/lib/white-glove/template";
 import { extendPrioritySupport } from "@/lib/db/white-glove-offers";
 import { clearPrioritySupportNudgeStamp } from "@/lib/db/businesses";
 import { WHITE_GLOVE_PRIORITY_SUPPORT_DAYS } from "@/lib/plans/white-glove";
+import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -302,20 +303,44 @@ export async function attachIntakePrioritySupportToBusiness(
       new Date(grantedAt.getTime() + INTAKE_PRIORITY_SUPPORT_DAYS * 24 * 60 * 60 * 1000),
       db
     );
-    // Re-arm the expiry warning so this new window can warn before it lapses.
-    await clearPrioritySupportNudgeStamp(businessId, db);
   } catch (err) {
-    // Release the claim so a retry can still grant, rather than stamping the
-    // questionnaire as granted when no window actually opened.
-    await db
+    // ONLY the window write rolls the claim back. Releasing on any later
+    // failure would clear the stamp for a window that did open, letting a
+    // retry re-claim an already-granted questionnaire.
+    const { error: releaseError } = await db
       .from("white_glove_intakes")
       .update({ priority_support_granted_at: null })
       .in(
         "id",
         rows.map((r) => r.id)
       );
+    if (releaseError) {
+      // Both writes failed, so the questionnaire is stamped as granted with no
+      // window behind it and the compare-and-swap will never match it again:
+      // the promised month is stranded until someone comps it by hand. Loud on
+      // purpose, because nothing downstream can detect this state.
+      logger.error("intake priority support: claim release FAILED, grant stranded", {
+        businessId,
+        intakeIds: rows.map((r) => r.id),
+        releaseError: releaseError.message,
+        grantError: err instanceof Error ? err.message : String(err)
+      });
+    }
     throw err;
   }
+
+  // Best-effort, and deliberately OUTSIDE the rollback: re-arming the expiry
+  // warning is a nicety, and failing it must never undo a window that is
+  // already open.
+  try {
+    await clearPrioritySupportNudgeStamp(businessId, db);
+  } catch (err) {
+    logger.warn("intake priority support: could not re-arm the expiry nudge", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   return rows.length;
 }
 

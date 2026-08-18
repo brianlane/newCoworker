@@ -3,11 +3,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/db/white-glove-offers", () => ({ extendPrioritySupport: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ clearPrioritySupportNudgeStamp: vi.fn() }));
+vi.mock("@/lib/logger", () => ({
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }
+}));
 
 import { attachIntakePrioritySupportToBusiness } from "@/lib/white-glove/intake";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { extendPrioritySupport } from "@/lib/db/white-glove-offers";
 import { clearPrioritySupportNudgeStamp } from "@/lib/db/businesses";
+import { logger } from "@/lib/logger";
 
 const BIZ = "0f0f0f0f-0000-4000-8000-0000000000bb";
 const DAY = 24 * 60 * 60 * 1000;
@@ -107,6 +111,40 @@ describe("attachIntakePrioritySupportToBusiness", () => {
       1
     );
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("keeps the window when only the nudge re-arm fails", async () => {
+    // The window IS open. Releasing the claim here would let a retry re-claim
+    // an already-granted questionnaire and log it as if support never opened.
+    for (const thrown of [new Error("stamp down"), "stamp down"]) {
+      vi.clearAllMocks();
+      vi.mocked(clearPrioritySupportNudgeStamp).mockRejectedValueOnce(thrown as never);
+      const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+      expect(await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")).toBe(1);
+      expect(extendPrioritySupport).toHaveBeenCalledTimes(1);
+      // No rollback: the only UPDATE payload is the claim, never a null release.
+      expect(db.update).not.toHaveBeenCalledWith({ priority_support_granted_at: null });
+      expect(logger.warn).toHaveBeenCalled();
+    }
+  });
+
+  it("shouts when the claim release ALSO fails, because the month is stranded", async () => {
+    // Stamped as granted with no window behind it: the compare-and-swap will
+    // never match again, so nothing downstream can detect or repair it.
+    for (const thrown of [new Error("db down"), "db down"]) {
+      vi.clearAllMocks();
+      vi.mocked(extendPrioritySupport).mockRejectedValueOnce(thrown as never);
+      const db = attachDb();
+      db.in.mockResolvedValueOnce({ error: { message: "release down" } } as never);
+      useDb(db);
+      await expect(
+        attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")
+      ).rejects.toThrow(/db down/);
+      expect(logger.error).toHaveBeenCalledWith(
+        "intake priority support: claim release FAILED, grant stranded",
+        expect.objectContaining({ businessId: BIZ, intakeIds: ["intake-1"] })
+      );
+    }
   });
 
   it("is a no-op for a blank owner email", async () => {
