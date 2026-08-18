@@ -1,6 +1,6 @@
 /**
  * The internal Instagram comment-reply bridge
- * (/api/internal/instagram-comment-reply), which is how the Deno AiFlow
+ * (/api/internal/comment-reply), which is how the Deno AiFlow
  * worker answers a comment without holding a page token.
  *
  * The load-bearing behavior here is the FAILURE taxonomy. Instagram allows
@@ -22,25 +22,28 @@ vi.mock("@/lib/meta/client", async () => {
   return {
     ...actual,
     replyToInstagramComment: vi.fn(),
+    replyToFacebookComment: vi.fn(),
     sendInstagramPrivateReply: vi.fn()
   };
 });
 
-import { POST } from "@/app/api/internal/instagram-comment-reply/route";
+import { POST } from "@/app/api/internal/comment-reply/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { getMetaConnection } from "@/lib/db/meta-connections";
 import {
   MetaApiError,
+  replyToFacebookComment,
   replyToInstagramComment,
   sendInstagramPrivateReply
 } from "@/lib/meta/client";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const publicReply = vi.mocked(replyToInstagramComment);
+const fbReply = vi.mocked(replyToFacebookComment);
 const privateReply = vi.mocked(sendInstagramPrivateReply);
 
 function req(body: unknown) {
-  return new Request("https://x/api/internal/instagram-comment-reply", {
+  return new Request("https://x/api/internal/comment-reply", {
     method: "POST",
     body: JSON.stringify(body)
   });
@@ -69,10 +72,11 @@ beforeEach(() => {
   vi.mocked(assertCronAuth).mockReturnValue(true);
   vi.mocked(getMetaConnection).mockResolvedValue(connection());
   publicReply.mockResolvedValue({ commentId: "reply-1" });
+  fbReply.mockResolvedValue({ commentId: "fb-reply-1" });
   privateReply.mockResolvedValue({ messageId: "m-1" });
 });
 
-describe("POST /api/internal/instagram-comment-reply", () => {
+describe("POST /api/internal/comment-reply", () => {
   it("refuses a bad bearer before touching anything", async () => {
     vi.mocked(assertCronAuth).mockReturnValue(false);
     const res = await POST(req(body));
@@ -93,6 +97,29 @@ describe("POST /api/internal/instagram-comment-reply", () => {
     expect(await res.json()).toMatchObject({ data: { ok: true, mode: "public", id: "reply-1" } });
     expect(publicReply).toHaveBeenCalledWith("c-9", "page-tok", "Thanks!");
     expect(privateReply).not.toHaveBeenCalled();
+  });
+
+  it("routes a Facebook public reply to the /comments edge, not /replies", async () => {
+    // Same idea, different noun: Instagram replies live on
+    // /{comment_id}/replies and Facebook's on /{comment_id}/comments.
+    const res = await POST(req({ ...body, platform: "facebook" }));
+    expect(await res.json()).toMatchObject({ data: { ok: true, id: "fb-reply-1" } });
+    expect(fbReply).toHaveBeenCalledWith("c-9", "page-tok", "Thanks!");
+    expect(publicReply).not.toHaveBeenCalled();
+  });
+
+  it("defaults to Instagram when an older worker sends no platform", async () => {
+    // The worker deploys separately from Next.js, so a request predating the
+    // field must not fail or silently post to the wrong network.
+    await POST(req(body));
+    expect(publicReply).toHaveBeenCalled();
+    expect(fbReply).not.toHaveBeenCalled();
+  });
+
+  it("uses the SAME private-reply call on both surfaces", async () => {
+    // Private replies are the Messenger Send API on the Page node either way.
+    await POST(req({ ...body, mode: "private", platform: "facebook" }));
+    expect(privateReply).toHaveBeenCalledWith("page-7", "page-tok", "c-9", "Thanks!");
   });
 
   it("routes a private reply through the PAGE node", async () => {

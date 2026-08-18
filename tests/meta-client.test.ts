@@ -13,6 +13,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   MetaApiError,
   META_GRAPH_BASE_URL,
+  META_PAGE_SUBSCRIBED_FIELDS,
   META_STATE_TTL_MS,
   MESSENGER_MAX_TEXT_LENGTH,
   WHATSAPP_MAX_TEXT_LENGTH,
@@ -38,6 +39,7 @@ import {
   getInstagramMediaState,
   getTokenUserId,
   getUserProfile,
+  replyToFacebookComment,
   replyToInstagramComment,
   sendInstagramPrivateReply,
   INSTAGRAM_COMMENT_MAX_LENGTH,
@@ -346,7 +348,15 @@ describe("subscribePageToLeadgen", () => {
     expect(init.method).toBe("POST");
     const parsed = new URL(url);
     expect(parsed.pathname).toBe("/v25.0/p1/subscribed_apps");
-    expect(parsed.searchParams.get("subscribed_fields")).toBe("leadgen,messages,messaging_postbacks");
+    // Asserted against the CONSTANT, not a literal: a field added to
+    // META_PAGE_SUBSCRIBED_FIELDS but not actually sent would otherwise pass
+    // here while Meta silently kept delivering the old set.
+    expect(parsed.searchParams.get("subscribed_fields")).toBe(
+      META_PAGE_SUBSCRIBED_FIELDS.join(",")
+    );
+    // `feed` is what carries Facebook Page comments; losing it silently kills
+    // every facebook_comment flow.
+    expect(META_PAGE_SUBSCRIBED_FIELDS).toContain("feed");
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: false }));
     await expect(subscribePageToLeadgen("p1", "page-tok")).rejects.toThrow(
@@ -932,6 +942,29 @@ describe("Instagram comment replies", () => {
     expect(url.searchParams.get("message")).toBe("Thanks!");
     expect(url.searchParams.get("access_token")).toBe("page-tok");
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+  });
+
+  it("posts a FACEBOOK public reply on the /comments edge", async () => {
+    // Same idea, different noun: Instagram is /{comment_id}/replies.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "fb-reply-1" }));
+    const res = await replyToFacebookComment("fb-c-9", "page-tok", "Thanks!");
+    expect(res).toEqual({ commentId: "fb-reply-1" });
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith("/fb-c-9/comments")).toBe(true);
+    expect(url.searchParams.get("message")).toBe("Thanks!");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+  });
+
+  it("trims a Facebook reply and tolerates a missing id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "x" }));
+    await replyToFacebookComment("c", "t", "z".repeat(INSTAGRAM_COMMENT_MAX_LENGTH + 10));
+    const msg = new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("message") ?? "";
+    expect(msg.length).toBe(INSTAGRAM_COMMENT_MAX_LENGTH);
+    expect(msg.endsWith("…")).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await replyToFacebookComment("c", "t", "hi")).toEqual({ commentId: null });
   });
 
   it("addresses a private reply by comment_id on the PAGE node", async () => {

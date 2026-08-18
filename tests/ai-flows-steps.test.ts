@@ -2751,6 +2751,7 @@ describe("planStep: reply_to_comment", () => {
       action: {
         kind: "reply_to_comment",
         replyMode: "public",
+        platform: "instagram",
         commentId: "c-1",
         body: "Thanks buyer!"
       }
@@ -2773,6 +2774,19 @@ describe("planStep: reply_to_comment", () => {
     expect((plan as { action: { commentId: string } }).action.commentId).toBe("c-legacy");
   });
 
+  it("keeps the Facebook surface even when it has nothing to answer", () => {
+    // The skip note names the network, so the owner reads "the Facebook
+    // public reply" rather than a generic one.
+    const plan = planStep(base as FlowStep, {
+      vars: {},
+      trigger: { channel: "webhook", from: "facebook_comment" }
+    });
+    expect((plan as { action: { platform: string; skipReason?: string } }).action).toMatchObject({
+      platform: "facebook",
+      skipReason: "no_comment_id"
+    });
+  });
+
   it("answers a different comment when one is named explicitly", () => {
     const plan = planStep(
       { ...base, commentId: "{{vars.found_comment}}" } as FlowStep,
@@ -2789,6 +2803,7 @@ describe("planStep: reply_to_comment", () => {
       action: {
         kind: "reply_to_comment",
         replyMode: "public",
+        platform: "instagram",
         commentId: "",
         // collapseEmpty tidies the gap the missing var left.
         body: "Thanks!",

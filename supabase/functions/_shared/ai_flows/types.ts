@@ -671,7 +671,7 @@ export type FlowStep =
        * (POST /{page_id}/messages with recipient {comment_id}).
        *
        * The worker cannot call Graph itself, so it goes through the
-       * platform's internal instagram-comment-reply endpoint, same
+       * platform's internal comment-reply endpoint, same
        * arrangement as send_whatsapp.
        *
        * Meta caps private replies at ONE per comment inside a 7-day window

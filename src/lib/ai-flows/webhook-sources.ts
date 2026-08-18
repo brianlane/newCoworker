@@ -32,6 +32,10 @@ export const FIRST_PARTY_WEBHOOK_SOURCES: Record<string, WebhookSourceCopy> = {
     label: "New comment on your Instagram post",
     detail: "Your connected Instagram account, when someone comments on a post"
   },
+  facebook_comment: {
+    label: "New comment on your Facebook post",
+    detail: "Your connected Facebook Page, when someone comments on a post"
+  },
   facebook_messenger: {
     label: "New Messenger conversation",
     detail: "Your connected Facebook Page, when someone starts a Messenger chat"

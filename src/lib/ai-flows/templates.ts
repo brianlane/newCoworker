@@ -222,6 +222,8 @@ export function instagramProspectTemplate(): AiFlowTemplate {
  * the two to the same string so they can never drift apart.
  */
 export const INSTAGRAM_COMMENT_SOURCE = "instagram_comment";
+/** Lockstep copy of FACEBOOK_COMMENT_FLOW_SOURCE (src/lib/meta/webhook.ts). */
+export const FACEBOOK_COMMENT_SOURCE = "facebook_comment";
 
 /**
  * "Instagram comment follow-up": the starter for the IG comment webhook.

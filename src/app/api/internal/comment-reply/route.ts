@@ -1,12 +1,15 @@
 /**
- * Internal Instagram comment-reply endpoint: the bridge the Deno AiFlow
- * worker calls for `reply_to_comment` steps. The Graph client and the page
- * token's decryption both live in src/lib and need the Node runtime, same
- * arrangement as /api/internal/whatsapp-send.
+ * Internal comment-reply endpoint: the bridge the Deno AiFlow worker calls
+ * for `reply_to_comment` steps, on Instagram and Facebook alike. The Graph
+ * client and the page token's decryption both live in src/lib and need the
+ * Node runtime, same arrangement as /api/internal/whatsapp-send.
  *
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>` (assertCronAuth).
  *
- * POST { businessId, commentId, text, mode: "public" | "private" }
+ * POST { businessId, commentId, text, mode, platform }
+ *   mode:     "public"    reply on the comment thread
+ *             "private"   direct message to the commenter
+ *   platform: "instagram" | "facebook"
  * → 200 with a structured result. An `ok:false` outcome is NOT an HTTP
  *   error: a permanent refusal is a step-level skip the worker reports in
  *   actions_taken, not a transport failure worth retrying.
@@ -19,6 +22,7 @@ import { getMetaConnection } from "@/lib/db/meta-connections";
 import {
   INSTAGRAM_COMMENT_MAX_LENGTH,
   MetaApiError,
+  replyToFacebookComment,
   replyToInstagramComment,
   sendInstagramPrivateReply
 } from "@/lib/meta/client";
@@ -31,10 +35,12 @@ const bodySchema = z.object({
   businessId: z.string().uuid(),
   commentId: z.string().min(1).max(200),
   text: z.string().min(1).max(INSTAGRAM_COMMENT_MAX_LENGTH),
-  mode: z.enum(["public", "private"])
+  mode: z.enum(["public", "private"]),
+  // Older workers predate this field; Instagram was the only surface then.
+  platform: z.enum(["instagram", "facebook"]).default("instagram")
 });
 
-export type InstagramCommentReplyResult =
+export type CommentReplyResult =
   | { ok: true; mode: "public" | "private"; id: string | null }
   | { ok: false; reason: string; detail?: string };
 
@@ -69,44 +75,47 @@ export async function POST(request: Request): Promise<Response> {
     const body = bodySchema.parse(await request.json());
     const connection = await getMetaConnection(body.businessId);
     if (!connection?.pageToken) {
-      return successResponse<InstagramCommentReplyResult>({
+      return successResponse<CommentReplyResult>({
         ok: false,
         reason: "not_connected"
       });
     }
     if (!connection.is_active) {
-      return successResponse<InstagramCommentReplyResult>({
+      return successResponse<CommentReplyResult>({
         ok: false,
         reason: "connection_inactive"
       });
     }
-    // The private reply is addressed through the PAGE node (we are a
-    // Facebook Login app); without a page id there is nothing to post to.
+    // The private reply is addressed through the PAGE node on BOTH surfaces
+    // (we are a Facebook Login app); without a page id there is nothing to
+    // post to.
     const pageId = connection.page_id;
     if (body.mode === "private" && !pageId) {
-      return successResponse<InstagramCommentReplyResult>({ ok: false, reason: "no_page_id" });
+      return successResponse<CommentReplyResult>({ ok: false, reason: "no_page_id" });
     }
 
     try {
       if (body.mode === "public") {
-        const { commentId } = await replyToInstagramComment(
-          body.commentId,
-          connection.pageToken,
-          body.text
-        );
-        return successResponse<InstagramCommentReplyResult>({
+        // Different edges for the same idea: Instagram replies live on
+        // /{comment_id}/replies, Facebook's on /{comment_id}/comments.
+        const reply =
+          body.platform === "facebook" ? replyToFacebookComment : replyToInstagramComment;
+        const { commentId } = await reply(body.commentId, connection.pageToken, body.text);
+        return successResponse<CommentReplyResult>({
           ok: true,
           mode: "public",
           id: commentId
         });
       }
+      // The private reply is the SAME call on both surfaces: the Messenger
+      // Send API addressed by recipient.comment_id, on the Page node.
       const { messageId } = await sendInstagramPrivateReply(
         pageId as string,
         connection.pageToken,
         body.commentId,
         body.text
       );
-      return successResponse<InstagramCommentReplyResult>({
+      return successResponse<CommentReplyResult>({
         ok: true,
         mode: "private",
         id: messageId
@@ -117,6 +126,7 @@ export async function POST(request: Request): Promise<Response> {
       logger.warn("instagram comment reply failed", {
         businessId: body.businessId,
         mode: body.mode,
+        platform: body.platform,
         metaCode: meta.metaCode,
         metaSubcode: meta.metaSubcode,
         message: meta.message
@@ -125,7 +135,7 @@ export async function POST(request: Request): Promise<Response> {
         meta.code !== "request_failed" ||
         (meta.status ?? 0) >= 500 ||
         (meta.metaCode !== undefined && RETRYABLE_META_CODES.has(meta.metaCode));
-      return successResponse<InstagramCommentReplyResult>({
+      return successResponse<CommentReplyResult>({
         ok: false,
         reason: retryable ? "send_failed" : "refused",
         // Meta's own words: the worker puts this in actions_taken, so the
