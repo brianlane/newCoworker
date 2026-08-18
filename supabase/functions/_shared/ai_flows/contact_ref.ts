@@ -15,6 +15,7 @@
  *     stay dependency-free and unit-testable).
  */
 import type { AiFlowDefinition, ContactRef, FlowStep, TriggerCondition } from "./types.ts";
+import { isDialableContactKey, isEmailContactKey } from "../contact_key.ts";
 
 // Minimal structural client type so this module works with the esm.sh
 // supabase-js the Edge functions use without importing it here (same pattern
@@ -64,7 +65,11 @@ export async function resolveContactRef(
   if (error) throw new Error(`contact ref: contact query failed: ${error.message}`);
   const row = data as { display_name?: string; customer_e164?: string } | null;
   const phone = row?.customer_e164?.trim();
-  if (!row || !phone) return null;
+  // A contact key is not necessarily dialable: it may be a lead-source short
+  // code, or an `email:` key for someone we only know by address. Returning it
+  // here would hand a send_sms / route_to_team step a "number" that is not one.
+  // No usable phone is exactly the null this function already documents.
+  if (!row || !phone || !isDialableContactKey(phone)) return null;
   return { name: (row.display_name ?? "").trim() || "contact", phone };
 }
 
@@ -111,7 +116,11 @@ export async function resolveRefIdentityValues(
     email?: string | null;
   } | null;
   const aliases = Array.isArray(row?.alias_e164s) ? row.alias_e164s : [];
-  return [row?.customer_e164, ...aliases, row?.email]
+  // An `email:` key is an internal identifier, never a value a sender arrives
+  // as. Drop it; the address itself is already in the list via `email`, which
+  // is what a from_matches condition on an emailed lead actually compares.
+  const key = isEmailContactKey(row?.customer_e164) ? null : row?.customer_e164;
+  return [key, ...aliases, row?.email]
     .map((v) => (typeof v === "string" ? v.trim() : ""))
     .filter((v) => v.length > 0);
 }

@@ -38,6 +38,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   CustomerExistsError,
   DEFAULT_LIST_LIMIT,
+  ensureEmailContact,
   MAX_LIST_LIMIT,
   createCustomerMemory,
   deleteCustomerMemory,
@@ -1585,5 +1586,272 @@ describe("default service-client fallback (every public helper)", () => {
     defaultClientSpy.mockReturnValue(client);
     await findCustomerByEmail(BIZ, "joe@x.com");
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensureEmailContact falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: [], error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await ensureEmailContact(BIZ, ADDRESS);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("linkCustomerEmail falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@x.com");
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("setContactSmsReplyMode falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: [{ id: "x" }], error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await setContactSmsReplyMode(BIZ, CUSTOMER, "suppress");
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A client whose successive `from()` calls return DIFFERENT results, so a
+ * helper that makes several queries in sequence (lookup, then insert, then
+ * tag) can be driven step by step. `makeClient` gives every query the same
+ * terminator, which cannot express "not found, then created".
+ */
+function makeSequencedClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
+  const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
+  const queue = [...terminators];
+  const client = {
+    from(table: string) {
+      const terminator = queue.shift() ?? { data: null, error: null };
+      const { builder, calls } = makeBuilder(terminator);
+      fromCalls.push({ table, calls });
+      return builder;
+    },
+    async rpc() {
+      return { data: null, error: null };
+    }
+  } as unknown as Parameters<typeof getCustomerMemory>[2];
+  return { client, fromCalls };
+}
+
+const ADDRESS = "valm0417@gmail.com";
+const EMAIL_KEY = `email:${ADDRESS}`;
+
+describe("ensureEmailContact", () => {
+  it("refuses an address that is not shaped like one, without touching the database", async () => {
+    const { client, fromCalls } = makeSequencedClient([]);
+    expect(await ensureEmailContact(BIZ, "not-an-address", {}, client)).toBeNull();
+    expect(fromCalls).toHaveLength(0);
+  });
+
+  it("reuses an existing contact that already carries the address, whatever its key", async () => {
+    // The case that makes this safe to switch on for tenants who already link
+    // emails: a phone-keyed customer who told us their address earlier must NOT
+    // gain a second, email-keyed row splitting their history in two.
+    const existing = memory({ customer_e164: CUSTOMER, email: ADDRESS });
+    const { client, fromCalls } = makeSequencedClient([
+      // findCustomerByEmail
+      { data: [{ customer_e164: CUSTOMER, display_name: "Val", email: ADDRESS }], error: null },
+      // getCustomerMemory
+      { data: existing, error: null }
+    ]);
+
+    const result = await ensureEmailContact(BIZ, ADDRESS, {}, client);
+    expect(result).toEqual({ row: existing, created: false });
+    // No insert happened.
+    expect(fromCalls.some((f) => f.calls.some((c) => c.name === "insert"))).toBe(false);
+  });
+
+  it("creates a row keyed by the address, carrying the address in `email` too", async () => {
+    const created = memory({ customer_e164: EMAIL_KEY, email: ADDRESS, display_name: "Val" });
+    const { client, fromCalls } = makeSequencedClient([
+      { data: [], error: null }, // findCustomerByEmail: nothing
+      { data: created, error: null } // createCustomerMemory insert
+    ]);
+
+    const result = await ensureEmailContact(BIZ, "  VALM0417@Gmail.com ", { displayName: "Val" }, client);
+    expect(result).toEqual({ row: created, created: true });
+
+    const insert = fromCalls[1]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    // The DB constraint contacts_email_key_matches_email requires both, and it
+    // is what keeps every existing email lookup finding these contacts.
+    expect(insert.customer_e164).toBe(EMAIL_KEY);
+    expect(insert.email).toBe(ADDRESS);
+    expect(insert.display_name).toBe("Val");
+  });
+
+  it("stamps an origin tag on the newly created row only", async () => {
+    const created = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const tagged = memory({ customer_e164: EMAIL_KEY, email: ADDRESS, tags: ["RefEx Lead"] });
+    const { client, fromCalls } = makeSequencedClient([
+      { data: [], error: null },
+      { data: created, error: null },
+      { data: tagged, error: null }
+    ]);
+
+    const result = await ensureEmailContact(
+      BIZ,
+      ADDRESS,
+      { sourceTag: "RefEx Lead", type: "customer" },
+      client
+    );
+    expect(result).toEqual({ row: tagged, created: true });
+    const update = fromCalls[2]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(update.tags).toEqual(["RefEx Lead"]);
+  });
+
+  it("still reports the contact as created when the tag write comes back empty", async () => {
+    // Tagging is a nice-to-have: a failure there must not turn a created
+    // contact into a reported failure.
+    const created = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client } = makeSequencedClient([
+      { data: [], error: null },
+      { data: created, error: null },
+      { data: null, error: null }
+    ]);
+    expect(await ensureEmailContact(BIZ, ADDRESS, { sourceTag: "RefEx Lead" }, client)).toEqual({
+      row: created,
+      created: true
+    });
+  });
+
+  it("resolves a lost create race to the winner's row, so contact_created fires once", async () => {
+    const winner = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client } = makeSequencedClient([
+      { data: [], error: null }, // findCustomerByEmail: nothing yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: winner, error: null } // getCustomerMemory finds theirs
+    ]);
+    expect(await ensureEmailContact(BIZ, ADDRESS, {}, client)).toEqual({
+      row: winner,
+      created: false
+    });
+  });
+
+  it("rethrows when the race loser cannot find the winning row either", async () => {
+    const { client } = makeSequencedClient([
+      { data: [], error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: null, error: null }
+    ]);
+    await expect(ensureEmailContact(BIZ, ADDRESS, {}, client)).rejects.toBeInstanceOf(
+      CustomerExistsError
+    );
+  });
+
+  it("rethrows a non-duplicate insert failure rather than reporting a create", async () => {
+    const { client } = makeSequencedClient([
+      { data: [], error: null },
+      { data: null, error: { code: "42501", message: "permission denied" } }
+    ]);
+    await expect(ensureEmailContact(BIZ, ADDRESS, {}, client)).rejects.toThrow(
+      /permission denied/
+    );
+  });
+
+  it("creates when a same-address contact is found but its row has since vanished", async () => {
+    // findCustomerByEmail saw a row; the follow-up read did not. Falling through
+    // to the create is right: a reuse we cannot load is not a reuse.
+    const created = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client } = makeSequencedClient([
+      { data: [{ customer_e164: CUSTOMER, display_name: null, email: ADDRESS }], error: null },
+      { data: null, error: null }, // getCustomerMemory: gone
+      { data: created, error: null } // create instead
+    ]);
+    expect(await ensureEmailContact(BIZ, ADDRESS, {}, client)).toEqual({
+      row: created,
+      created: true
+    });
+  });
+});
+
+describe("email-keyed contacts in the shared read/write paths", () => {
+  it("getCustomerMemory matches an email key exactly, never through the alias filter", async () => {
+    // An address in a comma-delimited PostgREST `.or()` string is an escaping
+    // hazard, and alias_e164s only ever holds numbers, so the alias arm could
+    // not match anyway.
+    const row = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: row, error: null } });
+    expect(await getCustomerMemory(BIZ, EMAIL_KEY, client)).toEqual(row);
+
+    const calls = fromCalls[0]!.calls;
+    expect(calls.some((c) => c.name === "or")).toBe(false);
+    expect(calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "customer_e164",
+      EMAIL_KEY
+    ]);
+  });
+
+  it("createCustomerMemory derives `email` from an email key even when the caller omits it", async () => {
+    const row = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: row, error: null } });
+    await createCustomerMemory(BIZ, { customerE164: EMAIL_KEY }, client);
+    const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.email).toBe(ADDRESS);
+  });
+
+  it("createCustomerMemory lets the key win over a conflicting email argument", async () => {
+    // The key IS the identity; the column is a projection of it. A row whose
+    // two disagreed would violate contacts_email_key_matches_email.
+    const row = memory({ customer_e164: EMAIL_KEY, email: ADDRESS });
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: row, error: null } });
+    await createCustomerMemory(
+      BIZ,
+      { customerE164: EMAIL_KEY, email: "someone.else@example.com" },
+      client
+    );
+    const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.email).toBe(ADDRESS);
+  });
+
+  it("setContactSmsReplyMode matches an email key exactly too", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: [{ id: "x" }], error: null } });
+    await setContactSmsReplyMode(BIZ, EMAIL_KEY, "suppress", client);
+    expect(fromCalls[0]!.calls.some((c) => c.name === "or")).toBe(false);
+  });
+
+  it("linkCustomerEmail matches an email key exactly on its race path too", async () => {
+    // The insert lost to a concurrent writer, so the address is filled in on
+    // the winner. That second write must use the same exact-match rule.
+    const { client, fromCalls } = makeSequencedClient([
+      { data: null, error: null }, // no row yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: null, error: null } // race update
+    ]);
+    await linkCustomerEmail(BIZ, EMAIL_KEY, ADDRESS, client);
+    expect(fromCalls[2]!.calls.some((c) => c.name === "or")).toBe(false);
+    expect(fromCalls[2]!.calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "customer_e164",
+      EMAIL_KEY
+    ]);
+  });
+
+  it("setContactSmsReplyMode matches an email key exactly on its race path too", async () => {
+    const { client, fromCalls } = makeSequencedClient([
+      { data: [], error: null }, // nothing to update
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: null, error: null } // race update
+    ]);
+    await setContactSmsReplyMode(BIZ, EMAIL_KEY, "suppress", client);
+    expect(fromCalls[2]!.calls.some((c) => c.name === "or")).toBe(false);
+  });
+
+  it("linkCustomerEmail matches an email key exactly too", async () => {
+    const { client, fromCalls } = makeClient({
+      fromTerminator: { data: { id: "x", email: null }, error: null }
+    });
+    await linkCustomerEmail(BIZ, EMAIL_KEY, ADDRESS, client);
+    expect(fromCalls[0]!.calls.some((c) => c.name === "or")).toBe(false);
   });
 });

@@ -184,7 +184,7 @@ describe("exportContactsCsv", () => {
 });
 
 describe("contactsCsvTemplate", () => {
-  it("has the importable headers and one example row", () => {
+  it("has the importable headers and both example rows", () => {
     const parsed = parseCsv(contactsCsvTemplate());
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
@@ -196,8 +196,12 @@ describe("contactsCsvTemplate", () => {
       "sms_reply_mode",
       "pinned_notes"
     ]);
-    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows).toHaveLength(2);
     expect(parsed.rows[0].phone).toBe("+16025551234");
+    // The email-only example: a blank phone with an address is a valid row,
+    // and showing it is how an owner finds out.
+    expect(parsed.rows[1].phone).toBe("");
+    expect(parsed.rows[1].email).toBe("sam@example.com");
   });
 });
 
@@ -210,10 +214,12 @@ describe("importContactsCsv", () => {
     expect(summary.errors[0].message).toMatch(/Unterminated/);
   });
 
-  it("requires the phone column", async () => {
+  it("requires a phone or an email column", async () => {
     const { db } = makeDb([]);
     const summary = await importContactsCsv(BIZ, "name\nJane", db);
-    expect(summary.errors).toEqual([{ row: 1, message: 'Missing required column: "phone".' }]);
+    expect(summary.errors).toEqual([
+      { row: 1, message: 'Missing required column: "phone" or "email".' }
+    ]);
   });
 
   it("rejects files over the row cap", async () => {
@@ -571,6 +577,124 @@ describe("importContactsCsv", () => {
     expect(summary.errors[1].message).toMatch(/^email:/);
     expect(summary.errors[2].message).toMatch(/^type:/);
     expect(summary.errors[3].message).toMatch(/^sms_reply_mode:/);
+  });
+
+  it("creates a contact keyed by the address when the row has no phone", async () => {
+    // The ReferralExchange / Realtor.com shape: a lead with an address and no
+    // number. Before email keys this row was an error and the lead never
+    // existed as a contact at all.
+    const { db, log } = makeDb([
+      { data: null, error: null }, // key lookup: nothing
+      { data: [], error: null }, // email scan: nobody has this address
+      { data: null, error: null } // insert ok
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,name,email\n,Valerie Marino,valm0417@gmail.com",
+      db
+    );
+    expect(summary).toMatchObject({ totalRows: 1, created: 1, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    const insert = log[2].calls.find((c) => c.name === "insert");
+    expect(insert?.args[0]).toMatchObject({
+      customer_e164: "email:valm0417@gmail.com",
+      display_name: "Valerie Marino",
+      // Both, always: the DB constraint contacts_email_key_matches_email.
+      email: "valm0417@gmail.com"
+    });
+  });
+
+  it("imports a file with no phone column at all", async () => {
+    // The header check now accepts phone OR email, so a file that only ever
+    // had addresses is importable end to end.
+    const { db, log } = makeDb([
+      { data: null, error: null }, // key lookup: nothing
+      { data: [], error: null }, // email scan: no match
+      { data: null, error: null } // insert ok
+    ]);
+    const summary = await importContactsCsv(BIZ, "name,email\nSam Okoye,sam@example.com", db);
+    expect(summary).toMatchObject({ totalRows: 1, created: 1, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    const insert = log[2].calls.find((c) => c.name === "insert");
+    expect(insert?.args[0]).toMatchObject({
+      customer_e164: "email:sam@example.com",
+      email: "sam@example.com"
+    });
+  });
+
+  it("matches an email key exactly, never through the alias filter", async () => {
+    const { db, log } = makeDb([
+      { data: { id: "row-9" }, error: null }, // key lookup hits
+      { data: null, error: null } // update ok
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,name,email\n,Val,val@example.com", db);
+    expect(summary).toMatchObject({ updated: 1 });
+    expect(log[0].calls.some((c) => c.name === "or")).toBe(false);
+    expect(log[0].calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "customer_e164",
+      "email:val@example.com"
+    ]);
+  });
+
+  it("round-trips an exported email-keyed contact whose phone cell holds the key", async () => {
+    // exportContactsCsv writes the raw key into the `phone` column, so a file
+    // we produced has to re-import as the same contact, not as an error row.
+    const { db, log } = makeDb([
+      { data: { id: "row-9" }, error: null }, // key lookup hits
+      { data: null, error: null } // update ok
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,name,email\nemail:val@example.com,Val,val@example.com",
+      db
+    );
+    expect(summary).toMatchObject({ totalRows: 1, updated: 1, skipped: 0 });
+    expect(log[0].calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "customer_e164",
+      "email:val@example.com"
+    ]);
+  });
+
+  it("resolves an email-keyed row onto the existing customer who already has that address", async () => {
+    // No merge here, and no second row: the address IS the row's identity and
+    // the match already carries it, so this is one person reached one way.
+    const { db, log, rpcCalls } = makeDb([
+      { data: null, error: null }, // key lookup: no email-keyed row
+      ONE_MATCH, // email scan: one phone-keyed customer has the address
+      { data: null, error: null } // patch the match
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,name,email\n,Val,val@example.com",
+      db
+    );
+    expect(summary).toMatchObject({ totalRows: 1, created: 0, updated: 1, skipped: 0 });
+    // Neither a temp row nor merge_customer_memories: those are for a second
+    // NUMBER joining a person, which an email key never is.
+    expect(rpcCalls).toEqual([]);
+    expect(log[2].calls.filter((c) => c.name === "eq").map((c) => c.args)).toContainEqual([
+      "id",
+      "match-1"
+    ]);
+    expect(fireContactEvent).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a patch failure when resolving an email-keyed row onto an existing customer", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      ONE_MATCH,
+      { data: null, error: { message: "patch blew up" } }
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,name,email\n,Val,val@example.com", db);
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors[0].message).toMatch(/patch blew up/);
+  });
+
+  it("skips a row with neither a usable phone nor an address", async () => {
+    const { db } = makeDb([]);
+    const summary = await importContactsCsv(BIZ, "phone,name,email\n,Nobody,", db);
+    expect(summary).toMatchObject({ totalRows: 1, skipped: 1 });
+    expect(summary.errors[0].message).toMatch(/no email address to identify this contact by/);
   });
 
   it("applies the row as an update after an insert unique-violation race", async () => {

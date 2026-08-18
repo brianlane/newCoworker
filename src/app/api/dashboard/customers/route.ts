@@ -23,6 +23,7 @@ import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
   createCustomerMemory,
   CustomerExistsError,
+  ensureEmailContact,
   listCustomerMemories,
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT
@@ -52,14 +53,24 @@ const contactNumberField = z.string().transform((val, ctx) => {
   return result.value;
 });
 
-const createSchema = z.object({
-  businessId: z.string().uuid(),
-  customerE164: contactNumberField,
-  displayName: z.string().trim().min(1).max(120).optional(),
-  email: z.string().trim().email("Enter a valid email").max(254).optional(),
-  pinnedMd: z.string().trim().max(4000).optional(),
-  type: z.enum(CONTACT_TYPES).optional()
-});
+// A contact is identified by a phone number OR an email address. Both together
+// is the normal case (the number is the key, the address links to it); neither
+// is not a contact at all. `customerE164` becomes optional rather than being
+// replaced, so every existing caller and the whole phone-keyed world is
+// untouched.
+const createSchema = z
+  .object({
+    businessId: z.string().uuid(),
+    customerE164: contactNumberField.optional(),
+    displayName: z.string().trim().min(1).max(120).optional(),
+    email: z.string().trim().email("Enter a valid email").max(254).optional(),
+    pinnedMd: z.string().trim().max(4000).optional(),
+    type: z.enum(CONTACT_TYPES).optional()
+  })
+  .refine((v) => Boolean(v.customerE164 || v.email), {
+    message: "Enter a phone number or an email address",
+    path: ["customerE164"]
+  });
 
 export type CustomerListItem = {
   /** contacts row id — the stable key AiFlow contact refs point at. */
@@ -127,7 +138,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const parsed = createSchema.parse({
       businessId: url.searchParams.get("businessId") ?? body.businessId ?? "",
-      customerE164: body.customerE164,
+      customerE164: body.customerE164 === "" ? undefined : body.customerE164,
       displayName: body.displayName === "" ? undefined : body.displayName,
       email: body.email === "" ? undefined : body.email,
       pinnedMd: body.pinnedMd === "" ? undefined : body.pinnedMd,
@@ -141,13 +152,35 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "Too many requests, slow down.", 429);
     }
 
-    const row = await createCustomerMemory(parsed.businessId, {
-      customerE164: parsed.customerE164,
-      displayName: parsed.displayName ?? null,
-      email: parsed.email ?? null,
-      pinnedMd: parsed.pinnedMd ?? null,
-      ...(parsed.type ? { type: parsed.type } : {})
-    });
+    // Email-only add: the row is keyed by the address instead of a number.
+    // ensureEmailContact reuses an existing contact that already carries this
+    // address (usually a phone-keyed one), so adding an email a customer
+    // already gave us resolves to THEM rather than splitting them in two. A
+    // reuse is not a create, so it surfaces as the same 409 a duplicate number
+    // gets: nothing was added, and the owner is told which contact it hit.
+    let row: CustomerMemoryRow;
+    if (parsed.customerE164) {
+      row = await createCustomerMemory(parsed.businessId, {
+        customerE164: parsed.customerE164,
+        displayName: parsed.displayName ?? null,
+        email: parsed.email ?? null,
+        pinnedMd: parsed.pinnedMd ?? null,
+        ...(parsed.type ? { type: parsed.type } : {})
+      });
+    } else {
+      const ensured = await ensureEmailContact(parsed.businessId, parsed.email as string, {
+        displayName: parsed.displayName ?? null,
+        pinnedMd: parsed.pinnedMd ?? null,
+        ...(parsed.type ? { type: parsed.type } : {})
+      });
+      // Zod already accepted the address, so a null here would mean the two
+      // validators disagree. Refuse rather than pretend something saved.
+      if (!ensured) return errorResponse("VALIDATION_ERROR", "Enter a valid email address");
+      if (!ensured.created) {
+        throw new CustomerExistsError(ensured.row.email ?? ensured.row.customer_e164);
+      }
+      row = ensured.row;
+    }
 
     // contact_created triggers: a manual add may start flows watching for
     // new contacts. Best-effort inside fireContactEvent; never fails the add.
@@ -159,7 +192,7 @@ export async function POST(request: Request) {
         ...(row.email ? { email: row.email } : {})
       },
       // Timestamped: the (flow, dedupe_key) index never expires, and a
-      // deleted-then-re-added number is a NEW creation that must refire.
+      // deleted-then-re-added contact is a NEW creation that must refire.
       // One HTTP request = one creation, so uniqueness per event holds.
       dedupeKey: `ce:created:${row.customer_e164}:${Date.now()}`
     });

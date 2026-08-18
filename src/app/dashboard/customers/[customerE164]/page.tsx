@@ -40,6 +40,10 @@ import { listBusinessDocumentsForContact } from "@/lib/documents/db";
 import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { listSmsLinksForContact } from "@/lib/db/sms-links";
+import {
+  classifyContactKey,
+  formatContactKey
+} from "../../../../../supabase/functions/_shared/contact_key";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
 export const dynamic = "force-dynamic";
@@ -59,8 +63,10 @@ export default async function CustomerDetailPage({ params }: Props) {
   } catch {
     customerE164 = raw;
   }
-  // E.164 or a 3-8 digit short code (service/lead-source contacts).
-  if (!/^(\+[1-9]\d{6,15}|\d{3,8})$/.test(customerE164)) {
+  // The route segment is the contact KEY: an E.164 number, a 3-8 digit short
+  // code (service / lead-source contacts), or an `email:` key for a contact we
+  // only know by address. Anything else is not a contact this page can open.
+  if (classifyContactKey(customerE164) === null) {
     notFound();
   }
 
@@ -169,8 +175,10 @@ export default async function CustomerDetailPage({ params }: Props) {
     (memory.alias_e164s ?? [])
       .map((a) => contactNames.get(a))
       .find((c): c is ContactName => Boolean(c));
-  const headerName =
-    headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
+  // The key is the last-resort label, and for an email-keyed contact the label
+  // is the bare address: nobody should be shown the internal `email:` prefix.
+  const contactLabel = formatContactKey(memory.customer_e164);
+  const headerName = headerContact?.name ?? (memory.display_name?.trim() || contactLabel);
   // Overlaid identity wins for the badge; otherwise show the stored type.
   const headerBadge =
     headerContact?.kind === "owner" || headerContact?.kind === "employee"
@@ -195,10 +203,8 @@ export default async function CustomerDetailPage({ params }: Props) {
             </span>
           )}
         </div>
-        {headerName !== memory.customer_e164 && (
-          <p className="text-sm text-parchment/50 font-mono mt-0.5">
-            {memory.customer_e164}
-          </p>
+        {headerName !== contactLabel && (
+          <p className="text-sm text-parchment/50 font-mono mt-0.5">{contactLabel}</p>
         )}
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
           {channelLabel && (

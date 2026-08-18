@@ -27,6 +27,8 @@ import {
  */
 export type CustomerListRow = {
   e164: string;
+  /** The key rendered for a human: an address for email-keyed contacts. */
+  label: string;
   name: string;
   type: string;
   lastChannel: string | null;
@@ -232,7 +234,7 @@ export function CustomersList({
   const filtered = rows.filter(
     (r) =>
       (!selectedSegment || matchesSegment(r, selectedSegment.filters, nowMs)) &&
-      matchesQuery(query, [r.name, r.e164, r.type, r.summary, r.tags.join(" ")]) &&
+      matchesQuery(query, [r.name, r.label, r.e164, r.type, r.summary, r.tags.join(" ")]) &&
       (!tagFilter || r.tags.some((t) => t.toLowerCase() === tagFilter.toLowerCase())) &&
       (!ownerFilter || r.ownerName === ownerFilter)
   );
@@ -502,8 +504,8 @@ export function CustomersList({
                       >
                         {c.type}
                       </span>
-                      {c.name !== c.e164 && (
-                        <span className="text-xs text-parchment/50 font-mono">{c.e164}</span>
+                      {c.name !== c.label && (
+                        <span className="text-xs text-parchment/50 font-mono">{c.label}</span>
                       )}
                       {channelLabel && (
                         <span className="text-[10px] uppercase tracking-wide text-parchment/60 bg-parchment/10 rounded px-1.5 py-0.5">

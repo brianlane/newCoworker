@@ -117,6 +117,29 @@ describe("resolveContactRef", () => {
       resolveContactRef(db, "biz", { source: "contact", id: CON_ID })
     ).rejects.toThrow("contact ref: contact query failed: nope");
   });
+
+  it("returns null for a contact whose key is not dialable", async () => {
+    // The contact key is not always a phone number. A send_sms.toRef or
+    // route_to_team.agentRef pointing at an email-keyed contact (or a
+    // lead-source short code) must resolve to "no usable phone", not hand the
+    // sender a "number" that is an address.
+    const emailKeyed = stubDb({
+      contacts: {
+        data: { display_name: "Valerie", customer_e164: "email:valm0417@gmail.com" },
+        error: null
+      }
+    });
+    expect(
+      await resolveContactRef(emailKeyed.db, "biz", { source: "contact", id: CON_ID })
+    ).toBeNull();
+
+    const shortCode = stubDb({
+      contacts: { data: { display_name: "ReferralExchange", customer_e164: "73339" }, error: null }
+    });
+    expect(
+      await resolveContactRef(shortCode.db, "biz", { source: "contact", id: CON_ID })
+    ).toBeNull();
+  });
 });
 
 describe("resolveVoiceContactRefs", () => {
@@ -377,6 +400,25 @@ describe("resolveRefIdentityValues", () => {
     expect(
       await resolveRefIdentityValues(bareAliases.db, "biz", { source: "contact", id: CON_ID })
     ).toEqual(["+16025550000"]);
+  });
+
+  it("drops an email KEY from the identity list but keeps the address itself", async () => {
+    // `email:<addr>` is an internal identifier; no sender ever arrives as one.
+    // The address is already in the list via the `email` column, and that is
+    // what a from_matches condition on an emailed lead actually compares.
+    const { db } = stubDb({
+      contacts: {
+        data: {
+          customer_e164: "email:valm0417@gmail.com",
+          alias_e164s: null,
+          email: "valm0417@gmail.com"
+        },
+        error: null
+      }
+    });
+    expect(await resolveRefIdentityValues(db, "biz", { source: "contact", id: CON_ID })).toEqual([
+      "valm0417@gmail.com"
+    ]);
   });
 
   it("returns [] for a missing contact and throws on a query error", async () => {

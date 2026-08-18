@@ -20,9 +20,13 @@ const ADDABLE_TYPES = ["customer", "tester", "company", "other"] as const;
 /**
  * Manual "Add contact" form for the unified contacts index. Customers are
  * normally auto-created on the first SMS/voice interaction; this lets the owner
- * seed any contact ahead of time with a type (customer, tester, company, other),
- * optionally linking an email so the profile spans channels. On success it
- * refreshes the server-rendered list.
+ * seed any contact ahead of time with a type (customer, tester, company, other).
+ *
+ * A phone number OR an email address identifies the contact, and either alone is
+ * enough. With a number, the address links to it so the profile spans channels;
+ * with only an address, the contact is keyed by that address (the shape a lead
+ * source like ReferralExchange hands us when it forwards a lead with no number).
+ * On success it refreshes the server-rendered list.
  */
 export function AddCustomerForm({ businessId }: Props) {
   const router = useRouter();
@@ -54,7 +58,9 @@ export function AddCustomerForm({ businessId }: Props) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            customerE164: phone.trim(),
+            // Omitted rather than sent empty: the contact is identified by the
+            // number OR the address, and an empty string is neither.
+            ...(phone.trim() ? { customerE164: phone.trim() } : {}),
             type,
             ...(name.trim() ? { displayName: name.trim() } : {}),
             ...(email.trim() ? { email: email.trim() } : {}),
@@ -110,7 +116,7 @@ export function AddCustomerForm({ businessId }: Props) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value.slice(0, 254))}
-          placeholder="Email (optional)"
+          placeholder="Email"
           className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
         />
         <select
@@ -126,6 +132,10 @@ export function AddCustomerForm({ businessId }: Props) {
           ))}
         </select>
       </div>
+      <p className="text-xs text-parchment/40 mt-2">
+        A phone number or an email address identifies the contact. Either one on its
+        own is enough; both together links the two channels to one profile.
+      </p>
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value.slice(0, 4000))}
@@ -137,7 +147,7 @@ export function AddCustomerForm({ businessId }: Props) {
         <button
           type="button"
           onClick={save}
-          disabled={saving || !phone.trim()}
+          disabled={saving || (!phone.trim() && !email.trim())}
           className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? "Saving…" : "Add"}
