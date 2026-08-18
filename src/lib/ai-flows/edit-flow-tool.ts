@@ -230,7 +230,17 @@ async function applyStagedEdit(
   // claim would burn it on a refusal that wrote nothing, and the owner would
   // be told to try again by a path that can no longer succeed.
   const peeked = await deps.peekEdit(businessId, token);
-  if (peeked !== null) {
+  // Only a row that is still claimable gets these checks. A row that was
+  // ALREADY consumed must fall through to the claim, which diagnoses it as
+  // "already applied once": after a successful apply the flow's updated_at
+  // has moved, so the freshness check below would otherwise fire first and
+  // report that nothing was applied and the flow changed underneath, which
+  // steers the model into re-staging a change that already landed.
+  //
+  // An expired row is left to fall through here too, but harmlessly: its
+  // advice ("describe the edit again to get a fresh summary") is the same
+  // either way.
+  if (peeked !== null && peeked.consumed_at === null) {
     if (peeked.flow_id !== flow.id) {
       return {
         ok: false,

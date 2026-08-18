@@ -362,6 +362,29 @@ describe("editAiFlowTool: applying (second call)", () => {
     expect(deps.persistUpdate).not.toHaveBeenCalled();
   });
 
+  it("a REPLAYED token is diagnosed as already-applied, not as a stale flow", async () => {
+    // After a successful apply the flow's updated_at has moved, so the
+    // freshness check would fire first and tell the model the flow changed
+    // underneath, steering it into re-staging a change that already landed.
+    const deps = happyDeps({
+      peekEdit: vi.fn(async () =>
+        pendingRow({ consumed_at: "2026-08-18T00:05:00Z", base_updated_at: "2026-07-01T00:00:00Z" })
+      ),
+      listFlows: vi.fn(async () => [flowRow({ updated_at: "2026-08-18T00:05:00Z" })]),
+      consumeEdit: vi.fn(async () => ({
+        ok: false as const,
+        message: "That change was already applied once. It has NOT been applied a second time."
+      }))
+    });
+    const res = await editAiFlowTool(BIZ, CONFIRM, deps);
+    expect(res).toMatchObject({ ok: false });
+    if (!res.ok) {
+      expect(res.message).toContain("already applied once");
+      expect(res.message).not.toContain("changed after that summary");
+    }
+    expect(deps.persistUpdate).not.toHaveBeenCalled();
+  });
+
   it("refuses a token staged against a DIFFERENT automation", async () => {
     const deps = happyDeps({
       peekEdit: vi.fn(async () => pendingRow({ flow_id: "44444444-4444-4444-8444-444444444444" }))
