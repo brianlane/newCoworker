@@ -15,7 +15,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   exchangeCodeForToken,
   exchangeForLongLivedToken,
-  getUserName,
+  getUserProfile,
   metaCallbackUrl,
   unsubscribePage,
   verifyMetaOAuthState
@@ -75,7 +75,12 @@ export async function GET(request: NextRequest) {
       metaCallbackUrl(request.nextUrl.origin)
     );
     const longLived = await exchangeForLongLivedToken(shortLived);
-    const accountName = await getUserName(longLived).catch(() => null);
+    // The id is what Meta's deauthorize / data-deletion callbacks match on;
+    // the name is display only. A failed lookup must not block connecting,
+    // so both fall back to null and the backfill script can recover the id
+    // later from the page token.
+    const profile = await getUserProfile(longLived).catch(() => ({ id: null, name: null }));
+    const accountName = profile.name;
 
     // A reconnect resets an ACTIVE connection back to pending, which clears
     // its Page. Capture the previous Page BEFORE the reset, persist first,
@@ -85,7 +90,12 @@ export async function GET(request: NextRequest) {
     // is no longer active.
     const existing = await getMetaConnection(businessId);
 
-    await savePendingMetaConnection({ businessId, userToken: longLived, accountName });
+    await savePendingMetaConnection({
+      businessId,
+      userToken: longLived,
+      accountName,
+      metaUserId: profile.id
+    });
 
     if (existing?.page_id && existing.pageToken) {
       // The leadgen subscription is an app<->page edge shared by whoever
