@@ -11,6 +11,7 @@ import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { notFound, redirect } from "next/navigation";
 import { z } from "zod";
 import { getAuthUser } from "@/lib/auth";
+import { phiAccessRequestContext, recordPhiAccess } from "@/lib/hipaa/access-log";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
@@ -71,7 +72,7 @@ export default async function SmsThreadPage({
   const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, hipaa_mode")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
@@ -93,6 +94,18 @@ export default async function SmsThreadPage({
     }))
   ]);
   if (messages.length === 0) notFound();
+  // HIPAA 164.312(b): this workforce member read this contact's message
+  // thread. After the notFound so the trail records threads actually shown.
+  const phiCtx = await phiAccessRequestContext();
+  await recordPhiAccess((business as { hipaa_mode?: boolean }).hipaa_mode, {
+    businessId: business.id,
+    userId: user.userId,
+    userEmail: user.email,
+    resource: "sms_thread",
+    resourceId: customerE164,
+    action: "view",
+    ...phiCtx
+  });
   const outboundLogIds = messages
     .map((m) => m.outboundLogId)
     .filter((id): id is string => Boolean(id));
