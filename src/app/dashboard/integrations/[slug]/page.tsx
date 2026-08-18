@@ -84,7 +84,7 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Google"
-          description="Gmail and Google Calendar, including a personal Google account. Connect one account per seat on your plan."
+          description="Gmail and Google Calendar, including a personal Google account."
           icon={getIntegration("google")!.icon}
           status={rows.length > 0 ? "connected" : "disconnected"}
         >
@@ -118,7 +118,7 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Microsoft 365"
-          description="Outlook mail and calendar, on Microsoft 365 or a personal Outlook account. Connect one account per seat on your plan."
+          description="Outlook mail and calendar, on Microsoft 365 or a personal Outlook account."
           icon={getIntegration("microsoft")!.icon}
           status={rows.length > 0 ? "connected" : "disconnected"}
         >
@@ -139,7 +139,7 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Other 3rd Party Connections"
-          description="Drive, OneDrive, and the rest of the long tail connect here through Nango. Google and Microsoft 365 have their own pages, and so do Slack and Zoom."
+          description="OneDrive, 1Password, and the rest of the long tail connections set up here through Nango. Google and Microsoft 365 have their own pages, and so do Slack and Zoom."
           icon={getIntegration("workspace")!.icon}
           status={rows.length > 0 ? "connected" : "disconnected"}
         >
