@@ -38,14 +38,22 @@ function attachDb(opts: { claim?: unknown } = {}) {
 describe("attachIntakePrioritySupportToBusiness", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  /** Resolve the module's default client to the stub, exercising the await. */
-  function useDb(db: unknown) {
+  /**
+   * Point the module's default client at the stub, which is what exercises
+   * the `client ?? await createSupabaseServiceClient()` await. Injecting a
+   * client instead skips that await, and v8 then reports every statement
+   * after it as an unreached async continuation.
+   *
+   * Deliberately NOT named use*: that prefix makes eslint treat it as a
+   * React Hook, and these tests call it inside loops.
+   */
+  function withDb(db: unknown) {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     return db;
   }
 
   it("opens a 30-day window when a completed questionnaire is claimed", async () => {
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     const n = await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com");
     expect(n).toBe(1);
     expect(extendPrioritySupport).toHaveBeenCalledTimes(1);
@@ -62,7 +70,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
   it("grants NOTHING when the claim matches no rows (already granted)", async () => {
     // The idempotence case: re-running the signup attach, or the Stripe-first
     // re-attach once the real email lands, must not open a second window.
-    const db = useDb(attachDb({ claim: { data: [], error: null } })) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb({ claim: { data: [], error: null } })) as ReturnType<typeof attachDb>;
     const n = await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com");
     expect(n).toBe(0);
     expect(extendPrioritySupport).not.toHaveBeenCalled();
@@ -70,7 +78,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
   });
 
   it("claims with a compare-and-swap on the granted stamp", async () => {
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com");
     // The `is(..., null)` guard in the WHERE clause is the whole mechanism:
     // two concurrent callers cannot both win it.
@@ -79,7 +87,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
   });
 
   it("escapes LIKE metacharacters so one prospect cannot match another", async () => {
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     await attachIntakePrioritySupportToBusiness(BIZ, "john_doe@test.com");
     expect(db.ilike).toHaveBeenCalledWith("recipient_email", "john\\_doe@test.com");
   });
@@ -88,7 +96,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
     // Stamping a questionnaire as granted when no window opened would lose the
     // customer a month with nothing to notice it.
     vi.mocked(extendPrioritySupport).mockRejectedValueOnce(new Error("db down"));
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     await expect(
       attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")
     ).rejects.toThrow(/db down/);
@@ -97,7 +105,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
   });
 
   it("treats a null claim payload as nothing claimed", async () => {
-    const db = useDb(attachDb({ claim: { data: null, error: null } })) as ReturnType<
+    const db = withDb(attachDb({ claim: { data: null, error: null } })) as ReturnType<
       typeof attachDb
     >;
     expect(await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")).toBe(0);
@@ -119,7 +127,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
     for (const thrown of [new Error("stamp down"), "stamp down"]) {
       vi.clearAllMocks();
       vi.mocked(clearPrioritySupportNudgeStamp).mockRejectedValueOnce(thrown as never);
-      const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+      const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
       expect(await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")).toBe(1);
       expect(extendPrioritySupport).toHaveBeenCalledTimes(1);
       // No rollback: the only UPDATE payload is the claim, never a null release.
@@ -136,7 +144,7 @@ describe("attachIntakePrioritySupportToBusiness", () => {
       vi.mocked(extendPrioritySupport).mockRejectedValueOnce(thrown as never);
       const db = attachDb();
       db.in.mockResolvedValueOnce({ error: { message: "release down" } } as never);
-      useDb(db);
+      withDb(db);
       await expect(
         attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com")
       ).rejects.toThrow(/db down/);
@@ -148,19 +156,19 @@ describe("attachIntakePrioritySupportToBusiness", () => {
   });
 
   it("is a no-op for a blank owner email", async () => {
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     expect(await attachIntakePrioritySupportToBusiness(BIZ, "   ")).toBe(0);
     expect(db.from).not.toHaveBeenCalled();
   });
 
   it("never steals a questionnaire that belongs to another business", async () => {
-    const db = useDb(attachDb()) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb()) as ReturnType<typeof attachDb>;
     await attachIntakePrioritySupportToBusiness(BIZ, "owner@test.com");
     expect(db.or).toHaveBeenCalledWith(`business_id.is.null,business_id.eq.${BIZ}`);
   });
 
   it("throws when the claim fails", async () => {
-    const db = useDb(attachDb({ claim: { data: null, error: { message: "claim boom" } } })) as ReturnType<typeof attachDb>;
+    const db = withDb(attachDb({ claim: { data: null, error: { message: "claim boom" } } })) as ReturnType<typeof attachDb>;
     await expect(
       attachIntakePrioritySupportToBusiness(BIZ, "o@t.com")
     ).rejects.toThrow(/claim boom/);
