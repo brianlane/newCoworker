@@ -92,7 +92,11 @@ export default async function DashboardCallsPage() {
       // downgrade existing summaries stay readable; the sweep just stops
       // generating new ones.
       summary: row.summary ?? null,
-      sentiment: row.sentiment ?? null
+      sentiment: row.sentiment ?? null,
+      // Answering-machine verdict, so the list can mark a voicemail the same
+      // way the detail page does.
+      answeringMachineResult: row.answering_machine_result ?? null,
+      voicemailLeft: row.voicemail_left === true
     };
   });
 

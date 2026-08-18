@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
+  AnsweringMachineBadge,
   CallDirectionBadge,
   ForwardedBadge,
   SentimentBadge,
@@ -12,6 +13,7 @@ import {
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
 import type {
+  VoiceAnsweringMachineResult,
   VoiceCallKind,
   VoiceCallSentiment,
   VoiceTranscriptDirection,
@@ -47,6 +49,16 @@ export type CallListRow = {
   /** AI digest + caller mood (Standard+ perk); null while unsummarized. */
   summary: string | null;
   sentiment: VoiceCallSentiment | null;
+  /**
+   * AMD verdict, or null when detection was not requested. Carried into the
+   * list (not just the detail page) so a row a voicemail picked up does not
+   * read as a call a person answered: whether the assistant reached a human
+   * is the first thing an owner scanning this list wants to know, and until
+   * this was here they had to open each row to find out.
+   */
+  answeringMachineResult: VoiceAnsweringMachineResult | null;
+  /** True when the assistant actually spoke its message into the voicemail. */
+  voicemailLeft: boolean;
 };
 
 const CALL_SORT_OPTIONS: SortOption[] = [
@@ -136,6 +148,12 @@ export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessI
                       )}
                       {row.callKind === "forwarded" && <ForwardedBadge />}
                       <StatusBadge status={row.status} />
+                      {/* Renders only for a machine answer, so an ordinary
+                          row keeps the badges it has today. */}
+                      <AnsweringMachineBadge
+                        result={row.answeringMachineResult}
+                        voicemailLeft={row.voicemailLeft}
+                      />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
                       <LocalDateTime iso={row.startedAt} /> ·{" "}
