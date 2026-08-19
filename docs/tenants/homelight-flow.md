@@ -355,4 +355,11 @@ longer settle (`AIFLOW_RENDER_TIMEOUT_MS` on the box), a screenshot via
 `--read-network`-style inspection of whether the panel's XHR is being blocked
 by the SSRF guard the render service attaches to every page
 (`attachSsrfGuard`), which is the one thing in our stack that could stop a
-same-origin data fetch a real browser would allow.
+fetch a real browser would allow. Concretely: the guard routes `**/*` through
+`safeUrl`, which returns null for any protocol that is not `http:`/`https:`, so
+every `blob:` and `data:` subresource is aborted with `blockedbyclient`. A SPA
+that boots a web worker from a `blob:` URL, which is a common bundler output,
+would lose it silently and could leave exactly this pattern: text painted,
+every interactive child stuck as a skeleton. That would affect every SPA portal
+we browse, not just this panel, so it is worth confirming before anything is
+built on top of it.
