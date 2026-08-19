@@ -7,7 +7,8 @@ import {
   formatAlertSummary,
   parsePositiveInt,
   postWebhook,
-  type AlertPayload
+  type AlertPayload,
+  formatAlertEmailBody
 } from "../supabase/functions/_shared/voice_bridge_health";
 
 type WebhookInit = { method: string; headers: Record<string, string>; body: string };
@@ -371,5 +372,105 @@ describe("defaults", () => {
   it("match the documented 5min / 30min cadence expectations", () => {
     expect(DEFAULT_BRIDGE_STALE_SECONDS).toBe(300);
     expect(DEFAULT_SETTLEMENT_STUCK_SECONDS).toBe(1800);
+  });
+});
+
+/**
+ * The email body.
+ *
+ * `formatAlertSummary` is a one-line chat blurb: counts and thresholds, no
+ * identities. That is right for a Slack `text` field, which sits beside
+ * attachments carrying the detail, and wrong for an email, which is now the
+ * path that actually reaches a person (ALERT_WEBHOOK_URL has never been set,
+ * so the attachments went nowhere).
+ *
+ * "3 stale bridges" with no tenant named is not actionable at 2am, and a
+ * stale bridge means that specific client's inbound calls are failing right
+ * now. Caught by Bugbot on PR #1478.
+ */
+describe("formatAlertEmailBody", () => {
+  const payload = {
+    generated_at: "2026-08-19T12:00:00Z",
+    stale_bridges: [
+      {
+        business_id: "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3",
+        bridge_last_heartbeat_at: "2026-08-19T11:40:00Z",
+        age_seconds: 1200
+      }
+    ],
+    stuck_settlements: [
+      {
+        call_control_id: "v3:abc",
+        business_id: "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d",
+        first_signal_at: "2026-08-19T10:00:00Z",
+        age_seconds: 7200
+      }
+    ],
+    thresholds: { bridge_stale_seconds: 300, settlement_stuck_seconds: 1800 }
+  };
+
+  it("names every affected tenant, not just a count", () => {
+    const body = formatAlertEmailBody(payload);
+    expect(body).toContain("621a5b0d-c2ad-449f-9d74-9d50e7b27fa3");
+    expect(body).toContain("8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d");
+    expect(body).toContain("v3:abc");
+  });
+
+  it("leads with the same summary the chat channel gets", () => {
+    expect(formatAlertEmailBody(payload)).toContain(formatAlertSummary(payload));
+  });
+
+  it("says what a stale bridge actually means, since that is the action", () => {
+    expect(formatAlertEmailBody(payload).toLowerCase()).toContain("inbound calls");
+  });
+
+  it("spells out a bridge that has never heartbeated", () => {
+    const body = formatAlertEmailBody({
+      ...payload,
+      stale_bridges: [
+        { business_id: "biz-1", bridge_last_heartbeat_at: null, age_seconds: -1 }
+      ],
+      stuck_settlements: []
+    });
+    expect(body).toContain("never");
+    expect(body).not.toContain("-1s");
+  });
+
+  it("caps each list so a fleet-wide outage cannot produce an unreadable mail", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      bridge_last_heartbeat_at: "2026-08-19T11:40:00Z",
+      age_seconds: 1200
+    }));
+    const body = formatAlertEmailBody({ ...payload, stale_bridges: many, stuck_settlements: [] });
+    expect(body).toContain("and 30 more");
+    expect(body.length).toBeLessThan(4000);
+  });
+
+  it("omits a section that has nothing in it", () => {
+    const body = formatAlertEmailBody({ ...payload, stuck_settlements: [] });
+    expect(body).not.toContain("Stuck settlements");
+    expect(body).toContain("Stale bridges");
+  });
+
+  it("omits the bridge section when only settlements are stuck", () => {
+    // The other half of that rule: a settlements-only alert must not carry an
+    // empty "inbound calls are failing" heading, which would send someone
+    // hunting a bridge outage that is not happening.
+    const body = formatAlertEmailBody({ ...payload, stale_bridges: [] });
+    expect(body).not.toContain("Stale bridges");
+    expect(body).toContain("Stuck settlements");
+    expect(body).toContain("v3:abc");
+  });
+
+  it("caps the settlements list too", () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      call_control_id: `v3:call-${i}`,
+      business_id: "biz-1",
+      first_signal_at: "2026-08-19T10:00:00Z",
+      age_seconds: 7200
+    }));
+    const body = formatAlertEmailBody({ ...payload, stale_bridges: [], stuck_settlements: many });
+    expect(body).toContain("and 15 more");
   });
 });

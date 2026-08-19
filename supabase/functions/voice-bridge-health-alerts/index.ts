@@ -6,9 +6,22 @@
  *   - Stale bridge heartbeats (`business_telnyx_settings.bridge_last_heartbeat_at` > threshold).
  *   - Stuck `voice_settlements` rows (`finalized_at IS NULL` with old `first_signal_at`).
  *
- * Always records a `voice_bridge_health_check` telemetry event. Optionally
- * POSTs a Slack-compatible webhook when `ALERT_WEBHOOK_URL` is set AND at
- * least one issue is detected.
+ * Always records a `voice_bridge_health_check` telemetry event.
+ *
+ * On a detected issue it EMAILS the admin, and additionally POSTs a
+ * Slack-compatible webhook when `ALERT_WEBHOOK_URL` is set.
+ *
+ * The email exists because the webhook never did anything. `ALERT_WEBHOOK_URL`
+ * has never been set in this project, so from the day this shipped its only
+ * output was rows nobody reads, while it advertised itself (and is documented
+ * in docs/VOICE-ROLLOUT.md) as paging on a dead bridge. A stale bridge means
+ * that tenant's inbound calls are failing right now.
+ *
+ * Email is throttled to one per VOICE_HEALTH_ALERT_THROTTLE_MINUTES (default
+ * 60). This sweep runs every 5 minutes and re-detects the same stale bridge
+ * each time, so unthrottled it would send twelve mails an hour until someone
+ * muted the thread, and a muted alert is the same as no alert. The webhook
+ * keeps its original per-run behavior, which is what a chat channel expects.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
@@ -16,10 +29,16 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
+  resolveAdminAlertConfig,
+  sendAdminAlertEmail,
+  shouldSendAdminAlert
+} from "../_shared/admin_alert_email.ts";
+import {
   DEFAULT_BRIDGE_STALE_SECONDS,
   DEFAULT_SETTLEMENT_STUCK_SECONDS,
   computeStaleBridges,
   computeStuckSettlements,
+  formatAlertEmailBody,
   formatAlertSummary,
   parsePositiveInt,
   postWebhook,
@@ -159,14 +178,73 @@ serve(async (req: Request) => {
   }
 
   const hasIssue = staleBridges.length > 0 || stuckSettlements.length > 0;
+
+  // Email the admin, throttled. This is the path that actually reaches a
+  // person; the webhook below is optional and, in this project, unset.
+  let emailResult: string | null = null;
+  if (hasIssue) {
+    const throttleMinutes = parsePositiveInt(
+      Deno.env.get("VOICE_HEALTH_ALERT_THROTTLE_MINUTES"),
+      60
+    );
+    // Last send is read back from our own telemetry rather than a new table:
+    // one row per send, already retained, and a duplicate email costs far
+    // less than a migration for bookkeeping.
+    let lastSentAt: string | null = null;
+    const { data: priorRows } = await supabase
+      .from("telemetry_events")
+      .select("created_at")
+      .eq("event_type", "voice_bridge_health_email_sent")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const prior = (priorRows ?? [])[0] as { created_at?: string } | undefined;
+    if (prior?.created_at) lastSentAt = prior.created_at;
+
+    if (!shouldSendAdminAlert(lastSentAt, nowMs, throttleMinutes)) {
+      emailResult = "throttled";
+    } else {
+      const config = resolveAdminAlertConfig((name) => Deno.env.get(name));
+      if (!config) {
+        emailResult = "unconfigured";
+        console.error("voice-bridge-health-alerts: issue detected but no alert email configured");
+        await telemetryRecord(supabase, "voice_bridge_health_email_unconfigured", {
+          stale_bridges: staleBridges.length,
+          stuck_settlements: stuckSettlements.length
+        });
+      } else {
+        emailResult = await sendAdminAlertEmail((url, init) => fetch(url, init), config, {
+          subject:
+            `Voice bridge health: ${staleBridges.length} stale, ` +
+            `${stuckSettlements.length} stuck settlements`,
+          // The EMAIL body, not the chat blurb: it names the affected
+          // tenants. formatAlertSummary is counts only, which is fine beside
+          // Slack attachments and useless in a mail that has none.
+          text: formatAlertEmailBody(alert)
+        });
+        // Stamped only on a real send, so a failed one retries next tick
+        // instead of being throttled out for the next hour.
+        if (emailResult === "sent") {
+          await telemetryRecord(supabase, "voice_bridge_health_email_sent", {
+            stale_bridges: staleBridges.length,
+            stuck_settlements: stuckSettlements.length
+          });
+        } else {
+          await telemetryRecord(supabase, "voice_bridge_health_email_failed", {
+            stale_bridges: staleBridges.length,
+            stuck_settlements: stuckSettlements.length
+          });
+        }
+      }
+    }
+  }
+
+  // The webhook stays, unchanged and still optional, for anyone who does set
+  // ALERT_WEBHOOK_URL. Unlike the email it is NOT throttled: a chat channel
+  // is expected to show a condition persisting.
   const webhookUrl = Deno.env.get("ALERT_WEBHOOK_URL") ?? "";
   let webhookResult: { ok: boolean; status: number; error?: string } | null = null;
   if (hasIssue && webhookUrl) {
-    webhookResult = await postWebhook(
-      (url, init) => fetch(url, init),
-      webhookUrl,
-      alert
-    );
+    webhookResult = await postWebhook((url, init) => fetch(url, init), webhookUrl, alert);
     if (!webhookResult.ok) {
       await telemetryRecord(supabase, "voice_bridge_health_webhook_failed", {
         status: webhookResult.status,
@@ -189,6 +267,7 @@ serve(async (req: Request) => {
       ok: true,
       stale_bridges: staleBridges.length,
       stuck_settlements: stuckSettlements.length,
+      email: emailResult,
       webhook: webhookResponse,
       summary: formatAlertSummary(alert)
     }),
