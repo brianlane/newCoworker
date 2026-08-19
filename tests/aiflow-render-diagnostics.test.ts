@@ -160,6 +160,31 @@ describe("the user agent cannot disagree with the engine", () => {
   });
 
   it("still overrides the default, which says HeadlessChrome", () => {
-    expect(server.match(/userAgent: uaFor\(browser\)/g) ?? []).toHaveLength(2);
+    // Three sites: both context creations, plus the CDP client-hint override,
+    // which must carry the SAME string or the two channels contradict again.
+    expect(server.match(/userAgent: uaFor\(browser\)/g) ?? []).toHaveLength(3);
+  });
+});
+
+describe("client hints cannot contradict the UA string", () => {
+  it("overrides Sec-CH-UA metadata via CDP on every page", () => {
+    // The userAgent context option rewrites only the UA HEADER. Headless
+    // Chromium kept broadcasting "HeadlessChrome" through Sec-CH-UA client
+    // hints, visible verbatim in HomeLight's own analytics beacon
+    // (uafvl=...|HeadlessChrome...). A CDN keying on client hints answers
+    // script chunks with an HTML challenge, the document still loads, and the
+    // page half-renders: "Unexpected token '<'".
+    expect(server).toContain('session.send("Emulation.setUserAgentOverride"');
+    expect(server).toContain("userAgentMetadata");
+    expect((server.match(/await alignClientHints\(page, /g) ?? []).length).toBe(2);
+  });
+
+  it("derives brands from the engine, with the GREASE brand real Chrome ships", () => {
+    expect(server).toContain('{ brand: "Chromium", version: major }');
+    expect(server).toContain('{ brand: "Not=A?Brand", version: "99" }');
+  });
+
+  it("degrades to today's behavior when CDP fails, never breaking the render", () => {
+    expect(server).toContain("client-hint alignment failed (continuing)");
   });
 });
