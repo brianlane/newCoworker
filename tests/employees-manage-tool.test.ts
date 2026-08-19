@@ -666,3 +666,62 @@ describe("manageEmployee, roster read", () => {
     });
   });
 });
+
+describe("manageEmployee, international numbers", () => {
+  // Long codes deliver SMS to +1 only, so a non-NANP roster number means
+  // every lead offer and team alert text silently dies at Telnyx. The note
+  // must say so and recommend WhatsApp (KYP Ads, Jul 30 2026: the owner
+  // moved his own roster entry to a Hong Kong +852 line and was told
+  // notifications would "now be routed" there).
+  it("warns and recommends WhatsApp when adding a teammate at a non-NANP number", async () => {
+    const d = deps([]);
+    const res = await manageEmployee(
+      BIZ,
+      { action: "add", name: "James Lee", phone: "+85260100607" },
+      d
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.employee.phoneE164).toBe("+85260100607");
+    expect(res.note).toContain("will never arrive");
+    expect(res.note).toContain("WhatsApp");
+    expect(res.note).toContain("/dashboard/integrations/whatsapp");
+  });
+
+  it("warns when an update moves an existing teammate onto a non-NANP number", async () => {
+    const d = deps([member()]);
+    const res = await manageEmployee(
+      BIZ,
+      { action: "update", employee: "Gabrielle Mota", phone: "+85260100607" },
+      d
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.employee.phoneE164).toBe("+85260100607");
+    expect(res.note).toContain("will never arrive");
+    expect(res.note).toContain("WhatsApp");
+  });
+
+  it("keeps re-surfacing the warning on any later change to that teammate", async () => {
+    // The gap does not heal with time: a reactivation months later still
+    // routes their lead offers at an untextable number.
+    const hk = member({ phone_e164: "+85260100607", active: false });
+    const d = deps([hk]);
+    const res = await manageEmployee(BIZ, { action: "reactivate", employee: "Gabrielle Mota" }, d);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.note).toContain("WhatsApp");
+  });
+
+  it("stays quiet for NANP numbers, Canada included", async () => {
+    const d = deps([]);
+    const res = await manageEmployee(
+      BIZ,
+      { action: "add", name: "Sandy Reyes", phone: "+15145188192" },
+      d
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.note).not.toContain("WhatsApp");
+  });
+});

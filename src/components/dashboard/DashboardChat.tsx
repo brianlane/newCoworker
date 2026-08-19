@@ -39,11 +39,34 @@ type DocumentOption = {
 // the old maxLength attribute, which silently clipped pastes mid-sentence.
 const MAX_MESSAGE_CHARS = 16_000;
 
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+// Message stamps carry the date once the message is no longer from today
+// (and the year once it is no longer this year). A thread reopened days
+// later used to show bare clock times, so "5:11 AM" from three weeks ago
+// read as this morning (KYP Ads, Aug 2026: a Jul 30 roster change was
+// mistaken for a fresh one).
 function formatTime(ts?: string): string {
   if (!ts) return "";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  if (sameCalendarDay(d, now)) {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(d);
+  }
   return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
     hour: "numeric",
     minute: "2-digit"
   }).format(d);
@@ -52,12 +75,7 @@ function formatTime(ts?: string): string {
 function formatThreadDate(ts: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) {
+  if (sameCalendarDay(d, new Date())) {
     return new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit"
