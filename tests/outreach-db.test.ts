@@ -40,6 +40,7 @@ import {
   upsertOutreachSettings
 } from "@/lib/outreach/db";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
+import { UNKNOWN_VERTICAL } from "@/lib/outreach/stats";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const PROSPECT = "22222222-2222-4222-8222-222222222222";
@@ -534,6 +535,24 @@ describe("countProspectsInVertical / skipProspectsInVertical (calling off a trad
     await expect(
       countProspectsInVertical(BIZ, "x", makeDb(chain({ count: null, error: { message: "cnt" } })))
     ).rejects.toThrow(/cnt/);
+  });
+
+  it("translates the funnel's (unknown) bucket back into a blank column", async () => {
+    // The funnel groups rows with no recorded trade under a LABEL that no row
+    // stores. Filtering on it literally matches nothing, so the Skip button on
+    // that row would report success and retire none of the prospects it was
+    // pointing at.
+    const c = chain({ count: 4, error: null });
+    expect(await countProspectsInVertical(BIZ, UNKNOWN_VERTICAL, makeDb(c))).toBe(4);
+    expect(c.or).toHaveBeenCalledWith("vertical.is.null,vertical.eq.");
+    expect(c.eq).not.toHaveBeenCalledWith("vertical", UNKNOWN_VERTICAL);
+
+    // Both queries have to translate it the same way, or the count and the
+    // write disagree about which rows the press covers.
+    const u = chain({ error: null });
+    await skipProspectsInVertical(BIZ, UNKNOWN_VERTICAL, "d", makeDb(u));
+    expect(u.or).toHaveBeenCalledWith("vertical.is.null,vertical.eq.");
+    expect(u.eq).not.toHaveBeenCalledWith("vertical", UNKNOWN_VERTICAL);
   });
 
   it("retires the trade with the status filter inside the write", async () => {

@@ -15,6 +15,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import type { PlacesOpeningHours } from "./discover";
+import { UNKNOWN_VERTICAL } from "./stats";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -343,6 +344,22 @@ export async function countProspectsToRewrite(
  */
 const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"];
 
+/**
+ * The funnel is a LABEL, the column is a VALUE, and for one bucket they differ.
+ *
+ * `summarizeFunnel` groups rows with a blank `vertical` under
+ * `UNKNOWN_VERTICAL`, and no row stores that string. Filtering on it literally
+ * matches nothing, so the Skip button on that row would report success and
+ * retire none of the prospects it was pointing at. That bucket has to become
+ * "null or empty" on the way to the database, and both queries below have to
+ * translate it the SAME way, which is what this constant is for.
+ *
+ * Blank means null or the empty string. Whitespace-only cannot occur:
+ * `saveProspectingSettings` trims every search term and drops the empty ones,
+ * and a prospect's vertical is copied from the term that found it.
+ */
+const BLANK_VERTICAL_FILTER = "vertical.is.null,vertical.eq.";
+
 /** How many prospects in one trade a skip would still catch. */
 export async function countProspectsInVertical(
   businessId: string,
@@ -350,12 +367,15 @@ export async function countProspectsInVertical(
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { count, error } = await db
+  const base = db
     .from("outreach_prospects")
     .select("id", { count: "exact", head: true })
     .eq("business_id", businessId)
-    .eq("vertical", vertical)
     .in("status", CANCELLABLE_STATUSES);
+  const { count, error } =
+    vertical === UNKNOWN_VERTICAL
+      ? await base.or(BLANK_VERTICAL_FILTER)
+      : await base.eq("vertical", vertical);
   if (error) throw new Error(`countProspectsInVertical: ${error.message}`);
   return count ?? 0;
 }
@@ -379,12 +399,15 @@ export async function skipProspectsInVertical(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const base = db
     .from("outreach_prospects")
     .update({ status: "skipped", status_detail: detail, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
-    .eq("vertical", vertical)
     .in("status", CANCELLABLE_STATUSES);
+  const { error } =
+    vertical === UNKNOWN_VERTICAL
+      ? await base.or(BLANK_VERTICAL_FILTER)
+      : await base.eq("vertical", vertical);
   if (error) throw new Error(`skipProspectsInVertical: ${error.message}`);
 }
 
