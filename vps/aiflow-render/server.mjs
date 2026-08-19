@@ -240,6 +240,60 @@ function finishSession(key, s, poisoned) {
   if (s.doomed && s.inUse === 0) closeEntry(s);
 }
 
+/**
+ * Record why a page did not finish loading itself.
+ *
+ * Nothing here listened to the page before, which made every hydration failure
+ * indistinguishable from "the control does not exist". HomeLight's referral
+ * panel is the case that forced this: in a real browser it paints its stage
+ * editor, and through this service the same click leaves two `--skeleton`
+ * placeholders forever. With no console and no failed-request capture there was
+ * no way to tell a blocked XHR from a wrong selector from a slow render, so the
+ * only tool left was guessing, and guessed selectors have broken this account
+ * twice.
+ *
+ * Attached always (the listeners are cheap and passive); the collected arrays
+ * are only RETURNED when the caller asks for diagnostics, so ordinary responses
+ * keep their shape and size.
+ *
+ * Bounded on purpose: a page in a retry loop can emit thousands of these, and
+ * this is diagnostic colour, not a log sink.
+ */
+const DIAG_MAX = 25;
+const DIAG_TEXT_MAX = 300;
+
+function attachDiagnostics(page) {
+  const diag = { consoleErrors: [], failedRequests: [], pageErrors: [] };
+  const push = (arr, value) => {
+    if (arr.length < DIAG_MAX) arr.push(String(value ?? "").slice(0, DIAG_TEXT_MAX));
+  };
+  page.on("console", (msg) => {
+    if (msg.type() === "error") push(diag.consoleErrors, msg.text());
+  });
+  page.on("pageerror", (err) => push(diag.pageErrors, err?.message ?? err));
+  page.on("requestfailed", (req) => {
+    // `blockedbyclient` is OUR ssrf guard refusing the request, and saying so
+    // by name is the difference between "the portal is broken" and "we broke
+    // it". Everything else is the network or the origin.
+    const why = req.failure()?.errorText ?? "unknown";
+    push(diag.failedRequests, `${why} ${req.method()} ${req.url()}`);
+  });
+  page.on("response", (res) => {
+    if (res.status() >= 400) {
+      push(diag.failedRequests, `HTTP ${res.status()} ${res.request().method()} ${res.url()}`);
+    }
+  });
+  return diag;
+}
+
+/** Drop empty arrays so an untroubled page adds nothing to the response. */
+function summarizeDiagnostics(diag) {
+  if (!diag) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(diag)) if (v.length > 0) out[k] = v;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function attachSsrfGuard(page) {
   return page.route("**/*", (route) => {
     if (safeUrl(route.request().url())) route.continue();
@@ -503,6 +557,7 @@ async function respondWithActions(
   if (forEachLink) {
     const fe = await performForEach(page, forEachLink, actions, forEachMatch);
     return res.json({
+      ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
       finalUrl: page.url(),
       actionsCompleted: fe.actionsCompleted,
       forEach: {
@@ -553,6 +608,10 @@ async function respondWithActions(
       error: "action_failed",
       detail: acted.error,
       actionsCompleted: acted.completed,
+      // Why the page did not do what was asked, when we know: a blocked or
+      // failing request explains a control that never appeared far better than
+      // "no matching control on the page" does.
+      ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
       ...(screenshotBase64 ? { screenshotBase64 } : {}),
       ...(pageSource ? { pageSource } : {}),
       ...(beforeBase64 ? { screenshotBeforeBase64: beforeBase64 } : {}),
@@ -575,6 +634,11 @@ async function respondWithActions(
   const screenshotBase64 =
     wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
   return res.json({
+    // Present even on a 200: a page that loaded but whose data requests failed
+    // returns REAL html with MISSING controls, which is indistinguishable from
+    // a page that simply does not have them. The owner-facing page picker and
+    // the worker both need to be able to tell those apart.
+    ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
     finalUrl: page.url(),
     actionsCompleted: acted.completed,
     text,
@@ -631,6 +695,8 @@ app.post("/render", async (req, res) => {
   const wantScreenshot = req.body?.screenshot === true;
   // Per-flow visibility opt-in: capture before/after/failure shots for the
   // dashboard "investigate" view. Off by default so most flows pay nothing.
+  // Collected passively on every request; returned only under debugScreenshots.
+  let pageDiagnostics = null;
   const wantDebug = req.body?.debugScreenshots === true;
   const rawActions = req.body?.actions;
   const actions = rawActions === undefined ? null : parseActions(rawActions);
@@ -699,6 +765,9 @@ app.post("/render", async (req, res) => {
       context = await browser.newContext({ userAgent: UA });
       page = await context.newPage();
       await attachSsrfGuard(page);
+      pageDiagnostics = attachDiagnostics(page);
+    page.__diag = pageDiagnostics;
+      page.__diag = pageDiagnostics;
       await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
       if (actions)
@@ -717,6 +786,7 @@ app.post("/render", async (req, res) => {
       const screenshotBase64 =
         wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
       return res.json({
+        ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
         finalUrl: page.url(),
         text,
         html,
@@ -727,6 +797,7 @@ app.post("/render", async (req, res) => {
       const screenshotBase64 = page && (wantScreenshot || wantDebug) ? await captureScreenshot(page) : null;
       const pageSource = page && (wantScreenshot || wantDebug) ? await capturePageSource(page) : null;
       return res.status(200).json({
+        ...(page && summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
         error: "render_failed",
         detail: String(e).slice(0, 300),
         ...(screenshotBase64 ? { screenshotBase64 } : {}),
@@ -755,6 +826,8 @@ app.post("/render", async (req, res) => {
   try {
     page = await session.context.newPage();
     await attachSsrfGuard(page);
+    pageDiagnostics = attachDiagnostics(page);
+    page.__diag = pageDiagnostics;
     await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
     // Settle BEFORE judging whether this is a login page. looksLikeLogin takes
     // an instant locator count with no auto-wait, and goto now returns at
@@ -817,6 +890,7 @@ app.post("/render", async (req, res) => {
         return res.status(200).json({
           error: "login_failed",
           detail,
+          ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
           finalUrl: page.url(),
           // Bounded: enough to spot "invalid password" / MFA / a bot challenge
           // without shipping a whole SPA back through the tunnel.
@@ -851,6 +925,10 @@ app.post("/render", async (req, res) => {
     const screenshotBase64 =
       wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     return res.json({
+      // The authenticated path is the one that matters most: every credentialed
+      // tenant browse and the owner-facing page picker come through here, and a
+      // logged-in portal is exactly where a half-rendered page looks healthy.
+      ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
       finalUrl: page.url(),
       text,
       html,
@@ -866,6 +944,9 @@ app.post("/render", async (req, res) => {
     return res.status(200).json({
       error: "render_failed",
       detail: String(e).slice(0, 300),
+      ...(page && summarizeDiagnostics(page.__diag)
+        ? { diagnostics: summarizeDiagnostics(page.__diag) }
+        : {}),
       ...(screenshotBase64 ? { screenshotBase64 } : {}),
       ...(pageSource ? { pageSource } : {})
     });

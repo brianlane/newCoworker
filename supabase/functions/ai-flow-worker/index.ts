@@ -4055,9 +4055,14 @@ async function browseActionStep(
             result: { skipped: ending ? "already_done" : "already_satisfied", marker, ...diag }
           };
         }
+        // A control that "does not exist" very often does exist and simply
+        // never rendered, because the page's own request for it failed. Say so.
+        const actionDiag = readRenderDiagnostics(parsedBody);
         return {
           kind: "fail",
-          error: `browse_action: ${detail || "a page action failed"}`,
+          error:
+            `browse_action: ${detail || "a page action failed"}` +
+            (actionDiag ? ` | ${actionDiag}` : ""),
           ...(Object.keys(diag).length > 0 ? { result: diag } : {})
         };
       }
@@ -4066,7 +4071,12 @@ async function browseActionStep(
       // step screenshots and the render captured the stuck page, store it and fail
       // the step so the investigate view shows the failure instead of dropping the
       // image into the silent retry path.
-      const why = [errCode, detail].filter(Boolean).join(": ");
+      const why = [
+        [errCode, detail].filter(Boolean).join(": "),
+        readRenderDiagnostics(parsedBody)
+      ]
+        .filter(Boolean)
+        .join(" | ");
       const failBase64 = readScreenshotBase64(parsedBody);
       if (scope.captureScreenshots && failBase64) {
         const failShot = await storeScreenshotBestEffort(supabase, run, index, failBase64);
@@ -4424,6 +4434,35 @@ function readPageSource(body: unknown): string | null {
   return typeof v === "string" && v ? v : null;
 }
 
+/**
+ * Read the render service's page diagnostics off a response body, flattened to
+ * one bounded line.
+ *
+ * The render service now listens for console errors, uncaught page errors and
+ * failed/4xx-5xx requests on every page it opens, and returns them whenever
+ * there are any. That matters beyond a single failure message: a portal whose
+ * data requests fail returns REAL html with MISSING controls, which is
+ * indistinguishable from a portal that simply does not have them. Amy's
+ * HomeLight referral panel is the case that forced this open, and it cost
+ * several rounds of guessing precisely because nothing was listening.
+ *
+ * `blockedbyclient` in the output is OUR ssrf guard refusing the request, and
+ * naming it is the difference between "the portal is broken" and "we broke it".
+ */
+function readRenderDiagnostics(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const d = (body as Record<string, unknown>).diagnostics;
+  if (!d || typeof d !== "object") return null;
+  const parts: string[] = [];
+  for (const [kind, items] of Object.entries(d as Record<string, unknown>)) {
+    if (!Array.isArray(items) || items.length === 0) continue;
+    // Two examples per kind: enough to see the pattern, short enough to store
+    // in `ai_flow_runs.last_error` alongside everything else.
+    parts.push(`${kind}(${items.length}): ${items.slice(0, 2).map(String).join(" | ")}`);
+  }
+  return parts.length > 0 ? parts.join("; ").slice(0, 600) : null;
+}
+
 /** Read the page source paired with the "before" shot off a render body, or null. */
 function readPageSourceBefore(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -4498,6 +4537,11 @@ async function fetchViaRender(
       body = null;
     }
     const { error: errCode, detail } = renderErrorFields(body);
+    // What the PAGE reported about itself, independent of what the render
+    // service concluded. A step can fail because a control is missing, and the
+    // control can be missing because the page's own data request failed; only
+    // this tells the two apart.
+    const pageDiag = readRenderDiagnostics(body);
     if (errCode) {
       // login_failed (bad creds/MFA) and auth_config_error (missing platform
       // config, integration not found, wrong selectors) are permanent setup
@@ -4507,12 +4551,19 @@ async function fetchViaRender(
         // service's `detail` (which submit selector it found, whether the
         // control was enabled, the click error) or the run records only a bare
         // code and the next person debugs it by reading portal markup.
-        throw new BrowseLoginError(detail ? `${errCode}: ${detail}` : errCode);
+        const loginWhy = [detail, pageDiag].filter(Boolean).join(" | ");
+        throw new BrowseLoginError(loginWhy ? `${errCode}: ${loginWhy}` : errCode);
       }
       // render_failed / unknown → transient; surface the root cause. Carry any
       // failure screenshot so a debug-enabled caller can store it before the run
       // retries (otherwise the stuck page is lost on a timeout/interstitial).
-      const why = [errCode, detail].filter(Boolean).join(": ");
+      // pageDiag belongs here too, not only on the login arm: a transient
+      // render failure is precisely when the page's own console and failed
+      // requests explain what went wrong, and without it the run stores a bare
+      // "render service error (render_failed)".
+      const why = [[errCode, detail].filter(Boolean).join(": "), pageDiag]
+        .filter(Boolean)
+        .join(" | ");
       throw new RenderFailedError(
         `render service error${why ? ` (${why})` : ""}`,
         readScreenshotBase64(body) ?? undefined,
