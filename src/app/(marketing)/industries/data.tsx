@@ -60,7 +60,11 @@ export const INDUSTRIES: IndustryDef[] = [
     i18nKey: "medicalDental",
     Icon: HeartPulse,
     useCaseIcons: [CalendarCheck, Bell, Phone, Users, ShieldCheck, Workflow],
-    dayTimes: ["8:01 AM", "1:20 PM", "5:45 PM", "7:00 PM"]
+    dayTimes: ["8:01 AM", "1:20 PM", "5:45 PM", "7:00 PM"],
+    // This page markets to covered entities, so it states the scope out loud.
+    // A practice must not read front-desk automation as a records system, and
+    // must not self-serve onto a standard plan when what they need is a BAA.
+    hasComplianceNote: true
   },
   {
     slug: "law-firms",

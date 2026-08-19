@@ -838,7 +838,7 @@
         },
         "u5": {
           "title": "Private By Design",
-          "description": "A dedicated server per practice, with patient conversations isolated per business and never shared."
+          "description": "Every practice runs on its own dedicated server, with conversations isolated per business. On enterprise, patient conversations can live on that server instead of our cloud."
         },
         "u6": {
           "title": "Recall Campaigns",
@@ -847,7 +847,8 @@
         "day1": "Monday-morning rush: five calls in ten minutes. All answered; three appointments booked; two questions resolved.",
         "day2": "A patient cancels by text. Your coworker re-books them and offers the freed slot to the waitlist.",
         "day3": "An after-hours caller asks about insurance acceptance. Answered from your website knowledge, with a booking for Thursday.",
-        "day4": "Tomorrow's patients receive confirmation texts; responses are handled automatically."
+        "day4": "Tomorrow's patients receive confirmation texts; responses are handled automatically.",
+        "complianceNote": "Scope matters here. Your coworker does front-desk work: scheduling, reminders, overflow and after-hours questions. It is not a records system, and we do not sign a Business Associate Agreement on standard plans, so keep clinical detail out of it. Practices that need a signed BAA, or patient conversations held on their own server, should talk to us about an enterprise deployment before buying."
       },
       "lawFirms": {
         "name": "Law Firms",
