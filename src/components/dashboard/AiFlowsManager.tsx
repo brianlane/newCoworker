@@ -26,6 +26,7 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { BrowseActionPagePicker } from "@/components/dashboard/BrowseActionPagePicker";
 import {
   findStepById,
   flattenForDisplay,
@@ -1922,6 +1923,7 @@ export function AiFlowsManager({
                   />
                 ) : (
                   <StepFields
+                    businessId={businessId}
                     step={selectedStep}
                     index={0}
                     patchStep={(_i, p) => patchNodeById(selectedStep.id, p)}
@@ -2712,6 +2714,7 @@ export function AiFlowsManager({
                 />
               )}
               <StepFields
+                businessId={businessId}
                 step={step}
                 index={i}
                 patchStep={patchStep}
@@ -3433,6 +3436,7 @@ function VariablesPalette({
 }
 
 function StepFields({
+  businessId,
   step,
   index,
   patchStep,
@@ -3444,6 +3448,8 @@ function StepFields({
   agents,
   examples
 }: {
+  /** Owner's business, for the browse-step page picker's probe call. */
+  businessId: string;
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
@@ -5156,6 +5162,19 @@ function StepFields({
         >
           + action
         </button>
+        {/* Pick a real control off the real page instead of typing a selector
+            from memory: the miss this costs is silent (the step fails on a
+            live lead, weeks later), so the fix belongs where the guess is
+            made. */}
+        <BrowseActionPagePicker
+          businessId={businessId}
+          {...(step.auth?.integrationLabel
+            ? { integrationLabel: step.auth.integrationLabel }
+            : {})}
+          onAddAction={(action) =>
+            patchStep(index, { actions: [...step.actions, action] })
+          }
+        />
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}

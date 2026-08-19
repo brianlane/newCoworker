@@ -11,6 +11,7 @@ import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
+import { AiFlowHistory } from "@/components/dashboard/AiFlowHistory";
 
 export const dynamic = "force-dynamic";
 
@@ -140,14 +141,21 @@ export default async function AiFlowViewPage({ params }: Props) {
         </div>
       </div>
 
-      {flow ? (
-        <Card>
-          <AiFlowView
-            definition={flow.definition}
-            coworkerEmail={coworkerEmail}
-            statsByStepId={statsByStepId}
-          />
-        </Card>
+      {flow && businessId ? (
+        <>
+          <Card>
+            <AiFlowView
+              definition={flow.definition}
+              coworkerEmail={coworkerEmail}
+              statsByStepId={statsByStepId}
+            />
+          </Card>
+          {/* Edit history lives beside the flow it belongs to, so "what did I
+              just change, and can I take it back" is answered in one place. */}
+          <Card>
+            <AiFlowHistory businessId={businessId} flowId={flow.id} />
+          </Card>
+        </>
       ) : (
         <Card>
           <p className="py-6 text-center text-sm text-parchment/60">
