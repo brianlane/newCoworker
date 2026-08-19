@@ -74,15 +74,27 @@ describe("the render service listens to the page", () => {
   });
 
   it("covers the AUTHENTICATED path, which is the one that actually matters", () => {
-    // Bugbot, high severity: the first cut attached listeners on the pooled
-    // authenticated page but spread diagnostics only on the UNAUTHENTICATED
-    // twins. Every credentialed tenant browse and the owner-facing page picker
-    // come through the authenticated handler, so a logged-in portal, which is
-    // exactly where a half-rendered page looks healthy, still returned nothing.
-    const authSuccess = server.slice(server.indexOf("const html = await page.content();"));
-    expect(authSuccess).toContain("summarizeDiagnostics(page.__diag)");
+    // Bugbot, twice. First cut: listeners attached on the pooled authenticated
+    // page but only the UNAUTHENTICATED twins spread the diagnostics, so every
+    // credentialed tenant browse and the owner-facing page picker still got a
+    // 200 with real html, missing controls and no explanation.
+    //
+    // Second cut: this test sliced from the first `page.content()`, which is
+    // inside `capturePageSource`, so the window already contained the
+    // unauthenticated call sites and would have passed while the authenticated
+    // path regressed. Anchor on a string that appears ONLY in the credentialed
+    // handler, and assert uniqueness so the anchor itself cannot rot.
+    const marker = "render_failed (authenticated";
+    expect(server.split(marker)).toHaveLength(2);
+    const at = server.indexOf(marker);
 
-    const authCatch = server.slice(server.indexOf("render_failed (authenticated"));
+    // The credentialed SUCCESS return sits immediately above that catch.
+    const authSuccess = server.slice(Math.max(0, at - 1200), at);
+    expect(authSuccess).toContain("summarizeDiagnostics(page.__diag)");
+    expect(authSuccess).toContain("finalUrl: page.url()");
+
+    // And the credentialed FAILURE return sits immediately below it.
+    const authCatch = server.slice(at, at + 1200);
     expect(authCatch).toContain("summarizeDiagnostics(page.__diag)");
   });
 });
