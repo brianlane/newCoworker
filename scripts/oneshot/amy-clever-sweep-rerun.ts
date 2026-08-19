@@ -12,9 +12,19 @@
  * "Needs Action" list and works whatever is still owed, which makes the
  * replay idempotent at the portal level (updated cards are no longer listed).
  *
- * The trigger's magic link expires in under a day, so a replay older than
- * that leans on the browse step's `auth` login fallback; if that login fails,
- * the run fails at the browse step and nothing is texted, a visible no-op.
+ * WHAT THIS CANNOT DO, learned by running it (2026-08-19). Clever's magic
+ * link is SINGLE-USE: once the scheduled run has consumed it, replaying the
+ * same trigger lands on "Magic link has expired", a page with no list rows
+ * and no error, so the sweep posts nothing. There is no fallback, because
+ * Clever's password login fails for this account too (probe the portal with
+ * `debug/portal-dom-probe.ts --label Clever` and it redirects to
+ * login.listwithclever.com and returns `login_failed`).
+ *
+ * So this is only useful for a reminder whose link is still UNSPENT, i.e. the
+ * scheduled run never ran or died before the browse step. Replaying a
+ * reminder the sweep already worked will do nothing; it is at least no longer
+ * SILENT about it, since the flow's `posted_nothing` alert arm fires when the
+ * sweep posts zero (see `amy-clever-sweep-measured-alert-definition.ts`).
  *
  * SAFE BY REFUSAL: refuses when the flow already has a queued/running/parked
  * run (never stack two sweeps), and refuses a replay when the source run is
