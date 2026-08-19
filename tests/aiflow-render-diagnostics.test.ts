@@ -196,3 +196,32 @@ describe("navigator.webdriver does not give the game away", () => {
     expect(server).toContain('"--disable-blink-features=AutomationControlled"');
   });
 });
+
+describe("a script served as markup gets named", () => {
+  it("records scripts whose content-type is not JavaScript", () => {
+    // Invisible to every other check: status 200, request did not fail, the
+    // document keeps rendering, and the app then dies on "Unexpected token
+    // '<'" with nothing naming the file. A CDN challenge page, an SPA rewrite
+    // swallowing a 404, or an auth redirect on a static asset all look like
+    // this. Verified against HomeLight, where plain curl from the same box
+    // returns the chunk as real JavaScript and only the browser gets markup.
+    expect(server).toContain("scriptNotJavaScript");
+    expect(server).toContain('res.request().resourceType() !== "script"');
+  });
+
+  it("treats JSON as acceptable, since bundlers legitimately serve it", () => {
+    expect(server).toMatch(/javascript\|ecmascript\|application\\\/json/);
+  });
+
+  it("returns early on a real HTTP error rather than double-reporting", () => {
+    const at = server.indexOf("push(diag.failedRequests, `HTTP ${res.status()}");
+    expect(server.slice(at, at + 200)).toContain("return;");
+  });
+
+  it("never lets header access on a closed page break collection", () => {
+    // Anchor on the PUSH site, not the declaration, which comes first.
+    const at = server.indexOf("push(diag.scriptNotJavaScript");
+    expect(at).toBeGreaterThan(-1);
+    expect(server.slice(at, at + 300)).toContain("catch");
+  });
+});
