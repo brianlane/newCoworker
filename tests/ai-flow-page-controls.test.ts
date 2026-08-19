@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { digestPageControls, stripCode, textOf } from "@/lib/ai-flows/page-controls";
+import {
+  decodeEntities,
+  digestPageControls,
+  stripCode,
+  textOf
+} from "@/lib/ai-flows/page-controls";
 
 describe("stripCode", () => {
   it("removes script and style bodies", () => {
@@ -136,6 +141,35 @@ describe("digestPageControls", () => {
     expect(controls).toEqual([]);
   });
 
+  it("only offers input types you can actually type into", () => {
+    // A checkbox, radio or file input carries a name too, and offering one as
+    // a "fill" builds a step action against a control that cannot be typed
+    // into. Submit and button inputs are already offered as clicks.
+    const { controls } = digestPageControls(
+      `<input type="checkbox" name="agree">
+       <input type="radio" name="mode">
+       <input type="file" name="upload">
+       <input type="color" name="shade">
+       <input type="range" name="price">
+       <input type="reset" name="clear">`
+    );
+    expect(controls.filter((c) => c.group === "Text fields")).toEqual([]);
+  });
+
+  it("offers every typeable input type, and treats a missing type as text", () => {
+    const html = ["text", "search", "email", "tel", "url", "number", "date", "time"]
+      .map((t) => `<input type="${t}" name="f_${t}">`)
+      .join("");
+    const { controls } = digestPageControls(`${html}<input name="f_bare">`);
+    expect(controls.map((c) => c.target)).toContain('input[name="f_bare"]');
+    expect(controls).toHaveLength(9);
+  });
+
+  it("matches an input type case-insensitively", () => {
+    const { controls } = digestPageControls(`<input type="TEXT" name="q">`);
+    expect(controls[0].target).toBe('input[name="q"]');
+  });
+
   it("offers data-test and data-testid handles as selectors", () => {
     const { controls } = digestPageControls(
       `<div data-test="claim-button"></div><div data-testid="row-3"></div>`
@@ -194,5 +228,66 @@ describe("digestPageControls", () => {
     );
     expect(digest.controls).toEqual([]);
     expect(digest.headings).toEqual(["Real"]);
+  });
+});
+
+describe("decodeEntities", () => {
+  it("decodes each entity exactly once, leaving unknown ones alone", () => {
+    expect(decodeEntities("a&amp;b")).toBe("a&b");
+    expect(decodeEntities("&amp;lt;")).toBe("&lt;");
+    expect(decodeEntities("&copy;")).toBe("&copy;");
+  });
+
+  it("preserves whitespace, unlike textOf", () => {
+    // Attribute values are used verbatim in selectors, so collapsing runs of
+    // spaces the way visible text does would build a selector that misses.
+    expect(decodeEntities("a  b")).toBe("a  b");
+  });
+});
+
+describe("attribute values from serialized DOM", () => {
+  it("decodes a link href, so walking a list page reaches the right address", () => {
+    // The sidecar returns serialized DOM, where a query string's "&" arrives
+    // as "&amp;". Probing the undecoded href hits a different page.
+    const { links } = digestPageControls(
+      `<a href="/leads?id=7&amp;stage=new">Jane</a>`
+    );
+    expect(links[0].href).toBe("/leads?id=7&stage=new");
+  });
+
+  it("decodes a name before building a selector from it", () => {
+    const { controls } = digestPageControls(`<input name="filter&amp;sort">`);
+    expect(controls[0].target).toBe('input[name="filter&sort"]');
+  });
+
+  it("decodes a placeholder", () => {
+    const { controls } = digestPageControls(`<input placeholder="Name &amp; email">`);
+    expect(controls[0].target).toBe("Name & email");
+  });
+
+  it("drops a control whose name cannot be quoted in a selector", () => {
+    // The attribute regex stops at the first raw quote, but decoding can
+    // reveal a &quot;, and a quote inside the brackets builds a selector that
+    // matches nothing. Better absent than silently broken.
+    const digest = digestPageControls(
+      `<input name="a&quot;b">
+       <select name="x&quot;y"><option>A</option></select>
+       <div data-test="p&quot;q"></div>`
+    );
+    expect(digest.controls).toEqual([]);
+  });
+
+  it("still offers a quote-bearing field by its placeholder, which needs no brackets", () => {
+    const { controls } = digestPageControls(
+      `<input name="a&quot;b" placeholder="Search leads">`
+    );
+    expect(controls[0]).toMatchObject({ kind: "fill_placeholder", target: "Search leads" });
+  });
+
+  it("falls back to a select's id when its name is unusable", () => {
+    const { controls } = digestPageControls(
+      `<select name="a&quot;b" id="stage"><option>A</option></select>`
+    );
+    expect(controls[0].target).toBe("#stage");
   });
 });

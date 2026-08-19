@@ -107,21 +107,42 @@ const HTML_ENTITIES: Record<string, string> = {
  */
 const ENTITY_RE = new RegExp(Object.keys(HTML_ENTITIES).join("|"), "gi");
 
+/**
+ * ONE pass over all entities. Decoding sequentially (&amp; to & before
+ * handling the rest) lets an already-decoded "&" combine with following text
+ * into a second entity and be unescaped twice, so "&amp;lt;" would wrongly
+ * become "<" instead of "&lt;".
+ */
+export function decodeEntities(value: string): string {
+  return value.replace(ENTITY_RE, (m) => HTML_ENTITIES[m.toLowerCase()]);
+}
+
 /** Visible text of a markup fragment. */
 export function textOf(fragment: string): string {
-  return fragment
-    .replace(/<[^>]+>/g, " ")
-    // ONE pass over all entities. Decoding sequentially (&amp; to & before
-    // handling the rest) lets an already-decoded "&" combine with following
-    // text into a second entity and be unescaped twice, so "&amp;lt;" would
-    // wrongly become "<" instead of "&lt;".
-    .replace(ENTITY_RE, (m) => HTML_ENTITIES[m.toLowerCase()])
+  return decodeEntities(fragment.replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
     .trim();
 }
 
+/**
+ * An attribute's real value. Decoded, because the sidecar returns SERIALIZED
+ * DOM: a href of `/leads?id=7&stage=new` arrives as `...&amp;stage=new`, and
+ * handing that back undecoded sends the next probe to the wrong address and
+ * builds name selectors that miss the live control.
+ */
 function attr(tag: string, name: string): string {
-  return new RegExp(`\\s${name}="([^"]*)"`, "i").exec(tag)?.[1] ?? "";
+  return decodeEntities(new RegExp(`\\s${name}="([^"]*)"`, "i").exec(tag)?.[1] ?? "");
+}
+
+/**
+ * A value safe to embed in a `[name="..."]` selector. The attribute regex
+ * stops at the first raw quote, but decoding can reveal a `&quot;`, and a
+ * quote inside the brackets builds a selector that matches nothing. Such a
+ * control is dropped rather than offered broken; the fill_placeholder path
+ * has no brackets, so it is unaffected.
+ */
+function quotableForSelector(value: string): boolean {
+  return value.length > 0 && !value.includes('"');
 }
 
 /** First non-empty of the given values. */
@@ -169,7 +190,11 @@ function dropdowns(body: string): PageControl[] {
     const id = attr(open, "id");
     // Prefer name over id: a name is the form contract, while SPA ids are
     // often build-time hashes that change on the vendor's next deploy.
-    const target = name ? `select[name="${name}"]` : id ? `#${id}` : "";
+    const target = quotableForSelector(name)
+      ? `select[name="${name}"]`
+      : id.length > 0
+        ? `#${id}`
+        : "";
     const options = [...inner.matchAll(/<option[^>]*>([\s\S]{0,120}?)<\/option>/gi)]
       .map((o) => firstOf(textOf(o[1]), attr(o[0], "value")))
       .filter((o) => o.length > 0)
@@ -185,16 +210,39 @@ function dropdowns(body: string): PageControl[] {
   return take(found);
 }
 
+/**
+ * Input types you can actually type into. An allowlist rather than a
+ * blocklist of password/hidden: a checkbox, radio, file or submit input
+ * carries a name too, and offering one as "fill" builds a step action
+ * against a control that cannot be typed into. `password` is absent on
+ * purpose, so a flow can never be authored to type a credential.
+ */
+const TYPEABLE_INPUT_TYPES = new Set([
+  "text",
+  "search",
+  "email",
+  "tel",
+  "url",
+  "number",
+  "date",
+  "datetime-local",
+  "month",
+  "time",
+  "week"
+]);
+
 function textFields(body: string): PageControl[] {
   const found: PageControl[] = [];
   const collect = (tag: string, element: "input" | "textarea"): void => {
-    const type = element === "input" ? firstOf(attr(tag, "type"), "text") : "textarea";
-    // Never offer a credential field: a flow typing into one would be
-    // storing a password in a step template.
-    if (type === "password" || type === "hidden") return;
+    if (element === "input") {
+      // A missing type attribute means text, which is the common case on a
+      // portal's search and note boxes.
+      const type = firstOf(attr(tag, "type").toLowerCase(), "text");
+      if (!TYPEABLE_INPUT_TYPES.has(type)) return;
+    }
     const name = attr(tag, "name");
     const placeholder = attr(tag, "placeholder");
-    if (name) {
+    if (quotableForSelector(name)) {
       found.push({
         group: "Text fields",
         kind: "fill_selector",
@@ -224,7 +272,9 @@ function stableHandles(body: string): PageControl[] {
   const found: PageControl[] = [];
   for (const m of body.matchAll(/data-test(?:id)?="([^"]+)"/gi)) {
     const which = /data-testid=/i.test(m[0]) ? "data-testid" : "data-test";
-    const target = `[${which}="${m[1]}"]`;
+    const value = decodeEntities(m[1]);
+    if (!quotableForSelector(value)) continue;
+    const target = `[${which}="${value}"]`;
     found.push({ group: "Stable handles", kind: "click_selector", target, label: target });
   }
   return take(found);
@@ -234,7 +284,7 @@ function links(body: string): PageLink[] {
   const seen = new Set<string>();
   const out: PageLink[] = [];
   for (const m of body.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]{0,200}?)<\/a>/gi)) {
-    const href = m[1];
+    const href = decodeEntities(m[1]);
     if (/^(#|mailto:|tel:|javascript:)/i.test(href)) continue;
     if (/\.(css|js|png|jpe?g|svg|ico|woff2?)($|\?)/i.test(href)) continue;
     if (seen.has(href)) continue;
