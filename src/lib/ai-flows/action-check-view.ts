@@ -94,3 +94,49 @@ export function describePageDiagnostics(diagnostics?: PageDiagnostics): string[]
   }
   return lines;
 }
+
+/**
+ * One action as the EDITOR holds it. The step schema calls the value
+ * `valueTemplate` (it can carry {{...}} placeholders a run fills in), while
+ * the sidecar's parseActions expects `value`.
+ */
+export type EditorAction = { kind: string; target: string; valueTemplate?: string };
+
+/**
+ * Value-requiring kinds, mirroring BROWSE_ACTION_KINDS_REQUIRING_VALUE in the
+ * schema and ACTION_KINDS_REQUIRING_VALUE in the sidecar. Duplicated rather
+ * than imported because this module must stay client-safe.
+ */
+const VALUE_REQUIRING_KINDS = new Set(["click_role", "select_option"]);
+
+/**
+ * Translate editor actions into what the checker sends.
+ *
+ * Passing the editor's objects straight through drops the value entirely, and
+ * `parseActions` rejects the WHOLE array when a value-requiring kind has none.
+ * So a sequence containing one `select_option` would not have come back with
+ * "the dropdown does not offer that choice"; it would have come back as a
+ * failed page open, blaming the address.
+ */
+export function toCheckableActions(actions: EditorAction[]): CheckableAction[] {
+  return actions.map((a) => ({
+    kind: a.kind,
+    target: a.target,
+    ...(a.valueTemplate ? { value: a.valueTemplate } : {})
+  }));
+}
+
+/**
+ * True when a value the check actually COMPARES is still a template.
+ *
+ * Only the value-requiring kinds matter: a dry run never types, so a
+ * `fill_selector` template is irrelevant, but `select_option` and
+ * `click_role` match ON the value, and at authoring time there is no run to
+ * resolve {{vars.x}} against. The owner has to be told the comparison used
+ * the text as written, or a correct step reads as a missing option.
+ */
+export function hasUnresolvedTemplateValue(actions: EditorAction[]): boolean {
+  return actions.some(
+    (a) => VALUE_REQUIRING_KINDS.has(a.kind) && (a.valueTemplate ?? "").includes("{{")
+  );
+}

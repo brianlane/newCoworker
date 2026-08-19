@@ -4,7 +4,9 @@ import {
   checkBrowseActions,
   describeActionCheck,
   describePageDiagnostics,
+  hasUnresolvedTemplateValue,
   noActionResolved,
+  toCheckableActions,
   type ActionCheck
 } from "@/lib/ai-flows/action-check";
 
@@ -404,5 +406,70 @@ describe("a sidecar that has not been redeployed", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(result).toEqual({ ok: false, error: "render_failed", detail: "sidecar http 500" });
+  });
+});
+
+
+describe("toCheckableActions", () => {
+  it("carries the editor's valueTemplate across as the value the sidecar wants", () => {
+    // The step schema calls it valueTemplate; parseActions wants `value`, and
+    // rejects the WHOLE array when a value-requiring kind has none. Passing
+    // the editor objects through unchanged turned "the dropdown does not offer
+    // that choice" into a failed page open blaming the address.
+    expect(
+      toCheckableActions([
+        { kind: "select_option", target: "select[name=stage]", valueTemplate: "Spoke with them" }
+      ])
+    ).toEqual([
+      { kind: "select_option", target: "select[name=stage]", value: "Spoke with them" }
+    ]);
+  });
+
+  it("omits the value entirely when there is none, rather than sending undefined", () => {
+    expect(toCheckableActions([{ kind: "click_text", target: "Accept" }])).toEqual([
+      { kind: "click_text", target: "Accept" }
+    ]);
+    expect(
+      toCheckableActions([{ kind: "click_text", target: "Accept", valueTemplate: "" }])
+    ).toEqual([{ kind: "click_text", target: "Accept" }]);
+  });
+
+  it("keeps click_role's accessible name, the other value-requiring kind", () => {
+    expect(
+      toCheckableActions([{ kind: "click_role", target: "option", valueTemplate: "09:00" }])
+    ).toEqual([{ kind: "click_role", target: "option", value: "09:00" }]);
+  });
+});
+
+describe("hasUnresolvedTemplateValue", () => {
+  it("is true when a kind that MATCHES on its value still holds a template", () => {
+    // select_option and click_role compare against the value, and there is no
+    // run here to resolve {{vars.x}}, so a correct step would otherwise read
+    // as a missing option.
+    expect(
+      hasUnresolvedTemplateValue([
+        { kind: "select_option", target: "s", valueTemplate: "{{vars.stage}}" }
+      ])
+    ).toBe(true);
+    expect(
+      hasUnresolvedTemplateValue([{ kind: "click_role", target: "option", valueTemplate: "{{vars.slot}}" }])
+    ).toBe(true);
+  });
+
+  it("ignores a template on a kind the dry run never compares", () => {
+    // A dry run never types, so a fill template is irrelevant and warning
+    // about it would be noise on almost every real step.
+    expect(
+      hasUnresolvedTemplateValue([
+        { kind: "fill_selector", target: "textarea", valueTemplate: "{{vars.actions_taken}}" }
+      ])
+    ).toBe(false);
+  });
+
+  it("is false for plain literal values and for no value at all", () => {
+    expect(
+      hasUnresolvedTemplateValue([{ kind: "select_option", target: "s", valueTemplate: "New" }])
+    ).toBe(false);
+    expect(hasUnresolvedTemplateValue([{ kind: "select_option", target: "s" }])).toBe(false);
   });
 });

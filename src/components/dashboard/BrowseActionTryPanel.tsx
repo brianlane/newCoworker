@@ -21,19 +21,22 @@ import { AlertTriangle, CheckCircle2, CircleDashed, PlayCircle, XCircle } from "
 // from it here fails the build.
 import type {
   ActionCheck,
-  CheckableAction,
+  EditorAction,
   PageDiagnostics
 } from "@/lib/ai-flows/action-check-view";
 import {
   describeActionCheck,
   describePageDiagnostics,
-  noActionResolved
+  hasUnresolvedTemplateValue,
+  noActionResolved,
+  toCheckableActions
 } from "@/lib/ai-flows/action-check-view";
 
 type Props = {
   businessId: string;
   integrationLabel?: string;
-  actions: CheckableAction[];
+  /** The step's actions, in the editor's own shape (valueTemplate, not value). */
+  actions: EditorAction[];
 };
 
 const inputClass =
@@ -56,8 +59,12 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
   const [shot, setShot] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
 
-  const usable = actions.filter((a) => a.kind && a.target);
+  const usable = actions.filter((a) => a.kind && a.target.trim());
   const diagnosticLines = describePageDiagnostics(diagnostics ?? undefined);
+  // The option or accessible name lives in valueTemplate; the checker (and the
+  // sidecar's parser) want `value`, and a value-requiring kind with none makes
+  // parseActions reject the whole array.
+  const templated = hasUnresolvedTemplateValue(usable);
 
   const run = async () => {
     setLoading(true);
@@ -72,7 +79,7 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
         body: JSON.stringify({
           businessId,
           url: url.trim(),
-          actions: usable,
+          actions: toCheckableActions(usable),
           ...(integrationLabel ? { integrationLabel } : {})
         })
       });
@@ -157,6 +164,14 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
                   </div>
                 </div>
               ))}
+
+              {templated && (
+                <p className="text-[11px] leading-snug text-parchment/40">
+                  One of these picks an option using a value the flow fills in while it runs
+                  (something in {"{{ }}"}). There is no run here, so we looked for that text
+                  exactly as written.
+                </p>
+              )}
 
               {/* Stated once, under the results, where it explains what the
                   owner is looking at rather than pre-emptively excusing it. */}

@@ -31,10 +31,13 @@ export {
   MAX_CHECKABLE_ACTIONS,
   describeActionCheck,
   describePageDiagnostics,
+  hasUnresolvedTemplateValue,
   noActionResolved,
+  toCheckableActions,
   type ActionCheck,
   type ActionCheckState,
   type CheckableAction,
+  type EditorAction,
   type PageDiagnostics
 } from "@/lib/ai-flows/action-check-view";
 
