@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
+  checkActions,
   runAction,
   condenseError,
   parseActions,
@@ -477,5 +478,263 @@ describe("MAX_FOREACH_ITEMS fits inside the Cloudflare edge budget", () => {
 
   it("stays overridable per box for an emergency, without a code change", () => {
     expect(actionsSource).toContain("process.env.AIFLOW_MAX_FOREACH_ITEMS");
+  });
+});
+
+
+/**
+ * DRY RUN (checkActions). The dashboard's "Test with a contact" simulates
+ * browse steps entirely, so before this a selector's first real test was a
+ * live lead. What has to hold: the verdicts match what the real action would
+ * meet, and NOTHING is performed.
+ */
+describe("checkActions (dry run)", () => {
+  it("reports a resolvable, enabled control as ready and clicks nothing", async () => {
+    const { page, run } = makeStubPage({ enabled: [true] });
+
+    const checks = await checkActions(page, [
+      { kind: "click_text", target: "Claim this lead", value: "" }
+    ]);
+
+    expect(checks).toEqual([
+      { kind: "click_text", target: "Claim this lead", state: "ready" }
+    ]);
+    // The whole point: a dry run that clicked would accept a real referral.
+    expect(run.clicks).toBe(0);
+  });
+
+  it("performs nothing across a whole sequence", async () => {
+    const { page, run } = makeStubPage({ enabled: [true] });
+
+    await checkActions(page, [
+      { kind: "click_text", target: "Accept", value: "" },
+      { kind: "fill_selector", target: 'textarea[name="message"]', value: "hello" },
+      { kind: "click_selector", target: "[data-test=submit]", value: "" }
+    ]);
+
+    expect(run.clicks).toBe(0);
+  });
+
+  it("reports a control that is not on the page as absent", async () => {
+    const { page } = makeStubPage({ count: 0 });
+
+    const checks = await checkActions(page, [
+      { kind: "click_text", target: "Claim this lead", value: "" }
+    ]);
+
+    expect(checks[0].state).toBe("absent");
+  });
+
+  it("reports a present-but-inert control as blocked, not absent", async () => {
+    // The distinction matters to the owner: "blocked" is normal for a button
+    // that wakes up once something above it is filled in, while "absent" means
+    // the selector is wrong.
+    const { page } = makeStubPage({ enabled: [false] });
+
+    const checks = await checkActions(page, [
+      { kind: "click_selector", target: "button.submit", value: "" }
+    ]);
+
+    expect(checks[0].state).toBe("blocked");
+  });
+
+  it("treats a control that never becomes visible as absent", async () => {
+    const { page } = makeStubPage({ invisible: true });
+
+    const checks = await checkActions(page, [
+      { kind: "click_selector", target: "button.submit", value: "" }
+    ]);
+
+    expect(checks[0].state).toBe("absent");
+  });
+
+  it("reaches the same verdict the while-present loop acts on", async () => {
+    // probeLocator is shared with probeClickable on purpose: a check that
+    // judged actionability differently from the thing it predicts would be
+    // worse than no check.
+    const { page } = makeStubPage({ enabled: [false] });
+
+    const [check] = await checkActions(page, [
+      { kind: "click_text_while_present", target: "Next", value: "" }
+    ]);
+    // Same state the loop reads before refusing to call this a finished wizard.
+    expect(check.state).toBe("blocked");
+    await expect(runAction(page, { kind: "click_text_while_present", target: "Next", value: "" }))
+      .rejects.toThrow("never became clickable");
+  });
+
+  it("checks every action rather than stopping at the first miss", async () => {
+    // A run stops at the first failure; a check must not, or fixing one
+    // selector only reveals the next one.
+    const { page } = makeStubPage({ count: 0 });
+
+    const checks = await checkActions(
+      page,
+      [
+        { kind: "click_text", target: "A", value: "" },
+        { kind: "click_text", target: "B", value: "" },
+        { kind: "click_text", target: "C", value: "" }
+      ],
+      { totalAppearMs: 100 }
+    );
+
+    expect(checks.map((c) => c.target)).toEqual(["A", "B", "C"]);
+  });
+
+  it("shares ONE appear budget across the sequence instead of paying it per action", async () => {
+    // Without this the worst case is 15 x CLICK_TEXT_APPEAR_MS, and the whole
+    // dry run is a single response behind a Cloudflare Tunnel with a ~100s
+    // ceiling. The owner would get an unexplained 524 from the button whose
+    // job is to explain failures.
+    const { page } = makeStubPage({ count: 0 });
+    const started = Date.now();
+
+    const checks = await checkActions(
+      page,
+      Array.from({ length: 8 }, (_, i) => ({
+        kind: "click_text",
+        target: `T${i}`,
+        value: ""
+      })),
+      { totalAppearMs: 200 }
+    );
+
+    expect(checks).toHaveLength(8);
+    expect(checks.every((c) => c.state === "absent")).toBe(true);
+    // Eight actions, one budget: nowhere near 8 x the per-action timeout.
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it("still resolves a control that IS present after the budget is spent", async () => {
+    // Losing the grace period must not turn a working action into a miss: the
+    // immediate resolution pass still runs for every action.
+    const { page } = makeStubPage({ enabled: [true] });
+
+    const checks = await checkActions(
+      page,
+      [
+        { kind: "click_text", target: "A", value: "" },
+        { kind: "click_text", target: "B", value: "" }
+      ],
+      { totalAppearMs: 0 }
+    );
+
+    expect(checks.map((c) => c.state)).toEqual(["ready", "ready"]);
+  });
+
+  it("reports a malformed selector with the reason instead of throwing", async () => {
+    const page = {
+      locator: () => {
+        throw new Error("Unexpected token while parsing selector");
+      }
+    };
+
+    const checks = await checkActions(page, [
+      { kind: "click_selector", target: "button[", value: "" }
+    ]);
+
+    expect(checks[0].state).toBe("absent");
+    expect(checks[0].detail).toContain("selector");
+  });
+
+  it("says when a dropdown exists but does not offer the chosen option", async () => {
+    const optionLocator = {
+      evaluateAll: async () => [
+        { label: "New", value: "new" },
+        { label: "Spoke with them", value: "spoke" }
+      ]
+    };
+    const page = {
+      locator: () => ({
+        first: () => ({
+          waitFor: async () => {},
+          isEnabled: async () => true,
+          locator: () => optionLocator
+        })
+      })
+    };
+
+    const checks = await checkActions(page, [
+      { kind: "select_option", target: "select[name=stage]", value: "Under contract" }
+    ]);
+
+    expect(checks[0]).toMatchObject({
+      state: "missing_option",
+      options: ["New", "Spoke with them"]
+    });
+  });
+
+  it("accepts an option matched by its value or by a partial label", async () => {
+    const make = (wanted: string) => {
+      const optionLocator = {
+        evaluateAll: async () => [{ label: "Spoke with them", value: "spoke" }]
+      };
+      const page = {
+        locator: () => ({
+          first: () => ({
+            waitFor: async () => {},
+            isEnabled: async () => true,
+            locator: () => optionLocator
+          })
+        })
+      };
+      return checkActions(page, [
+        { kind: "select_option", target: "select[name=stage]", value: wanted }
+      ]);
+    };
+
+    expect((await make("spoke"))[0].state).toBe("ready");
+    expect((await make("Spoke"))[0].state).toBe("ready");
+    expect((await make("SPOKE WITH THEM"))[0].state).toBe("ready");
+  });
+
+  it("does not claim a custom dropdown is missing an option it cannot enumerate", async () => {
+    // A div-based combobox is a real pattern; reporting it as broken would
+    // send an owner rewriting a step that works.
+    const page = {
+      locator: () => ({
+        first: () => ({
+          waitFor: async () => {},
+          isEnabled: async () => true,
+          locator: () => ({
+            evaluateAll: async () => {
+              throw new Error("not a select");
+            }
+          })
+        })
+      })
+    };
+
+    const checks = await checkActions(page, [
+      { kind: "select_option", target: "div[role=combobox]", value: "Anything" }
+    ]);
+
+    expect(checks[0].state).toBe("ready");
+  });
+});
+
+describe("the dry run cannot perform actions", () => {
+  it("the check responder never reaches the action engine", () => {
+    // Structural, not a flag: server.mjs routes checkOnly to its own responder.
+    // If that body ever grows a performActions call, a dry run silently starts
+    // clicking on a live portal, and no unit test with a stub page would see it.
+    const serverSrc = readFileSync(
+      new URL("../vps/aiflow-render/server.mjs", import.meta.url),
+      "utf8"
+    );
+    const start = serverSrc.indexOf("async function respondWithActionChecks(");
+    expect(start).toBeGreaterThan(-1);
+    const body = serverSrc.slice(start, serverSrc.indexOf("\nasync function", start + 10));
+    for (const forbidden of ["performActions", "performForEach", "waitForExpectedText"]) {
+      expect(body, `respondWithActionChecks must not call ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("refuses checkOnly without actions, and alongside forEachLink", () => {
+    const serverSrc = readFileSync(
+      new URL("../vps/aiflow-render/server.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(serverSrc).toContain("if (checkOnly && (!actions || forEachLink))");
   });
 });

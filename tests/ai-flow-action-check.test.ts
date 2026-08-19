@@ -1,0 +1,306 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MAX_CHECKABLE_ACTIONS,
+  checkBrowseActions,
+  describeActionCheck,
+  noActionResolved,
+  type ActionCheck
+} from "@/lib/ai-flows/action-check";
+
+const BIZ = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+const URL_OK = "https://portal.example.com/lead/7";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body
+  } as unknown as Response;
+}
+
+const ACTIONS = [{ kind: "click_text", target: "Claim this lead" }];
+
+beforeEach(() => {
+  process.env.AIFLOW_RENDER_URL_TEMPLATE = "https://render-{businessId}.example.com/render";
+  process.env.AIFLOW_RENDER_TOKEN = "tok-123";
+});
+
+afterEach(() => {
+  delete process.env.AIFLOW_RENDER_URL_TEMPLATE;
+  delete process.env.AIFLOW_RENDER_TOKEN;
+  vi.restoreAllMocks();
+});
+
+describe("describeActionCheck", () => {
+  it("says what to do about each verdict, not just what it is", () => {
+    expect(describeActionCheck({ kind: "click_text", target: "A", state: "ready" })).toContain(
+      "Found it"
+    );
+    // "blocked" is normal for a button that wakes up once a field above it is
+    // filled, so the copy must not read as a fault.
+    expect(describeActionCheck({ kind: "click_text", target: "A", state: "blocked" })).toContain(
+      "only wakes up"
+    );
+    // The most common real cause of "absent" is the wizard limitation, not a
+    // wrong selector, and an owner not told that will "fix" a working step.
+    expect(describeActionCheck({ kind: "click_text", target: "A", state: "absent" })).toContain(
+      "only appears after an earlier action"
+    );
+  });
+
+  it("prefers the sidecar's reason when it has one", () => {
+    const line = describeActionCheck({
+      kind: "click_selector",
+      target: "button[",
+      state: "absent",
+      detail: "Unexpected token in selector"
+    });
+    expect(line).toContain("Unexpected token in selector");
+  });
+
+  it("lists the choices a dropdown does offer", () => {
+    const line = describeActionCheck({
+      kind: "select_option",
+      target: "select[name=stage]",
+      state: "missing_option",
+      options: ["New", "Spoke with them"]
+    });
+    expect(line).toContain("New, Spoke with them");
+  });
+
+  it("handles a dropdown whose options could not be listed", () => {
+    const line = describeActionCheck({
+      kind: "select_option",
+      target: "s",
+      state: "missing_option"
+    });
+    expect(line).toContain("does not offer that choice");
+    expect(line).not.toContain("It offers:");
+  });
+});
+
+describe("noActionResolved", () => {
+  it("is true only when EVERY action came back absent", () => {
+    const absent: ActionCheck = { kind: "click_text", target: "A", state: "absent" };
+    const ready: ActionCheck = { kind: "click_text", target: "B", state: "ready" };
+    // One miss mid-sequence is usually the wizard limitation; a total miss
+    // normally means the page never really loaded.
+    expect(noActionResolved([absent, absent])).toBe(true);
+    expect(noActionResolved([absent, ready])).toBe(false);
+    expect(noActionResolved([])).toBe(false);
+  });
+});
+
+describe("checkBrowseActions", () => {
+  it("asks the sidecar for a check, and never for a run", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        finalUrl: URL_OK,
+        checks: [{ kind: "click_text", target: "Claim this lead", state: "ready" }]
+      })
+    );
+
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      integrationLabel: "HomeLight",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toMatchObject({ ok: true, finalUrl: URL_OK });
+    const [endpoint, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = JSON.parse(String(init.body));
+    // checkOnly is what routes the sidecar to its dry-run responder. Without
+    // it this request would CLICK the claim button on a real referral.
+    expect(sent.checkOnly).toBe(true);
+    // A dry run is one page, one pass: looping or asserting an after-state
+    // would both require performing the actions.
+    expect(sent).not.toHaveProperty("forEachLink");
+    expect(sent).not.toHaveProperty("expectText");
+    expect(sent.auth).toEqual({ integrationLabel: "HomeLight" });
+    expect(endpoint).toBe(`https://render-${BIZ}.example.com/render`);
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-123");
+  });
+
+  it("normalizes a missing value to an empty string, as the sidecar parser expects", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    await checkBrowseActions(BIZ, URL_OK, [{ kind: "fill_selector", target: "input" }], {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const sent = JSON.parse(
+      String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
+    );
+    expect(sent.actions).toEqual([{ kind: "fill_selector", target: "input", value: "" }]);
+  });
+
+  it("drops half-typed actions rather than sending a target the sidecar will reject", async () => {
+    // The editor's "+ action" adds an empty row, so an owner mid-edit always
+    // has one. parseActions returns null for the whole array on a blank
+    // target, which would fail the entire check for an unrelated reason.
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    await checkBrowseActions(
+      BIZ,
+      URL_OK,
+      [
+        { kind: "click_text", target: "Accept" },
+        { kind: "click_text", target: "" }
+      ],
+      { fetchImpl: fetchImpl as unknown as typeof fetch }
+    );
+    const sent = JSON.parse(
+      String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
+    );
+    expect(sent.actions).toHaveLength(1);
+  });
+
+  it("refuses when nothing usable is left, without calling the sidecar", async () => {
+    const fetchImpl = vi.fn();
+    const result = await checkBrowseActions(BIZ, URL_OK, [{ kind: "click_text", target: "  " }], {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({ ok: false, error: "no_actions" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("caps the sequence at the sidecar's own limit", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    await checkBrowseActions(
+      BIZ,
+      URL_OK,
+      Array.from({ length: 20 }, (_, i) => ({ kind: "click_text", target: `T${i}` })),
+      { fetchImpl: fetchImpl as unknown as typeof fetch }
+    );
+    const sent = JSON.parse(
+      String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
+    );
+    expect(sent.actions).toHaveLength(MAX_CHECKABLE_ACTIONS);
+  });
+
+  it("omits auth for a public page, and the header when there is no token", async () => {
+    delete process.env.AIFLOW_RENDER_TOKEN;
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const init = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("auth");
+    expect(init.headers).not.toHaveProperty("Authorization");
+  });
+
+  it("returns the screenshot when the sidecar sent one", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ checks: [], screenshotBase64: "aGVsbG8=" })
+    );
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({ ok: true, screenshotBase64: "aGVsbG8=" });
+  });
+
+  it("omits an empty screenshot rather than passing a blank data URI to the page", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [], screenshotBase64: "" }));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result.ok && result.screenshotBase64).toBeUndefined();
+  });
+
+  it("falls back to the requested URL when the sidecar reports no final one", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({ ok: true, finalUrl: URL_OK });
+  });
+
+  it("refuses an unsafe address without calling the sidecar", async () => {
+    const fetchImpl = vi.fn();
+    const result = await checkBrowseActions(BIZ, "http://169.254.169.254/", ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({ ok: false, error: "unsafe_url" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("reports not_configured when the platform has no render template", async () => {
+    delete process.env.AIFLOW_RENDER_URL_TEMPLATE;
+    const fetchImpl = vi.fn();
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({ ok: false, error: "not_configured" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("names a bad login separately from a failed page", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: "login_failed", detail: "submit never appeared" })
+    );
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      integrationLabel: "HomeLight",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "login_failed",
+      detail: "submit never appeared"
+    });
+  });
+
+  it("falls back to the error code when the sidecar gives no detail", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: "invalid_check_only" }));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "render_failed",
+      detail: "invalid_check_only"
+    });
+  });
+
+  it("treats a non-2xx, a malformed body and a transport failure as render failures", async () => {
+    const cases: Array<[unknown, number]> = [
+      [{}, 502],
+      [null, 200],
+      [{ checks: "not an array" }, 200]
+    ];
+    for (const [body, status] of cases) {
+      const fetchImpl = vi.fn(async () => jsonResponse(body, status));
+      const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+        fetchImpl: fetchImpl as unknown as typeof fetch
+      });
+      expect(result).toMatchObject({ ok: false, error: "render_failed" });
+    }
+
+    const thrower = vi.fn(async () => {
+      throw new Error("box unreachable");
+    });
+    expect(
+      await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+        fetchImpl: thrower as unknown as typeof fetch
+      })
+    ).toEqual({ ok: false, error: "render_failed", detail: "box unreachable" });
+
+    const nonError = vi.fn(async () => {
+      throw "timed out";
+    });
+    expect(
+      await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+        fetchImpl: nonError as unknown as typeof fetch
+      })
+    ).toEqual({ ok: false, error: "render_failed", detail: "timed out" });
+  });
+
+  it("treats unparseable JSON as a render failure", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("not json");
+      }
+    }));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({ ok: false, error: "render_failed" });
+  });
+});

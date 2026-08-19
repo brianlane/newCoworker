@@ -50,7 +50,20 @@ POST /render
 200 -> { "error": "render_failed" | "login_failed" | "auth_config_error"
                  | "action_failed", "detail": "...", "actionsCompleted": <n> }
 400 -> { "error": "invalid_or_unsafe_url" | "missing_business_or_label"
-                 | "invalid_actions" }
+                 | "invalid_actions" | "invalid_check_only" }
+
+# DRY RUN. Adding "checkOnly": true alongside "actions" reports whether each
+# action would find something to act on, and performs NONE of them (a separate
+# responder, not a flag threaded through the action path). Requires actions and
+# refuses forEachLink. Powers the dashboard's "Try these actions" button.
+{ "url": "https://...", "actions": [...], "checkOnly": true }
+200 -> { "finalUrl": "...", "checks": [
+           { "kind": "click_text", "target": "Claim this lead", "state": "ready" },
+           { "kind": "select_option", "target": "select[name=stage]",
+             "state": "missing_option", "options": ["New", "Spoke with them"] } ] }
+# state: "ready" | "blocked" | "absent" | "missing_option". It judges the page
+# AS LOADED, so an action that only exists after an earlier click reads as
+# "absent"; that is a limit of not clicking, not evidence the action is wrong.
 401 -> { "error": "unauthorized" }                              # bad/no bearer
 ```
 

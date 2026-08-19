@@ -74,7 +74,8 @@ import {
   NAV_TIMEOUT_MS,
   parseActions,
   performActions,
-  waitForExpectedText
+  waitForExpectedText,
+  checkActions
 } from "./actions.mjs";
 // Same reasoning for the login form: see the Clever 2026-08-17 incident in
 // login.mjs for why the submit control needs an enabled check and a blur.
@@ -538,6 +539,27 @@ async function performForEach(page, forEachLink, actions, matchNames) {
 }
 
 /**
+ * DRY RUN responder: report whether each action would find something to act
+ * on, and change nothing.
+ *
+ * Deliberately a SEPARATE function from respondWithActions rather than a flag
+ * threaded through it. The two differ in the only way that matters (one acts,
+ * one does not), so they must not share a body where a future edit could let
+ * a check fall through into a click. Nothing here calls performActions,
+ * performForEach or waitForExpectedText.
+ */
+async function respondWithActionChecks(page, res, actions, wantShot) {
+  const checks = await checkActions(page, actions);
+  const screenshotBase64 = wantShot ? await captureScreenshot(page) : null;
+  return res.json({
+    ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
+    finalUrl: page.url(),
+    checks,
+    ...(screenshotBase64 ? { screenshotBase64 } : {})
+  });
+}
+
+/**
  * Respond for ACTION mode: run the sequence and reply with how far it got.
  * Returns true (response sent). An action failure is reported as
  * `action_failed` so the worker fails the run permanently instead of retrying
@@ -703,6 +725,12 @@ app.post("/render", async (req, res) => {
   if (rawActions !== undefined && !actions) {
     return res.status(400).json({ error: "invalid_actions" });
   }
+  // DRY RUN: locate every action's target and report, without performing any
+  // of them. Requires actions (there is nothing to check otherwise) and
+  // refuses forEachLink: a dry run over a list would multiply the cost of the
+  // one mode that already lives inside a single ~100s response, and the answer
+  // for row 1 is the answer for every row.
+  const checkOnly = req.body?.checkOnly === true;
   // forEachLink loops `actions` over every matching list row; it therefore
   // REQUIRES an actions array. Bound the selector length defensively.
   const forEachRaw = req.body?.forEachLink;
@@ -715,6 +743,9 @@ app.post("/render", async (req, res) => {
   }
   if (forEachLink && !actions) {
     return res.status(400).json({ error: "invalid_actions" });
+  }
+  if (checkOnly && (!actions || forEachLink)) {
+    return res.status(400).json({ error: "invalid_check_only" });
   }
   // Optional name filter for the forEachLink loop: a list of strings; rows whose
   // text contains one of them are acted on. An ABSENT filter (undefined) means
@@ -771,16 +802,18 @@ app.post("/render", async (req, res) => {
       await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
       if (actions)
-        return await respondWithActions(
-          page,
-          res,
-          actions,
-          wantScreenshot,
-          forEachLink,
-          wantDebug,
-          forEachMatch,
-          expectText
-        );
+        return checkOnly
+          ? await respondWithActionChecks(page, res, actions, wantScreenshot || wantDebug)
+          : await respondWithActions(
+              page,
+              res,
+              actions,
+              wantScreenshot,
+              forEachLink,
+              wantDebug,
+              forEachMatch,
+              expectText
+            );
       const html = await page.content();
       const text = await readPageText(page);
       const screenshotBase64 =
@@ -909,16 +942,18 @@ app.post("/render", async (req, res) => {
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session, the login is still good; only the page/selectors disagreed.
     if (actions)
-      return await respondWithActions(
-        page,
-        res,
-        actions,
-        wantScreenshot,
-        forEachLink,
-        wantDebug,
-        forEachMatch,
-        expectText
-      );
+      return checkOnly
+        ? await respondWithActionChecks(page, res, actions, wantScreenshot || wantDebug)
+        : await respondWithActions(
+            page,
+            res,
+            actions,
+            wantScreenshot,
+            forEachLink,
+            wantDebug,
+            forEachMatch,
+            expectText
+          );
 
     const html = await page.content();
     const text = await readPageText(page);
