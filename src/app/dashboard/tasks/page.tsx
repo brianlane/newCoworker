@@ -20,6 +20,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { Card } from "@/components/ui/Card";
 import { TasksWorkspace } from "@/components/dashboard/TasksWorkspace";
 
@@ -52,20 +53,16 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
     );
   }
 
-  // Staff linked to a roster member start on "My tasks"; owners/managers
-  // (and unlinked staff) see the whole board first.
-  let linkedEmployeeId: string | null = null;
-  if (ctx.role === "staff" || ctx.role === "manager") {
-    const { data: memberRow } = await db
-      .from("business_members")
-      .select("employee_id")
-      .eq("business_id", ctx.businessId)
-      .eq("email", user.email.trim().toLowerCase())
-      .neq("status", "revoked")
-      .maybeSingle();
-    linkedEmployeeId =
-      (memberRow as { employee_id?: string | null } | null)?.employee_id ?? null;
-  }
+  // The roster member this login IS: the explicit business_members link
+  // (staff/managers), or the owner's own roster row, owners have no member
+  // row, so "My tasks" used to tell the account's owner their login wasn't
+  // linked. Staff linked to a roster member start on "My tasks"; everyone
+  // else sees the whole board first.
+  const linkedEmployeeId = await resolveCallerEmployeeId(
+    ctx.businessId,
+    user.email,
+    db
+  );
   const defaultScope = ctx.role === "staff" && linkedEmployeeId ? "mine" : "all";
   // Pipeline administration (create boards, edit stages) is manager+, same
   // bar as the manage_settings routes it calls.

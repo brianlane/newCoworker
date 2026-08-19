@@ -2,7 +2,8 @@
  * Staff Task Center aggregation.
  *
  * GET /api/dashboard/tasks?businessId=<uuid>&scope=mine|all
- *   → { tasks: TaskCardData[], employees: {id,name}[], myEmployeeId }
+ *   → { tasks: TaskCardData[], employees: {id,name}[], myEmployeeId,
+ *       implicitOwnerEmployeeId }
  *
  * A task = a lead in motion: a contact with non-terminal AiFlow runs and/or
  * lead-state tags. Each card combines the five Task Center facets:
@@ -34,6 +35,7 @@ import { runTriggerEntries, runVarEntries, type RunDataEntry } from "@/lib/ai-fl
 import type { FlowStep } from "@/lib/ai-flows/schema";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
+import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getActivityForContacts, type ActivityItem } from "@/lib/db/activity";
 
@@ -89,6 +91,17 @@ export type TaskReasoningView = {
 export type TaskCardData = {
   e164: string;
   name: string;
+  /**
+   * The RAW stored label (contacts.display_name). `name` above is the
+   * RESOLVED one (manual label, owner/employee overlay, else the phone), so
+   * the quick editor edits THIS and must never echo `name` back into it.
+   */
+  displayName: string | null;
+  /**
+   * False for cards synthesized from runs whose lead has no contact row
+   * yet; there is nothing to edit or delete until the flow files them.
+   */
+  hasContact: boolean;
   tags: string[];
   ownerEmployeeId: string | null;
   ownerName: string | null;
@@ -123,18 +136,10 @@ export async function GET(request: Request) {
 
     const db = await createSupabaseServiceClient();
 
-    // The caller's linked roster member (drives scope=mine).
-    let myEmployeeId: string | null = null;
-    if (user.email) {
-      const { data: memberRow } = await db
-        .from("business_members")
-        .select("employee_id")
-        .eq("business_id", businessId)
-        .eq("email", user.email.trim().toLowerCase())
-        .neq("status", "revoked")
-        .maybeSingle();
-      myEmployeeId = (memberRow as { employee_id?: string | null } | null)?.employee_id ?? null;
-    }
+    // The roster member the caller IS (drives scope=mine): their explicit
+    // business_members link, or the owner's own roster row, owner logins
+    // have no member row, so "mine" used to come back empty for them.
+    const myEmployeeId = await resolveCallerEmployeeId(businessId, user.email, db);
 
     // 1) Leads in motion: non-terminal runs, newest activity first.
     const { data: runData, error: runErr } = await db
@@ -247,9 +252,12 @@ export async function GET(request: Request) {
     // A lead can be in motion with NO contact row yet (the flow hasn't filed
     // them, or the profile is keyed on a merged-away number). Their runs must
     // still get a card, synthesize a bare contact so the workflow position
-    // shows even before the CRM entry exists.
+    // shows even before the CRM entry exists. Tracked so the card can say it
+    // has no contact record behind it (the quick editor needs a row to PATCH).
+    const synthesizedPhones = new Set<string>();
     for (const [phone, leadRuns] of runsByLead) {
       if (contactsByPhone.has(phone)) continue;
+      synthesizedPhones.add(phone);
       contactsByPhone.set(phone, {
         customer_e164: phone,
         alias_e164s: null,
@@ -447,6 +455,8 @@ export async function GET(request: Request) {
         e164: phone,
         name:
           contactNames.get(phone)?.name ?? contact.display_name ?? phone,
+        displayName: contact.display_name,
+        hasContact: !synthesizedPhones.has(phone),
         tags: contact.tags ?? [],
         // Explicit stamp first, implicit owner when nobody claimed it. Both
         // the card label and the scope=mine filter below read these.
@@ -482,7 +492,11 @@ export async function GET(request: Request) {
     return successResponse({
       tasks: scoped.slice(0, MAX_TASKS),
       employees,
-      myEmployeeId
+      myEmployeeId,
+      // One-person team whose only member is the owner: the stored owner
+      // column would resolve straight back to them, so the quick editor
+      // drops its "Unassigned" choice (a control that would do nothing).
+      implicitOwnerEmployeeId: implicitOwner?.id ?? null
     });
   } catch (err) {
     return handleRouteError(err);

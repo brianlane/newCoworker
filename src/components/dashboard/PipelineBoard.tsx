@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import {
   ChevronDown,
@@ -32,6 +33,11 @@ import {
   X
 } from "lucide-react";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import {
+  LeadQuickEditor,
+  type RosterOption
+} from "@/components/dashboard/LeadQuickEditor";
+import { NewLeadButton } from "@/components/dashboard/NewLeadButton";
 import { groupCardsByStage, isStageTag } from "@/lib/pipelines/board";
 import { computeStageMove } from "@/lib/pipelines/move";
 import {
@@ -92,16 +98,21 @@ export function PipelineBoard({
   canManage: boolean;
   highlightLead: string | null;
 }) {
+  const t = useTranslations("dashboard.tasksData");
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
+  const [employees, setEmployees] = useState<RosterOption[]>([]);
+  const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  /** The lead whose quick editor is open in the modal (a contact key). */
+  const [editLeadKey, setEditLeadKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const highlightRef = useRef<HTMLDivElement | null>(null);
 
@@ -117,10 +128,18 @@ export function PipelineBoard({
           fetch(
             `/api/dashboard/tasks?businessId=${encodeURIComponent(businessId)}&scope=${nextScope}`,
             { cache: "no-store" }
-          ).then((r) => readEnvelope<{ tasks: TaskCardData[] }>(r))
+          ).then((r) =>
+            readEnvelope<{
+              tasks: TaskCardData[];
+              employees: RosterOption[];
+              implicitOwnerEmployeeId: string | null;
+            }>(r)
+          )
         ]);
         setPipelines(pipelinesData.pipelines);
         setTasks(tasksData.tasks);
+        setEmployees(tasksData.employees ?? []);
+        setImplicitOwnerEmployeeId(tasksData.implicitOwnerEmployeeId ?? null);
         setSelectedId((prev) =>
           prev && pipelinesData.pipelines.some((p) => p.id === prev)
             ? prev
@@ -157,6 +176,15 @@ export function PipelineBoard({
     if (!pipeline || !tasks) return new Map<string, TaskCardData[]>();
     return groupCardsByStage(pipeline.stages, tasks);
   }, [pipeline, tasks]);
+
+  /** The task card behind the open quick-edit modal, fresh across reloads. */
+  const editLead = useMemo(
+    () =>
+      editLeadKey && tasks
+        ? tasks.find((c) => c.e164 === editLeadKey) ?? null
+        : null,
+    [editLeadKey, tasks]
+  );
 
   /** Leads with tags/runs that match NO stage of the selected pipeline. */
   const offBoardCount = useMemo(() => {
@@ -319,6 +347,11 @@ export function PipelineBoard({
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </button>
+          <NewLeadButton
+            businessId={businessId}
+            stages={pipeline?.stages ?? null}
+            onCreated={() => void load(scope)}
+          />
           {canManage && (
             <button
               onClick={() => setEditing((v) => !v)}
@@ -439,6 +472,7 @@ export function PipelineBoard({
                         stages={pipeline.stages}
                         highlighted={card.e164 === highlightLead}
                         highlightRef={card.e164 === highlightLead ? highlightRef : null}
+                        onEdit={() => setEditLeadKey(card.e164)}
                       />
                     ))}
                   </div>
@@ -456,6 +490,51 @@ export function PipelineBoard({
           stage tag), see the List view for everything.
         </p>
       )}
+
+      {editLead && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setEditLeadKey(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("editLead")}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border border-parchment/15 bg-deep-ink p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-parchment">{editLead.name}</h3>
+              <button
+                onClick={() => setEditLeadKey(null)}
+                className="text-parchment/40 hover:text-parchment"
+                aria-label={t("editCancel")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <LeadQuickEditor
+              businessId={businessId}
+              contactKey={editLead.e164}
+              resolvedName={editLead.name}
+              initialDisplayName={editLead.displayName}
+              initialTags={editLead.tags}
+              initialOwnerEmployeeId={editLead.ownerEmployeeId}
+              employees={employees}
+              implicitOwnerEmployeeId={implicitOwnerEmployeeId}
+              onSaved={() => {
+                setEditLeadKey(null);
+                void load(scope);
+              }}
+              onDeleted={() => {
+                setEditLeadKey(null);
+                void load(scope);
+              }}
+              onClose={() => setEditLeadKey(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -464,15 +543,18 @@ function BoardCard({
   card,
   stages,
   highlighted,
-  highlightRef
+  highlightRef,
+  onEdit
 }: {
   card: TaskCardData;
   stages: PipelineStage[];
   highlighted: boolean;
   highlightRef: React.RefObject<HTMLDivElement | null> | null;
+  onEdit: () => void;
 }) {
+  const t = useTranslations("dashboard.tasksData");
   const activeRun = card.runs[0] ?? null;
-  const extraTags = card.tags.filter((t) => !isStageTag(stages, t));
+  const extraTags = card.tags.filter((tag) => !isStageTag(stages, tag));
   return (
     <div
       ref={highlightRef}
@@ -495,6 +577,18 @@ function BoardCard({
         >
           {card.name}
         </Link>
+        {card.hasContact && (
+          <button
+            type="button"
+            data-testid="board-card-edit"
+            onClick={onEdit}
+            className="ml-auto shrink-0 text-parchment/30 hover:text-signal-teal"
+            aria-label={t("editLead")}
+            title={t("editLead")}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        )}
       </div>
       <p className="mt-0.5 text-[10px] font-mono text-parchment/40">{card.e164}</p>
       {activeRun && (
@@ -507,13 +601,13 @@ function BoardCard({
       )}
       {extraTags.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {extraTags.slice(0, 4).map((t) => (
+          {extraTags.slice(0, 4).map((tag) => (
             <span
-              key={t}
+              key={tag}
               className="inline-flex items-center gap-0.5 rounded-full bg-parchment/10 px-1.5 py-0.5 text-[10px] text-parchment/60"
             >
               <Tag className="h-2.5 w-2.5" />
-              {t}
+              {tag}
             </span>
           ))}
         </div>
