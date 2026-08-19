@@ -47,6 +47,13 @@ vi.mock("@/lib/plans/prospecting", () => ({
   prospectingAllowedForTier: (tier: string | null | undefined) => allowedForTier(tier),
   postalAddressRequiredForTier: (tier: string | null | undefined) => postalRequiredForTier(tier)
 }));
+const listOutreachSendFromOptionsSpy = vi.fn(async () => [
+  { id: "", label: "Automatic", email: null as string | null },
+  { id: "conn-a", label: "Gmail: sales@acme.test", email: "sales@acme.test" }
+]);
+vi.mock("@/lib/email/mailbox-options", () => ({
+  listOutreachSendFromOptions: (...a: unknown[]) => listOutreachSendFromOptionsSpy(...(a as []))
+}));
 vi.mock("@/lib/outreach/db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -106,6 +113,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
 
 function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSettingsInput {
   return {
+    fromConnectionId: "",
     mode: "auto",
     searchTerms: ["hvac"],
     cities: ["Phoenix"],
@@ -509,7 +517,10 @@ describe("defaultProspectingSettings", () => {
       sendWindowEndHour: 11,
       postalAddress: "",
       valueProp: "",
-      senderName: ""
+      senderName: "",
+      // Empty means "whichever mailbox is connected", which is what the sweep
+      // did before there was a choice to make.
+      fromConnectionId: ""
     });
   });
 });
@@ -540,5 +551,87 @@ describe("skipVertical (the owner stopped looking for this kind of business)", (
     defaultClientSpy.mockReturnValue({});
     countProspectsInVerticalSpy.mockResolvedValueOnce(2);
     expect(await skipVertical(BIZ, "law firm")).toBe(2);
+  });
+});
+
+describe("the mailbox cold email leaves from", () => {
+  it("offers the connected mailboxes and blocks when there are none", async () => {
+    // Not a field on this page: the fix lives on Integrations. Without the
+    // blocker an owner watches drafts pile up with nothing going out and has
+    // nowhere on the page that explains it.
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow());
+    const withMailbox = await loadProspectingView(BIZ, {} as never);
+    expect(withMailbox.mailboxes.map((m) => m.id)).toEqual(["", "conn-a"]);
+    expect(withMailbox.blockers).not.toContain("mailbox");
+
+    listOutreachSendFromOptionsSpy.mockResolvedValueOnce([]);
+    const without = await loadProspectingView(BIZ, {} as never);
+    expect(without.mailboxes).toEqual([]);
+    expect(without.blockers).toContain("mailbox");
+  });
+
+  it("flags a pin whose mailbox is gone, which is a quieter dead end than having none", async () => {
+    // Another mailbox is still connected, so the `mailbox` blocker stays
+    // silent. Meanwhile the send path refuses to fall back to an address the
+    // owner did not choose, and every save is refused because the form keeps
+    // submitting the stale id. Without its own blocker (and the picker the
+    // panel shows alongside it) outreach is stopped with nothing able to
+    // clear it.
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ from_connection_id: "conn-gone" }));
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.blockers).toContain("mailboxGone");
+    expect(view.blockers).not.toContain("mailbox");
+    return view;
+  });
+
+  it("says nothing when the pin still resolves, or when there is no pin", () => {
+    expect(
+      describeBlockers(settingsRow() as never, { pinnedMailboxConnected: true })
+    ).not.toContain("mailboxGone");
+    // Defaults to fine, so a caller that never looked cannot invent one.
+    expect(describeBlockers(settingsRow() as never, {})).not.toContain("mailboxGone");
+  });
+
+  it("defaults to connected, so a caller that never looked cannot invent a blocker", () => {
+    expect(describeBlockers(settingsRow() as never, {})).not.toContain("mailbox");
+    expect(describeBlockers(settingsRow() as never, { mailboxConnected: true })).not.toContain(
+      "mailbox"
+    );
+  });
+
+  it("refuses to pin a mailbox that is not connected, and never blocks the kill switch", async () => {
+    // The send path fails closed on an id it cannot resolve, so storing an
+    // unchecked one would be accepted here and then stop outreach dead.
+    await expect(
+      saveProspectingSettings(BIZ, input({ fromConnectionId: "conn-gone" }), {} as never)
+    ).rejects.toThrow(/not connected any more/);
+
+    // Off is never blocked by a form error, including this one.
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", fromConnectionId: "conn-gone" }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ from_connection_id: "conn-gone" }),
+      expect.anything()
+    );
+  });
+
+  it("stores a connected pick, and stores null for Automatic", async () => {
+    await saveProspectingSettings(BIZ, input({ fromConnectionId: "conn-a" }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ from_connection_id: "conn-a" }),
+      expect.anything()
+    );
+
+    await saveProspectingSettings(BIZ, input({ fromConnectionId: "  " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ from_connection_id: null }),
+      expect.anything()
+    );
   });
 });

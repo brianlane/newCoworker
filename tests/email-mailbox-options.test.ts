@@ -15,7 +15,11 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   listWorkspaceOAuthConnections: vi.fn()
 }));
 
-import { connectionEmail, listSendFromOptions } from "@/lib/email/mailbox-options";
+import {
+  connectionEmail,
+  listOutreachSendFromOptions,
+  listSendFromOptions
+} from "@/lib/email/mailbox-options";
 import { getTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 
@@ -104,5 +108,40 @@ describe("listSendFromOptions", () => {
         email: `${BIZ.toLowerCase()}@newcoworker.com`
       }
     ]);
+  });
+});
+
+describe("listOutreachSendFromOptions (cold email is a shorter list)", () => {
+  it("offers Automatic plus the connected mailboxes, and never the coworker one", async () => {
+    // Cold outreach has to leave from the tenant's own domain: it is the
+    // address replies come back to, and the reputation a stranger's spam
+    // report burns should be the sender's, not a platform domain shared by
+    // every tenant. The prospecting send path only speaks Gmail/Outlook for
+    // the same reason, so offering the coworker mailbox would be a dropdown
+    // entry that cannot send.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      conn({ id: "c1", metadata: { provider_account_email: "sales@acme.test" } }),
+      // Not a mailbox: a calendar-only grant cannot send, so it is not offered.
+      conn({ id: "c2", provider_config_key: "google-calendar" }),
+      conn({ id: "c3", provider_config_key: "outlook", metadata: {} })
+    ]);
+    expect(await listOutreachSendFromOptions(BIZ)).toEqual([
+      { id: "", label: "Automatic", email: null },
+      { id: "c1", label: "Gmail: sales@acme.test", email: "sales@acme.test" },
+      // No metadata: labelled by provider rather than an empty address.
+      { id: "c3", label: "Outlook", email: null }
+    ]);
+    // The coworker mailbox is never even looked up here.
+    expect(getTenantMailbox).not.toHaveBeenCalled();
+  });
+
+  it("returns nothing at all when no mailbox is connected", async () => {
+    // Not even the Automatic entry: on its own it would read as though
+    // outreach were ready to send, when there is no send path at all. The
+    // caller turns the empty list into a blocker.
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      conn({ id: "c2", provider_config_key: "google-calendar" })
+    ]);
+    expect(await listOutreachSendFromOptions(BIZ)).toEqual([]);
   });
 });

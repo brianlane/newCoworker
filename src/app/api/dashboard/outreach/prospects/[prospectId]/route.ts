@@ -57,6 +57,8 @@ const SEND_FAILURE_MESSAGE: Record<string, string> = {
   cap_reached: "You have reached today's send limit. Try again tomorrow, or raise the cap.",
   not_configured: "Finish setting up Prospecting first.",
   tier_blocked: PROSPECTING_UPGRADE_MESSAGE,
+  no_mailbox:
+    "Connect the mailbox this should be sent from on the Integrations page first. Your draft is untouched.",
   send_failed: "The email could not be sent. Check your connected mailbox and try again."
 };
 
