@@ -75,6 +75,7 @@
  */
 import { loadEnv } from "./_shared.ts";
 import { getActiveVpsSshKeyForBusiness } from "../src/lib/db/vps-ssh-keys.ts";
+import { stripCode, textOf } from "../src/lib/ai-flows/page-controls.ts";
 import { sshExec } from "../src/lib/hostinger/ssh.ts";
 import {
   ensureNextPublicSupabaseUrlOrExit,
@@ -142,56 +143,6 @@ curl -sf --max-time 120 -X POST http://127.0.0.1:8080/render \\
   --data-binary @/tmp/probe-payload.json
 rm -f /tmp/probe-payload.json
 `;
-}
-
-/**
- * Strip <script>/<style> so their contents never pollute the control digest.
- *
- * The end-tag pattern allows trailing whitespace (`</script >` is valid HTML and
- * a single-pass naive `</script>` misses it), and the whole thing repeats until
- * the string stops changing, because one pass over nested or overlapping markup
- * can reveal a further opening tag. This is a readability filter for a terminal
- * digest, not a sanitizer, and nothing downstream renders the result as HTML,
- * but incomplete stripping is worth avoiding on its own merits.
- */
-function stripCode(html: string): string {
-  // The end tag is `</script\b[^>]*>`, not `</script\s*>`: HTML lets a closing
-  // tag carry ignored junk, so `</script\t\n bar>` is valid and a tighter
-  // pattern walks straight past it, leaving the script body in the digest.
-  const patterns = [/<script\b[\s\S]*?<\/script\b[^>]*>/gi, /<style\b[\s\S]*?<\/style\b[^>]*>/gi];
-  let out = html;
-  for (let pass = 0; pass < 5; pass++) {
-    const before = out;
-    for (const re of patterns) out = out.replace(re, " ");
-    if (out === before) break;
-  }
-  return out;
-}
-
-/** The handful of entities these portals actually emit. */
-const HTML_ENTITIES: Record<string, string> = {
-  "&nbsp;": " ",
-  "&amp;": "&",
-  "&quot;": '"',
-  "&apos;": "'",
-  "&#x27;": "'",
-  "&#39;": "'",
-  "&lt;": "<",
-  "&gt;": ">"
-};
-
-function textOf(fragment: string): string {
-  return (
-    fragment
-      .replace(/<[^>]+>/g, " ")
-      // ONE pass over all entities. Decoding sequentially (&amp; -> & before
-      // handling the rest) lets an already-decoded "&" combine with following
-      // text into a second entity and be unescaped twice, so "&amp;lt;" would
-      // wrongly become "<" instead of "&lt;".
-      .replace(/&(?:nbsp|amp|quot|apos|lt|gt|#x27|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
-      .replace(/\s+/g, " ")
-      .trim()
-  );
 }
 
 function uniq(values: string[]): string[] {
