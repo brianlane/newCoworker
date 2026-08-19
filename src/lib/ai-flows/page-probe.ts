@@ -22,13 +22,16 @@ import { logger } from "@/lib/logger";
 import { isBareIpHost, isPrivateOrLoopbackHost } from "@/lib/db/custom-integrations";
 import { digestPageControls, type PageDigest } from "@/lib/ai-flows/page-controls";
 
+/** Every way a probe can fail. Exported so callers must name each one. */
+export type ProbePageFailure =
+  | "not_configured"
+  | "unsafe_url"
+  | "render_failed"
+  | "login_failed";
+
 export type ProbePageResult =
   | { ok: true; finalUrl: string; digest: PageDigest }
-  | {
-      ok: false;
-      error: "not_configured" | "unsafe_url" | "render_failed" | "login_failed";
-      detail?: string;
-    };
+  | { ok: false; error: ProbePageFailure; detail?: string };
 
 export type ProbePageDeps = {
   /** Injectable fetch (tests). */

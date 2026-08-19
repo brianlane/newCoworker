@@ -16,7 +16,7 @@
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { probePageControls } from "@/lib/ai-flows/page-probe";
+import { probePageControls, type ProbePageFailure } from "@/lib/ai-flows/page-probe";
 import {
   BROWSE_ACTION_UPGRADE_MESSAGE,
   browseActionAllowedForBusiness
@@ -29,8 +29,12 @@ const bodySchema = z.object({
   integrationLabel: z.string().min(1).max(80).optional()
 });
 
-/** Owner-readable wording for each way a probe can fail. */
-const FAILURE_MESSAGES: Record<string, string> = {
+/**
+ * Owner-readable wording for each way a probe can fail. Keyed by the exported
+ * union, so adding a failure mode in the lib fails this file to compile
+ * rather than reaching an owner as "undefined".
+ */
+const FAILURE_MESSAGES: Record<ProbePageFailure, string> = {
   not_configured:
     "This business has no browser service running, so a page cannot be opened from here.",
   unsafe_url: "That address is not a public web page.",
