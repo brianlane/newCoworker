@@ -139,13 +139,18 @@ export async function GET(
     const smsHistory = await listSmsHistoryForCustomer(businessId, customerE164, { limit: 50 });
 
     // Same attribution the contact page shows: on a one-person team whose
-    // only member is the owner, an unclaimed contact is already theirs. Only
-    // reached when the column is null, so an owned contact costs no extra
-    // read.
-    const ownerEmployeeId =
-      memory.owner_employee_id ??
-      (await resolveImplicitContactOwner(businessId))?.id ??
-      null;
+    // only member is the owner, an unclaimed contact is already theirs.
+    //
+    // Reported in its OWN field. `ownerEmployeeId` stays the RAW stored
+    // claim, because this response's shape mirrors the PATCH body below: a
+    // caller that reads, edits one field and sends the object back would
+    // otherwise persist an owner nobody assigned, fire `owner_assigned`, and
+    // put the row out of reach of the claim path's compare-and-swap on a
+    // null owner. Only read when the column is null, so a claimed contact
+    // costs no extra query.
+    const implicitOwner = memory.owner_employee_id
+      ? null
+      : await resolveImplicitContactOwner(businessId);
 
     return successResponse({
       memory: {
@@ -162,7 +167,9 @@ export async function GET(
         lastSummarizedAt: memory.last_summarized_at,
         lastChannel: memory.last_channel,
         tags: memory.tags,
-        ownerEmployeeId,
+        ownerEmployeeId: memory.owner_employee_id,
+        implicitOwnerEmployeeId: implicitOwner?.id ?? null,
+        implicitOwnerName: implicitOwner?.name ?? null,
         birthday: memory.birthday,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at

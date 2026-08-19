@@ -222,10 +222,17 @@ describe("get_contact", () => {
 
   /**
    * HQ, Aug 18 2026. A one-person team whose only member is the owner has no
-   * unowned contacts, so the AI is told who holds the lead instead of
+   * unowned contacts, so the model is told who holds the lead instead of
    * "nobody", the same answer the dashboard shows.
+   *
+   * In its OWN field, never folded into `owner_employee_id`: this tool's tag
+   * field tells the model to read current values here before writing them
+   * back through `update_contact`, which persists whatever it is handed. A
+   * merged field would turn a tag edit into a stored owner stamp, and a
+   * stamped row is invisible to the claim path's compare-and-swap on a null
+   * owner.
    */
-  it("names the implicit one-person-team owner for an unclaimed contact", async () => {
+  it("reports the implicit one-person-team owner without faking a claim", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue({
       ...CONTACT_ROW,
       owner_employee_id: null
@@ -236,8 +243,26 @@ describe("get_contact", () => {
     });
     const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
       owner_employee_id: string | null;
+      implicit_owner_employee_id: string | null;
+      implicit_owner_name: string | null;
     };
-    expect(result.owner_employee_id).toBe("mem-owner");
+    expect(result.owner_employee_id).toBeNull();
+    expect(result.implicit_owner_employee_id).toBe("mem-owner");
+    expect(result.implicit_owner_name).toBe("Brian");
+  });
+
+  it("leaves the implicit fields empty for a business with a real team", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      ...CONTACT_ROW,
+      owner_employee_id: null
+    } as never);
+    const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
+      implicit_owner_employee_id: string | null;
+      implicit_owner_name: string | null;
+    };
+    expect(result.implicit_owner_employee_id).toBeNull();
+    expect(result.implicit_owner_name).toBeNull();
   });
 
   it("keeps a claimed contact's owner and pays for no ownership read", async () => {
@@ -247,8 +272,10 @@ describe("get_contact", () => {
     } as never);
     const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
       owner_employee_id: string | null;
+      implicit_owner_employee_id: string | null;
     };
     expect(result.owner_employee_id).toBe("emp-9");
+    expect(result.implicit_owner_employee_id).toBeNull();
     expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
 
