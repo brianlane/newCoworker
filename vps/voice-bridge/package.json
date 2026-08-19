@@ -10,15 +10,15 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@google/genai": "^2.16.0",
-    "@supabase/supabase-js": "^2.112.2",
+    "@google/genai": "^2.17.1",
+    "@supabase/supabase-js": "^2.112.3",
     "dotenv": "^17.4.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/ws": "^8.5.13",
-    "tsx": "^4.23.11",
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
 }
