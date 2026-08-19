@@ -560,9 +560,13 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
               sit together and reading one as the other is the obvious mistake. */}
           <p className="mt-1 text-xs text-parchment/50">{t("senderNameHelp")}</p>
         </div>
-        {/* Only worth a control when there is a choice: one connected mailbox
-            needs no picker, and none is a blocker rather than a preference. */}
-        {view && view.mailboxes.length > 1 ? (
+        {/* Only worth a control when there is a real choice: one connected
+            mailbox needs no picker, and none is a blocker rather than a
+            preference. Counted on the CONNECTED entries, not the list length:
+            the list leads with "Automatic" (id ""), so a single mailbox makes
+            it two long and a length test shows a picker whose only decision is
+            between automatic and the one mailbox automatic would have picked. */}
+        {view && view.mailboxes.filter((m) => m.id !== "").length > 1 ? (
           <div>
             <label className={labelClass} htmlFor="prospecting-from">
               {t("fields.fromMailbox")}

@@ -2011,6 +2011,11 @@ a **Send from** picker writes `outreach_settings.from_connection_id`, and the
 sweep sends through exactly that one; "Automatic" (a null column) means
 whichever mailbox resolves, which is what it always did.
 
+The panel counts CONNECTED entries, not the length of the options list. The
+list leads with "Automatic" (id `""`), so one mailbox makes it two long, and a
+length test renders a picker whose only decision is between automatic and the
+single mailbox automatic would have chosen anyway.
+
 `listOutreachSendFromOptions` is deliberately a SHORTER list than the Emails
 composer's `listSendFromOptions`: no AI coworker mailbox. Cold outreach has to
 leave from the tenant's own domain, since that is the address replies come back
