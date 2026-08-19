@@ -1653,6 +1653,30 @@ describe("browse_action step", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  it("accepts optional on a select_option action", () => {
+    const withOptional = JSON.parse(JSON.stringify(actionInput));
+    withOptional.steps[1].actions.push({
+      kind: "select_option",
+      target: 'select[id="How would you classify this customer?"]',
+      valueTemplate: "Active/progressing",
+      optional: true
+    });
+    const def = parseAiFlowDefinition(withOptional);
+    const step = def.steps[1];
+    expect(
+      step.type === "browse_action" &&
+        step.actions.some((a) => (a as { optional?: boolean }).optional === true)
+    ).toBe(true);
+  });
+
+  it("rejects optional on anything but a select_option", () => {
+    // A missing select is unambiguous; a missing button is usually just late
+    // (hydration), and an optional click would skip real controls silently.
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].actions.push({ kind: "click_text", target: "Maybe here", optional: true });
+    expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
+  });
+
   it("flags a urlVar no earlier step produces", () => {
     const bad = JSON.parse(JSON.stringify(actionInput));
     bad.steps[1].urlVar = "ghost_url";

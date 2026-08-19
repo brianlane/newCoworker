@@ -11,7 +11,8 @@ import {
   CLOSE_ATTR_RE,
   CLOSE_ICON_RE,
   MAX_FOREACH_ITEMS,
-  capForEachList
+  capForEachList,
+  optionalTargetPresent
 } from "../vps/aiflow-render/actions.mjs";
 import { SWEEP_CAPACITY } from "../scripts/oneshot/amy-clever-weekly-update-sweep-definition";
 
@@ -252,8 +253,8 @@ describe("parseActions", () => {
         { kind: "click_text_while_present", target: "Next" }
       ])
     ).toEqual([
-      { kind: "click_text", target: "Accept", value: "" },
-      { kind: "click_text_while_present", target: "Next", value: "" }
+      { kind: "click_text", target: "Accept", value: "", optional: false },
+      { kind: "click_text_while_present", target: "Next", value: "", optional: false }
     ]);
   });
 });
@@ -796,5 +797,94 @@ describe("the dry run cannot perform actions", () => {
       "utf8"
     );
     expect(serverSrc).toContain("if (checkOnly && (!actions || forEachLink))");
+  });
+});
+
+/**
+ * Optional select_option (2026-08-19): Clever renders a REQUIRED
+ * "How would you classify this customer?" select on a SUBSET of update
+ * modals. A sweep that never answers it times out on Submit for those cards
+ * (6 distinct cards in run 5f6b1075); one that always answers it would fail
+ * every card without the control. `optional: true` answers it where it
+ * exists and skips it where it does not.
+ */
+describe("optional select_option", () => {
+  function selectStubPage(opts: { attached: boolean }) {
+    const calls = { selected: [] as unknown[], waited: 0 };
+    const locator = {
+      first: () => locator,
+      waitFor: async () => {
+        calls.waited++;
+        if (!opts.attached) throw new Error("waiting for locator to be attached");
+      },
+      selectOption: async (v: unknown) => {
+        calls.selected.push(v);
+      }
+    };
+    return { page: { locator: () => locator }, calls };
+  }
+
+  it("parseActions carries optional through on select_option only", () => {
+    const parsed = parseActions([
+      { kind: "select_option", target: "select#x", value: "A", optional: true },
+      { kind: "click_text", target: "Submit Update", optional: true },
+      { kind: "select_option", target: "select#y", value: "B" }
+    ]);
+    expect(parsed).toEqual([
+      { kind: "select_option", target: "select#x", value: "A", optional: true },
+      // Ignored on any other kind, so an older flow row or a hand-crafted
+      // request cannot make a click skippable.
+      { kind: "click_text", target: "Submit Update", value: "", optional: false },
+      { kind: "select_option", target: "select#y", value: "B", optional: false }
+    ]);
+  });
+
+  it("skips an optional select whose target is not on the page", async () => {
+    const { page, calls } = selectStubPage({ attached: false });
+    await runAction(page as never, {
+      kind: "select_option",
+      target: 'select[id="How would you classify this customer?"]',
+      value: "Active/progressing",
+      optional: true
+    });
+    expect(calls.selected).toEqual([]);
+    expect(calls.waited).toBe(1);
+  });
+
+  it("answers the select when it is present", async () => {
+    const { page, calls } = selectStubPage({ attached: true });
+    await runAction(page as never, {
+      kind: "select_option",
+      target: 'select[id="How would you classify this customer?"]',
+      value: "Active/progressing",
+      optional: true
+    });
+    expect(calls.selected).toEqual([{ label: "Active/progressing" }]);
+  });
+
+  it("a NON-optional select on an absent target still fails loudly", async () => {
+    const failing = {
+      first: () => failing,
+      waitFor: async () => {
+        throw new Error("waiting for locator to be attached");
+      },
+      selectOption: async () => {
+        throw new Error("selectOption: Timeout 10000ms exceeded.");
+      }
+    };
+    await expect(
+      runAction({ locator: () => failing } as never, {
+        kind: "select_option",
+        target: "select#gone",
+        value: "A"
+      })
+    ).rejects.toThrow(/Timeout/);
+  });
+
+  it("optionalTargetPresent answers both ways", async () => {
+    const { page: there } = selectStubPage({ attached: true });
+    const { page: gone } = selectStubPage({ attached: false });
+    expect(await optionalTargetPresent(there as never, "select#x", 10)).toBe(true);
+    expect(await optionalTargetPresent(gone as never, "select#x", 10)).toBe(false);
   });
 });

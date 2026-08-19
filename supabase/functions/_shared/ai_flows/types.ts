@@ -413,6 +413,11 @@ export type BrowseActionItem = {
   target: string;
   /** Fill/select/role-name value template, e.g. "AI assistant: {{vars.actions_taken}}". */
   valueTemplate?: string;
+  // Skip (instead of fail) when the target is not on the page. Authoring
+  // restricts this to select_option: some portals render a REQUIRED select on
+  // only a subset of records (Clever's "How would you classify this
+  // customer?"), so a fixed action list can serve both card shapes.
+  optional?: boolean;
 };
 
 /**

@@ -298,6 +298,23 @@ These are mistakes already made on this account. Do not remake them.
   `forEachLink` bullet above) depend on: each pass re-lists and sees only what
   is still owed. Per-lead URLs are
   `/portal/<portalId>/connection/<connectionId>/`.
+- **SOME cards' update modals carry a REQUIRED classification select, and a
+  fixed action list must treat it as optional (2026-08-19).** The first
+  chained sweep (run `5f6b1075`) drained 6 of 34 and stopped at its
+  no_progress terminal: six distinct cards timed out clicking "Submit Update"
+  on every pass. Probing one with the modal open showed
+  `select[id="How would you classify this customer?"]`
+  (`Active/progressing` / `On hold/nurture` / `Cold/stagnant`), REQUIRED
+  where present, absent on the cards that succeeded. So the sweep answers it
+  with `Active/progressing` via a `select_option` carrying `optional: true`
+  (browse-action support added the same day: the render service skips an
+  optional select whose target is not attached within ~2s,
+  `AIFLOW_OPTIONAL_TARGET_PROBE_MS`). "Active/progressing" is the truthful
+  value for this list: the sweep only walks `/portal/<id>/active`, and held
+  deals live in the On Hold list it never touches. `optional` is deliberately
+  select_option-only, in the schema and in the sidecar: a missing select is
+  unambiguous, while an "optional" text click would let hydration lag skip
+  real buttons. Applied by `amy-clever-sweep-classify-select.ts`.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
@@ -909,6 +926,10 @@ adds the capacity alert; see Sharp edges),
 the chained sweep's measured `update_each_updated`/`update_each_left` vars
 instead of backlog-minus-6 arithmetic, and the `sweep_remainder` math step is
 removed; a clean sweep of any backlog stays silent; see Sharp edges),
+`amy-clever-sweep-classify-select.ts` +
+`amy-clever-sweep-classify-select-definition.ts` (Aug 19 2026: the sweep
+answers the classification select, optional so cards without it keep working;
+see Sharp edges),
 `amy-clever-sweep-rerun.ts` (Aug 19 2026: replays the most recent weekly
 reminder's trigger as a fresh queued run, so the week the chaining shipped
 got finished instead of waiting for Clever's next text; refuses when a run is

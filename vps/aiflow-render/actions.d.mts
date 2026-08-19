@@ -21,6 +21,8 @@ type RenderPage = unknown;
 
 /** One normalized action from the worker's browse_action step. */
 export interface RenderAction {
+  /** Skip (instead of fail) when the target is absent; select_option only. */
+  optional?: boolean;
   kind: string;
   target: string;
   value: string;
@@ -32,6 +34,12 @@ export const MAX_ACTIONS: number;
 export const MAX_WHILE_PRESENT_CLICKS: number;
 export const WHILE_PRESENT_PROBE_MS: number;
 export const MAX_FOREACH_ITEMS: number;
+export const OPTIONAL_TARGET_PROBE_MS: number;
+export function optionalTargetPresent(
+  page: RenderPage,
+  target: string,
+  timeoutMs?: number
+): Promise<boolean>;
 export function capForEachList(hrefs: string[]): {
   kept: string[];
   remaining: number;

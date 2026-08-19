@@ -193,9 +193,37 @@ export function parseActions(raw) {
     const value = String(a?.value ?? "");
     if (!ACTION_KINDS.has(kind) || !target) return null;
     if (ACTION_KINDS_REQUIRING_VALUE.has(kind) && !value) return null;
-    out.push({ kind, target, value });
+    // `optional` = skip this action when its target is not on the page.
+    // Honored only for select_option (mirrors the authoring schema): a select
+    // is either in the DOM or it is not, while an "optional" text click would
+    // let hydration lag skip real buttons. An unknown-field request from an
+    // older worker simply never sets it, and this service ignores it on any
+    // other kind, so version skew degrades to today's fail-on-absent.
+    out.push({ kind, target, value, optional: a?.optional === true && kind === "select_option" });
   }
   return out;
+}
+
+/**
+ * How long an OPTIONAL action waits for its target before concluding the page
+ * genuinely does not have one. Long enough to ride out a modal's mount (the
+ * classify select renders with Clever's update modal, opened by the previous
+ * action), short enough that a truly absent control costs ~2s, not a timeout.
+ */
+export const OPTIONAL_TARGET_PROBE_MS = Number(process.env.AIFLOW_OPTIONAL_TARGET_PROBE_MS ?? 2_000);
+
+/**
+ * Is an optional action's CSS target on the page? Bounded wait for ATTACHED
+ * (not visible: a select inside a scrolled modal section still counts).
+ * Returns false on timeout or error; the caller records a skip either way.
+ */
+export async function optionalTargetPresent(page, target, timeoutMs = OPTIONAL_TARGET_PROBE_MS) {
+  try {
+    await page.locator(target).first().waitFor({ state: "attached", timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -642,6 +670,16 @@ export async function runAction(page, a, opts = {}) {
       .first()
       .click({ timeout: ACTION_TIMEOUT_MS });
   } else if (a.kind === "select_option") {
+    // Optional select: some portals render a REQUIRED select on only a subset
+    // of records (Clever's "How would you classify this customer?" appears on
+    // some update modals and not others). When the author marked the action
+    // optional and the select is not on this page, record the skip and move
+    // on; when it IS present it must be answered, so failures past this point
+    // stay loud.
+    if (a.optional && !(await optionalTargetPresent(page, a.target))) {
+      console.log(`[render] optional select "${a.target}": not on this page, skipped`);
+      return;
+    }
     // target = CSS selector for the <select>, value = option value OR label.
     await page
       .locator(a.target)
