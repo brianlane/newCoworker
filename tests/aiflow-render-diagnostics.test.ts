@@ -188,3 +188,11 @@ describe("client hints cannot contradict the UA string", () => {
     expect(server).toContain("client-hint alignment failed (continuing)");
   });
 });
+
+describe("navigator.webdriver does not give the game away", () => {
+  it("launches with AutomationControlled disabled", () => {
+    // The oldest bot tell there is, and the one that survived fixing the UA
+    // string and the client hints. Chromium's own flag for it.
+    expect(server).toContain('"--disable-blink-features=AutomationControlled"');
+  });
+});

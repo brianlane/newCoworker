@@ -231,7 +231,20 @@ app.use(
 
 let browserPromise = null;
 function getBrowser() {
-  if (!browserPromise) browserPromise = chromium.launch({ args: ["--no-sandbox"] });
+  if (!browserPromise) {
+    browserPromise = chromium.launch({
+      args: [
+        "--no-sandbox",
+        // Playwright leaves `navigator.webdriver = true`, the oldest bot tell
+        // there is, and one that survived fixing the UA string (#1511) and the
+        // Sec-CH-UA client hints (#1513): HomeLight's chunk CDN still answered
+        // our script requests with an HTML challenge while the beacon showed a
+        // clean fingerprint. This flag is Chromium's own switch for it; it
+        // changes nothing else about the engine.
+        "--disable-blink-features=AutomationControlled"
+      ]
+    });
+  }
   return browserPromise;
 }
 
