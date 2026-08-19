@@ -13,9 +13,11 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Download, RefreshCw, X } from "lucide-react";
+import { Download, RefreshCw, Trash2, X } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import type { RosterOption } from "@/components/dashboard/LeadQuickEditor";
+import { NewLeadButton } from "@/components/dashboard/NewLeadButton";
 import { stageForTags } from "@/lib/pipelines/board";
 import { computeStageMove } from "@/lib/pipelines/move";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -101,10 +103,13 @@ export function LeadDataGrid({
   const [rows, setRows] = useState<LeadDataRow[] | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
+  const [employees, setEmployees] = useState<RosterOption[]>([]);
+  const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [moveError, setMoveError] = useState<string | null>(null);
+  /** Move/owner/delete failures, shown in the dismissable strip. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
 
   const load = useCallback(
@@ -119,7 +124,14 @@ export function LeadDataGrid({
           fetch(
             `/api/dashboard/leads-data?businessId=${encodeURIComponent(businessId)}&scope=${nextScope}`,
             { cache: "no-store" }
-          ).then((r) => readEnvelope<{ rows: LeadDataRow[]; columns: string[] }>(r))
+          ).then((r) =>
+            readEnvelope<{
+              rows: LeadDataRow[];
+              columns: string[];
+              employees: RosterOption[];
+              implicitOwnerEmployeeId: string | null;
+            }>(r)
+          )
         ]);
         setPipelines(pipelinesData.pipelines);
         setSelectedId((prev) =>
@@ -129,6 +141,8 @@ export function LeadDataGrid({
         );
         setRows(gridData.rows);
         setColumns(gridData.columns);
+        setEmployees(gridData.employees ?? []);
+        setImplicitOwnerEmployeeId(gridData.implicitOwnerEmployeeId ?? null);
       } catch (e) {
         setError(e instanceof Error ? e.message : t("loadFailed"));
         setRows(null);
@@ -184,7 +198,7 @@ export function LeadDataGrid({
         ? pipeline.stages.find((s) => s.id === stageId) ?? null
         : null;
       if (stageId && !target) return;
-      setMoveError(null);
+      setActionError(null);
 
       // Optimistic: apply the same tag delta the server will compute.
       const delta = computeStageMove(
@@ -213,14 +227,75 @@ export function LeadDataGrid({
             : rs
         );
         if (data.droppedAtCap) {
-          setMoveError(t("tagCap", { name: row.name }));
+          setActionError(t("tagCap", { name: row.name }));
         }
       } catch (e) {
         setRows(previous);
-        setMoveError(e instanceof Error ? e.message : t("moveFailed"));
+        setActionError(e instanceof Error ? e.message : t("moveFailed"));
       }
     },
     [businessId, pipeline, rows, t]
+  );
+
+  const changeOwner = useCallback(
+    async (row: LeadDataRow, ownerEmployeeId: string | null) => {
+      if (!row.e164 || !row.hasContact || ownerEmployeeId === row.ownerEmployeeId) {
+        return;
+      }
+      setActionError(null);
+
+      // Optimistic, reverted on failure (same pattern as the stage move).
+      const nextName = ownerEmployeeId
+        ? employees.find((m) => m.id === ownerEmployeeId)?.name ?? null
+        : null;
+      const previous = rows;
+      setRows((rs) =>
+        rs
+          ? rs.map((r) =>
+              r.e164 === row.e164 ? { ...r, ownerEmployeeId, ownerName: nextName } : r
+            )
+          : rs
+      );
+
+      try {
+        const res = await fetch(
+          `/api/dashboard/customers/${encodeURIComponent(row.e164)}?businessId=${encodeURIComponent(businessId)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerEmployeeId })
+          }
+        );
+        const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        if (!res.ok || !json?.ok) throw new Error(t("ownerUpdateFailed"));
+      } catch (e) {
+        setRows(previous);
+        setActionError(e instanceof Error ? e.message : t("ownerUpdateFailed"));
+      }
+    },
+    [businessId, employees, rows, t]
+  );
+
+  const deleteLead = useCallback(
+    async (row: LeadDataRow) => {
+      if (!row.e164 || !row.hasContact) return;
+      if (!window.confirm(t("editDeleteConfirm", { name: row.name }))) return;
+      setActionError(null);
+      try {
+        const res = await fetch(
+          `/api/dashboard/customers/${encodeURIComponent(row.e164)}?businessId=${encodeURIComponent(businessId)}`,
+          { method: "DELETE" }
+        );
+        const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        if (!res.ok || !json?.ok) throw new Error(t("editDeleteFailed"));
+        // Reload rather than splice: the lead may legitimately stay visible
+        // as a submission-only row (hasContact false) after the contact goes.
+        await load(scope);
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : t("editDeleteFailed"));
+      }
+    },
+    [businessId, load, scope, t]
   );
 
   const exportCsv = useCallback(() => {
@@ -284,6 +359,11 @@ export function LeadDataGrid({
             <Download className="h-3.5 w-3.5" />
             {t("exportCsv")}
           </button>
+          <NewLeadButton
+            businessId={businessId}
+            stages={pipeline?.stages ?? null}
+            onCreated={() => void load(scope)}
+          />
         </div>
       </div>
 
@@ -293,12 +373,12 @@ export function LeadDataGrid({
         </Card>
       )}
 
-      {moveError && (
+      {actionError && (
         <Card>
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-spark-orange">{moveError}</p>
+            <p className="text-sm text-spark-orange">{actionError}</p>
             <button
-              onClick={() => setMoveError(null)}
+              onClick={() => setActionError(null)}
               className="text-parchment/40 hover:text-parchment"
               aria-label={t("dismiss")}
             >
@@ -368,6 +448,9 @@ export function LeadDataGrid({
                     {humanizeColumnKey(c)}
                   </th>
                 ))}
+                <th className="px-3 py-2 font-medium">
+                  <span className="sr-only">{t("colActions")}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -416,7 +499,27 @@ export function LeadDataGrid({
                     )}
                   </td>
                   <td className="px-3 py-2 text-parchment/70">{row.source ?? "-"}</td>
-                  <td className="px-3 py-2 text-parchment/70">{row.ownerName ?? "-"}</td>
+                  <td className="px-3 py-2">
+                    {row.hasContact && row.e164 ? (
+                      <select
+                        value={row.ownerEmployeeId ?? ""}
+                        onChange={(e) => void changeOwner(row, e.target.value || null)}
+                        className="rounded-md border border-parchment/15 bg-deep-ink px-2 py-1 text-xs text-parchment"
+                        aria-label={t("colOwner")}
+                      >
+                        {implicitOwnerEmployeeId === null && (
+                          <option value="">{t("editUnassigned")}</option>
+                        )}
+                        {employees.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-parchment/70">{row.ownerName ?? "-"}</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 whitespace-nowrap text-parchment/50">
                     <LocalDateTime iso={row.createdAt} />
                   </td>
@@ -425,6 +528,20 @@ export function LeadDataGrid({
                       {row.fields[c] ?? "-"}
                     </td>
                   ))}
+                  <td className="px-3 py-2 text-right">
+                    {row.hasContact && row.e164 && (
+                      <button
+                        type="button"
+                        data-testid="grid-delete-lead"
+                        onClick={() => void deleteLead(row)}
+                        className="text-parchment/30 hover:text-spark-orange"
+                        aria-label={t("editDelete")}
+                        title={t("editDelete")}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

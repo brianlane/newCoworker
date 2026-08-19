@@ -2,7 +2,8 @@
  * Tasks page "Data" view feed.
  *
  * GET /api/dashboard/leads-data?businessId=<uuid>&scope=mine|all
- *   → { rows: LeadDataRow[], columns: string[], employees, myEmployeeId }
+ *   → { rows: LeadDataRow[], columns: string[], employees, myEmployeeId,
+ *       implicitOwnerEmployeeId }
  *
  * One row per lead: the newest lead_submissions rows (webhook lead events,
  * Meta Lead Ads direct, the bridges, backlog imports) folded onto contacts
@@ -27,6 +28,7 @@ import {
   type LeadContactRow,
   type LeadSubmissionRow
 } from "@/lib/leads/data-view";
+import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 
 export const dynamic = "force-dynamic";
@@ -61,19 +63,10 @@ export async function GET(request: Request) {
 
     const db = await createSupabaseServiceClient();
 
-    // The caller's linked roster member (drives scope=mine).
-    let myEmployeeId: string | null = null;
-    if (user.email) {
-      const { data: memberRow } = await db
-        .from("business_members")
-        .select("employee_id")
-        .eq("business_id", businessId)
-        .eq("email", user.email.trim().toLowerCase())
-        .neq("status", "revoked")
-        .maybeSingle();
-      myEmployeeId =
-        (memberRow as { employee_id?: string | null } | null)?.employee_id ?? null;
-    }
+    // The roster member the caller IS (drives scope=mine): their explicit
+    // business_members link, or the owner's own roster row, owner logins
+    // have no member row, so "mine" used to come back empty for them.
+    const myEmployeeId = await resolveCallerEmployeeId(businessId, user.email, db);
 
     // One-person team whose only member is the owner: their unclaimed leads
     // are already theirs everywhere else, so this view attributes them the
@@ -240,7 +233,11 @@ export async function GET(request: Request) {
       rows,
       columns: dynamicFieldColumns(rows),
       employees,
-      myEmployeeId
+      myEmployeeId,
+      // One-person team whose only member is the owner: the grid's owner
+      // picker drops its "Unassigned" choice, which would resolve straight
+      // back to this person anyway (see resolveImplicitContactOwner).
+      implicitOwnerEmployeeId: implicitOwner?.id ?? null
     });
   } catch (err) {
     return handleRouteError(err);

@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import {
   Bell,
@@ -21,12 +22,18 @@ import {
   Flag,
   History,
   Hourglass,
+  Pencil,
   RefreshCw,
   Tag,
   User,
   Workflow
 } from "lucide-react";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import {
+  LeadQuickEditor,
+  type RosterOption
+} from "@/components/dashboard/LeadQuickEditor";
+import { NewLeadButton } from "@/components/dashboard/NewLeadButton";
 import { goalViaText } from "@/lib/ai-flows/tasks";
 import type {
   TaskCardData,
@@ -168,15 +175,21 @@ function ReasoningLine({ r }: { r: TaskReasoningView }) {
 function TaskCard({
   task,
   businessId,
+  employees,
+  implicitOwnerEmployeeId,
   canDismissRuns,
   onChanged
 }: {
   task: TaskCardData;
   businessId: string;
+  employees: RosterOption[];
+  implicitOwnerEmployeeId: string | null;
   canDismissRuns: boolean;
   onChanged: () => void;
 }) {
+  const t = useTranslations("dashboard.tasksData");
   const [showVars, setShowVars] = useState(false);
+  const [editing, setEditing] = useState(false);
   return (
     <Card className="space-y-3">
       {/* Header: who + lead state */}
@@ -188,20 +201,56 @@ function TaskCard({
           {task.name}
         </Link>
         <span className="text-xs text-parchment/40">{task.e164}</span>
-        {task.tags.map((t) => (
+        {task.tags.map((tag) => (
           <span
-            key={t}
+            key={tag}
             className="inline-flex items-center gap-1 rounded-full bg-signal-teal/10 px-2 py-0.5 text-[10px] font-medium text-signal-teal"
           >
             <Tag className="h-2.5 w-2.5" />
-            {t}
+            {tag}
           </span>
         ))}
         <span className="ml-auto inline-flex items-center gap-1 text-xs text-parchment/50">
           <User className="h-3.5 w-3.5" />
           {task.ownerName ?? (task.claimedBy ? `claimed by ${task.claimedBy}` : "unassigned")}
         </span>
+        {task.hasContact && (
+          <button
+            type="button"
+            data-testid="task-edit"
+            onClick={() => setEditing((v) => !v)}
+            className={`transition-colors ${
+              editing ? "text-signal-teal" : "text-parchment/40 hover:text-signal-teal"
+            }`}
+            aria-label={t("editLead")}
+            title={t("editLead")}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
+
+      {editing && task.hasContact && (
+        <LeadQuickEditor
+          businessId={businessId}
+          contactKey={task.e164}
+          resolvedName={task.name}
+          initialDisplayName={task.displayName}
+          initialTags={task.tags}
+          initialOwnerEmployeeId={task.ownerEmployeeId}
+          employees={employees}
+          implicitOwnerEmployeeId={implicitOwnerEmployeeId}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+          onDeleted={() => {
+            setEditing(false);
+            onChanged();
+          }}
+          onClose={() => setEditing(false)}
+        />
+      )}
 
       {/* Active workflows */}
       {task.runs.length > 0 ? (
@@ -329,6 +378,8 @@ export function TaskCenter({
 }) {
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
+  const [employees, setEmployees] = useState<RosterOption[]>([]);
+  const [implicitOwnerEmployeeId, setImplicitOwnerEmployeeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -343,7 +394,11 @@ export function TaskCenter({
         );
         const json = (await res.json()) as {
           ok: boolean;
-          data?: { tasks: TaskCardData[] };
+          data?: {
+            tasks: TaskCardData[];
+            employees: RosterOption[];
+            implicitOwnerEmployeeId: string | null;
+          };
           error?: { message?: string };
         };
         if (!res.ok || !json.ok || !json.data) {
@@ -351,6 +406,8 @@ export function TaskCenter({
           setTasks(null);
         } else {
           setTasks(json.data.tasks);
+          setEmployees(json.data.employees ?? []);
+          setImplicitOwnerEmployeeId(json.data.implicitOwnerEmployeeId ?? null);
         }
       } catch {
         setError("Couldn't load tasks");
@@ -392,6 +449,11 @@ export function TaskCenter({
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </button>
+        <NewLeadButton
+          businessId={businessId}
+          stages={null}
+          onCreated={() => void load(scope)}
+        />
       </div>
 
       {scope === "mine" && !hasLinkedEmployee && (
@@ -425,6 +487,8 @@ export function TaskCenter({
           key={task.e164}
           task={task}
           businessId={businessId}
+          employees={employees}
+          implicitOwnerEmployeeId={implicitOwnerEmployeeId}
           canDismissRuns={canDismissRuns}
           onChanged={() => void load(scope)}
         />
