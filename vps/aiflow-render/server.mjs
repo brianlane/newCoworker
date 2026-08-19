@@ -355,7 +355,7 @@ const DIAG_MAX = 25;
 const DIAG_TEXT_MAX = 300;
 
 function attachDiagnostics(page) {
-  const diag = { consoleErrors: [], failedRequests: [], pageErrors: [] };
+  const diag = { consoleErrors: [], failedRequests: [], pageErrors: [], scriptNotJavaScript: [] };
   const push = (arr, value) => {
     if (arr.length < DIAG_MAX) arr.push(String(value ?? "").slice(0, DIAG_TEXT_MAX));
   };
@@ -373,6 +373,25 @@ function attachDiagnostics(page) {
   page.on("response", (res) => {
     if (res.status() >= 400) {
       push(diag.failedRequests, `HTTP ${res.status()} ${res.request().method()} ${res.url()}`);
+      return;
+    }
+    // A SCRIPT that comes back as markup is always a bug, and it is invisible
+    // to every check above: the status is 200, the request did not fail, and
+    // the document keeps rendering. The app then dies on `Unexpected token
+    // '<'` with nothing naming the file. That is a CDN challenge page, an
+    // SPA rewrite swallowing a 404, or an auth redirect on a static asset.
+    //
+    // HomeLight's referral panel is exactly this: its lazily-imported chunk
+    // returns HTML, the stage editor never mounts, and the page looks merely
+    // "missing a control". Naming the URL is the difference between that dead
+    // end and a fixable problem.
+    try {
+      if (res.request().resourceType() !== "script") return;
+      const type = res.headers()["content-type"] ?? "";
+      if (/javascript|ecmascript|application\/json/i.test(type)) return;
+      push(diag.scriptNotJavaScript, `${res.status()} ${type || "no content-type"} ${res.url()}`);
+    } catch {
+      /* header access on a closed page must never break collection */
     }
   });
   return diag;
