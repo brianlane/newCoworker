@@ -192,13 +192,24 @@ export const getContactTool = defineMcpTool({
     const { getCustomerMemory } = await import("@/lib/customer-memory/db");
     const row = await getCustomerMemory(businessId, phone);
     if (!row) throw new McpToolError(`No contact found for ${phone}.`);
+    // An unclaimed contact on a one-person team belongs to that one person,
+    // so the AI is told the same owner the dashboard shows rather than
+    // "nobody". Guarded, so a contact someone actually claimed costs no
+    // extra read at all.
+    let ownerEmployeeId = row.owner_employee_id;
+    if (!ownerEmployeeId) {
+      const { resolveImplicitContactOwner } = await import(
+        "@/lib/db/implicit-contact-owner"
+      );
+      ownerEmployeeId = (await resolveImplicitContactOwner(businessId))?.id ?? null;
+    }
     return {
       phone: row.customer_e164,
       name: row.display_name,
       email: row.email,
       type: row.type,
       tags: row.tags,
-      owner_employee_id: row.owner_employee_id,
+      owner_employee_id: ownerEmployeeId,
       birthday: row.birthday,
       pinned_notes: row.pinned_md,
       ai_summary: row.summary_md,

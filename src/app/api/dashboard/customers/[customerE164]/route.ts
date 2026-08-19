@@ -39,6 +39,7 @@ import {
   SMS_REPLY_MODES,
   normalizeContactTags
 } from "@/lib/customer-memory/types";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
@@ -137,6 +138,15 @@ export async function GET(
 
     const smsHistory = await listSmsHistoryForCustomer(businessId, customerE164, { limit: 50 });
 
+    // Same attribution the contact page shows: on a one-person team whose
+    // only member is the owner, an unclaimed contact is already theirs. Only
+    // reached when the column is null, so an owned contact costs no extra
+    // read.
+    const ownerEmployeeId =
+      memory.owner_employee_id ??
+      (await resolveImplicitContactOwner(businessId))?.id ??
+      null;
+
     return successResponse({
       memory: {
         customerE164: memory.customer_e164,
@@ -152,7 +162,7 @@ export async function GET(
         lastSummarizedAt: memory.last_summarized_at,
         lastChannel: memory.last_channel,
         tags: memory.tags,
-        ownerEmployeeId: memory.owner_employee_id,
+        ownerEmployeeId,
         birthday: memory.birthday,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at

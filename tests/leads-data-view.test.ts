@@ -248,6 +248,50 @@ describe("buildLeadDataRows", () => {
     expect(unknown).toMatchObject({ ownerEmployeeId: "emp-gone", ownerName: null });
   });
 
+  /**
+   * HQ, Aug 18 2026: a one-person team whose only member is the owner. An
+   * unclaimed contact is already theirs, so the grid names them instead of
+   * leaving the owner column empty on every row.
+   */
+  it("attributes unclaimed contacts to the implicit one-person-team owner", () => {
+    const rows = buildLeadDataRows({
+      submissions: [],
+      contacts: [
+        contact({ owner_employee_id: null }),
+        contact({ customer_e164: "+14805551111", owner_employee_id: "emp-1" })
+      ],
+      contactNames: new Map(),
+      employeeNameById: new Map([["emp-1", "Alex"]]),
+      implicitOwner: { id: "mem-owner", name: "Brian" }
+    });
+    const unclaimed = rows.find((r) => r.e164 === "+16025551234");
+    const claimed = rows.find((r) => r.e164 === "+14805551111");
+    expect(unclaimed).toMatchObject({ ownerEmployeeId: "mem-owner", ownerName: "Brian" });
+    // An explicit stamp still wins: the implicit owner only fills a null.
+    expect(claimed).toMatchObject({ ownerEmployeeId: "emp-1", ownerName: "Alex" });
+  });
+
+  it("puts an implicitly owned lead in that owner's 'My leads' scope", () => {
+    const rows = buildLeadDataRows({
+      submissions: [],
+      contacts: [contact({ owner_employee_id: null })],
+      contactNames: new Map(),
+      employeeNameById: new Map(),
+      implicitOwner: { id: "mem-owner", name: "Brian" },
+      scopeOwnerEmployeeId: "mem-owner"
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("leaves contacts unowned for every business without an implicit owner", () => {
+    const rows = buildLeadDataRows({
+      submissions: [],
+      contacts: [contact({ owner_employee_id: null })],
+      ...EMPTY_MAPS
+    });
+    expect(rows[0]).toMatchObject({ ownerEmployeeId: null, ownerName: null });
+  });
+
   it("keeps the FIRST claim when two contacts share an alias", () => {
     const rows = buildLeadDataRows({
       submissions: [sub({ phone_e164: "+16025550000" })],

@@ -37,6 +37,7 @@ import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailCompo
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listTeamMembers } from "@/lib/db/employees";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { listBusinessDocumentsForContact } from "@/lib/documents/db";
 import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
@@ -193,6 +194,11 @@ export default async function CustomerDetailPage({ params }: Props) {
     )
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
+  // Read-time owner for an unclaimed contact (a one-person team whose only
+  // member is the owner). Runs after the group above so it reuses that
+  // roster read rather than paying for its own.
+  const implicitOwner = await resolveImplicitContactOwner(business.id, db, teamMembers);
+
   // The URL number can be a merged-in alias, and the owner/override identity
   // may live on the alias rather than the profile's primary. Prefer the
   // primary, then the URL number, then any alias that resolved.
@@ -288,6 +294,11 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialOwnerEmployeeId={memory.owner_employee_id}
         initialBirthday={memory.birthday}
         teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
+        // A one-person team whose only member is the owner: the picker opens
+        // on them rather than asking who owns a contact only one person could
+        // own. Reuses the roster already loaded above, so a business with a
+        // real team pays no extra query for it.
+        implicitOwner={implicitOwner}
       />
 
       {/* SMS reply mode governs auto-replies to INBOUND texts, so a short code
