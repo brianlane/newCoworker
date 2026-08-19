@@ -872,7 +872,12 @@ adds the capacity alert; see Sharp edges),
 `amy-clever-sweep-measured-alert-definition.ts` (Aug 19 2026: the alert reads
 the chained sweep's measured `update_each_updated`/`update_each_left` vars
 instead of backlog-minus-6 arithmetic, and the `sweep_remainder` math step is
-removed; a clean sweep of any backlog stays silent; see Sharp edges).
+removed; a clean sweep of any backlog stays silent; see Sharp edges),
+`amy-clever-sweep-rerun.ts` (Aug 19 2026: replays the most recent weekly
+reminder's trigger as a fresh queued run, so the week the chaining shipped
+got finished instead of waiting for Clever's next text; refuses when a run is
+active or the source is older than 48h, since the magic link dies in under a
+day).
 
 Unowned-lead recovery (Aug 15 2026): `amy-unowned-lead-team-alert.ts` texts
 the lead-type-tagged team about ONE unowned lead by hand, using the same
