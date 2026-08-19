@@ -14,6 +14,7 @@ import {
   MAX_ONBOARDING_CHAT_MESSAGES,
   onboardingChatMessageSchema,
   onboardingChatModelResponseSchema,
+  ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA,
   onboardingInquiryFlowSchema,
   ONBOARDING_CHAT_RATE_LIMIT,
   onboardingAssistantProfileSchema,
@@ -755,5 +756,67 @@ describe("CHAT_ELICITED_TOPIC_KEYS / areAllChatTopicsCovered", () => {
         `expected false when only ${blockingKey} is uncovered`
       ).toBe(false);
     }
+  });
+});
+
+describe("ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA", () => {
+  const schema = ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA.schema;
+  const profileSchema = schema.properties.profile;
+
+  // The JSON Schema is what the provider enforces during decoding; the Zod schema
+  // is what the route validates afterwards. If someone adds a profile field to one
+  // and not the other, the model is either told to emit a field Zod will strip, or
+  // forbidden from emitting one Zod requires. Both fail silently in production, so
+  // pin them together here.
+  it("stays key-for-key in step with the Zod response schema", () => {
+    expect(Object.keys(schema.properties).sort()).toEqual(
+      Object.keys(onboardingChatModelResponseSchema.shape).sort()
+    );
+  });
+
+  it("stays key-for-key in step with the Zod profile schema", () => {
+    expect(Object.keys(profileSchema.properties).sort()).toEqual(
+      Object.keys(onboardingAssistantProfileSchema.shape).sort()
+    );
+  });
+
+  it("marks every property required, as OpenAI strict mode demands", () => {
+    expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
+    expect([...profileSchema.required].sort()).toEqual(Object.keys(profileSchema.properties).sort());
+  });
+
+  it("closes every object to additional properties", () => {
+    expect(schema.additionalProperties).toBe(false);
+    expect(profileSchema.additionalProperties).toBe(false);
+    expect(profileSchema.properties.inquiryFlows.items.additionalProperties).toBe(false);
+  });
+
+  it("omits validation keywords strict mode rejects", () => {
+    // `completionPercent` is 0-100, but strict mode does not allow minimum/maximum,
+    // so the clamp lives in `normalizeCompletionPercent` instead.
+    const serialized = JSON.stringify(schema);
+    expect(serialized).not.toContain("minimum");
+    expect(serialized).not.toContain("maximum");
+    expect(serialized).not.toContain("minLength");
+  });
+
+  it("describes a payload the Zod schema accepts unchanged", () => {
+    const emitted = {
+      assistantMessage: "Who usually reaches out first?",
+      readyToFinalize: false,
+      completionPercent: 40,
+      missingTopics: ["tone"],
+      profile: {
+        ...createEmptyAssistantProfile(),
+        inquiryFlows: [{ trigger: "Leak call", responseGoal: "Book a visit" }]
+      }
+    };
+
+    expect(onboardingChatModelResponseSchema.parse(emitted)).toEqual(emitted);
+  });
+
+  it("is marked strict so providers enforce rather than hint", () => {
+    expect(ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA.strict).toBe(true);
+    expect(ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA.name).toBe("onboarding_chat_response");
   });
 });

@@ -11,6 +11,7 @@ import {
   onboardingChatMessageSchema,
   onboardingChatModelResponseSchema,
   ONBOARDING_CHAT_RATE_LIMIT,
+  ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA,
   summarizeOnboardingTopicStatus,
   TOOL_SIGNAL_PATTERN
 } from "@/lib/onboarding/chat";
@@ -18,7 +19,14 @@ import {
 function resolveOnboardingModels(): string[] {
   // Always carry a fallback so a single upstream provider rate-limit (e.g. DeepInfra)
   // never surfaces to onboarding users.
-  return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
+  //
+  // The primary is pinned to a dated snapshot on purpose. The bare
+  // `deepseek/deepseek-v4-flash` slug resolves to the 0423 build (Artificial
+  // Analysis intelligence index 40); the 0731 GA build scores 52 on the same
+  // index for roughly $0.09/$0.18 per million tokens against $0.068/$0.168, a
+  // fraction of a cent per intake. Pinning also stops the slug repointing under
+  // us mid-quarter. Revisit when DeepSeek retires 0731.
+  return ["deepseek/deepseek-v4-flash-0731", "openai/gpt-5.4-nano"];
 }
 
 // Hard ceiling on total route time. Sized so the worst-case negative path
@@ -98,7 +106,30 @@ async function fetchOpenRouterChat(params: {
         effort: "minimal",
         exclude: true
       },
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA
+      },
+      // Route only to upstreams that neither retain nor train on the payload.
+      // This request carries pre-signup business identity: business name, owner
+      // name, phone, service area and the scraped website summary. Unconstrained,
+      // OpenRouter spreads this model across 28 endpoints including Baidu and
+      // SiliconFlow; `data_collection: "deny"` plus `zdr: true` narrows it to
+      // zero-retention endpoints (observed: Fireworks, DeepInfra, Morph,
+      // OpenInference for DeepSeek, Azure and OpenAI for the fallback).
+      //
+      // Deliberately NOT `require_parameters: true`, which reads as the obvious
+      // companion flag and empties the pool to zero on both models: no OpenAI
+      // GPT-5.x endpoint declares `temperature`, and no DeepSeek endpoint
+      // declares `max_completion_tokens`. OpenRouter still normalizes both to
+      // the upstream (verified: a cap of 20 returns exactly 20 completion tokens
+      // with `finish_reason: "length"`), so the flag would exclude endpoints
+      // that work. Schema enforcement is therefore a strong preference here, and
+      // the Zod gate below plus model fallover remain the backstop.
+      provider: {
+        data_collection: "deny",
+        zdr: true
+      },
       messages: params.messages
     }),
     signal: params.signal
@@ -129,6 +160,62 @@ function extractSafeOpenRouterErrorMeta(responseText: string): {
   } catch {
     return {};
   }
+}
+
+// OpenRouter's `usage` block, which the route previously read nothing from. Shapes
+// vary slightly by upstream, so every field is treated as optional and coerced.
+type OpenRouterUsage = {
+  prompt_tokens?: unknown;
+  completion_tokens?: unknown;
+  total_tokens?: unknown;
+  cost?: unknown;
+  prompt_tokens_details?: { cached_tokens?: unknown };
+  completion_tokens_details?: { reasoning_tokens?: unknown };
+};
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * One structured line per successfully served turn.
+ *
+ * Onboarding is the only OpenRouter call site in the repo and sits outside the
+ * Gemini spend meter, so before this existed there was no way to answer how
+ * often the fallback fires, what a turn costs, or which upstream served it. That
+ * made "is this model still the right one" unanswerable from data and left the
+ * endpoint invisible to the margin view.
+ *
+ * Metadata only, deliberately. The response body restates user-provided business
+ * and contact context, so it is never logged here, matching the discipline of the
+ * two failure logs below.
+ *
+ * Not wired into `ai-spend-meter` on purpose: that ledger keys on a `business_id`
+ * which does not exist yet at pre-signup. Logs first; a ledger is a separate call
+ * once the volume is known.
+ */
+function logServedTurn(params: {
+  model: string;
+  attempt: number;
+  provider?: string;
+  elapsedMs: number;
+  finishReason?: string;
+  usage?: OpenRouterUsage;
+}): void {
+  const usage = params.usage;
+  console.info("[onboard/chat] openrouter turn served", {
+    model: params.model,
+    attempt: params.attempt,
+    provider: params.provider,
+    elapsedMs: params.elapsedMs,
+    finishReason: params.finishReason,
+    promptTokens: finiteNumberOrUndefined(usage?.prompt_tokens),
+    completionTokens: finiteNumberOrUndefined(usage?.completion_tokens),
+    totalTokens: finiteNumberOrUndefined(usage?.total_tokens),
+    cachedTokens: finiteNumberOrUndefined(usage?.prompt_tokens_details?.cached_tokens),
+    reasoningTokens: finiteNumberOrUndefined(usage?.completion_tokens_details?.reasoning_tokens),
+    costUsd: finiteNumberOrUndefined(usage?.cost)
+  });
 }
 
 const requestSchema = z.object({
@@ -274,8 +361,11 @@ export async function POST(request: Request) {
     let json: any = null;
     let parsed: z.infer<typeof onboardingChatModelResponseSchema> | null = null;
 
-    for (const model of models) {
-      const isLastModel = model === models[models.length - 1];
+    for (const [modelIndex, model] of models.entries()) {
+      // Index-based rather than value-based: a duplicated entry in the model list
+      // would otherwise make the first copy look like the last attempt.
+      const isLastModel = modelIndex === models.length - 1;
+      const attempt = modelIndex + 1;
       const attemptStart = Date.now();
       const abortController = new AbortController();
       const abortTimer = setTimeout(() => abortController.abort(), OPENROUTER_ATTEMPT_TIMEOUT_MS);
@@ -315,6 +405,7 @@ export async function POST(request: Request) {
       if (attemptFailed || !response || !response.ok) {
         console.error("[onboard/chat] openrouter request failed", {
           model,
+          attempt,
           status: response?.status,
           timedOut,
           // Only surface networkErrorName when the failure was an actual thrown error
@@ -351,6 +442,14 @@ export async function POST(request: Request) {
         // output also fails parse or schema validation.
         try {
           parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
+          logServedTurn({
+            model,
+            attempt,
+            provider: typeof json?.provider === "string" ? json.provider : undefined,
+            elapsedMs: Date.now() - attemptStart,
+            finishReason: typeof finishReason === "string" ? finishReason : undefined,
+            usage: json?.usage
+          });
           break;
         } catch (parseError) {
           if (finishReason === "length") {
@@ -369,6 +468,7 @@ export async function POST(request: Request) {
                 : "parse_error";
         console.error("[onboard/chat] openrouter parse failed", {
           model,
+          attempt,
           errorType,
           finishReason: json?.choices?.[0]?.finish_reason,
           responseLength: responseText.length

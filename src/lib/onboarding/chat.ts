@@ -113,6 +113,111 @@ export const onboardingChatModelResponseSchema = z.object({
   )
 });
 
+/**
+ * Strict JSON Schema handed to the model via `response_format`, mirroring
+ * `onboardingChatModelResponseSchema` above.
+ *
+ * Why a schema and not `{ type: "json_object" }`: plain JSON mode constrains the
+ * output to *some* valid JSON, so a model that drops `readyToFinalize` or emits
+ * `profile` as an array still returns a 200 that only fails later at the Zod
+ * gate, and a Zod failure costs a whole fallover attempt. Strict mode makes the
+ * provider enforce the shape during decoding instead, which removes
+ * `schema_mismatch` and `invalid_json` as routine failure classes.
+ *
+ * The Zod layer stays exactly as it was. It is now belt-and-braces rather than
+ * load-bearing: providers that only soft-honour `response_format` still exist,
+ * and the route still has to survive one.
+ *
+ * Strict-mode rules this shape has to satisfy, on every nested object:
+ *   - every property listed in `required` (no optional fields),
+ *   - `additionalProperties: false`,
+ *   - no unsupported validation keywords (`minimum`/`maximum` are not allowed,
+ *     so `completionPercent` is clamped by `normalizeCompletionPercent`).
+ *
+ * `tests/onboarding-chat.test.ts` asserts this stays key-for-key in step with
+ * the Zod schema, so adding a profile field to one and not the other fails CI.
+ */
+const jsonSchemaStringArray = {
+  type: "array",
+  items: { type: "string" }
+} as const;
+
+export const ONBOARDING_CHAT_RESPONSE_JSON_SCHEMA = {
+  name: "onboarding_chat_response",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["assistantMessage", "readyToFinalize", "completionPercent", "missingTopics", "profile"],
+    properties: {
+      assistantMessage: {
+        type: "string",
+        description: "The next thing to say to the business owner. Ask exactly one question unless finalizing."
+      },
+      readyToFinalize: { type: "boolean" },
+      completionPercent: {
+        type: "number",
+        description: "How much of the brief is captured, 0 to 100."
+      },
+      missingTopics: jsonSchemaStringArray,
+      profile: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "businessSummary",
+          "serviceArea",
+          "teamSize",
+          "crmUsed",
+          "offerings",
+          "customerTypes",
+          "commonRequests",
+          "inquiryFlows",
+          "routingRules",
+          "schedulingRules",
+          "escalationRules",
+          "tools",
+          "toneDirectives",
+          "signature",
+          "policies",
+          "factsToRemember"
+        ],
+        properties: {
+          businessSummary: { type: "string" },
+          serviceArea: { type: "string" },
+          teamSize: {
+            type: "string",
+            description: "Headcount as digits in a string, e.g. \"4\". Empty string when unknown."
+          },
+          crmUsed: jsonSchemaStringArray,
+          offerings: jsonSchemaStringArray,
+          customerTypes: jsonSchemaStringArray,
+          commonRequests: jsonSchemaStringArray,
+          inquiryFlows: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["trigger", "responseGoal"],
+              properties: {
+                trigger: { type: "string" },
+                responseGoal: { type: "string" }
+              }
+            }
+          },
+          routingRules: jsonSchemaStringArray,
+          schedulingRules: jsonSchemaStringArray,
+          escalationRules: jsonSchemaStringArray,
+          tools: jsonSchemaStringArray,
+          toneDirectives: jsonSchemaStringArray,
+          signature: { type: "string" },
+          policies: jsonSchemaStringArray,
+          factsToRemember: jsonSchemaStringArray
+        }
+      }
+    }
+  }
+} as const;
+
 export type OnboardingChatMessage = z.infer<typeof onboardingChatMessageSchema>;
 export type OnboardingAssistantProfile = z.infer<typeof onboardingAssistantProfileSchema>;
 export type OnboardingChatModelResponse = z.infer<typeof onboardingChatModelResponseSchema>;
