@@ -212,13 +212,28 @@ These are mistakes already made on this account. Do not remake them.
   pass, and texts Amy the remainder, so a short sweep can never again look like
   a complete one. Covering the whole backlog needs the loop moved worker-side
   (one request per item); until then the alert is the honest answer.
-- **The "We Spoke" status the sweep clicks still overclaims.** It is the only
-  status label ever verified against the live Provide Update modal, and it
-  submits reliably, so it stays until the modal's real option list can be read.
-  That needs a Clever session: password login fails (submit is found, enabled,
-  blurred and clicked, and the session still does not establish) and the magic
-  links in Clever's own texts expire in under a day. The per-card NOTE was made
-  honest in the meantime; the status was not.
+- **Clever's status list is FORWARD-ONLY from the card's current stage, so
+  "We Spoke" is not on every card.** Read live 2026-08-18 in a signed-in
+  browser. A card at "Tried Reaching Out" offers `We Spoke`; a card already at
+  "Spoke" does NOT. Full list, in portal order: `No Status Change`, `We Spoke`,
+  `We Scheduled A Meeting`, `We Met In-Person`, `We Signed a Listing Agreement`,
+  `We Listed the Home For Sale`, `We're Under Contract`, `We Closed`,
+  `Released: No Longer Pursuing`. The WEEKLY sweep runs over every active deal
+  and most of the 87-card book is past "Spoke", so the sweep as first shipped
+  would have failed its second action on the majority of cards, one `failed` at
+  a time. Fixed Aug 18 2026 by `amy-clever-sweep-no-status-change.ts`: the sweep
+  posts `No Status Change`, which is the first option at every stage AND the
+  truthful one for a compliance ping. Choosing it also SHORTENS the action list,
+  because the required "Did you schedule a time to meet in person?" select is
+  revealed by `We Spoke` and never rendered on this path, so it is removed
+  rather than retargeted. The daily (Chris) flow keeps `We Spoke` deliberately:
+  it fires the day a lead arrives, when the card is at "New"/"Tried Reaching
+  Out" and that option is offered.
+- **An updated Clever card DOES leave "Needs Action".** Confirmed live
+  2026-08-18: `Needs Action (0)` / `Recently Updated (87)`, the second section
+  labelled "Items in this list do not need to be updated". That is the
+  precondition chained sweep passes depend on, so chaining is now safe to build.
+  Per-lead URLs are `/portal/<portalId>/connection/<connectionId>/`.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
@@ -784,6 +799,10 @@ accept step, see Sharp edges),
 `clever-spoke-check-unclaimed-patch.ts` +
 `patch-clever-spoke-check-unclaimed-leads.ts` (Aug 10 2026: the spoke check's
 second trigger, see Sharp edges),
+`amy-clever-sweep-no-status-change.ts` +
+`amy-clever-sweep-no-status-change-definition.ts` (Aug 18 2026: the weekly
+sweep posts "No Status Change", the only status Clever offers at every stage,
+see Sharp edges),
 `amy-clever-weekly-update-sweep.ts` +
 `amy-clever-weekly-update-sweep-definition.ts` (Aug 17 2026: repoints
 the weekly sweep at the real sender, separates the two flows by needle, and

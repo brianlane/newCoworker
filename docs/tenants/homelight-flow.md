@@ -309,7 +309,36 @@ one probe's control list and was absent from the next probe's markup, from the
 identical click. Use the probe's `--expect` flag (added for exactly this) to
 hold until the drawer is on the page.
 
-**Where the stage editor actually is**
+**The stage editor, read live 2026-08-18 in a signed-in browser**
+
+In a REAL browser the panel hydrates fully (zero `--skeleton` nodes) and carries
+`Call`, `Email`, `Reassign`, `Hide Activity`, **`Update Stage`** and
+**`Add Note`**. Clicking `Update Stage` opens a bottom drawer:
+
+```
+.referral-action-drawer.stage-update-drawer
+  [data-test="referralDetailsModal-stageUpdateOptions"]   role=listbox
+    [data-test="select-selected-item"]                    role=button, text = current stage
+    [data-test="select-option-item"]                      one per offered stage
+  button "Add Note"
+```
+
+**The dropdown is forward-only and contextual, like Clever's.** A referral at
+`Listing` offers exactly `Listing`, `In Escrow`, `Failed`. HomeLight enforces
+the stage ordering itself, so the forward-only guard this plan plannned to build
+is unnecessary: the portal will not offer a backward stage. What a flow must
+handle instead is the target stage simply not being on offer.
+
+**The headless render still does not get here.** Same referral, same click:
+the real browser shows zero skeletons and `Update Stage`; the render service
+leaves both interactive children as `--skeleton` and `--expect "Update Stage"`
+times out. Two hypotheses are now DISPROVEN: it is not referral-specific (a
+terminal `Failed` referral has the editor too), and it is not the SSRF guard
+aborting `blob:`/`data:` subresources (the live page loads 242 resources, all
+https, no service worker, no workers). Still open: viewport (the render service
+sets none, so Playwright's default applies) and headless-specific gating.
+
+**Superseded note on where the editor is**
 
 Both routes, clicking a row and clicking the dashboard's `Update Referral
 Stage`, open the same panel. Its visible text reads as read-only:
