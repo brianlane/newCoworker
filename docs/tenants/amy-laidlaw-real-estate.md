@@ -314,7 +314,21 @@ These are mistakes already made on this account. Do not remake them.
   deals live in the On Hold list it never touches. `optional` is deliberately
   select_option-only, in the schema and in the sidecar: a missing select is
   unambiguous, while an "optional" text click would let hydration lag skip
-  real buttons. Applied by `amy-clever-sweep-classify-select.ts`.
+  real buttons. Applied by `amy-clever-sweep-classify-select.ts`. With it, the
+  2026-08-19 drain (run `313c6f3a`) posted 28 of 30 across 5 passes at full
+  6-per-pass throughput, terminal `list_drained`.
+- **A NEVER-updated card has no "No Status Change" to click.** The 2 cards
+  that survived the 2026-08-19 drain failed with
+  `click_text "No Status Change": no matching control` (connection `581283`
+  probed live): the forward-only status list on a card with no prior update
+  starts at `I Tried Reaching Out`, there is no status to keep. The sweep
+  deliberately does NOT fall back to clicking "I Tried Reaching Out": whether
+  outreach happened is a per-card fact the sweep cannot verify, and posting
+  it blind is the same overclaim the "We Spoke" fix removed. These cards fail
+  per-card, stay listed, and the measured alert hands them to a human by
+  count; once a first update lands (a human, or the daily flow on arrival
+  day), the card grows "No Status Change" and the weekly sweep owns it from
+  then on.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
