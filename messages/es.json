@@ -838,7 +838,7 @@
         },
         "u5": {
           "title": "Privado por diseño",
-          "description": "Un servidor dedicado por consultorio, con conversaciones de pacientes aisladas por negocio y nunca compartidas."
+          "description": "Cada consultorio corre en su propio servidor dedicado, con las conversaciones aisladas por negocio. En enterprise, las conversaciones de pacientes pueden vivir en ese servidor en vez de en nuestra nube."
         },
         "u6": {
           "title": "Campañas de recordatorio",
@@ -847,7 +847,8 @@
         "day1": "Prisa de lunes por la mañana: cinco llamadas en diez minutos. Todas contestadas; tres citas reservadas; dos preguntas resueltas.",
         "day2": "Un paciente cancela por texto. Tu coworker lo reagenda y ofrece el espacio libre a la lista de espera.",
         "day3": "Alguien llama fuera de horario preguntando por seguros aceptados. Respondido con el conocimiento de tu sitio, con reserva para el jueves.",
-        "day4": "Los pacientes de mañana reciben textos de confirmación; las respuestas se atienden automáticamente."
+        "day4": "Los pacientes de mañana reciben textos de confirmación; las respuestas se atienden automáticamente.",
+        "complianceNote": "El alcance importa. Tu AI coworker hace el trabajo de recepción: agendar, recordatorios, desbordes y preguntas fuera de horario. No es un sistema de expedientes, y en los planes estándar no firmamos un Business Associate Agreement (BAA), así que mantén el detalle clínico fuera. Los consultorios que necesiten un BAA firmado, o las conversaciones de pacientes alojadas en su propio servidor, deben hablar con nosotros sobre un despliegue enterprise antes de comprar."
       },
       "lawFirms": {
         "name": "Despachos legales",
