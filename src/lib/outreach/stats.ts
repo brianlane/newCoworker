@@ -51,6 +51,17 @@ const DRAFTED_STATUSES: OutreachProspectStatus[] = [
   "skipped"
 ];
 
+/**
+ * The bucket rows with no recorded trade group under.
+ *
+ * Exported because it is a LABEL, not a stored value: no `outreach_prospects`
+ * row has this in its `vertical` column. Anything acting on the bucket (the
+ * per-trade skip) has to translate it back into "null or blank", and the two
+ * ends of that translation must not drift apart, or the button silently
+ * matches nothing.
+ */
+export const UNKNOWN_VERTICAL = "(unknown)";
+
 function emptyFunnel(): OutreachFunnel {
   return {
     discovered: 0,
@@ -97,7 +108,7 @@ export function summarizeFunnel(
   const byVertical = new Map<string, OutreachFunnel>();
   for (const row of rows) {
     tally(total, row.status);
-    const key = row.vertical.trim() || "(unknown)";
+    const key = row.vertical.trim() || UNKNOWN_VERTICAL;
     const bucket = byVertical.get(key) ?? emptyFunnel();
     tally(bucket, row.status);
     byVertical.set(key, bucket);

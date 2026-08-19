@@ -15,6 +15,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import type { PlacesOpeningHours } from "./discover";
+import { UNKNOWN_VERTICAL } from "./stats";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -330,6 +331,84 @@ export async function countProspectsToRewrite(
     .lt("updated_at", beforeIso);
   if (error) throw new Error(`countProspectsToRewrite: ${error.message}`);
   return count ?? 0;
+}
+
+/**
+ * Statuses a whole trade can still be called off at.
+ *
+ * `discovered` is a prospect the sweep has not written to yet; `drafted` is one
+ * waiting on the owner. Everything later is excluded on purpose: `queued` is
+ * already in flight, and a sent pitch is a thing that happened, so retiring the
+ * trade must not rewrite the record of mail that is already in somebody's
+ * inbox.
+ */
+const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"];
+
+/**
+ * The funnel is a LABEL, the column is a VALUE, and for one bucket they differ.
+ *
+ * `summarizeFunnel` groups rows with a blank `vertical` under
+ * `UNKNOWN_VERTICAL`, and no row stores that string. Filtering on it literally
+ * matches nothing, so the Skip button on that row would report success and
+ * retire none of the prospects it was pointing at. That bucket has to become
+ * "null or empty" on the way to the database, and both queries below have to
+ * translate it the SAME way, which is what this constant is for.
+ *
+ * Blank means null or the empty string. Whitespace-only cannot occur:
+ * `saveProspectingSettings` trims every search term and drops the empty ones,
+ * and a prospect's vertical is copied from the term that found it.
+ */
+const BLANK_VERTICAL_FILTER = "vertical.is.null,vertical.eq.";
+
+/** How many prospects in one trade a skip would still catch. */
+export async function countProspectsInVertical(
+  businessId: string,
+  vertical: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const base = db
+    .from("outreach_prospects")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .in("status", CANCELLABLE_STATUSES);
+  const { count, error } =
+    vertical === UNKNOWN_VERTICAL
+      ? await base.or(BLANK_VERTICAL_FILTER)
+      : await base.eq("vertical", vertical);
+  if (error) throw new Error(`countProspectsInVertical: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
+ * Retire every prospect in one trade that has not gone out yet.
+ *
+ * The owner stopped looking for this kind of business, so the drafts already
+ * queued for it are work nobody wants done. Skipped rather than deleted, for
+ * the same reason a single Skip is: the row is what keeps the domain out of
+ * future discovery, so deleting it would invite the sweep to find them again.
+ *
+ * The status filter rides inside the UPDATE rather than being read first, so a
+ * prospect the sweep sends between the page load and the press is left alone
+ * instead of being marked skipped after the fact.
+ */
+export async function skipProspectsInVertical(
+  businessId: string,
+  vertical: string,
+  detail: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const base = db
+    .from("outreach_prospects")
+    .update({ status: "skipped", status_detail: detail, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .in("status", CANCELLABLE_STATUSES);
+  const { error } =
+    vertical === UNKNOWN_VERTICAL
+      ? await base.or(BLANK_VERTICAL_FILTER)
+      : await base.eq("vertical", vertical);
+  if (error) throw new Error(`skipProspectsInVertical: ${error.message}`);
 }
 
 export async function getProspect(

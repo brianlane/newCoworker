@@ -339,7 +339,7 @@ describe("tenant resolution", () => {
     });
     const result = await processOutreachSweep(baseDeps({ schedulingLinkImpl }));
     expect(result.drafted).toBe(1);
-    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[2]
+    const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[3]
       .pitch_body as string;
     expect(body).toContain("Just reply if you want to hear more.");
   });
@@ -502,14 +502,35 @@ describe("phase 2: drafting", () => {
     const ledger = draftLedger();
     const result = await processOutreachSweep(baseDeps());
     expect(result.drafted).toBe(1);
+    // The address claim is an unguarded patch; the draft itself is a guarded
+    // transition off `discovered`, so the two land on different writers.
     const patches = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls;
-    // The address claim comes first, then the drafted patch.
     expect(patches[0][2]).toMatchObject({ email: "info@acmehvac.com" });
-    const draft = patches[1][2];
+    const claim = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(claim[2]).toBe("discovered");
+    const draft = claim[3];
     expect(draft.status).toBe("drafted");
     expect(draft.pitch_subject).toContain("Acme HVAC");
     expect(draft.pitch_body).toContain("/api/outreach/unsubscribe?");
     expect(draft.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+  });
+
+  it("drops the compose when the prospect was retired while it ran", async () => {
+    // A pass takes seconds per prospect (a probe, then a model call), and the
+    // owner can call off the whole trade while it runs. Before the guard, the
+    // compose finished and moved a just-skipped prospect BACK to `drafted`, and
+    // in automatic mode that draft then went out: the trade the owner stopped
+    // got emailed anyway.
+    const ledger = draftLedger({ transitionProspect: vi.fn(async () => false) });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.drafted).toBe(0);
+    // Recorded rather than swallowed: a silent zero looks like a probe failure.
+    expect(result.notes).toContainEqual({
+      businessId: BIZ,
+      note: "acmehvac.com: retired while it was being drafted"
+    });
+    // The claim was attempted, and nothing else was written after it lost.
+    expect((ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
   it("stores the editable middle beside the assembled body", async () => {
@@ -518,7 +539,7 @@ describe("phase 2: drafting", () => {
     // to contain the compliance footer.
     const ledger = draftLedger();
     await processOutreachSweep(baseDeps());
-    const draft = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2];
+    const draft = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
     expect(draft.pitch_paragraphs).toContain("Hi Acme HVAC,");
     expect(draft.pitch_paragraphs).not.toContain("unsubscribe");
     expect(draft.pitch_body).toContain(draft.pitch_paragraphs);
@@ -543,7 +564,7 @@ describe("phase 2: drafting", () => {
       })
     );
     expect(result.drafted).toBe(1);
-    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+    const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
       .pitch_body as string;
     expect(body).toContain("9 Profile Street, Phoenix AZ");
   });
@@ -569,7 +590,7 @@ describe("phase 2: drafting", () => {
       );
       expect(result.drafted).toBe(1);
       expect(result.notes).toEqual([]);
-      const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+      const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
         .pitch_body as string;
       // The unsubscribe link is never waived, and the mail ends on it rather
       // than on a blank line where an address should have been.
@@ -693,7 +714,7 @@ describe("phase 2: drafting", () => {
     await processOutreachSweep(baseDeps({ polishImpl }));
     const polishInput = polishImpl.mock.calls[0] as unknown as [string, string[]];
     expect(polishInput[1].join("\n")).not.toContain("unsubscribe");
-    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+    const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
       .pitch_body as string;
     expect(body).toContain("Polished middle.");
     expect(body).toContain("/api/outreach/unsubscribe?");
@@ -704,7 +725,7 @@ describe("phase 2: drafting", () => {
     const previous = process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
     await processOutreachSweep(baseDeps({ appUrl: undefined }));
-    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+    const body = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3]
       .pitch_body as string;
     expect(body).toContain("http://localhost:3000/api/outreach/unsubscribe?");
     process.env.NEXT_PUBLIC_APP_URL = previous;

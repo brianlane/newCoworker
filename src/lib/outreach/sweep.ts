@@ -409,9 +409,17 @@ async function draftForBusiness(
       settings.business_id,
       pitchParagraphs(tenant, pitchProspect, lead)
     );
-    await patchProspect(
+    // Guarded on the row still being `discovered`, not a blind write.
+    // A pass takes seconds per prospect (a probe, then a model call), and the
+    // owner can retire this whole trade while it runs. An unguarded write would
+    // finish composing and move a just-skipped prospect BACK to `drafted`, and
+    // in automatic mode that draft then goes out: the trade the owner called
+    // off gets emailed anyway. Losing the claim means somebody else moved the
+    // row on purpose, so the compose is dropped rather than counted.
+    const drafted = await transitionProspect(
       settings.business_id,
       prospect.id,
+      "discovered",
       {
         status: "drafted",
         status_detail: null,
@@ -424,6 +432,13 @@ async function draftForBusiness(
       },
       r.db
     );
+    if (!drafted) {
+      result.notes.push({
+        businessId: settings.business_id,
+        note: `${prospect.domain}: retired while it was being drafted`
+      });
+      continue;
+    }
     result.drafted += 1;
   }
 }

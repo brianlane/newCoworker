@@ -2575,7 +2575,9 @@
         "regenerate": "Write it again",
         "rewriteAll": "Write it again (for all drafts)",
         "rewriteAllYes": "Yes, rewrite them all",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "skipVertical": "Skip these",
+        "skipVerticalYes": "Yes, skip them"
       },
       "saved": "Saved. The change takes effect on the next pass.",
       "saveFailed": "That could not be saved.",
@@ -2595,7 +2597,9 @@
       "rewriteAllProgress": "Writing them again: {done} of {total}.",
       "rewroteAll": "Wrote {count} drafts again. Read them before you send.",
       "wholeEmailHelp": "The sign-off, the link, the unsubscribe line, and the address are added for you. Only the box above is yours to edit.",
-      "wholeEmailStale": "This still shows the saved draft. Save your changes to see them here."
+      "wholeEmailStale": "This still shows the saved draft. Save your changes to see them here.",
+      "skipVerticalConfirm": "Stop outreach to every {vertical}? That skips {count} waiting drafts and anything still queued behind them. Nothing already sent is touched.",
+      "skippedVertical": "Skipped {count} {vertical} prospects. Nothing already sent was touched."
     }
   },
   "admin": {
