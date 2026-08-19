@@ -2303,6 +2303,61 @@ runtime in `_shared/pipelines/lifecycle.ts`, the Next-side wrapper in
 `src/lib/pipelines/lifecycle-hooks.ts`. Existing leads are backfilled per
 tenant by a one-shot, which fires no hooks and edits no flows.
 
+## Authoring a browse step: see the page, then prove the actions
+
+A `browse_action` step aims at markup we do not control, which makes it the
+step type most likely to break and, until Aug 2026, the only one the product
+could not test. "Test with a contact" SIMULATES browse steps (see
+`_shared/ai_flows/test_mode.ts`: it echoes the action list and never opens a
+browser), so a selector's first real trial was a live lead, days later,
+silently. Both halves of the fix run through the tenant's OWN aiflow-render
+sidecar with the tenant's own saved login, so what the owner sees is what the
+flow will see.
+
+**Open this page** (`BrowseActionPagePicker`, `POST /api/aiflows/probe-page`).
+Paste a real lead URL and get the page's actual controls: buttons by visible
+text (falling back to `aria-label` for icon-only ones), dropdowns with their
+real option labels, text fields (`name` first, placeholder when there is no
+name), and `data-test` handles. Clicking one writes the action. This is
+`debug/portal-dom-probe.ts` moved where an owner can reach it; that tool
+exists because the first ReferralExchange update sequence was written blind,
+the note field turned out to be `textarea[name="message"]` rather than a
+placeholder, and the step timed out on action 4 in production for weeks.
+
+**Try these actions** (`BrowseActionTryPanel`, `POST
+/api/aiflows/check-actions`). Runs the step's sequence as a DRY RUN and
+reports per action: `ready`, `blocked` (there but not yet clickable),
+`absent`, or `missing_option` with the choices the dropdown does offer, plus
+a screenshot and whatever the page reported about itself.
+
+Three properties worth keeping:
+
+- **Read-only structurally, not by a flag.** The sidecar routes the dry run
+  to its own responder that calls `checkActions` and never `performActions`,
+  and the page picker sends no `actions` array at all. Resolution mirrors
+  `runAction` per kind and the actionability verdict comes from the same
+  `probeLocator` the while-present loop acts on, so a check cannot disagree
+  with the thing it predicts.
+- **A new sidecar MODE is a new PATH, never a request flag.** The app deploys
+  on merge; `vps/aiflow-render` only updates on a manual per-tenant redeploy,
+  so there is always a window where the dashboard is new and a box is old. An
+  old box does not reject an unknown `checkOnly` field, it IGNORES it, and its
+  `if (actions)` branch performs them: the button promising to change nothing
+  would click a live claim button. `POST /check-actions` returns 404 on an old
+  box instead, and the app says "this business's browser service has not been
+  updated yet". `debug/redeploy-aiflow-render.ts` greps the synced files for
+  the responder and exits non-zero if it is missing.
+- **The limit is in the UI, not hidden.** A dry run judges the page AS LOADED,
+  so an action that only exists after an earlier click (a wizard page, a box
+  inside a modal) reads as absent. That is stated under the results, because
+  an owner not told it would "fix" a step that works. Simulating the sequence
+  would mean performing it.
+
+The whole-sequence appear budget is SHARED rather than per action. Only an
+absent target waits, so 15 absent actions at `CLICK_TEXT_APPEAR_MS` each would
+not fit inside the single response the tunnel caps at roughly 100s, the same
+ceiling that forced `MAX_FOREACH_ITEMS` from 25 down to 6.
+
 ## AiFlow edit history and undo
 
 Every change to an AiFlow's definition or name appends the PRIOR state to
@@ -2346,19 +2401,33 @@ trail is worse than an absent one. Nothing is lost: a version row records
 the source of the edit that REPLACED it, so the newest row's source is the
 provenance of the definition that is live right now.
 
-Current sources: `dashboard`, `ai_edit_dashboard`, `ai_edit_sms`,
-`ai_edit_slack`, `ai_edit_email`, `mcp`, `mcp_restore`, `white_glove`. An
-unstamped writer lands in the history with a null source, which reads as
-"nobody said", never as a surface.
+Current sources: `dashboard`, `dashboard_restore`, `ai_edit_dashboard`,
+`ai_edit_sms`, `ai_edit_slack`, `ai_edit_email`, `mcp`, `mcp_restore`,
+`white_glove`. An unstamped writer lands in the history with a null source,
+which reads as "nobody said", never as a surface.
 
 ### Undoing
 
+- Dashboard: a "Recent changes" panel on the flow detail page
+  (`AiFlowHistory`, `GET`/`POST /api/aiflows/[id]/versions`). It lists the
+  most recent versions (`FLOW_VERSION_LIST_LIMIT`, 20) with what the edit that
+  replaced each one DID, in the same plain English the AI confirm handshake
+  reads back, and a Restore button. The
+  history shipped first and reached only the AI tools, so until this panel an
+  owner who broke a flow in the builder had no visible way back, and every
+  edit they made in it was a one-way door.
 - Owner coworker (dashboard chat and owner-SMS): `undo_aiflow_edit`, sharing
   the `edit_aiflow` Settings toggle rather than carrying its own, the way
   `list_aiflows` shares `run_aiflow`'s. A surface allowed to rewrite a live
   automation must always be allowed to take that rewrite back.
 - MCP: `list_flow_versions` (what changed, when, from which surface) and
   `restore_flow_version` (no `version_id` undoes the last edit).
+
+The version rows hold the state BEFORE each edit and nothing about the edit
+itself, so describing one means pairing a row with whatever replaced it: the
+next-newer row, or the live definition for the newest row. That off-by-one
+lives in `src/lib/ai-flows/version-history.ts` with tests rather than in the
+component, where nothing would check it.
 
 Restores go through `updateAiFlow` rather than writing `ai_flows` directly,
 so a restore validates like any other edit and is itself snapshotted. Undo
@@ -2411,6 +2480,7 @@ states).
 | --- | --- | --- | --- |
 | `none` | the instruction changed nothing | refused, nothing staged | refused |
 | `wording` | same steps in the same order, different field values | staged, confirm normally | staged |
+| `behavioral` | a field changed on a step that acts on a page we do not control (`browse_action` / `browse_extract`), or a `when` guard changed on any step | **refused**, pointed at the dashboard | staged with the risk named |
 | `structural` | steps added, removed or reordered, or the trigger changed | **refused**, pointed at the dashboard | staged with the risk named |
 | `in_flight` | the divergence sits at or before a parked run's index | **refused** | staged with the risk named |
 
@@ -2419,6 +2489,28 @@ changing what it DOES needs the owner looking at it.** That is why appending
 to the end of a flow is only `structural` and inserting at the top with runs
 parked is `in_flight`: an append leaves the old id list as a prefix of the
 new one, so no live index changes meaning.
+
+`behavioral` exists because the id list is not a good enough proxy for that
+line. A changed CSS selector leaves the steps in the same order with the same
+ids, so it used to classify as `wording` and one text message could repoint a
+claim button at a label that does not exist. That failure is invisible: the
+flow keeps running, the click resolves to nothing, and the lead sits unclaimed
+for days. The step's TYPE is read off both the before and after definitions,
+so a step turning INTO a browse step under the same id cannot slip through as
+wording. A `when` guard counts for the same reason on any step type: every
+message in the flow can be untouched while what the automation does changes.
+
+It sits BELOW `structural` deliberately. Nothing renumbers, so no parked run
+resumes on the wrong instruction; the class is about what an owner can judge
+from a sentence on their phone, not about blast radius through live runs.
+
+The vocabulary is also a CHECK constraint on `ai_flow_pending_edits.risk`, and
+`stagePendingEdit` writes the classifier's answer straight into it. Adding a
+class to the TypeScript union without widening the column makes the refusing
+half work and the allowing half fail at INSERT, which is how `behavioral`
+first shipped. `tests/ai-flow-pending-edit-risk-lockstep.test.ts` reads the
+vocabulary out of the migrations and pins it against the classes the real
+classifier produces, in both directions.
 
 ## Two more limits on AI edits: scope, and unanswered questions
 
