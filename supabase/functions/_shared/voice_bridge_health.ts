@@ -143,6 +143,60 @@ export type AlertPayload = {
   };
 };
 
+/** Rows named per section before the body starts counting instead. */
+const EMAIL_MAX_ROWS = 10;
+
+/**
+ * The body of the paging EMAIL, as opposed to the chat blurb above.
+ *
+ * `formatAlertSummary` is counts and thresholds, which is right for a Slack
+ * `text` field sitting beside attachments that carry the identities. Email
+ * has no attachments, and since ALERT_WEBHOOK_URL has never been set in this
+ * project, email is the only path that reaches a person at all. "3 stale
+ * bridges" at 2am is not something anyone can act on: a stale bridge means
+ * one specific tenant's inbound calls are failing, so the tenant has to be
+ * in the message.
+ *
+ * Capped per section, because a fleet-wide outage would otherwise produce a
+ * mail too long to read, and the count in the summary line already carries
+ * the magnitude.
+ */
+export function formatAlertEmailBody(p: AlertPayload): string {
+  const lines: string[] = [formatAlertSummary(p), ""];
+
+  if (p.stale_bridges.length > 0) {
+    lines.push(
+      `Stale bridges (no heartbeat for over ${p.thresholds.bridge_stale_seconds}s).`,
+      "Inbound calls to these tenants are failing right now:"
+    );
+    for (const b of p.stale_bridges.slice(0, EMAIL_MAX_ROWS)) {
+      const age = b.age_seconds < 0 ? "never seen" : `${b.age_seconds}s ago`;
+      const last = b.bridge_last_heartbeat_at ?? "never";
+      lines.push(`  - ${b.business_id}: last heartbeat ${last} (${age})`);
+    }
+    const rest = p.stale_bridges.length - EMAIL_MAX_ROWS;
+    if (rest > 0) lines.push(`  - and ${rest} more`);
+    lines.push("");
+  }
+
+  if (p.stuck_settlements.length > 0) {
+    lines.push(
+      `Stuck settlements (unfinalized for over ${p.thresholds.settlement_stuck_seconds}s):`
+    );
+    for (const st of p.stuck_settlements.slice(0, EMAIL_MAX_ROWS)) {
+      lines.push(
+        `  - ${st.call_control_id} (tenant ${st.business_id}, ${st.age_seconds}s since first signal)`
+      );
+    }
+    const rest = p.stuck_settlements.length - EMAIL_MAX_ROWS;
+    if (rest > 0) lines.push(`  - and ${rest} more`);
+    lines.push("");
+  }
+
+  lines.push(`Generated ${p.generated_at}.`);
+  return lines.join("\n");
+}
+
 /** Short, chat-friendly summary suitable as a Slack/Discord `text` field. */
 export function formatAlertSummary(p: AlertPayload): string {
   const bridgeCount = p.stale_bridges.length;

@@ -38,6 +38,7 @@ import {
   DEFAULT_SETTLEMENT_STUCK_SECONDS,
   computeStaleBridges,
   computeStuckSettlements,
+  formatAlertEmailBody,
   formatAlertSummary,
   parsePositiveInt,
   postWebhook,
@@ -215,7 +216,10 @@ serve(async (req: Request) => {
           subject:
             `Voice bridge health: ${staleBridges.length} stale, ` +
             `${stuckSettlements.length} stuck settlements`,
-          text: formatAlertSummary(alert)
+          // The EMAIL body, not the chat blurb: it names the affected
+          // tenants. formatAlertSummary is counts only, which is fine beside
+          // Slack attachments and useless in a mail that has none.
+          text: formatAlertEmailBody(alert)
         });
         // Stamped only on a real send, so a failed one retries next tick
         // instead of being throttled out for the next hour.
