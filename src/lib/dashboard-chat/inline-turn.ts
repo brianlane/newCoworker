@@ -546,7 +546,7 @@ async function executeToolCall(
         stepCount: result.definition.steps.length,
         triggerChannel: result.definition.trigger.channel,
         warnings: result.warnings,
-        note: "Draft created and validated. The owner will see an 'Open in AiFlows builder' card under your reply, tell them to review and save it there. Do NOT repeat the JSON definition in your reply."
+        note: "Draft created and validated. The owner will see an 'Open in AiFlows builder' card under your reply, tell them to review and save it there. Do NOT repeat the JSON definition in your reply. IMPORTANT: saving in the builder stores the automation switched OFF, so tell the owner plainly that after saving they must also turn it ON before it runs, and that any older automation covering the same job stays enabled until they turn that one off. If the owner later says they saved it, verify with list_aiflows and report the new automation's actual on/off state instead of assuming it is live. (KYP Ads, Aug 18 2026: the owner saved two drafts, was told 'all set', and both sat disabled.)"
       };
     } catch (err) {
       logger.warn("dashboard-chat create_aiflow tool failed", {

@@ -25,7 +25,7 @@ problem rather than a messaging problem.
 
 ## Flows
 
-Live snapshot 2026-08-12 (6 on / 9 total).
+Live snapshot 2026-08-19 (7 on / 11 total).
 
 | Flow | State | Note |
 | --- | --- | --- |
@@ -34,7 +34,9 @@ Live snapshot 2026-08-12 (6 on / 9 total).
 | Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation. `event_start`, 60 min lead, scoped to events containing "KYP Ads \| Free Strategy Call", so the VFM flow's T-60 confirmation never overlaps it |
 | No-show recovery text (calendar, 3) | **on** | Live since 2026-08-01, and it has sent. The row still says "awaiting approval" in its own name because James never approved it going live: treat that as an open question for him, not as a reason to flip it off. Fires only for no-shows marked in Calendly within 2h |
 | Follow-up send: Stefan, Windshield Place (manual, 1) | on | One-off manual send_email |
-| VFM lead follow-up (Vantage Flow Media) (webhook, 21) | on | Seeded 2026-08-10 by `seed-vfm-lead-aiflow.ts` in emailOnly mode (Liz has no roster row yet); claims the three VFM Meta form names. Live volume since 2026-08-12. See the VFM section and the international-lead sharp edge |
+| VFM lead follow-up (Vantage Flow Media) (webhook, 25) | on | Seeded 2026-08-10 by `seed-vfm-lead-aiflow.ts` in emailOnly mode; claims the three VFM Meta form names. Live volume since 2026-08-12. Reshaped 2026-08-18 by an owner-approved AI edit (dashboard chat) into a 5-touch value ladder (waits +1d/+2d/+2d/+3d, then the went-quiet flag); live is canonical, the seed builder predates the reshape and re-running it with --force would revert the ladder. Liz emails unified to one address 2026-08-19 (`patch-kyp-vfm-booking-liz-emails.ts`). See the VFM section and the international-lead sharp edge |
+| VFM Calendly booking follow-up (SMS + email) (calendar, 9) | on | Saved from the Aug 18 chat hand-off as a disabled "Adapted automation" draft; trigger retargeted + renamed + enabled 2026-08-19 by `patch-kyp-vfm-booking-liz-emails.ts` (the saved condition matched the scheduling LINK, which calendar event text never contains). Scoped by event TITLE ("30 Minute Meeting"): renaming Liz's Calendly event type silently kills it, same class as the pre-call reminder's title scope. Confirmation email + SMS, T-120 attendance-check SMS, no-answer email alert to Liz |
+| VFM Calendly booking follow-up (old draft, superseded, keep off) (webhook + calendar, 7) | off | The first Aug 18 chat draft, superseded by the row above. Owner directed 2026-08-19: keep it, keep it OFF, do not delete. Its webhook condition (`calendly_booking_vfm`) matches no real event source |
 | Proposal follow-up, email (tag_changed, 8) | off | Fires on the `proposal-sent` tag when enabled |
 | Wrong-link booking flag (calendar, 2) | off | Blocked on the warm list |
 | Proposal send + follow-up (manual, 6) | off | Awaiting approval; James triggers it manually |
@@ -109,8 +111,15 @@ How the pieces fit:
   now lets Liz's PAT sit alongside James's on the Integrations card; once
   she pastes it, her bookings become native (booking precheck stops the
   nurture ladder, `appointment_booked` goals fire, calendar triggers see
-  her events). Until that PAT is connected, the reply-parsing path remains
-  the only signal.
+  her events). Liz's PAT connected 2026-08-14 ("Elizabeth Stone" row in
+  `calendly_connections`), so her bookings ARE native now, and since
+  2026-08-19 the "VFM Calendly booking follow-up (SMS + email)" flow rides
+  them (confirmation email + SMS, T-120 attendance check, no-answer alert
+  to Liz). Known small overlap, accepted for now: a booker who ALSO texted
+  their call time into the nurture thread gets the lead flow's parsed
+  T-60 confirm on top of the booking flow's T-120 check; the parse path
+  predates booking visibility and is arguably retirable, but that is an
+  owner decision, not a cleanup.
 - **Timezones:** VFM nudge quiet hours are gated per-flow in
   America/New_York; the business timezone stays America/Toronto, so KYP's
   flows are unaffected.
@@ -171,6 +180,14 @@ How the pieces fit:
   profile, alert-phone, and forwarding surfaces, which are correct, not a
   bug. A registered one-way alphanumeric sender (application drafted Aug
   2026) may later restore outbound-only SMS alerts to HK.
+  Status 2026-08-19: the switch already happened silently on Jul 30, in
+  dashboard chat (James asked to replace his Montreal number with a Hong
+  Kong one): the roster row is +852, team texts to James have been dying
+  since, the notification-preferences alert phone still holds the old
+  Montreal +1 number, and the chat coworker twice blamed his number's
+  settings instead of naming the platform limit. PR #1514 makes every send_sms and roster
+  tool state the +1-only fact and recommend WhatsApp; Brian has told
+  James to connect WhatsApp (pending on James).
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free
@@ -254,6 +271,25 @@ Vantage Flow Media rollout: `apply-vfm-brand.ts` (vault sections + sync),
 `apply-vfm-team.ts` (Liz on the roster + `lead_auto_assign`),
 `seed-vfm-lead-aiflow.ts` (parser agent + the VFM lead flow). Content and
 flow shape are pinned by `tests/oneshot-vfm-definitions.test.ts`.
+
+Owner-directed fixes 2026-08-19: `patch-kyp-vfm-booking-liz-emails.ts`
+(transforms pinned by `tests/oneshot-kyp-vfm-booking.test.ts`) enables and
+renames the chat-drafted booking follow-up with a trigger that can actually
+fire (event TITLE, not the scheduling link), keeps the superseded first
+draft off without deleting it, unifies the lead flow's Liz emails onto the
+address the owner gave in chat, and repoints the two memory identity lines
+off the retired outbound address (the "do not use" instruction line stays).
+Addresses are argv-only; run it as (ids are this tenant's booking flow,
+old draft, and business):
+
+```bash
+npx tsx scripts/oneshot/patch-kyp-vfm-booking-liz-emails.ts \
+  --business 056034a7-e84c-444d-8d15-747eeb1fa899 \
+  --booking-flow 7ffc3fd0-fc41-44cf-9a67-4bb70461dbb8 \
+  --old-draft-flow 7a6918af-326c-416c-a663-cf429faf34e7 \
+  --liz-email liz@vfmedia.io --old-liz-email liz@lizdev.com \
+  --platform-email sam@newcoworker.com --retired-email sam@kypads.com
+```
 
 Flow definitions: `kyp-lead-flow-definition.ts` (previously named
 kyp-offer-definition.ts), `kyp-noshow-definition.ts`,
