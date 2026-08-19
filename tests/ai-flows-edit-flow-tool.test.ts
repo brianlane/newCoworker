@@ -41,6 +41,36 @@ const EDITED: AiFlowDefinition = {
   steps: [{ id: "s1", type: "notify_owner", message: "updated" }]
 } as AiFlowDefinition;
 
+/**
+ * The SAME single step, now aiming at a page we do not control: the
+ * "behavioral" risk class. Same id and same position, so nothing renumbers.
+ */
+const BROWSE_BASE: AiFlowDefinition = {
+  version: 1,
+  trigger: { channel: "manual" },
+  steps: [
+    {
+      id: "s1",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text", target: "Claim this lead" }]
+    }
+  ]
+} as unknown as AiFlowDefinition;
+
+const BROWSE_RETARGETED: AiFlowDefinition = {
+  version: 1,
+  trigger: { channel: "manual" },
+  steps: [
+    {
+      id: "s1",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text", target: "Accept referral" }]
+    }
+  ]
+} as unknown as AiFlowDefinition;
+
 /** An extra step ahead of nothing in flight: the "structural" risk class. */
 const RESTRUCTURED: AiFlowDefinition = {
   version: 1,
@@ -325,6 +355,42 @@ describe("editAiFlowTool: blast radius", () => {
     const deps = happyDeps({ surfaceKind: "text" });
     const res = await editAiFlowTool(BIZ, ARGS, deps);
     expect(res).toMatchObject({ ok: true, staged: true, risk: "wording" });
+  });
+
+  it("refuses a retargeted browse click by text, even though nothing renumbers", async () => {
+    // The gap this closes: a changed selector used to classify as "wording",
+    // so one text message could repoint the claim button at a label that does
+    // not exist, and the failure would surface days later on a live lead.
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [flowRow({ definition: BROWSE_BASE })]),
+      compileEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: BROWSE_RETARGETED,
+        warnings: []
+      })),
+      surfaceKind: "text"
+    });
+    const res = await editAiFlowTool(BIZ, ARGS, deps);
+    expect(res).toMatchObject({ ok: false });
+    if (!res.ok) {
+      expect(res.message).toContain("what a step DOES on a web page");
+      expect(res.message).toContain(`/dashboard/aiflows?edit=${FLOW_ID}`);
+      expect(res.message).toContain("nothing was saved anywhere");
+    }
+    expect(deps.stageEdit).not.toHaveBeenCalled();
+  });
+
+  it("still STAGES that same browse edit on a rich surface, where the owner can see it", async () => {
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [flowRow({ definition: BROWSE_BASE })]),
+      compileEdit: vi.fn(async () => ({
+        ok: true as const,
+        definition: BROWSE_RETARGETED,
+        warnings: []
+      }))
+    });
+    const res = await editAiFlowTool(BIZ, ARGS, deps);
+    expect(res).toMatchObject({ ok: true, staged: true, risk: "behavioral" });
   });
 
   it("an edit that diverges at or before a parked run is in_flight, and says so", async () => {
