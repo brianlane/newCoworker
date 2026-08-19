@@ -12,6 +12,7 @@ import {
   type UsageCopyLocale
 } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import { AI_BUDGET_MONTHLY_CENTS } from "@/lib/plans/ai-budget";
 import {
   formatPriceCents,
   formatPricePerMonth,
@@ -121,6 +122,18 @@ export function getPeriodSummary(
 export const PERIOD_SUMMARY: Record<BillingPeriod, { title: string; description: string }> =
   PERIOD_SUMMARY_BY_LOCALE.en;
 
+/**
+ * "$5/mo" / "$5/mes" for the included agentic-AI budget. The bullets, the
+ * highlight strip, and the comparison table all read this, so the three can
+ * never disagree about the number.
+ */
+function aiBudgetPerMonth(
+  tier: Exclude<PlanTier, "enterprise">,
+  locale: PlanCopyLocale
+): string {
+  return `${formatPriceCents(AI_BUDGET_MONTHLY_CENTS[tier])}${locale === "es" ? "/mes" : "/mo"}`;
+}
+
 function buildStarterFeatures(locale: PlanCopyLocale): string[] {
   const es = locale === "es";
   return [
@@ -129,7 +142,9 @@ function buildStarterFeatures(locale: PlanCopyLocale): string[] {
       ? "Número telefónico y dirección de correo dedicados a tu coworker"
       : "Phone number and email address dedicated to your coworker",
     es ? "Acceso por chat a tu coworker" : "Chat access to your coworker",
-    es ? "$5/mes de presupuesto de IA para tareas agénticas" : "$5/mo AI budget for agentic tasks",
+    es
+      ? `${aiBudgetPerMonth("starter", locale)} de presupuesto de IA para tareas agénticas`
+      : `${aiBudgetPerMonth("starter", locale)} AI budget for agentic tasks`,
     es
       ? `Generación de imágenes con IA (${imageGenerationLine("starter", undefined, locale)})`
       : `AI image generation (${imageGenerationLine("starter", undefined, locale)})`,
@@ -190,8 +205,8 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
       : "Alerts when callers are turned away (missed-call spikes)",
     es ? "Transferencias de llamada con contexto" : "Warm handoff call transfers",
     es
-      ? "$10/mes de presupuesto de IA para tareas agénticas, antes del respaldo con modelo gratuito"
-      : "$10/mo AI budget for agentic tasks, before free model fallback",
+      ? `${aiBudgetPerMonth("standard", locale)} de presupuesto de IA para tareas agénticas, antes del respaldo con modelo gratuito`
+      : `${aiBudgetPerMonth("standard", locale)} AI budget for agentic tasks, before free model fallback`,
     es
       ? `Generación de imágenes con IA (${imageGenerationLine("standard", undefined, locale)})`
       : `AI image generation (${imageGenerationLine("standard", undefined, locale)})`,
@@ -251,6 +266,191 @@ export const STARTER_FEATURES: string[] = buildStarterFeatures("en");
 export const STANDARD_FEATURES: string[] = buildStandardFeatures("en");
 export const ENTERPRISE_FEATURES: string[] = buildEnterpriseFeatures("en");
 
+const FEATURES_BY_TIER: Record<PlanTier, (locale: PlanCopyLocale) => string[]> = {
+  starter: buildStarterFeatures,
+  standard: buildStandardFeatures,
+  enterprise: buildEnterpriseFeatures
+};
+
+/**
+ * Selects bullets out of a tier's full feature array by position.
+ *
+ * Positions rather than substrings because the English and Spanish arrays
+ * are built from the same literal in the same order, so one set of indices
+ * picks the matching bullet in both locales without a second table of
+ * Spanish matchers to keep in sync. Out-of-range throws rather than
+ * returning undefined, so a bullet deleted from the array fails the test
+ * suite instead of rendering a blank line on the pricing page.
+ *
+ * Exported so that guard can be tested directly: it is the thing standing
+ * between a reordered feature array and a card quietly rendering blanks.
+ */
+export function pickFeatures(all: string[], indices: number[]): string[] {
+  return indices.map((i) => {
+    const feature = all[i];
+    if (feature === undefined) {
+      throw new Error(`pickFeatures: index ${i} is out of range (length ${all.length})`);
+    }
+    return feature;
+  });
+}
+
+/**
+ * Which bullets the CARD shows. The full array stays the complete record,
+ * read by the comparison table and by `STANDARD_FEATURES`; the card shows
+ * only what differentiates the tier from the one below it.
+ *
+ * This is deliberately NOT a truncation with a "show more" toggle. Baymard's
+ * testing found users overlook those links entirely and conclude the feature
+ * does not exist, so the full list lives in the always-open comparison table
+ * instead, and `tests/pricing-comparison.test.ts` proves every bullet has a
+ * row there.
+ */
+const CARD_FEATURE_INDICES: Record<PlanTier, number[]> = {
+  // The three headline inclusions first (voice coworker, dedicated number and
+  // email, booking), then the two Starter-specific limits. Standard and
+  // Enterprise do not repeat these because their "Everything in Starter,
+  // plus:" lead-in already covers them.
+  starter: [0, 1, 8, 5, 4],
+  // Outbound calls, prospecting, webhooks, browser skills, Zapier, call
+  // summaries: the six that most obviously are not on Starter.
+  standard: [11, 7, 6, 23, 5, 15],
+  // Agency dashboard, team roles, white-label, SLA, branded RCS.
+  enterprise: [1, 2, 3, 4, 6]
+};
+
+/** The short, card-facing subset of a tier's bullets. */
+export function getCardFeatures(tier: PlanTier, locale: PlanCopyLocale = "en"): string[] {
+  return pickFeatures(FEATURES_BY_TIER[tier](locale), CARD_FEATURE_INDICES[tier]);
+}
+
+/**
+ * The "Everything in Starter, plus:" line, which is the highest-leverage
+ * thing on the card: it lets a tier that genuinely includes far more get
+ * away with showing six bullets instead of twenty-four. It was already the
+ * first element of the array, just rendered as a checkmark bullet alongside
+ * real features, where it read as one more item rather than as the frame for
+ * all of them.
+ */
+export function getTierLeadIn(tier: PlanTier, locale: PlanCopyLocale = "en"): string | undefined {
+  if (tier === "starter") return undefined;
+  return FEATURES_BY_TIER[tier](locale)[0];
+}
+
+export type TierHighlight = { label: string; value: string };
+
+const HIGHLIGHT_LABELS_BY_LOCALE: Record<
+  PlanCopyLocale,
+  { voice: string; texts: string; concurrency: string; aiBudget: string }
+> = {
+  en: {
+    voice: "Voice minutes",
+    texts: "Texts / month",
+    concurrency: "Calls at once",
+    aiBudget: "AI budget"
+  },
+  es: {
+    voice: "Minutos de voz",
+    texts: "Textos / mes",
+    concurrency: "Llamadas a la vez",
+    aiBudget: "Presupuesto de IA"
+  }
+};
+
+const HIGHLIGHT_NUMBER_FORMAT = new Intl.NumberFormat("en-US");
+
+/**
+ * The four metered numbers, in the same four slots on every card, so the
+ * capacity difference between tiers is readable side by side instead of
+ * buried at positions 10 through 12 of a bullet list.
+ *
+ * Enterprise is quoted per deployment, so all four read "Custom", matching
+ * what its price and the comparison table already say.
+ */
+export function buildTierHighlights(
+  tier: PlanTier,
+  locale: PlanCopyLocale = "en"
+): TierHighlight[] {
+  const labels = HIGHLIGHT_LABELS_BY_LOCALE[locale];
+  if (tier === "enterprise") {
+    // "A medida", not the "Personalizado" the price and the table use: the
+    // strip cell is a quarter of a card wide and the longer word overflowed
+    // it. Same meaning, and the fuller word still carries the price itself.
+    const custom = locale === "es" ? "A medida" : "Custom";
+    return [
+      { label: labels.voice, value: custom },
+      { label: labels.texts, value: custom },
+      { label: labels.concurrency, value: custom },
+      { label: labels.aiBudget, value: custom }
+    ];
+  }
+  const limits = TIER_LIMITS[tier];
+  return [
+    {
+      label: labels.voice,
+      value: HIGHLIGHT_NUMBER_FORMAT.format(
+        Math.round(limits.voiceIncludedSecondsPerStripePeriod / 60)
+      )
+    },
+    { label: labels.texts, value: HIGHLIGHT_NUMBER_FORMAT.format(limits.smsPerMonth) },
+    {
+      label: labels.concurrency,
+      value: HIGHLIGHT_NUMBER_FORMAT.format(limits.maxConcurrentCalls)
+    },
+    { label: labels.aiBudget, value: aiBudgetPerMonth(tier, locale) }
+  ];
+}
+
+/**
+ * Why Standard costs 10x Starter, in one line: it carries 10x the minutes,
+ * 33x the texts, and 10x the concurrency. Every multiplier is computed from
+ * `TIER_LIMITS`, so raising a cap can never leave a stale "33x" on the page.
+ */
+export function buildStandardMultiplierLine(locale: PlanCopyLocale = "en"): string {
+  const starter = TIER_LIMITS.starter;
+  const standard = TIER_LIMITS.standard;
+  const voice = Math.round(
+    standard.voiceIncludedSecondsPerStripePeriod / starter.voiceIncludedSecondsPerStripePeriod
+  );
+  const texts = Math.round(standard.smsPerMonth / starter.smsPerMonth);
+  const calls = Math.round(standard.maxConcurrentCalls / starter.maxConcurrentCalls);
+  return locale === "es"
+    ? `${voice}x los minutos, ${texts}x los textos, ${calls}x las llamadas a la vez`
+    : `${voice}x the minutes, ${texts}x the texts, ${calls}x the calls at once`;
+}
+
+/**
+ * Starter carries only two bullets the shared band does not already cover,
+ * which leaves real estate under its list that no honest feature can fill.
+ * Rather than pad the card back out with things every tier includes (the
+ * thing that made the old design unreadable), that space names the upgrade
+ * path, using the same computed multipliers as Standard's own line so the
+ * two can never disagree.
+ */
+export function buildStarterUpgradeNote(locale: PlanCopyLocale = "en"): string {
+  const voice = Math.round(
+    TIER_LIMITS.standard.voiceIncludedSecondsPerStripePeriod /
+      TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod
+  );
+  const texts = Math.round(TIER_LIMITS.standard.smsPerMonth / TIER_LIMITS.starter.smsPerMonth);
+  return locale === "es"
+    ? `¿Se te queda corto Starter? Standard suma ${voice}x los minutos y ${texts}x los textos, más llamadas salientes y prospección.`
+    : `Outgrowing Starter? Standard adds ${voice}x the minutes and ${texts}x the texts, plus outbound calling and prospecting.`;
+}
+
+const TAGLINE_BY_LOCALE: Record<PlanCopyLocale, Record<PlanTier, string>> = {
+  en: {
+    starter: "For a solo owner who needs the phone answered.",
+    standard: "For a team that wants its coworker chasing leads too.",
+    enterprise: "For agencies and multi-location operators."
+  },
+  es: {
+    starter: "Para un dueño solo que necesita que contesten el teléfono.",
+    standard: "Para un equipo que también quiere a su coworker buscando clientes.",
+    enterprise: "Para agencias y operadores con varias ubicaciones."
+  }
+};
+
 export type TierCard = {
   id: PlanTier;
   name: string;
@@ -260,7 +460,20 @@ export type TierCard = {
   total?: string;
   introOffer?: string;
   setup: string;
+  /** Complete record for this tier: the comparison table and llms.txt read this. */
   features: string[];
+  /** The short differentiating subset the card actually renders. */
+  cardFeatures: string[];
+  /** "Everything in Starter, plus:", rendered as a frame rather than a bullet. */
+  leadIn?: string;
+  /** Who the tier is for, one line, so positioning is not inferred from bullets. */
+  tagline: string;
+  /** The four metered numbers, same slots on every card. */
+  highlights: TierHighlight[];
+  /** Standard only: the computed line that justifies the 10x price step. */
+  multiplierLine?: string;
+  /** Starter only: what upgrading buys, shown where its bullets run out. */
+  upgradeNote?: string;
   cta: string;
   highlight: boolean;
   badge?: string;
@@ -282,7 +495,20 @@ function buildPaidTierCard(
   tier: Exclude<PlanTier, "enterprise">,
   period: BillingPeriod,
   locale: PlanCopyLocale
-): Omit<TierCard, "name" | "features" | "cta" | "highlight" | "badge"> {
+): Omit<
+  TierCard,
+  | "name"
+  | "features"
+  | "cardFeatures"
+  | "leadIn"
+  | "tagline"
+  | "highlights"
+  | "multiplierLine"
+  | "upgradeNote"
+  | "cta"
+  | "highlight"
+  | "badge"
+> {
   const price = getTierPricingDisplay(tier, period);
   const es = locale === "es";
   const shortLabel = PERIOD_SHORT_LABEL_BY_LOCALE[locale][period];
@@ -323,6 +549,11 @@ export function getTierCards(period: BillingPeriod, locale: PlanCopyLocale = "en
       ...buildPaidTierCard("starter", period, locale),
       name: "Starter",
       features: buildStarterFeatures(locale),
+      cardFeatures: getCardFeatures("starter", locale),
+      leadIn: getTierLeadIn("starter", locale),
+      tagline: TAGLINE_BY_LOCALE[locale].starter,
+      highlights: buildTierHighlights("starter", locale),
+      upgradeNote: buildStarterUpgradeNote(locale),
       cta: es ? "Elegir Starter" : "Choose Starter",
       highlight: false,
       badge: period === "biennial" ? (es ? "Mejor valor" : "Best Value") : undefined
@@ -331,6 +562,11 @@ export function getTierCards(period: BillingPeriod, locale: PlanCopyLocale = "en
       ...buildPaidTierCard("standard", period, locale),
       name: "Standard",
       features: buildStandardFeatures(locale),
+      cardFeatures: getCardFeatures("standard", locale),
+      leadIn: getTierLeadIn("standard", locale),
+      tagline: TAGLINE_BY_LOCALE[locale].standard,
+      highlights: buildTierHighlights("standard", locale),
+      multiplierLine: buildStandardMultiplierLine(locale),
       cta: es ? "Elegir Standard" : "Choose Standard",
       highlight: true,
       badge: es ? "Más popular" : "Most Popular"
@@ -343,6 +579,10 @@ export function getTierCards(period: BillingPeriod, locale: PlanCopyLocale = "en
       total: undefined,
       setup: es ? "Contáctanos para precios" : "Contact us for pricing",
       features: buildEnterpriseFeatures(locale),
+      cardFeatures: getCardFeatures("enterprise", locale),
+      leadIn: getTierLeadIn("enterprise", locale),
+      tagline: TAGLINE_BY_LOCALE[locale].enterprise,
+      highlights: buildTierHighlights("enterprise", locale),
       cta: es ? "Contactar ventas" : "Contact Sales",
       highlight: false,
       badge: undefined

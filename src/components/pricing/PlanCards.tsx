@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
+import { PLAN_CARD_ROWS, PlanCard } from "@/components/pricing/PlanCard";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import type { AppLocale } from "@/i18n/routing";
 import { listWhiteGlovePackages } from "@/lib/plans/white-glove";
+import { listComparisonRows } from "@/lib/plans/comparison";
 import {
   getPeriodOptions,
   getPeriodSummary,
@@ -19,7 +19,16 @@ import {
  * /pricing page: billing-period toggle, tier cards, and the white-glove
  * onboarding add-on grid. All display data comes from `tier-display.ts`.
  */
-export function PlanCards() {
+export function PlanCards({
+  /**
+   * Where the cards' "compare all features" link points. /pricing passes a
+   * same-page anchor; /onboard has no table of its own, so it falls back to
+   * the pricing page's.
+   */
+  compareHref = "/pricing#compare"
+}: {
+  compareHref?: string;
+} = {}) {
   const t = useTranslations("marketing.planCards");
   const locale = useLocale() as AppLocale;
   const [period, setPeriod] = useState<BillingPeriod>("biennial");
@@ -29,6 +38,13 @@ export function PlanCards() {
   const tiers = getTierCards(period, locale);
   const periodOptions = getPeriodOptions(locale);
   const periodSummary = getPeriodSummary(period, locale);
+  const compareCount = listComparisonRows(locale).length;
+
+  const savingsFor = (tierId: string): number | undefined => {
+    if (tierId === "enterprise" || period === "monthly") return undefined;
+    const committed = period as "biennial" | "annual";
+    return tierId === "starter" ? starterSavings[committed] : standardSavings[committed];
+  };
 
   return (
     <div className="space-y-10">
@@ -101,88 +117,23 @@ export function PlanCards() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      {/* `grid-rows-[repeat(PLAN_CARD_ROWS,auto)]` plus a subgrid inside each
+          card is what keeps the price, strip, button, and bullet bands level
+          across all three tiers even though each holds a different amount of
+          text. Without it the three CTAs land at three different heights. */}
+      <div
+        className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3"
+        style={{ gridTemplateRows: `repeat(${PLAN_CARD_ROWS}, auto)` }}
+      >
         {tiers.map((tier) => (
-          <Card
+          <PlanCard
             key={tier.id}
-            className={[
-              "min-w-0 flex flex-col",
-              tier.highlight ? "border-signal-teal/50 ring-1 ring-signal-teal/30" : ""
-            ].join(" ")}
-          >
-            {tier.badge && (
-              <div className="mb-3">
-                <Badge variant="pending">{tier.badge}</Badge>
-              </div>
-            )}
-
-            <h2 className="text-lg font-bold text-parchment">{tier.name}</h2>
-            <div className="mt-1 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-1">
-              <p className="min-w-0 text-2xl font-bold text-claw-green sm:text-3xl">{tier.price}</p>
-              {tier.originalPrice && (
-                <p className="pb-1 text-sm font-semibold text-parchment/35 line-through break-words">
-                  {tier.originalPrice}
-                </p>
-              )}
-            </div>
-
-            <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 min-w-0 space-y-1.5">
-              {tier.introOffer && (
-                <div className="inline-flex max-w-full items-center rounded-full border border-spark-orange/25 bg-spark-orange/10 px-2.5 py-1 text-center text-[11px] font-semibold leading-snug text-spark-orange">
-                  {tier.introOffer}
-                </div>
-              )}
-              {tier.id !== "enterprise" && period !== "monthly" && (
-                <div className="inline-flex max-w-full items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-center text-[11px] font-semibold leading-snug text-claw-green">
-                  {t("saveVersusMonthly", {
-                    percent:
-                      tier.id === "starter"
-                        ? starterSavings[period as "biennial" | "annual"]
-                        : standardSavings[period as "biennial" | "annual"]
-                  })}
-                </div>
-              )}
-              {tier.renewal && (
-                <p className="text-xs text-parchment/58">{tier.renewal}</p>
-              )}
-              {tier.total && (
-                <p className="text-xs font-medium text-parchment/80">{tier.total}</p>
-              )}
-              <p className="text-xs text-parchment/52">{tier.setup}</p>
-            </div>
-
-            <ul className="mt-5 space-y-2 flex-1">
-              {tier.features.map((f) => (
-                <li key={f} className="flex items-start gap-2 text-sm text-parchment/70">
-                  <span className="text-claw-green mt-0.5">✓</span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-
-            <div className="mt-6">
-              {tier.id === "enterprise" ? (
-                <a
-                  href="/contact"
-                  className="block w-full text-center rounded-lg border border-parchment/20 text-parchment px-4 py-2.5 text-sm font-semibold hover:bg-parchment/10 transition-colors"
-                >
-                  {tier.cta}
-                </a>
-              ) : (
-                <a
-                  href={`/onboard/questionnaire?tier=${tier.id}&period=${period}`}
-                  className={[
-                    "block w-full text-center rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors",
-                    tier.highlight
-                      ? "bg-signal-teal text-deep-ink hover:bg-opacity-90"
-                      : "bg-claw-green text-deep-ink hover:bg-opacity-90"
-                  ].join(" ")}
-                >
-                  {tier.cta}
-                </a>
-              )}
-            </div>
-          </Card>
+            tier={tier}
+            period={period}
+            savingsPercent={savingsFor(tier.id)}
+            compareHref={compareHref}
+            compareCount={compareCount}
+          />
         ))}
       </div>
 
