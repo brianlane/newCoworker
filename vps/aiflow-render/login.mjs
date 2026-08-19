@@ -524,13 +524,28 @@ export async function waitForLoginToResolve(page, login, opts = {}) {
     const waitedMs = Date.now() - startedAt;
     const url = readUrl();
     if (url !== null && url !== startUrl) return { resolved: true, via: "navigation", waitedMs };
-    let formStillThere = true;
-    try {
-      formStillThere = await looksLikeLogin(page, login);
-    } catch {
-      formStillThere = true;
+    // "The form is gone" is only believable from a page that can actually
+    // ANSWER. Mid-navigation, Playwright rejects evaluate/count with
+    // "Execution context destroyed", and looksLikeLogin's helpers map a
+    // failed count() to ZERO MATCHES (firstSelector treats it as "no such
+    // field"), so without this probe a page that is tearing down reads as
+    // "form left" and the wait returns on its first poll, re-creating the
+    // premature re-navigation this function exists to prevent (Bugbot caught
+    // the first cut doing exactly that). A rejecting probe is movement:
+    // keep waiting, the URL check above will see the commit.
+    const pageAnswers = await Promise.resolve()
+      .then(() => page.evaluate?.(() => true))
+      .then(() => true)
+      .catch(() => false);
+    if (pageAnswers) {
+      let formStillThere = true;
+      try {
+        formStillThere = await looksLikeLogin(page, login);
+      } catch {
+        formStillThere = true;
+      }
+      if (!formStillThere) return { resolved: true, via: "form_gone", waitedMs };
     }
-    if (!formStillThere) return { resolved: true, via: "form_gone", waitedMs };
     if (waitedMs >= timeoutMs) return { resolved: false, via: "timeout", waitedMs };
     await page.waitForTimeout?.(pollMs);
   }

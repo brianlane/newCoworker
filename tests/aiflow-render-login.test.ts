@@ -879,6 +879,8 @@ describe("waitForLoginToResolve", () => {
     formPresent?: boolean[];
     /** Make url() throw on these tick numbers (mid-navigation). */
     urlThrowsOnTicks?: number[];
+    /** Make evaluate() reject on these ticks (execution context destroyed). */
+    contextDeadOnTicks?: number[];
   }) {
     let tick = 0;
     const at = <T,>(seq: T[] | undefined, fallback: T): T =>
@@ -889,17 +891,28 @@ describe("waitForLoginToResolve", () => {
         return at(opts.urls, "https://login.example.com/");
       },
       locator(selector: string) {
+        const dead = opts.contextDeadOnTicks?.includes(tick) ?? false;
         const present =
           at(opts.formPresent, true) &&
           (selector === 'input[type="email"]' || selector === 'input[type="password"]');
         const self = {
           first: () => self,
-          count: async () => (present ? 1 : 0),
+          // A rejecting count is what firstSelector maps to "no match", the
+          // exact false-negative the health probe exists to gate.
+          count: async () => {
+            if (dead) throw new Error("Execution context was destroyed");
+            return present ? 1 : 0;
+          },
           isEnabled: async () => true
         };
         return self;
       },
-      evaluate: async () => "Log In",
+      evaluate: async () => {
+        if (opts.contextDeadOnTicks?.includes(tick)) {
+          throw new Error("Execution context was destroyed");
+        }
+        return "Log In";
+      },
       waitForTimeout: async () => {
         tick += 1;
       }
@@ -948,6 +961,35 @@ describe("waitForLoginToResolve", () => {
     const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
     expect(out.resolved).toBe(true);
     expect(out.via).toBe("navigation");
+  });
+
+  it("a dying execution context is movement, not a vanished form (Bugbot's catch)", async () => {
+    // Right after submit, Playwright rejects count()/evaluate() with
+    // "Execution context destroyed" while the page navigates. count() failures
+    // read as zero matches inside looksLikeLogin, so without the health probe
+    // this returned form_gone on the FIRST poll and the caller re-navigated
+    // straight into the in-flight auth again. The navigation must win instead.
+    const page = resolvingPage({
+      urls: [
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://agents.example.com/portal/1/active"
+      ],
+      contextDeadOnTicks: [0, 1, 2]
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
+    expect(out.resolved).toBe(true);
+    expect(out.via).toBe("navigation");
+  });
+
+  it("a context that stays dead without ever navigating times out, not form_gone", async () => {
+    const page = resolvingPage({
+      contextDeadOnTicks: Array.from({ length: 200 }, (_, i) => i)
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 40, pollMs: 1 });
+    expect(out.resolved).toBe(false);
+    expect(out.via).toBe("timeout");
   });
 
   it("never lets a looksLikeLogin crash end the wait early", async () => {
