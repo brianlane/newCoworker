@@ -4,7 +4,7 @@
  * Mirrors the carrier constraints encoded in
  * `supabase/functions/_shared/ai_flows/compliance.ts`: one non-GSM character
  * (an emoji, a smart quote, any non-ASCII symbol) forces UCS-2 encoding for
- * the WHOLE message — 70/67 chars per segment instead of 160/153 — and Telnyx
+ * the WHOLE message, 70/67 chars per segment instead of 160/153, and Telnyx
  * hard-rejects anything over 10 segments. 10 × 67 = 670 is therefore the
  * longest message containing an emoji that can be sent at all.
  *
@@ -50,7 +50,7 @@ export type SmsSegmentInfoOptions = {
    * Apply the same smart-punctuation → ASCII normalization the AiFlow
    * worker's `gsmSafeSmsText` runs BEFORE its encoding check (curly quotes,
    * en/em dashes, ellipsis, nbsp). With it, a long message whose only
-   * non-ASCII chars are smart punctuation is correctly reported as GSM —
+   * non-ASCII chars are smart punctuation is correctly reported as GSM,
    * the worker will normalize it and nothing gets stripped. Leave off for
    * verbatim sends, where those characters really do force UCS-2.
    */

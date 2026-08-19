@@ -198,7 +198,7 @@ describe("reconcileOrphanedPurchases", () => {
 
   it("skips running/installing VMs (may belong to a live tenant or in-flight provision)", async () => {
     // Bugbot High: a `running` box whose post-purchase pool bookkeeping
-    // failed is a live tenant box — pooling it would let another signup
+    // failed is a live tenant box, pooling it would let another signup
     // recreate it. Only the fail-but-charge signature (`initial`, no
     // template) is safe to reclaim.
     const args = makeArgs({

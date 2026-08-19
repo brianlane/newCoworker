@@ -1,5 +1,5 @@
 /**
- * Gemini Developer API `generateContent` with FUNCTION CALLING — the
+ * Gemini Developer API `generateContent` with FUNCTION CALLING, the
  * multi-turn sibling of src/lib/gemini-generate-content.ts (which is
  * deliberately single-shot text-only and used by many surfaces; extending
  * its contract for tools would ripple through every caller).
@@ -39,7 +39,7 @@ export type GeminiFunctionCall = {
 /**
  * One content entry in the `contents` array. Parts are kept as raw JSON
  * (text / functionCall / functionResponse) so a model turn can be echoed
- * back verbatim on the next step — Gemini requires the functionCall part
+ * back verbatim on the next step, Gemini requires the functionCall part
  * to precede its functionResponse in history.
  */
 export type GeminiChatContent = {
@@ -59,7 +59,7 @@ export type GeminiChatStepParams = {
   /**
    * Gemini 3 reasoning budget (`thinkingConfig.thinkingLevel`). Gemini 3
    * models default to dynamic (medium+) thinking which BILLS as output and
-   * counts against `maxOutputTokens` — under a small cap the hidden
+   * counts against `maxOutputTokens`, under a small cap the hidden
    * reasoning can consume the whole budget and yield an empty step. Only
    * valid on Gemini 3 models (Gemini 2.5 rejects it); callers gate on the
    * model family.

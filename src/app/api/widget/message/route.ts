@@ -1,5 +1,5 @@
 /**
- * POST /api/widget/message — one visitor turn on the website chat widget.
+ * POST /api/widget/message, one visitor turn on the website chat widget.
  *
  * Write-and-queue, mirroring /api/dashboard/chat (PR #79): the route
  * persists the visitor message, enqueues a webchat_jobs row with the
@@ -11,7 +11,7 @@
  * Abuse controls, in order of cheapness: per-session in-memory + per-IP
  * durable rate limits, message char cap, and the per-business rolling-24h visitor
  * message ceiling (hard stop protecting the tenant's shared AI budget from
- * anonymous traffic — the spend fuse degrading to the local model is the
+ * anonymous traffic, the spend fuse degrading to the local model is the
  * soft layer under this).
  */
 
@@ -48,7 +48,7 @@ import { appendVisitorPage, parseVisitorMeta } from "@/lib/webchat/visitor-meta"
 import { updateWebchatSessionMeta, type WebchatSessionRow } from "@/lib/webchat/db";
 
 /**
- * Best-effort page-trail append — runs on normal sends AND idempotent
+ * Best-effort page-trail append, runs on normal sends AND idempotent
  * replays (a retry whose original POST died before the trail write must
  * still record the page). Never throws: the turn is already safe.
  */
@@ -70,7 +70,7 @@ async function recordVisitorPage(
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// Per-session stays in-memory (cheap local backstop — a session is already
+// Per-session stays in-memory (cheap local backstop, a session is already
 // a scarce, bearer-authed identity); per-IP is durable so the quota binds
 // fleet-wide instead of per Vercel isolate (audit 2026-07, finding M3).
 const MESSAGE_RATE_PER_SESSION = { interval: 5 * 60 * 1000, maxRequests: 20 };
@@ -88,7 +88,7 @@ const bodySchema = z.object({
   // actually persisted server-side is replayed (original message + job)
   // instead of duplicated.
   clientMessageId: z.string().uuid().optional(),
-  // The page the visitor is on when sending — appended to the session's
+  // The page the visitor is on when sending, appended to the session's
   // visitor_meta page trail (deduped/capped). Best-effort, never blocking.
   page: z.string().trim().max(2000).optional()
 });
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
       businessId: ctx.business.id
     });
     if (!session) {
-      // The widget restarts its session on 401 — expired TTL and stale
+      // The widget restarts its session on 401, expired TTL and stale
       // bearers are normal, not errors.
       return errorResponse("UNAUTHORIZED", "Chat session expired. Please start a new chat.");
     }
@@ -207,7 +207,7 @@ export async function POST(request: Request) {
     //   * The INSERT loses the idempotency race (two concurrent identical
     //     retries): re-read the winner and replay its job.
     //   * The JOB insert fails after the message persisted: delete the
-    //     orphaned message (compensating write) and surface the error —
+    //     orphaned message (compensating write) and surface the error,
     //     otherwise the transcript would keep a visitor turn no worker will
     //     ever answer, and the widget's retry (same clientMessageId) would
     //     replay a jobless message forever.
@@ -260,7 +260,7 @@ export async function POST(request: Request) {
 
     await touchWebchatSession(session.id);
 
-    // Page-trail append — best-effort, after the turn is safely enqueued.
+    // Page-trail append, best-effort, after the turn is safely enqueued.
     await recordVisitorPage(session, body.page);
 
     return successResponse({

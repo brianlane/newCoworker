@@ -6,7 +6,7 @@
  * This route only authenticates + validates, then forwards to the
  * telnyx-voice-originate Edge function (service-role bearer). That function
  * dials, reserves voice budget under the real leg id BEFORE any media, and hangs
- * up if the account is over budget — so an over-budget tenant can never place an
+ * up if the account is over budget, so an over-budget tenant can never place an
  * AI call. The optional `toE164` overrides the step's default callee for a
  * one-off call.
  */

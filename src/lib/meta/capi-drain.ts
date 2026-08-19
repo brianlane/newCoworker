@@ -7,13 +7,13 @@
  * carrying a leadgen_id for the contact's numbers/email), and uploads the
  * stage event to the connection's dataset. Terminal states:
  *   - sent:    Meta accepted the event;
- *   - skipped: the lead isn't a Meta lead (no submission with identifiers)
- *              — a non-event, not an error;
+ *   - skipped: the lead isn't a Meta lead (no submission with identifiers),
+ *              a non-event, not an error;
  *   - expired: older than Meta's 7-day acceptance window;
  *   - failed:  exhausted upload retries.
  * Everything transient stays `pending` and retries next tick until it
  * expires: upload errors bump `attempts` (capped), and a not-CAPI-ready
- * connection (missing, paused, mid-reconnect, lookup failure) just waits —
+ * connection (missing, paused, mid-reconnect, lookup failure) just waits,
  * a tenant who re-enables the connection within the window loses nothing.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -28,7 +28,7 @@ import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Rows per tick — small enough for a route invocation, large enough to keep up. */
+/** Rows per tick, small enough for a route invocation, large enough to keep up. */
 export const CAPI_DRAIN_BATCH = 50;
 /** Upload attempts before a row is marked failed (it expires at 7d anyway). */
 export const CAPI_MAX_ATTEMPTS = 10;
@@ -73,7 +73,7 @@ async function markRow(
 /**
  * The lead's newest Meta-identified submission: primary+alias phones
  * first, contact email as the fallback join. Null when the lead has no
- * submission carrying a leadgen_id — i.e. not a Meta Lead Ads lead.
+ * submission carrying a leadgen_id, i.e. not a Meta Lead Ads lead.
  */
 async function findMetaSubmission(
   db: SupabaseClient,
@@ -82,8 +82,8 @@ async function findMetaSubmission(
 ): Promise<{ leadgen_id: string; email: string | null } | null> {
   // Contact row for merge aliases + email, ALIAS-AWARE: the outbox stores
   // whatever number the tag writer saw, which for worker-driven moves can
-  // be a merged-away alias — the surviving profile is keyed on a different
-  // primary. Best-effort — a deleted contact still resolves by phone.
+  // be a merged-away alias, the surviving profile is keyed on a different
+  // primary. Best-effort, a deleted contact still resolves by phone.
   // E.164 values are strictly `+digits`, so they are safe in the filter.
   let phones: string[] = [contactE164];
   let contactEmail: string | null = null;
@@ -174,7 +174,7 @@ export async function drainMetaCapiEvents(
 
   // Atomic claim: only rows still `pending` flip to `sending`, so
   // overlapping drain invocations (long tick, manual replay) can never
-  // upload the same row twice — each processes only the rows it won.
+  // upload the same row twice, each processes only the rows it won.
   const { data: claimedData, error: claimErr } = await db
     .from("meta_capi_events")
     .update({ status: "sending", claimed_at: new Date().toISOString() })
@@ -194,7 +194,7 @@ export async function drainMetaCapiEvents(
   for (const businessId of new Set(rows.map((r) => r.business_id))) {
     // A connection with no dataset_id simply defers below: the owner has
     // not entered their Conversions API dataset yet. There is no discovery
-    // step to run here — see the note in src/lib/meta/client.ts for why the
+    // step to run here, see the note in src/lib/meta/client.ts for why the
     // endpoint we used to call is not one Meta supports.
     const connection = await getMetaConnection(businessId, db).catch((err) => {
       logger.warn("meta capi drain: connection lookup failed", {
@@ -225,7 +225,7 @@ export async function drainMetaCapiEvents(
       !connection.pageToken
     ) {
       // Often temporary (paused connection, mid-reconnect, lookup error):
-      // release the claim back to pending — it retries every tick until
+      // release the claim back to pending, it retries every tick until
       // the connection comes back or the 7-day window expires it. attempts
       // is reserved for real upload tries, so waiting never burns the cap.
       await markRow(db, row.id, {
@@ -252,7 +252,7 @@ export async function drainMetaCapiEvents(
         });
       }
     } catch (err) {
-      // Resolution is a DB read — transient. Release the claim WITHOUT
+      // Resolution is a DB read, transient. Release the claim WITHOUT
       // burning an attempt: `attempts` counts real Graph uploads only, so
       // a flaky read spell can never eat the upload retry budget (the
       // 7-day expiry still bounds how long a row can wait).
@@ -277,7 +277,7 @@ export async function drainMetaCapiEvents(
     try {
       await sendConversionLeadBody(connection.dataset_id, connection.pageToken, body);
       // If THIS update fails, the row stays `sending` and is retried only
-      // after the stale-claim window — and the re-upload carries the same
+      // after the stale-claim window, and the re-upload carries the same
       // event_id (the dedupe key), which Meta deduplicates server-side, so
       // a lost bookkeeping write can never double-count a conversion.
       await markRow(db, row.id, {

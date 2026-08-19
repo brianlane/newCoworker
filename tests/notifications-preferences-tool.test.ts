@@ -20,7 +20,7 @@ import { logger } from "@/lib/logger";
 
 /**
  * AI-surface notification toggle core (the update_notification_preferences
- * tool): boolean toggles only, whitelisted — never phone_number, alert_email,
+ * tool): boolean toggles only, whitelisted, never phone_number, alert_email,
  * digest recipients, or unsubscribed_at (a hijacked alert destination is the
  * scarier failure than a flipped boolean). The SMS surface passes
  * enableOnly, which refuses every `false` so an injected customer can never
@@ -157,7 +157,7 @@ describe("applyNotificationPreferenceToggles", () => {
 
   it("skips undefined values and defaults missing row columns to false", async () => {
     // undefined = "not mentioned" (the zod-optional shape both tool surfaces
-    // produce) — never written, never counted as a toggle.
+    // produce), never written, never counted as a toggle.
     const result = await applyNotificationPreferenceToggles(BIZ, {
       customer_reply_alerts: true,
       sms_urgent: undefined

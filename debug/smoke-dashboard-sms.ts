@@ -10,14 +10,14 @@
  * Usage:
  *   tsx debug/smoke-dashboard-sms.ts [businessId] [phone] ["message"]
  *
- * ⚠️ Sends a REAL text (gated by the tenant's SMS spend cap) — default target
+ * ⚠️ Sends a REAL text (gated by the tenant's SMS spend cap), default target
  * is the operator's own number, not a customer's.
  */
 import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-// Default: New Coworker (HQ, internal) — the real SMS this sends meters
+// Default: New Coworker (HQ, internal), the real SMS this sends meters
 // against our own tenant's cap, never a customer's.
 const BUSINESS_ID = process.argv[2] ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const PHONE = process.argv[3] ?? "+16026866672";

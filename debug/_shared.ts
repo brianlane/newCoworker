@@ -1,7 +1,7 @@
 /**
  * Shared helpers for the one-shot operational/debug scripts in this folder.
  *
- * These scripts run locally via `tsx` against the LIVE fleet — they read the
+ * These scripts run locally via `tsx` against the LIVE fleet, they read the
  * repo's `.env` for Supabase + Hostinger credentials, look up each tenant's
  * VPS SSH key, resolve its public IP, and run remote commands over SSH. They
  * are intentionally NOT part of the app bundle and NOT covered by the test
@@ -149,7 +149,7 @@ export async function resolveVpsIp(
  * applies, so a routine `update-all-vps` brings every box's capture env into
  * the desired state with no manual SSH. It only ever touches the managed keys
  * (GOOGLE_API_KEY, MEMORY_CAPTURE_*, OLLAMA_BASE_URL) and removes the dead
- * router var — every other line in `.env` is left untouched.
+ * router var, every other line in `.env` is left untouched.
  *
  * It also reinstalls `/opt/newcoworker/scripts/heartbeat.sh` from the
  * refreshed repo. That install used to live only in deploy-client.sh, which
@@ -158,7 +158,7 @@ export async function resolveVpsIp(
  * it. The README points at `update-all-vps` for `vps/` changes, so it needs
  * to be true for the one `vps/` file that is not a container.
  *
- * `set -euo pipefail` — `-e` is critical: without it a failed `git fetch`,
+ * `set -euo pipefail`, `-e` is critical: without it a failed `git fetch`,
  * `rsync`, or `docker compose up` would NOT stop the script, the final
  * `docker logs … | tail` would exit 0, and sshExec (plus the fleet rollout
  * summary in update-all-vps.ts) would falsely report success while the worker

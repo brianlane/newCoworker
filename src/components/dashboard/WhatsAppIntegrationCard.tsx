@@ -10,7 +10,7 @@
  * message. We POST those to /api/integrations/whatsapp, which exchanges
  * the code server-side, subscribes the WABA to our webhooks, and
  * auto-registers the stock utility templates (owner alerts +
- * out-of-window follow-ups, reviewed by Meta — usually minutes).
+ * out-of-window follow-ups, reviewed by Meta, usually minutes).
  *
  * API contract (/api/integrations/whatsapp):
  *   GET    ?businessId=…
@@ -41,7 +41,7 @@ type WhatsAppConnection = {
 type Props = {
   businessId: string;
   initialConnection: WhatsAppConnection | null;
-  /** The platform Meta app id (public by design — it ships in the SDK init). */
+  /** The platform Meta app id (public by design, it ships in the SDK init). */
   metaAppId: string | null;
   /** Embedded Signup configuration id from the Meta app dashboard. */
   configId: string | null;
@@ -149,7 +149,7 @@ export function WhatsAppIntegrationCard({
   useEffect(() => {
     if (!configured || connection) return;
     const onMessage = (event: MessageEvent) => {
-      // Exact host allowlist — a suffix string check would also match
+      // Exact host allowlist, a suffix string check would also match
       // "evilfacebook.com". The dot boundary keeps subdomains valid.
       let host: string;
       try {
@@ -269,7 +269,7 @@ export function WhatsAppIntegrationCard({
 
   const templates = Object.entries(connection?.templates ?? {});
   // Only the bare-name (en_US) entries gate out-of-window delivery; the
-  // suffixed language variants (name:es) are enhancements — sends fall
+  // suffixed language variants (name:es) are enhancements, sends fall
   // back to the approved English template while those are in review.
   const templatesPending = templates.some(
     ([name, t]) => !name.includes(":") && t.status !== "APPROVED"

@@ -4,18 +4,18 @@
  * The Rowboat agent's `http_api_call` tool POSTs here with the
  * Rowboat gateway bearer token. The body is the model-supplied
  * portion of the call (label, method, path, query, body, headers);
- * the **businessId is NOT in the body** — it comes from the
+ * the **businessId is NOT in the body**, it comes from the
  * `?businessId=<uuid>` URL query parameter, which Rowboat
  * substitutes from `BUSINESS_ID` at deploy time. That keeps the
  * tenant binding entirely outside the model's reach: a
  * prompt-injected user cannot smuggle another business UUID
  * because the URL is fixed by the deployment, not the model.
  *
- * Security model — this route is the one place a stored credential ever
+ * Security model, this route is the one place a stored credential ever
  * leaves the encrypted-at-rest column, so the rules are strict:
  *
  *   1. Auth is gateway-only (`ROWBOAT_GATEWAY_TOKEN`). The dashboard UI
- *      never calls this — the dashboard manages rows, not invocations.
+ *      never calls this, the dashboard manages rows, not invocations.
  *   2. The tenant (`businessId`) is bound by the URL query string,
  *      not the JSON body. The Rowboat workflow template hardcodes
  *      `?businessId={{BUSINESS_ID}}` so the model has no input
@@ -73,7 +73,7 @@ const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
  * Tenant binding lives in the URL query (`?businessId=<uuid>`), not
  * the JSON body, so the model's input schema has no field that could
  * be prompt-injected to point at another tenant. Any `businessId`
- * present in the JSON body is ignored — the body schema is `passthrough`
+ * present in the JSON body is ignored, the body schema is `passthrough`
  * but does not declare it, and the route never reads it.
  */
 const callSchema = z.object({
@@ -123,7 +123,7 @@ function buildHeaders(
       const name = k.toLowerCase();
       if (STRIPPED_HEADERS.has(name)) continue;
       // When scheme=header, the agent must not be allowed to set the
-      // configured header_name itself — they'd be supplying the secret
+      // configured header_name itself, they'd be supplying the secret
       // value (probably a placeholder, but we don't trust it).
       if (
         integration.auth_scheme === "header" &&
@@ -166,7 +166,7 @@ function applyAuthScheme(
       return null;
     }
     case "basic":
-      // `secret` is "user:pass" by convention — see UI hint.
+      // `secret` is "user:pass" by convention, see UI hint.
       outHeaders.set(
         "Authorization",
         `Basic ${Buffer.from(secret, "utf8").toString("base64")}`
@@ -176,7 +176,7 @@ function applyAuthScheme(
       if (!integration.header_name) {
         return { detail: "header_name_missing" };
       }
-      // Always overwrite — the agent's `query` map cannot supply this
+      // Always overwrite, the agent's `query` map cannot supply this
       // parameter (we set it after merging the agent's query below).
       outUrl.searchParams.set(integration.header_name, secret);
       return null;
@@ -197,7 +197,7 @@ function safelyJoinPath(prefix: string, path: string): string | null {
   // equivalent to `/` for special schemes (https) during authority
   // detection, so both `//evil/path` and `/\evil/path` would pivot to
   // a different host when resolved against the base origin. We
-  // additionally refuse ANY backslash anywhere in the path — REST APIs
+  // additionally refuse ANY backslash anywhere in the path, REST APIs
   // don't use `\` in URL paths and tolerating it just hands the
   // attacker a second class of pivot strings to probe.
   if (/^\/+\/+/.test(path)) return null;
@@ -209,7 +209,7 @@ function safelyJoinPath(prefix: string, path: string): string | null {
 /**
  * Tenant-id validator. We delegate to Zod's `.uuid()` instead of a
  * hand-rolled regex so this route accepts the same set of UUIDs the
- * rest of the codebase produces and validates — including v6/v7/v8
+ * rest of the codebase produces and validates, including v6/v7/v8
  * (RFC 9562) which the previous local `[1-5]` regex would have
  * silently rejected with a confusing `missing_business_id`. Today's
  * `crypto.randomUUID()` returns v4, but if the platform ever adopts
@@ -246,7 +246,7 @@ export async function POST(request: Request) {
     parsed = callSchema.parse(await request.json());
   } catch (err) {
     // Body parse / Zod failure both surface as `invalid_args:<detail>`.
-    // We don't try to plumb the specific Zod issue through — the
+    // We don't try to plumb the specific Zod issue through, the
     // detail is for human debugging, not model branching, and the
     // simpler message keeps this handler trivially testable.
     const detail = err instanceof z.ZodError ? "invalid_args" : "invalid_body";
@@ -275,7 +275,7 @@ export async function POST(request: Request) {
   try {
     parsedBase = parseBaseUrl(integration.base_url);
   } catch {
-    // Should never happen — base_url passed validation at write time —
+    // Should never happen, base_url passed validation at write time,
     // but a stricter guard added later might reject an old row. Refuse.
     return voiceToolResponse(
       { ok: false, detail: "base_url_invalid" },
@@ -388,7 +388,7 @@ export async function POST(request: Request) {
   // detect overflow without buffering more than necessary.
   //
   // The fetch timeout (`ac` / `timeout`) stays active until the body
-  // is fully drained (or cancelled) — otherwise an upstream that sends
+  // is fully drained (or cancelled), otherwise an upstream that sends
   // headers promptly but stalls mid-body would hang the worker
   // indefinitely. We only `clearTimeout` once the read loop has
   // resolved one way or another.
@@ -404,7 +404,7 @@ export async function POST(request: Request) {
         /* c8 ignore next -- streams spec: a non-done chunk always carries bytes; null guard is defensive against non-conformant polyfills */
         if (!value) continue;
         // If this chunk would push us over the cap, keep ONLY the
-        // bytes that fit (don't drop the chunk entirely — a single
+        // bytes that fit (don't drop the chunk entirely, a single
         // 110 KB chunk used to produce an empty response with
         // `truncated:true`, which is useless to the agent).
         const remaining = RESPONSE_MAX_BYTES - total;

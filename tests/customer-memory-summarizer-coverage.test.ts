@@ -8,12 +8,12 @@ vi.mock("@/lib/db/vps-gateway-tokens", () => ({
 }));
 
 /**
- * Supplemental coverage for src/lib/customer-memory/summarizer.ts —
+ * Supplemental coverage for src/lib/customer-memory/summarizer.ts,
  * targets the specific branches the original test file
  * (customer-memory.test.ts) leaves uncovered:
  *
  *  1. summarizeCustomerMemoryAndLog logging branches (ok / expected
- *     skip / non-expected failure) — lines 333-378 of summarizer.ts.
+ *     skip / non-expected failure), lines 333-378 of summarizer.ts.
  *  2. summarizeCustomerMemory's "empty_summary" path (Rowboat
  *     returned only whitespace).
  *  3. summarizeCustomerMemory's "no_project_id" / "no_bearer" paths
@@ -146,7 +146,7 @@ describe("summarizeCustomerMemory, db_failed paths (every read/write surface)", 
     // Defensive: not every layer reliably throws Error subclasses
     // (vendor SDKs sometimes throw plain strings or numbers). The
     // fallback `String(err)` keeps `detail` debuggable instead of
-    // "[object Object]" — exercises the falsy arm of every
+    // "[object Object]", exercises the falsy arm of every
     // `err instanceof Error` ternary in summarizer.ts.
     const stringThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {      getCustomerMemory: (async () => {
         throw "raw_string_error" as unknown as Error;
@@ -228,7 +228,7 @@ describe("summarizeCustomerMemory, db_failed paths (every read/write surface)", 
     });
     if (updateThrow.ok === false) {
       expect(updateThrow.reason).toBe("db_failed");
-      // String({ code: "PGRST123" }) => "[object Object]" — verify
+      // String({ code: "PGRST123" }) => "[object Object]", verify
       // we don't spuriously get "null" or undefined.
       expect(updateThrow.detail).toBe("[object Object]");
     }
@@ -334,7 +334,7 @@ describe("summarizeCustomerMemory, empty/whitespace Rowboat reply", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("empty_summary");
-    // No persistence — the gate prevented the empty-write outcome.
+    // No persistence, the gate prevented the empty-write outcome.
     expect(updateCustomerSummary).not.toHaveBeenCalled();
   });
 });
@@ -488,7 +488,7 @@ describe("summarizeCustomerMemoryAndLog, logging branches", () => {
       now: () => Date.parse("2026-05-06T12:00:00Z")
     });
     // No direct assertion possible without intercepting the logger
-    // module — but a clean execution + DB write IS the assertion that
+    // module, but a clean execution + DB write IS the assertion that
     // the success branch ran. The detailed branch coverage comes from
     // the dedicated logger-spy tests below.
     expect(infoSpy).not.toBe(warnSpy); // sanity, satisfies the spy refs
@@ -547,7 +547,7 @@ describe("summarizeCustomerMemoryAndLog, logging branches", () => {
 
   it("treats SUMMARY_MAX_CHARS / SUMMARY_INTERACTION_THRESHOLD / SUMMARY_DEBOUNCE_MS as part of the public contract", () => {
     // These constants are imported by callers (sms worker,
-    // dashboard chat preamble logic) — locking the values prevents
+    // dashboard chat preamble logic), locking the values prevents
     // a stealth tightening that would silently change the gate.
     expect(SUMMARY_MAX_CHARS).toBe(2000);
     expect(SUMMARY_INTERACTION_THRESHOLD).toBe(1);
@@ -685,7 +685,7 @@ describe("summarizeCustomerMemory, joinSmsHistory branch coverage", () => {
   it("renders SMS turns with NO assistant reply yet (covers the `if (r.assistantReply)` false arm in joinSmsHistory)", async () => {
     // History rows where the customer texted but Rowboat hasn't
     // produced a reply yet (in-flight job, retry exhausted, etc.).
-    // The summarizer prompt should still include the inbound line —
+    // The summarizer prompt should still include the inbound line,
     // omitting them would leak gaps in the customer's history.
     const callRowboatChat = vi.fn(async () => ({
       reply: "ok",
@@ -730,7 +730,7 @@ describe("summarizeCustomerMemory, joinSmsHistory branch coverage", () => {
   });
 
   it("renders outbound-only entries (AiFlow sends) without an empty Customer line (covers the `if (r.inboundText)` false arm)", async () => {
-    // Worker-initiated sends from sms_outbound_log have no inbound side —
+    // Worker-initiated sends from sms_outbound_log have no inbound side,
     // the flow texted the lead first. The prompt must show the assistant
     // line but never an empty "[... SMS Customer]:" line.
     const callRowboatChat = vi.fn(async () => ({
@@ -751,7 +751,7 @@ describe("summarizeCustomerMemory, joinSmsHistory branch coverage", () => {
           receivedAt: "2026-05-05T08:00:00Z",
           source: "ai_flow" as const
         },
-        // The lead's reply — without at least one customer-authored item the
+        // The lead's reply, without at least one customer-authored item the
         // summarizer now skips entirely (no_customer_content gate).
         {
           jobId: "j2",
@@ -815,7 +815,7 @@ describe("summarizeCustomerMemory, per-contact email feed (scoped, never busines
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.emailCount).toBe(1);
-    // The feeder is queried with this contact's email — never a mailbox-wide scan.
+    // The feeder is queried with this contact's email, never a mailbox-wide scan.
     expect(listEmailLogForAddress).toHaveBeenCalledWith(BIZ, "joe@acme.com", {
       limit: SUMMARY_INPUT_EMAILS
     });

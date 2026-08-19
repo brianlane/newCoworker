@@ -4,21 +4,21 @@
  *
  * Every call is cookie-free and authenticated by two anonymous-internet
  * credentials: the tenant's public site key (`ncw_pub_…`, identifies the
- * business) and — after session start — the per-session bearer
+ * business) and, after session start, the per-session bearer
  * (`ncws_…`). On top of those we enforce, in order:
  *
  *   1. key resolves to a chat_widget_settings row
  *   2. widget enabled by the owner
  *   3. tier still Standard+ (a starter downgrade turns the widget off
  *      server-side even if the row says enabled)
- *   4. business not paused / not in Safe Mode (widget goes "offline" —
+ *   4. business not paused / not in Safe Mode (widget goes "offline",
  *      there is no phone to forward a web visitor to)
  *
  * Where the ORIGIN ALLOWLIST is enforced: NOT here. The widget iframe is
  * served from OUR origin, so its API fetches are same-origin and their
  * Origin header says nothing about the embedding site. The enforceable
  * control is the /widget/frame response's dynamic
- * `Content-Security-Policy: frame-ancestors <allowed origins>` — the
+ * `Content-Security-Policy: frame-ancestors <allowed origins>`, the
  * BROWSER refuses to render the frame inside an unapproved site, so no
  * session is ever minted there (see frameAncestorsValue +
  * refererAllowedForFrame below). Non-browser callers can spoof any header
@@ -51,7 +51,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const WEBCHAT_SESSION_IDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Per-business ceiling on VISITOR messages per rolling 24h — a hard stop on
+ * Per-business ceiling on VISITOR messages per rolling 24h, a hard stop on
  * an anonymous surface burning the tenant's shared AI budget. Generous for
  * real traffic (the AI spend fuse degrades to the free local model long
  * before this trips); env-tunable for enterprise deals.
@@ -146,7 +146,7 @@ export async function resolveWidgetContext(args: {
  * the form was off (or by a hand-rolled client that skipped it) must not
  * keep chatting past a later-enabled requirement. Same rule the session
  * route applies to the submitted form: a name plus at least one of
- * email/phone. Lead-capture merges count — a visitor who told the AGENT
+ * email/phone. Lead-capture merges count, a visitor who told the AGENT
  * their details mid-conversation passes without re-seeing the form.
  */
 export function sessionSatisfiesContactGate(
@@ -163,7 +163,7 @@ export function sessionSatisfiesContactGate(
 /**
  * `frame-ancestors` source list for the /widget/frame response. Empty
  * allowlist ⇒ any site may embed (`*`). Non-empty ⇒ the exact origins,
- * with the `www.`/bare twin of each host included — the browser matches
+ * with the `www.`/bare twin of each host included, the browser matches
  * frame-ancestors literally, and owners routinely save the variant their
  * visitors don't use.
  */
@@ -187,7 +187,7 @@ export function frameAncestorsValue(allowedOrigins: string[]): string {
  * Soft referer check for the /widget/frame page load. The platform's
  * Referrer-Policy (strict-origin-when-cross-origin) means a real browser
  * embedding the frame cross-origin sends at least the parent's ORIGIN in
- * Referer — when it's present and off-list we can refuse before rendering
+ * Referer, when it's present and off-list we can refuse before rendering
  * anything. When it's ABSENT we allow: the dynamic frame-ancestors CSP is
  * the authoritative gate, and rejecting on a stripped Referer would break
  * privacy-tooling users on legitimately allowed sites.
@@ -207,7 +207,7 @@ export function refererAllowedForFrame(
 /**
  * Resolve the per-session bearer on a request to a live session row that
  * belongs to `businessId`. Null on any failure (malformed token, unknown
- * hash, cross-tenant token, idle-TTL expiry) — the routes answer 401 and
+ * hash, cross-tenant token, idle-TTL expiry), the routes answer 401 and
  * the widget restarts the session.
  */
 export async function verifyWebchatSession(args: {

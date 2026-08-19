@@ -9,7 +9,7 @@
  *          → { ok: true }
  *
  * Dates are whole days in the business timezone (route_to_team hard-skips a
- * member whose range covers the business-local "today" — supersedes pinned
+ * member whose range covers the business-local "today", supersedes pinned
  * routing).
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass.
@@ -86,7 +86,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
     // Best-effort mirror onto the shared NewCoworker calendar (all-day
     // "out of office" event, display only). Failure leaves the time off
-    // fully functional — routing reads the DB, not the calendar.
+    // fully functional, routing reads the DB, not the calendar.
     const eventId = await mirrorTimeOffEvent(
       businessId,
       member?.name ?? "Employee",

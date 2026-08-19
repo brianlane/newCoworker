@@ -1,11 +1,11 @@
 /**
  * Node-side entry point for AiFlow contact-event triggers (contact_created /
- * tag_changed / owner_assigned — see
+ * tag_changed / owner_assigned, see
  * supabase/functions/_shared/ai_flows/contact_events.ts for the mechanics).
  *
  * The Deno worker calls enqueueContactEventRuns directly; app-side surfaces
  * (contact creation, dashboard tag/owner edits, CSV import) go through this
- * wrapper, which supplies the service-role client and stays best-effort — a
+ * wrapper, which supplies the service-role client and stays best-effort, a
  * trigger failure must never break the contact write that observed it.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";

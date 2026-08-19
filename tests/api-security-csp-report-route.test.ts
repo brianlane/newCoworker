@@ -1,5 +1,5 @@
 /**
- * POST /api/security/csp-report — the hard-capped sink for
+ * POST /api/security/csp-report, the hard-capped sink for
  * Content-Security-Policy-Report-Only violations.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

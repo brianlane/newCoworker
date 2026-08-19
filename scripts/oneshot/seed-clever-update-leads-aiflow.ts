@@ -19,7 +19,7 @@
  *     reveals a required react-datepicker ("When do you plan to follow up
  *     again?"): clicking the input opens a calendar whose day cells are
  *     role="option" named e.g. "Choose Wednesday, June 24th, 2026". Choosing the
- *     day (default 12:00 AM) sets the value and enables Submit — no time pick
+ *     day (default 12:00 AM) sets the value and enables Submit, no time pick
  *     needed. We template that label with {{now.in7Days.*}} (7 days out).
  * Both the list selector and the action list stay env-overridable (no code edit)
  * via AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR / AIFLOW_CLEVER_UPDATE_ACTIONS_JSON.

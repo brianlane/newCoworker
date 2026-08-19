@@ -1,7 +1,7 @@
 /**
  * Presentational pieces for /dashboard/analytics (Standard/Enterprise perk).
  *
- * Pure server-renderable markup — no state, no client JS beyond Next's Link.
+ * Pure server-renderable markup, no state, no client JS beyond Next's Link.
  * Charts are CSS flex bars (the datasets are tiny: 30 day-points or 24
  * hour-buckets), which keeps the page dependency-free and instant. Every
  * drill-down (day / sentiment / hour) is plain navigation (`?day=`,
@@ -131,7 +131,7 @@ export function DailyVolumeCard({
   change
 }: {
   label: string;
-  /** e.g. "calls", "texts", "min" — appended to the total. */
+  /** e.g. "calls", "texts", "min", appended to the total. */
   unit: string;
   total: number;
   days: DailyUsagePoint[];
@@ -175,7 +175,7 @@ export function DailyVolumeCard({
 
 /**
  * One call row in a drill-down list, pre-labeled on the server (owner /
- * employee / contact-name overrides already resolved) — mirrors CallListRow.
+ * employee / contact-name overrides already resolved), mirrors CallListRow.
  */
 export type DayDetailCallDisplayRow = AnalyticsDayDetail["calls"][number] & {
   label: string;
@@ -382,7 +382,7 @@ export function DayDetailCard({
 
 /**
  * Drill-down card for a sentiment row or a peak-hours bar: the window's
- * matching calls with their AI summaries — "what made all the calls
+ * matching calls with their AI summaries, "what made all the calls
  * Neutral" is answered by reading them. Rendered on `?sentiment=` / `?hour=`.
  */
 export function SegmentDetailCard({
@@ -462,7 +462,7 @@ const SEGMENT_META: Array<{
 ];
 
 /**
- * Customer engagement segments + the quiet ("win-back") shortlist —
+ * Customer engagement segments + the quiet ("win-back") shortlist,
  * BizBlasts RFM/churn port in engagement terms. Quiet customers order by
  * lifetime interactions so the most valuable lapsed relationships lead.
  */
@@ -576,8 +576,8 @@ function LeadSourceTable({ title, rows }: { title: string; rows: LeadSourceRowVi
 }
 
 /**
- * Where this window's new leads came from — channels (last_channel) and the
- * source tags intake flows stamp — with per-source engagement and claim
+ * Where this window's new leads came from, channels (last_channel) and the
+ * source tags intake flows stamp, with per-source engagement and claim
  * rates. Untracked = new contacts carrying no source signal at all.
  */
 export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
@@ -702,7 +702,7 @@ export type TrendForecastView = {
 /**
  * Long-window trend + 30-day activity forecast, fed by the nightly
  * analytics_daily_snapshots (BizBlasts AnalyticsSnapshot / forecast port).
- * Renders weekly aggregate bars — snapshots survive retention pruning, so
+ * Renders weekly aggregate bars, snapshots survive retention pruning, so
  * this window can extend past the raw-transcript history.
  */
 export function TrendForecastCard({
@@ -793,7 +793,7 @@ export type FlowFunnelView = {
 };
 
 /**
- * Per-flow conversion funnel (runs → texts → link clicks → goals reached) —
+ * Per-flow conversion funnel (runs → texts → link clicks → goals reached),
  * the BizBlasts campaign-performance concept on AiFlow data. Row links to
  * the flow's editor; the runs page holds the per-run detail.
  */
@@ -812,7 +812,7 @@ export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clip
         </Link>
       </div>
       <div className="mt-3 space-y-2">
-        {/* The name column takes ~2.5x a stat column — an equal 5-way split
+        {/* The name column takes ~2.5x a stat column, an equal 5-way split
             left flow names ~60px wide on phones (3-4 visible characters). */}
         <div className="grid grid-cols-[minmax(0,2.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
           <span>Flow</span>
@@ -984,7 +984,7 @@ export function PeakHoursCard({
 }: {
   hourBuckets: number[];
   callCount: number;
-  /** Scan hit its row cap — the histogram covers the most recent attempts only. */
+  /** Scan hit its row cap, the histogram covers the most recent attempts only. */
   clipped: boolean;
   timeZoneLabel: string;
   /** When set, each hour bar links to its drill-down URL. */

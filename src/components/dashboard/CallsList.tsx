@@ -118,7 +118,7 @@ export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessI
               <li key={row.id}>
                 <Link
                   // Link by transcript row UUID rather than the Telnyx
-                  // call_control_id (which starts with `v3:` — the `:` is a URL
+                  // call_control_id (which starts with `v3:`, the `:` is a URL
                   // sub-delim some edges pre-decode, 404ing on rows that exist).
                   href={`/dashboard/calls/${row.id}`}
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
@@ -126,7 +126,7 @@ export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessI
                   <div className="min-w-0">
                     {/* flex-wrap (as in CustomersList): the name is the only
                         shrinkable item, so without wrapping it absorbed all the
-                        squeeze on phones — "Brian" rendered as "Bri…" while the
+                        squeeze on phones, "Brian" rendered as "Bri…" while the
                         E.164 and badges kept full width. */}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <CallDirectionBadge direction={row.direction} />
@@ -157,7 +157,7 @@ export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessI
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
                       <LocalDateTime iso={row.startedAt} /> ·{" "}
-                      {/* A missed forwarded call never ended normally — its
+                      {/* A missed forwarded call never ended normally, its
                           ended_at is NULL, which formatDuration would read as
                           a live call. */}
                       {row.status === "missed"

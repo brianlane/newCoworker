@@ -1,24 +1,24 @@
 /**
- * Blog publish pipeline — the engine behind the 5-minute blog-publish-sweep
+ * Blog publish pipeline, the engine behind the 5-minute blog-publish-sweep
  * (pg_cron → Edge → /api/internal/blog-publish-sweep → here) and the admin
  * "Publish now" button.
  *
  * One publish:
  *   1. (Sweep only) promote a due `scheduled` post to `published` via a
- *      guarded transition — an admin edit racing the sweep wins cleanly.
+ *      guarded transition, an admin edit racing the sweep wins cleanly.
  *   2. Fan out side effects, each independently best-effort:
  *      - Email every active blog subscriber (Resend), locale-aware copy
  *        with a tokenized one-click unsubscribe.
  *      - Cross-post to Instagram: insert a post into the designated
  *        business's Marketing composer (`social_posts`) with the featured
- *        image and the post's EXCERPT as the caption (no link — links
+ *        image and the post's EXCERPT as the caption (no link, links
  *        aren't clickable in IG captions). Draft by default; the
  *        `instagram_publish_immediately` toggle schedules it now instead,
  *        and the existing social-post-sweep publishes it.
  *      - Ping IndexNow so Bing (and therefore ChatGPT search) can index the
  *        post today instead of on its own recrawl schedule.
  *
- * Side-effect failures never un-publish the post — they are logged and
+ * Side-effect failures never un-publish the post, they are logged and
  * reported in the sweep summary.
  */
 
@@ -170,7 +170,7 @@ export async function runBlogPublishSideEffects(
         postId: post.id
       });
     } else if (!mediaUrl) {
-      // Instagram feed posts require an image — a post without one skips.
+      // Instagram feed posts require an image, a post without one skips.
       logger.info("blog-publish: post has no featured image, skipping cross-post", {
         postId: post.id
       });
@@ -227,7 +227,7 @@ export type BlogSweepResult = {
 };
 
 /**
- * One sweep pass: flip due scheduled posts to published (guarded — a racing
+ * One sweep pass: flip due scheduled posts to published (guarded, a racing
  * admin edit wins) and fan out the side effects for each winner.
  */
 export async function processBlogPublishSweep(

@@ -38,7 +38,7 @@ function readUuid(payload: Record<string, unknown>, key: string): string | null 
 
 /**
  * An href is safe to render only when it stays inside the dashboard. "Starts
- * with /" alone is NOT enough — "//evil.example.com" is a protocol-relative
+ * with /" alone is NOT enough, "//evil.example.com" is a protocol-relative
  * URL browsers resolve off-site, so a second leading slash is rejected (same
  * rule the redirect helpers apply).
  */
@@ -227,7 +227,7 @@ const MESSAGES_HREF_PREFIX = "/dashboard/messages/";
  * text-thread link. The digest builder encodes the number into the href
  * (`/dashboard/messages/<encodeURIComponent(e164)>`); this reverses that so
  * the raw number embedded in the label can be swapped for a contact name.
- * decodeURIComponent can throw on a malformed (tampered) payload — treated as
+ * decodeURIComponent can throw on a malformed (tampered) payload, treated as
  * "no number" rather than crashing the list render.
  */
 export function eventLinkE164(href: string): string | null {
@@ -242,9 +242,9 @@ export function eventLinkE164(href: string): string | null {
 /**
  * Swap raw phone numbers in digest event labels for known contact names using
  * the same resolver (`resolveContactNames`) the dashboard uses, so the
- * notifications list reads "Texts with Mike Haas — …" instead of a bare
- * +1602… number. Only text-thread events are rewritten — customer events
- * already carry the display name in their label — and only when the number is
+ * notifications list reads "Texts with Mike Haas, …" instead of a bare
+ * +1602… number. Only text-thread events are rewritten, customer events
+ * already carry the display name in their label, and only when the number is
  * actually known; everything else is returned unchanged.
  */
 export function applyContactNamesToEventLinks(
@@ -263,7 +263,7 @@ export function applyContactNamesToEventLinks(
 
 /**
  * Human-labeled payload fields for the expanded row. Only fields with
- * presentable values are returned; internal keys (logId, reason — rendered
+ * presentable values are returned; internal keys (logId, reason, rendered
  * separately) are skipped.
  */
 export function notificationDetailFields(n: NotificationLike): NotificationDetailField[] {

@@ -3,8 +3,8 @@
  *
  * The fan-out here was born in the Calendly booking-goal sweep
  * (calendly-booking-goals.ts) and is now shared by every off-platform
- * booking observer — the Calendly sweep/webhook/precheck AND the Vagaro
- * webhook/precheck — so the providers cannot drift:
+ * booking observer, the Calendly sweep/webhook/precheck AND the Vagaro
+ * webhook/precheck, so the providers cannot drift:
  *
  *   - a booked person's phone (normalized to E.164) and email both seed the
  *     firing set; emails resolve through the business's contacts to that
@@ -12,7 +12,7 @@
  *     phone);
  *   - every seed number is fanned out over its matched contact row's
  *     primary + merged aliases (the same fan-out the update_contact tag
- *     hook does — runs match the EXACT number they were triggered with,
+ *     hook does, runs match the EXACT number they were triggered with,
  *     which after a profile merge may be any of them);
  *   - `applyGoalEvent` fires once per unique number, fast-forwarding parked
  *     runs past their remaining nudges.
@@ -31,7 +31,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /**
  * A booked person's phone as a provider reports it → E.164 (already-E.164
- * kept as-is, loose NANP normalized, anything else null) — the same
+ * kept as-is, loose NANP normalized, anything else null), the same
  * tolerance as fireGoalEvent's phone handling.
  */
 export function bookingPhoneE164(raw: string | undefined): string | null {
@@ -153,12 +153,12 @@ export async function fireBookingGoalsForIdentities(
 
   // Knowledge graph (kg-source: booking): the calendar system is
   // authoritative that this person booked. One ingest per ORIGINAL identity
-  // (not the alias fan-out — dedupe happens in resolution anyway); a
+  // (not the alias fan-out, dedupe happens in resolution anyway); a
   // phone-only identity creates/resolves a phone-named node that later
   // contact ingests enrich. The fact value is deliberately DATE-FREE: the
   // goal fan-out doesn't carry the appointment's actual date (a delayed
   // Calendly sweep fires later than the booking), and the graph records
-  // the durable relationship — "this person books with us" — while the
+  // the durable relationship, "this person books with us", while the
   // calendar stays the authoritative per-event log; the fact row's
   // stated_at carries recency. Never-throws, mode-gated inside.
   /* c8 ignore next -- production default; tests inject */

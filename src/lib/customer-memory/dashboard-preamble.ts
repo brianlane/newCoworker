@@ -8,7 +8,7 @@
  * by the most recent customer_memories rows for the business.
  *
  * Capped tightly so it doesn't dominate the prompt budget on every
- * single dashboard turn — the owner's question is the headline; this
+ * single dashboard turn, the owner's question is the headline; this
  * is ambient context the agent dips into only when relevant. The
  * trailing instruction explicitly tells the model not to volunteer
  * customer details unless the owner's question references them, to

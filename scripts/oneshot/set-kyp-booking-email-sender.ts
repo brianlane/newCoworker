@@ -1,12 +1,12 @@
 /**
- * set-kyp-booking-email-sender.ts — point a flow's send_email step at the
+ * set-kyp-booking-email-sender.ts, point a flow's send_email step at the
  * owner's connected mailbox (KYP Ads booking-confirmation sender fix).
  *
  * Background (Jul 22 2026): James connected his sam@ Outlook mailbox and ran
  * sender-check test bookings; the flow was briefly pointed at a mailbox
  * connection id that doesn't exist for the business, so runs failed with
  * `send_email: owner-mailbox send failed (connection_not_found)`, and a later
- * edit dropped `fromConnectionId` entirely — booking emails went back to the
+ * edit dropped `fromConnectionId` entirely, booking emails went back to the
  * AI coworker's platform address. This script sets the step's
  * `fromConnectionId` to the REAL connection row (resolved by the mailbox
  * email, never a hard-coded uuid) and can enqueue a synthetic verification
@@ -14,7 +14,7 @@
  *
  * Idempotent: a flow already pointing at the resolved connection is a no-op.
  *
- * Usage (ids/emails from argv per scripts/oneshot/README.md — no PII here):
+ * Usage (ids/emails from argv per scripts/oneshot/README.md, no PII here):
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/set-kyp-booking-email-sender.ts \
  *     --business <uuid> --sender-email <mailbox email>            # dry-run
@@ -69,7 +69,7 @@ const db = createClient(
 // ---------------------------------------------------------------------------
 // Resolve the mailbox connection ROW ID by its account email. The runtime
 // send path looks connections up by row id (`getWorkspaceOAuthConnection`),
-// so this is the value the step must carry — resolving by email here is what
+// so this is the value the step must carry, resolving by email here is what
 // makes a stale/foreign uuid impossible.
 // ---------------------------------------------------------------------------
 type ConnRow = {
@@ -278,7 +278,7 @@ if (finalStatus === "queued" || finalStatus === "running") {
 }
 
 // Owner-mailbox sends log `source: "owner_mailbox"` with from_email set to
-// the PROVIDER label (the Nango send API doesn't echo the address back) —
+// the PROVIDER label (the Nango send API doesn't echo the address back),
 // that source value, not the from address, is the proof the send went
 // through the connected mailbox rather than the platform Resend path.
 const { data: emailRows } = await db

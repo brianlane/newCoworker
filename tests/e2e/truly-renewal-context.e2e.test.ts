@@ -22,8 +22,8 @@ import { TRIGGER, trulyFlowSteps } from "./truly-privyr-flow.fixture";
 
 /**
  * The Alex replay (Truly Insurance, 2026-07-14, run 5820f7f0): the full
- * "Lead intake & follow-up (Privyr) (copy)" flow — the tenant's EXACT
- * enabled production definition, verbatim below — executed end to end with
+ * "Lead intake & follow-up (Privyr) (copy)" flow, the tenant's EXACT
+ * enabled production definition, verbatim below, executed end to end with
  * live Gemini decisions and the production timeline:
  *
  *   17:08  Privyr "New Lead: Alex 😁" email triggers the flow
@@ -32,7 +32,7 @@ import { TRIGGER, trulyFlowSteps } from "./truly-privyr-flow.fixture";
  *   17:10  classify → gave_info → else arm texts "Approximately when does
  *          your current policy renew?" and IMMEDIATELY parks on the
  *          route_to_team agent offer (10-minute window)
- *   17:10  Alex answers "July 23, 2026" 16 seconds after the question —
+ *   17:10  Alex answers "July 23, 2026" 16 seconds after the question,
  *          the run is parked awaiting_agent, NO wait is listening
  *          (wait_renewal sits AFTER route_to_team), so the deadline answer
  *          falls through to the generic AI reply path, which answered
@@ -41,21 +41,21 @@ import { TRIGGER, trulyFlowSteps } from "./truly-privyr-flow.fixture";
  *
  * Two contracts, both violated in production and pinned here:
  *
- *  1. FLOW OWNERSHIP: the intake flow must own the renewal answer — a
- *     policy DEADLINE — in vars for the broker handoff, and no lead text
+ *  1. FLOW OWNERSHIP: the intake flow must own the renewal answer, a
+ *     policy DEADLINE, in vars for the broker handoff, and no lead text
  *     may fall through to the generic path mid-intake.
  *  2. FALLBACK CONTEXT: even when a lead text does land on the generic
  *     path, the assistant (with the exact production preamble) must read a
  *     bare date as the answer to the renewal question it can see was just
- *     asked — never ask the lead what the date means.
+ *     asked, never ask the lead what the date means.
  */
 
 const LEAD = "+15199560528";
 const RENEWAL_ANSWER = "July 23, 2026";
 
 /** What the tenant's SMS Coworker agent runs (deploy-client.sh
- * SMS_CHAT_MODEL default; upgraded off 2.5-flash-lite after this incident —
- * the old model ignored the system preamble on the incident turn — then to
+ * SMS_CHAT_MODEL default; upgraded off 2.5-flash-lite after this incident,
+ * the old model ignored the system preamble on the incident turn, then to
  * 3.5-flash-lite with the PR #809 fleet migration, 3.x being viable on the
  * Rowboat path since the llm-router thought_signature shim, PR #683). */
 const TRULY_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
@@ -64,7 +64,7 @@ const TRULY_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 /**
  * Alex's production timeline in minutes since the run's first step:
  * the intro answer landed ~18s after the ack, the renewal answer ~16s
- * after the question — i.e. both within a minute or two, while the run
+ * after the question, i.e. both within a minute or two, while the run
  * had already parked on the 10-minute route_to_team offer.
  */
 const ALEX_INBOUND = [
@@ -89,7 +89,7 @@ describe("Truly Privyr flow replay, Alex 2026-07-14 (full flow, live decisions)"
     expect(String(walk.vars.lead_phone)).toContain("5199560528");
     expect(String(walk.vars.product)).toMatch(/auto/i);
     // Live classify read "I am looking for auto insurance" as gave_info,
-    // so the else arm asked the renewal question — same as production.
+    // so the else arm asked the renewal question, same as production.
     expect(walk.vars.intent).toBe("gave_info");
     expect(
       walk.sends.some((s) => s.body.includes("when does your current policy renew"))
@@ -100,7 +100,7 @@ describe("Truly Privyr flow replay, Alex 2026-07-14 (full flow, live decisions)"
   it("the flow OWNS the renewal deadline: wait_renewal captures Alex's answer", () => {
     // Production violation: the run was parked awaiting_agent when the
     // answer arrived, wait_renewal never saw it, and renewal_timing timed
-    // out to "no_reply" — the broker never got the July 23 deadline.
+    // out to "no_reply", the broker never got the July 23 deadline.
     expect(walk.vars.renewal_timing).toBe(RENEWAL_ANSWER);
   });
 
@@ -116,7 +116,7 @@ describe("Truly Privyr flow replay, Alex 2026-07-14 (full flow, live decisions)"
 
   it("no lead text falls through to the generic AI path mid-intake", () => {
     // Each entry here is a customer message the flow asked for but never
-    // received — in production it landed on a context-poor generic reply
+    // received, in production it landed on a context-poor generic reply
     // ("I'm sorry, I need a bit more context…").
     expect(walk.fellThroughToGenericPath).toEqual([]);
   });
@@ -127,7 +127,7 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
   // the stored Rowboat conversation 6a566d80a138dbaf59c8db5f), rebuilt from
   // the same production builders the SMS worker uses, with the flow state
   // taken from the walk above. With the fixed flow this exact message no
-  // longer falls through — but ANY lead text arriving during a
+  // longer falls through, but ANY lead text arriving during a
   // route_to_team park still does, so the fallback path must read a bare
   // answer in context. Mirrors the worker's post-incident shape: the
   // fresh-thread flow-answer note rides inside the user turn
@@ -157,7 +157,7 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
     });
     // The conversation state AT THE INCIDENT MOMENT: the flow has texted the
     // intro and the renewal question (nothing after), and the run is parked.
-    // Rendered by the walk so the bodies are the real templated sends —
+    // Rendered by the walk so the bodies are the real templated sends,
     // the same bodies loadFlowRunContext quotes from the outbound log.
     const allFlowSends = walk.sends.filter((s) => s.to === LEAD).map((s) => s.body);
     const renewalQuestionIdx = allFlowSends.findIndex((b) =>
@@ -171,13 +171,13 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
           status: "awaiting_agent",
           updatedAt: "2026-07-14T17:10:06.54938+00:00",
           vars: {
-            // The incident run's RECORDED values, pinned literally — this
+            // The incident run's RECORDED values, pinned literally, this
             // block used to read intent/product from the live walk above,
             // which made the prompt vary run-to-run with the walk's
             // extraction phrasing. Some of those variants put
             // 3.5-flash-lite into a STICKY trailer-only mode (three
             // temperature-varied re-rolls all returned bare
-            // "[[reasoning]]{…}" with no customer text — observed on the
+            // "[[reasoning]]{…}" with no customer text, observed on the
             // #842 main run and reproduced locally), so the suite flaked
             // on prompt drift that has nothing to do with this test's
             // contract. Pinning restores the incident turn byte-for-byte.
@@ -210,7 +210,7 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
     // Whole-turn retry, mirroring production: a trailer-only draw (reply
     // empty after the reasoning strip) makes the worker THROW
     // (rowboat_empty_assistant_after_reasoning_strip) and the job retries
-    // the model call — a customer never receives that draw, so asserting on
+    // the model call, a customer never receives that draw, so asserting on
     // it would fail the suite on a shape production explicitly re-rolls. A
     // parsed-but-trailerless draw is also re-rolled here, the suite's
     // standard { retry: 1 }-style flake treatment (the trailer contract
@@ -218,7 +218,7 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
     //
     // Re-rolls run at production's temperature (0.3), NOT the suite's 0:
     // observed live (main run post-#842 + a local repro), 3.5-flash-lite's
-    // trailer-only mode is STICKY at temperature 0 — three identical
+    // trailer-only mode is STICKY at temperature 0, three identical
     // re-rolls all produced bare "[[reasoning]]{…}" with no customer text.
     // Production escapes the mode through its own temperature variance;
     // re-rolling the same prompt at 0 just burns the attempts.
@@ -232,7 +232,7 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
       );
       split = splitReplyReasoning(raw);
       if (split.reply.trim() !== "" && split.reasoning !== null) break;
-      // A re-rolled draw is undebuggable from the final assertion alone —
+      // A re-rolled draw is undebuggable from the final assertion alone,
       // log the RAW shape (trailer-only? bracket-blob-swallowed? truly
       // empty?) so a repeat CI failure names the class.
       console.error(
@@ -270,14 +270,14 @@ describe("generic-path fallback turn, the incident turn's exact prompt", () => {
   });
 
   it("reads the bare date as the renewal answer it can see was just asked", () => {
-    // Surface the live reply + verdict in the vitest output on failure —
+    // Surface the live reply + verdict in the vitest output on failure,
     // a semantic-judge miss is undebuggable from a bare boolean diff.
     if (!verdict.answers.acknowledges_answer || verdict.answers.asks_what_date_means) {
       console.error("live reply:", reply);
       console.error("judge verdict:", JSON.stringify(verdict));
     }
     // Production violation: "I'm sorry, I need a bit more context to
-    // understand what you're referring to…" — the deadline was in plain
+    // understand what you're referring to…", the deadline was in plain
     // sight in the automation-context block.
     expect(verdict.answers.asks_what_date_means).toBe(false);
     expect(verdict.answers.acknowledges_answer).toBe(true);

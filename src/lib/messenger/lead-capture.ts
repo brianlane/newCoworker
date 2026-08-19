@@ -1,5 +1,5 @@
 /**
- * Messenger/Instagram variant of `webchat_capture_lead` — the write tool
+ * Messenger/Instagram variant of `webchat_capture_lead`, the write tool
  * on the DM conversation surface.
  *
  * Records the lead's contact details + interest as a `coworker_logs` row
@@ -9,7 +9,7 @@
  * the cross-channel contact profile with last_channel='messenger'.
  *
  * Attribution: the engine's system prompt hands the model an opaque
- * `sessionRef` (the conversation UUID) to pass back verbatim — validated
+ * `sessionRef` (the conversation UUID) to pass back verbatim, validated
  * against the SAME business before writing, so a hallucinated ref can at
  * worst tag a sibling conversation of the same tenant, never cross a
  * tenant boundary. The lead log itself is written either way (webchat
@@ -101,7 +101,7 @@ export async function captureMessengerLead(
     }
   });
 
-  // Best-effort conversation merge — the lead is durably logged above.
+  // Best-effort conversation merge, the lead is durably logged above.
   if (conversationId) {
     try {
       await updateMessengerConversationContact(conversationId, { name, phone });
@@ -115,8 +115,8 @@ export async function captureMessengerLead(
   }
 
   // Cross-channel contact rollup: a usable phone number becomes (or bumps)
-  // a contact profile with last_channel='messenger' — from then on SMS
-  // follow-ups work outside the 24h window — and a brand-new lead fires the
+  // a contact profile with last_channel='messenger', from then on SMS
+  // follow-ups work outside the 24h window, and a brand-new lead fires the
   // `contact_created` AiFlow trigger. Best-effort, like webchat.
   const e164 = coerceOwnerPhoneToE164(phone);
   if (e164) {
@@ -129,7 +129,7 @@ export async function captureMessengerLead(
   }
 
   // Knowledge graph: the model already distilled the DM conversation into
-  // structured lead details — map them deterministically at the channel's
+  // structured lead details, map them deterministically at the channel's
   // trust. Never-throws, mode-gated inside.
   await ingestCapturedLead(businessId, channel, {
     name,

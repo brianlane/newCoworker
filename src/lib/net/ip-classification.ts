@@ -3,15 +3,15 @@
  *
  * Two callers consume these helpers:
  *
- *   1. `lib/website-ingest` — runs the helper on DNS-resolved addresses
+ *   1. `lib/website-ingest`, runs the helper on DNS-resolved addresses
  *      while crawling owner-supplied URLs. Calls always come in as
  *      well-formed dotted-quad / colon-separated literals (Node's
  *      `dns.lookup` only returns valid addresses), but the helper
  *      defensively treats any "weird" input (non-numeric octets,
- *      length≠4, etc.) as private — the cost of a false positive is
+ *      length≠4, etc.) as private, the cost of a false positive is
  *      a refused crawl, the cost of a false negative is SSRF.
  *
- *   2. `lib/db/custom-integrations` — runs the helper on
+ *   2. `lib/db/custom-integrations`, runs the helper on
  *      `URL.hostname` for the owner-registered integration's base URL.
  *      Callers there are responsible for first checking that the
  *      hostname IS in IPv4 / IPv6 shape before consulting this module
@@ -29,7 +29,7 @@
  * True iff `ip` is an IPv4 dotted-quad in a private, loopback,
  * link-local, multicast, or reserved range. Inputs that don't parse
  * as four numeric octets in 0–255 are conservatively classified as
- * private — see module docstring for why.
+ * private, see module docstring for why.
  */
 export function isPrivateIpv4(ip: string): boolean {
   const parts = ip.split(".").map((x) => Number(x));

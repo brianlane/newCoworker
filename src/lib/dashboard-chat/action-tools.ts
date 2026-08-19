@@ -1,23 +1,23 @@
 /**
- * Dashboard-chat INLINE action tools — send_sms + calendar lifecycle.
+ * Dashboard-chat INLINE action tools, send_sms + calendar lifecycle.
  *
  * The worker-path dashboard coworker (Rowboat `OwnerCoworker`) has had
  * `send_sms` and the `dashboard_calendar_*` tools since launch, fulfilled by
  * /api/rowboat/tool-call. When the INLINE path became primary (PR #612 /
  * #655) it shipped with only creation + knowledge tools, so a healthy inline
- * path silently REMOVED the owner's ability to text and book from chat —
+ * path silently REMOVED the owner's ability to text and book from chat,
  * James's (KYP Ads) test texts only worked because his turns happened to
  * fall back to the worker. This module gives the inline turn the same
  * actions through the same cores the Rowboat webhook dispatch uses.
  *
  * Design notes:
  *  - Every helper returns a plain JSON payload destined for a Gemini
- *    functionResponse — never throws (a tool blow-up must degrade to an
+ *    functionResponse, never throws (a tool blow-up must degrade to an
  *    honest failure the model can relay, not kill the turn).
  *  - send_sms mirrors the voice follow-up adapter's posture: canonicalize
  *    the destination, STOP-list check fails CLOSED, metered send, then a
  *    best-effort `sms_outbound_log` insert (source `dashboard_chat`) so the
- *    text renders in the dashboard Text history — tool sends used to be
+ *    text renders in the dashboard Text history, tool sends used to be
  *    invisible platform-side (the only record lived in Telnyx).
  *  - Calendar failures carry the same model-facing guidance strings the
  *    Rowboat dispatch attaches, re-phrased for the owner surface (dashboard
@@ -92,8 +92,8 @@ export function isActionToolName(name: string): name is ActionToolName {
 
 /**
  * Settings → Coworker tools gate state for the action tools (dashboard
- * agent). The chat route reads the toggles once per turn — same pattern as
- * `emailToolEnabled` / `knowledgeToolEnabled` — and tools that are OFF are
+ * agent). The chat route reads the toggles once per turn, same pattern as
+ * `emailToolEnabled` / `knowledgeToolEnabled`, and tools that are OFF are
  * never even declared to the model. `list_aiflows` and `run_aiflow` share
  * the single `run_aiflow` Settings toggle (listing exists to serve running).
  */
@@ -129,7 +129,7 @@ export type ActionToolGates = {
   /**
    * The dashboard `generate_image` Settings toggle. The Rowboat
    * OwnerCoworker has had `dashboard_generate_image` since the tool
-   * shipped, but the INLINE primary path never declared it — so a healthy
+   * shipped, but the INLINE primary path never declared it, so a healthy
    * inline path told owners "I don't have an image creation tool" (Truly
    * Insurance, Jul 16 2026) while only worker-fallback turns could
    * generate. Same parity gap this module exists to close for send_sms.
@@ -137,7 +137,7 @@ export type ActionToolGates = {
   generate_image: boolean;
   /**
    * Settings toggle AND the caller's manage_settings role (manager+),
-   * computed per turn by the chat route — a staff-role teammate never even
+   * computed per turn by the chat route, a staff-role teammate never even
    * sees this tool declared. INLINE-ONLY by design: the Rowboat fallback
    * carries no caller role, so it gets no dashboard_ twin.
    */
@@ -145,11 +145,11 @@ export type ActionToolGates = {
   /**
    * Owner declared a lead spam: opt-out suppression + pending-run cancels +
    * contact tag through the shared core (customer-tools/flag-spam.ts).
-   * INLINE-ONLY by design — declared solely on the owner-verified surfaces
+   * INLINE-ONLY by design, declared solely on the owner-verified surfaces
    * (dashboard chat, owner-SMS operator turn); the customer-facing Rowboat
    * texting coworker must never hold an irreversible suppression tool. On
    * dashboard chat the gate also requires the caller's manage_settings role
-   * (same bar as /api/dashboard/sms-optouts — the suppression cannot be
+   * (same bar as /api/dashboard/sms-optouts, the suppression cannot be
    * undone from the platform); the owner-SMS surface is the verified owner.
    */
   flag_contact_spam: boolean;
@@ -177,13 +177,13 @@ export type ActionToolGates = {
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
 // Jul 20 2026: a "3:00 PM" confirmation with no timezone went to a
-// Central-time lead about an Eastern-time call — a plausible no-show cause).
+// Central-time lead about an Eastern-time call, a plausible no-show cause).
 const OUTBOUND_TIMEZONE_RULE =
   ' If the body mentions a clock time, always name the timezone (e.g. "1:00 PM Eastern", never a bare "1:00 PM"), and when the recipient is known to be in a different timezone, give the time in THEIR timezone too.';
 
 // Outbound-first recipients must exist as contacts (KYP/Ayanna: a number the
 // owner texted twice had no contact row, so the assistant later denied any
-// record of her). Optional — the send never depends on it.
+// record of her). Optional, the send never depends on it.
 const CONTACT_NAME_PARAM = {
   type: "string",
   description:
@@ -445,7 +445,7 @@ const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
-// Boolean toggle parameters, one per whitelisted key — self-documenting for
+// Boolean toggle parameters, one per whitelisted key, self-documenting for
 // the model and structurally incapable of carrying recipients (the core
 // re-validates regardless).
 const NOTIFICATION_TOGGLE_PARAMS = Object.fromEntries(
@@ -597,7 +597,7 @@ export function actionToolDeclarations(gates: ActionToolGates): GeminiFunctionDe
 }
 
 // ---------------------------------------------------------------------
-// Arg schemas — kept in lockstep with /api/rowboat/tool-call so both turn
+// Arg schemas, kept in lockstep with /api/rowboat/tool-call so both turn
 // paths accept the same shapes.
 // ---------------------------------------------------------------------
 
@@ -614,7 +614,7 @@ const sendWhatsAppArgsSchema = z.object({
 });
 
 // Booleans per whitelisted toggle. PASSTHROUGH (not strict/strip): unknown
-// keys must reach the core, whose refusal names the real toggle list —
+// keys must reach the core, whose refusal names the real toggle list,
 // stripping them would misreport "no_toggles", and a schema error is less
 // actionable for the model. The core owns unknown-key + enable-only
 // refusals for every surface (shared with /api/rowboat/tool-call).
@@ -715,7 +715,7 @@ const generateImageArgsSchema = z.object({
 
 // ---------------------------------------------------------------------
 // Owner-surface guidance (dashboard chat talks TO the owner, so the
-// escalation arm of the Rowboat guidance — notify_team / capture_lead —
+// escalation arm of the Rowboat guidance, notify_team / capture_lead,
 // doesn't apply; the honest move here is telling the owner directly).
 // ---------------------------------------------------------------------
 
@@ -836,7 +836,7 @@ export async function executeActionTool(
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
   // 2026: a number the owner texted twice had NO contact row, so the
   // assistant told James "I don't have any record of Ayanna" hours after
-  // texting her for him). Rollup only — deliberately NOT ensureCapturedContact,
+  // texting her for him). Rollup only, deliberately NOT ensureCapturedContact,
   // so an owner-initiated outbound never fires contact_created lead-follow-up
   // automations. Best-effort: a failed upsert never fails a sent message.
   const upsertRecipientContact = async (
@@ -868,7 +868,7 @@ export async function executeActionTool(
         if (!parsed.success) {
           return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
         }
-        // Canonicalize BEFORE the opt-out check and the send — STOP rows are
+        // Canonicalize BEFORE the opt-out check and the send, STOP rows are
         // stored canonical, so a differently-formatted destination must not
         // slip past the exact-match check.
         const normalized = normalizeContactNumber(parsed.data.toE164);
@@ -913,7 +913,7 @@ export async function executeActionTool(
         }
         // Best-effort durable log so the text renders in the dashboard Text
         // history (source dashboard_chat). A failed insert must not fail the
-        // tool call — the SMS already went out.
+        // tool call, the SMS already went out.
         try {
           const db = await createDb();
           const { error: logErr } = await db.from("sms_outbound_log").insert({
@@ -1074,7 +1074,7 @@ export async function executeActionTool(
         if (!parsed.success) {
           return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
         }
-        // Shared core (edit-flow-tool.ts): validated in-place edit — the
+        // Shared core (edit-flow-tool.ts): validated in-place edit, the
         // compile pipeline refuses anything short of a clean definition, so
         // a live flow is never left half-edited.
         return await editAiFlowTool(businessId, parsed.data, {
@@ -1161,7 +1161,7 @@ export async function executeActionTool(
       }
     }
   } catch (err) {
-    // A tool blow-up must never kill the chat turn — degrade to an honest
+    // A tool blow-up must never kill the chat turn, degrade to an honest
     // failure the model can relay to the owner.
     logger.warn("dashboard-chat action tool failed", {
       businessId,

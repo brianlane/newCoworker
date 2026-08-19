@@ -58,7 +58,7 @@ type Diagnostics = {
 
 /**
  * Admin business page: live-Stripe diagnostics on demand (BizBlasts
- * `stripe_diagnostics` analog). Loaded only when the operator clicks — the
+ * `stripe_diagnostics` analog). Loaded only when the operator clicks, the
  * page render never pays the Stripe round-trips.
  */
 export function StripeDiagnosticsPanel({ businessId }: { businessId: string }) {

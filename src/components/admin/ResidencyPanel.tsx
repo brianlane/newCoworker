@@ -9,11 +9,11 @@
  * this panel is the operator's console for it.
  *
  * Mode semantics (matching src/lib/residency):
- *   supabase — off (default). All content central, code path unchanged.
- *   dual     — journal replication ON: every content write copies to the
+ *   supabase, off (default). All content central, code path unchanged.
+ *   dual, journal replication ON: every content write copies to the
  *              tenant box (~1 min lag). Reads stay central. Run the
  *              backfill after flipping.
- *   vps      — dashboard content reads come FROM THE BOX (no fallback).
+ *   vps, dashboard content reads come FROM THE BOX (no fallback).
  *              Flip only after the parity gate passes.
  *
  * The purge (removing central history) is deliberately CLI-only

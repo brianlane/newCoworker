@@ -1,11 +1,11 @@
 /**
- * Duplicate-contact detection with completeness-scored merge direction —
+ * Duplicate-contact detection with completeness-scored merge direction,
  * concept ported from BizBlasts' CustomerLinker (`customer_completeness_score`
  * / `select_canonical_customer`).
  *
  * newCoworker keys contacts by phone number, so the duplicate class here is
  * "one person, two numbers": rows sharing the SAME EMAIL are (almost always)
- * the same human reached on two lines. Nothing is merged automatically —
+ * the same human reached on two lines. Nothing is merged automatically,
  * `findDuplicateContactPairs` surfaces suggestions on the Contacts page and
  * recommends a direction (the more complete profile survives), and the
  * owner confirms through the existing merge endpoint. The one automatic
@@ -48,7 +48,7 @@ export function contactCompletenessScore(
   let score = 0;
   if ((contact.display_name ?? "").trim()) {
     score += 2;
-    // An owner-typed name is a deliberate label — worth more than an
+    // An owner-typed name is a deliberate label, worth more than an
     // auto-captured one.
     if (contact.name_source === "manual") score += 1;
   }
@@ -105,7 +105,7 @@ export type DuplicateContactPair = {
   fromName: string | null;
 };
 
-/** Cap on suggestions per page load — a directory-wide audit is not the goal. */
+/** Cap on suggestions per page load, a directory-wide audit is not the goal. */
 export const MAX_DUPLICATE_PAIRS = 10;
 
 const SCAN_COLUMNS =
@@ -116,7 +116,7 @@ type ScanRow = ScorableContact & { email: string };
 
 /**
  * Customer profiles that share an email address, paired with a recommended
- * merge direction. Only `type = 'customer'` rows are considered — the merge
+ * merge direction. Only `type = 'customer'` rows are considered, the merge
  * endpoint refuses every other contact type. Groups larger than two produce
  * one pair per non-canonical row (all folding into the same survivor).
  */

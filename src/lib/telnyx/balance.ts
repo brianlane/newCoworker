@@ -1,6 +1,6 @@
 /**
  * Telnyx account balance (GET /v2/balance) for the admin Costs page
- * header — the number the operator otherwise opens the Telnyx portal for.
+ * header, the number the operator otherwise opens the Telnyx portal for.
  * Read-only and best-effort: any failure returns null and the page renders
  * without it.
  */

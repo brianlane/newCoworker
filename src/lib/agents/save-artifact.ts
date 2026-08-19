@@ -1,5 +1,5 @@
 /**
- * Agents — save a run's artifact into the Documents knowledge library.
+ * Agents, save a run's artifact into the Documents knowledge library.
  *
  * Shared by the dashboard "Save as document" action and the run_agent
  * AiFlow step's saveDocument option, so both paths get identical cap
@@ -7,7 +7,7 @@
  * artifact becomes a regular business document: text targets store the
  * markdown/text as the original file; PDF/DOCX targets typeset the markdown
  * into real bytes (documents/typeset.ts). Either way the agent-facing
- * content_md is the artifact text (clipped to the documents cap) — no
+ * content_md is the artifact text (clipped to the documents cap), no
  * second Gemini ingest pass is needed because the artifact is already
  * clean text.
  */
@@ -47,7 +47,7 @@ export type SaveArtifactInput = {
   title?: string;
   /**
    * Document audience. Flow-saved artifacts are pinned to 'staff' by the
-   * caller — an automated run must never widen an artifact to customer
+   * caller, an automated run must never widen an artifact to customer
    * channels.
    */
   audience: "clients" | "staff" | "both";
@@ -64,7 +64,7 @@ export type SaveArtifactResult =
 /**
  * Persist a run artifact as a business document. Expected failures return
  * `{ ok: false }`; unexpected DB faults throw (callers decide whether that
- * is fatal — the dashboard 500s, the flow route reports a fileError).
+ * is fatal, the dashboard 500s, the flow route reports a fileError).
  */
 export async function saveAgentRunArtifact(
   input: SaveArtifactInput,
@@ -102,7 +102,7 @@ export async function saveAgentRunArtifact(
     .slice(0, 120);
   const storagePath = `${businessId}/${documentId}/${safeName}`;
   // PDF/DOCX targets render from the artifact (typeset markdown, or the
-  // sidecar-printed re-typeset HTML — whose stored representation mime is
+  // sidecar-printed re-typeset HTML, whose stored representation mime is
   // the PDF, not the html artifact mime); text targets store the artifact
   // text byte-for-byte. A required renderer failing (unreachable sidecar)
   // is a clean refusal, not a silently different document.
@@ -133,7 +133,7 @@ export async function saveAgentRunArtifact(
     run.input_filename ? ` from ${run.input_filename}` : ""
   }.`.slice(0, DOCUMENT_SUMMARY_MAX_CHARS);
 
-  // content_md is what knowledge lookup reads — re-typeset HTML artifacts
+  // content_md is what knowledge lookup reads, re-typeset HTML artifacts
   // file their visible text, everything else files the artifact verbatim.
   const contentMd = isHtmlDocumentArtifact(run.output_md)
     ? htmlArtifactToText(run.output_md)

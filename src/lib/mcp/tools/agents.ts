@@ -2,7 +2,7 @@
  * Agent tools: CRUD over the business's reusable attachment→output task
  * templates (name + instructions + output format). Creation is tier-capped
  * exactly like the dashboard route (agentLimitForTier), and everything is
- * gated on `manage_aiflows` — agents are automation definitions, same
+ * gated on `manage_aiflows`, agents are automation definitions, same
  * trust level as flows.
  */
 

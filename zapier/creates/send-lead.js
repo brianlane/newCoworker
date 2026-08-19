@@ -1,12 +1,12 @@
 "use strict";
 
 /**
- * "Send Lead to Coworker" action — POST /api/public/v1/flow-events.
+ * "Send Lead to Coworker" action, POST /api/public/v1/flow-events.
  *
  * The inbound bridge for lead sources Zapier can read but the coworker
  * can't reach directly (Meta/Facebook Lead Ads, Google Lead Forms, etc.):
  * the mapped lead fields become a webhook event that starts every enabled
- * webhook-triggered AiFlow whose conditions match. Idempotent per lead —
+ * webhook-triggered AiFlow whose conditions match. Idempotent per lead,
  * pass the source's lead id as Lead ID so a Zap replay never runs a flow
  * twice for the same lead.
  */

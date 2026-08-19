@@ -1,5 +1,5 @@
 /**
- * The voice bridge's system-instruction builder — the single string that
+ * The voice bridge's system-instruction builder, the single string that
  * defines everything Gemini Live is on a call: persona (customer
  * receptionist vs internal staff assistant), identity/honesty discipline,
  * tool teaching, transfer wording, and the two per-caller context blocks
@@ -22,7 +22,7 @@ import {
 /**
  * Who the caller is (owner / team member / customer). When the caller is
  * staff, the system instruction switches from the customer receptionist
- * script to an internal-assistant persona — same intent as the SMS worker's
+ * script to an internal-assistant persona, same intent as the SMS worker's
  * team/owner gate. Undefined is treated as a customer (backwards compatible).
  */
 export type CallerIdentity = {
@@ -40,7 +40,7 @@ export type CallerIdentity = {
  * 800 chars covers every real-world summary observed in test (mean ~280,
  * 95th percentile ~520, hard tail at ~720). Larger summaries are
  * deliberately truncated client-side rather than letting the prompt
- * grow — a bigger summary is rarely a more useful one (the model
+ * grow, a bigger summary is rarely a more useful one (the model
  * actually skims the first ~3 sentences in practice), and skew between
  * the dashboard's full-fat summary and the voice-trimmed snippet is
  * acceptable on this surface.
@@ -48,7 +48,7 @@ export type CallerIdentity = {
 export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
 
 /**
- * Hard cap on the inline AiFlow context block — same 12 KB-ceiling
+ * Hard cap on the inline AiFlow context block, same 12 KB-ceiling
  * discipline as VOICE_CUSTOMER_MEMORY_MAX_CHARS. 900 chars fits the header,
  * one run's dozen clipped vars, and the last-automated-text excerpt; a
  * longer digest adds noise, not signal, on a live call.
@@ -57,13 +57,13 @@ export const VOICE_FLOW_CONTEXT_MAX_CHARS = 900;
 
 /**
  * Hard cap on the inline cross-channel recent-interactions block
- * (contact-context.ts) — same 12 KB-ceiling discipline. 1400 chars fits the
+ * (contact-context.ts), same 12 KB-ceiling discipline. 1400 chars fits the
  * header plus roughly the last half-dozen clipped SMS/call lines, which is
  * the window a caller mid-thread actually references.
  */
 export const VOICE_RECENT_INTERACTIONS_MAX_CHARS = 1400;
 
-/** Cap on the booking-status line — a single sentence from the platform. */
+/** Cap on the booking-status line, a single sentence from the platform. */
 export const VOICE_BOOKING_STATUS_MAX_CHARS = 400;
 
 /**
@@ -116,9 +116,9 @@ export function systemInstructionForBusiness(
   // Honesty about actions, shared by the staff and customer personas and
   // independent of whether tools are enabled (with tools OFF, claiming an
   // action is guaranteed false). A real tenant lead was told over SMS that
-  // an appointment was booked when no calendar event existed — this is the
+  // an appointment was booked when no calendar event existed, this is the
   // voice twin of the SMS worker's groundedActionsLine
-  // (supabase/functions/sms-inbound-worker/index.ts) — keep in sync.
+  // (supabase/functions/sms-inbound-worker/index.ts), keep in sync.
   const groundedActionsLine =
     "You can only take real actions through your tools, saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success (a `booking_link_created` result is NOT a booking, the caller must finish it via the link you text them). Only book a time AFTER the caller has explicitly said yes to that ONE specific time, never book while they are still deciding, and never book two slots for the same caller. When a booking succeeds, confirm the day and time by reading the result's `startLocal` back VERBATIM, never work out the day yourself, and never say today or tomorrow unless the current date line proves it. A booking you made stays real even if you misspoke its day, never abandon it or book a replacement; fix mistakes with `calendar_reschedule_appointment`. If a booking fails with `attendee_already_booked`, the caller ALREADY has an upcoming appointment: tell them its `existingStartLocal` time and follow the result's message (keep it, move it, or cancel it), only retry with `allowAdditional` true after they explicitly confirm they want a separate additional appointment. When the appointment it collides with is the one YOU just booked moments ago on this same call, that is not news to report: simply confirm the day and time as booked. Never say the slot was already booked, which to a caller who just chose it sounds like a stranger took it. If a booking fails (but NOT on a `timeout` or `booking_in_progress` result, follow that result's own recovery instructions instead), tell the caller that time is no longer available (never blame a technical error), re-check with `calendar_find_slots` before offering another option, and if a second booking also fails, stop offering times, call `notify_team` with their preferred day and time and say a team member will confirm. A follow-up email is a plain email, not a calendar invite, never call it one. A calendar invite goes out ONLY when the successful booking result shows an `inviteEmail`; when it is null the caller receives NO invite, never promise one, and offer a text confirmation instead. Never invent or guess email addresses, phone numbers, times, or confirmation details, ask instead. If you can't complete something, say so plainly and offer to have the team follow up, never pretend it worked.";
 
@@ -180,7 +180,7 @@ export function systemInstructionForBusiness(
       // "full name" escalation the model invented is closed off explicitly.
       "If the caller is turning into a genuine lead (they're interested in what the business offers, want a callback, or want to book) and you still don't know their name, ask for it once, naturally, before the call wraps up: something like \"and can I get your name?\". Before you ask, check whether they have already said their name at ANY point in this call, however briefly and even if you did not catch the spelling: if they have, you already know it, so do NOT ask again. Only once in the whole call, and never for someone just asking a quick question. Ask for a first name only, never a \"full name\", and never ask them to repeat or spell a name they have already given. If they'd rather not say, let it go immediately and carry on.",
       // Conversation quality (twin of the SMS worker's
-      // conversationQualityLine — keep in sync): reuse what is known, vary
+      // conversationQualityLine, keep in sync): reuse what is known, vary
       // the phrasing, respond to what the caller actually said.
       "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared), reuse it, including when booking an appointment. Address the caller by their FIRST name only, and use it sparingly, most replies need no name at all; never say their full name in normal conversation. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
       ONE_VOICE_LINE,
@@ -194,7 +194,7 @@ export function systemInstructionForBusiness(
       "If the caller explicitly asks to speak to a human, a manager, the owner, or indicates the matter is urgent/sensitive (emergencies, complaints, legal, medical), briefly acknowledge it, tell them you're connecting them now, then call the `transfer_to_owner` tool. Do not call the tool for routine questions you can answer yourself."
     );
   } else if (isStaff) {
-    // Staff are not customers — never run the customer callback-intake script.
+    // Staff are not customers, never run the customer callback-intake script.
     // If they want to reach someone specific, note who/what and relay it.
     base.push(
       "This account has not set up human transfer. If they want to reach someone specific on the team, briefly note who they're trying to reach and what it's about, and tell them you'll pass the message along, do not ask them for their name or number."
@@ -244,7 +244,7 @@ export function systemInstructionForBusiness(
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         // Aug 3 2026: asked what a consultation involves, the AI said it did
-        // not have specifics and "I'll have the team follow up with you" —
+        // not have specifics and "I'll have the team follow up with you",
         // then never called this tool. Nothing reached the team. The rule
         // existed; what was missing was tying the SENTENCE to the tool call,
         // so the promise cannot be made independently of the thing that keeps
@@ -300,7 +300,7 @@ export function systemInstructionForBusiness(
   // automations' collected facts + the last automated text, so the
   // receptionist never re-asks what a workflow already gathered. After the
   // memory note (the automation view is fresher and more specific, so it
-  // reads as the final word). Customer persona only — an owner calling in
+  // reads as the final word). Customer persona only, an owner calling in
   // doesn't need their own automation digest recited back.
   if (!isStaff && flowContextNote) {
     const trimmed = flowContextNote.trim();
@@ -330,8 +330,8 @@ export function systemInstructionForBusiness(
   }
 
   // Booking-status line (booking-context.ts, voice twin of the SMS worker's
-  // preamble line): the caller's live Calendly state — upcoming booking,
-  // reschedule, or a recent cancel — so "did my reschedule go through?"
+  // preamble line): the caller's live Calendly state, upcoming booking,
+  // reschedule, or a recent cancel, so "did my reschedule go through?"
   // gets an informed answer instead of a confident denial. After the
   // timeline: it is the single freshest fact. Customer persona only.
   if (!isStaff && bookingStatusNote) {

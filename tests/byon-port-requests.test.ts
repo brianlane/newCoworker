@@ -445,7 +445,7 @@ describe("createByonPortRequest", () => {
   it("keeps the draft with a SUBMIT_FAILED detail when confirm fails, mirroring the PATCH response", async () => {
     const porting = makePorting({
       // Telnyx stored the PATCH (requested FOC, support key) before confirm
-      // blew up — the refresh must mirror the PATCH, not the create snapshot.
+      // blew up, the refresh must mirror the PATCH, not the create snapshot.
       updatePortingOrder: vi.fn(async () => ({
         id: "po-1",
         activation_settings: { foc_datetime_requested: "2026-07-20T13:00:00Z" },
@@ -540,7 +540,7 @@ describe("createByonPortRequest", () => {
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.rows).toHaveLength(1);
-    // Telnyx accepted the submit even though the bookkeeping write failed —
+    // Telnyx accepted the submit even though the bookkeeping write failed,
     // the returned row reflects the confirmed state, not the stale draft,
     // so it agrees with `submitted: true`.
     expect(result.submitted).toBe(true);
@@ -1215,7 +1215,7 @@ describe("handlePortingStatusChange", () => {
   it("merges newer same-status fields after losing the CAS to a concurrent delivery", async () => {
     // We carry fresh exception details; a parallel delivery wins the status
     // CAS first but with no details. The retry lands in the same-status
-    // path and merges our details in — without re-alerting (already claimed).
+    // path and merges our details in, without re-alerting (already claimed).
     const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
     const { db, log } = makeDb([
       { data: portRow({ status: "submitted" }), error: null }, // read

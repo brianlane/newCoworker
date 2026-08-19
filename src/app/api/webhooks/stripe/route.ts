@@ -74,7 +74,7 @@ import {
   mirrorPrioritySupportSubscription
 } from "@/lib/db/priority-support";
 
-// Vercel Pro allows up to 800s — take all of it. Several dispatch paths
+// Vercel Pro allows up to 800s, take all of it. Several dispatch paths
 // below (`dispatchAutoCancelOnPaymentFailure`, `runChangePlanFromCheckout`,
 // `runResubscribeFromCheckout`, and the signup provisioning orchestrator)
 // schedule minutes-long SSH backup + Hostinger teardown / new-VM
@@ -119,7 +119,7 @@ async function fetchSubscriptionPeriodCacheOrEmpty(
  * correct for the common case, BUT if a user opens the Stripe portal
  * during the activation race window and toggles "Cancel at period end",
  * the mirror skip would silently lose that flag. Once we land here in
- * `checkout.session.completed`, the linkage is finally being planted —
+ * `checkout.session.completed`, the linkage is finally being planted,
  * any `cancel_at_period_end` we read from Stripe at this moment IS the
  * authoritative current state, so we mirror it inline. We do NOT
  * mirror `status` here: that would tangle with the activation flow's
@@ -177,7 +177,7 @@ export async function POST(request: Request) {
 
       case "checkout.session.async_payment_failed": {
         // Pending subs (never activated) are discarded on initial payment
-        // failure — we never write `past_due` for new signups. The DB row
+        // failure, we never write `past_due` for new signups. The DB row
         // stays as `pending` with status unchanged; the abandoned-subs
         // cleanup job (existing) will prune it.
         const session = event.data.object as Stripe.Checkout.Session;
@@ -231,8 +231,8 @@ export async function POST(request: Request) {
         // deliver this event before `checkout.session.completed`. The
         // later activation would then see `alreadyLinkedToThisStripeSub
         // === true` AND `status === "active"`, making `firstActivation`
-        // false and silently skipping `incrementLifetimeSubscriptionCount`
-        // — a lifetime-cap bypass under ordinary webhook delivery.
+        // false and silently skipping `incrementLifetimeSubscriptionCount`,
+        // a lifetime-cap bypass under ordinary webhook delivery.
         //
         // Downside: if `checkout.session.completed` is genuinely lost
         // (not retried, not delivered), the mirror is a no-op and the
@@ -323,7 +323,7 @@ export async function POST(request: Request) {
           // row with `status="canceled"`, fail
           // `planPeriodEndReached`'s `status !== "active"` precondition,
           // and skip the proper SSH backup + Hostinger snapshot/teardown
-          // + cancel-confirmation email — deferring everything to the
+          // + cancel-confirmation email, deferring everything to the
           // 30-day grace-sweep backstop and losing the
           // `user_period_end` audit reason. Detect the period-end
           // signature here (active row, scheduled-cancel flag, Stripe
@@ -429,7 +429,7 @@ export async function POST(request: Request) {
           }
           // Resurrection guard. Stripe can deliver `subscription.updated`
           // with `status="active"` for a row our lifecycle has already
-          // moved into the canceled/grace state — typical sources:
+          // moved into the canceled/grace state, typical sources:
           //   * Operator clicks "Resume subscription" in the Stripe
           //     dashboard (Stripe re-activates without dispatching a
           //     re-checkout, so we never run our resubscribe orchestrator
@@ -453,7 +453,7 @@ export async function POST(request: Request) {
           // reserve minutes against a stale period after the
           // subscription is gone. Re-stamping live period bounds from a
           // resurrected-in-Stripe sub onto a canceled-in-grace row
-          // would silently re-validate that JIT-fail proceed path —
+          // would silently re-validate that JIT-fail proceed path,
           // voice usage on the still-running VPS during grace would be
           // billed against the supposedly-terminated subscription. We
           // still mirror `cancel_at_period_end` (UI-only, no quota
@@ -585,7 +585,7 @@ export async function POST(request: Request) {
 
         // Enterprise-deal bookkeeping: flip the deal row to 'canceled' so the
         // one-live-deal-per-business slot frees up for a future re-deal.
-        // Best-effort — the subscription lifecycle below is the authority.
+        // Best-effort, the subscription lifecycle below is the authority.
         try {
           const dealCanceled = await markEnterpriseDealCanceledByStripeSubscriptionId(sub.id);
           if (dealCanceled) {
@@ -770,7 +770,7 @@ export async function POST(request: Request) {
           // `customer.subscription.updated` had already mirrored
           // status=canceled (e.g. Stripe dunning → canceled → deleted)
           // and left `grace_ends_at` null. Without a deadline the
-          // grace-sweep cron never picks the row up — SSH backup,
+          // grace-sweep cron never picks the row up, SSH backup,
           // Hostinger snapshot, stop VM, and Hostinger billing cancel
           // are all silently skipped, leaving the VPS running and
           // Hostinger billing active indefinitely. The upgrade_switch
@@ -1095,7 +1095,7 @@ export async function POST(request: Request) {
  * background execution can never produce an unhandled promise rejection
  * from the webhook entrypoint.
  *
- * Errors are logged but not thrown — webhook acknowledgement must stay 200 or
+ * Errors are logged but not thrown, webhook acknowledgement must stay 200 or
  * Stripe will retry, and by the time we get here the subscription is already
  * canceled on the Stripe side.
  */
@@ -1147,7 +1147,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // Enterprise deals are mode=subscription but must NOT run the default
   // signup activation below: no lifetime-cap accounting (the deal is
   // admin-vetted), no commitment schedule (month-to-month by design), and no
-  // provisioning trigger (the admin provisions from the panel — the box may
+  // provisioning trigger (the admin provisions from the panel, the box may
   // already exist).
   if (session.metadata?.checkoutKind === "enterprise_deal") {
     await applyEnterpriseDealFromCheckout(session, eventId);
@@ -1238,8 +1238,8 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     });
     // Same `after()` wrapper as changePlan above: fresh VM provisioning
     // + SSH restore is minutes-long work that must (a) not block the
-    // Stripe webhook ack, and (b) must outlive it on Vercel serverless
-    // — a bare floating promise is NOT guaranteed to keep the function
+    // Stripe webhook ack, and (b) must outlive it on Vercel serverless,
+    // a bare floating promise is NOT guaranteed to keep the function
     // alive past the response.
     after(async () => {
       try {
@@ -1349,7 +1349,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // uncounted, so a retry would also skip the increment and we under-
   // count by 1. That's acceptable because under-counting is permissive
   // (lets a legit user through), while over-counting is restrictive
-  // (incorrectly blocks legit future subs) — and the atomic DB RPC is
+  // (incorrectly blocks legit future subs), and the atomic DB RPC is
   // still the last authority on concurrent checkouts at the cap.
   const alreadyLinkedToThisStripeSub =
     !!subscriptionId && existing.stripe_subscription_id === subscriptionId;
@@ -1359,11 +1359,11 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // linked to a *different* Stripe subscription id, then re-linking it
   // here (the unconditional update below) would attach a brand-new paid
   // Stripe sub to an existing local row WITHOUT consuming a lifetime
-  // slot — `firstActivation` is false because the row is already
+  // slot, `firstActivation` is false because the row is already
   // active, so the increment branch is skipped. This is the lifetime-
   // cap bypass that the screenshot bug report describes. Real
   // subscription transitions (changePlan / resubscribe) never reach
-  // this default activation branch — they short-circuit at the
+  // this default activation branch, they short-circuit at the
   // `lifecycleAction` dispatch above and run their own orchestrators
   // (which DO bump the lifetime counter). So an active row arriving
   // here with a fresh-and-different Stripe sub id is anomalous: a
@@ -1394,7 +1394,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // and the lifetime-count increment below, otherwise we silently relink
   // the canceled row to a fresh Stripe sub, burn a lifetime slot, and
   // (further down) flip `status` back to `active` while leaving
-  // `grace_ends_at` / `wiped_at` / `cancel_at` / `cancel_reason` set —
+  // `grace_ends_at` / `wiped_at` / `cancel_at` / `cancel_reason` set,
   // a Frankenstein state that the grace-sweep cron can't see (it filters
   // `status="canceled"`) and that races a possibly-already-running wipe.
   //
@@ -1408,7 +1408,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   //      between the original delivery and the retry, the retry must
   //      not unwind that. The Stripe sub is already canceled at Stripe's
   //      end (the deleted event is what flipped us), so we don't need
-  //      to issue a teardown — silent bail is correct.
+  //      to issue a teardown, silent bail is correct.
   //
   //   2. Fresh checkout against a previously-canceled row that did NOT
   //      go through `/api/billing/reactivate` (mode=resubscribe):
@@ -1459,7 +1459,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     // when a degenerate Stripe session arrives without a customer id
     // (retry races, mode=payment sessions that slipped past earlier
     // guards, etc.). The two activation writes must apply this guard
-    // uniformly — otherwise the first write silently undoes the second
+    // uniformly, otherwise the first write silently undoes the second
     // write's protection on rare-but-real null-customer payloads.
     await updateSubscription(existing.id, {
       ...(customerId ? { stripe_customer_id: customerId } : {}),
@@ -1568,7 +1568,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // must not reinstate the month-to-month rollover schedule that
   // /api/billing/auto-renew deliberately released. Re-read the flag FRESH
   // here rather than trusting the `existing` snapshot loaded at handler
-  // start — an owner toggling auto-renew on while this webhook is mid-flight
+  // start, an owner toggling auto-renew on while this webhook is mid-flight
   // would otherwise have their released schedule silently recreated from
   // the stale snapshot. Falls back to the snapshot if the re-read misses.
   if (subscriptionId && billingPeriod && tier !== "enterprise") {
@@ -1616,7 +1616,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // Durable job row FIRST (inline, before the ack): even if this function
   // is torn down before the orchestrator writes anything, the
   // provisioning-watchdog cron has a queued row to find and re-run. A
-  // ledger failure must never block a signup — the inline run below still
+  // ledger failure must never block a signup, the inline run below still
   // happens either way.
   const jobInputs = {
     businessId,
@@ -1636,7 +1636,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // `after()` (Vercel waitUntil) rather than a bare floating promise: the
   // runtime is free to tear the function down right after the 200 ack
   // otherwise, which is exactly how the Truly (Jul 8) and KYP (Jul 14)
-  // signups died at "started 5%" — the .then/.catch chain here previously
+  // signups died at "started 5%", the .then/.catch chain here previously
   // had no keep-alive at all. billingPeriod drives the Hostinger purchase
   // term: a customer committing to an annual/biennial contract funds a
   // term-priced box (~40-65% cheaper per month than the monthly SKU's
@@ -1659,7 +1659,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       // Persist the Hostinger billing-subscription id so the lifecycle
       // engine can later cancel Hostinger billing (DELETE
       // /api/billing/v1/subscriptions/{id}) when the user cancels. Done on
-      // success only — if provisioning failed we don't want to write a stale
+      // success only, if provisioning failed we don't want to write a stale
       // id onto the row.
       if (!result.hostingerBillingSubscriptionId) return;
       try {
@@ -1681,7 +1681,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       // row on uncaught errors so the dashboard flips into its terminal
       // failure state instead of sticking at 5%. The remaining job here
       // is to surface diagnostic detail (endpoint, status, body) into
-      // Vercel logs — `err.message` alone strips the response body, and
+      // Vercel logs, `err.message` alone strips the response body, and
       // the body is exactly where Hostinger puts the actionable error
       // copy (e.g. `[VPS:2000] Unauthorized` for a token missing scope).
       //
@@ -1690,7 +1690,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       // tests mock the entire orchestrator module, which leaves the
       // helper undefined inside an async catch block. Keeping this
       // inline trades five lines of duplication for hermetic test
-      // mocking — and the logic is small enough that drift is cheap.
+      // mocking, and the logic is small enough that drift is cheap.
       const detail = (() => {
         if (err instanceof Error && err.name === "HostingerApiError") {
           const e = err as Error & { endpoint?: unknown; status?: unknown; body?: unknown };
@@ -1940,7 +1940,7 @@ async function applyEnterpriseDealFromCheckout(
   // Linkage guard, checked BEFORE claiming the deal so a refused payment
   // never wedges the deal row in 'active': an ACTIVE local row already
   // linked to a DIFFERENT live Stripe sub means this payment would
-  // double-bill the tenant — cancel the fresh sub. (A CANCELED row linked
+  // double-bill the tenant, cancel the fresh sub. (A CANCELED row linked
   // to an old, dead Stripe sub is the normal returning-tenant re-deal shape
   // and is handled below.)
   if (
@@ -2002,7 +2002,7 @@ async function applyEnterpriseDealFromCheckout(
   if (existing && !existing.wiped_at) {
     // Re-deal for a canceled-in-grace tenant is legitimate (the admin
     // authored a fresh deal after the old subscription ended), but the row
-    // must not keep its cancellation bookkeeping alongside status=active —
+    // must not keep its cancellation bookkeeping alongside status=active,
     // that Frankenstein state races the grace-sweep and confuses the
     // dashboard. Clear it in the same write, mirroring what the resubscribe
     // orchestrator does for self-serve reactivations.
@@ -2026,7 +2026,7 @@ async function applyEnterpriseDealFromCheckout(
       ...periodCache
     });
   } else {
-    // No row (defensive — admin-created enterprise businesses always have
+    // No row (defensive, admin-created enterprise businesses always have
     // one), or the prior lifetime was WIPED: a wiped row is terminal
     // bookkeeping (its data backup is gone) and must never be resurrected,
     // so the re-deal starts a fresh row. getSubscription reads newest-first,
@@ -2139,7 +2139,7 @@ async function applyPrioritySupportFromCheckout(
  * Records a white-glove package purchase (Phase C5): stamps the package +
  * priority call/video support window (purchase + 30d) on the business row
  * and sends the booking confirmation email. Idempotent under webhook
- * retries — the row update re-writes the same values (session `created` is
+ * retries, the row update re-writes the same values (session `created` is
  * fixed) and a duplicate confirmation email is a tolerable worst case.
  */
 async function applyWhiteGlovePurchaseFromCheckout(
@@ -2250,11 +2250,11 @@ async function applyWhiteGlovePurchaseFromCheckout(
  * row to 'paid', extends (never shortens) the business's priority
  * call/video support window by the standard 30 days, and sends the same
  * booking confirmation email as the fixed packages. PROSPECT offers
- * (business_id null — paid through the public /offer link before any
+ * (business_id null, paid through the public /offer link before any
  * account exists) skip the business steps; the confirmation goes to the
  * offer's recipient_email (falling back to the Stripe payer email) and the
  * support window is granted when the account is created. Idempotent under
- * webhook retries — the row re-writes the same values (session `created`
+ * webhook retries, the row re-writes the same values (session `created`
  * is fixed) and extendPrioritySupport is monotonic.
  */
 async function applyCustomWhiteGloveOfferFromCheckout(
@@ -2300,7 +2300,7 @@ async function applyCustomWhiteGloveOfferFromCheckout(
   if (claim === "duplicate_session") {
     // The offer was already paid by a DIFFERENT Checkout Session: the
     // customer was charged twice (two Buy tabs both reached Stripe before
-    // the first completion landed). Don't re-credit anything — surface it
+    // the first completion landed). Don't re-credit anything, surface it
     // loudly so support refunds this session's charge.
     logger.error("white_glove_offer paid by a second session, refund needed", {
       eventId,
@@ -2318,7 +2318,7 @@ async function applyCustomWhiteGloveOfferFromCheckout(
     // the link and paying). Attach the paid offer to their newest business so
     // billing hides the upsell and priority support opens now; when no
     // account exists yet, createBusiness / the pending-email swap attach it
-    // at signup instead. Strictly the recipient's email — never the Stripe
+    // at signup instead. Strictly the recipient's email, never the Stripe
     // payer's, which anyone holding the link could set.
     try {
       effectiveBusinessId = await attachPaidProspectOfferToBusinessByEmail(
@@ -2512,7 +2512,7 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
  *
  * - `refundedAmount` / `originalAmount` are both in the smallest currency unit (cents).
  * - When we can't compute a ratio (missing/zero original amount), return `null` so the
- *   caller falls back to a full void — safer than miscomputing a partial clawback.
+ *   caller falls back to a full void, safer than miscomputing a partial clawback.
  * - Ratio is applied to `session.amount_total` if present (falls back to the grant's
  *   `seconds_purchased` in the RPC via `p_clawback_seconds=null` when both inputs are
  *   unavailable). Rounded to the nearest second; a full refund (amount_refunded ===

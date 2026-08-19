@@ -7,7 +7,7 @@
  * - Business mode (business detail page): offers tied to one business; they
  *   also appear on that business's billing page.
  * - Prospect mode (admin overview, no businessId): pre-account offers keyed
- *   to an email — payable through the public /offer/<pay_token> link BEFORE
+ *   to an email, payable through the public /offer/<pay_token> link BEFORE
  *   the account exists.
  *
  * Every open offer exposes its durable, emailable payment link (the link

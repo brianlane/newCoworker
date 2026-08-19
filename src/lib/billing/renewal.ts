@@ -42,7 +42,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * subscription.
  *
  * Why this exists: the page historically showed `subscriptions.renewal_at`,
- * which is computed once at signup/plan-change and never advanced — so after
+ * which is computed once at signup/plan-change and never advanced, so after
  * the first monthly cycle it renders a date in the past even though the
  * subscription is healthy. Stripe's `current_period_end` is the real rolling
  * next-charge boundary (correct for monthly, annual, and biennial alike).
@@ -50,7 +50,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * TTFB-aware strategy (the billing route is already the slowest page, see the
  * auth round-trip work):
  *   1. If the cached `stripe_current_period_end` is still in the FUTURE, it's
- *      fresh (webhooks keep it current) — use it with NO network call.
+ *      fresh (webhooks keep it current), use it with NO network call.
  *   2. Only when the cache is missing or already elapsed do we fetch the live
  *      subscription from Stripe, bounded by a short timeout.
  *   3. On any failure/timeout, fall back to the cached value, then `renewal_at`.
@@ -71,7 +71,7 @@ export async function resolveActiveRenewalDate(
     return fallback;
   }
 
-  // Cache is fresh (period end in the future) — webhooks already advanced it.
+  // Cache is fresh (period end in the future), webhooks already advanced it.
   if (cachedEnd && new Date(cachedEnd).getTime() > now.getTime()) {
     return cachedEnd;
   }

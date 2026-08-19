@@ -43,7 +43,7 @@ export function isRcsInboundPayload(payload: Record<string, unknown>): boolean {
 
 /**
  * The RCS agent id an inbound RCS message was addressed to (`to[].agent_id`).
- * RCS inbound webhooks carry NO recipient phone number — the agent id is the
+ * RCS inbound webhooks carry NO recipient phone number, the agent id is the
  * only routing key, resolved against business_channel_settings.rcs_agent_id.
  */
 export function rcsInboundAgentId(payload: Record<string, unknown>): string | null {
@@ -69,13 +69,13 @@ export function isHelpKeyword(normalizedUpper: string): boolean {
   return /^(HELP|AYUDA|INFO|INFORMACION|INFORMACIÓN)$/.test(normalizedUpper.trim());
 }
 
-/** START / UNSTOP — case-insensitive single token (carrier re-subscribe). */
+/** START / UNSTOP, case-insensitive single token (carrier re-subscribe). */
 export function isStartKeyword(normalizedUpper: string): boolean {
   return /^(START|YES|UNSTOP|INICIO|COMENZAR|ALTA|SUSCRIBIR)$/.test(normalizedUpper.trim());
 }
 
 /**
- * True when a compliance keyword is one of the Spanish aliases — the auto-reply
+ * True when a compliance keyword is one of the Spanish aliases, the auto-reply
  * should answer in Spanish. Unambiguous tokens only ("INFO" stays English).
  */
 export function isSpanishComplianceKeyword(normalizedUpper: string): boolean {
@@ -88,7 +88,7 @@ export function isSpanishComplianceKeyword(normalizedUpper: string): boolean {
  * Telnyx REST base. Overridable ONLY so the worker-integration suite can
  * point sends at a local fake and assert delivered bodies; production leaves
  * it unset and always hits the real host. Runtime-agnostic (Deno on the
- * edge, Node under Vitest) — same pattern as gateway_token.ts.
+ * edge, Node under Vitest), same pattern as gateway_token.ts.
  */
 export function telnyxApiBase(): string {
   const g = globalThis as {
@@ -104,7 +104,7 @@ export async function telnyxSendSms(params: {
   messagingProfileId: string;
   /**
    * Optional sender E.164. Leave empty/undefined to let Telnyx pick a sender
-   * from the messaging profile's number pool — the correct behaviour for
+   * from the messaging profile's number pool, the correct behaviour for
    * tenants that don't have a dedicated `telnyx_sms_from_e164` configured.
    * When empty we must OMIT the `from` key entirely (sending "" would 400).
    */
@@ -131,9 +131,9 @@ export async function telnyxSendSms(params: {
   idempotencyKey?: string;
   /**
    * Tenant's approved Telnyx RCS agent id (resolve via
-   * _shared/channel_settings.ts `resolveRcsAgentId`). When set — and the send
+   * _shared/channel_settings.ts `resolveRcsAgentId`). When set, and the send
    * is a single-recipient, no-media text with a concrete `fromE164` for the
-   * SMS fallback — the message goes out RCS-FIRST (`POST /v2/messages/rcs`,
+   * SMS fallback, the message goes out RCS-FIRST (`POST /v2/messages/rcs`,
    * verified-brand sender, read receipts) with automatic SMS fallback to
    * non-RCS devices. Group sends, MMS, and pool-sender sends stay on the
    * plain SMS/MMS path. Callers that must stay plain SMS (carrier compliance
@@ -198,7 +198,7 @@ export async function telnyxSendSms(params: {
     if (res.ok) {
       // A 2xx without data.id means Telnyx did not durably create the message
       // (nothing to track, reconcile, or deliver). Treat it like a rejection
-      // and deliver over plain SMS — same behavior as the Node helper and the
+      // and deliver over plain SMS, same behavior as the Node helper and the
       // inbound worker.
       let rcsMessageId = "";
       try {
@@ -214,7 +214,7 @@ export async function telnyxSendSms(params: {
     } else {
       // RCS API rejection (agent revoked, destination not routable, …): fall
       // through to plain SMS so channel plumbing never drops a customer message.
-      // The idempotency key is safe to reuse — the rejected request created no
+      // The idempotency key is safe to reuse, the rejected request created no
       // message. Warn so operators notice misconfigured agents.
       console.warn(
         `telnyxSendSms: RCS send rejected (${res.status}), falling back to SMS:`,
@@ -246,7 +246,7 @@ export async function telnyxSendSms(params: {
  * length of exactly 1"); group messaging lives on its own endpoint, fans the
  * message into a single group thread, and is delivered as MMS.
  *
- * `from` is REQUIRED here (unlike the single-send number-pool case) — a group
+ * `from` is REQUIRED here (unlike the single-send number-pool case), a group
  * MMS must originate from a specific MMS-enabled number. Telnyx caps the group
  * at 8 recipients; callers should pre-trim.
  */

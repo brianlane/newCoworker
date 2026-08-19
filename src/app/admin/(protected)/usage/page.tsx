@@ -70,7 +70,7 @@ export default async function AdminUsagePage({
   const telnyx = telnyxMicrosByBusinessInWindow(telnyxRows, window);
 
   // Gemini spend from the day-keyed ledger (gemini_spend_events), summed over
-  // the SELECTED calendar month — works for historical months too, unlike the
+  // the SELECTED calendar month, works for historical months too, unlike the
   // period-keyed fuse rows. The fuse still drives Util % below.
   const geminiRows = await listGeminiSpendDaily(window.startYmd).catch((err: unknown) => {
     logger.error("admin usage: gemini ledger read failed", {
@@ -98,7 +98,7 @@ export default async function AdminUsagePage({
         peakConcurrentCalls: usage?.peakConcurrentCalls ?? 0,
         aiSpendMicros,
         // Null = the ledger has no rows in this window at all (pre-ledger
-        // months) — rendered as "—", not a misleading $0.00.
+        // months), rendered as ", ", not a misleading $0.00.
         geminiMonthMicros: gemini.hasRows ? (gemini.byBusiness.get(business.id) ?? 0) : null,
         aiCapMicros,
         includedVoiceMinutes: limits.voiceIncludedSecondsPerStripePeriod / 60,

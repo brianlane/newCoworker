@@ -239,7 +239,7 @@ describe("vagaroFetch", () => {
       vagaroFetch(CONN, { method: "GET", path: "/p" })
     ).rejects.toMatchObject({ code: "request_failed" });
 
-    // Token is cached from the first call — queue only the API response.
+    // Token is cached from the first call, queue only the API response.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 204,

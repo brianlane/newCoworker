@@ -1,8 +1,8 @@
 /**
- * Staff Task Center — pure helpers.
+ * Staff Task Center, pure helpers.
  *
  * A "task" is a lead in motion: a contact with non-terminal AiFlow runs
- * and/or lead-state tags. The Task Center card combines five facets — the
+ * and/or lead-state tags. The Task Center card combines five facets, the
  * active workflow position, the lead state (tags + owner), the goal-event
  * timeline, the collected info (run vars), and the AI's response reasoning.
  *

@@ -363,7 +363,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     // Regression: this route previously awaited `executeLifecyclePlan`
     // synchronously, which performs Stripe cancel, SSH backup, Hostinger
     // snapshot/stop/billing-cancel, DB updates (auth-user delete +
-    // mark_business_wiped), and emails — minutes-long work end-to-end.
+    // mark_business_wiped), and emails, minutes-long work end-to-end.
     // With no `maxDuration` export the route fell back to the platform
     // default and was torn down mid-teardown on larger tenants. The
     // fix mirrors `/api/billing/cancel` + `/api/admin/force-refund`:
@@ -405,7 +405,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       const response = await DELETE(makeRequest());
       expect(response.status).toBe(200);
       expect(executeLifecyclePlanFastPhase).toHaveBeenCalledTimes(1);
-      // Slow phase has NOT yet run when the response is returned —
+      // Slow phase has NOT yet run when the response is returned,
       // critical so the operator's HTTP call returns in seconds rather
       // than minutes.
       expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
@@ -430,7 +430,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
 
       const response = await DELETE(makeRequest());
       expect(response.status).toBe(500);
-      // No background work scheduled — Stripe cancel never landed.
+      // No background work scheduled, Stripe cancel never landed.
       expect(afterCallbacks.length).toBe(0);
       expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
       expect(logger.error).toHaveBeenCalledWith(

@@ -1,5 +1,5 @@
 /**
- * Vagaro webhook processing — the Zapier-free inbound path.
+ * Vagaro webhook processing, the Zapier-free inbound path.
  *
  * The owner pastes the tenant's webhook URL (which embeds the connection's
  * `webhook_verification_token`) into Vagaro's APIs & Webhooks settings.
@@ -11,7 +11,7 @@
  *      `source: "vagaro"` so flows can filter on it), idempotent per Vagaro
  *      event id;
  *   2. sync `customer` created/updated events into the coworker's contacts
- *      (create-if-missing, fill-only on name/email — never clobber); and
+ *      (create-if-missing, fill-only on name/email, never clobber); and
  *   3. treat `appointment` events as booking intelligence (Calendly-stack
  *      parity, Jul 2026): a created appointment fires the
  *      `appointment_booked` goal machinery (nurture flows stop nudging a
@@ -54,7 +54,7 @@ import {
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
-/** Serialized payload ceiling — mirrors /api/public/v1/flow-events. */
+/** Serialized payload ceiling, mirrors /api/public/v1/flow-events. */
 export const VAGARO_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 
 /**
@@ -65,7 +65,7 @@ export const VAGARO_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export { verificationTokenMatches } from "@/lib/integrations/webhook-token";
 
 export type VagaroWebhookEvent = {
-  /** Vagaro's event id — the idempotency key when present. */
+  /** Vagaro's event id, the idempotency key when present. */
   id: string | null;
   /** e.g. "appointment", "customer", "transaction", "formResponse". */
   type: string | null;
@@ -169,7 +169,7 @@ export async function syncVagaroCustomer(
       return;
     } catch (err) {
       if (!(err instanceof CustomerExistsError)) throw err;
-      // Concurrent deliveries raced the existence check — the profile now
+      // Concurrent deliveries raced the existence check, the profile now
       // exists, so re-read it and apply THIS delivery's fields fill-only
       // below (returning here would silently drop them).
       existing = await getCustomerMemory(businessId, phone);
@@ -188,7 +188,7 @@ export async function syncVagaroCustomer(
 const APPOINTMENT_GONE_ACTIONS = new Set(["deleted", "canceled", "cancelled"]);
 
 /**
- * The appointment object out of an `appointment` event payload — nested
+ * The appointment object out of an `appointment` event payload, nested
  * under `payload.appointment` or the payload itself (shape tolerance, same
  * posture as extractVagaroCustomer). Null when it has no id + parseable
  * start (the listing normalizer's contract).
@@ -200,7 +200,7 @@ export function extractVagaroAppointment(
   return normalizeVagaroAppointment(Object.keys(nested).length > 0 ? nested : payload);
 }
 
-/** Appointment id alone — deletion events may carry nothing else usable. */
+/** Appointment id alone, deletion events may carry nothing else usable. */
 export function extractVagaroAppointmentId(payload: Record<string, unknown>): string | null {
   const nested = asRecord(payload.appointment);
   const source = Object.keys(nested).length > 0 ? nested : payload;
@@ -252,14 +252,14 @@ const NO_APPOINTMENT_INTELLIGENCE: VagaroAppointmentIntelligence = {
  * parity). Three independent, each-best-effort effects:
  *
  *   - GOALS (action created, appointment standing): the customer's phone +
- *     email fire the shared `appointment_booked` machinery — parked nurture
+ *     email fire the shared `appointment_booked` machinery, parked nurture
  *     runs fast-forward past their remaining nudges, exactly as if the
  *     booking had been made through the platform tools.
  *   - CALENDAR TRIGGERS: created → event_created flows, deleted/canceled
  *     (or a payload whose status marks it canceled) → event_canceled flows,
  *     in real time through the poller's own enqueue core (shared dedupe
  *     keys make poll/webhook double-observation a no-op). A payload without
- *     the relevant timestamp gets the delivery moment — the event is
+ *     the relevant timestamp gets the delivery moment, the event is
  *     happening NOW, that is what "real time" means here.
  *   - LEDGER: created → record an external booking claim; updated → move it
  *     (drop + re-record at the new start); deleted/canceled → drop every
@@ -295,7 +295,7 @@ export async function processVagaroAppointmentEvent(
   if (!appointmentId) return result;
   const gone = APPOINTMENT_GONE_ACTIONS.has(action) || appt?.cancelled === true;
 
-  // GOALS — a created, still-standing appointment means "this person
+  // GOALS, a created, still-standing appointment means "this person
   // booked"; stop nurturing them.
   if (action === "created" && !gone && appt) {
     const customer = extractVagaroCustomer(event.payload);
@@ -331,7 +331,7 @@ export async function processVagaroAppointmentEvent(
     }
   }
 
-  // CALENDAR TRIGGERS — real-time created/canceled firings through the
+  // CALENDAR TRIGGERS, real-time created/canceled firings through the
   // poller's enqueue core (shared dedupe keys).
   if (appt && (action === "created" || gone)) {
     try {
@@ -356,7 +356,7 @@ export async function processVagaroAppointmentEvent(
     }
   }
 
-  // LEDGER — keep reschedule/cancel resolution working for off-platform
+  // LEDGER, keep reschedule/cancel resolution working for off-platform
   // bookings. The ledger primitives are individually best-effort already;
   // the try/catch guards the composition.
   let vacatedStarts: string[] = [];
@@ -460,7 +460,7 @@ export type VagaroWebhookResult = {
  * A contact-sync failure only logs (the flow result still returns), and the
  * appointment-intelligence half never throws by contract. A flow-processing
  * failure runs the other halves FIRST, then rethrows so the route answers
- * non-2xx and Vagaro redelivers — the retried flow event is deduped by
+ * non-2xx and Vagaro redelivers, the retried flow event is deduped by
  * event id, and the already-applied side effects are idempotent
  * (create-if-missing + fill-only contacts; goal jumps and calendar dedupe
  * keys no-op on re-observation; ledger writes are conflict-ignored).

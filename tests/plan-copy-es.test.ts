@@ -1,6 +1,6 @@
 /**
  * Spanish display variants of the plan/usage copy helpers. English is the
- * default locale everywhere — these tests pin the es output AND that the
+ * default locale everywhere, these tests pin the es output AND that the
  * en output is untouched when no locale is passed (zero-change guarantee).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";

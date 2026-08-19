@@ -8,14 +8,14 @@ import { logger } from "@/lib/logger";
  *
  * Why: the SMS worker retries a whole Rowboat turn when the model call fails
  * AFTER tool calls already ran (2026-07-13: Gemini 503s after a successful
- * booking tool call re-booked the same appointment on every retry — four
+ * booking tool call re-booked the same appointment on every retry, four
  * identical Outlook events). The provider APIs have no create-idempotency,
  * so the shared booking core claims a (business, attendee, start time) row
  * here before creating, and a repeat attempt inside the dedupe window gets
  * the already-created event back instead of a new one.
  *
  * Fail-open by design: any ledger error returns null and the booking
- * proceeds un-deduped — a missed dedupe is a nuisance, a blocked booking is
+ * proceeds un-deduped, a missed dedupe is a nuisance, a blocked booking is
  * a lost customer.
  */
 
@@ -121,7 +121,7 @@ export async function claimBookingDedupe(
 
     // Expired row (old confirmed booking, or a claimant that died without
     // confirming): reclaim it in place. Compare-and-swap on created_at so two
-    // concurrent claimants can't both win — the reclaim always bumps
+    // concurrent claimants can't both win, the reclaim always bumps
     // created_at, so a rival's reclaim invalidates our snapshot and this
     // update matches zero rows (Bugbot Medium on PR #566).
     const { data: reclaimed, error: reclaimErr } = await supabase
@@ -140,7 +140,7 @@ export async function claimBookingDedupe(
     }
     if (!reclaimed) {
       // Lost the CAS: a rival claimant reclaimed (and is booking) this slot
-      // between our read and our update. Refuse instead of failing open —
+      // between our read and our update. Refuse instead of failing open,
       // failing open here would book in parallel with the winner, which is
       // exactly the duplicate this ledger exists to prevent.
       return { kind: "in_flight" };
@@ -166,7 +166,7 @@ const CONFIRM_RETRY_DELAY_MS = 250;
  * an event that already exists: an unconfirmed row is reclaimable after
  * BOOKING_IN_FLIGHT_TTL_MS, so a lost confirm re-opens the duplicate window
  * (Bugbot High on PR #566). After the retries the failure is logged at error
- * level — the residual exposure is a sustained DB outage bracketed by two
+ * level, the residual exposure is a sustained DB outage bracketed by two
  * working moments, at which point duplicate suppression is best-effort by
  * the module's fail-open contract.
  */
@@ -251,7 +251,7 @@ export type UpcomingBookingClaim = {
    */
   sharedCalendarEventId?: string | null;
   /**
-   * The row's stored attendee key — set by the phone-tolerant lookup, where
+   * The row's stored attendee key, set by the phone-tolerant lookup, where
    * it can differ from the caller's key (different phone formatting at
    * booking time). Ledger mutations should prefer it when present.
    */
@@ -370,8 +370,8 @@ export async function findUpcomingBookingClaimByPhone(
  *
  * A unique-index conflict means a DIFFERENT claim already covers the new
  * slot (e.g. the model booked a second event there before rescheduling this
- * one). The provider event behind THIS claim has already moved — its
- * updated invitation is what the attendee just received — so this claim
+ * one). The provider event behind THIS claim has already moved, its
+ * updated invitation is what the attendee just received, so this claim
  * must stay tracked: the conflicting row loses (deleted) and the move is
  * retried once. The displaced event, if real, resolves later through the
  * provider-search fallback (Bugbot on PR #577). Best-effort throughout.
@@ -453,7 +453,7 @@ export async function deleteBookingClaim(claimId: string): Promise<void> {
  * The Zoom meeting recorded for a provider event under ANY attendee key.
  * Used by the provider-search resolution path in reschedule/cancel: the
  * caller's own key missed (booked by phone, canceled by email), but the
- * event's ledger row — about to be dropped by deleteBookingClaimsByEvent —
+ * event's ledger row, about to be dropped by deleteBookingClaimsByEvent,
  * may still carry the booking's Zoom meeting id, and the meeting must move
  * or die with the event. Best-effort: null means "no meeting to touch".
  */
@@ -624,7 +624,7 @@ export async function deleteBookingClaimsByEvent(
 /**
  * Record a confirmed booking discovered OUTSIDE the ledger (a reschedule of
  * an event booked before the ledger shipped) so future duplicate checks and
- * reschedules resolve without a provider search. Conflicts are ignored — an
+ * reschedules resolve without a provider search. Conflicts are ignored, an
  * existing claim for the slot already serves that purpose.
  */
 export async function recordExternalBookingClaim(

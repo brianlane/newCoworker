@@ -112,7 +112,7 @@ function branchChoiceLabel(s: AiFlowRunStepRow): string | null {
 
 /**
  * The vars a step's recorded result produced (its set_vars payload), minus
- * engine-internal underscore markers — "what did this step actually find".
+ * engine-internal underscore markers, "what did this step actually find".
  */
 function stepProducedEntries(s: AiFlowRunStepRow): RunDataEntry[] {
   const vars = (s.result?.vars ?? null) as Record<string, unknown> | null;
@@ -150,7 +150,7 @@ function DataList({ title, entries }: { title: string; entries: RunDataEntry[] }
 /**
  * "What data was in this run": the trigger content it started from and every
  * variable its steps produced so far. Shown for in-progress, completed, AND
- * failed runs — on a failure this is usually the answer ("lead_phone was
+ * failed runs, on a failure this is usually the answer ("lead_phone was
  * empty"), so it renders above the step list.
  */
 function RunDataSection({ context }: { context: Record<string, unknown> }) {
@@ -230,7 +230,7 @@ export function AiFlowRunsManager({
   businessId: string;
   initialRuns: AiFlowRunRow[];
   flows: AiFlowRef[];
-  /** When set, the page is scoped to one flow — keep the filter on reload. */
+  /** When set, the page is scoped to one flow, keep the filter on reload. */
   flowId?: string;
   /** E.164 → roster/contact name for the employees offered a lead (routing). */
   employeeNames?: Record<string, string>;
@@ -238,7 +238,7 @@ export function AiFlowRunsManager({
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
   // Kept in state (not just the prop) so a reload() can MERGE in names for
-  // newly offered employees that weren't in the initial server snapshot —
+  // newly offered employees that weren't in the initial server snapshot,
   // otherwise an escalated offer would show a raw E.164 until a full reload.
   const [names, setNames] = useState<Record<string, string>>(employeeNames);
   // Set of expanded run ids. Multiple runs can be open at once (per-group
@@ -283,7 +283,7 @@ export function AiFlowRunsManager({
   };
 
   const loadSteps = async (runId: string) => {
-    // Terminal runs never change — their cached steps/links are final. A
+    // Terminal runs never change, their cached steps/links are final. A
     // LIVE run keeps producing steps and tracked links after the first
     // expand, so re-expanding refetches instead of serving the stale cache.
     const run = runs.find((r) => r.id === runId);
@@ -300,7 +300,7 @@ export function AiFlowRunsManager({
     if (json.ok && json.data) {
       setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
       // Always seed the cache (default []) so the loaded-guard above holds
-      // even when the response carries no links — otherwise every expand
+      // even when the response carries no links, otherwise every expand
       // would re-fetch the run detail endpoint.
       setRunLinks((s) => ({ ...s, [runId]: json.data!.links ?? [] }));
     }
@@ -333,7 +333,7 @@ export function AiFlowRunsManager({
     // Decide expand-vs-collapse from the CURRENT committed state, not from a
     // flag mutated inside the setState updater. React runs functional updaters
     // lazily during render, so a `willExpand` set inside the updater is still
-    // false when the line after setExpandedRuns runs — which meant loadSteps
+    // false when the line after setExpandedRuns runs, which meant loadSteps
     // never fired on an individual run click and the row showed "No steps
     // recorded" until the group-level "Expand details" (which loads directly)
     // was used. `toggle` is recreated each render, so `expandedRuns` here is
@@ -362,7 +362,7 @@ export function AiFlowRunsManager({
     if (expand) await Promise.all(runIds.map((id) => loadSteps(id)));
   };
 
-  // Show/hide a whole flow's run list (the primary expand/collapse). Cheap —
+  // Show/hide a whole flow's run list (the primary expand/collapse). Cheap,
   // the runs are already loaded; only their per-run step details are fetched
   // lazily when an individual run (or "Expand details") opens.
   const toggleGroup = (groupId: string) => {
@@ -393,7 +393,7 @@ export function AiFlowRunsManager({
   }, [deepLinkedRun, runs]);
 
   // Scroll only AFTER the row is expanded and its steps have mounted, so the
-  // detail (error + steps + screenshots) is on the page when we center it —
+  // detail (error + steps + screenshots) is on the page when we center it,
   // scrolling right after expanding would center the still-collapsed row.
   useEffect(() => {
     if (!deepLinkedRun || scrolledDeepLink.current === deepLinkedRun) return;
@@ -415,7 +415,7 @@ export function AiFlowRunsManager({
       });
       if (!res.ok) {
         // A 409 (already decided) or other failure must NOT imply success.
-        // The API shape is { ok:false, error:{ code, message } } — read the
+        // The API shape is { ok:false, error:{ code, message } }, read the
         // message string, never the object (which renders as [object Object]).
         const detail = await res
           .json()
@@ -440,7 +440,7 @@ export function AiFlowRunsManager({
   // (newest-run flow first) so the runs view matches the AiFlows page's
   // sort-by-last-run. Runs within a group stay newest-first as the API returns
   // them, so runs[0] is the group's latest run. Runs whose flow no longer
-  // appears in the list (deleted between fetches — FK cascade removes them on
+  // appears in the list (deleted between fetches, FK cascade removes them on
   // the next load) still group together as "Deleted flow".
   const grouped: Array<{ id: string; name: string; runs: AiFlowRunRow[] }> = [];
   const byFlow = new Map<string, AiFlowRunRow[]>();

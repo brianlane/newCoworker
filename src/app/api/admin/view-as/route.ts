@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
       path: "/",
-      // Persistent cookie with a hard 4h cap (NOT session-scoped — a
+      // Persistent cookie with a hard 4h cap (NOT session-scoped, a
       // persistent maxAge survives browser close, which is fine: the cookie
       // is only ever honored for the admin, and it expires on its own).
       // Exit via the banner clears it immediately. The cap matters more now

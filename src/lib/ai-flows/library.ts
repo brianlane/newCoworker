@@ -99,7 +99,7 @@ export async function getAiFlowLibraryEntry(
  * then set download_count to the authoritative COUNT of download rows for the
  * entry. Counting the just-written source-of-truth table (rather than bumping a
  * cached value) avoids the lost-update race two concurrent "Use this flow"
- * requests would hit with a read-modify-write. Best-effort — never blocks the
+ * requests would hit with a read-modify-write. Best-effort, never blocks the
  * duplicate itself.
  */
 export async function recordLibraryDownload(
@@ -114,13 +114,13 @@ export async function recordLibraryDownload(
     .select("*", { count: "exact", head: true })
     .eq("library_id", libraryId);
   // If the count is unavailable (query error / null), leave download_count as-is
-  // rather than zeroing a real total — the hourly refresh reconciles it anyway.
+  // rather than zeroing a real total, the hourly refresh reconciles it anyway.
   if (error || count === null || count === undefined) return;
   await db.from("ai_flow_library").update({ download_count: count }).eq("id", libraryId);
 }
 
 /**
- * Delete catalog entries whose template_key is NOT in `keepKeys` — i.e. flows
+ * Delete catalog entries whose template_key is NOT in `keepKeys`, i.e. flows
  * that no longer have any successful run. Keeps the public library from showing
  * retired automations with stale stats. When `keepKeys` is empty the whole
  * catalog is cleared (no flow qualifies). Cascades to download rows via FK.

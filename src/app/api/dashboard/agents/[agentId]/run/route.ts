@@ -1,5 +1,5 @@
 /**
- * Agents — run execution.
+ * Agents, run execution.
  *
  *   POST /api/dashboard/agents/:agentId/run
  *     multipart: businessId + file (repeatable)      → run against fresh uploads
@@ -7,13 +7,13 @@
  *     JSON:      { businessId, documentIds: [...] }  → run against several documents
  *
  * One run = one Gemini transformation (executeAgentRun) over EVERY attached
- * file — multi-file runs exist for side-by-side work ("compare these
- * carrier quotes"). Executed INLINE — a run is an owner-attended action and
+ * file, multi-file runs exist for side-by-side work ("compare these
+ * carrier quotes"). Executed INLINE, a run is an owner-attended action and
  * the model call is bounded at 90s, same posture as document ingestion.
  * Fresh uploads are stored in the private business-docs bucket
  * (`<businessId>/agent-inputs/<runId>/…`) so run history keeps its inputs;
  * document runs read the stored originals for full fidelity (not the
- * condensed content_md). Runs are staff-allowed (`operate_messages`) —
+ * condensed content_md). Runs are staff-allowed (`operate_messages`),
  * using an agent is operating, not authoring.
  */
 
@@ -190,7 +190,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const runId = randomUUID();
-    // Archive fresh uploads so run history keeps its inputs (best-effort —
+    // Archive fresh uploads so run history keeps its inputs (best-effort,
     // the run itself matters more than a re-viewable copy). One object per
     // file, index-prefixed so same-named uploads can't collide.
     const archivedPaths: (string | null)[] = inputs.map(() => null);
@@ -254,7 +254,7 @@ export async function POST(request: Request, context: RouteContext) {
       throw err;
     }
 
-    // executeAgentRun never throws for expected failures — it returns
+    // executeAgentRun never throws for expected failures, it returns
     // { ok: false } and the terminal patch below records it. The try/catch
     // layering exists for UNEXPECTED throws (executor bug, DB failure on the
     // terminal write) so the row can never stick in 'running'.
@@ -301,7 +301,7 @@ export async function POST(request: Request, context: RouteContext) {
       : {
           status: "failed" as const,
           // Attachment-classification failures carry the failing filename
-          // in the detail — essential on multi-file runs, where "an
+          // in the detail, essential on multi-file runs, where "an
           // attachment is empty" alone doesn't say which one. Model
           // failures keep the generic message (their detail is a raw
           // transport error, not owner-facing).
@@ -316,7 +316,7 @@ export async function POST(request: Request, context: RouteContext) {
     try {
       await patchAgentRun(businessId, runId, terminalPatch);
     } catch (firstErr) {
-      // The spend is already metered and (on success) the artifact exists —
+      // The spend is already metered and (on success) the artifact exists,
       // worth a second identical write before giving up on it. Only after
       // the retry also fails do we fall back to a minimal failed stamp
       // (smaller payload, so it can survive a size/content-related failure)
@@ -344,7 +344,7 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
-    // Respond with the terminal state we just wrote — deterministic even if
+    // Respond with the terminal state we just wrote, deterministic even if
     // a concurrent agent delete cascaded the row away mid-request (a re-read
     // could return null, and the pre-patch insert snapshot still says
     // 'running' with no artifact).

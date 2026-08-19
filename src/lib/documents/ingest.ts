@@ -1,9 +1,9 @@
 /**
- * Business Documents — upload ingestion (extract + condense).
+ * Business Documents, upload ingestion (extract + condense).
  *
  * Text formats (txt / markdown / csv) are decoded directly; Word documents
  * (.docx) are decoded locally via mammoth; PDFs go to Gemini as inlineData
- * (native PDF understanding — no local parser dependency). Either way one
+ * (native PDF understanding, no local parser dependency). Either way one
  * Gemini pass condenses the material into the agent-facing `content_md`
  * plus a 1–2 sentence retrieval `summary`, mirroring the website-ingest
  * pipeline (metered into the shared AI budget via
@@ -87,7 +87,7 @@ export function isSupportedDocumentMime(mime: string): boolean {
 
 /**
  * Canonical mime for an upload: maps VTT transcripts (reported as text/vtt,
- * blank, or octet-stream with a .vtt name — browsers do all three) onto
+ * blank, or octet-stream with a .vtt name, browsers do all three) onto
  * VTT_MIME_TYPE, and Word uploads (canonical mime, or blank/octet-stream
  * with a .docx name) onto DOCX_MIME_TYPE, so the upload routes accept them
  * and ingestion knows to convert. Every other upload keeps its reported type.
@@ -168,7 +168,7 @@ function buildCondensePrompt(args: {
  */
 export function parseCondensedReply(reply: string): { contentMd: string; summary: string } {
   // The content group is optional so a reply whose body is blank (delimiter
-  // at end-of-string) still parses — and correctly yields empty content.
+  // at end-of-string) still parses, and correctly yields empty content.
   const match = /^SUMMARY:\s*([\s\S]*?)\n-{3,}(?:\n([\s\S]*))?$/m.exec(reply.trim());
   if (match) {
     const summary = clipAtBoundary(
@@ -232,7 +232,7 @@ async function runCondense(
     return { ok: true, text };
   } catch (err) {
     if (err instanceof GeminiEmptyError) {
-      // Billed even when empty (thinking-only output) — meter before failing.
+      // Billed even when empty (thinking-only output), meter before failing.
       await meterGeminiSpendForBusiness({
         businessId,
         model,
@@ -344,8 +344,8 @@ export async function ingestDocument(
 }
 
 /**
- * Knowledge graph (kg-source: document): every successful ingest — first
- * upload, AiFlow filing, Zoom import, owner re-ingest — schedules chunked
+ * Knowledge graph (kg-source: document): every successful ingest, first
+ * upload, AiFlow filing, Zoom import, owner re-ingest, schedules chunked
  * entity extraction over the CONDENSED body (the retrieval source of
  * truth; smaller and cleaner than the raw file), trust 2, attributed to
  * the document title. Deferred via after(); never blocks or fails the

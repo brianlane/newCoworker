@@ -1,5 +1,5 @@
 /**
- * Structured services catalog (BizBlasts-inspired) — DB access.
+ * Structured services catalog (BizBlasts-inspired), DB access.
  *
  * `business_services` rows (name / duration / price / active) are edited on
  * the dashboard Settings page and rendered into

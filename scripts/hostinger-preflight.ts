@@ -1,11 +1,11 @@
 #!/usr/bin/env tsx
 /**
- * Hostinger provisioning preflight — end-to-end dry run against the LIVE API.
+ * Hostinger provisioning preflight, end-to-end dry run against the LIVE API.
  *
  * Exercises every primitive `orchestrateProvisioning` depends on EXCEPT the one
- * that spends money (`POST /api/vps/v1/virtual-machines`). Everything else —
+ * that spends money (`POST /api/vps/v1/virtual-machines`). Everything else,
  * catalog lookup, payment-method presence, data-center / template verification,
- * public-key create + delete, post-install script create + delete — is invoked
+ * public-key create + delete, post-install script create + delete, is invoked
  * for real and cleaned up before exit.
  *
  * Why this exists:
@@ -15,7 +15,7 @@
  *   - Confirms the Boston DC (`DEFAULT_US_DATA_CENTER_ID`) and Ubuntu 24.04
  *     Docker template (`DEFAULT_TEMPLATE_ID`) are still live.
  *   - Confirms at least one non-expired, non-suspended payment method is on
- *     file — otherwise a real purchase would 402.
+ *     file, otherwise a real purchase would 402.
  *
  * Usage:
  *   HOSTINGER_API_TOKEN=… npx tsx scripts/hostinger-preflight.ts
@@ -23,9 +23,9 @@
  *   HOSTINGER_API_TOKEN=… npx tsx scripts/hostinger-preflight.ts --keep
  *
  * Exit codes:
- *   0  — all checks passed
- *   1  — at least one check failed (cleanup is still attempted)
- *   2  — required env missing or bad CLI args
+ *   0, all checks passed
+ *   1, at least one check failed (cleanup is still attempted)
+ *   2, required env missing or bad CLI args
  *
  * See `src/lib/hostinger/client.ts` for the endpoint surface and
  * `src/lib/hostinger/provision.ts` for the SKU / DC / template defaults we
@@ -244,7 +244,7 @@ export async function runPreflight(
   }
 
   // ---- 6. Post-install script round-trip: create + delete. --------------
-  //   Smallest possible valid script — only exercises the API surface, not
+  //   Smallest possible valid script, only exercises the API surface, not
   //   the production bootstrap (which is 4 KB and lives in `provision.ts`).
   let createdScript: PostInstallScript | undefined;
   let createdScriptDeleted: boolean | null = null;

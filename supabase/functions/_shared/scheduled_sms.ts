@@ -5,13 +5,13 @@
  * (`/api/dashboard/messages/schedule`); the scheduled-sms-sweep Edge cron
  * calls processDueScheduledSms every minute to dispatch what's due.
  *
- * Per-row gate chain (each failure marks THAT row and moves on — one bad row
+ * Per-row gate chain (each failure marks THAT row and moves on, one bad row
  * must never wedge the batch):
- *   1. tier still allows (standard/enterprise — a downgrade between
+ *   1. tier still allows (standard/enterprise, a downgrade between
  *      scheduling and dispatch voids the perk)
  *   2. CTIA opt-out (sms_is_opted_out) → canceled, not failed
  *   3. Telnyx messaging configured for the tenant
- *   4. monthly SMS cap (try_reserve_sms_outbound_slot — owner-scheduled
+ *   4. monthly SMS cap (try_reserve_sms_outbound_slot, owner-scheduled
  *      sends are customer-facing and metered like any other outbound)
  *   5. Telnyx send (idempotency key scheduled_sms:<id> makes stale-claim
  *      retries safe), RCS-first for eligible tenants
@@ -122,7 +122,7 @@ async function dispatchOne(
     // Stale-claim retry guard: the outbound-log row (unique on
     // scheduled_sms_id) is the durable "Telnyx accepted this" marker, written
     // before the queue row flips to 'sent'. If a previous attempt delivered
-    // but the sent-mark failed, short-circuit here — never reserve a second
+    // but the sent-mark failed, short-circuit here, never reserve a second
     // metered slot or double-post the thread entry.
     const { data: priorLog } = await supabase
       .from("sms_outbound_log")
@@ -247,7 +247,7 @@ async function dispatchOne(
     // The log row doubles as the idempotency marker (see the stale-claim
     // guard above); its unique scheduled_sms_id index makes a racing retry's
     // duplicate insert a no-op. A failed insert must not mark the (already
-    // delivered) send as failed — worst case the narrow marker gap means one
+    // delivered) send as failed, worst case the narrow marker gap means one
     // extra reserved slot on reclaim, with Telnyx's idempotency key still
     // preventing a duplicate text.
     const { error: logErr } = await supabase.from("sms_outbound_log").insert({

@@ -5,7 +5,7 @@
  * Clever's "Cue" texts arrive on a dedicated number (314-907-1456) and just need
  * a "Y" confirmation back. This flow suppresses the AI assistant's normal reply,
  * auto-replies "Y" straight to the sender, and arms a short expected-call window
- * so the concierge's follow-up call (from a ROTATING number pool — see the
+ * so the concierge's follow-up call (from a ROTATING number pool, see the
  * Jul 20 2026 missed transfer from +18609926975) bridges straight to the
  * assigned agent instead of the AI answering.
  *
@@ -26,7 +26,7 @@
  *   AIFLOW_CLEVER_CUE_FROM            (default "3149071456")
  *   AIFLOW_CLEVER_CUE_REPLY           (default "Y")
  *   AIFLOW_CLEVER_CUE_KEYWORD         (default "LIVE TRANSFER")
- *   AIFLOW_CLEVER_CUE_TRANSFER_TO     (default "+16025245719" — Dave)
+ *   AIFLOW_CLEVER_CUE_TRANSFER_TO     (default "+16025245719", Dave)
  *   AIFLOW_CLEVER_CUE_WINDOW_MINUTES  (default "20")
  */
 import { createClient } from "@supabase/supabase-js";
@@ -69,7 +69,7 @@ function buildDefinition(opts: {
       channel: "sms",
       // Window 0 = match ONLY the message that just arrived, never the
       // correlation window. Clever's "LIVE TRANSFER … Reply Y" prompt is a
-      // single self-contained text, so no window is needed — and a window would
+      // single self-contained text, so no window is needed, and a window would
       // re-fire the "Y" on Clever's follow-up ("Awesome! You've been added…")
       // because that prompt's text still sits inside the window. Keep at 0.
       correlationWindowMinutes: 0,

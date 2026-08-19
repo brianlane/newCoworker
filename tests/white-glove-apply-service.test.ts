@@ -235,7 +235,7 @@ describe("applyWhiteGloveIntake", () => {
       expect.objectContaining({ businessId: BIZ_ID, id: FLOW_ID }),
       expect.anything()
     );
-    // enabled untouched on update — the owner's toggle survives a re-apply.
+    // enabled untouched on update, the owner's toggle survives a re-apply.
     expect(vi.mocked(updateAiFlow).mock.calls[0][0]).not.toHaveProperty("enabled");
     expect(createAiFlow).not.toHaveBeenCalled();
 

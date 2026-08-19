@@ -13,7 +13,7 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
  * The texting coworker's flow-enrollment DISCOVERY block, on the real
  * Rowboat wire: when (and only when) the business has an enabled flow the
  * owner flagged `options.agentInvocable`, the customer preamble carries an
- * "Automations you may start" section naming it — so the model knows what
+ * "Automations you may start" section naming it, so the model knows what
  * the start_aiflow_for_contact tool may target. Tenants with no flagged
  * flows get a byte-identical preamble (zero prompt change platform-wide).
  */

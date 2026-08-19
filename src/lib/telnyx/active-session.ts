@@ -49,9 +49,9 @@ export type VoiceSessionRow = {
 };
 
 /**
- * - `"live"`   — unended and heartbeating; a caller is on the line.
- * - `"ended"`  — the bridge stamped `ended_at`; the call is over.
- * - `"stale"`  — unended but silent past the ceiling; a leaked row, not a call.
+ * - `"live"`, unended and heartbeating; a caller is on the line.
+ * - `"ended"`, the bridge stamped `ended_at`; the call is over.
+ * - `"stale"`, unended but silent past the ceiling; a leaked row, not a call.
  */
 export type VoiceSessionLiveness = "live" | "ended" | "stale";
 

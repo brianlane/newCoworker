@@ -54,7 +54,7 @@ export function useBusinessConfigSave() {
  * Two layers, because they cover disjoint exits:
  *  - `beforeunload` for tab close, reload, and full-page navigation
  *    (browsers show their own generic wording; the string is ignored).
- *  - a capture-phase click interceptor for SAME-ORIGIN anchor clicks —
+ *  - a capture-phase click interceptor for SAME-ORIGIN anchor clicks,
  *    Next.js `<Link>` navigations (the dashboard sidebar!) are client-side
  *    route changes that never fire beforeunload, and the App Router has no
  *    supported route-change veto, so the click itself is the only reliable
@@ -74,7 +74,7 @@ export function useUnsavedChangesWarning(dirty: boolean): void {
       if (e.defaultPrevented || e.button !== 0) return;
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       // The click target can be a Text node (bare link labels), which has no
-      // closest() — climb to its parent element first or the guard silently
+      // closest(), climb to its parent element first or the guard silently
       // lets the navigation through.
       const node = e.target as Node | null;
       const el = node instanceof Element ? node : (node?.parentElement ?? null);
@@ -94,7 +94,7 @@ export function useUnsavedChangesWarning(dirty: boolean): void {
       if (url.origin !== window.location.origin) return;
       if (!window.confirm("You have unsaved changes. Leave this page and discard them?")) {
         // Runs in the capture phase at document level, so this lands before
-        // the Link's own handler — preventDefault stops the route change.
+        // the Link's own handler, preventDefault stops the route change.
         e.preventDefault();
         e.stopPropagation();
       }

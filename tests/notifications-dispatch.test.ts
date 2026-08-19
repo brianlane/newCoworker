@@ -194,7 +194,7 @@ describe("notifications/dispatch", () => {
           : { insert: outboundLogInsert }
       )
     } as never);
-    // Default success shape ({ id, channel }) — the dispatcher destructures
+    // Default success shape ({ id, channel }), the dispatcher destructures
     // the result to stamp telnyx_message_id on the outbound-log row.
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
     // Default: Slack NOT connected, so the pre-Slack expectations (four

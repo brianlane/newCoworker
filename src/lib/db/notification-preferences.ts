@@ -43,12 +43,12 @@ export type NotificationPreferencesRow = {
   /**
    * Opt-in (default false): notify the owner when a customer texts the
    * business (per-contact coalescing; forward_owner contacts excluded).
-   * KYP feedback, Jul 20 2026 — "let me know when clients text back".
+   * KYP feedback, Jul 20 2026, "let me know when clients text back".
    */
   customer_reply_alerts: boolean;
   /**
    * ON by default: alert the owner when the AI confirms a booking for a
-   * contact NO teammate owns (Truly, Jul 21 2026 — a real broker call was
+   * contact NO teammate owns (Truly, Jul 21 2026, a real broker call was
    * booked after hours and no human was ever told it existed). Optional on
    * the type for rows read before 20260819100000.
    */
@@ -88,7 +88,7 @@ export type NotificationPreferencesRow = {
    * Set when the owner clicks "Unsubscribe from all" or hits a one-click
    * email-link unsubscribe. Cleared automatically when any toggle is flipped
    * back on (re-subscribing). The four boolean toggles remain the gate the
-   * dispatcher checks — this column is for audit + UI banner copy only.
+   * dispatcher checks, this column is for audit + UI banner copy only.
    */
   unsubscribed_at: string | null;
   updated_at: string;
@@ -116,8 +116,8 @@ export type NotificationPreferenceContactSeeds = {
  * Phone seeds are E.164-coerced, never passed through raw: `businesses.phone`
  * is free-form onboarding input (KYP Ads arrived as the 7-digit "5188192",
  * Jul 14 2026), and this value is what the alert dispatcher hands Telnyx as
- * the SMS `to`. A seed that can't be safely coerced is dropped — the form
- * shows an empty field the owner fills in (and the save route validates) —
+ * the SMS `to`. A seed that can't be safely coerced is dropped, the form
+ * shows an empty field the owner fills in (and the save route validates),
  * instead of pre-filling a number that could never receive an alert.
  */
 export function initialNotificationPreferenceContactsFromSeeds(
@@ -139,8 +139,8 @@ export function initialNotificationPreferenceContactsFromSeeds(
  * only), this is safe to call on every render: it never writes to the DB. It
  * fills `alert_email` / `phone_number` from account info ONLY when the stored
  * value is null/blank, so the form is pre-populated from the owner's email +
- * business phone the first time they visit — answering "why isn't this
- * autofilled?" — while a real stored value always wins.
+ * business phone the first time they visit, answering "why isn't this
+ * autofilled?", while a real stored value always wins.
  *
  * Tradeoff: because the merge is display-only, the stored row is unchanged
  * until the owner clicks Save, at which point the shown value is persisted.
@@ -222,8 +222,8 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
 
 /**
  * In-memory equivalent of the row {@link getOrCreateNotificationPreferences}
- * would insert (defaults, no contact seeds). For read-only rendering paths —
- * admin view-as previews a tenant who never opened the notifications page —
+ * would insert (defaults, no contact seeds). For read-only rendering paths,
+ * admin view-as previews a tenant who never opened the notifications page,
  * where creating the real row as a page-load side effect is not acceptable.
  */
 export function defaultNotificationPreferencesRow(businessId: string): NotificationPreferencesRow {

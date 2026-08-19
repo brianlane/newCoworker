@@ -24,7 +24,7 @@ import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
 /**
  * The Liz replay (HQ discovery funnel, 2026-07-25): a warm lead answered a
  * same-day discovery-call bump with "How is next week? I am super booked
- * today but would love to hop on Monday" — and the whole negotiation
+ * today but would love to hop on Monday", and the whole negotiation
  * (day pivot, timezone, email for the Zoom invite, the booking itself)
  * happened by hand over the founder's personal iMessage, off-platform.
  *
@@ -32,13 +32,13 @@ import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
  * it arrives on the business line: the sms-inbound-worker's REAL prompt
  * lines (imported from _shared/sms_prompt_lines.ts), the REAL fresh-thread
  * preamble builders, and the REAL Rowboat seed tool declarations (rendered
- * from vps/scripts/deploy-client.sh via debug/_workflow-seed.ts — the exact
+ * from vps/scripts/deploy-client.sh via debug/_workflow-seed.ts, the exact
  * JSON a fresh tenant provision declares), with tool executions stubbed to
  * the /api/rowboat/tool-call envelope shapes.
  *
  * Contracts:
- *   1. The Monday pivot is accepted mid-thread — no steering back to
- *      "today", no restarting the conversation — and NOTHING is booked or
+ *   1. The Monday pivot is accepted mid-thread, no steering back to
+ *      "today", no restarting the conversation, and NOTHING is booked or
  *      claimed booked while the lead is still choosing.
  *   2. Any specific time offered is grounded in a calendar_find_slots call
  *      and carries a named timezone (SMS_TIMEZONE_LINE, the KYP incident).
@@ -48,7 +48,7 @@ import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
  */
 
 /** Fleet SMS chat model (deploy-client.sh SMS_CHAT_MODEL default since the
- * PR #809 migration — same pin as the KYP and Truly replays). */
+ * PR #809 migration, same pin as the KYP and Truly replays). */
 const SMS_TOOLS_MODEL = "gemini-3.5-flash-lite";
 
 const LEAD = "+14805550177";
@@ -102,7 +102,7 @@ const PERSONA =
   "call with the founder, Brian. Discovery calls happen over Zoom.";
 
 /** The worker's fresh-thread customer preamble, piece for piece
- * (sms-inbound-worker/index.ts, non-staff path — same assembly as the KYP
+ * (sms-inbound-worker/index.ts, non-staff path, same assembly as the KYP
  * timezone replay, plus the persona that rides as agent instructions). */
 function buildSystem(): string {
   const dateLine = currentDateTimeLine(TURN_AT, BUSINESS_TZ);
@@ -162,7 +162,7 @@ type ToolRouter = (name: string, args: Record<string, unknown>) => ToolResult;
 type Content = { role: "user" | "model"; parts: Array<Record<string, unknown>> };
 
 /**
- * One generateContent step with the seed declarations attached — the REST
+ * One generateContent step with the seed declarations attached, the REST
  * shape of the Rowboat turn's tool config, with the suite's transient-retry
  * policy (same harness shape as voice-tools.e2e.test.ts).
  */
@@ -289,7 +289,7 @@ function baseRouter(
     if (overrides[name]) return overrides[name](args);
     if (name === "customer_lookup_by_phone") {
       // Production lookupCustomerByPhone nests the profile under
-      // data.customer (customer-tools/handlers.ts) — keep the envelope
+      // data.customer (customer-tools/handlers.ts), keep the envelope
       // byte-shaped so tool-loop behavior matches live SMS.
       return {
         ok: true,
@@ -330,7 +330,7 @@ describe("Liz Monday pivot (live model, real seed declarations)", () => {
         [],
         MONDAY_PIVOT,
         baseRouter({
-          // A premature booking would "succeed" — the assertion below is
+          // A premature booking would "succeed", the assertion below is
           // that the model never calls it while the lead is still choosing.
           calendar_book_appointment: () => ({
             ok: true,

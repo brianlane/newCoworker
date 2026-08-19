@@ -151,7 +151,7 @@ describe("POST /api/dashboard/api-keys", () => {
   });
 
   it("409s when the DB cap trigger rejects a racing insert", async () => {
-    // Pre-check passed (count below cap) but the api_keys_cap trigger fired —
+    // Pre-check passed (count below cap) but the api_keys_cap trigger fired,
     // a concurrent mint won the race.
     vi.mocked(insertApiKey).mockRejectedValue(
       new Error("insertApiKey: API key limit reached (10) for business biz-1")

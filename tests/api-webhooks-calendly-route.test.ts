@@ -1,5 +1,5 @@
 /**
- * POST /api/webhooks/calendly — the signed Calendly invitee.created
+ * POST /api/webhooks/calendly, the signed Calendly invitee.created
  * receiver: business selection, rate limiting, body caps, subscription
  * gating, signature verification wiring, and handler dispatch.
  */

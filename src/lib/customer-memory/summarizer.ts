@@ -56,7 +56,7 @@ export const SUMMARY_MAX_CHARS = 2000;
 
 /** Interactions since last summary that trigger a fresh run. Set to
  * 1 so a customer's very first SMS or call produces a summary the
- * dashboard chat preamble can reference on the owner's next turn —
+ * dashboard chat preamble can reference on the owner's next turn,
  * without it the preamble's "Recent customer activity" notes have no
  * cross-channel narrative and the owner sees the AI rediscover the
  * same customer for several turns. The 30s debounce
@@ -64,7 +64,7 @@ export const SUMMARY_MAX_CHARS = 2000;
  * spam, not the threshold. */
 export const SUMMARY_INTERACTION_THRESHOLD = 1;
 
-/** Debounce window — refuse to re-summarize within this many ms of the last run. */
+/** Debounce window, refuse to re-summarize within this many ms of the last run. */
 export const SUMMARY_DEBOUNCE_MS = 30_000;
 
 /** Looser than the chat path: fire-and-forget summarizer can afford a cold local model. */
@@ -74,7 +74,7 @@ export const SUMMARY_TIMEOUT_MS = 60_000;
 export const SUMMARY_INPUT_VOICE_CALLS = 5;
 export const SUMMARY_INPUT_SMS_TURNS = 30;
 /**
- * Recent emails pulled in — but ONLY the ones to/from THIS contact's own
+ * Recent emails pulled in, but ONLY the ones to/from THIS contact's own
  * linked address (`customer_memories.email`). Never a business-wide mail
  * roll-up: the feed is `listEmailLogForAddress(businessId, memory.email)`, so
  * one customer's summary can never absorb another contact's correspondence.
@@ -141,7 +141,7 @@ export type SummarizeDeps = {
     limit: number
   ) => Promise<VoiceTurnEntry[]>;
   /**
-   * Email feeder. Scoped to the contact's own linked address — the production
+   * Email feeder. Scoped to the contact's own linked address, the production
    * default reads `email_log` for messages to/from that one address only.
    */
   listEmailLogForAddress?: typeof defaultListEmailLogForAddress;
@@ -166,7 +166,7 @@ export type SummarizeOpts = {
    * dashboard rename path (setCustomerDisplayName): a rename adds no
    * interaction, so without `force` the regeneration that corrects the old
    * name in summary_md would be silently skipped. The content gates
-   * (no_inputs / no_customer_content) still apply — force never causes a
+   * (no_inputs / no_customer_content) still apply, force never causes a
    * summary to be fabricated from nothing.
    */
   force?: boolean;
@@ -256,10 +256,10 @@ export async function summarizeCustomerMemory(
 
   // Re-check the gate inside the summarizer too. The fire-and-forget
   // caller can race with the nightly cron and a manual trigger from
-  // the customers page — without this guard we'd happily run the
+  // the customers page, without this guard we'd happily run the
   // summarizer multiple times in parallel, wasting Rowboat capacity
   // and producing duplicate updated_at bumps. `force` (dashboard rename
-  // path) skips these two gates only — the content gates below still hold.
+  // path) skips these two gates only, the content gates below still hold.
   if (!opts.force) {
     if (memory.interaction_count < SUMMARY_INTERACTION_THRESHOLD) {
       return { ok: false, reason: "below_threshold" };
@@ -319,7 +319,7 @@ export async function summarizeCustomerMemory(
       { limit: SUMMARY_INPUT_SMS_TURNS }
     );
     // Email is pulled only when this contact has a linked address, and only
-    // for THAT address — never a business-wide mailbox scan. Keeps the
+    // for THAT address, never a business-wide mailbox scan. Keeps the
     // cross-channel summary about this one person.
     const contactEmail = memory.email?.trim();
     if (contactEmail) {
@@ -338,7 +338,7 @@ export async function summarizeCustomerMemory(
   }
 
   // If we have *no* fresh source material AND no prior summary, the
-  // model has nothing to compress — abort rather than run an empty
+  // model has nothing to compress, abort rather than run an empty
   // prompt that might hallucinate.
   if (
     voiceTurns.length === 0 &&
@@ -353,7 +353,7 @@ export async function summarizeCustomerMemory(
   // only material is the AI's own output (a 2-second call that never got past
   // the greeting, an AiFlow intro text with no reply), there are no customer
   // facts to digest and the model has been observed fabricating an entire
-  // identity instead — inventing a name, "interests", and pinned notes for a
+  // identity instead, inventing a name, "interests", and pinned notes for a
   // caller who never said a word. No customer content ⇒ nothing to summarize.
   const hasCustomerContent =
     voiceTurns.some((t) => t.role === "caller" && t.content.trim().length > 0) ||
@@ -411,7 +411,7 @@ export async function summarizeCustomerMemory(
       projectId,
       bearer,
       messages: summarizerMessages,
-      // Stateless: never reuse a continuation — we want a clean
+      // Stateless: never reuse a continuation, we want a clean
       // summarizer turn untainted by chat-mode rolling state.
       conversationId: null,
       state: null,
@@ -447,12 +447,12 @@ export async function summarizeCustomerMemory(
 
   // Knowledge-graph extraction over the SAME assembled window
   // (kg-source: voice_call / kg-source: customer_sms /
-  // kg-source: email_replied) — the
+  // kg-source: email_replied), the
   // summarizer boundary is already the debounced conversation-close moment,
   // the window is already per-identified-customer, and email here passed
   // the relationship gate (a linked contact with real interactions), so
   // everything lands at trust 1 attributed to the customer. Fresh material
-  // only — never the rolling summary (that would re-launder model output
+  // only, never the rolling summary (that would re-launder model output
   // into facts). Never-throws + daily-capped inside.
   /* c8 ignore next -- production default; tests inject */
   const _extractGraph = deps.extractConversationGraph ?? extractConversationGraph;

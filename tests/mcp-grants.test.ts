@@ -1,5 +1,5 @@
 /**
- * src/lib/mcp/grants.ts — matching and revoking the caller's OAuth grant
+ * src/lib/mcp/grants.ts, matching and revoking the caller's OAuth grant
  * behind the Disconnect button on the connector card.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

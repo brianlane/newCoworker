@@ -195,7 +195,7 @@ export async function PATCH(
     // a save succeeded after the row was deleted from another tab.
     // EXCEPTION: a reply-mode-only patch may target a number that has SMS
     // history but no contact row yet (the thread page offers the toggle for
-    // any thread) — setContactSmsReplyMode creates the minimal row.
+    // any thread), setContactSmsReplyMode creates the minimal row.
     const existing = await getCustomerMemory(businessId, customerE164);
     if (!existing) {
       const onlyReplyMode =
@@ -213,7 +213,7 @@ export async function PATCH(
     }
 
     // An assigned owner must be one of THIS business's roster members (active
-    // or not — deactivating someone shouldn't block re-labeling history, and
+    // or not, deactivating someone shouldn't block re-labeling history, and
     // routing already skips inactive members).
     if (body.ownerEmployeeId) {
       const member = await getTeamMember(businessId, body.ownerEmployeeId);
@@ -224,7 +224,7 @@ export async function PATCH(
 
     // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
     // it alias-aware to the surviving row. Write (and fire goal events)
-    // against that row's PRIMARY number — updateCustomerOwnerFields filters
+    // against that row's PRIMARY number, updateCustomerOwnerFields filters
     // on customer_e164 only, so the alias spelling would update nothing
     // while events fired anyway.
     const canonicalE164 = existing.customer_e164;
@@ -257,7 +257,7 @@ export async function PATCH(
     // trigger failure never fails the save.
     if (body.tags !== undefined) {
       // Both sides of the diff go through the SAME normalization the write
-      // used — comparing raw stored tags would make a legacy spelling or
+      // used, comparing raw stored tags would make a legacy spelling or
       // stray whitespace look "new" and fire a spurious event.
       const nextTags = normalizeContactTags(body.tags);
       const previousTags = normalizeContactTags(existing.tags ?? []);
@@ -265,7 +265,7 @@ export async function PATCH(
       const after = new Set(nextTags.map((t) => t.toLowerCase()));
       const eventStamp = Date.now();
       // Runs match goal events by the exact number they were triggered with,
-      // which after a profile merge may be an ALIAS — fire for every linked
+      // which after a profile merge may be an ALIAS, fire for every linked
       // number so a parked run keyed on the old number still jumps.
       const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
       for (const tag of nextTags) {
@@ -294,7 +294,7 @@ export async function PATCH(
     }
 
     // owner_assigned triggers: a manual owner pick (not a clear) may start
-    // flows — but only when the owner actually CHANGED to someone new.
+    // flows, but only when the owner actually CHANGED to someone new.
     if (
       body.ownerEmployeeId !== undefined &&
       body.ownerEmployeeId !== null &&
@@ -346,9 +346,9 @@ export async function DELETE(
 
     // Delete-if-exists semantics: 204 even if the row is already gone
     // (idempotent retries from a flaky network shouldn't 404). The
-    // SMS/voice history rows are NOT cascaded — those are facts about
+    // SMS/voice history rows are NOT cascaded, those are facts about
     // what was sent/said, retained for the channel-specific dashboards.
-    // Only the rollup memory is removed — plus the person's linked record
+    // Only the rollup memory is removed, plus the person's linked record
     // documents (policies/contracts), which must not silently become
     // unlinked knowledge-library docs via the FK's SET NULL (that would
     // leak their data into the library AND mint library docs past the tier
@@ -360,7 +360,7 @@ export async function DELETE(
     }
     // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
     // it alias-aware to the surviving row. Delete by that row's PRIMARY
-    // number — deleting by the alias spelling would remove nothing while
+    // number, deleting by the alias spelling would remove nothing while
     // the documents cleanup above already ran.
     await deleteCustomerMemory(businessId, existing?.customer_e164 ?? customerE164);
     return successResponse({ ok: true });

@@ -305,7 +305,7 @@ describe("verifyFreedSlotOpen", () => {
   it("Acuity: asks in the BUSINESS timezone, never a hardcoded UTC", async () => {
     // Acuity availability is keyed by local calendar date. Asking in the
     // wrong zone asks about the wrong DAY for any merchant outside UTC, the
-    // freed slot never appears, and this check fails closed — silently
+    // freed slot never appears, and this check fails closed, silently
     // swallowing a waitlist offer that should have gone out.
     mockAcuity.mockResolvedValue({
       ok: true,

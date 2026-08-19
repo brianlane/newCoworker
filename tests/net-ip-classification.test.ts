@@ -33,7 +33,7 @@ describe("isPrivateIpv4", () => {
     ["239.255.255.255", true],
     ["240.0.0.1", true],
     ["255.255.255.255", true],
-    // Public space — must NOT be classified as private.
+    // Public space, must NOT be classified as private.
     ["8.8.8.8", false],
     ["1.1.1.1", false],
     ["93.184.216.34", false],

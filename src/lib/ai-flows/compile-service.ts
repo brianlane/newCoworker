@@ -1,5 +1,5 @@
 /**
- * AiFlow AI-assist compile pipeline — shared service.
+ * AiFlow AI-assist compile pipeline, shared service.
  *
  * Owns the full "plain-English description → VALIDATED AiFlow definition"
  * flow that used to live inline in POST /api/aiflows/compile: document
@@ -7,12 +7,12 @@
  * billed-but-empty replies), schema + DB-backed validation, the one-shot
  * self-repair round, and the best-effort salvage. Factored out so the
  * dashboard-chat `create_aiflow` tool and the compile route run the exact
- * same pipeline — AI output is never trusted or executed without full
+ * same pipeline, AI output is never trusted or executed without full
  * validation, and nothing here persists a flow (callers hand the owner a
  * draft to review).
  *
  * `editAiFlowDefinition` is the in-place EDIT sibling (the chat
- * `edit_aiflow` tool): same model, metering, validation, and self-repair —
+ * `edit_aiflow` tool): same model, metering, validation, and self-repair,
  * but NO salvage, because an edit is applied to the live flow with no
  * builder-review step in between. A definition that would only pass via
  * salvage is refused with humanized issues instead of persisted.
@@ -141,7 +141,7 @@ export const FLOW_COMPILE_THINKING_LEVEL = "high" as const;
 /**
  * Documents the model may bind share_document steps to: client-eligible +
  * ready only (flow recipients are customers). A read failure degrades to
- * "no documents" — the same NEVER-invent contract applies either way.
+ * "no documents", the same NEVER-invent contract applies either way.
  */
 async function loadCompileDocuments(
   businessId: string,
@@ -186,7 +186,7 @@ async function loadCompileAgents(
 
 /**
  * Connected mailboxes the model may bind send_email `fromConnectionId` /
- * email triggers / email_extract to — so "send it from my sam@ mailbox"
+ * email triggers / email_extract to, so "send it from my sam@ mailbox"
  * binds the REAL connection uuid instead of relying on the never-invent
  * contract alone. Email providers only; labels via the same metadata
  * resolution as the composer's send-from picker. Same degrade posture as
@@ -272,7 +272,7 @@ export async function compileAiFlowFromDescription(
       thinkingLevel: FLOW_COMPILE_THINKING_LEVEL
     }));
   } catch (err) {
-    // Empty replies (e.g. thinking-only output) are still billed — meter
+    // Empty replies (e.g. thinking-only output) are still billed, meter
     // them before surfacing the failure.
     if (err instanceof GeminiEmptyError) {
       await meterGeminiSpendForBusiness({
@@ -297,7 +297,7 @@ export async function compileAiFlowFromDescription(
 
   const candidate = extractFlowJson(raw);
   if (candidate === null) {
-    // The compile (authoring) call is otherwise invisible in system_logs —
+    // The compile (authoring) call is otherwise invisible in system_logs,
     // record truncated/unparseable model output so "the AI builder failed"
     // is debuggable via `debug/system-logs.ts --source=app --grep=compile`.
     void recordSystemLog({
@@ -323,7 +323,7 @@ export async function compileAiFlowFromDescription(
 
   // Same layering as the CRUD routes: shape+semantics via
   // parseAiFlowDefinition, then the DB-backed share_document / run_agent /
-  // mailbox-binding checks — so an invalid binding feeds the self-repair
+  // mailbox-binding checks, so an invalid binding feeds the self-repair
   // loop instead of surfacing later as a save failure.
   const parseAndValidate = async (input: unknown): Promise<AiFlowDefinition> => {
     const definition = parseAiFlowDefinition(input);
@@ -426,7 +426,7 @@ export async function compileAiFlowFromDescription(
     // explaining exactly what was changed.
     const salvaged = salvageFlowDefinition(lastCandidate);
     if (salvaged) {
-      // The salvage loads DISABLED for review — a bad document binding in
+      // The salvage loads DISABLED for review, a bad document binding in
       // it becomes a visible warning (and the save-time validator still
       // blocks it) rather than a rejected compile.
       const salvageDocumentIssues = await validateShareDocumentSteps(
@@ -482,7 +482,7 @@ export async function compileAiFlowFromDescription(
 
 /**
  * Edit one EXISTING definition per the owner's instruction (with the same
- * one-shot self-repair as compile). See module doc: no salvage — the result
+ * one-shot self-repair as compile). See module doc: no salvage, the result
  * is applied to a live flow, so anything short of a cleanly validated
  * definition is refused and the caller leaves the flow untouched.
  */
@@ -542,7 +542,7 @@ export async function editAiFlowDefinition(
       thinkingLevel: FLOW_COMPILE_THINKING_LEVEL
     }));
   } catch (err) {
-    // Empty replies (thinking-only output) are still billed — meter first.
+    // Empty replies (thinking-only output) are still billed, meter first.
     if (err instanceof GeminiEmptyError) {
       await meterGeminiSpendForBusiness({
         businessId: args.businessId,

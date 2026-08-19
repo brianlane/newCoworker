@@ -2,7 +2,7 @@
  * THE routing contract: the shape of `context.routing` on a route_to_team run.
  *
  * The inbound webhook (telnyx-sms-inbound) and the engine (ai-flow-worker)
- * communicate exclusively through this object — one stamps, the other reads —
+ * communicate exclusively through this object, one stamps, the other reads,
  * so an undocumented convention here becomes a cross-function bug (stale
  * pass_reason, tried-vs-offered_log semantics, …). Every field below documents
  * its full lifecycle: WHO sets it, WHO clears it, and WHAT survives a claim.
@@ -21,7 +21,7 @@ export type OfferRouting = {
    * Set: worker when it texts an offer; webhook swaps it to the claimer on a
    * late claim / yank. Cleared: worker when retiring an agent (reject/timeout)
    * and when finalizing a claim.
-   * NEVER set while a BROADCAST offer is live (offered_all below) — the two
+   * NEVER set while a BROADCAST offer is live (offered_all below), the two
    * modes are mutually exclusive so single-offer code paths stay inert on a
    * broadcast run. The webhook DOES stamp `offered` = the claimer when it
    * consumes a broadcast claim, which is what hands the run to the worker's
@@ -32,7 +32,7 @@ export type OfferRouting = {
   offered_name?: string;
   /**
    * BROADCAST mode (route_to_team `agentNames`): E.164s of EVERY teammate the
-   * offer is currently live with, all sharing one deadline — first "1" wins.
+   * offer is currently live with, all sharing one deadline, first "1" wins.
    * Set: worker on fan-out. Shrinks: webhook removes a passing teammate on
    * their "2". Cleared: WORKER when finalizing a claim (it reads the losing
    * offerees off this list to text them a courtesy notice first) and on
@@ -56,7 +56,7 @@ export type OfferRouting = {
   /**
    * E.164s that were actually TEXTED an offer for this lead, in order.
    * Set: worker appends on every offer send (and backfills the retiring agent
-   * for runs that predate the field). Never cleared — survives the claim.
+   * for runs that predate the field). Never cleared, survives the claim.
    * This is the eligibility list for the first-to-claim yank; `tried` is NOT
    * (it also collects opt-out/lead-phone skips that never saw an offer).
    */
@@ -64,7 +64,7 @@ export type OfferRouting = {
   /**
    * E.164s already consumed by the escalation loop (offered agents AND
    * skipped ones). Set: worker on retire/skip; webhook adds the preempted
-   * teammate on a yank. Never cleared — survives the claim.
+   * teammate on a yank. Never cleared, survives the claim.
    */
   tried?: string[];
   /**
@@ -108,7 +108,7 @@ export type OfferRouting = {
    */
   route_step_index?: number;
   /**
-   * The route_to_team step's ID — the definition-edit-proof companion to
+   * The route_to_team step's ID, the definition-edit-proof companion to
    * route_step_index. The webhook rewinds restore it as the run's resume
    * marker (RESUME_STEP_ID_VAR) so a rewound run relocates correctly even if
    * the flow was edited while parked. Set: worker when the route step
@@ -138,7 +138,7 @@ export type OfferRouting = {
   pass_reason?: string;
   /**
    * Accumulated "<name>: <reason>" entries, one per reasoned pass. Set:
-   * worker. Never cleared — appended to the owner-fallback SMS and kept as
+   * worker. Never cleared, appended to the owner-fallback SMS and kept as
    * run history.
    */
   pass_reasons?: string[];
@@ -197,7 +197,7 @@ export type OfferRouting = {
    * @deprecated
    */
   tf_digit?: string;
-  /** LEGACY — see tf_digit. @deprecated */
+  /** LEGACY, see tf_digit. @deprecated */
   late_digit?: string;
 };
 
@@ -231,14 +231,14 @@ const LAST_EVENTS: readonly string[] = ["claim", "reject", "timeout", "unclaim"]
  *
  * - Unknown/legacy keys are preserved at runtime (spread first) so a
  *   parse → mutate → persist round-trip never drops data a newer or older
- *   deploy stamped — but they are invisible to the type, so WRITES to
+ *   deploy stamped, but they are invisible to the type, so WRITES to
  *   misspelled fields are compile errors.
  * - Malformed values (wrong JSON type) are dropped rather than trusted, so
  *   readers never need inline `typeof` guards again.
  *
  * Mutating the returned object never mutates the source; callers persist by
  * writing it back into context (the webhook pattern). The worker, which owns
- * a mutable reference, may cast instead — its writes are still key-checked.
+ * a mutable reference, may cast instead, its writes are still key-checked.
  */
 export function parseRouting(raw: unknown): OfferRouting {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};

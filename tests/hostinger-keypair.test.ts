@@ -94,7 +94,7 @@ describe("ssh keypair", () => {
   it("convertPkcs8Ed25519PemToOpenssh rejects valid PKCS#8 PEMs that aren't ed25519", async () => {
     // Generate a valid RSA key in PKCS#8 form. node:crypto will load it
     // (so we get past the createPrivateKey throw), but the JWK comes back
-    // with crv=undefined / kty="RSA" — exercising the explicit
+    // with crv=undefined / kty="RSA", exercising the explicit
     // "input is not an ed25519 PKCS#8 PEM" branch that early-rejects
     // wrong-curve material before we attempt to repack as openssh-key-v1.
     // Without this test that throw is unreachable from any real consumer
@@ -114,7 +114,7 @@ describe("ssh keypair", () => {
     // OpenSSH-format export switch) can still be sanity-checked end-to-
     // end during an admin re-bootstrap. The else-branch (line ~157 in
     // keypair.ts) re-derives the public half via node:crypto's
-    // createPublicKey + JWK export — only this path exercises that
+    // createPublicKey + JWK export, only this path exercises that
     // branch in CI; without it branch coverage drops below 100%.
     const { publicKey, privateKey } = await generateKeyPair("ed25519");
     const pkcs8 = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
@@ -194,7 +194,7 @@ describe("ssh keypair", () => {
     // of the cipher block size (8 for cipher=none). `inner.length` =
     // 4+4 (checkint*2) + 4+11 (algo "ssh-ed25519") + 4+32 (pub32) +
     // 4+64 (priv32||pub32) + 4+commentLen → 131 + commentLen. A 5-char
-    // comment like "hello" yields 136 bytes — already a multiple of 8 —
+    // comment like "hello" yields 136 bytes, already a multiple of 8,
     // so `padNeeded === 0` and the `if (padNeeded > 0) { ... }` block
     // is skipped. Without this test, that else-branch never fires in
     // CI and branch coverage drops below 100% on keypair.ts.
@@ -209,7 +209,7 @@ describe("ssh keypair", () => {
 
   it("verifyKeypairRoundTrip returns false when an OpenSSH PEM lacks the magic header bytes", async () => {
     // A PEM that *names* itself OPENSSH PRIVATE KEY but whose decoded
-    // payload doesn't start with "openssh-key-v1\\0" must not pass — the
+    // payload doesn't start with "openssh-key-v1\\0" must not pass, the
     // internal `parseOpensshEd25519PrivateKey` throws and
     // `verifyKeypairRoundTrip` collapses that to `false`. This guards
     // the magic-byte check and exercises the parser's rejection path

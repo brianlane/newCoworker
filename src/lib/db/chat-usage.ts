@@ -2,10 +2,10 @@
  * Read-only Gemini (chat-model) spend snapshot for the billing page.
  *
  * The actual cap enforcement lives in the workers (`_shared/chat_spend_cap.ts`
- * and `vps/chat-worker/worker.mjs`); this mirrors their reads — period keyed by
+ * and `vps/chat-worker/worker.mjs`); this mirrors their reads, period keyed by
  * the subscription's Stripe period start (UTC month start fallback), spend from
  * `owner_chat_model_spend`, purchased credit via the `chat_active_credit_micros`
- * RPC — purely for display. Base cap mirrors the workers' env contract
+ * RPC, purely for display. Base cap mirrors the workers' env contract
  * (`OWNER_CHAT_SPEND_CAP_MICROS`, default $10).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -25,7 +25,7 @@ export type ChatSpendSnapshot = {
   spendMicros: number;
   baseCapMicros: number;
   creditMicros: number;
-  /** baseCapMicros + creditMicros — what the workers trip the fuse against. */
+  /** baseCapMicros + creditMicros, what the workers trip the fuse against. */
   effectiveCapMicros: number;
 };
 
@@ -116,13 +116,13 @@ export async function getChatSpendSnapshotForBusiness(
  * FLEET-WIDE Gemini spend (micro-USD) across every tenant's CURRENT period
  * row (admin dashboard platform-cost estimate). A spend row's window is one
  * CLAMPED month from its `period_start` (the same `addUtcMonthsClamped`
- * math deriveMonthlyQuotaWindow keys the rows with — naive month addition
+ * math deriveMonthlyQuotaWindow keys the rows with, naive month addition
  * would keep a Jan-31-anchored window "alive" into early March), so the sum
  * takes each business's NEWEST started row and counts it only while its
- * window still covers `now` — summing every row in a rolling one-month
+ * window still covers `now`, summing every row in a rolling one-month
  * lookback would double-count a tenant right after a window rollover. The
  * two-month fetch lookback is a safe superset of any window that can cover
- * `now`. Best effort on error — the dashboard must render even if a read
+ * `now`. Best effort on error, the dashboard must render even if a read
  * fails: a failed page stops the scan but the rows already merged still
  * count, so the result is 0 only when the very FIRST page fails. A partial
  * (under-)count is unavoidable either way; discarding merged pages would

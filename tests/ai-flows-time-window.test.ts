@@ -4,7 +4,7 @@ import {
   zonedWeekday
 } from "../supabase/functions/_shared/ai_flows/quiet_hours";
 
-// Phoenix never observes DST, so UTC-7 holds year-round — exact-instant
+// Phoenix never observes DST, so UTC-7 holds year-round, exact-instant
 // assertions stay stable no matter when the suite runs.
 const PHX = "America/Phoenix";
 // 2026-06-09 is a Tuesday (weekday 2).
@@ -18,7 +18,7 @@ const BUSINESS_HOURS = { timezone: PHX, start: "09:00", end: "17:00" };
 describe("zonedWeekday", () => {
   it("resolves the local weekday", () => {
     expect(zonedWeekday(phx(12, 0), PHX)).toBe(2); // Tuesday
-    // 20:00 Phoenix Tuesday is 03:00 UTC Wednesday — local day wins.
+    // 20:00 Phoenix Tuesday is 03:00 UTC Wednesday, local day wins.
     expect(zonedWeekday(phx(20, 0), PHX)).toBe(2);
   });
 

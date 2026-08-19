@@ -55,7 +55,7 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   AIFLOW_HOMELIGHT_INTEGRATION_LABEL    (default "HomeLight" — must match the
+ *   AIFLOW_HOMELIGHT_INTEGRATION_LABEL    (default "HomeLight", must match the
  *                                          stored custom_integrations label EXACTLY.
  *                                          The lookup is `ilike` on the trimmed
  *                                          label, so case is forgiven and the
@@ -111,7 +111,7 @@ function parseArgs(argv: readonly string[]): Args {
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
 // Amy's connected Outlook mailbox (workspace_oauth_connections.id) where the
-// HomeLight "Client Details" alert emails arrive — the email_extract fallback
+// HomeLight "Client Details" alert emails arrive, the email_extract fallback
 // reads it. Override with AIFLOW_HOMELIGHT_EMAIL_CONNECTION_ID for another tenant.
 const DEFAULT_EMAIL_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 
@@ -220,7 +220,7 @@ function buildDefinition(opts: {
         ]
       },
       // 3. Open the lead link, screenshot it, and capture the claim button's href.
-      //    Links-only browse_extract (no AI field extraction) — just the screenshot
+      //    Links-only browse_extract (no AI field extraction), just the screenshot
       //    and the direct claim URL. This pre-claim referral-page screenshot lands
       //    in {{vars.screenshot_path}} and is what step 4 (route) attaches to
       //    Dave's offer MMS, because route runs BEFORE the step-5 card re-shoots it.
@@ -232,7 +232,7 @@ function buildDefinition(opts: {
         screenshot: true,
         extractLinks: [{ name: "claim_link", matchText: opts.claimButtonText }]
       },
-      // 4. Offer to Dave only (agentName pins the roster pick — no rotation), with
+      // 4. Offer to Dave only (agentName pins the roster pick, no rotation), with
       //    BOTH links clearly labeled and a short claim window. Owner fallback to
       //    Amy. Sets {{vars.claimed_agent}} for the gated steps below.
       {
@@ -243,7 +243,7 @@ function buildDefinition(opts: {
         offerWindow,
         attachScreenshot: true,
         // "1" claims (live or late); "1, <eta>" claims and states a timeframe;
-        // "2" passes (optionally "2, <reason>") — same digits as every flow.
+        // "2" passes (optionally "2, <reason>"), same digits as every flow.
         offerTemplate:
           "New HomeLight referral: {{vars.lead_first_name}}, {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +
@@ -269,9 +269,9 @@ function buildDefinition(opts: {
           "Tap to claim: {{vars.leadUrl}}"
       },
       // 5. Re-open the (now claimed) lead link and read the real contact card off
-      //    the portal. GATED — only runs after Dave accepted. screenshot:true here
+      //    the portal. GATED, only runs after Dave accepted. screenshot:true here
       //    DELIBERATELY overwrites {{vars.screenshot_path}} with the post-claim
-      //    contact-card image (lead name/phone/email/address) — that richer "QT"
+      //    contact-card image (lead name/phone/email/address), that richer "QT"
       //    is exactly what step 8 attaches to Amy's email. Dave's offer MMS already
       //    fired in step 4 with the pre-claim referral-page shot, so re-shooting
       //    here doesn't affect what he received.
@@ -324,7 +324,7 @@ function buildDefinition(opts: {
       //     on. fillOnlyEmpty means the portal values (step 5) win; the email only
       //     fills gaps. Matched to THIS lead by FIRST NAME within the lookback
       //     window. (A price second-term looked stronger but broke in practice:
-      //     the alert rounds — $784,663 → "$785K" → digits "785" — while the
+      //     the alert rounds, $784,663 → "$785K" → digits "785", while the
       //     email spells the price in full, so the "785" token never appears and
       //     the backfill could never find the email exactly when it was needed.
       //     The 60-minute lookback keeps first-name collisions unlikely.)
@@ -379,7 +379,7 @@ function buildDefinition(opts: {
           "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}})",
         when: gateOnClaim
       },
-      // 8. Email Amy the "QT" — the post-claim contact-card screenshot captured in
+      // 8. Email Amy the "QT", the post-claim contact-card screenshot captured in
       //    step 5 (the latest {{vars.screenshot_path}}), i.e. the lead's details.
       {
         id: "qt_email",
@@ -417,7 +417,7 @@ function buildDefinition(opts: {
       },
       // 10. Email the lead the full HomeLight inquiry marketing email. If the
       //     portal card had no email, {{vars.lead_email}} is "none" and the
-      //     worker skips the send (it doesn't fail the run) — the SMS in step 9
+      //     worker skips the send (it doesn't fail the run), the SMS in step 9
       //     still reaches the lead.
       {
         id: "lead_email",

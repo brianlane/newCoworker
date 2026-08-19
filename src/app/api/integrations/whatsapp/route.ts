@@ -1,6 +1,6 @@
 /**
  * Owner-facing management for the business's WhatsApp Business connection
- * (Embedded Signup — mirrors /api/integrations/meta).
+ * (Embedded Signup, mirrors /api/integrations/meta).
  *
  *   GET    ?businessId=…  → connection state (masked, incl. template
  *                           review statuses, refreshed opportunistically)
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
-    // Another tenant already holding this number is a hard conflict — the
+    // Another tenant already holding this number is a hard conflict, the
     // unique index would reject the insert anyway; fail with a clear
     // message before burning the one-time code.
     const claim = await getWhatsAppPhoneNumberClaim(body.phoneNumberId);
@@ -138,10 +138,10 @@ export async function POST(request: Request) {
     const accessToken = await exchangeEmbeddedSignupCode(body.code);
 
     // Subscribe FIRST: if Meta refuses, nothing is stored and the owner
-    // can retry the popup — we never store an unsubscribed connection.
+    // can retry the popup, we never store an unsubscribed connection.
     await subscribeWabaToApp(body.wabaId, accessToken);
 
-    // Put the number on the Cloud API so it can actually send/receive —
+    // Put the number on the Cloud API so it can actually send/receive,
     // Embedded Signup verifies the number but leaves it unregistered, so
     // without this the number stays `NOT_APPLICABLE` and consumers see
     // "invite on WhatsApp". Best-effort like template registration: a
@@ -175,7 +175,7 @@ export async function POST(request: Request) {
     }
     // Reconnects: registration answers "already exists" (recorded as
     // PENDING above), but the live review status may long since be
-    // APPROVED — fetch it now so out-of-window sends aren't blocked until
+    // APPROVED, fetch it now so out-of-window sends aren't blocked until
     // someone happens to open the integration card. Best-effort.
     try {
       for (const s of await fetchWhatsAppTemplateStatuses(body.wabaId, accessToken)) {
@@ -193,7 +193,7 @@ export async function POST(request: Request) {
 
     // Reconnect with a DIFFERENT WABA: capture the abandoned one so its
     // app subscription can be torn down after the new row is saved (the
-    // Meta callback's ordering — never unsubscribe before the DB commit,
+    // Meta callback's ordering, never unsubscribe before the DB commit,
     // and never a WABA another tenant still routes through).
     const previous = await getWhatsAppConnection(body.businessId).catch(() => null);
 
@@ -255,7 +255,7 @@ export async function DELETE(request: Request) {
     const existing = await getWhatsAppConnection(parsed.data);
     if (existing?.accessToken) {
       // One WABA can back multiple tenants (different phone numbers), and
-      // the app subscription is WABA-level — tearing it down while another
+      // the app subscription is WABA-level, tearing it down while another
       // tenant still routes through it would silence THEIR inbound too.
       const sharedElsewhere = await isWabaClaimedByOtherBusiness(
         existing.waba_id,

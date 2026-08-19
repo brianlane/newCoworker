@@ -25,7 +25,7 @@ describe("scrubSelfPhones", () => {
     expect(values.lead_phone).toBe("");
     expect(values.alt_phone).toBe("");
     expect(cleared.sort()).toEqual(["alt_phone", "lead_phone"]);
-    // Non-phone values are never touched — even ones as suspicious as "Amy".
+    // Non-phone values are never touched, even ones as suspicious as "Amy".
     expect(values.lead_name).toBe("Amy");
     expect(values.lead_email).toBe("none");
   });
@@ -35,7 +35,7 @@ describe("scrubSelfPhones", () => {
       { lead_phone: "(480) 600-8501", lead_address: "3536 E Elmwood St, Mesa, AZ 85213" },
       [BUSINESS_DID, "not-a-phone", ""]
     );
-    // Surviving values are never rewritten — the scrub only clears matches.
+    // Surviving values are never rewritten, the scrub only clears matches.
     expect(values.lead_phone).toBe("(480) 600-8501");
     expect(values.lead_address).toBe("3536 E Elmwood St, Mesa, AZ 85213");
     expect(cleared).toEqual([]);
@@ -91,7 +91,7 @@ describe("isSelfNameValue", () => {
   });
 
   it("never matches a DIFFERENT person who shares a first name", () => {
-    // "Amy Smith" is a real lead, not our agent — full name differs.
+    // "Amy Smith" is a real lead, not our agent, full name differs.
     expect(isSelfNameValue("Amy Smith", SELF)).toBe(false);
     expect(isSelfNameValue("Pamela", SELF)).toBe(false);
     expect(isSelfNameValue("Laidlaw", SELF)).toBe(false);
@@ -157,7 +157,7 @@ describe("withSelfNameRetryHint", () => {
 
 describe("isSelfPhone", () => {
   it("normalizes BOTH sides (free-form stored self numbers still match)", () => {
-    // businesses.phone is captured verbatim at onboarding — "(602) 805-3377".
+    // businesses.phone is captured verbatim at onboarding, "(602) 805-3377".
     expect(isSelfPhone("+16028053377", ["(602) 805-3377"])).toBe(true);
     expect(isSelfPhone("602.805.3377", ["+16028053377"])).toBe(true);
     expect(isSelfPhone("+14806008501", ["(602) 805-3377"])).toBe(false);

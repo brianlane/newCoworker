@@ -363,7 +363,7 @@ describe("importContactsCsv", () => {
     const promote = log[4].calls.find((c) => c.name === "update");
     expect(promote?.args[0]).toMatchObject({ email: "a@b.co" });
     expect(log[4].calls.map((c) => c.name)).toContain("eq");
-    // It IS a creation in this outcome — the trigger hook fires.
+    // It IS a creation in this outcome, the trigger hook fires.
     expect(fireContactEvent).toHaveBeenCalledTimes(1);
   });
 

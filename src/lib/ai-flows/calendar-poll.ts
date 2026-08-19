@@ -5,11 +5,11 @@
  * cron tick kicks ~1/min, alongside the email poll): finds every ENABLED flow
  * whose trigger channel is "calendar", reads the watched calendar(s) through
  * the business's connected calendar account (resolved exactly like the
- * calendar tools — no connectionId lives in the trigger), evaluates the
+ * calendar tools, no connectionId lives in the trigger), evaluates the
  * flow's conditions over the event text, and enqueues a queued ai_flow_run
  * per match. Google/Microsoft calendars poll through the Nango fetchers
  * below; Calendly connections poll through the dedicated fetcher in
- * calendly-poll.ts (scheduled events + invitee enrichment — Calendly-only
+ * calendly-poll.ts (scheduled events + invitee enrichment, Calendly-only
  * tenants like KYP Ads previously had NO working calendar triggers), and
  * Acuity connections through acuity-poll.ts (appointments listing plus an
  * observation shadow, since Acuity has no last-modified field), and
@@ -22,15 +22,15 @@
  *     lookback window (dedupe key `cal:<eventId>`).
  *   - event_start: an event starting within the next `leadMinutes` (dedupe
  *     key `cal:<eventId>:<startIso>`, so each occurrence of a recurring event
- *     fires once — and a reschedule legitimately fires again).
+ *     fires once, and a reschedule legitimately fires again).
  *   - event_end: an event whose ACTUAL end time passed `followMinutes` ago
  *     (dedupe key `cal:<eventId>:end:<endIso>`). Anchored to the event's real
  *     end, so a post-appointment follow-up works for a 30-minute and a 2-hour
- *     appointment alike — no guessed sleep after an event_start trigger.
+ *     appointment alike, no guessed sleep after an event_start trigger.
  *
  * Exactly-once: the unique (flow_id, dedupe_key) index on ai_flow_runs
  * absorbs repeat polls, so unlike the email poller there is no seen-marker
- * table — the list responses already carry every field we evaluate, so
+ * table, the list responses already carry every field we evaluate, so
  * re-evaluating a non-matching event each tick costs nothing extra.
  *
  * Failure isolation: one business failing (no calendar connected, revoked
@@ -90,14 +90,14 @@ export const CALENDAR_CANCELED_LOOKBACK_MINUTES = 15;
  */
 export const CALENDAR_POLL_MAX_EVENTS = 100;
 
-/** Page size for the flow listing — paged so no flow is silently skipped. */
+/** Page size for the flow listing, paged so no flow is silently skipped. */
 export const CALENDAR_POLL_FLOW_PAGE = 100;
 
 /**
  * Extra minutes added to the event_start fetch window beyond the largest
  * leadMinutes. Both providers treat the window's upper bound as EXCLUSIVE, so
- * an event starting exactly at `now + lead` — precisely the moment it first
- * becomes due — would otherwise be omitted from the listing until a later
+ * an event starting exactly at `now + lead`, precisely the moment it first
+ * becomes due, would otherwise be omitted from the listing until a later
  * tick (and with a 1-minute lead, never listed while still due). The due
  * check (eventStartDue) still gates enqueueing, so the buffer only widens
  * what is read, not what fires.
@@ -107,7 +107,7 @@ export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
 /**
  * How many PRIOR failures inside the escalation window a connection-class
  * failure needs before the owner is alerted (i.e. the alert fires on the
- * third consecutive failing poll — a blip never pings the owner).
+ * third consecutive failing poll, a blip never pings the owner).
  */
 export const CALENDAR_POLL_ALERT_PRIOR_FAILURES = 2;
 
@@ -125,7 +125,7 @@ const CONNECTION_FAILURE_DETAILS = [
  * Minimum spacing between REAL polls. The worker kicks this route every
  * minute, but the trigger due-windows (15-minute lookbacks; event_start
  * fires anywhere inside its lead window) make per-minute provider listings
- * pure waste — one real poll per ~3 minutes has identical trigger behavior
+ * pure waste, one real poll per ~3 minutes has identical trigger behavior
  * at a third of the Calendly/Google/Microsoft calls. 10s under the nominal
  * 3 minutes so pg_cron jitter can't make every third tick miss the gate.
  */
@@ -134,7 +134,7 @@ export const CALENDAR_POLL_MIN_INTERVAL_MS = 3 * 60_000 - 10_000;
 /**
  * The cadence gate only engages when EVERY event_start flow's leadMinutes
  * exceeds this. An event_start due window is exactly leadMinutes wide
- * ([start - lead, start)) with no lookback — a window shorter than the
+ * ([start - lead, start)) with no lookback, a window shorter than the
  * gated interval could fall entirely between two real polls and the
  * reminder would never fire. Leads above 5 minutes leave comfortable
  * margin over the ~2m50s interval plus cron jitter; anything at or below
@@ -150,7 +150,7 @@ export const CALENDAR_POLL_TICK_EVENT = "ai_flow_calendar_poll_tick";
  * hold the two immediately preceding real polls (plus jitter slack), so
  * "N prior failures inside the window" genuinely means "the last N polls
  * failed too". A healthy poll between failures leaves a full poll interval
- * with no failure row, pushing the older failure out of the window — a
+ * with no failure row, pushing the older failure out of the window, a
  * recovered connection can never accumulate stale strikes toward the owner
  * alert (each business logs at most ONE failure row per real poll; see
  * pollCalendarTriggers' per-business aggregation).
@@ -161,7 +161,7 @@ export const CALENDAR_POLL_FAILURE_ESCALATION_MS =
 type CalendarSource = "primary" | "shared";
 
 export type CalendarFlow = {
-  /** Unique per (flow, trigger index) — one flow can carry several calendar triggers. */
+  /** Unique per (flow, trigger index), one flow can carry several calendar triggers. */
   key: string;
   id: string;
   business_id: string;
@@ -192,7 +192,7 @@ export function eventStartDue(
   // A cancelled event never "starts"; only event_canceled fires for it.
   if (ev.cancelled) return false;
   // An all-day event's "start" is a calendar-local date, not a moment in
-  // time — a minutes-before reminder would fire at an arbitrary wall-clock
+  // time, a minutes-before reminder would fire at an arbitrary wall-clock
   // time, so start-mode skips all-day events (created mode still fires).
   if (ev.allDay) return false;
   if (!ev.startIso) return false;
@@ -211,7 +211,7 @@ export function eventEndDue(
 ): boolean {
   // A cancelled event never "ends"; only event_canceled fires for it.
   if (ev.cancelled) return false;
-  // An all-day event's "end" is a calendar-local date, not a moment in time —
+  // An all-day event's "end" is a calendar-local date, not a moment in time,
   // skipped for the same reason event_start skips all-day events.
   if (ev.allDay) return false;
   if (!ev.endIso) return false;
@@ -242,7 +242,7 @@ export function eventCanceledDue(
   nowMs: number
 ): boolean {
   // Only cancelled events, and only within the lookback of the moment they
-  // were modified (= cancelled) — a flow re-enabled a week later must not
+  // were modified (= cancelled), a flow re-enabled a week later must not
   // replay every historical cancellation.
   if (!ev.cancelled) return false;
   if (!ev.updatedIso) return false;
@@ -251,7 +251,7 @@ export function eventCanceledDue(
   return updatedMs >= nowMs - CALENDAR_CANCELED_LOOKBACK_MINUTES * 60_000;
 }
 
-/** Whether `flow` is due for `ev` at `nowMs` — one place for the mode fork. */
+/** Whether `flow` is due for `ev` at `nowMs`, one place for the mode fork. */
 export function flowDueForEvent(
   flow: Pick<CalendarFlow, "on" | "leadMinutes" | "followMinutes">,
   ev: CalendarEventInput,
@@ -311,7 +311,7 @@ export function normalizeGoogleEvent(
   return {
     id: raw.id,
     // A date-only start marks an all-day event (its ISO form below is a
-    // convention, not a real instant — see CalendarEventInput.allDay).
+    // convention, not a real instant, see CalendarEventInput.allDay).
     allDay: raw.start?.date !== undefined,
     title: raw.summary ?? "",
     description: raw.description,
@@ -350,7 +350,7 @@ type GraphEvent = {
 
 /**
  * Graph start/end → ISO. Graph omits the zone suffix from `dateTime` and
- * reports it in `timeZone` (UTC unless a Prefer header asked otherwise — we
+ * reports it in `timeZone` (UTC unless a Prefer header asked otherwise, we
  * never do); anything non-UTC degrades to the raw string rather than lying
  * with a Z suffix.
  */
@@ -461,7 +461,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
  * Recently CANCELLED events (event_canceled candidates): everything modified
  * since the lookback, filtered to the cancelled ones. Google surfaces
  * cancellations in the events list only with showDeleted=true (they come
- * back as thin tombstones — id + status, sometimes without a title); Graph
+ * back as thin tombstones, id + status, sometimes without a title); Graph
  * keeps declined/cancelled events listed with isCancelled=true until they
  * are hard-deleted, so a hard Graph delete is not observable here.
  */
@@ -634,7 +634,7 @@ async function logCalendarPollFailure(
      * Whether this failure is evidence the CONNECTION is broken (owner-alert
      * eligible). Defaults to the message carrying a connection-class detail;
      * the per-source aggregation passes false when another calendar on the
-     * same connection still polled fine — "reconnect your calendar, your
+     * same connection still polled fine, "reconnect your calendar, your
      * automations are paused" must never go out while flows keep firing.
      */
     connectionBroken?: boolean;
@@ -655,9 +655,9 @@ async function logCalendarPollFailure(
     if (error) throw new Error(error.message);
     priorFailures = (data ?? []).length;
   } catch (err) {
-    // Lookback failed — LOG as persistent (error, like before this helper
+    // Lookback failed, LOG as persistent (error, like before this helper
     // existed) rather than misfiling a real outage as a blip; but never ALERT
-    // off an assumed count — the owner ping needs real evidence of three
+    // off an assumed count, the owner ping needs real evidence of three
     // failing polls, not a system_logs read hiccup.
     lookbackFailed = true;
     console.error("calendar poll failure lookback", err);
@@ -681,7 +681,7 @@ async function logCalendarPollFailure(
 
 /**
  * Once-per-day owner alert for a persistently broken calendar connection.
- * The dedupe marker is written BEFORE dispatch (at-most-once semantics — an
+ * The dedupe marker is written BEFORE dispatch (at-most-once semantics, an
  * alert storm about an outage would be worse than a lost retry; the outage
  * keeps logging errors either way).
  */
@@ -731,7 +731,7 @@ async function alertOwnerCalendarBroken(db: SupabaseClient, businessId: string):
  * Due-check + source + conditions + enqueue for one (flow, event). Returns
  * true when a NEW run was enqueued (false on not-due, source mismatch,
  * unmatched conditions, or the dedupe key already claimed by an earlier
- * observation — the poll and the Vagaro webhook share these keys, so
+ * observation, the poll and the Vagaro webhook share these keys, so
  * double-observation is a benign no-op).
  */
 export async function tryEnqueueCalendarRun(
@@ -784,7 +784,7 @@ export async function tryEnqueueCalendarRun(
 
 /**
  * Fire one business's event_created / event_canceled calendar flows for an
- * event PUSHED by a provider webhook (the Vagaro receiver), in real time —
+ * event PUSHED by a provider webhook (the Vagaro receiver), in real time,
  * the push-side twin of the poll loop, sharing due-checks, condition
  * evaluation, and dedupe keys, so whichever observer sees the event first
  * wins and the other no-ops. event_start / event_end stay poll-only (they
@@ -799,7 +799,7 @@ export async function fireCalendarTriggersForPushedEvent(
   // Paged like pollCalendarTriggers' listing so a business with more than
   // one page of calendar-capable flows never silently loses the tail
   // (Bugbot on PR #810). A LATER page failing keeps the flows already in
-  // hand — the minute poll re-observes with the same dedupe keys.
+  // hand, the minute poll re-observes with the same dedupe keys.
   const flowRows: Array<{ id: string; business_id: string; definition: unknown }> = [];
   for (let offset = 0; ; offset += CALENDAR_POLL_FLOW_PAGE) {
     const { data, error } = await db
@@ -853,8 +853,8 @@ export async function fireCalendarTriggersForPushedEvent(
  * Should this tick run a REAL poll, or did a recent poll already cover it?
  * Tracked with a platform-level system_logs marker (no new table); the
  * caller stamps the marker AFTER a successful poll (stampCalendarPollTick),
- * so a thrown poll never consumes a cadence slot — the next minute retries.
- * Two racing kicks could both poll — harmless, the run dedupe keys make
+ * so a thrown poll never consumes a cadence slot, the next minute retries.
+ * Two racing kicks could both poll, harmless, the run dedupe keys make
  * double polling idempotent; this gate is purely a call-volume optimization.
  * Fails OPEN (poll runs) so gate trouble can never stall calendar triggers.
  */
@@ -877,7 +877,7 @@ export async function shouldRunCalendarPoll(client?: SupabaseClient): Promise<bo
   }
 }
 
-/** Stamp the cadence marker — call only after a poll actually completed. */
+/** Stamp the cadence marker, call only after a poll actually completed. */
 export async function stampCalendarPollTick(client?: SupabaseClient): Promise<void> {
   await recordSystemLog(
     {
@@ -958,7 +958,7 @@ export async function pollCalendarTriggers(
       .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);
     if (error) {
       // Nothing listed yet → surface the failure. A LATER page failing must
-      // not discard the flows already in hand — poll those businesses this
+      // not discard the flows already in hand, poll those businesses this
       // tick and let the next tick retry the full listing.
       if (flowRows.length === 0) throw new Error(`pollCalendarTriggers: ${error.message}`);
       console.error("pollCalendarTriggers flow listing page", error.message);
@@ -979,7 +979,7 @@ export async function pollCalendarTriggers(
   if (flows.length === 0) return result;
 
   // Cadence gate: the worker kicks every minute, but the trigger due-windows
-  // tolerate the wider CALENDAR_POLL_MIN_INTERVAL_MS spacing — EXCEPT an
+  // tolerate the wider CALENDAR_POLL_MIN_INTERVAL_MS spacing, EXCEPT an
   // event_start flow with a lead at or below the gate threshold, whose due
   // window ([start - lead, start)) could fall entirely between two gated
   // polls. Any such flow keeps the whole poll at per-minute cadence; the
@@ -1003,7 +1003,7 @@ export async function pollCalendarTriggers(
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      // CalDAV connections have no pollable calendar — not connected for
+      // CalDAV connections have no pollable calendar, not connected for
       // triggers. Calendly, Vagaro and Acuity ARE pollable (dedicated
       // fetchers below); Google/Microsoft use the Nango fetchers.
       if (
@@ -1020,11 +1020,11 @@ export async function pollCalendarTriggers(
 
       if (conn.provider === "calendly") {
         // Calendly branch: one "primary" source (no shared-calendar concept
-        // on Calendly — shared-only flows quietly see no events). Windows
+        // on Calendly, shared-only flows quietly see no events). Windows
         // mirror the workspace path; the due filter is the poller's own
         // logic so invitee enrichment is spent only on events that can fire.
         // EVERY linked Calendly account is polled (a business can connect
-        // several — e.g. a teammate's own Calendly) and the events union;
+        // several, e.g. a teammate's own Calendly) and the events union;
         // per-account failures degrade to the other accounts rather than
         // failing the business (first error is rethrown only when NO
         // account could be read, preserving the escalation contract).
@@ -1186,7 +1186,7 @@ export async function pollCalendarTriggers(
           connectionId: conn.connectionId,
           providerConfigKey: conn.providerConfigKey
         };
-        // Read-only lookup — polling must never create the shared calendar. A
+        // Read-only lookup, polling must never create the shared calendar. A
         // flow watching only a not-yet-created shared calendar is a quiet no-op.
         const shared = await getSharedCalendar(businessId);
 
@@ -1224,7 +1224,7 @@ export async function pollCalendarTriggers(
         let overflowed = false;
         // Per-calendar isolation: one calendar failing (e.g. the shared one
         // was deleted on the provider) must not drop the events already
-        // fetched from the other — collect and keep going; dedupe keys make
+        // fetched from the other, collect and keep going; dedupe keys make
         // the retry on the next tick benign.
         try {
           if (group.some((f) => f.on === "event_created" && f.sources.includes(source))) {
@@ -1301,7 +1301,7 @@ export async function pollCalendarTriggers(
             { calendars: sourceFailures.map((f) => f.source) },
             {
               // Owner-alert eligible only when EVERY polled calendar failed
-              // with a connection-class detail — one dead shared calendar
+              // with a connection-class detail, one dead shared calendar
               // beside a healthy primary is not a broken connection, and the
               // "your automations are paused" alert would be false.
               connectionBroken:
@@ -1374,7 +1374,7 @@ export async function pollCalendarTriggers(
     }
   }
   // Stamp AFTER the poll completed so a thrown listing never consumes a
-  // cadence slot. Only stamped when the gate applies — a short-lead
+  // cadence slot. Only stamped when the gate applies, a short-lead
   // deployment polls every minute and would just accumulate unread markers.
   if (gateSafe) await stampCalendarPollTick(db);
   return result;

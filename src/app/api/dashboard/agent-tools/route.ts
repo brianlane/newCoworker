@@ -2,11 +2,11 @@
  * Settings → Coworker tools.
  *
  * GET  ?businessId=  → the full worker/tool catalog (code registry) merged
- *                      with this tenant's overrides — what the page renders.
+ *                      with this tenant's overrides, what the page renders.
  * PUT  { businessId, agentKey, toolKey, enabled }
  *                    → flip one tool. Rejected for tools the registry marks
  *                      non-configurable (no platform enforcement point) or
- *                      that don't exist — the table must never accumulate
+ *                      that don't exist, the table must never accumulate
  *                      rows the enforcement layer won't honor.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings") (admin bypasses ownership,

@@ -7,7 +7,7 @@
  * For every business with `data_retention_days` set, prunes content history
  * older than the window via `pruneExpiredContent` (residency-aware: dual/vps
  * tenants are pruned on their box too). Per-tenant errors are captured and
- * the sweep continues — one unreachable box can't block the fleet; every
+ * the sweep continues, one unreachable box can't block the fleet; every
  * delete is idempotent so tomorrow's run converges.
  */
 
@@ -67,7 +67,7 @@ async function runSweep(request: Request): Promise<Response> {
     }
   }
 
-  // Fixed 90-day platform prune of the KG comparison ledger — independent
+  // Fixed 90-day platform prune of the KG comparison ledger, independent
   // of tenant retention settings (kg_retrieval_events is an ops artifact,
   // not tenant-configurable history). A failure logs and retries tomorrow.
   let kgEventsPruned = 0;

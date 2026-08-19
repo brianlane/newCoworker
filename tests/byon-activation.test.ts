@@ -245,7 +245,7 @@ describe("activatePortedNumber", () => {
     expect(assignMock).not.toHaveBeenCalled();
     expect(attachMock).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
-    // pending is normal right after a port — no warning noise.
+    // pending is normal right after a port, no warning noise.
     expect(logger.warn).not.toHaveBeenCalled();
   });
 

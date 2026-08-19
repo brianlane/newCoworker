@@ -240,7 +240,7 @@ describe("simulateTestAction", () => {
     ).toMatchObject({ to: "(group thread)" });
 
     // A planner SKIP (templated recipient resolved to nothing usable) reads
-    // as the skip the live run would record — never as a successful send to
+    // as the skip the live run would record, never as a successful send to
     // the "(group thread)" display fallback.
     expect(
       simulateTestAction(
@@ -296,7 +296,7 @@ describe("simulateTestAction", () => {
       lead_name: "Jennifer Phillips"
     });
 
-    // Locators are optional — the simulation mirrors the action shape.
+    // Locators are optional, the simulation mirrors the action shape.
     expect(
       simulateTestAction({ kind: "notify_lead_owner", message: "m" } as StepAction, scope())
     ).toEqual({ simulated: "notify_lead_owner", message: "m" });
@@ -335,7 +335,7 @@ describe("simulateTestAction", () => {
       )
     ).toEqual({ simulated: "upsert_customer", customer_e164: "+1602", name: "Joe" });
     // A planner skip (no usable phone) must read as the skip a live run
-    // records — never as a saved contact.
+    // records, never as a saved contact.
     expect(
       simulateTestAction(
         {

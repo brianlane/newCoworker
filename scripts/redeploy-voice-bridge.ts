@@ -3,7 +3,7 @@
  * Targeted voice-bridge redeploy across every per-tenant VPS.
  *
  * Why this exists:
- *   `vps/scripts/deploy-client.sh` is the full provisioner — it rewrites
+ *   `vps/scripts/deploy-client.sh` is the full provisioner, it rewrites
  *   `/opt/voice-bridge/.env`, reseeds Rowboat's Mongo agent prompts,
  *   re-stages bootstrap deps, and runs every health gate. Re-running
  *   that entire pipeline just to ship a bridge-only code change (e.g.
@@ -38,12 +38,12 @@
  * Required env (caller must export or pre-load `.env`, e.g.
  * `set -a; source .env; set +a; npx tsx scripts/redeploy-voice-bridge.ts`):
  *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL as alias), SUPABASE_SERVICE_ROLE_KEY
- *   HOSTINGER_API_TOKEN                        — resolve VPS public IP
+ *   HOSTINGER_API_TOKEN, resolve VPS public IP
  *
  * Exit codes:
- *   0  — every targeted VPS reported `voice_bridge_ready`
- *   1  — one or more tenants failed (see `failures` in JSON output)
- *   2  — bad CLI args or missing env
+ *   0, every targeted VPS reported `voice_bridge_ready`
+ *   1, one or more tenants failed (see `failures` in JSON output)
+ *   2, bad CLI args or missing env
  */
 import { getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";
 import { sshExec } from "@/lib/hostinger/ssh";
@@ -60,7 +60,7 @@ import {
 
 /**
  * The exact bash run over SSH. Mirrors the bridge sync block of
- * `deploy-client.sh` (lines ~584-776) minus the .env rewrite — this
+ * `deploy-client.sh` (lines ~584-776) minus the .env rewrite, this
  * helper deliberately doesn't touch /opt/voice-bridge/.env so secret
  * rotations stay confined to the full deploy path.
  */

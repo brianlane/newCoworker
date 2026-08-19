@@ -3,14 +3,14 @@
  *
  * Every inbound call telnyx-voice-inbound refuses (concurrency limit or
  * voice minutes exhausted) already writes a `voice_call_blocked` row to
- * `system_logs` — the same ledger the dashboard's answer-rate card reads.
+ * `system_logs`, the same ledger the dashboard's answer-rate card reads.
  * This helper turns that silent ledger into a signal: the first time a
  * tenant's refused-call count crosses the threshold on a given UTC day, the
  * owner gets ONE urgent notification (SMS/email/dashboard per their
  * notification preferences) telling them callers are being turned away.
  *
  * Why this matters: a Starter tenant with 1 concurrent call slot who gets a
- * burst of calls loses customers without any visible failure — no error, no
+ * burst of calls loses customers without any visible failure, no error, no
  * log the owner reads, just callers hearing "the line is busy". The alert
  * is the difference between "silent churn" and "owner upgrades concurrency
  * or buys minutes the same day".
@@ -21,7 +21,7 @@
  *     rollback when the notifications POST fails so a later refusal retries.
  *   - the `notifications` Edge function fans out to the owner's channels.
  *
- * Tier-gated to Standard/Enterprise (checked here, at alert time — the
+ * Tier-gated to Standard/Enterprise (checked here, at alert time, the
  * refusal ledger itself is written for every tier).
  *
  * Never throws: alerting must never break the call-refusal path that
@@ -99,7 +99,7 @@ export async function maybeSendMissedCallSpikeAlert(
     const now = opts.now ?? new Date();
     const dayKey = now.toISOString().slice(0, 10);
 
-    // Tier gate first — no point counting for Starter tenants.
+    // Tier gate first, no point counting for Starter tenants.
     const { data: bizData, error: bizErr } = await supabase
       .from("businesses")
       .select("tier")

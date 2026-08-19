@@ -6,7 +6,7 @@
  * Controls what happens when the OWNER or a roster team member texts the
  * business number:
  *   - assistantReplyEnabled: the assistant replies in internal-assistant mode
- *     (staff mode — no lead intake, no customer profile), like the dashboard
+ *     (staff mode, no lead intake, no customer profile), like the dashboard
  *     chat. Default on.
  *   - forwardToOwnerEnabled: also relay the staff text to the owner's cell.
  *     Default off.

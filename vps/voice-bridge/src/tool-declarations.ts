@@ -1,6 +1,6 @@
 /**
  * The voice bridge's Gemini Live tool declarations for the customer/staff
- * receptionist persona — extracted from gemini-telnyx-bridge.ts so
+ * receptionist persona, extracted from gemini-telnyx-bridge.ts so
  * repo-root tests (tests/e2e/voice-tools.e2e.test.ts) and typecheck can
  * import the REAL declarations WITHOUT pulling the bridge's runtime deps
  * (`@google/genai`, `ws`) that are only installed on the VPS. Same

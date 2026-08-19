@@ -4,10 +4,10 @@
  * Admin panel for white-glove intake questionnaires.
  *
  * The admin names the prospect's business (and optionally picks the
- * industry, which drives the questionnaire's suggested wording — those two
+ * industry, which drives the questionnaire's suggested wording, those two
  * are supplied HERE, never asked of the prospect, because the onboarding
  * interview already collects them). The email is OPTIONAL: with one, the
- * public /intake/<token> link is emailed automatically (best-effort — the
+ * public /intake/<token> link is emailed automatically (best-effort, the
  * copyable link is always shown); without one, the admin just gets the link
  * to share however they like. The list shows every intake's status;
  * completed ones link to the printable build document
@@ -80,7 +80,7 @@ function ApplyIntakeSection({
       });
     } catch {
       // A malformed stored answer set can't be applied; the server would
-      // reject it too — surface that instead of a broken preview.
+      // reject it too, surface that instead of a broken preview.
       return null;
     }
   }, [intake]);
@@ -246,7 +246,7 @@ export function WhiteGloveIntakesPanel({
         setIndustry("other");
         setEmail("");
         // Show the created intake (and its copyable link) IMMEDIATELY from
-        // the POST response — the manual-send path must not depend on the
+        // the POST response, the manual-send path must not depend on the
         // follow-up refresh succeeding.
         const created = json.data?.intake;
         const intakeUrl: string | undefined = json.data?.intakeUrl;

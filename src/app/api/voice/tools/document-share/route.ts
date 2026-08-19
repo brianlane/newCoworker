@@ -10,7 +10,7 @@ import { shareDocumentTool } from "@/lib/documents/tool-handlers";
 import { logger } from "@/lib/logger";
 
 /**
- * `document_share` — voice-bridge adapter. Texts the caller an expiring
+ * `document_share`, voice-bridge adapter. Texts the caller an expiring
  * link to a client-facing business document (price sheet, menu, policy)
  * via the shared core in src/lib/documents/tool-handlers.ts. The core
  * enforces the audience gate (voice can only share client-audience docs)

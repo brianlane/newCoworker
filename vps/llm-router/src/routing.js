@@ -30,7 +30,7 @@ export function pickUpstream(model) {
  *
  * The ONLY gemini spend NOT metered here is Gemini Live (the real-time
  * audio-to-audio model, e.g. gemini-3.1-flash-live-preview): it never reaches
- * this router — the voice-bridge holds that WebSocket directly and meters it
+ * this router, the voice-bridge holds that WebSocket directly and meters it
  * separately from the exact `usageMetadata` it sees. We guard on the `live`
  * substring defensively so a stray Live completion here could never
  * double-count against the bridge's meter.
@@ -58,7 +58,7 @@ export function isAiBudgetModel(model) {
  * reasoning/thinking tokens, so it maps straight onto the platform's
  * `GeminiUsage { promptTokens, outputTokens }` shape (which the app prices
  * with `geminiCostMicrosFromUsage`). Returns null when no usable usage is
- * present (so a usage-less response simply isn't metered — never over-counts).
+ * present (so a usage-less response simply isn't metered, never over-counts).
  */
 export function extractOpenAiUsage(obj) {
   if (!obj || typeof obj !== "object") return null;
@@ -130,7 +130,7 @@ export function createSseUsageCollector() {
  * message in `messages[]`. Rowboat's agents runtime sends the agent
  * instructions as one system message, and its `ensureSystemMessage` (or a
  * caller-supplied preamble, e.g. the AiFlow route_to_team selection call)
- * contributes a SECOND one — so the entire vault-grounded agent prompt
+ * contributes a SECOND one, so the entire vault-grounded agent prompt
  * (identity/soul/website/memory) was silently dropped on every Gemini turn
  * and agents answered as a bare base model (hallucinated team rosters,
  * "I am a large language model" replies). Merging preserves both prompts for
@@ -164,7 +164,7 @@ export function mergeSystemMessages(body) {
  * Why: the OpenAI streaming spec marks `index` REQUIRED on tool-call deltas
  * (it's how clients stitch fragmented arguments back together), and Rowboat's
  * AI SDK openai-compatible provider hard-fails chunk schema validation
- * without it — every Gemini tool call turned into a 500 even though the
+ * without it, every Gemini tool call turned into a 500 even though the
  * model called the function correctly. Gemini's OpenAI-compat endpoint sends
  * each tool call complete in a single chunk, so the array position is the
  * correct index.
@@ -239,7 +239,7 @@ export function createSseToolCallIndexNormalizer() {
  * Gemini 3.x models attach `extra_content.google.thought_signature` to every
  * tool call they emit on the OpenAI-compat endpoint, and REQUIRE the same
  * signature to be echoed back on the assistant `tool_calls` message when the
- * conversation is replayed — otherwise turn 2 of any tool-calling
+ * conversation is replayed, otherwise turn 2 of any tool-calling
  * conversation fails with HTTP 400 "Function call is missing a
  * thought_signature" (verified live 2026-07-16; this is why PR #602 pinned
  * SMS to gemini-2.5-flash). Rowboat's `@openai/agents` + AI SDK layers strip
@@ -254,7 +254,7 @@ export function createSseToolCallIndexNormalizer() {
  *   - INJECT: on each gemini-3.x request, assistant `tool_calls` lacking a
  *     signature get the cached one back; when the cache has nothing (router
  *     restart, evicted, or history imported from another model) they get
- *     Google's documented validator-bypass placeholder instead — verified
+ *     Google's documented validator-bypass placeholder instead, verified
  *     live to be accepted. Real signatures preserve reasoning quality; the
  *     placeholder guarantees no 400s.
  *
@@ -300,7 +300,7 @@ export function createSignatureCache(max = 2000) {
 
 /**
  * Pull `extra_content.google.thought_signature` off every tool call in a
- * parsed chat-completions payload — non-streamed (`choices[].message`) and
+ * parsed chat-completions payload, non-streamed (`choices[].message`) and
  * streamed (`choices[].delta`) alike (Gemini's OpenAI-compat sends each
  * streamed tool call complete in a single delta, id + signature included).
  * Returns how many signatures were cached.
@@ -374,7 +374,7 @@ export function injectThoughtSignatures(body, cache) {
  * Stateful line-buffered SSE scanner that feeds every `data: {...}` event
  * through `harvestThoughtSignatures`. Same chunk-splitting contract as
  * `createSseUsageCollector` (buffers to the last newline; `flush()` drains
- * the trailing unterminated line at end-of-stream). Read-only — never
+ * the trailing unterminated line at end-of-stream). Read-only, never
  * rewrites the stream.
  */
 export function createSseSignatureHarvester(cache) {
@@ -419,7 +419,7 @@ export function createSseSignatureHarvester(cache) {
  * endpoint can get stuck deterministically returning completions with
  * finish_reason "stop", ZERO completion tokens, no content, and no tool
  * calls. Rowboat's agents SDK burned a turn per empty response until "Max
- * turns (25) exceeded" — an owner-visible dead turn. The router retries the
+ * turns (25) exceeded", an owner-visible dead turn. The router retries the
  * upstream request ONCE when the whole completion is empty (absorbing
  * transient blips); a persistent empty response forwards unchanged, where
  * Rowboat's runtime now fails fast with a typed `model_empty_response` error.

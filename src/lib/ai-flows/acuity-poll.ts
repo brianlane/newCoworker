@@ -101,7 +101,7 @@ export function acuityAppointmentToCalendarEvent(
     ...(item.createdIso ? { createdIso: item.createdIso } : {}),
     ...(updatedIso ? { updatedIso } : {}),
     cancelled: item.canceled,
-    // Acuity has no shared-calendar concept — everything is "primary".
+    // Acuity has no shared-calendar concept, everything is "primary".
     calendar: "primary"
   };
 }
@@ -234,7 +234,7 @@ export async function fetchAcuityCandidateEvents(
   }
 
   // Diff against our observation shadow to learn WHEN each appointment last
-  // changed — Acuity itself will not tell us.
+  // changed, Acuity itself will not tell us.
   const observations: AcuityObservation[] = collected.map((item) => ({
     appointmentId: item.id,
     startIso: item.startIso,

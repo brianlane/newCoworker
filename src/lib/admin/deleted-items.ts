@@ -3,8 +3,8 @@
  *
  * Owners "delete" notifications, emails, calls, SMS conversations, chat
  * threads, and AiFlows with a `deleted_at` stamp (see src/lib/residency/row-delete.ts);
- * this module is the ONLY surface that reads those stamped rows back —
- * newest first, summarized enough for an admin to identify — and clears the
+ * this module is the ONLY surface that reads those stamped rows back,
+ * newest first, summarized enough for an admin to identify, and clears the
  * stamp on request. Restore is deliberately admin-only: the owner-facing
  * dashboard behaves as if the delete were hard.
  *
@@ -37,7 +37,7 @@ export type DeletedItemType =
 
 export type DeletedItem = {
   type: DeletedItemType;
-  /** Row id — or the customer number for a grouped SMS conversation. */
+  /** Row id, or the customer number for a grouped SMS conversation. */
   id: string;
   /** Human-readable identification line for the admin card. */
   summary: string;
@@ -50,7 +50,7 @@ export type DeletedItem = {
 
 export type DeletedItemsDeps = ContentRowMutationDeps & ReadDeps;
 
-/** Per-table listing cap — the admin card shows recent deletes, not an archive. */
+/** Per-table listing cap, the admin card shows recent deletes, not an archive. */
 const PER_TABLE_LIMIT = 100;
 
 /**
@@ -101,7 +101,7 @@ async function readDeletedRows(
 /**
  * Every soft-deleted item for one business, newest deletion first. SMS rows
  * (outbound sends + inbound jobs) are folded into one entry per customer
- * number — that matches the owner's delete unit ("delete conversation") and
+ * number, that matches the owner's delete unit ("delete conversation") and
  * gives the admin a single restore action instead of hundreds.
  */
 export async function listDeletedItems(
@@ -136,7 +136,7 @@ export async function listDeletedItems(
       db,
       deps
     ),
-    // Chat is engine state — reads stay central in every residency mode,
+    // Chat is engine state, reads stay central in every residency mode,
     // mirroring src/lib/db/dashboard-chat.ts.
     readDeletedRows(
       businessId,
@@ -165,7 +165,7 @@ export async function listDeletedItems(
   ]);
 
   // Inbound jobs are central-only. `payload` rides along so legacy rows
-  // (customer_e164 NULL — the delete stamped them by payload matching) can
+  // (customer_e164 NULL, the delete stamped them by payload matching) can
   // still be folded into their conversation below.
   const { data: inboundData, error: inboundError } = await db
     .from("sms_inbound_jobs")
@@ -256,7 +256,7 @@ export async function listDeletedItems(
   };
   for (const o of outboundSms) foldSms(str(o.to_e164), String(o.deleted_at), str(o.deleted_by));
   for (const j of inboundSms) {
-    // Legacy rows predate the denormalized column — identify them the same
+    // Legacy rows predate the denormalized column, identify them the same
     // way the reader and the delete did, by parsing the Telnyx payload.
     const e164 =
       str(j.customer_e164) ??
@@ -280,7 +280,7 @@ export async function listDeletedItems(
 /**
  * Clear the soft-delete stamp so the item reappears in the owner's
  * dashboard (central + box for moved tables). A restored chat thread comes
- * back ARCHIVED (is_active stays false) — it shows in history without
+ * back ARCHIVED (is_active stays false), it shows in history without
  * displacing the owner's current conversation. Returns the number of rows
  * un-stamped (0 = nothing matched; idempotent).
  */
@@ -340,7 +340,7 @@ export async function restoreDeletedItem(
 
       // Rows the delete stamped by PAYLOAD matching (legacy NULL columns, or
       // a column value that diverged from the payload) are restored the same
-      // way — page every still-stamped row, match payloads, un-stamp by id.
+      // way, page every still-stamped row, match payloads, un-stamp by id.
       const PAGE = 500;
       const legacyIds: string[] = [];
       for (let offset = 0; ; offset += PAGE) {

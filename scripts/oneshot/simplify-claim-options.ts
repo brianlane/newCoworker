@@ -5,7 +5,7 @@
  *
  * The engine now treats "1" as the universal claim digit everywhere:
  *   - "1"          → claims a live offer, OR retroactively claims a lapsed,
- *                    still-unclaimed offer (late claim) — seamless, no extra digit.
+ *                    still-unclaimed offer (late claim), seamless, no extra digit.
  *   - "1, <ETA>"   → same claim, live or late, with the stated timeframe
  *                    surfaced to the owner (what claimTimeframeOption's digit did).
  *   - "2"          → pass (round-robin flows), unchanged.
@@ -76,7 +76,7 @@ const RETRO_LINE_MARKER = "triple tap this lead";
 
 /**
  * The universal ETA hint appended where a timeframe option used to be
- * advertised — same affordance, now on the one claim digit. Doubles as the
+ * advertised, same affordance, now on the one claim digit. Doubles as the
  * idempotency marker (`"1, <ETA>"` appears only in this line).
  */
 export const CLAIM_ETA_HINT_LINE =
@@ -107,7 +107,7 @@ export function simplifyClaimOptions(def: Definition): boolean {
       );
       // The timeframe option advertised a real affordance (claim + say when
       // you'll reach out); keep it discoverable on the universal digit. The
-      // retro option gets NO replacement line — a late "1" just works.
+      // retro option gets NO replacement line, a late "1" just works.
       if (hadTimeframeLine && !kept.some((l) => l.includes('"1, <ETA>"'))) {
         kept.push(CLAIM_ETA_HINT_LINE);
       }

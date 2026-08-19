@@ -1,5 +1,5 @@
 /**
- * Agents — single-agent management.
+ * Agents, single-agent management.
  *
  *   PATCH  /api/dashboard/agents/:agentId  → edit name / instructions / format / enabled
  *   DELETE /api/dashboard/agents/:agentId  → remove the agent (runs cascade)
@@ -57,7 +57,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const existing = await getBusinessAgent(body.data.businessId, agentId);
     if (!existing) return errorResponse("NOT_FOUND", "Agent not found", 404);
 
-    // Re-typeset renders on the tenant's VPS render sidecar — a
+    // Re-typeset renders on the tenant's VPS render sidecar, a
     // Standard/Enterprise entitlement (Starter boxes have no sidecar).
     if (body.data.outputFormat === "pdf_retypeset") {
       const business = await getBusiness(body.data.businessId);

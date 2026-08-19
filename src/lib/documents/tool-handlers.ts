@@ -1,5 +1,5 @@
 /**
- * Business Documents — agent tool cores.
+ * Business Documents, agent tool cores.
  *
  * Channel-agnostic handlers behind the document tools, shared by every
  * surface adapter (Rowboat tool webhook for sms/dashboard/webchat, the
@@ -9,13 +9,13 @@
  *   - document_share           mint a tokenized link + deliver it. Client
  *                              channels can only share client-audience docs
  *                              (enforced in mintDocumentShare); webchat gets
- *                              the link INLINE — no SMS/email side effects
+ *                              the link INLINE, no SMS/email side effects
  *                              on the anonymous surface.
  *   - document_update          (dashboard-only) free-form edit applied to
  *                              content_md via Gemini; original file immutable.
  *   - document_set_expiration  (dashboard-only) set/extend/clear expires_at.
  *   - document_request_signature (dashboard-only) send a document for a
- *                              DocuSign-style legal sign-off — sending
+ *                              DocuSign-style legal sign-off, sending
  *                              contracts is an owner action, never a
  *                              customer-surface one.
  *
@@ -105,7 +105,7 @@ export type ShareDocumentArgs = {
  *   phone → metered SMS from the business number (opt-out checked)
  *   email → owner's connected mailbox
  *   neither → link returned inline (dashboard presents it; webchat is
- *             ALWAYS inline regardless of args — no sends from the
+ *             ALWAYS inline regardless of args, no sends from the
  *             anonymous surface).
  */
 export async function shareDocumentTool(

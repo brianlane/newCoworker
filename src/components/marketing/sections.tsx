@@ -133,7 +133,7 @@ export function CtaBanner({
 export type FaqItem = { question: string; answer: ReactNode };
 
 /**
- * Server-rendered accordion via native details/summary — no client JS, and
+ * Server-rendered accordion via native details/summary, no client JS, and
  * the answers stay in the HTML for SEO.
  */
 export function FaqAccordion({ items }: { items: FaqItem[] }) {

@@ -113,7 +113,7 @@ describe("email-log vps reads", () => {
     const c = { id: "e3", created_at: "2026-07-02T00:00:00Z", from_email: addr, to_email: null };
     const dupe = { id: "e1", created_at: "2026-07-01T00:00:00Z", from_email: addr, to_email: null };
     // A wildcard near-miss (joeXsmith) that a broken ILIKE-escape would let
-    // through — the JS exact-match post-filter must drop it.
+    // through, the JS exact-match post-filter must drop it.
     const nearMiss = {
       id: "e9",
       created_at: "2026-07-04T00:00:00Z",
@@ -340,7 +340,7 @@ describe("analytics vps reads", () => {
   /**
    * Db stub for the tables the analytics lib still reads centrally on the
    * vps path: `daily_usage` (maybeSingle / thenable list), `system_logs`
-   * (thenable head count or list), and `sms_inbound_jobs` (thenable list) —
+   * (thenable head count or list), and `sms_inbound_jobs` (thenable list),
    * all control-plane/engine tables that never move to the box.
    */
   function analyticsCentralDb(resultsByTable: Record<string, unknown> = {}) {

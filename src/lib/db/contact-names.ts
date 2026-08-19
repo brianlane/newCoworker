@@ -77,7 +77,7 @@ function ownerNumbersFrom(input: {
 /**
  * Map E.164 → display name for every number we can identify. Numbers with
  * no roster entry and no named customer profile are simply absent from the
- * result — callers fall back to showing the raw number.
+ * result, callers fall back to showing the raw number.
  */
 export async function resolveContactNames(
   businessId: string,
@@ -140,7 +140,7 @@ export async function resolveContactNames(
   const out = new Map<string, ContactName>();
   const wanted = new Set(unique);
   // A contacts row whose name_source is 'manual' is an owner-set label, so its
-  // name wins even over a derived owner/employee name — regardless of `type`
+  // name wins even over a derived owner/employee name, regardless of `type`
   // (an owner/employee number can carry a manual name that should stick, the
   // case the old "set type to other" workaround existed for). An 'auto' name
   // (captured from a channel) loses to the overlay. `type` only drives the
@@ -177,7 +177,7 @@ export async function resolveContactNames(
       out.set(row.phone_e164, labeled ? { name, kind: "employee", override: true } : { name, kind: "employee" });
     }
   }
-  // Owner last — wins over a roster entry or stale customer profile for the
+  // Owner last, wins over a roster entry or stale customer profile for the
   // same number; a manual label still wins over the derived owner name.
   const biz = bizRes.data as { owner_name?: string | null; phone?: string | null } | null;
   const telnyx = telnyxRes.data as { forward_to_e164?: string | null } | null;

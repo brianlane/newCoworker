@@ -2,27 +2,27 @@
  * GHL-style Goal Events: external-milestone jumps for AiFlow runs.
  *
  * A `goal` step is a trunk-only checkpoint. When a watched milestone lands
- * for a lead — they text back, an appointment is booked, a tag is added, a
- * teammate claims them — every one of that lead's runs that is queued
+ * for a lead, they text back, an appointment is booked, a tag is added, a
+ * teammate claims them, every one of that lead's runs that is queued
  * (including sleep/quiet-hour deferrals), parked awaiting their reply, or
- * parked on an in-progress AI call (awaiting_call — the physical call is
+ * parked on an in-progress AI call (awaiting_call, the physical call is
  * unaffected; its outcome resume no-ops on the moved-on run)
  * fast-forwards to its first matching goal step AHEAD of the current step:
  *
  *   1. the run's `current_step` jumps to the goal's flattened index (forward
- *      only — the integer park/resume state machine is untouched);
+ *      only, the integer park/resume state machine is untouched);
  *   2. the skipped-over steps are recorded "skipped" (reason `goal_jump`) so
  *      run history shows exactly which follow-ups the goal short-circuited;
  *   3. the context var `__goal_<stepId>` records which event kind jumped, so
  *      the goal step's inline execution reports "reached via <event>".
  *
- * Consumers (all best-effort — a goal failure must never break the hook's
+ * Consumers (all best-effort, a goal failure must never break the hook's
  * own path):
  *   - telnyx-sms-inbound: `replied` on any inbound lead SMS;
  *   - ai-flow-worker: `tag_added` (update_contact step), `claimed`
  *     (route_to_team claim finalization);
  *   - Next.js: `appointment_booked` (calendar tool bookings), `tag_added`
- *     (dashboard contact edits) — imported the same Node<->Deno way as
+ *     (dashboard contact edits), imported the same Node<->Deno way as
  *     contact_ref.ts.
  *
  * Runs parked on a HUMAN (`awaiting_approval` / `awaiting_agent`) are
@@ -39,7 +39,7 @@ export const GOAL_JUMP_SKIP = "goal_jump";
  * Run statuses a goal jump may touch (never the human-parked ones).
  * awaiting_call is jumpable: the physical AI call proceeds unaffected (its
  * outcome resume is status-guarded and simply no-ops), while the run stops
- * nurturing a lead who just converted — e.g. an appointment booked DURING
+ * nurturing a lead who just converted, e.g. an appointment booked DURING
  * the call window must not be lost to a one-shot event.
  */
 const JUMPABLE_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
@@ -67,7 +67,7 @@ type GoalStep = Extract<FlowStep, { type: "goal" }>;
 /**
  * Pure: does this goal step watch for the observed event? tag_added matches
  * on the tag (case-insensitive); an authored tag_added without a tag never
- * matches (the schema requires one — this is runtime defense).
+ * matches (the schema requires one, this is runtime defense).
  */
 export function goalStepMatches(step: GoalStep, event: ObservedGoalEvent): boolean {
   for (const g of Array.isArray(step.events) ? step.events : []) {
@@ -110,7 +110,7 @@ type CandidateRun = {
  * throws; a failure on one run never blocks the others.
  *
  * `excludeRunIds`: runs the caller just resumed with THIS same event (a
- * wait_for_reply that consumed the reply) — those must process the event
+ * wait_for_reply that consumed the reply), those must process the event
  * through their authored branch logic, not jump past it.
  */
 export async function applyGoalEvent(
@@ -214,7 +214,7 @@ async function jumpRunToGoal(
       : {};
   // A run parked on a wait_for_reply / place_ai_call carries the wait's
   // resolution marker; stamp it (like the reply/timeout/outcome resumes do)
-  // so the parked step can never re-park — or re-DIAL — if anything ever
+  // so the parked step can never re-park, or re-DIAL, if anything ever
   // re-enters it.
   const waiting =
     (run.context?.waiting_reply as { marker?: unknown } | undefined) ?? {};
@@ -237,7 +237,7 @@ async function jumpRunToGoal(
       [goalReachedVar(goalStep.id)]: event.kind,
       ...markerVars,
       // The jump moves current_step outside the worker's loop, so refresh the
-      // resume marker to the goal step — a stale marker would relocate the
+      // resume marker to the goal step, a stale marker would relocate the
       // next claim back to wherever the run previously parked.
       [RESUME_STEP_ID_VAR]: goalStep.id
     },
@@ -259,7 +259,7 @@ async function jumpRunToGoal(
       : {})
   };
   // Optimistic concurrency: gate on the revision we read (trigger-bumped on
-  // every update) so a concurrent claim/resume/timeout wins cleanly — losing
+  // every update) so a concurrent claim/resume/timeout wins cleanly, losing
   // the race means the run moved on and this jump no longer applies.
   const { data: updated, error: updErr } = await supabase
     .from("ai_flow_runs")

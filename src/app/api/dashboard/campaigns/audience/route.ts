@@ -1,5 +1,5 @@
 /**
- * Campaign audience preview — GET /api/dashboard/campaigns/audience
+ * Campaign audience preview, GET /api/dashboard/campaigns/audience
  *   ?businessId=…&tag=…   → { recipients, needsReview, clipped, tags }
  *
  * The composer calls this (debounced) as the owner types an audience tag,

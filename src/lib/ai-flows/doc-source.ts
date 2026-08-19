@@ -1,19 +1,19 @@
 /**
- * Flow document sources — resolve a templated document ref to bytes the
+ * Flow document sources, resolve a templated document ref to bytes the
  * platform can hand to Gemini (agent runs, doc extraction).
  *
  * Two ref forms are addressable:
- *   - `email-attachments:<path>` — an inbound tenant-mailbox attachment
+ *   - `email-attachments:<path>`, an inbound tenant-mailbox attachment
  *     ({{trigger.document}}). Ownership is gated on the path being recorded
  *     on THIS business's own inbound mail (email_log.attachments), exactly
  *     like doc-extract: the ref came through a template render, so it is
  *     untrusted.
- *   - `business-docs:<documentId>` — a document in the business's own
+ *   - `business-docs:<documentId>`, a document in the business's own
  *     Documents store. Ownership is the tenant-scoped row lookup itself;
  *     only ready documents with a supported original format resolve.
  *
  * Failure taxonomy matches doc-extract: `ok:false` errors are PERMANENT
- * input problems (bad ref, unsupported type, oversized, missing) — callers
+ * input problems (bad ref, unsupported type, oversized, missing), callers
  * report them without retrying; thrown errors are transient lookup/storage
  * faults the worker retries.
  */
@@ -33,7 +33,7 @@ export const DOC_EXTRACT_MAX_BYTES = 15 * 1024 * 1024;
 
 /**
  * Parse and sanitize an email-attachment document ref. Only sane relative
- * paths within the email-attachments bucket — the ref came through a
+ * paths within the email-attachments bucket, the ref came through a
  * template render, so treat it as untrusted.
  */
 export function parseDocumentRef(ref: string): { bucket: string; path: string } | null {

@@ -5,7 +5,7 @@
  *
  * Synced actuals (Hostinger billing snapshot, this month's Telnyx rows)
  * degrade gracefully to the per-unit estimates when the sync hasn't run or
- * a read fails — an admin page must render either way. Usage/AI reads are
+ * a read fails, an admin page must render either way. Usage/AI reads are
  * likewise best-effort (zeroes), matching the dashboard's existing
  * behavior for the same sources.
  */
@@ -92,7 +92,7 @@ export function monthStartYmdUtc(now: Date = new Date()): string {
 
 /**
  * businessId → summed monthly price of its synced Hostinger boxes.
- * Cancelled subscriptions recur nothing (sunk cost until lapse) — same
+ * Cancelled subscriptions recur nothing (sunk cost until lapse), same
  * non-recurring rule as the Costs page fleet KPI and the pool burn view.
  */
 export function hostingCentsByBusiness(rows: HostingerVpsCostRow[]): Map<string, number> {
@@ -145,11 +145,11 @@ export function hostingSizesByBusiness(rows: HostingerVpsCostRow[]): Map<string,
  *
  * Rationale: a pinned tenant sitting on a differently-sized box (e.g. a
  * standard tenant pinned kvm2 whose lapsing KVM8 is still the assigned
- * billing row) is mid-transition — the pin is the intended steady-state
+ * billing row) is mid-transition, the pin is the intended steady-state
  * hardware, so the pinned SKU is the tenant's RECURRING cost; the old
  * box's remaining term is sunk money the fleet views (Costs page vendor
- * table/KPI) still report. When the pin and box agree — or there is no
- * pin, or no parseable plan — the synced actual wins: real promo/term
+ * table/KPI) still report. When the pin and box agree, or there is no
+ * pin, or no parseable plan, the synced actual wins: real promo/term
  * pricing beats the SKU table.
  */
 export function syncedHostingContradictsPin(
@@ -346,7 +346,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
     // A pinned tenant whose synced box size disagrees with the pin is
     // mid-transition (e.g. standard pinned kvm2 with a lapsing KVM8 still
     // assigned): drop the synced price so the margin reflects the pinned
-    // SKU — the intended recurring cost — instead of the old box's bill.
+    // SKU, the intended recurring cost, instead of the old box's bill.
     // See syncedHostingContradictsPin.
     const pinContradicted = syncedHostingContradictsPin(
       business.vps_size ?? null,

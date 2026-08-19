@@ -138,7 +138,7 @@ describe("attachBusinessDidToCampaign", () => {
   });
 
   it("pending: returns pending when 10dlc is not configured (cold start)", async () => {
-    // Explicit cold start — clear every env var readTendlcConfig consults so
+    // Explicit cold start, clear every env var readTendlcConfig consults so
     // the "config: null" path actually reaches the no-config branch even when
     // the test runner inherits TELNYX_API_KEY from a real .env file.
     const saved = {

@@ -5,7 +5,7 @@
  * their own VPS instead of central Supabase (the "your data on your own
  * server" compliance story). The gate lives server-side so every write to
  * `businesses.data_residency_mode` enforces it regardless of what the UI
- * shows — same pattern as the BYON tier gate (src/lib/byon/tier-gate.ts).
+ * shows, same pattern as the BYON tier gate (src/lib/byon/tier-gate.ts).
  *
  * Default is 'supabase' for every business; nothing in the residency code
  * path activates unless an admin flips an enterprise tenant forward.

@@ -3,7 +3,7 @@
  *
  * A subscription's revenue is REFUND-EXPOSED while the owner can still take
  * the lifetime-once 30-day money-back refund: their customer profile's
- * window is open and unused ({@link isWithinLifetimeRefundWindow} — the
+ * window is open and unused ({@link isWithinLifetimeRefundWindow}, the
  * exact gate `/api/billing/cancel` enforces) AND the placement is
  * self-serve refundable (`vps_provider` resolves to `hostinger`; BYOS/OVH
  * placements are refused by the cancel route's placement gate). Everyone
@@ -64,7 +64,7 @@ export function stampRefundExposure<T extends RefundExposureSubscription>(
 /**
  * Production loader: batch-load the customer profiles behind the given
  * subscriptions and stamp exposure. Only profiles that could possibly
- * matter are fetched — active, Stripe-backed, non-enterprise rows are the
+ * matter are fetched, active, Stripe-backed, non-enterprise rows are the
  * only ones `computeDayCurrentMrr` counts.
  */
 export async function stampRefundExposureFromDb<T extends RefundExposureSubscription>(

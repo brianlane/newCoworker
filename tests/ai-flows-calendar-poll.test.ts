@@ -7,7 +7,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
   // Empty by default: the single-connection fallback in each consumer
   // (conns.length > 0 ? conns : [conn]) keeps every legacy scenario intact.
   listCalendlyCalendarConnections: vi.fn(async () => []),
-  // Pure helper — real behavior inline so the guards under test stay honest.
+  // Pure helper, real behavior inline so the guards under test stay honest.
   isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
 }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
@@ -127,7 +127,7 @@ function systemLogsChain(queue: LogsResult[]) {
 
 /**
  * Chainable service-client stub serving the (paged) ai_flows listing plus
- * the failure-path system_logs lookbacks (default: no recent rows — every
+ * the failure-path system_logs lookbacks (default: no recent rows, every
  * failure reads as a first failure, owner-alert dedupe finds nothing).
  */
 function dbWithRange(range: ReturnType<typeof vi.fn>, logsQueue: LogsResult[] = []) {
@@ -841,7 +841,7 @@ describe("pollCalendarTriggers", () => {
         flowRow("f-created", createdTrigger()),
         flowRow("f-end", endTrigger(30)),
         flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] }),
-        // Shared-only flow: Calendly has no shared calendar — no events for it.
+        // Shared-only flow: Calendly has no shared calendar, no events for it.
         flowRow("f-shared", startTrigger(60, { calendar: "shared" }))
       ])
     );
@@ -1275,7 +1275,7 @@ describe("pollCalendarTriggers", () => {
     const backMinutes = (before - Date.parse(timeMin)) / 60_000;
     expect(backMinutes).toBeGreaterThanOrEqual(120 + CALENDAR_END_LOOKBACK_MINUTES - 0.1);
     expect(backMinutes).toBeLessThan(120 + CALENDAR_END_LOOKBACK_MINUTES + 1);
-    // Upper bound is now — future events are irrelevant to end mode.
+    // Upper bound is now, future events are irrelevant to end mode.
     expect(Math.abs(Date.parse(timeMax) - before)).toBeLessThan(60_000);
   });
 
@@ -1345,7 +1345,7 @@ describe("pollCalendarTriggers", () => {
     }) as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     // The primary event still enqueues; the shared failure logs ONE
-    // aggregated row (never one per source — the escalation lookback counts
+    // aggregated row (never one per source, the escalation lookback counts
     // rows as failing POLLS).
     expect(res.enqueued).toBe(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
@@ -1395,7 +1395,7 @@ describe("pollCalendarTriggers", () => {
     );
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
     expect(workspaceProxyForBusiness).not.toHaveBeenCalled();
-    // Only the cadence-tick stamp — no failure/overflow rows.
+    // Only the cadence-tick stamp, no failure/overflow rows.
     expect(recordSystemLog).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
     );
@@ -1434,7 +1434,7 @@ describe("pollCalendarTriggers", () => {
 
   it("shares one upcoming query across start flows (largest lead) and dedupes listings", async () => {
     // One created + one start flow on the same calendar: the created listing
-    // and the upcoming listing both return ev1 — it must count once.
+    // and the upcoming listing both return ev1, it must count once.
     const startIso = isoIn(10);
     vi.mocked(workspaceProxyForBusiness).mockImplementation((async (
       _biz: string,
@@ -1471,7 +1471,7 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(0);
-    // A dedupe collision is routine — nothing beyond the cadence-tick stamp.
+    // A dedupe collision is routine, nothing beyond the cadence-tick stamp.
     expect(recordSystemLog).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: expect.stringContaining("enqueued") })
     );
@@ -1796,7 +1796,7 @@ describe("poll failure escalation + owner alert", () => {
         { data: [{ id: 1 }, { id: 2 }], error: null } // 2 priors, third strike
       ])
     );
-    // Persistent, so it logs at error — but flows on the primary calendar
+    // Persistent, so it logs at error, but flows on the primary calendar
     // kept firing, so "your automations are paused" must NOT go out.
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
@@ -1838,7 +1838,7 @@ describe("poll failure escalation + owner alert", () => {
 
   it("a failed lookback logs as persistent but NEVER alerts (an assumed count is not evidence)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    // Connection-class failure — exactly the kind that would alert with two
+    // Connection-class failure, exactly the kind that would alert with two
     // real priors. A lookback read error must not synthesize them.
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
     await pollCalendarTriggers(

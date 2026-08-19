@@ -97,7 +97,7 @@ describe("evaluateTriggerConditions", () => {
   // trigger set (from lead-forwarding@ + "new lead"; from alerts-noreply@ +
   // "new lead:") lets both real lead-alert shapes through and rejects the
   // digest. These are Truly's EXACT production conditions and the real
-  // email shapes — if trigger matching semantics drift, this fails first.
+  // email shapes, if trigger matching semantics drift, this fails first.
   describe("Truly Privyr trigger set vs real Privyr email shapes", () => {
     const primary = [
       { type: "from_matches" as const, value: "lead-forwarding@privyr.com" },
@@ -429,7 +429,7 @@ describe("tenantEmailTriggerScope", () => {
       id: "m4",
       fromEmail: "a@b.c",
       subject: "docs",
-      // A body at the window cap would truncate an in-body line away — the
+      // A body at the window cap would truncate an in-body line away, the
       // attachments line must survive it.
       bodyText: "x".repeat(EMAIL_WINDOW_TEXT_MAX),
       attachmentNames: ["license.pdf", "  proof of address.pdf  ", ""]
@@ -494,7 +494,7 @@ describe("flattenWebhookPayload", () => {
     expect(big.length).toBe(EMAIL_WINDOW_TEXT_MAX);
   });
   it("bounds hostile payloads: deep nesting and huge key counts stop early", () => {
-    // 6 levels deep — beyond the depth bound, so the innermost leaf is dropped.
+    // 6 levels deep, beyond the depth bound, so the innermost leaf is dropped.
     const deep = { a: { b: { c: { d: { e: { f: "too deep" } } } } } };
     expect(flattenWebhookPayload(deep)).toBe("");
     const wide: Record<string, unknown> = {};

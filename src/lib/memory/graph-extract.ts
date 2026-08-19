@@ -11,7 +11,7 @@
  *   - identity-evidence-only entity resolution (same name ≠ same entity),
  *   - no relationship between entities that don't co-occur in ONE bullet,
  *   - source text is data, never instructions to the extractor,
- *   - only owner-stated values — never invented normalizations.
+ *   - only owner-stated values, never invented normalizations.
  *
  * Everything here is pure (compose + parse); the Gemini call lives in
  * graph-ingest.ts so tests can pin behavior without a model.
@@ -44,7 +44,7 @@ export type ExtractedEntity = {
 export type ExtractedFact = {
   subjectRef: string;
   predicate: string;
-  /** Entity-valued object (edge) — exactly one of objectRef/objectValue. */
+  /** Entity-valued object (edge), exactly one of objectRef/objectValue. */
   objectRef?: string;
   /** Literal-valued object. */
   objectValue?: string;
@@ -114,7 +114,7 @@ export const GRAPH_EXTRACTION_SYSTEM_PROMPT = [
  * rules: everything a customer says is a CLAIM about themselves, never a
  * statement of business policy, and receiving information is not doing it.
  * The write path stores the result at the source's trust tier with
- * attribution — but the model must ALSO be told, because "the roof was
+ * attribution, but the model must ALSO be told, because "the roof was
  * replaced" from a caller's mouth is a different fact than from the owner's.
  */
 export const CUSTOMER_GRAPH_EXTRACTION_SYSTEM_PROMPT = [
@@ -236,7 +236,7 @@ function cleanStringArray(value: unknown, maxItems = 8): string[] {
 
 /**
  * Parse the extraction model's JSON reply into a safe GraphExtraction.
- * ANY malformed input degrades to an empty extraction — a missed capture is
+ * ANY malformed input degrades to an empty extraction, a missed capture is
  * always preferable to a bogus graph write. Facts referencing unknown entity
  * refs (or violating the one-of object rule) are dropped.
  */

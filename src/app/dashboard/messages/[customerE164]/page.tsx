@@ -79,7 +79,7 @@ export default async function SmsThreadPage({
   const business = businesses?.[0] ?? null;
   if (!business) notFound();
 
-  // The four reads are independent — one parallel group instead of four
+  // The four reads are independent, one parallel group instead of four
   // serial awaits (for residency tenants each is a tunnel round-trip).
   const [messages, rcsEnabled, memory, contactMap, contactLanguage] = await Promise.all([
     listMessagesForCustomer(business.id, customerE164, { limit: 100 }),

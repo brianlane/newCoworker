@@ -16,7 +16,7 @@ import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { runSnapshotSweep } from "@/lib/analytics/snapshots";
 
-// Fleet-wide sweep with residency-routed transcript reads — same ceiling as
+// Fleet-wide sweep with residency-routed transcript reads, same ceiling as
 // the other sweeps.
 // 150 matches the chain's reachable budget: Supabase 504s the Edge bridge
 // at 150s, and this sweep's worst run in the ledger's first full week was

@@ -77,7 +77,7 @@ export async function sshExecPinned(
     } catch (err) {
       // ssh2 surfaces a hostVerifier rejection as a handshake/connection
       // error. When we captured a fingerprint and it differs from the pin,
-      // we KNOW it was the verifier — translate into the typed error with
+      // we KNOW it was the verifier, translate into the typed error with
       // remediation instead of a generic "connection error".
       if (captured !== null && captured !== pinned) {
         throw new HostKeyMismatchError(opts.host, pinned, captured);
@@ -97,7 +97,7 @@ export async function sshExecPinned(
       await persistFingerprint(keyRow.id, captured);
     } catch (err) {
       // Best-effort: a failed persist just means the NEXT connection is
-      // also TOFU — log it so a persistent write failure is visible.
+      // also TOFU, log it so a persistent write failure is visible.
       logger.warn("host-key fingerprint persist failed (next connect stays TOFU)", {
         sshKeyId: keyRow.id,
         host: opts.host,

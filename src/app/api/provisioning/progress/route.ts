@@ -16,7 +16,7 @@ const bodySchema = z.object({
 /**
  * An explicit, operator-set provisioning token (distinct from any gateway token).
  * When unset, orchestration deploys the per-tenant gateway token as the progress
- * bearer instead — that path is handled by `verifyGatewayTokenForBusiness` below.
+ * bearer instead, that path is handled by `verifyGatewayTokenForBusiness` below.
  */
 function matchesExplicitProgressToken(request: Request): boolean {
   const expected = process.env.PROVISIONING_PROGRESS_TOKEN ?? "";

@@ -3,7 +3,7 @@
  *
  * POST /api/dashboard/aiflows/lead-import?businessId=<uuid>&mode=preview
  *   body: { csv: string }
- *   → { headers, totalRows, sampleRows, webhookFlowsEnabled, flows } — a dry
+ *   → { headers, totalRows, sampleRows, webhookFlowsEnabled, flows }, a dry
  *     run so the UI can show the parsed sheet and offer the target-flow
  *     dropdown (enabled, batch-runnable flows) before the owner commits.
  *
@@ -18,7 +18,7 @@
  * browser so the server never parses binary uploads.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_aiflows")
- * (admins bypass, existing dashboard convention). Imports run synchronously —
+ * (admins bypass, existing dashboard convention). Imports run synchronously,
  * the sheet is capped at 500 rows / 1 MB.
  */
 
@@ -43,7 +43,7 @@ export const maxDuration = 300;
 
 const IMPORT_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
-/** Body cap — matches the row cap's order of magnitude. */
+/** Body cap, matches the row cap's order of magnitude. */
 const MAX_IMPORT_BYTES = 1024 * 1024;
 
 /** Rows echoed back by preview mode for the "does this look right?" check. */

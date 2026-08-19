@@ -11,8 +11,8 @@ import {
  * Pure-helper unit tests pulled out of `tests/provisioning.test.ts` so they
  * don't have to drag along that file's heavyweight `vi.mock(...)` graph
  * (auth, businesses, configs, telnyx, email, etc.). Each helper here is a
- * leaf function — `describeProvisioningError`, `runWithSshConnectRetry`,
- * `describeAttachError`, `formatTendlcAttachProgress` — so this file just
+ * leaf function, `describeProvisioningError`, `runWithSshConnectRetry`,
+ * `describeAttachError`, `formatTendlcAttachProgress`, so this file just
  * imports from `@/lib/provisioning/orchestrate` and asserts on outputs.
  *
  * Splitting these out lets vitest run them in their own worker in parallel
@@ -183,7 +183,7 @@ describe("provisioning/orchestrate pure helpers", () => {
 
     it("falls back to 'unknown' reason when the outcome shape is missing it", () => {
       // Defence against future TendlcAttachOutcome variants that forget
-      // to populate `reason` — the progress copy must not render 'undefined'.
+      // to populate `reason`, the progress copy must not render 'undefined'.
       const out = formatTendlcAttachProgress(
         { kind: "pending" },
         "+15550005555"

@@ -11,7 +11,7 @@ import { syncVaultToVpsAndLog } from "./sync-vault";
  *   fire-and-forget promise was routinely killed mid-flight. The result: an
  *   owner's memory/config edit landed in Supabase (so the dashboard Memory
  *   panel showed it), but the per-tenant Rowboat agent's MongoDB
- *   `instructions` stayed frozen at the last successful sync — the agent kept
+ *   `instructions` stayed frozen at the last successful sync, the agent kept
  *   answering from a stale prompt (e.g. "I don't have that phone number" even
  *   though it was just saved).
  *

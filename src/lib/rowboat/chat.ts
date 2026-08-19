@@ -8,7 +8,7 @@
  * so the Deno worker could import it too via a shared ports/adapters split
  * later; for now we duplicate the shape knowingly.
  *
- * The Rowboat reply is NOT `{ reply: string }` — the assistant text lives in
+ * The Rowboat reply is NOT `{ reply: string }`, the assistant text lives in
  * `turn.output[]` where `role === "assistant"`.
  */
 
@@ -182,8 +182,8 @@ export function describeRowboatError(err: unknown): string {
       // (Cloudflare 524 = origin idle timeout exceeded; 408 = request timeout;
       // 522 = origin connection timed out). Treat them as the same UX as
       // rowboat_timeout: a slow model, not a misconfiguration. Mapped here
-      // (rather than at the streaming layer) so the buffered fallback path
-      // — and any future caller — gets the same friendly copy without
+      // (rather than at the streaming layer) so the buffered fallback path,
+      // and any future caller, gets the same friendly copy without
       // having to special-case status codes.
       if (status === "524" || status === "522" || status === "408") {
         return "Your coworker took too long to reply. Try again in a moment.";
@@ -195,7 +195,7 @@ export function describeRowboatError(err: unknown): string {
 }
 
 // =====================================================================
-// Streaming variant — used by /api/dashboard/chat to emit deltas to the
+// Streaming variant, used by /api/dashboard/chat to emit deltas to the
 // browser as Rowboat / Ollama generates them.
 //
 // Why streaming exists at all: Cloudflare Tunnel (which fronts the per-
@@ -254,7 +254,7 @@ export type CallRowboatChatStreamInput = {
   conversationId?: string | null;
   state?: unknown | null;
   /**
-   * Hard cap on time-to-first-byte. 270s default — sized to the
+   * Hard cap on time-to-first-byte. 270s default, sized to the
    * route's `maxDuration` (300s on Vercel Hobby) minus 30s of
    * generation budget. Owners have legitimate workflows where
    * Rowboat needs to load a cold model, retrieve a large customer
@@ -273,7 +273,7 @@ export type CallRowboatChatStreamInput = {
    * latency characteristics from mid-stream tokens. TTFB is
    * dominated by model load + retrieval + first inference pass
    * (legitimately variable, can be minutes). Idle is "the model
-   * paused mid-token-stream" — once tokens are flowing, a 30s gap
+   * paused mid-token-stream", once tokens are flowing, a 30s gap
    * almost always means something is genuinely broken, so the idle
    * cap stays tight at 30s regardless of how loose TTFB gets.
    *
@@ -295,7 +295,7 @@ export type CallRowboatChatStreamInput = {
    * aborts the in-flight upstream fetch + body reader and yields no
    * further events. Used by /api/dashboard/chat to propagate browser
    * disconnect (`request.signal`) all the way down to the per-tenant
-   * Rowboat call — without this plumbing, a client navigating away
+   * Rowboat call, without this plumbing, a client navigating away
    * mid-generation leaves the per-tenant Ollama generating tokens
    * nobody will ever read until one of the internal timers trips
    * (idle: 30s mid-stream, TTFB: 90s pre-token), wasting up to that
@@ -317,7 +317,7 @@ export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
  * This distinction matters for OpenAI-compatible streams: the very
  * first chunk is `{choices:[{delta:{role:"assistant"}}]}` (no content
  * yet) and the last is `{choices:[{finish_reason:"stop",delta:{}}]}`
- * (no content, just terminator). Both are normal — failing the
+ * (no content, just terminator). Both are normal, failing the
  * stream on either would kill every OpenAI-shaped reply before it
  * produced a single token.
  */
@@ -334,13 +334,13 @@ export type RowboatStreamParseResult =
  *
  * Wire-format note (verified at design time, code review pending live
  * confirmation): Rowboat's `stream: true` mode is not documented in our
- * repo — every existing caller sends `stream: false` (see
+ * repo, every existing caller sends `stream: false` (see
  * `callRowboatChat` and tests/integration/kvm-rowboat/rowboat-chat.ts
  * line 87). The infrastructure (`vps/llm-router`) passes
  * `text/event-stream` through verbatim, so the most likely shapes are:
  *
- *   1. OpenAI-compatible: `{"choices":[{"delta":{"content":"..."}}]}`
- *      — what llm-router forwards from upstream.
+ *   1. OpenAI-compatible: `{"choices":[{"delta":{"content":"..."}}]}`,
+ *      what llm-router forwards from upstream.
  *   2. Rowboat-native: `{"type":"delta","content":"..."}` /
  *      `{"type":"done","conversationId":"...","state":{...}}`.
  *   3. Final Rowboat-shaped JSON: a single SSE event carrying the same
@@ -361,11 +361,11 @@ export type RowboatStreamParseResult =
  */
 export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResult {
   const trimmed = rawData.trim();
-  // Empty data lines are common SSE keep-alives — `noop` (skippable),
+  // Empty data lines are common SSE keep-alives, `noop` (skippable),
   // not an error.
   if (!trimmed) return ROWBOAT_STREAM_NOOP;
   // SSE convention: `[DONE]` sentinel (OpenAI compat). When we see it,
-  // we don't yet know the conversationId — those land in earlier events
+  // we don't yet know the conversationId, those land in earlier events
   // OR in the final Rowboat-shaped JSON. The caller (`callRowboatChatStream`)
   // tracks running metadata and emits the actual `done` event itself.
   if (trimmed === "[DONE]") {
@@ -397,7 +397,7 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResu
         ? obj.delta
         : null;
     // A delta event with no string content is malformed but tolerated
-    // as a noop — be liberal in what we accept rather than killing the
+    // as a noop, be liberal in what we accept rather than killing the
     // whole stream over an upstream bug. The idle timer still ticks.
     if (content === null) return ROWBOAT_STREAM_NOOP;
     return { type: "delta", text: content };
@@ -422,7 +422,7 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResu
   }
 
   // Hypothesis 1: OpenAI-compatible chat-completions stream chunk.
-  // `{choices: [{delta: {content: "..."}}]}` — extract delta.content.
+  // `{choices: [{delta: {content: "..."}}]}`, extract delta.content.
   if (Array.isArray(obj.choices) && obj.choices.length > 0) {
     const first = obj.choices[0] as Record<string, unknown> | null;
     const delta = first && typeof first === "object" ? (first.delta as Record<string, unknown> | undefined) : undefined;
@@ -430,7 +430,7 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResu
       return { type: "delta", text: delta.content };
     }
     // OpenAI emits empty chunks (e.g. role-only first chunk, finish_reason
-    // last chunk, choices:[null] keep-alive). All NORMAL — `noop` so the
+    // last chunk, choices:[null] keep-alive). All NORMAL, `noop` so the
     // stream loop skips them and keeps reading. Returning `null` here was
     // the bug (Codex P1 + Cursor Bugbot HIGH on PR #76): a standard
     // OpenAI-shaped stream emits the role-only chunk as its very first
@@ -482,7 +482,7 @@ export async function* callRowboatChatStream(
   // Cursor Bugbot Low on PR #76 commit 1ff78e9: pre-fix the input
   // type was the union `CallRowboatChatInput | CallRowboatChatStreamInput`,
   // which let a future caller pass the non-streaming shape's
-  // `timeoutMs` field — silently dropped here in favor of the 30s
+  // `timeoutMs` field, silently dropped here in favor of the 30s
   // TTFB / 30s idle defaults. The non-streaming `callRowboatChat`
   // and the streaming `callRowboatChatStream` have intentionally
   // different timeout models (single hard cap vs separate TTFB +
@@ -516,7 +516,7 @@ export async function* callRowboatChatStream(
   // Hoisted shared state. `reader` is null until res.body is unwrapped
   // post-fetch; `timedOut` is the deterministic "we hit a timeout we
   // set" signal that the post-loop code uses to surface
-  // `rowboat_timeout` (the abort signal alone isn't sufficient — see
+  // `rowboat_timeout` (the abort signal alone isn't sufficient, see
   // the rowboat_timeout block at the bottom). Both are referenced by
   // the shared `fireTimeout` callback below so the TTFB and idle
   // timers can use the same cancellation path.
@@ -599,7 +599,7 @@ export async function* callRowboatChatStream(
        paths and survives a refactor that adds early returns. */
     if (timer) clearTimeout(timer);
     timer = null;
-    // Remove the external listener on every early return — `once:true`
+    // Remove the external listener on every early return, `once:true`
     // covers the fired case but not the "never fired and we bailed
     // pre-reader" case, where the listener would otherwise outlive the
     // function.
@@ -635,13 +635,13 @@ export async function* callRowboatChatStream(
   // Local non-null alias so closures below can reference the reader
   // without TS narrowing tripping on the hoisted-and-reassigned outer
   // `reader: ReadableStreamDefaultReader | null` (which is hoisted
-  // so `fireTimeout` — which runs both before and after this point
-  // — can read the latest value).
+  // so `fireTimeout`, which runs both before and after this point,
+  // can read the latest value).
   const activeReader = reader;
   // Upgrade `cancelUpstream` now that we have a reader: an external
   // abort fired post-fetch must also cancel the body stream, otherwise
   // the per-tenant Rowboat keeps streaming bytes into a TCP socket we
-  // no longer drain. Idempotent — safe even if the cancellation also
+  // no longer drain. Idempotent, safe even if the cancellation also
   // came from our own timer (which already calls reader.cancel()).
   cancelUpstream = () => {
     abort.abort();
@@ -659,7 +659,7 @@ export async function* callRowboatChatStream(
   let buffer = "";
   let sawAnyDelta = false;
   // Running metadata harvested from any event that carries it. The
-  // final `done` we emit is built from the LAST seen values — Rowboat
+  // final `done` we emit is built from the LAST seen values, Rowboat
   // may sprinkle conversationId across events (one in a meta event,
   // one in the final JSON); last-write-wins matches the buffered API
   // semantics.
@@ -731,7 +731,7 @@ export async function* callRowboatChatStream(
         if (parsed === ROWBOAT_STREAM_NOOP) {
           // Recognized-but-empty chunk (OpenAI role-only first event,
           // finish_reason terminator, blank keep-alive, or a malformed
-          // delta with no content). Skip — the idle timer already
+          // delta with no content). Skip, the idle timer already
           // reset on this chunk arriving, and the next chunk will
           // carry real content.
           continue;
@@ -741,7 +741,7 @@ export async function* callRowboatChatStream(
           // an invalid_json error so the friendly-error layer catches
           // it (vs. silently dropping content and emitting an empty
           // assistant). This is the single most likely place for a
-          // future Rowboat release to break us — the tests should
+          // future Rowboat release to break us, the tests should
           // drive parseRowboatStreamEvent directly to catch shape
           // drift before we ship.
           yield { type: "error", message: "rowboat_invalid_json" };
@@ -825,12 +825,12 @@ export async function* callRowboatChatStream(
     return;
   }
 
-  // Empty assistant turn — surface as rowboat_empty_assistant
+  // Empty assistant turn, surface as rowboat_empty_assistant
   // REGARDLESS of whether Rowboat sent an explicit done sentinel.
   // Cursor Bugbot Medium on PR #76 commit d6a3145: pre-fix this
   // gate was `!sawAnyDelta && !explicitDone`, which let an explicit
   // `[DONE]` (or done-typed event) with zero content events through
-  // as a normal `done` — the route then saw `kind: "done"` and
+  // as a normal `done`, the route then saw `kind: "done"` and
   // skipped the stateless-retry gate entirely. Semantically a stream
   // with no delta events IS empty whether or not it terminated
   // gracefully, and the retry path (drop conversationId/state and

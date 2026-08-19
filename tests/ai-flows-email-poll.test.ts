@@ -44,7 +44,7 @@ function flowRow(id: string, trigger: unknown, triggers?: unknown[], steps: unkn
   };
 }
 
-/** A flow that answers the email itself — the only kind that marks it read. */
+/** A flow that answers the email itself, the only kind that marks it read. */
 const sendEmailStep = { id: "s_reply", type: "send_email" };
 
 type SeenTable = {
@@ -888,7 +888,7 @@ describe("pollEmailTriggers", () => {
     const res = await pollEmailTriggers(
       dbWith([
         // Primary is manual; TWO email triggers on the same mailbox live in
-        // the extras (one misses, one matches) — merged to one entry, one run.
+        // the extras (one misses, one matches), merged to one entry, one run.
         flowRow("f-multi", { channel: "manual" }, [
           emailTrigger([{ type: "contains", value: "unrelated" }]),
           emailTrigger([{ type: "has_url" }])
@@ -1195,7 +1195,7 @@ describe("pollEmailTriggers", () => {
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
       };
     }) as never);
-    // Two flows but only one marker — e.g. f2 was added after m1 arrived.
+    // Two flows but only one marker, e.g. f2 was added after m1 arrived.
     const res = await pollEmailTriggers(
       dbWith([flowRow("f1", emailTrigger()), flowRow("f2", emailTrigger())], null, {
         rows: [{ message_id: "m1" }]

@@ -7,7 +7,7 @@
  * permitted when the caller's profile still has the lifetime-once 30-day
  * guarantee available; the planner surfaces a typed error otherwise.
  *
- * This route does NOT reach into the Stripe customer portal — cancellation
+ * This route does NOT reach into the Stripe customer portal, cancellation
  * is always driven through our own lifecycle engine so side effects (VPS
  * teardown, data backup, grace window, lifetime-refund bookkeeping) stay
  * consistent. The Stripe customer portal is configured (Stripe Dashboard
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
 
     // Placement gate (Terms §9): enterprise deployments on Canadian-region
     // or customer-supplied boxes (vps_provider ovh/byos) are excluded from
-    // the self-serve 30-day money-back guarantee — the underlying OVH
+    // the self-serve 30-day money-back guarantee, the underlying OVH
     // infrastructure is non-refundable to the platform, and these
     // placements are governed by the enterprise agreement. Support can
     // still honor edge cases via /api/admin/force-refund, which is
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
       // Billable-usage carve-out (Jul 2026): the refund withholds the
       // tenant's third-party usage charges (SMS, voice, Gemini spend) at
       // platform cost, scoped to the refunded invoice's period. FAIL CLOSED
-      // on an unknown window or a read error — refunding money we cannot
+      // on an unknown window or a read error, refunding money we cannot
       // verify wasn't already spent on usage is the expensive mistake; the
       // customer can simply retry. (For an eligible self-serve refund the
       // window is always resolvable: the period cache, or first_paid_at
@@ -213,7 +213,7 @@ export async function POST(request: Request) {
     // + cancel billing, owner emails) without blocking the HTTP
     // response. We use Next.js `after` (Vercel `waitUntil` under the
     // hood on serverless) so the runtime is guaranteed to keep the
-    // function alive until this work completes — a bare `void
+    // function alive until this work completes, a bare `void
     // promise.catch(...)` is NOT guaranteed to keep the serverless
     // function alive past the HTTP response, and a customer who got
     // refunded would otherwise be left with no SSH backup and a still-

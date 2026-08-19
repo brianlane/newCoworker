@@ -18,7 +18,7 @@ import {
 } from "../../../../../../supabase/functions/_shared/sms_short_links";
 
 /**
- * `send_follow_up_sms` — sends an SMS to the caller (or another number the
+ * `send_follow_up_sms`, sends an SMS to the caller (or another number the
  * model collected). Goes through the same metered helper as the SMS-inbound
  * worker, so monthly caps and per-second throttles apply. The adapter is
  * also our only path for "email not connected -> fall back to SMS".
@@ -29,7 +29,7 @@ import {
  *
  * Every successful send is logged to `sms_outbound_log` (source
  * 'voice_follow_up') so it renders in the dashboard Text history like every
- * other outbound path — these used to be invisible platform-side (the only
+ * other outbound path, these used to be invisible platform-side (the only
  * record lived in Telnyx).
  */
 
@@ -99,8 +99,8 @@ export async function POST(request: Request) {
     });
 
     // Tracked short links: rewrite long URLs to /s/<code> redirects so link
-    // clicks are measurable (sms_links table). Fail-safe — any error leaves
-    // the original URL in place and the send proceeds — and a failed send
+    // clicks are measurable (sms_links table). Fail-safe, any error leaves
+    // the original URL in place and the send proceeds, and a failed send
     // below deletes the minted rows so no live redirect survives for a text
     // nobody received.
     const linksDb = await createSupabaseServiceClient();
@@ -118,7 +118,7 @@ export async function POST(request: Request) {
         meterBusinessId: envelope.businessId
       });
       // Best-effort durable log so the text renders in the dashboard thread.
-      // A failed insert must not fail the tool call — the SMS already went out.
+      // A failed insert must not fail the tool call, the SMS already went out.
       try {
         const db = await createSupabaseServiceClient();
         const { data: logRow, error: logErr } = await db
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
       }
       return voiceToolResponse({ ok: true, data: { messageId, toE164: toPhone } });
     } catch (err) {
-      // The text never went out — remove its tracked links (best-effort).
+      // The text never went out, remove its tracked links (best-effort).
       await deleteShortLinks(linksDb, shortened.links);
       const message = err instanceof Error ? err.message : String(err);
       const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);

@@ -1,7 +1,7 @@
 /**
  * Shared owner-operator context blocks
  * (src/lib/dashboard-chat/context-blocks.ts): the connected-integrations
- * ground-truth line and the business identity/memory block — provider label
+ * ground-truth line and the business identity/memory block, provider label
  * arms, clipping, and the best-effort failure contract. Used by BOTH the
  * dashboard chat route and the owner-over-SMS turn.
  */

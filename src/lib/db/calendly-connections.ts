@@ -15,7 +15,7 @@
  * "calendly connected" probe) keep their original behavior by reading it.
  *
  * Service-role only: RLS is on with no policies. The decrypted token never
- * leaves a server-side function — the dashboard gets
+ * leaves a server-side function, the dashboard gets
  * `toPublicCalendlyConnection` (has_token flag, no ciphertext).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -33,7 +33,7 @@ type StoredCalendlyConnectionRow = {
   account_name: string | null;
   account_email: string | null;
   /**
-   * Cached canonical Calendly user URI for the stored PAT (GET /users/me) —
+   * Cached canonical Calendly user URI for the stored PAT (GET /users/me),
    * constant per token, so the calendar-trigger poller reads it instead of
    * probing /users/me every tick. Null until first resolve; cleared when the
    * token changes (a new PAT can belong to a different account).
@@ -44,7 +44,7 @@ type StoredCalendlyConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (direct API calls). */
+/** Decrypted row, server-side use only (direct API calls). */
 export type CalendlyConnectionRow = Omit<
   StoredCalendlyConnectionRow,
   "access_token_encrypted"
@@ -68,7 +68,7 @@ function toDecryptedRow(row: StoredCalendlyConnectionRow): CalendlyConnectionRow
   const { access_token_encrypted: encrypted, ...rest } = row;
   const token = decryptIntegrationSecret(encrypted);
   if (token === null) {
-    // NOT NULL column, so this only happens on a truly empty stored value —
+    // NOT NULL column, so this only happens on a truly empty stored value,
     // fail closed rather than calling Calendly with an empty bearer.
     throw new Error("calendly connection has no stored access token");
   }
@@ -101,7 +101,7 @@ export async function listCalendlyConnections(
   return ((data ?? []) as unknown as StoredCalendlyConnectionRow[]).map(toDecryptedRow);
 }
 
-/** Active connections only, oldest first — the multi-account read set. */
+/** Active connections only, oldest first, the multi-account read set. */
 export async function listActiveCalendlyConnections(
   businessId: string,
   client?: SupabaseClient
@@ -196,7 +196,7 @@ export async function setCalendlyConnectionUserUri(
   if (error) throw new Error(`setCalendlyConnectionUserUri: ${error.message}`);
 }
 
-/** Dashboard listing (no decrypt — masked), oldest first. */
+/** Dashboard listing (no decrypt, masked), oldest first. */
 export async function listPublicCalendlyConnections(
   businessId: string,
   client?: SupabaseClient
@@ -228,7 +228,7 @@ export type SaveCalendlyConnectionInput = {
   /**
    * VERIFIED account identity from GET /users/me. The route verifies BEFORE
    * saving, so a row is never created for a token that does not work, and
-   * the user URI (the account's stable id) is present from birth — it is
+   * the user URI (the account's stable id) is present from birth, it is
    * the dedupe key that converges a re-pasted token for an already-linked
    * account onto its existing row instead of stacking a duplicate.
    */

@@ -20,7 +20,7 @@
  * to (a buyer, a $1M+ owner-direct lead, an already-claimed lead) ends
  * instantly instead of parking for two hours (Bugbot, this PR):
  *
- *   {p}_team_unclaimed (branch, when price_gate != "ai" — the under-$500K
+ *   {p}_team_unclaimed (branch, when price_gate != "ai", the under-$500K
  *   path has its own tagging and must not double-tag)
  *     arm: price_band == "under_1m" ($1M+ was never offered: Amy's own)
  *       per seller variant (flows with buyer traffic get a branch per

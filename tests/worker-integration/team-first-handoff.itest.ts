@@ -21,7 +21,7 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
 
 /**
  * TEAM-FIRST HUMAN HANDOFF, end to end through the REAL workers:
- * a "speak to a representative" turn (classified handoff:false by the model —
+ * a "speak to a representative" turn (classified handoff:false by the model,
  * the Truly 2026-07-20 shape) escalates via the deterministic intent
  * backstop; with businesses.needs_human_team_first ON and the seeded
  * broadcastAll flow enabled, the escalation tags the contact and enqueues
@@ -29,7 +29,7 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
  * the offer to every active roster member on one 10-minute deadline. The
  * owner hears about it only via a claim notice, or the timeout fallback.
  *
- * Offer/courtesy/fallback SMS cannot leave this harness (no Telnyx env) —
+ * Offer/courtesy/fallback SMS cannot leave this harness (no Telnyx env),
  * the park/claim rows are the durable facts under test.
  */
 
@@ -166,7 +166,7 @@ describe("team-first human handoff (real sms worker + real flow worker)", () => 
     const routing = (run.context as { routing?: Record<string, unknown> }).routing ?? {};
     expect(routing.offered_all).toEqual(expect.arrayContaining([DANIA, AWAIS]));
     expect((routing.offered_all as string[]).length).toBe(2);
-    // The offer text rendered the customer's message into the SMS body —
+    // The offer text rendered the customer's message into the SMS body,
     // pinned via the recorded step result being a broadcast park (the sends
     // themselves cannot leave the harness).
     expect(await needsHumanPages(biz)).toBe(0);

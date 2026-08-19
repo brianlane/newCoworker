@@ -1,7 +1,7 @@
 /**
  * POST /api/webhooks/calendly?business=<uuid>
  *
- * Calendly invitee.created receiver — the real-time fast path for
+ * Calendly invitee.created receiver, the real-time fast path for
  * appointment_booked goal events (the ~1/min booking-goal sweep remains the
  * always-on fallback). Subscriptions are created lazily by the sweep
  * (src/lib/calendly/webhook-subscriptions.ts) for businesses whose Calendly
@@ -10,7 +10,7 @@
  * Auth is the per-subscription signing key: every delivery must carry a
  * valid `Calendly-Webhook-Signature` (HMAC-SHA256 over `t.rawBody`,
  * timing-safe compare, 5-minute replay bound). The business id in the URL
- * only selects WHICH signing key to verify against — a forged id fails the
+ * only selects WHICH signing key to verify against, a forged id fails the
  * signature check.
  */
 import { z } from "zod";

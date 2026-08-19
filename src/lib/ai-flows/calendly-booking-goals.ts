@@ -3,10 +3,10 @@
  *
  * The `appointment_booked` goal event historically fired ONLY from
  * platform-created bookings (`calendar_book_appointment` on Google /
- * Microsoft / Vagaro / CalDAV — see calendar-tools/handlers.ts). Calendly
+ * Microsoft / Vagaro / CalDAV, see calendar-tools/handlers.ts). Calendly
  * bookings happen on calendly.com (the tool can only hand out a scheduling
  * link), so a lead who booked was never observed and nurture flows kept
- * nudging them — KYP Ads' "just floating this back up" text landing AFTER
+ * nudging them, KYP Ads' "just floating this back up" text landing AFTER
  * the lead had already booked (Jul 18 2026).
  *
  * This sweep runs on the same ~1/min tick as the calendar-trigger poller:
@@ -14,12 +14,12 @@
  * watching `appointment_booked`, (b) has at least one jumpable run for such
  * a flow, and (c) resolves to a Calendly calendar connection, it lists
  * Calendly bookings created inside the poll lookback, resolves each active
- * invitee to lead phone number(s), and fires `applyGoalEvent` — parked
+ * invitee to lead phone number(s), and fires `applyGoalEvent`, parked
  * follow-up runs fast-forward past their remaining nudges exactly as if the
  * booking had been made through the platform tools.
  *
  * Idempotency: no seen-marker is needed. A booking stays "fresh" for the
- * whole lookback, so it re-fires each tick — but a run that already jumped
+ * whole lookback, so it re-fires each tick, but a run that already jumped
  * has no matching goal AHEAD of it anymore, so repeats no-op. (A brand-new
  * run started inside that window jumps immediately, which is the right
  * outcome: the lead has already booked, don't nurture them.)
@@ -29,7 +29,7 @@
  * never see that booking (Tim Tsai booked ~10h before this sweep first
  * deployed and still got nudged). When a business has a jumpable run CREATED
  * inside the young-run window, that tick's firing set widens from "bookings
- * created inside the lookback" to "active bookings with a FUTURE start" —
+ * created inside the lookback" to "active bookings with a FUTURE start",
  * one extra invitee fetch per upcoming booking, only while a young run
  * exists. Future-start-only is the stale-booking policy: an appointment
  * that already happened never silently skips a new flow's steps. The
@@ -41,7 +41,7 @@
  * belong to the same person, and `applyGoalEvent` matches by exact E.164):
  *   - the SMS-reminder phone, normalized to E.164, unioned with the matched
  *     contact row's primary + merged aliases (the same fan-out the
- *     update_contact tag hook does — runs match the EXACT number they were
+ *     update_contact tag hook does, runs match the EXACT number they were
  *     triggered with, which after a profile merge may be any of them);
  *   - the invitee email, resolved through the business's contacts to that
  *     contact's numbers (a Calendly form often collects email but no phone).
@@ -83,21 +83,21 @@ export type { BookingGoalFireDeps, BookingGoalFireResult };
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Page size for the goal-flow listing — paged so no flow is silently skipped. */
+/** Page size for the goal-flow listing, paged so no flow is silently skipped. */
 export const BOOKING_GOAL_FLOW_PAGE = 100;
 
 /**
  * Cap on per-tick invitee fetches per business. Set to the listing page size
  * (not the poller's smaller enrichment cap): a capped booking is only
  * retried while it is still inside the created lookback, so a sustained
- * burst bigger than the cap could age bookings out UNFIRED — with the cap
+ * burst bigger than the cap could age bookings out UNFIRED, with the cap
  * equal to everything one page can list, that requires >100 bookings created
  * within the lookback for one tenant (and the overflow is logged).
  */
 export const BOOKING_GOAL_INVITEE_FETCH_CAP = 100;
 
 /**
- * Run statuses a goal jump may touch — MUST mirror JUMPABLE_STATUSES in
+ * Run statuses a goal jump may touch, MUST mirror JUMPABLE_STATUSES in
  * _shared/ai_flows/goal_events.ts (not exported there; the sweep only uses
  * this to SKIP businesses with nothing jumpable, so drift would cost an
  * extra no-op Calendly call, never a wrong jump).
@@ -116,8 +116,8 @@ export const BOOKING_SWEEP_FAILURE_ESCALATION_MS = 2 * 60_000 + 90_000;
 
 /**
  * Record one per-business sweep failure with blip-vs-outage escalation:
- * the FIRST failure inside the window logs `warn` (a one-off upstream blip
- * — e.g. a single 2 AM "Calendly API timed out" — stays out of the admin
+ * the FIRST failure inside the window logs `warn` (a one-off upstream blip,
+ * e.g. a single 2 AM "Calendly API timed out", stays out of the admin
  * System Errors feed, which is error-only); a repeat inside the window
  * logs `error`. A failed/thrown lookback fails TOWARD `error` so a real
  * outage is never misfiled as a blip. No owner-alert arm: the calendar
@@ -176,7 +176,7 @@ export function definitionWatchesBookingGoal(definition: unknown): boolean {
 }
 
 /**
- * Whether a booking's `created_at` falls inside the sweep lookback — the
+ * Whether a booking's `created_at` falls inside the sweep lookback, the
  * same window the calendar poller's event_created mode uses, so both
  * observers of "someone booked on Calendly" agree on freshness.
  */
@@ -191,7 +191,7 @@ export function bookingCreatedRecently(
 }
 
 /**
- * Whether a booking's start is still ahead — the young-run widening only
+ * Whether a booking's start is still ahead, the young-run widening only
  * fires goals for appointments that haven't happened yet (stale-booking
  * policy). Missing/unparseable starts are never "future".
  */
@@ -221,13 +221,13 @@ export function runIsYoung(createdIso: string | undefined, nowMs: number): boole
 }
 
 /**
- * Calendly's SMS-reminder phone → E.164 — the provider-neutral normalizer
+ * Calendly's SMS-reminder phone → E.164, the provider-neutral normalizer
  * under its historical Calendly-facing name (precheck + one-shot imports).
  */
 export const inviteePhoneE164 = bookingPhoneE164;
 
 /**
- * Invitee identity as Calendly reports it — the invitees listing item and
+ * Invitee identity as Calendly reports it, the invitees listing item and
  * the invitee.created webhook payload share these fields, so the sweep and
  * the webhook receiver feed the same firing helper.
  */
@@ -281,7 +281,7 @@ export type BookingGoalSweepDeps = {
  * canceled invitees are skipped; the SMS-reminder phone (normalized to
  * E.164) and the invitee email (resolved through the business's contacts)
  * both seed the firing set, fanned out over each matched contact row's
- * primary + merged aliases — `applyGoalEvent` matches runs by exact E.164.
+ * primary + merged aliases, `applyGoalEvent` matches runs by exact E.164.
  * The fan-out itself lives in the provider-neutral
  * `fireBookingGoalsForIdentities` (booking-goal-fire.ts), shared with the
  * Vagaro observers.
@@ -369,7 +369,7 @@ export async function sweepCalendlyBookingGoals(
     try {
       // Anything jumpable at all? If not, skip the Calendly API entirely.
       // Newest-first so the same single row also answers "is any jumpable
-      // run YOUNG?" — which switches this tick to the widened firing set.
+      // run YOUNG?", which switches this tick to the widened firing set.
       const { data: runRows, error: runErr } = await db
         .from("ai_flow_runs")
         .select("id, created_at")
@@ -436,7 +436,7 @@ export async function sweepCalendlyBookingGoals(
         const listed = (listRes.data as { collection?: RawBooking[] })?.collection ?? [];
         if (listed.length >= CALENDLY_POLL_PAGE_COUNT) {
           // The single page may be truncating; fresh bookings could be hidden
-          // behind it (bounded like the poller — surface it, don't page).
+          // behind it (bounded like the poller, surface it, don't page).
           await recordSystemLog({
             businessId,
             source: "aiflow",
@@ -449,7 +449,7 @@ export async function sweepCalendlyBookingGoals(
         }
         // Oldest created first: a booking about to age out of the lookback
         // must never be starved behind newer ones if the cap ever bites.
-        // With a young run, ANY active future-start booking also fires — a
+        // With a young run, ANY active future-start booking also fires, a
         // just-enrolled lead may have booked long before this run existed.
         const bookings = listed
           .filter(
@@ -462,7 +462,7 @@ export async function sweepCalendlyBookingGoals(
           )
           .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
         result.bookings += bookings.length;
-        // This account READ successfully — stamp it before the zero-bookings
+        // This account READ successfully, stamp it before the zero-bookings
         // early-out, or a quiet account plus one dead account would count as
         // "every account failed" and misfile the sweep as a business-level
         // failure (Bugbot Medium on PR #1349).
@@ -472,7 +472,7 @@ export async function sweepCalendlyBookingGoals(
 
         // Invitee identities across this business's fresh bookings. The cap
         // equals the listing page size, so every booking listed this tick can
-        // be fetched this tick — a fresh booking cannot be starved past its
+        // be fetched this tick, a fresh booking cannot be starved past its
         // lookback by a same-tick burst (Bugbot on PR #742). A capped/refused
         // booking is retried next tick while it is still inside the lookback.
         for (const booking of bookings) {

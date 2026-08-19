@@ -1,5 +1,5 @@
 /**
- * Agents — pure domain rules shared by every surface.
+ * Agents, pure domain rules shared by every surface.
  *
  * An agent is a reusable attachment→output task template: saved instructions
  * the owner runs repeatedly against different inputs (fresh uploads or
@@ -37,7 +37,7 @@ export const AGENT_OUTPUT_FORMATS = [
 /**
  * `pdf_retypeset` renders on the tenant's VPS render sidecar, which is a
  * Standard/Enterprise entitlement (mirrors the provisioning `renderEnabled`
- * gate — Starter boxes have no sidecar or render-* hostname).
+ * gate, Starter boxes have no sidecar or render-* hostname).
  */
 export function retypesetAvailableForTier(tier: string | null | undefined): boolean {
   return tier === "standard" || tier === "enterprise";
@@ -69,7 +69,7 @@ const MARKDOWN_TARGET: AgentOutputTarget = {
   formatWord: "markdown"
 };
 
-// The model always writes markdown for typeset targets (formatWord) — the
+// The model always writes markdown for typeset targets (formatWord), the
 // PDF/DOCX bytes are rendered from that markdown by documents/typeset.ts at
 // persistence/download time, never by the model.
 const PDF_TARGET: AgentOutputTarget = {
@@ -88,7 +88,7 @@ const DOCX_TARGET: AgentOutputTarget = {
  * with styled HTML mirroring its design; the VPS render sidecar prints it to
  * PDF. formatWord slots into the run prompt's "Produce the result as …"
  * line, so it carries the whole HTML contract. The target mime is
- * `text/html` — the ARTIFACT's own type, stored on the run row as the
+ * `text/html`, the ARTIFACT's own type, stored on the run row as the
  * explicit renderer discriminator (renderAgentArtifactBytes maps it to a
  * PDF download; a markdown artifact that merely looks like HTML can never
  * be misrouted to the sidecar). The extension stays `pdf` because the
@@ -113,7 +113,7 @@ const PDF_RETYPESET_TARGET: AgentOutputTarget = {
 /**
  * What the run should produce for a given input MIME. `pdf` / `docx` always
  * typeset the markdown artifact into that format. `same_as_input` echoes
- * the primary input's format back — text formats in kind, and PDF/DOCX
+ * the primary input's format back, text formats in kind, and PDF/DOCX
  * inputs as re-typeset PDF/DOCX (the layout comes from the markdown
  * artifact, not the source file's design); markdown/VTT inputs produce
  * markdown.
@@ -145,7 +145,7 @@ export function buildOutputFilename(inputFilename: string, target: AgentOutputTa
     .replace(/\.[a-z0-9]+$/i, "")
     .replace(/[^A-Za-z0-9._-]/g, "_")
     .slice(0, 100);
-  // A base with no alphanumeric at all ("...", "___") is degenerate — fall
+  // A base with no alphanumeric at all ("...", "___") is degenerate, fall
   // back rather than emitting a dotfile-looking artifact name.
   const base = /[A-Za-z0-9]/.test(sanitized) ? sanitized : "output";
   return `${base}.${target.extension}`;
@@ -159,7 +159,7 @@ export type AgentPromptTextSection = { filename: string; text: string };
 
 /**
  * The user turn for a run: the agent's saved instructions + every
- * attachment — inline sections for text formats; PDFs ride along as
+ * attachment, inline sections for text formats; PDFs ride along as
  * inlineData parts, so the prompt only names them as attached. A run can
  * carry several files (e.g. one quote PDF per carrier); each text section
  * is labeled with its filename so the model can attribute facts.
@@ -203,7 +203,7 @@ export function buildAgentRunPrompt(args: {
 /**
  * Strip a whole-reply code fence if the model wrapped its output in one
  * despite the system prompt. Inner fences (legitimate markdown) are
- * untouched — only a fence enclosing the entire reply is removed.
+ * untouched, only a fence enclosing the entire reply is removed.
  */
 export function stripWholeReplyFence(raw: string): string {
   const text = raw.trim();

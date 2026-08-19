@@ -12,7 +12,7 @@
  *
  * Both execute through the platform dispatcher (/api/rowboat/tool-call) and
  * are gated per surface by agent_tool_settings. Surgical Mongo patch over
- * pinned SSH — idempotent; re-running converges and never duplicates
+ * pinned SSH, idempotent; re-running converges and never duplicates
  * declarations. deploy-client.sh seeds all of this for NEW tenants; this
  * script exists for boxes provisioned before the tools shipped.
  *

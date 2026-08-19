@@ -1,5 +1,5 @@
 /**
- * Mexican messaging surcharge — detection + fee constants.
+ * Mexican messaging surcharge, detection + fee constants.
  *
  * Mexican tenants keep a US +1 coworker number in v1, so their SMS
  * terminates at +52 as international A2P: Telnyx list price $0.091/part
@@ -44,7 +44,7 @@ import { resolveBusinessCountry } from "./business-country";
 export const MEXICO_MESSAGING_FEE_MONTHLY_CENTS = 999;
 
 /**
- * Product name on the Stripe line item — the customer-visible label on
+ * Product name on the Stripe line item, the customer-visible label on
  * checkout, invoices, and the billing portal. Also the sentinel other code
  * can use to find the fee line on an invoice (same pattern as
  * CANADA_MESSAGING_FEE_NAME).

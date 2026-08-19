@@ -166,7 +166,7 @@ describe("moveStepById", () => {
   });
 
   it("moves a nested step only within its own arm", () => {
-    // auto_sms is alone in its arm — moving it down must not leak into the
+    // auto_sms is alone in its arm, moving it down must not leak into the
     // next arm's list.
     const steps = tree();
     expect(moveStepById(steps, "auto_sms", 1)).toBe(steps);

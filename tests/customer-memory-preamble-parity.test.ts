@@ -8,8 +8,8 @@ import {
 /**
  * Pins the Next.js preamble builder (src/lib/customer-memory/) and
  * the Deno-edge mirror (supabase/functions/_shared/) to identical
- * output. They're duplicated by necessity — see the file-header
- * comment on customer_memory_preamble.ts — but they MUST stay in
+ * output. They're duplicated by necessity, see the file-header
+ * comment on customer_memory_preamble.ts, but they MUST stay in
  * lockstep. A one-sided edit would mean SMS and dashboard chat see
  * different per-customer context for the same row.
  */

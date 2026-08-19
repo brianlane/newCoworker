@@ -112,14 +112,14 @@ type ProvisioningInput = {
   /**
    * Hardware pin (`businesses.vps_size`). Callers pass the raw column value;
    * null/undefined resolves to the tier default (starter→kvm1,
-   * standard→kvm2, enterprise→kvm8 — see DEFAULT_TIER_VPS_SIZE). Drives the
-   * Hostinger SKU + bootstrap hardware profile only — entitlements stay on
+   * standard→kvm2, enterprise→kvm8, see DEFAULT_TIER_VPS_SIZE). Drives the
+   * Hostinger SKU + bootstrap hardware profile only, entitlements stay on
    * `tier`.
    */
   vpsSize?: string | null;
   /**
    * Customer contract term. When a purchase is needed, the Hostinger box is
-   * bought at the matching term (biennial → 2-year SKU, annual → 1-year) —
+   * bought at the matching term (biennial → 2-year SKU, annual → 1-year),
    * term SKUs are ~40-65% cheaper per month than monthly renewal. Omitted /
    * null buys monthly. Pool adoption ignores this (the box is already owned).
    */
@@ -133,7 +133,7 @@ type ProvisioningInput = {
   /**
    * Skip the adopt-first pool claim and force a purchase. Used by the
    * change-plan term-alignment migration, whose entire point is landing on
-   * a term-priced PURCHASE — adopting a pooled (typically monthly-cycle,
+   * a term-priced PURCHASE, adopting a pooled (typically monthly-cycle,
    * soon-lapsing) box there would keep the tenant on expensive renewal
    * pricing. The purchased box is still recorded in `vps_inventory`.
    */
@@ -190,7 +190,7 @@ export type ProvisioningResult = {
 /**
  * Map the ENTITLEMENT tier onto the on-box deploy profile. Enterprise runs
  * the STANDARD box profile (full compose stack, render sidecar, standard
- * Ollama model selection) — there is no separate enterprise bootstrap TIER,
+ * Ollama model selection), there is no separate enterprise bootstrap TIER,
  * and every downstream gate already treats enterprise as standard-plus
  * (render, analytics, call summaries, BYON). Entitlements (limits, caps,
  * `enterprise_limits` overrides) keep reading the REAL tier from the
@@ -246,7 +246,7 @@ function loadIdentityTemplate(): string {
  * The orchestrator's deploy-env builder calls this once per env var (≈26
  * vars), and on macOS each `bash` spawn costs ~80–100 ms (xprotect / dyld /
  * amfi), so the deploy phase paid ~2.5 s of pure subprocess overhead per
- * call — which compounded across the ~30 orchestrator tests that exercise
+ * call, which compounded across the ~30 orchestrator tests that exercise
  * this path and made the local `vitest run` suite take ~4 minutes vs ~45 s
  * on Linux CI. The pure-JS path produces a bash-equivalent quoted form, so
  * dropping the spawn fixes the macOS-vs-CI divergence without changing the
@@ -298,8 +298,8 @@ const defaultRemoteExecutor: RemoteExecutor = (args) =>
  * its `runcmd` phase holds `/var/lib/dpkg/lock-frontend` AND `/var/lib/
  * apt/lists/lock` for the duration of the bootstrap (apt-get update,
  * Docker install, etc.). The orchestrator's SSH-bootstrap pass starts as
- * soon as sshd binds — which can be well before cloud-init's runcmd
- * finishes — and our `apt-get install -y --no-install-recommends git
+ * soon as sshd binds, which can be well before cloud-init's runcmd
+ * finishes, and our `apt-get install -y --no-install-recommends git
  * curl ca-certificates` would race the in-flight cloud-init apt and exit
  * non-zero under `set -euo pipefail`, aborting the whole provision.
  *
@@ -327,7 +327,7 @@ function buildBootstrapSshCommand(bootstrapB64: string): string {
 /**
  * Run the bootstrap script on an already-provisioned VPS over SSH.
  *
- * Internal-only — the only production caller is the orchestrator's own
+ * Internal-only, the only production caller is the orchestrator's own
  * bootstrap phase below. A previously-exported `runRemoteBootstrap`
  * wrapper that returned 2KB tails was dropped (per Cursor Bugbot Low
  * "wire-or-drop" guidance) when the customer-specific oneshot that
@@ -373,7 +373,7 @@ async function runRemoteBootstrapInternal(input: {
  * Wrap a single SSH-exec attempt in a retry loop that ONLY retries on
  * "connection failed" (refused / handshake timeout / kex failure). Once the
  * remote command has actually run, its exit code is the source of truth and
- * we don't retry — re-running a partial bootstrap is more dangerous than
+ * we don't retry, re-running a partial bootstrap is more dangerous than
  * surfacing the error.
  *
  * The fresh-VPS race we're catching: Hostinger flips `state=running` as
@@ -400,7 +400,7 @@ export async function runWithSshConnectRetry<T>(
         throw err;
       }
       // Linear backoff (5s, 10s, 15s, ...). Total worst-case wait at default
-      // settings is 5+10+15+20+25 = 75s before the final attempt — well under
+      // settings is 5+10+15+20+25 = 75s before the final attempt, well under
       // any practical sshd-startup window we've observed.
       await sleep(baseDelayMs * (i + 1));
     }
@@ -441,7 +441,7 @@ export type VpsProvisioner = (input: {
 }) => Promise<ProvisionVpsForBusinessResult>;
 
 /**
- * Adopter for a pooled (already-owned) VPS — the no-purchase path. Same
+ * Adopter for a pooled (already-owned) VPS, the no-purchase path. Same
  * output shape as {@link VpsProvisioner} so downstream phases are identical.
  */
 export type VpsAdopter = (input: {
@@ -472,7 +472,7 @@ export type VpsPool = {
  *
  * The flow is **opt-in**: it only runs when `process.env.TELNYX_AUTO_PURCHASE_DID`
  * is truthy (or the caller injects a provisioner). This keeps the default
- * behavior — "operator manually assigns a DID from the admin UI" — unchanged.
+ * behavior, "operator manually assigns a DID from the admin UI", unchanged.
  */
 export type DidProvisioner = (input: {
   businessId: string;
@@ -548,7 +548,7 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
 /**
  * Placeholder provisioner for providers that have no generic purchase path.
  * BYOS boxes are enrolled through the admin SSH-handover flow (which
- * injects its own provisioner) — reaching this thrower means a BYOS
+ * injects its own provisioner), reaching this thrower means a BYOS
  * business hit the generic purchase path. Fail loudly with the next step
  * instead of silently buying a box for a tenant who supplies their own.
  */
@@ -957,7 +957,7 @@ export async function orchestrateProvisioning(
     /**
      * Hostinger paid-through lookup used to stamp `vps_inventory.expires_at`
      * on a freshly purchased box. Defaults to the real Hostinger list call;
-     * tests inject. Never throws by contract — see
+     * tests inject. Never throws by contract, see
      * `resolvePaidThroughForBillingSub`.
      */
     resolvePaidThrough?: (billingSubscriptionId: string | null) => Promise<string | null>;
@@ -1022,8 +1022,8 @@ export async function orchestrateProvisioning(
   } catch (err) {
     // Top-level safety net. Several inner steps already record their own
     // `status: "error"` rows AND swallow the error (cloudflare, DID, deploy),
-    // but the calls before the cloudflare phase — `vpsProvisioner`,
-    // `updateBusinessStatus`, the config writes — are unprotected, so a
+    // but the calls before the cloudflare phase, `vpsProvisioner`,
+    // `updateBusinessStatus`, the config writes, are unprotected, so a
     // Hostinger 4xx (e.g. token missing the `post-install-scripts` scope,
     // retired data-center id, suspended payment method) used to bubble
     // straight up to the webhook caller. The dashboard, which polls
@@ -1084,7 +1084,7 @@ type ProvisioningErrorDetail = {
  * Stringify a thrown value from the 10DLC attach call.
  *
  * Pulled into a tiny helper so v8 can instrument the Error vs non-Error
- * branches without a synthetic uninstrumented arm — when this lived
+ * branches without a synthetic uninstrumented arm, when this lived
  * inline as `err instanceof Error ? err.message : String(err)`, v8
  * couldn't see the falsy arm under TS source maps and reported partial
  * coverage on the catch line.
@@ -1247,7 +1247,7 @@ async function recordFailButChargeRecovery(input: {
  * Claim + adopt one pooled box. Extracted from {@link acquireVps} so the
  * purchase-failure reconciliation path below can re-run the exact same
  * adopt sequence after pooling an orphaned VM. Returns `null` when there is
- * nothing claimable or the adopt fails (after retiring the bad box) — the
+ * nothing claimable or the adopt fails (after retiring the bad box), the
  * caller decides whether to fall through to purchase or surface an error.
  */
 async function tryAdoptFromPool(args: {
@@ -1299,7 +1299,7 @@ async function tryAdoptFromPool(args: {
     }
     // Admin release-to-pool cascade: the adopt recreated the box, so any
     // OTHER (non-wiped) business still pointing at this VM is a stale
-    // control surface over the NEW tenant's hardware — cascade-delete it
+    // control surface over the NEW tenant's hardware, cascade-delete it
     // (see stale-tenant-cleanup.ts). Best-effort: a cleanup failure logs
     // loudly but must never abort a signup that already has its box.
     try {
@@ -1315,7 +1315,7 @@ async function tryAdoptFromPool(args: {
   } catch (err) {
     // A box that failed the proven adopt sequence (setup 4xx, key never
     // attaching, terminal VM state, 404 = already lapsed/deleted) is not
-    // safe to hand to the next signup either — retire it for the audit
+    // safe to hand to the next signup either, retire it for the audit
     // trail and buy fresh.
     logger.warn("vps adopt failed, retiring pooled box and purchasing", {
       businessId,
@@ -1449,7 +1449,7 @@ async function tryAdoptSpecificVm(args: {
 
 /**
  * True when the thrown error is a failure of Hostinger's PURCHASE endpoint
- * (`POST /api/vps/v1/virtual-machines`) — the only call that can leave a
+ * (`POST /api/vps/v1/virtual-machines`), the only call that can leave a
  * fail-but-charge orphan behind. Duck-typed on `name` for the same
  * import-cycle reason as `describeProvisioningError`.
  */
@@ -1476,7 +1476,7 @@ function isHostingerPurchaseFailure(err: unknown): boolean {
  *
  * Fail-but-charge recovery: Hostinger's purchase endpoint has repeatedly
  * (Jul 5 + Jul 8 + Jul 28 2026) returned an error (402 card-declined, 422
- * hostname) while STILL charging the card and creating the VM — sometimes
+ * hostname) while STILL charging the card and creating the VM, sometimes
  * ~a minute AFTER the error response. When the purchase call throws, we
  * poll the orphan reconciler (up to ~5 min) until a size-matching unpaid
  * box appears, pool it, and adopt it so the signup / term switch lands on
@@ -1495,7 +1495,7 @@ async function acquireVps(args: {
   /**
    * Provider axis. The `vps_inventory` pool is Hostinger-owned stock, so
    * both the adopt-first claim AND the post-acquire bookkeeping only run
-   * for hostinger tenants — a BYOS/OVH provision must never land on (or
+   * for hostinger tenants, a BYOS/OVH provision must never land on (or
    * record into) the Hostinger reuse pool.
    */
   vpsProvider: VpsProvider;
@@ -1544,7 +1544,7 @@ async function acquireVps(args: {
     purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod, hostingerTerm });
   } catch (err) {
     // Purchase failed. If this was the Hostinger purchase endpoint, the VM
-    // may exist anyway (fail-but-charge) — reconcile orphans into the pool
+    // may exist anyway (fail-but-charge), reconcile orphans into the pool
     // (with retries for Hostinger's async materialization), then adopt so
     // the provision still lands on the box that was already paid for.
     // Reconciliation is best-effort: any failure inside it must never mask
@@ -1604,7 +1604,7 @@ async function acquireVps(args: {
             if (adopted) {
               // Note: the claim takes the FURTHEST-EXPIRY available box of
               // this size (≥72h runway), which is not necessarily one of the
-              // just-reconciled orphans — either way the signup lands on an
+              // just-reconciled orphans, either way the signup lands on an
               // already-owned box instead of failing, and the orphan stays
               // pooled for the next one.
               logger.warn(
@@ -1679,7 +1679,7 @@ async function runOrchestrator(
   const { businessId, ownerEmail, ownerPhone, tier: narrowTier, vpsSize } = input;
 
   // Provider axis: which provider runs this tenant's box. Resolved from the
-  // business row (single source of truth — callers don't thread it) so a
+  // business row (single source of truth, callers don't thread it) so a
   // BYOS/OVH tenant can never be silently re-provisioned onto a Hostinger
   // purchase by a caller that predates the axis. Loaded ONCE here and
   // reused below for the config/tunnel phases. Non-hostinger providers are
@@ -1765,7 +1765,7 @@ async function runOrchestrator(
   // Phase 1: get a VPS. Adopt-first (fleet economics Phase B): Hostinger
   // boxes are non-refundable for us until ≈Dec 30 2026, so a pooled
   // matching-size VM is reused via the no-purchase setup/recreate path
-  // before we buy a new one. Every pool interaction is best-effort — a
+  // before we buy a new one. Every pool interaction is best-effort, a
   // broken pool must never block a signup, so failures log + fall through
   // to the purchase path.
   const provisioned = await acquireVps({
@@ -1881,7 +1881,7 @@ async function runOrchestrator(
 
   await updateBusinessStatus(businessId, "offline", vpsId);
 
-  // Persist the RESOLVED hardware pin — only now, AFTER updateBusinessStatus
+  // Persist the RESOLVED hardware pin, only now, AFTER updateBusinessStatus
   // pointed hostinger_vps_id at the new box, so the pin and the referenced VM
   // never disagree (a pin written at acquire time would describe the NEW box
   // while hostinger_vps_id still referenced the old one, letting a fleet
@@ -1891,9 +1891,9 @@ async function runOrchestrator(
   // Ollama", so every box provisioned from here on must carry its actual
   // size. The write is FATAL on failure, exactly like the updateBusinessStatus
   // call above (same table, same client): a kvm1 box silently left unpinned
-  // would be treated as legacy hardware — over-cap SMS would route to an
+  // would be treated as legacy hardware, over-cap SMS would route to an
   // Ollama that doesn't exist and fleet redeploys would push a kvm2 profile
-  // onto it — which is worse than surfacing the error and letting the
+  // onto it, which is worse than surfacing the error and letting the
   // provision retry.
   await updateBusinessVpsSize(businessId, vpsSize);
 
@@ -1932,7 +1932,7 @@ async function runOrchestrator(
   // standard/enterprise can personalize later from Settings). Idempotent and
   // best-effort: it's just a DB row (Cloudflare Email Routing's catch-all
   // already routes every address), so a transient failure here must never
-  // abort the deploy — the dashboard's mailbox route also self-heals via
+  // abort the deploy, the dashboard's mailbox route also self-heals via
   // ensureTenantMailbox on first read.
   try {
     const mailbox = await ensureTenantMailbox(businessId);
@@ -1964,7 +1964,7 @@ async function runOrchestrator(
 
   // Fallback hostname only used when the tunnel provisioner is disabled
   // (no CF token in env, dep injected as `null`). The leading subdomain
-  // is the business UUID — ONE level under the zone — so Universal SSL
+  // is the business UUID, ONE level under the zone, so Universal SSL
   // on the parent zone covers it without paid Total TLS.
   //
   // We coerce blank/whitespace strings to `undefined` BEFORE the `??` because
@@ -1981,7 +1981,7 @@ async function runOrchestrator(
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
   // The AiFlow render sidecar (headless Chromium) is an ENTITLEMENT gate:
-  // standard/enterprise get it, starter does not — regardless of hardware
+  // standard/enterprise get it, starter does not, regardless of hardware
   // (the June 2026 KVM2 experiment validated render runs fine on a KVM2 box,
   // so a standard tenant pinned to kvm2 still gets the sidecar). Gate the
   // public render hostname to match where the container actually runs.
@@ -2029,7 +2029,7 @@ async function runOrchestrator(
   // Phase 2b: per-tenant DID provisioning (opt-in). Runs after the tunnel so
   // `bridgeMediaWssOrigin` is known and `assign-did` can persist it into
   // `business_telnyx_settings` alongside the routing row. Any failure is
-  // recorded as an error log but does not abort the deploy — the operator can
+  // recorded as an error log but does not abort the deploy, the operator can
   // assign a DID manually from the admin UI afterwards.
   const shouldAutoOrderDid =
     deps?.didProvisioner === undefined
@@ -2057,7 +2057,7 @@ async function runOrchestrator(
           // Only override the platform default when we actually resolved a
           // concrete origin. If the tunnel provisioner failed (or isn't
           // configured) AND BRIDGE_MEDIA_WSS_ORIGIN is empty, the local is
-          // "" — spreading that would clobber the `undefined` default,
+          // "", spreading that would clobber the `undefined` default,
           // bypass the `?? null` fallback downstream, and persist "" into
           // telnyx_voice_routes.media_wss_origin, producing a malformed
           // wss:// URL for the inbound-voice edge function.
@@ -2067,8 +2067,8 @@ async function runOrchestrator(
         // doesn't have a Call Control connection_id and/or messaging
         // profile id. Ordering without these silently produces an
         // unwired DID that costs money and can't carry calls (root
-        // cause of the May 2026 "call could not be completed" outage
-        // — number was active in Telnyx, but `connection_id: ""` left
+        // cause of the May 2026 "call could not be completed" outage,
+        // number was active in Telnyx, but `connection_id: ""` left
         // inbound webhooks with nowhere to go). Failing here surfaces
         // the config gap as a deploy-time error instead of a silent
         // production regression at first call.
@@ -2076,7 +2076,7 @@ async function runOrchestrator(
 
         // Non-US tenants ride their country's messaging profile (the
         // destination country must be whitelisted on the profile or every
-        // outbound SMS fails with Telnyx 40309 — the Truly Insurance
+        // outbound SMS fails with Telnyx 40309, the Truly Insurance
         // incident). The same resolution gates the labeled country
         // surcharges at checkout, so capability and fee travel together.
         // Mexican tenants keep a US DID in v1 (no +52 purchase), but their
@@ -2096,7 +2096,7 @@ async function runOrchestrator(
           if (countryProfileId) {
             platformDefaults.messagingProfileId = countryProfileId;
           } else {
-            // Fee may already be charged at checkout — surface the config gap
+            // Fee may already be charged at checkout, surface the config gap
             // loudly instead of silently provisioning a tenant whose texts to
             // their own country will bounce.
             logger.warn(
@@ -2172,11 +2172,11 @@ async function runOrchestrator(
         // Ordered search cascade (see did-search-plan.ts): the area code
         // the owner explicitly REQUESTED at signup, then the NPA derived
         // from their own phone, then the platform default, then any number
-        // in the default country. `businessRow` was already loaded above —
+        // in the default country. `businessRow` was already loaded above,
         // no second DB round-trip, no risk of a transient re-read silently
         // dropping a valid preference. Each spec carries its own country:
         // the NANP spans US + Canada and Telnyx files inventory per
-        // country (a 519/Ontario search under `US` returns nothing — the
+        // country (a 519/Ontario search under `US` returns nothing, the
         // Jul 8 2026 Truly Insurance signup needed a manual CA-scoped
         // order for exactly this reason).
         const searchPlan = buildDidSearchPlan({
@@ -2244,7 +2244,7 @@ async function runOrchestrator(
           phase: "did_assigned",
           percent: 38,
           // Only claim a requested/local number when that tier actually
-          // produced the purchase — after a fallback the number came from
+          // produced the purchase, after a fallback the number came from
           // the platform default (or any-country) tier, so don't imply
           // locality.
           message:
@@ -2258,11 +2258,11 @@ async function runOrchestrator(
 
         // Best-effort 10DLC (A2P SMS) campaign attach. US carriers silently
         // drop A2P SMS from numbers that aren't registered to an approved
-        // campaign — the May 2026 SMS outage was exactly this. If 10DLC
+        // campaign, the May 2026 SMS outage was exactly this. If 10DLC
         // isn't configured yet, or the shared campaign is still in carrier
         // vetting, we record the per-DID status as `pending` and let the
         // dashboard banner + retry worker pick it up later. NEVER block
-        // provisioning on this — the customer's voice + inbound-SMS path
+        // provisioning on this, the customer's voice + inbound-SMS path
         // works without it.
         try {
           const { attachBusinessDidToCampaign } = await import(
@@ -2285,7 +2285,7 @@ async function runOrchestrator(
             status: progress.status
           });
         } catch (err) {
-          // Including MissingTendlcConfigError — surfaces in progress log
+          // Including MissingTendlcConfigError, surfaces in progress log
           // but doesn't fail the orchestrator.
           const reason = describeAttachError(err);
           logger.warn("10DLC attach skipped", { businessId, reason });
@@ -2320,7 +2320,7 @@ async function runOrchestrator(
   // Per-tenant gateway token: reuse the business's existing (pending or confirmed)
   // token, or mint + persist a fresh PENDING one BEFORE the deploy. The token is
   // the VPS->app bearer, Rowboat's tool-webhook JWT secret, the app->Rowboat API
-  // key, AND the in-deploy progress-callback bearer — so its row must exist while
+  // key, AND the in-deploy progress-callback bearer, so its row must exist while
   // deploy-client.sh runs (so progress POSTs authenticate via the inbound
   // binding). It stays PENDING (deployed_at NULL) until the deploy succeeds, so
   // outbound/JWT verification keep using the shared secret the box is still on; we
@@ -2332,14 +2332,14 @@ async function runOrchestrator(
   const gatewayToken =
     existingGatewayToken ?? (await issueGatewayToken(businessId, { label: "provisioning" }));
   // Residency data-api bearer list: EVERY non-revoked token (pending +
-  // confirmed), not just the one this deploy stamps — during a rotation the
+  // confirmed), not just the one this deploy stamps, during a rotation the
   // platform can still present the old confirmed token until
   // markGatewayTokenDeployed flips it, and the data-api must keep answering
   // through that overlap. Only resolved for residency-enabled tenants.
   let dataApiTokens = "";
   let residencyBackupPassphrase = "";
   // Where the box's encrypted dumps go: 'central' (ciphertext to central
-  // Storage) or 'onbox' (dumps stay on the box — in-region even for
+  // Storage) or 'onbox' (dumps stay on the box, in-region even for
   // ciphertext, per Canadian/insurance deals). Only meaningful when the
   // residency stack is enabled.
   const residencyBackupDestination =
@@ -2352,7 +2352,7 @@ async function runOrchestrator(
     dataApiTokens = all.join(",");
     // AES passphrase for the box's encrypted datastore dumps
     // (residency_backup_keys). Minted once per tenant; only ciphertext
-    // ever leaves the box. Empty for customer_held custody — the deploy
+    // ever leaves the box. Empty for customer_held custody, the deploy
     // then uninstalls the platform backup timer (customer owns DR).
     residencyBackupPassphrase = await resolveResidencyBackupPassphraseForDeploy(businessId);
   }
@@ -2378,7 +2378,7 @@ async function runOrchestrator(
     ["BUSINESS_ID", businessId],
     ["TIER", narrowTier],
     // Hardware profile for deploy-client.sh (Ollama model selection). The
-    // aiflow-render gate stays keyed on TIER — standard/enterprise get the
+    // aiflow-render gate stays keyed on TIER, standard/enterprise get the
     // render sidecar regardless of box size.
     ["VPS_SIZE", vpsSize],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""],
@@ -2439,7 +2439,7 @@ async function runOrchestrator(
     // so a rotation's overlap window never drops authenticated requests).
     ["DATA_API_TOKENS", dataApiTokens],
     // Backup-encryption passphrase (empty when residency is off OR custody
-    // is customer_held — deploy-client then skips/uninstalls the backup timer).
+    // is customer_held, deploy-client then skips/uninstalls the backup timer).
     ["RESIDENCY_BACKUP_PASSPHRASE", residencyBackupPassphrase],
     // 'central' uploads ciphertext to central Storage; 'onbox' keeps dumps
     // on the box (in-region even for ciphertext).
@@ -2588,7 +2588,7 @@ async function runOrchestrator(
     });
   } else {
     notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
-    // Recipient: the OWNER's phone — the explicit caller override first, then
+    // Recipient: the OWNER's phone, the explicit caller override first, then
     // the phone the owner gave at onboarding (coerced: it's free-form input,
     // e.g. "5145188192"), then the platform ops phone as the last-resort
     // fallback (admin-driven provisions with no owner phone on file).
@@ -2620,11 +2620,11 @@ async function runOrchestrator(
 
     if (notifyPhone) {
       try {
-        // Sender: the tenant's OWN new DID — their first text from their own
+        // Sender: the tenant's OWN new DID, their first text from their own
         // business number. The platform owns no sender number, so there is
         // deliberately NO env fallback here: falling back to
         // TELNYX_SMS_FROM_E164 once sent this from ANOTHER tenant's business
-        // number (Amy's DID, Jul 14 2026 — the env value was repointed after
+        // number (Amy's DID, Jul 14 2026, the env value was repointed after
         // the original platform number was released). A tenant whose DID
         // auto-order failed skips with an honest log instead.
         const tenantSettings = await getBusinessTelnyxSettings(businessId);

@@ -1,23 +1,23 @@
 /**
- * Gemini billed-actuals sync — Google's side of the metered-vs-billed
+ * Gemini billed-actuals sync, Google's side of the metered-vs-billed
  * reconciliation on the admin Gemini page.
  *
  * Google exposes NO direct spend API for the Gemini API (AI Studio's
  * billing page is UI-only); the supported programmatic path is the Cloud
  * Billing export to BigQuery. This module runs one aggregate query per day
- * against that export — billed cost per UTC usage day + GCP project for
- * the Generative Language API — and replaces a rolling window of
+ * against that export, billed cost per UTC usage day + GCP project for
+ * the Generative Language API, and replaces a rolling window of
  * `gemini_billed_daily` rows, mirroring the Telnyx cost sync's shape
  * (delete+insert in one transaction, status recorded in
  * admin_platform_settings).
  *
  * Until the operator finishes the one-time setup (billing export enabled,
- * service account key + export table env vars set — see
+ * service account key + export table env vars set, see
  * docs/GEMINI-SPEND.md) the sync records `configured: false` and skips
  * WITHOUT failing the surrounding platform-cost sync.
  *
  * All dependencies are injected; the runner wires production
- * implementations. Nothing here bills anyone — operator telemetry only.
+ * implementations. Nothing here bills anyone, operator telemetry only.
  */
 
 import type { GeminiBilledDailyInsert } from "@/lib/db/gemini-spend";
@@ -40,7 +40,7 @@ export const DEFAULT_GEMINI_BILLING_SERVICE = "Gemini API";
 /**
  * Rolling sync window: must cover the WIDEST admin range (/admin/gemini's
  * 90-day view) plus lag headroom, so every billed day the UI can show is
- * rewritten on every sync — a narrower window would freeze older in-range
+ * rewritten on every sync, a narrower window would freeze older in-range
  * days at their last synced value while the metered side stays live.
  */
 export const BILLED_SYNC_WINDOW_DAYS = 95;
@@ -133,7 +133,7 @@ export function billedWindowStartDayUtc(now: Date, days: number = BILLED_SYNC_WI
 }
 
 export type GeminiBilledSyncDeps = {
-  /** Null when the operator hasn't finished setup — sync records a skip. */
+  /** Null when the operator hasn't finished setup, sync records a skip. */
   exportTableId: string | null;
   /** Billing `service.description` to filter on (default "Gemini API"). */
   serviceDescription?: string;

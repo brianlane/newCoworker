@@ -63,7 +63,7 @@ export default async function CallTranscriptPage({
   const t = await getTranslations("dashboard.pages");
   // The route segment is named `callControlId` for backward compatibility,
   // but the URL value is now the transcript row's UUID (see the list page
-  // for the rationale — Telnyx call_control_id contains a literal `:` that
+  // for the rationale, Telnyx call_control_id contains a literal `:` that
   // the Cloudflare/Vercel routing layer occasionally mangles, producing
   // 404s on rows that exist in the DB). UUIDs are URL-safe everywhere.
   const { callControlId: rawId } = await params;
@@ -106,7 +106,7 @@ export default async function CallTranscriptPage({
     ...phiCtx
   });
 
-  // Everything below depends only on the transcript — one parallel group
+  // Everything below depends only on the transcript, one parallel group
   // instead of three serial awaits (for residency tenants each is a tunnel
   // round-trip to their box).
   const callerE164 = transcript.caller_e164?.trim() || null;
@@ -196,7 +196,7 @@ export default async function CallTranscriptPage({
           <LocalDateTime iso={transcript.started_at} style="detail" />
           <span>·</span>
           <span>
-            {/* Missed forwarded calls never ended normally (ended_at NULL) —
+            {/* Missed forwarded calls never ended normally (ended_at NULL),
                 don't read that as a live call. */}
             {transcript.status === "missed"
               ? "no answer"

@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const config = await getTelnyxMessagingForBusiness(BUSINESS_ID, undefined, { resolveRcs: true });
   console.log(`resolved rcsAgentId=${config.rcsAgentId ?? "(none)"} from=${config.fromE164}`);
   // Without a resolved RCS agent (or sender), sendTelnyxSms never enters the
-  // RCS-first branch — a plain-SMS send would "pass" while proving nothing
+  // RCS-first branch, a plain-SMS send would "pass" while proving nothing
   // about the fallback. Fail fast instead of false-passing.
   if (!config.rcsAgentId || !config.fromE164) {
     throw new Error(

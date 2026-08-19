@@ -79,7 +79,7 @@ export async function GET(request: Request) {
 
     const connection = await getPublicMetaConnection(parsed.data);
 
-    // While pending, surface the Page options (ids + names only — the page
+    // While pending, surface the Page options (ids + names only, the page
     // tokens stay server-side until one is chosen).
     let pages: Array<{ id: string; name: string }> = [];
     if (connection?.status === "pending") {
@@ -151,10 +151,10 @@ export async function POST(request: Request) {
     }
 
     // Subscribe FIRST: if Meta refuses, the connection stays pending and
-    // the owner can retry — we never store an unsubscribed "active" row.
+    // the owner can retry, we never store an unsubscribed "active" row.
     await subscribePageToLeadgen(page.id, page.accessToken);
 
-    // Linked IG professional account (best-effort — pages without one, or
+    // Linked IG professional account (best-effort, pages without one, or
     // tokens missing the instagram scopes, simply skip Instagram DMs).
     const instagram = await getLinkedInstagramAccount(page.accessToken, page.id);
 
@@ -180,7 +180,7 @@ export async function POST(request: Request) {
       // leaves a dangling subscription delivering events no row routes.
       // The subscription is a single platform-app<->page edge shared by
       // whoever holds the Page, so only unsubscribe if no OTHER tenant
-      // (active or paused) claims it — otherwise the rollback would sever
+      // (active or paused) claims it, otherwise the rollback would sever
       // that tenant's delivery.
       const claim = await getMetaPageClaim(page.id).catch(() => null);
       if (!claim || claim.business_id === body.businessId) {

@@ -777,7 +777,7 @@ describe("migrateBusinessVpsSize, old-box teardown + completion", () => {
       getBusiness: vi.fn(async () => bizRow({ hostinger_vps_id: null }))
     });
     const out = await migrateBusinessVpsSize(input, deps);
-    // No old box means no IP and no key — the elective flow refuses rather
+    // No old box means no IP and no key, the elective flow refuses rather
     // than silently provisioning a fresh box (that's what re-provision is for).
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.stage).toBe("backup");

@@ -1,7 +1,7 @@
 /**
  * Write-time validation for `share_document` AiFlow steps.
  *
- * The schema (schema.ts) can only check SHAPE — that documentId is a uuid.
+ * The schema (schema.ts) can only check SHAPE, that documentId is a uuid.
  * Whether that document exists, is ingested, is client-audience, and is not
  * already expired requires a DB read, so the flows CRUD routes call this
  * AFTER parseAiFlowDefinition (same layering as the connectionId ownership

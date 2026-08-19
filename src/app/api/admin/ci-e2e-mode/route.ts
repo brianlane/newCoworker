@@ -2,7 +2,7 @@
  * Admin toggle for the CI live-e2e mode (Admin → Gemini card).
  *
  * GET → current mode ("per-change" | "nightly-only").
- * PUT → set it. Takes effect on the NEXT CI run — the e2e job's spend
+ * PUT → set it. Takes effect on the NEXT CI run, the e2e job's spend
  *       guard consults GET /api/public/ci-e2e-mode at the start of every
  *       run, so no deploy or workflow edit is needed.
  */

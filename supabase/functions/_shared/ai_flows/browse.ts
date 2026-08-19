@@ -7,7 +7,7 @@
  * (public) lead page. The contract here also describes an optional external
  * render service (`AIFLOW_RENDER_URL_TEMPLATE`, resolved per-tenant) so a heavier
  * headless backend (the self-hosted Playwright service in vps/aiflow-render) can be swapped in
- * for SPA / login-gated pages WITHOUT touching the engine — the worker just
+ * for SPA / login-gated pages WITHOUT touching the engine, the worker just
  * POSTs `{ url }` (plus `businessId`+`auth` for credentialed browse) and gets
  * back `{ finalUrl, text, html }`.
  *
@@ -34,7 +34,7 @@ function isPrivateIpv4Literal(host: string): boolean {
 /**
  * True when a hostname must NOT be fetched: loopback/localhost, cloud-metadata
  * names, `*.internal`, private IPv4 literals, and ALL IPv6 literals (blocked
- * conservatively — public browsing always has a DNS name).
+ * conservatively, public browsing always has a DNS name).
  */
 export function isUnsafeBrowseHost(host: string): boolean {
   const h = host.toLowerCase();
@@ -94,15 +94,15 @@ export function parseRenderResponse(body: unknown, requestedUrl: string): Render
  * The render service reports application-level failures in a 200 JSON body
  * (`{ error, detail }`) rather than an HTTP 5xx, because a per-tenant render
  * sidecar sits behind a Cloudflare Tunnel and Cloudflare REPLACES the body of
- * any origin 5xx with its own `error code: 502` page — so a 502 would erase the
+ * any origin 5xx with its own `error code: 502` page, so a 502 would erase the
  * structured error and the worker would misread a permanent failure as a
  * transient one and retry it. Classifying on the error code keeps that
  * distinction intact:
- *  - "login"     — bad creds / MFA / missing platform config (`login_failed`,
+ *  - "login", bad creds / MFA / missing platform config (`login_failed`,
  *                  `auth_config_error`): a permanent setup error.
- *  - "action"    — a browse_action selector no longer matches (`action_failed`):
+ *  - "action", a browse_action selector no longer matches (`action_failed`):
  *                  permanent (the page changed; retrying can't fix it).
- *  - "transient" — navigation timeout / unknown (`render_failed`, anything else):
+ *  - "transient", navigation timeout / unknown (`render_failed`, anything else):
  *                  safe to retry.
  */
 export function renderErrorKind(errCode: string): "login" | "action" | "transient" {
@@ -150,7 +150,7 @@ export type ActionRenderResult = {
 /**
  * Coerce a render-service ACTION-mode JSON body (`POST /render` with
  * `actions[]`) into an `ActionRenderResult`, or null when it doesn't match the
- * contract. `actionsCompleted` must be a non-negative number — it is how the
+ * contract. `actionsCompleted` must be a non-negative number, it is how the
  * worker proves the click sequence actually ran. `text`/`html` are optional
  * (an older render service omits them) and default to "" so a browse_action
  * WITHOUT `fields` keeps working against any service version.

@@ -6,7 +6,7 @@
  * literal text instead of executing. Only http(s) link/image URLs survive;
  * anything else (javascript:, data:) renders as plain text.
  *
- * Supported syntax — the subset the blog actually needs:
+ * Supported syntax, the subset the blog actually needs:
  *   headings (# … ######), paragraphs, bold, italic, strikethrough,
  *   inline code, fenced code blocks, links, images (plus bare-URL
  *   autolinking), ordered/unordered lists, blockquotes, horizontal
@@ -49,7 +49,7 @@ function renderInline(escaped: string): string {
     return `\u0001${codeSpans.length - 1}\u0001`;
   });
   // Every emitted HTML chunk is stashed behind a placeholder so later
-  // passes (autolink, emphasis) can never rewrite inside a tag — a bare
+  // passes (autolink, emphasis) can never rewrite inside a tag, a bare
   // URL in link text or an image alt stays plain text instead of nesting
   // an anchor or corrupting the attribute.
   const htmlChunks: string[] = [];
@@ -69,7 +69,7 @@ function renderInline(escaped: string): string {
       : match
   );
   // Autolink bare URLs. Only when preceded by start-of-line or whitespace.
-  // Trailing punctuation stays outside the anchor — except a closing ')'
+  // Trailing punctuation stays outside the anchor, except a closing ')'
   // that balances an opening one inside the URL (GFM's rule, so
   // Wikipedia-style /Foo_(bar) paths keep their full href).
   out = out.replace(/(^|\s)(https?:\/\/[^\s<\u0001\u0002]+)/g, (_match, pre: string, raw: string) => {

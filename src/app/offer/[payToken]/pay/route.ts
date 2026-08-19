@@ -1,5 +1,5 @@
 /**
- * GET /offer/<pay_token>/pay — hand off to Stripe Checkout for a custom
+ * GET /offer/<pay_token>/pay, hand off to Stripe Checkout for a custom
  * white-glove offer.
  *
  * Public by design: the pay_token is the capability (prospect offers are paid
@@ -7,7 +7,7 @@
  * the amount stored on the offer row (never client-supplied), so the emailed
  * /offer/<token> link stays valid indefinitely while raw Checkout URLs expire
  * after 24h. Non-open offers bounce back to the offer page, which explains
- * the state instead of charging twice — and the webhook's atomic paid-claim
+ * the state instead of charging twice, and the webhook's atomic paid-claim
  * catches any double-charge race that slips through.
  */
 import { NextResponse } from "next/server";

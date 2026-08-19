@@ -49,7 +49,7 @@ export type DashboardChatMessageRow = {
 /**
  * API-shape projection of a stored message. Single source of truth for the
  * `{ id, role, content, createdAt }` envelope returned by every
- * `/api/dashboard/chat*` endpoint that surfaces messages — both the active
+ * `/api/dashboard/chat*` endpoint that surfaces messages, both the active
  * conversation (`/api/dashboard/chat`) and the per-archived-thread read-only
  * route (`/api/dashboard/chat/threads/[threadId]/messages`). Keeping it here
  * means a future schema change (e.g. attaching attachments or a tool-call
@@ -84,7 +84,7 @@ export async function getActiveThread(
 /**
  * Look up a single thread row by primary key. Used by the per-thread
  * "view archived conversation" route to verify the requested thread
- * actually belongs to the caller's business before returning messages —
+ * actually belongs to the caller's business before returning messages,
  * without this check, the read-only history endpoint would let any
  * authenticated owner page through any thread on the platform by
  * brute-forcing UUIDs.
@@ -110,8 +110,8 @@ export async function getThreadById(
  * Two-step because the partial unique index
  * `dashboard_chat_threads_one_active(business_id) where is_active`
  * forbids two active rows per business: deactivate everything currently
- * active for the business first, then activate the target. Order matters
- * — activating before deactivating would violate the index. A brief
+ * active for the business first, then activate the target. Order matters,
+ * activating before deactivating would violate the index. A brief
  * window with zero active threads is fine; the index allows it and the
  * next chat call would mint a new active thread anyway if the second
  * UPDATE failed.
@@ -153,8 +153,8 @@ export async function reactivateThread(
 
 /**
  * Persist a freshly-generated rolling summary on the thread row.
- * `messageCount` is the total messages on the thread at summarize time
- * — recorded so we can later detect "this summary is stale, 20+
+ * `messageCount` is the total messages on the thread at summarize time,
+ * recorded so we can later detect "this summary is stale, 20+
  * messages have accrued since" without re-reading the text.
  *
  * Concurrent-summarizer guard: summarizer runs are fire-and-forget,
@@ -163,8 +163,8 @@ export async function reactivateThread(
  * could land AFTER a fast run with a newer snapshot, regressing
  * `summary_message_count` (re-opening the summarize gate prematurely)
  * and replacing newer prompt context with older. We defend by
- * predicating the UPDATE on `summary_message_count <= messageCount`
- * — PostgREST returns zero updated rows when the predicate fails,
+ * predicating the UPDATE on `summary_message_count <= messageCount`,
+ * PostgREST returns zero updated rows when the predicate fails,
  * which is exactly the desired no-op for a stale write. Equality is
  * allowed (idempotent re-summarize at the same message count is fine).
  */
@@ -202,7 +202,7 @@ export type DashboardChatThreadSummary = DashboardChatThreadRow & {
  * "5 messages" without an N+1 round-trip per thread.
  *
  * Sort key is `updated_at DESC` (not `created_at`) so threads recently
- * touched by a model reply or a re-hydration float to the top — matches
+ * touched by a model reply or a re-hydration float to the top, matches
  * how the chat surface itself shows the active conversation.
  *
  * `limit` defaults to 50: more than enough to surface recent context
@@ -289,7 +289,7 @@ function isUniqueViolation(err: unknown): boolean {
  *
  * Race-safety: the migration adds a partial unique index so only one active
  * thread per business can exist. Two concurrent first-message POSTs can both
- * see "no active thread" and race the insert — one wins, one fails with
+ * see "no active thread" and race the insert, one wins, one fails with
  * 23505. We swallow that and re-read the winner's row instead of bubbling up
  * a spurious 500.
  */
@@ -357,7 +357,7 @@ export async function updateThreadConversation(
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   // Only persist fields the caller actually provided. A null conversationId
-  // or undefined state means "leave the prior value alone" — Rowboat may
+  // or undefined state means "leave the prior value alone", Rowboat may
   // respond without a state key between turns. We build the patch via
   // conditional spread to avoid partial-overwrite bugs.
   const update: Record<string, unknown> = {
@@ -376,7 +376,7 @@ export async function updateThreadConversation(
 
 /**
  * Owner-facing thread delete: SOFT (deleted_at stamp, admin-restorable) but
- * indistinguishable from a hard delete in the dashboard — every reader
+ * indistinguishable from a hard delete in the dashboard, every reader
  * above filters the stamp, and messages are only reachable through their
  * (now hidden) parent thread. The same UPDATE flips `is_active` off so a
  * deleted active thread can't block the one-active-per-business partial
@@ -387,7 +387,7 @@ export async function updateThreadConversation(
  * write journal replicates the stamp to a dual/vps box copy.
  *
  * Returns the stamped-row count (0 when unknown/already deleted or owned by
- * another business — idempotent, IDOR-safe on the business_id predicate).
+ * another business, idempotent, IDOR-safe on the business_id predicate).
  */
 export async function softDeleteThread(
   businessId: string,

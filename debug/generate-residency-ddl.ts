@@ -4,8 +4,8 @@
  * Reads the LIVE central database's information_schema for every table in
  * RESIDENCY_MOVED_TABLES (src/lib/residency/tables.ts) and emits a single
  * versioned schema file the per-tenant data-api datastore will host
- * (vps/data-api/schema.sql). Generating from the live schema — instead of
- * hand-copying 130+ migrations — means the artifact can never drift from
+ * (vps/data-api/schema.sql). Generating from the live schema, instead of
+ * hand-copying 130+ migrations, means the artifact can never drift from
  * what production actually runs; re-run after any migration that touches a
  * moved table.
  *
@@ -25,7 +25,7 @@
  *
  * `--catalog-json` skips the live connection and reads a pre-fetched
  * `{ columns, constraints, indexes }` JSON (the three catalog queries below,
- * json_agg'd) — for operators whose only DB access is the Supabase MCP /
+ * json_agg'd), for operators whose only DB access is the Supabase MCP /
  * SQL editor rather than a raw postgres:// URL.
  * Read-only against the central DB; writes only the local schema file.
  */
@@ -92,7 +92,7 @@ if (CATALOG_ARG !== -1) {
   /**
    * PostgREST (the supabase-js service client) cannot query
    * information_schema/pg_catalog, so the three catalog reads go over the raw
-   * `pg` protocol using the connection string in SUPABASE_DB_URL — the same
+   * `pg` protocol using the connection string in SUPABASE_DB_URL, the same
    * var the supabase CLI uses. It is the ONLY credential this script needs.
    */
   const dbUrl = process.env.SUPABASE_DB_URL ?? "";
@@ -110,7 +110,7 @@ if (CATALOG_ARG !== -1) {
   // (SELF_SIGNED_CERT_IN_CHAIN). A `sslmode=` query param inside the URL takes
   // precedence over both PGSSLMODE and the `ssl` client option, so strip it
   // from the URL and configure TLS explicitly: encrypted, but without chain
-  // verification. Acceptable here — the script is read-only catalog
+  // verification. Acceptable here, the script is read-only catalog
   // introspection run by an operator, not a production data path.
   const parsedUrl = new URL(dbUrl);
   parsedUrl.searchParams.delete("sslmode");
@@ -233,7 +233,7 @@ for (const table of tables) {
   // no-op on a table that already exists, so columns added centrally after a
   // box's first deploy would silently never land. One idempotent
   // `add column if not exists` per column closes that gap. NOT NULL is only
-  // emitted when the column carries a default (or identity) — adding it to
+  // emitted when the column carries a default (or identity), adding it to
   // an already-populated table without one would fail, and every central
   // migration that adds a NOT NULL column ships a default for the same
   // reason.

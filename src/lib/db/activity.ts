@@ -3,7 +3,7 @@
  *
  * Why this exists: the dashboard's Recent Activity card historically read only
  * `coworker_logs`, a table that nothing but voice caller-captures (and the
- * legacy Rowboat claw-log gateway) writes to — so it showed "No activity yet"
+ * legacy Rowboat claw-log gateway) writes to, so it showed "No activity yet"
  * even for busy businesses with calls, texts, dashboard chat, and AiFlow runs.
  * The emailed digest already aggregates the REAL activity tables (see
  * supabase/functions/notifications-digest/index.ts + _shared/digest_builder.ts);
@@ -72,7 +72,7 @@ export type ActivitySmsInboundRow = {
 /**
  * A coworker reply stored on an inbound job. Queried on its own `updated_at`
  * window (not `created_at`) so a reply sent recently to an older inbound text
- * still appears — matching the digest's reply accounting.
+ * still appears, matching the digest's reply accounting.
  */
 export type ActivitySmsReplyRow = {
   payload: Record<string, unknown> | null;
@@ -82,12 +82,12 @@ export type ActivitySmsReplyRow = {
 export type ActivitySmsOutboundRow = {
   to_e164: string | null;
   /**
-   * `sms_outbound_log.source` — one origin signal for the AiFlow tag.
+   * `sms_outbound_log.source`, one origin signal for the AiFlow tag.
    * Optional so contact-scoped callers that predate the tag keep compiling.
    */
   source?: string | null;
   /**
-   * `sms_outbound_log.flow_id` — the AUTHORITATIVE flow-origin signal: the
+   * `sms_outbound_log.flow_id`, the AUTHORITATIVE flow-origin signal: the
    * flow worker stamps it on every send it makes, including ones whose
    * `source` reflects the transport (e.g. group/agent-offer texts).
    */
@@ -106,10 +106,10 @@ export type ActivityEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
-  /** `email_log.source` — one origin signal for the AiFlow tag. */
+  /** `email_log.source`, one origin signal for the AiFlow tag. */
   source?: string | null;
   /**
-   * `email_log.flow_id` — the AUTHORITATIVE flow-origin signal: the flow
+   * `email_log.flow_id`, the AUTHORITATIVE flow-origin signal: the flow
    * worker stamps it on every send, while `source` can be `owner_mailbox` /
    * `tenant_mailbox_outbound` when the flow sends through the tenant's
    * connected mailbox.
@@ -119,9 +119,9 @@ export type ActivityEmailRow = {
 };
 
 export type ActivityFlowRow = {
-  /** The run id — deep-links the feed item straight to this run's detail. */
+  /** The run id, deep-links the feed item straight to this run's detail. */
   id: string;
-  /** The owning flow id — scopes the runs page so the run is in view. */
+  /** The owning flow id, scopes the runs page so the run is in view. */
   flow_id: string;
   status: string;
   created_at: string;
@@ -156,7 +156,7 @@ export type ActivityAlertRow = {
 /**
  * Owner-chosen narrowing of the full activity page, from the filter bar's URL
  * params. Applied at the FETCH layer (not post-merge) so every chunk is full
- * of the requested kinds — filtering the merged chunk client-side would show
+ * of the requested kinds, filtering the merged chunk client-side would show
  * near-empty pages for low-frequency kinds and waste the row budget on
  * excluded sources.
  */
@@ -324,7 +324,7 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       href: "/dashboard/emails",
       at: r.created_at,
-      // Same AiFlow origin tag as texts — the badge applies to any message
+      // Same AiFlow origin tag as texts, the badge applies to any message
       // type a flow can send (outbound only). flow_id is authoritative: the
       // flow worker stamps it even when it sends through the tenant mailbox
       // (source 'owner_mailbox' / 'tenant_mailbox_outbound').
@@ -398,10 +398,10 @@ function byRecency(a: ActivityItem, b: ActivityItem): number {
 
 /**
  * Merge every activity source into one chronological (newest-first) feed,
- * capped at `limit`. Pure — callers pass already-fetched plain rows.
+ * capped at `limit`. Pure, callers pass already-fetched plain rows.
  *
  * Used by the dashboard's compact Recent Activity card. Alerts rank like every
- * other kind — strictly by recency — so an old urgent item scrolls away as
+ * other kind, strictly by recency, so an old urgent item scrolls away as
  * newer activity arrives instead of staying pinned (the notifications page
  * remains the durable home for alerts). This matches the full "See all
  * activity" page ({@link paginateFullActivityFeed}).
@@ -415,7 +415,7 @@ export type ActivityFeedPage = {
   /**
    * Cursor for the next-older chunk (pass back as `before`), or null when the
    * window is exhausted. Timestamps are ms-precision; distinct events sharing
-   * the exact cursor millisecond could be skipped across a chunk boundary — an
+   * the exact cursor millisecond could be skipped across a chunk boundary, an
    * accepted trade-off for cursor paging without a global sequence.
    */
   nextBefore: string | null;
@@ -432,7 +432,7 @@ function cappedSourceBoundaries(input: ActivityFeedInput): string[] {
     if (rows.length < input.limit || rows.length === 0) return null;
     // Walk up from the oldest fetched row to the first parseable timestamp:
     // a malformed row (shouldn't happen for timestamptz columns, but fail
-    // safe) must not make a CAPPED source look uncapped — that would end
+    // safe) must not make a CAPPED source look uncapped, that would end
     // paging early and reintroduce the merge gap.
     for (let i = rows.length - 1; i >= 0; i--) {
       const at = rows[i]?.[key];
@@ -457,11 +457,11 @@ function cappedSourceBoundaries(input: ActivityFeedInput): string[] {
  * Merge one CHUNK of the full-page feed and compute the cursor for the next
  * one. The subtlety: each source is fetched with its own row cap, so a chatty
  * source (say 200 texts in two days) stops early while quieter sources run the
- * whole window — naively merging would show quiet-source items from BELOW the
+ * whole window, naively merging would show quiet-source items from BELOW the
  * chatty source's fetch depth while silently missing the texts between. To
  * keep every chunk gap-free:
  *
- *   1. Find the NEWEST "oldest fetched row" among sources that hit their cap —
+ *   1. Find the NEWEST "oldest fetched row" among sources that hit their cap,
  *      the merged feed is only complete above that boundary.
  *   2. Keep merged items at/above the boundary (capped at `limit`).
  *   3. Point `nextBefore` at the last KEPT item, so the next chunk re-queries
@@ -484,7 +484,7 @@ export function paginateFullActivityFeed(input: ActivityFeedInput): ActivityFeed
 
   // Newest incomplete-source boundary. The boundary row was fetched, but the
   // collector may have DROPPED it (e.g. an SMS job without a parsable phone),
-  // so the filtered chunk can legitimately come back empty — advance the
+  // so the filtered chunk can legitimately come back empty, advance the
   // cursor to the boundary itself in that case so paging always makes
   // progress (the next fetch is strictly below it) instead of throwing.
   const boundary = boundaries.reduce((a, b) => (a > b ? a : b));
@@ -504,20 +504,20 @@ export const DEFAULT_ACTIVITY_LIMIT = 10;
  * Upper bound on rows loaded for the full "See all activity" page. The page
  * paginates client-side over an already-bounded set (mirroring the calls/texts/
  * emails list views), so this caps memory + query cost while still being deep
- * enough that AiFlow runs and other lower-frequency events — which the 10-item
- * dashboard card crowds out — are actually reachable.
+ * enough that AiFlow runs and other lower-frequency events, which the 10-item
+ * dashboard card crowds out, are actually reachable.
  */
 export const ACTIVITY_FEED_MAX = 200;
 
 /**
  * How far back the feed looks, by tier. Bounding the window keeps "Recent
- * Activity" actually recent — without it, a long-idle business would surface
+ * Activity" actually recent, without it, a long-idle business would surface
  * months-old rows (e.g. a stale `customer_memories` row mislabeled "New
  * customer").
  *
  * Tier relaunch decision (Jul 2026): activity history depth is a Standard/
  * Enterprise perk. Starter keeps the week-at-a-glance view (7 days); Standard
- * and Enterprise get a full quarter (90 days). This is a VIEW window only —
+ * and Enterprise get a full quarter (90 days). This is a VIEW window only,
  * nothing is deleted, so an upgrade instantly reveals the older history.
  */
 export const ACTIVITY_WINDOW_DAYS_STARTER = 7;
@@ -548,8 +548,8 @@ export function activityWindowDays(tier: string | null | undefined): number {
  *
  * `filter` narrows kinds and the look-back at the fetch layer: a source whose
  * kinds are all excluded is never queried (it resolves to no rows, which the
- * chunk pagination already treats as "never capped"), and `sinceDays` tightens
- * — never widens — the tier window.
+ * chunk pagination already treats as "never capped"), and `sinceDays` tightens,
+ * never widens, the tier window.
  */
 async function fetchActivityFeedInput(
   businessId: string,
@@ -560,7 +560,7 @@ async function fetchActivityFeedInput(
   filter?: ActivityFilter
 ): Promise<ActivityFeedInput> {
   const kinds = filter?.kinds ?? [];
-  // Empty selection means "everything" — the filter bar treats no chips as all.
+  // Empty selection means "everything", the filter bar treats no chips as all.
   const wants = (...ks: ActivityKind[]): boolean =>
     kinds.length === 0 || ks.some((k) => kinds.includes(k));
   const effectiveDays =
@@ -571,7 +571,7 @@ async function fetchActivityFeedInput(
   // Cursor filter, applied per-source on its ordering column. `q` is the
   // PostgREST builder mid-chain; `lt`'s return is typed `any` because a
   // recursive structural constraint (lt(): T) sends tsc into TS2589 against
-  // the real builder generics — only the chain shape matters here.
+  // the real builder generics, only the chain shape matters here.
   const beforeLt = <T extends { lt(column: string, value: string): any }>(
     q: T,
     column: string
@@ -644,7 +644,7 @@ async function fetchActivityFeedInput(
             .order("created_at", { ascending: false })
             .limit(limit),
       // Coworker email activity (AiFlow/assistant sends, trigger emails,
-      // tenant-mailbox traffic) — the email counterpart of the SMS sources.
+      // tenant-mailbox traffic), the email counterpart of the SMS sources.
       !wants("email_inbound", "email_outbound")
         ? none
         : beforeLt(
@@ -708,7 +708,7 @@ async function fetchActivityFeedInput(
       // High-signal coworker_logs entries: urgent alerts only. These are the
       // ones dispatched to the notifications page (see evaluateUrgency), so the
       // "/dashboard/notifications" deep link always resolves to the event.
-      // `error` rows are intentionally excluded — they aren't dispatched
+      // `error` rows are intentionally excluded, they aren't dispatched
       // anywhere owner-facing, so there's no page to link them to.
       !wants("alert")
         ? none
@@ -783,7 +783,7 @@ export async function getRecentActivity(
  * Like {@link getRecentActivity} but for the full "See all activity" page:
  * loads ONE gap-free chunk of up to `limit` items ranked strictly by recency,
  * plus the `nextBefore` cursor for the next-older
- * chunk — so the whole tier window (e.g. 90 days) is reachable, not just the
+ * chunk, so the whole tier window (e.g. 90 days) is reachable, not just the
  * newest {@link ACTIVITY_FEED_MAX} events. Pass `before` (a previous chunk's
  * `nextBefore`) to walk older history. `filter` narrows kinds and the
  * look-back window (see {@link ActivityFilter}).
@@ -845,7 +845,7 @@ export type ContactActivityTarget = {
 
 /**
  * One person's unified activity timeline: their calls, texts (both
- * directions), email traffic, and the AiFlow runs where they are the lead —
+ * directions), email traffic, and the AiFlow runs where they are the lead,
  * newest first, capped at `limit`. This is the contact-page/task-card
  * counterpart of {@link getRecentActivity}: same sources, same item shapes,
  * scoped to one contact's numbers + email instead of the whole business.
@@ -970,14 +970,14 @@ export async function getContactActivity(
 /**
  * Batched recent activity for MANY contacts at once (the Task Center's
  * per-card timeline): one IN(...) query per source instead of a query
- * fan-out per card. Returns a map keyed by the item's own number — callers
+ * fan-out per card. Returns a map keyed by the item's own number, callers
  * with merged profiles fold alias keys into the primary themselves (they
  * hold the alias table; this function deliberately doesn't).
  *
  * Sources are calls + texts only: those are the person-keyed columns that
  * batch cleanly, and they're what a task card needs to answer "what
  * happened with this lead lately?". Email needs a per-contact address and
- * flow runs need context parsing — both stay on the single-contact path
+ * flow runs need context parsing, both stay on the single-contact path
  * ({@link getContactActivity}).
  */
 export async function getActivityForContacts(

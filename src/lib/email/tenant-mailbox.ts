@@ -1,7 +1,7 @@
 /**
  * Per-tenant AI coworker mailbox helpers.
  *
- * Every business owns ONE address at the platform email domain — the AI
+ * Every business owns ONE address at the platform email domain, the AI
  * coworker's own inbox, distinct from the platform team inbox and from the
  * owner's Nango-connected Gmail/Outlook. The default local-part is the
  * business UUID (guaranteed-unique, zero setup); standard/enterprise tiers
@@ -52,7 +52,7 @@ export const RESERVED_LOCAL_PARTS = new Set([
   "newcoworkerteam"
 ]);
 
-/** Just the slice of env this module reads — lets tests pass partial objects. */
+/** Just the slice of env this module reads, lets tests pass partial objects. */
 type DomainEnv = Record<string, string | undefined>;
 
 /** The domain tenant mailboxes live under (e.g. "newcoworker.com"). */
@@ -153,7 +153,7 @@ export function normalizePersonalizedLocalPart(raw: string): string {
 /**
  * Derive a friendly default handle suggestion from a business name. Returns a
  * best-effort slug, or "" when nothing usable remains (caller falls back to the
- * UUID default). NOT guaranteed unique — the availability check owns that.
+ * UUID default). NOT guaranteed unique, the availability check owns that.
  */
 export function suggestLocalPartFromName(name: string): string {
   const slug = name
@@ -200,7 +200,7 @@ export async function ensureTenantMailbox(
     .select(MAILBOX_COLS)
     .single();
   if (error) {
-    // 23505: a concurrent provision created it first — return that row.
+    // 23505: a concurrent provision created it first, return that row.
     if ((error as { code?: string }).code === "23505") {
       const row = await getTenantMailbox(businessId, db);
       if (row) return row;
@@ -250,7 +250,7 @@ export type AvailabilityResult = { available: boolean; reason?: MailboxErrorCode
 
 /**
  * Whether a personalized handle is free to claim. Validates format + reserved
- * list first (cheap, no IO), then checks the unique index — excluding the
+ * list first (cheap, no IO), then checks the unique index, excluding the
  * caller's own current row so re-saving the same handle reads as available.
  */
 export async function checkLocalPartAvailable(

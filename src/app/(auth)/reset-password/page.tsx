@@ -15,7 +15,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 /**
  * Landing page for the password-reset link. The email link points at
  * /api/auth/callback?redirectTo=/reset-password, which exchanges the recovery
- * code for a session before redirecting here — so by the time this renders the
+ * code for a session before redirecting here, so by the time this renders the
  * user has a (recovery) session and can set a new password via updateUser.
  */
 export default function ResetPasswordPage() {

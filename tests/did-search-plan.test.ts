@@ -85,7 +85,7 @@ describe("buildDidSearchPlan", () => {
       defaultState: "AZ"
     });
     // The 602 default would re-run the identical owner search narrowed by
-    // state — dropped, leaving owner then any.
+    // state, dropped, leaving owner then any.
     expect(plan.map((s) => s.source)).toEqual(["owner_local", "any"]);
   });
 

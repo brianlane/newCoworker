@@ -150,7 +150,7 @@ export default async function SystemPage() {
         }}
       />
 
-      {/* Nango account headroom — every tenant workspace connect draws from
+      {/* Nango account headroom, every tenant workspace connect draws from
           this one shared pool, so nearing the limit is a platform incident
           (new connects start failing), not a per-tenant one. */}
       <Card>

@@ -14,7 +14,7 @@ const bodySchema = z
     custody: z.enum(["escrowed", "customer_held"]).optional(),
     /**
      * `custody: 'customer_held'` DROPS the plaintext passphrase forever
-     * (fingerprint only) — the platform can never again decrypt or restore
+     * (fingerprint only), the platform can never again decrypt or restore
      * this tenant's dumps. Required acknowledgment for that flip.
      */
     acknowledgeIrreversible: z.boolean().optional().default(false)

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Worker-integration suite: the REAL edge workers (supabase functions
- * serve) against a REAL local Postgres (supabase start) — run claiming,
+ * serve) against a REAL local Postgres (supabase start), run claiming,
  * park/timeout RPCs, deferrals, revision bumps, step persistence, the
  * sms-inbound-worker reply pipeline (against the suite's fake Rowboat on
  * :8977), goal-event jumps, and needs-human escalation through the real
@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
  *     npm run test:worker-integration
  *
  * (CI swaps host.docker.internal for the supabase docker network's gateway
- * IP — Linux containers don't get the Docker Desktop alias.)
+ * IP, Linux containers don't get the Docker Desktop alias.)
  *
  * Any Supabase CLI version works. It did not always: on a CLI whose baseline
  * no longer auto-grants the Data API roles, replaying the migrations left
@@ -58,7 +58,7 @@ export default defineConfig({
     hookTimeout: 60_000,
     fileParallelism: false,
     // One scenario at a time: every test ticks the SAME worker, and a tick
-    // claims every due run — interleaved scenarios would race each other's
+    // claims every due run, interleaved scenarios would race each other's
     // timer manipulation.
     sequence: { concurrent: false }
   }

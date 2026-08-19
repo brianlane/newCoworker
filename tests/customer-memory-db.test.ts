@@ -19,8 +19,8 @@ vi.mock("@/lib/supabase/server", () => ({
  *
  * The module is a thin wrapper around Supabase's PostgREST client, so
  * the goal here is twofold:
- *   (a) Pin the wire-level shape we send to PostgREST — column lists,
- *       order/limit, search filter escaping, RPC arg names — so a
+ *   (a) Pin the wire-level shape we send to PostgREST, column lists,
+ *       order/limit, search filter escaping, RPC arg names, so a
  *       casual edit (e.g. typo'ing `customer_memories` or renaming
  *       a column) breaks a fast unit test rather than failing in
  *       prod.
@@ -29,7 +29,7 @@ vi.mock("@/lib/supabase/server", () => ({
  *       explicit assertion, a future "simplification" could
  *       reintroduce the comma/dot injection bug.
  *
- * We mock the entire SupabaseClient surface — the real one is too
+ * We mock the entire SupabaseClient surface, the real one is too
  * heavyweight for unit tests and pulls in network. The mock returns
  * `{ data, error }` shapes identical to Supabase's runtime contract
  * so any signature drift here surfaces in production-shaped tests.
@@ -202,7 +202,7 @@ describe("getCustomerMemory", () => {
     expect(fr.calls.find((c) => c.name === "or")?.args[0]).toBe(
       `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
     );
-    // maybeSingle() — null when missing, never throws on 0 rows.
+    // maybeSingle(), null when missing, never throws on 0 rows.
     expect(fr.calls.find((c) => c.name === "maybeSingle")).toBeDefined();
   });
 
@@ -277,7 +277,7 @@ describe("linkCustomerEmail", () => {
       { data: { id: "row-1", email: "owner@set.com" }, error: null }
     ]);
     await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
-    // Only the SELECT ran — no UPDATE, no INSERT.
+    // Only the SELECT ran, no UPDATE, no INSERT.
     expect(fromCalls).toHaveLength(1);
   });
 
@@ -420,7 +420,7 @@ describe("listCustomerMemories", () => {
     //       quoted values to `<c>` before handing the value to
     //       Postgres LIKE, so the LIKE escape only survives end-to-end
     //       when we double it here. Verified live against the REST
-    //       surface — leaving step (2) at "only escape quote" causes
+    //       surface, leaving step (2) at "only escape quote" causes
     //       a search for "100%" to also match "100abc" (regression
     //       caught by CodeQL high-severity "Incomplete string
     //       escaping" alert + a live escape test).
@@ -436,7 +436,7 @@ describe("listCustomerMemories", () => {
       // Bare backslash from the user is also doubled.
       { input: "win\\path", pattern: `"%win\\\\path%"` },
       // Plain alphanumerics get the same quoting treatment for
-      // consistency — the cost is negligible vs. the safety win.
+      // consistency, the cost is negligible vs. the safety win.
       { input: "Joe", pattern: `"%Joe%"` }
     ];
     for (const { input, pattern } of cases) {
@@ -763,7 +763,7 @@ describe("touchLastSummarizedAt", () => {
     expect(patch.last_summarized_at).toBeTruthy();
     expect(patch.updated_at).toBeTruthy();
     // The skip stamp must never clobber the summary or the interaction
-    // counter — it exists purely to rotate the sweep queue.
+    // counter, it exists purely to rotate the sweep queue.
     expect(Object.keys(patch).sort()).toEqual(["last_summarized_at", "updated_at"]);
     const eqs = fr.calls.filter((c) => c.name === "eq");
     expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
@@ -892,7 +892,7 @@ describe("updateCustomerOwnerFields", () => {
     vi.mocked(ingestContact).mockClear();
 
     // Read-back returns no row (replica blip): the just-WRITTEN values
-    // still reach the graph — never dropped because a follow-up read failed.
+    // still reach the graph, never dropped because a follow-up read failed.
     const emailNameless = makeClient({ fromTerminator: { data: null, error: null } });
     await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "x@y.co" }, emailNameless.client);
     expect(ingestContact).toHaveBeenCalledWith(BIZ, {
@@ -1118,7 +1118,7 @@ describe("updateCustomerOwnerFields", () => {
 
 describe("setContactSmsReplyMode", () => {
   // Like linkCustomerEmail, this makes up to three from() calls (alias-aware
-  // UPDATE, INSERT fallback, race-recovery UPDATE) — sequence the terminators.
+  // UPDATE, INSERT fallback, race-recovery UPDATE), sequence the terminators.
   function makeSeqClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
     const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
     let i = 0;
@@ -1149,7 +1149,7 @@ describe("setContactSmsReplyMode", () => {
 
   it("creates a minimal contact row when none exists (thread-history-only numbers)", async () => {
     // PostgREST can hand back `null` instead of `[]` for a zero-row
-    // update+select — both must fall through to the insert.
+    // update+select, both must fall through to the insert.
     const { client, fromCalls } = makeSeqClient([
       { data: null, error: null },
       { data: null, error: null }
@@ -1320,7 +1320,7 @@ describe("listSmsHistoryForCustomer", () => {
         data: [
           jobRow({ id: "a", payload: { data: { payload: { text: "from text key" } } } }),
           jobRow({ id: "b", payload: { data: { payload: { body: "from body key" } } } }),
-          // Malformed shape: empty inboundText (we don't throw — we degrade gracefully).
+          // Malformed shape: empty inboundText (we don't throw, we degrade gracefully).
           jobRow({ id: "c", payload: {} })
         ],
         error: null
@@ -1444,7 +1444,7 @@ describe("listSmsHistoryForCustomer", () => {
   });
 
   it("merges worker-initiated sends chronologically with inbound jobs, tagging their source", async () => {
-    // AiFlow texted the lead FIRST (no inbound job exists for that send) —
+    // AiFlow texted the lead FIRST (no inbound job exists for that send),
     // exactly the live shape that left the profile page saying "No SMS
     // history" while the thread page showed the message.
     const { client } = makeClient({
@@ -1509,7 +1509,7 @@ describe("default service-client fallback (every public helper)", () => {
   // Each helper exposes an optional `client` arg purely so the unit
   // tests above can swap in a stub. In production every caller goes
   // through the `client ?? (await createSupabaseServiceClient())`
-  // branch — exercise it explicitly to keep coverage at 100% AND to
+  // branch, exercise it explicitly to keep coverage at 100% AND to
   // notice if any helper accidentally drops the fallback.
 
   it("getCustomerMemory falls back to createSupabaseServiceClient", async () => {

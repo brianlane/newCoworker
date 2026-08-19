@@ -4,12 +4,12 @@
  * Enqueues a run whose trigger scope is synthesized from a chosen contact
  * and flagged `test_mode: true`: the worker executes the real engine but
  * SIMULATES every side-effecting action (sends, routing, CRM writes,
- * approvals) and resolves waits instantly — the whole flow plays out on the
+ * approvals) and resolves waits instantly, the whole flow plays out on the
  * runs page in seconds, with each simulated step recording exactly what a
  * live run would have sent. See _shared/ai_flows/test_mode.ts.
  *
- * Unlike "Run now", the flow does NOT need to be enabled — testing a draft
- * before switching it on is the whole point — so the run is enqueued with
+ * Unlike "Run now", the flow does NOT need to be enabled, testing a draft
+ * before switching it on is the whole point, so the run is enqueued with
  * the trigger scope carrying the flag the worker's disabled-flow guard
  * checks (test runs of disabled flows are allowed to execute).
  */

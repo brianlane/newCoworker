@@ -1,13 +1,13 @@
 /**
- * Agent templates — prebuilt, reviewable starting points for common
+ * Agent templates, prebuilt, reviewable starting points for common
  * document tasks. A template is nothing but prefill for the create form
  * (name + instructions + output format): the owner reviews and saves it as
  * a regular agent, and it runs ONLY when a staff member manually invokes
- * it — templates are never wired to flow triggers or starter flows.
+ * it, templates are never wired to flow triggers or starter flows.
  *
  * The quote templates encode the objectivity guardrail directly in their
  * instructions: they organize and compare information but must never
- * recommend an option — recommendations and any coverage/purchase advice
+ * recommend an option, recommendations and any coverage/purchase advice
  * stay with the business's licensed/qualified staff. Wording is industry
  * neutral (insurance quotes, contractor bids, vendor proposals all fit).
  */

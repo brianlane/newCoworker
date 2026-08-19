@@ -70,7 +70,7 @@ describe("parseEnvelope", () => {
     // 4xx + non-JSON typically means a misconfigured proxy stripped a
     // valid JSON body, OR an upstream load balancer returned its own
     // HTML error page. Saying "your coworker is taking longer" there
-    // would be misleading — the request is being rejected, not slow.
+    // would be misleading, the request is being rejected, not slow.
     const r = new Response("<html>403 Forbidden</html>", {
       status: 403,
       headers: { "Content-Type": "text/html" }

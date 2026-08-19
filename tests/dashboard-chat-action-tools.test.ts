@@ -299,7 +299,7 @@ describe("update_notification_preferences", () => {
     const decl = decls.find((d) => d.name === "update_notification_preferences");
     expect(decl?.description).toMatch(/explicitly asks/i);
     expect(decl?.description).toMatch(/notification|alert/i);
-    // Recipients are NOT parameters — booleans only.
+    // Recipients are NOT parameters, booleans only.
     const props = Object.keys(
       (decl?.parameters as { properties: Record<string, unknown> }).properties
     );

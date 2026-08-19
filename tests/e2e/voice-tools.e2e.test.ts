@@ -6,13 +6,13 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
 
 /**
- * Voice TOOL-CALLING against the live model — the grounded-booking layer
+ * Voice TOOL-CALLING against the live model, the grounded-booking layer
  * voice-persona.e2e.test.ts deliberately leaves out (it runs tools-off).
  *
  * Gemini Live's audio channel can't run in CI, so this is the text-mode
  * stand-in with the bridge's REAL system instruction (production builder,
  * hasVoiceTools=true) and the bridge's REAL tool declarations (imported
- * from vps/voice-bridge/src/tool-declarations.ts — the exact objects the
+ * from vps/voice-bridge/src/tool-declarations.ts, the exact objects the
  * bridge hands Gemini Live), with tool executions stubbed to the voice
  * tool routes' response shapes. The phantom-booking incident class is
  * pinned only prompt-side for SMS; on voice the booking IS a tool call,
@@ -27,7 +27,7 @@ import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
  *
  * Temperature 0 for CI stability; the model is the text-generation sibling
  * of the fleet's conversational tier (the Live audio model itself has no
- * text-only mode) — gemini-3.5-flash-lite since the PR #809 fleet
+ * text-only mode), gemini-3.5-flash-lite since the PR #809 fleet
  * migration.
  */
 
@@ -72,7 +72,7 @@ type ToolRouter = (name: string, args: Record<string, unknown>) => ToolResult;
 type Content = { role: "user" | "model"; parts: Array<Record<string, unknown>> };
 
 /**
- * One generateContent step with the bridge's declarations attached —
+ * One generateContent step with the bridge's declarations attached,
  * the REST shape of the Live session's tool config (same functionDeclarations
  * array), with the suite's transient-retry policy.
  */
@@ -99,7 +99,7 @@ async function voiceStep(contents: Content[]): Promise<{
             temperature: 0,
             maxOutputTokens: 1500,
             // Gemini 3 thinking bills as output AND counts against the 1500
-            // cap — "low" keeps some reasoning for tool choice (the same
+            // cap, "low" keeps some reasoning for tool choice (the same
             // posture as the production Messenger tool loop) without letting
             // hidden thinking truncate the visible reply. Gated on the
             // family: Gemini 2.5 rejects thinkingLevel.
@@ -215,7 +215,7 @@ function baseRouter(overrides: Record<string, (args: Record<string, unknown>) =>
 
 const digits = (v: unknown): string => String(v ?? "").replace(/\D/g, "");
 
-/** The caller's opener — books "tomorrow" with no specific time yet. */
+/** The caller's opener, books "tomorrow" with no specific time yet. */
 const OPENER =
   "Hi, this is Sarah Mitchell. I'd like to book a gel manicure for tomorrow if you " +
   "have anything open.";
@@ -223,23 +223,23 @@ const OPENER =
 describe("voice booking flow (live model, real bridge declarations)", () => {
   // NOTE deliberately NOT pinned here: capture_caller_details timing. The
   // instruction's rule is "never let a call with a genuine lead END without
-  // having called it" — this harness never ends the call, and the first
+  // having called it", this harness never ends the call, and the first
   // post-merge main run proved mid-call capture timing is model freedom
   // (it booked + texted without a capture call, which the end-of-call rule
   // does not forbid at that point). A capture pin needs an end_call-shaped
   // harness; the never-invent contract below is what IS hard mid-call.
   //
   // One retried test instead of beforeAll + four tests (the suite-standard
-  // de-flake shape): a marginal draw anywhere in the exchange — the Jul 19
+  // de-flake shape): a marginal draw anywhere in the exchange, the Jul 19
   // main run drew a pick turn that captured details but never called the
-  // booking tool — must re-roll the WHOLE exchange, and vitest retry cannot
+  // booking tool, must re-roll the WHOLE exchange, and vitest retry cannot
   // re-run a beforeAll.
   it(
     "offers without booking, books exactly the picked slot, invents no numbers, promises no invite",
     { retry: 1, timeout: 480_000 },
     async () => {
       // Turn 1: vague ask. The model may look the caller up, find slots,
-      // and offer times — but must NOT book yet.
+      // and offer times, but must NOT book yet.
       const open = await voiceTurn(
         [],
         OPENER,
@@ -279,9 +279,9 @@ describe("voice booking flow (live model, real bridge declarations)", () => {
 
       // The instruction: "never invent or guess ... phone numbers", and the
       // tool contract says texting the CALLER means OMITTING the destination
-      // (it defaults to their ANI, which the model cannot see — the number
+      // (it defaults to their ANI, which the model cannot see, the number
       // is never in the prompt). Sarah dictated no other number, so ANY
-      // explicit destination is an invention — the first main run sent the
+      // explicit destination is an invention, the first main run sent the
       // confirmation text to a made-up +15551234567.
       for (const call of [...open.calls, ...pick.calls]) {
         if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
@@ -340,7 +340,7 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
       ];
       // STATEFUL find-slots stub: the confirmed slot disappears from
       // availability only AFTER a booking attempt has failed. The previous
-      // always-slice(1) stub assumed the model books first — but some
+      // always-slice(1) stub assumed the model books first, but some
       // temperature-0 draws (observed on the #842 main run and on 2 of 5
       // full-suite hammer runs, gemini-3.5-flash-lite) VERIFY availability
       // before booking; with slot 0 already missing they correctly refuse
@@ -371,7 +371,7 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
       );
 
       // The caller explicitly confirmed a slot: the booking tool must have
-      // been attempted, and every attempt must be for THAT slot — a silent
+      // been attempted, and every attempt must be for THAT slot, a silent
       // book of a different slot is the stacked-invitations class.
       const books = fail.calls.filter((c) => c.name === "calendar_book_appointment");
       if (books.length === 0) {
@@ -384,7 +384,7 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
 
       // Only the HARD incident contract is judged: no phantom-booked claim.
       // "Never blame a technical error" is guidance styling, not pinned (see
-      // the messenger suite's failure-fork note — a borderline honest
+      // the messenger suite's failure-fork note, a borderline honest
       // phrasing drew a judge flake on a post-merge main run).
       const verdict: JudgeVerdict = await judgeReply(
         "a phone receptionist whose booking attempt just failed, replying to a caller who " +

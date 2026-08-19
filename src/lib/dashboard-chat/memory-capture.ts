@@ -7,8 +7,8 @@
  * saved to Memory automatically" behavior the owner preamble promises.
  * Semantics mirror the worker: a strict extraction prompt classifies the
  * owner's latest message (with the assistant reply as reference-resolution
- * context ONLY — never a source of values; see the KYP Ads incident where
- * assistant-invented policy was persisted as durable fact — and
+ * context ONLY, never a source of values; see the KYP Ads incident where
+ * assistant-invented policy was persisted as durable fact, and
  * already-saved bullets as an anti-duplication hint), and a positive
  * extraction persists through the same dedupe/append path
  * (appendOwnerMemoryBullets). Silent and best-effort: failures are logged
@@ -29,7 +29,7 @@ import { appendOwnerMemoryBullets, BULLETS_MAX_CHARS } from "./memory-append";
 import { logger } from "@/lib/logger";
 
 /**
- * Extraction system prompt — MUST stay in lockstep with
+ * Extraction system prompt, MUST stay in lockstep with
  * vps/chat-worker/memory-capture.mjs (OWNER_MEMORY_SYSTEM_PROMPT) so both
  * turn paths capture the same class of rules.
  */
@@ -112,7 +112,7 @@ export function normalizeBullets(raw: unknown): string[] {
 
 /**
  * Parse the extraction model's JSON reply into a safe { save, bullets }
- * result. ANY malformed/unexpected input degrades to no-op — a capture miss
+ * result. ANY malformed/unexpected input degrades to no-op, a capture miss
  * is always preferable to a crash or a bogus write.
  */
 export function parseMemoryExtraction(content: unknown): { save: boolean; bullets: string[] } {
@@ -222,7 +222,7 @@ export type InlineMemoryCaptureDeps = {
 
 /**
  * Run the full silent capture for one inline turn: toggle check →
- * extraction → append. NEVER throws — callers fire-and-forget it after the
+ * extraction → append. NEVER throws, callers fire-and-forget it after the
  * assistant reply is persisted. Returns what was saved (for logging/tests).
  */
 export async function captureOwnerRuleInline(
@@ -303,7 +303,7 @@ export async function captureOwnerRuleInline(
     const extraction = parseMemoryExtraction(text);
     if (!extraction.save) return noop;
     // save=true guarantees at least one bullet, and fitting keeps (or
-    // truncates) at least the first — so `fitted` is never empty here.
+    // truncates) at least the first, so `fitted` is never empty here.
     const fitted = fitBulletsToPayload(extraction.bullets);
 
     const result = await append(args.businessId, fitted.join("\n"));

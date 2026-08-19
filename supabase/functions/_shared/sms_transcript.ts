@@ -2,7 +2,7 @@
  * Compact recent-SMS-thread transcript for the stateless Rowboat retry.
  *
  * When callSmsRowboatWithStatelessFallback drops a continuation, Rowboat
- * roots a brand-new conversation that knows only the current inbound line —
+ * roots a brand-new conversation that knows only the current inbound line,
  * production showed the model restarting lead intake mid-thread ("what
  * prompted you to shop around?", Truly Insurance 2026-07-13). The worker
  * reconstructs the recent exchange from completed sms_inbound_jobs (the
@@ -10,14 +10,14 @@
  * `statelessContextExtra`, so even a reset turn continues the thread.
  *
  * Formatting is pure and unit-tested; the loader is a thin best-effort IO
- * wrapper — a transcript failure must never break the reply path.
+ * wrapper, a transcript failure must never break the reply path.
  */
 import { inboundSmsBody } from "./telnyx_sms_compliance.ts";
 
 /** Most recent exchanges included (each = one inbound + its reply). */
 export const TRANSCRIPT_MAX_EXCHANGES = 6;
 
-/** Per-line excerpt cap — keeps a chatty thread from dominating the prompt. */
+/** Per-line excerpt cap, keeps a chatty thread from dominating the prompt. */
 export const TRANSCRIPT_MAX_LINE_CHARS = 300;
 
 export type SmsExchange = {
@@ -34,7 +34,7 @@ function clip(s: string): string {
 
 /**
  * Render exchanges (oldest first) into the prompt block. Null when there is
- * nothing worth saying — the retry then behaves exactly as before this fix.
+ * nothing worth saying, the retry then behaves exactly as before this fix.
  */
 export function formatSmsTranscript(exchanges: SmsExchange[]): string | null {
   const lines: string[] = [];

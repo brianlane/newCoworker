@@ -13,8 +13,8 @@
  * here would be a lie. The API route refuses writes for them.
  *
  * Rowboat-mediated tools (texting coworker + the dashboard coworker's
- * Rowboat-declared tools) execute through /api/rowboat/tool-call — the
- * per-tenant Rowboat project's tool webhook — which enforces these settings
+ * Rowboat-declared tools) execute through /api/rowboat/tool-call, the
+ * per-tenant Rowboat project's tool webhook, which enforces these settings
  * per call, so they ARE configurable.
  */
 
@@ -530,7 +530,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
   {
     // Website chat widget (Standard+). DELIBERATELY the smallest tool
     // surface of any coworker: it faces the anonymous internet, so it is
-    // info + lead gen ONLY — no SMS sends, no email sends, no calls, no
+    // info + lead gen ONLY, no SMS sends, no email sends, no calls, no
     // image generation. This list is enforced structurally: the Rowboat
     // workflow seed declares only `webchat_*` tool names for the
     // WebchatCoworker agents, and /api/rowboat/tool-call maps those names
@@ -572,7 +572,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
-        // Webchat sharing is INLINE-ONLY (the link appears in the chat) —
+        // Webchat sharing is INLINE-ONLY (the link appears in the chat),
         // no SMS/email sends from the anonymous surface, preserving the
         // info + lead-gen threat model.
         toolKey: "document_share",

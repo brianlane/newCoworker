@@ -5,12 +5,12 @@
  * pg_cron hits this daily with
  *   Authorization: Bearer <INTERNAL_CRON_SECRET>.
  * We validate the bearer, then forward to the Next.js internal endpoint
- * which pulls Telnyx detail records + the Hostinger billing snapshot —
+ * which pulls Telnyx detail records + the Hostinger billing snapshot,
  * same indirection as the data-retention and billing-posture bridges.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  *
  * Response: forwards the Next.js body and status. On any bridge-level
  * failure returns 502 so the pg_cron audit log captures something useful.
@@ -19,7 +19,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 
 const TARGET_PATH = "/api/internal/platform-cost-sync";
-// Telnyx MDR paging + sequential Hostinger calls — match the Next route's
+// Telnyx MDR paging + sequential Hostinger calls, match the Next route's
 // maxDuration.
 const REQUEST_TIMEOUT_MS = 290_000;
 

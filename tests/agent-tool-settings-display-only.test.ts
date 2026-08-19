@@ -3,7 +3,7 @@
  *
  * The live registry currently marks every tool configurable (each one has a
  * real enforcement point), so these branches are exercised against a mocked
- * registry containing a display-only tool — the mechanism must keep working
+ * registry containing a display-only tool, the mechanism must keep working
  * for any future tool we surface for visibility without a platform
  * chokepoint.
  */

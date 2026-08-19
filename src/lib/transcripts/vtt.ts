@@ -1,16 +1,16 @@
 /**
- * WebVTT transcript handling — the format Zoom (and Meet/Teams) produce for
+ * WebVTT transcript handling, the format Zoom (and Meet/Teams) produce for
  * meeting recordings. Uploading one anywhere documents/agents accept text
  * should "just work", so this module owns:
  *
  *   - recognizing a VTT upload (mime `text/vtt`, or a `.vtt` filename when
- *     the browser reports a blank/octet-stream type — common for VTT);
+ *     the browser reports a blank/octet-stream type, common for VTT);
  *   - converting cue soup into clean "Speaker: sentence" lines (headers,
  *     cue ids, timestamps, and settings stripped; consecutive cues from the
  *     same speaker merged) so Gemini prompts read like a meeting, not a
  *     subtitle file.
  *
- * Pure functions only — the ingest/run pipelines call these before their
+ * Pure functions only, the ingest/run pipelines call these before their
  * existing text paths.
  */
 
@@ -39,16 +39,16 @@ export function isVttUpload(mime: string, filename: string): boolean {
  * (merging consecutive cues from the same speaker), drops the WEBVTT
  * header, NOTE/STYLE/REGION blocks, numeric cue ids, timing lines, and
  * inline `<v Speaker>` / timestamp tags. Returns "" for input with no
- * payload — callers treat that as empty content.
+ * payload, callers treat that as empty content.
  */
 export function vttToPlainText(raw: string): string {
   const lines = raw.replace(/^\uFEFF/, "").split(/\r\n?|\n/);
   const out: string[] = [];
   let inSkipBlock = false;
-  // True between a cue timing line and the next blank line — payload
+  // True between a cue timing line and the next blank line, payload
   // territory, where NOTE/STYLE/REGION are spoken words, not block markers.
   let inCue = false;
-  // True once the current cue emitted a payload line — later lines of the
+  // True once the current cue emitted a payload line, later lines of the
   // SAME cue are wrapped continuations of it, not new utterances.
   let cueHasPayload = false;
   let lastSpeaker: string | null = null;
@@ -63,7 +63,7 @@ export function vttToPlainText(raw: string): string {
     }
     if (/^WEBVTT/i.test(trimmed)) {
       // The header BLOCK (optional "Kind:"/"Language:" metadata lines) runs
-      // until the first blank line — none of it is dialogue.
+      // until the first blank line, none of it is dialogue.
       inSkipBlock = true;
       continue;
     }
@@ -77,14 +77,14 @@ export function vttToPlainText(raw: string): string {
       cueHasPayload = false;
       continue;
     }
-    // Bare numeric cue identifiers ("1", "42") — block position only; a
+    // Bare numeric cue identifiers ("1", "42"), block position only; a
     // digits-only line INSIDE a cue payload is spoken content ("42").
     if (!inCue && /^\d+$/.test(trimmed)) continue;
 
     // Inline tags: `<v Jane Doe>text</v>` carries the speaker; other tags
     // (<c>, <i>, timestamps like <00:01:02.000>) are decoration. Stripped
     // to a fixpoint so overlapping sequences ("<scr<i>ipt>") can't re-form
-    // a tag after one pass — the output feeds model prompts as plain text,
+    // a tag after one pass, the output feeds model prompts as plain text,
     // but stable stripping costs nothing and satisfies static analysis.
     let text = trimmed;
     let speaker: string | null = null;
@@ -108,7 +108,7 @@ export function vttToPlainText(raw: string): string {
     }
 
     if (speaker && speaker === lastSpeaker && out.length > 0) {
-      // Same speaker continuing — merge into their running line.
+      // Same speaker continuing, merge into their running line.
       out[out.length - 1] += ` ${text}`;
     } else if (speaker) {
       out.push(`${speaker}: ${text}`);
@@ -116,7 +116,7 @@ export function vttToPlainText(raw: string): string {
     } else if (cueHasPayload && out.length > 0) {
       // A speakerless SECOND line of the same cue is a wrapped continuation
       // of the utterance above ("Dania: Hello" + "everyone today"), not a
-      // new speakerless line — append and keep the speaker running.
+      // new speakerless line, append and keep the speaker running.
       out[out.length - 1] += ` ${text}`;
     } else {
       out.push(text);

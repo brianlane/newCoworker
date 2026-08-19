@@ -479,7 +479,7 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
   it("salvages a VALID voice trigger whose steps all failed (Bugbot a61cd2d8: no placeholder loop)", () => {
     const res = salvageFlowDefinition({
       version: 1,
-      // Fully valid inbound voice trigger — kept at the zod stage.
+      // Fully valid inbound voice trigger, kept at the zod stage.
       trigger: { channel: "voice", fromE164: "+16025551234" },
       // No step survives zod, so the placeholder path runs under voice.
       steps: [{ id: "v", type: "ring_handoff" }] // no toE164/toRef

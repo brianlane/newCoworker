@@ -1,10 +1,10 @@
 /**
- * Read/write helpers for `agent_tool_settings` — the owner's per-tool
+ * Read/write helpers for `agent_tool_settings`, the owner's per-tool
  * overrides on top of the code registry in src/lib/agent-tools/registry.ts.
  *
  * Access is service-role only (table has no owner-facing RLS policies); all
  * callers MUST gate on requireOwner() / the Rowboat gateway token before
- * invoking — same trust model as dashboard-chat-jobs.ts.
+ * invoking, same trust model as dashboard-chat-jobs.ts.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -45,7 +45,7 @@ export async function listAgentToolSettings(
 }
 
 /**
- * Registry merged with the tenant's overrides — what the Settings page
+ * Registry merged with the tenant's overrides, what the Settings page
  * renders. Rows that don't match a registry entry are ignored (stale rows
  * from a removed tool must not invent UI entries).
  */
@@ -63,7 +63,7 @@ export async function resolveAgentTools(
       const override = overrides.get(`${agent.key}\u0000${tool.toolKey}`);
       return {
         ...tool,
-        // Non-configurable tools always render their default — a stale row
+        // Non-configurable tools always render their default, a stale row
         // (e.g. written before a tool became display-only) must not lie.
         enabled: tool.configurable && override !== undefined ? override : tool.defaultEnabled
       };
@@ -106,7 +106,7 @@ export async function isAgentToolEnabled(
 }
 
 /**
- * Effective enabled state for MANY (agent, tool) keys in ONE query — the
+ * Effective enabled state for MANY (agent, tool) keys in ONE query, the
  * batched sibling of `isAgentToolEnabled` with identical per-key semantics:
  * unknown keys fail closed (false), display-only tools pin to their registry
  * default (a stale row must not lie), and a failed read resolves every

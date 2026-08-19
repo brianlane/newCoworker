@@ -4,8 +4,8 @@
  *
  * Policy (Jul 14 2026): NOTHING is exempt from the tenant's monthly SMS
  * metering. These sends were historically invisible to the quota ledger;
- * now every one counts via the `meter_sms_operational_send` RPC — plan
- * slot, bonus-text spill, or explicit overage — while remaining sends that
+ * now every one counts via the `meter_sms_operational_send` RPC, plan
+ * slot, bonus-text spill, or explicit overage, while remaining sends that
  * are never REFUSED (STOP/HELP/START replies are legally required, and
  * the cap alert itself must outrun the cap it reports).
  *
@@ -98,7 +98,7 @@ export async function releaseOperationalSms(
  * blocked by the meter (count-only mode has no refusal path), so the
  * calling code's behavior is unchanged except that the tenant's ledger now
  * sees the traffic. `businessId` may be null for sends that could not be
- * routed to a tenant (e.g. a keyword reply on an unmapped DID) — those
+ * routed to a tenant (e.g. a keyword reply on an unmapped DID), those
  * have no pool to meter against and send as before.
  */
 export async function sendOperationalSms(

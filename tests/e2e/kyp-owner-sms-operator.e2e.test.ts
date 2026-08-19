@@ -24,30 +24,30 @@ import { recordGeminiUsage } from "./usage-log";
  * What actually happened in production that morning: James texted his own
  * business line asking the assistant to text his invitee Uday Nandam a 2pm
  * call confirmation. The turn ran on the Rowboat staff persona (no send_sms
- * tool), so the assistant could only `notify_team` — an "Urgent" alert
- * delivered straight back to James — and no text ever reached Uday. Earlier
+ * tool), so the assistant could only `notify_team`, an "Urgent" alert
+ * delivered straight back to James, and no text ever reached Uday. Earlier
  * the same evening, the dashboard model had re-sent its own previous chat
  * reply ("The text has been sent.") as an SMS BODY when James said a test
  * text hadn't arrived.
  *
  * This suite replays those exact messages against the owner-operator
  * surface that now handles them (/api/internal/owner-sms-turn): the REAL
- * production prompt blocks (OWNER_PREAMBLE + SMS_SURFACE_BLOCK, imported —
+ * production prompt blocks (OWNER_PREAMBLE + SMS_SURFACE_BLOCK, imported,
  * not paraphrased), the REAL tool declarations, and the live model the
  * surface runs, with tool executions stubbed to the executor's real
  * response shapes. Pinned contracts:
  *
  *   1. James's request is ACTIONABLE: the assistant either texts Uday's
- *      number (never James's own) or asks a real question — and never
+ *      number (never James's own) or asks a real question, and never
  *      claims it "notified the team" as the fulfilment.
  *   2. With a matching ENABLED automation, it PRESENTS the options (direct
- *      text vs. run the flow) and commits NOTHING until James chooses —
+ *      text vs. run the flow) and commits NOTHING until James chooses,
  *      then executes exactly the chosen option.
  *   3. A "didn't receive anything" retry re-sends the INTENDED body, never
  *      the assistant's own previous chat reply.
  *
  * Temperature 0 for CI stability (production runs 0.3 on this surface);
- * the engine loop itself is unit-tested — this suite pins what the MODEL
+ * the engine loop itself is unit-tested, this suite pins what the MODEL
  * does with the production prompts and tools.
  */
 
@@ -91,7 +91,7 @@ const ALL_GATES: ActionToolGates = {
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 
-/** KYP Ads context fixture — the curated memory the tenant actually runs. */
+/** KYP Ads context fixture, the curated memory the tenant actually runs. */
 const KYP_IDENTITY = [
   "Business Name: KYP Ads",
   "Owner / Primary Contact: James Lee",
@@ -109,7 +109,7 @@ const KYP_MEMORY = [
   '- Requested automation (pending James\'s wording approval before anything goes live): when someone books through Calendly, send an SMS 2-3 hours before the call confirming attendance, timed to the INVITEE\'s timezone. Draft template: "Hey [name], James here from KYP Ads. Just confirming our call at [time] today. See you then?" Calls are 30 minutes over Zoom.'
 ].join("\n");
 
-/** Flow fixtures — response shapes byte-matched to the executor's. */
+/** Flow fixtures, response shapes byte-matched to the executor's. */
 const CONFIRMATION_FLOW_ID = "11111111-aaaa-4aaa-8aaa-111111111111";
 const LIST_NOTE =
   "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run, the owner reviews/enables them at /dashboard/aiflows.";
@@ -206,7 +206,7 @@ async function stepWithRetry(
  * Run one owner turn through the model↔tool loop (the engine loop itself is
  * unit-tested; this drives the same call shape with stubbed executions).
  *
- * A COMPLETELY empty turn (no text and no tool calls — a thinking-only
+ * A COMPLETELY empty turn (no text and no tool calls, a thinking-only
  * draw) is retried whole-turn, bounded: the production inline engine treats
  * that shape as an error and the job retries, so the harness mirrors it
  * rather than asserting on "". Attempts that made tool calls are NEVER
@@ -243,7 +243,7 @@ async function operatorTurnOnce(
   for (let step = 0; step < 5; step++) {
     let result = await stepWithRetry(contents);
     // Empty completion (no text, no calls): re-request the SAME step,
-    // bounded — the per-completion mirror of the llm-router's empty-
+    // bounded, the per-completion mirror of the llm-router's empty-
     // completion retry (#766). Only applies when the turn has produced no
     // usable text yet; a benign trailing empty after text already landed
     // just ends the loop.
@@ -322,7 +322,7 @@ describe("scenario 1, James's exact request, confirmation flow still disabled (p
         expect(call.name).not.toBe("run_aiflow");
       }
 
-      // Acts on the request: texts Uday, or asks a real question — never
+      // Acts on the request: texts Uday, or asks a real question, never
       // "I've notified the team" as the fulfilment.
       const sms = calls.find((c) => c.name === "send_sms");
       if (sms) {
@@ -362,7 +362,7 @@ describe("scenario 1, James's exact request, confirmation flow still disabled (p
 
 describe("scenario 2, flow ENABLED: presents both options, then executes the owner's choice", () => {
   // One retried test instead of beforeAll + three tests: a marginal round-1
-  // draw (the model committing an action before asking — seen once on PR
+  // draw (the model committing an action before asking, seen once on PR
   // #729's CI run) must re-roll the WHOLE exchange, and vitest retry cannot
   // re-run a beforeAll.
   it(

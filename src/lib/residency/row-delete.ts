@@ -13,7 +13,7 @@
  *   * The central UPDATE journals normally, so a dual/vps box receives the
  *     stamp as a replicated upsert.
  *   * A vps-mode box also holds history central already purged, which the
- *     journal can't reach — so for dual/vps tenants the stamp is ALSO
+ *     journal can't reach, so for dual/vps tenants the stamp is ALSO
  *     applied directly on the box through the data API. The overlap with
  *     the journaled update is idempotent (same stamp columns).
  *   * An unreachable dual/vps box fails the request loudly: reporting
@@ -87,7 +87,7 @@ async function stampContentRows(
   //     and a retry redoes the whole thing.
   //   * box succeeds, central fails → vps-mode reads (the box) already hide
   //     the row, and the retry's central UPDATE + journaled replication
-  //     converge the central copy (the overlap is idempotent — same stamp).
+  //     converge the central copy (the overlap is idempotent, same stamp).
   // Central-first would invert that: a box failure would leave central
   // stamped while vps-mode reads keep serving the "deleted" row.
   let box: number | null = null;
@@ -118,7 +118,7 @@ async function stampContentRows(
 
 /**
  * Soft-delete content rows (central + box). `deletedBy` is the auth user id
- * of the owner/staff member who clicked delete — audit trail only, never
+ * of the owner/staff member who clicked delete, audit trail only, never
  * shown to the tenant.
  *
  * `extraSet` folds additional columns into the same UPDATE (AiFlow delete

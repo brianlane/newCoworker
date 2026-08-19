@@ -3,7 +3,7 @@
  * One-off: inspect (and with --fix, true-up) Amy's chat-spend row for the
  * current billing period. Context: platform Gemini surfaces (AiFlow compile,
  * website ingest, knowledge lookups) were unmetered until PR #157, so the
- * meter showed $0.0076 while Google AI Studio billed $0.07 — all of it inside
+ * meter showed $0.0076 while Google AI Studio billed $0.07, all of it inside
  * the period that began 2026-05-29. `--fix` sets the row to the real amount.
  */
 import { loadEnv } from "./_shared.ts";

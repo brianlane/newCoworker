@@ -3,7 +3,7 @@
 /**
  * White-label branding editor (enterprise): product name, https logo URL,
  * accent color. Used on the dashboard settings page (owner/manager) and the
- * admin enterprise business page — both talk to /api/dashboard/branding,
+ * admin enterprise business page, both talk to /api/dashboard/branding,
  * which enforces manage_settings + the enterprise tier gate server-side.
  */
 

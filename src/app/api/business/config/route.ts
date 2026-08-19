@@ -157,7 +157,7 @@ export async function POST(request: Request) {
           await updateBusinessWebsiteUrl(body.businessId, normalized);
         } catch (err) {
           // Don't fail the entire save for a transient `businesses` update
-          // error — the soul/identity/memory patch below is the higher-value
+          // error, the soul/identity/memory patch below is the higher-value
           // write. Log so we can catch repeated failures in telemetry.
           logger.warn("business-config: persist website_url failed", {
             businessId: body.businessId,
@@ -176,7 +176,7 @@ export async function POST(request: Request) {
     // editors round-trip the marker block, but a save that deleted (or
     // mangled) it must not silently strip the tenant's guardrails while
     // businesses.compliance_module stays set. Re-apply the canonical block
-    // whenever a module exists — applyComplianceModuleToSoul strips any
+    // whenever a module exists, applyComplianceModuleToSoul strips any
     // existing block first, so a normal round-trip save is a no-op.
     let soulMd = body.soulMd;
     const { data: moduleRow } = await db
@@ -189,7 +189,7 @@ export async function POST(request: Request) {
       if (complianceModule) {
         soulMd = applyComplianceModuleToSoul(soulMd, complianceModule);
         // The appended block can push a near-cap soul past the same limit
-        // the schema enforced on the raw input — refuse rather than persist
+        // the schema enforced on the raw input, refuse rather than persist
         // an oversized document the next editor load would reject.
         if (soulMd.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
           return errorResponse(
@@ -217,7 +217,7 @@ export async function POST(request: Request) {
     await patchBusinessConfig(body.businessId, patch);
 
     // Knowledge graph (kg-source: identity): the identity write-up is
-    // owner-authored during onboarding — trust 3, no attribution. Deferred
+    // owner-authored during onboarding, trust 3, no attribution. Deferred
     // via after(); mode-gated + daily-capped inside; never blocks the save.
     if (body.identityMd.trim()) {
       scheduleLongFormGraphExtract(body.businessId, {
@@ -229,7 +229,7 @@ export async function POST(request: Request) {
 
     // Re-seed the live VPS vault + MongoDB agent prompt from the freshly
     // patched `business_configs`. Without this, owner edits in the dashboard
-    // would land in Supabase but never reach the per-tenant Rowboat agent —
+    // would land in Supabase but never reach the per-tenant Rowboat agent,
     // chat / SMS / voice would keep replying from the provision-time vault
     // snapshot. Deferred to after() so the SSH re-seed reliably completes on
     // Vercel without blocking the response (Supabase is the source of truth).

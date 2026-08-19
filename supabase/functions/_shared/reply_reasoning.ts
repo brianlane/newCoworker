@@ -8,7 +8,7 @@
  *   [[reasoning]]{"intent":"wants_quote","why":"...","handoff":false}
  *
  * `splitReplyReasoning` then strips every trailer-marked line from the reply
- * (the customer must NEVER see it — including echoes a customer might try to
+ * (the customer must NEVER see it, including echoes a customer might try to
  * inject) and parses the LAST one into a typed record. Everything is
  * best-effort: no trailer, or a malformed one, yields `reasoning: null` and
  * the untouched customer-facing text.
@@ -22,7 +22,7 @@
  *
  * Plain ASCII on purpose. The first version used the Unicode brackets
  * ⟦reasoning⟧ (un-typeable by customers), but production showed models do
- * NOT reproduce exotic brackets byte-perfectly — one live reply came back as
+ * NOT reproduce exotic brackets byte-perfectly, one live reply came back as
  * `⟦reasoning}{...}⟧` (closer swapped for `}` and the `⟧` displaced to the
  * end of the line), the exact match found nothing, and the whole trailer was
  * texted to the customer. Doubled square brackets are trivial for any model
@@ -31,7 +31,7 @@
 export const REASONING_MARKER = "[[reasoning]]";
 
 /**
- * Tolerant marker detector used for STRIPPING (never for teaching — the
+ * Tolerant marker detector used for STRIPPING (never for teaching, the
  * prompt always shows the canonical marker). Accepts every observed and
  * plausible mangling: `[[reasoning]]`, `[reasoning]`, `⟦reasoning⟧`,
  * `⟦reasoning}` (the production leak), with optional inner whitespace and
@@ -42,7 +42,7 @@ const MARKER_PATTERN = /[⟦\[]{1,2}\s*reasoning\s*[⟧\]}]{0,2}/i;
 
 /**
  * Second net: the trailer JSON itself, for trailers that escaped WITHOUT a
- * recognizable marker. Caught live by the e2e suite on its first run — the
+ * recognizable marker. Caught live by the e2e suite on its first run, the
  * model emitted `[[<free-form summary>]] {"intent":...}`, replacing the
  * marker word with actual reasoning text, which the marker matcher cannot
  * see. No customer-facing reply legitimately contains `{"intent":"`.
@@ -70,8 +70,8 @@ function trailerCutIndex(line: string): number {
  * The opening clause ("first write the message… it is required and must
  * never be empty") is load-bearing, not styling. On gemini-3.5-flash-lite
  * (the fleet SMS default since PR #809), the previous "After your reply,
- * append…" phrasing produced TRAILER-ONLY completions — no customer text at
- * all — on 7/12 temperature-0 draws of the Truly renewal replay prompt
+ * append…" phrasing produced TRAILER-ONLY completions, no customer text at
+ * all, on 7/12 temperature-0 draws of the Truly renewal replay prompt
  * (two flow messages of context; live probe 2026-07-22). Production
  * surfaces that draw as rowboat_empty_assistant_after_reasoning_strip and
  * burns a whole job retry on it. With this phrasing the same probe drew
@@ -79,15 +79,15 @@ function trailerCutIndex(line: string): number {
  *
  * DO NOT reword the handoff spec to fix classification misses. Live probes
  * (2026-07-20, temperature 0) showed the wording is chaotically coupled to
- * the REPLY itself — inserting even a short parenthetical made the model
+ * the REPLY itself, inserting even a short parenthetical made the model
  * re-ask an already-answered intake question in the Juhu replay scenario
- * (tests/e2e/sms-duplicate-replies.e2e.test.ts) — while the handoff flag on
+ * (tests/e2e/sms-duplicate-replies.e2e.test.ts), while the handoff flag on
  * a "speak to a representative" turn stayed false under every variant
  * probed. Deterministic misclassification fixes belong in
  * `isHumanRequestIntent` below, which the worker consults independently of
  * the model's flag. (The 2026-07-22 rewording above touched only the
- * reply-first framing, and the full live e2e suite — including the Juhu
- * replay — gated it.)
+ * reply-first framing, and the full live e2e suite, including the Juhu
+ * replay, gated it.)
  */
 export const REASONING_PROMPT_INSTRUCTION =
   `\n\nEvery turn: first write the message to send the texter, it is required ` +
@@ -109,7 +109,7 @@ export type ReplyReasoning = {
 /**
  * Deterministic backstop for the handoff flag (Truly Insurance 2026-07-20):
  * their tester asked to "speak to a representative" six times and every turn
- * came back intent=request_human_agent with handoff:false — the model judged
+ * came back intent=request_human_agent with handoff:false, the model judged
  * its schedule-a-call offer to have HANDLED the person-request, so the
  * needs-human escalation (PR #534) never fired. When the intent itself NAMES
  * a human, the worker must not depend on the model's handoff judgment.
@@ -119,7 +119,7 @@ export type ReplyReasoning = {
  * must not match "personal_insurance_question"):
  *
  *  - an unambiguous human noun (human / representative / rep / operator)
- *    escalates on its own IF a contact verb accompanies it — "representative
+ *    escalates on its own IF a contact verb accompanies it, "representative
  *    _office_hours_question" is about a person, not a request FOR one;
  *  - the ambiguous nouns (agent / person / someone / somebody) additionally
  *    require the contact verb and exclude the "in_person" meeting-mode bigram
@@ -198,8 +198,8 @@ const MAX_TRAILER_LINES = 12;
 
 /**
  * A markdown fence-only line (``` or ```json). When a trailer was stripped,
- * these are debris from a model that fenced its trailer — never customer
- * copy — and are scrubbed too. (An SMS reply has no legitimate code fences;
+ * these are debris from a model that fenced its trailer, never customer
+ * copy, and are scrubbed too. (An SMS reply has no legitimate code fences;
  * stripping here is deliberately over-eager, like the marker matcher.)
  */
 const FENCE_LINE_RE = /^\s*`{3,}[a-zA-Z]*\s*$/;
@@ -276,14 +276,14 @@ function gatherTrailerPayload(
     payload += "\n" + lines[i];
     if (hasBalancedObject(payload)) return { payload, endLine: i };
   }
-  // Never balanced: don't swallow reply text — strip only the marker line.
+  // Never balanced: don't swallow reply text, strip only the marker line.
   return { payload: single, endLine: startLine };
 }
 
 /**
  * Fourth net: free-form double-bracket note blobs. Teaching the model the
  * `[[reasoning]]` marker made it generalize "double brackets are my private
- * notes" — live replays showed replies carrying `[[The user wants to
+ * notes", live replays showed replies carrying `[[The user wants to
  * schedule...]]` prose (no marker word, no JSON) straight into customer
  * text, which no marker or trailer-JSON matcher can see. No legitimate SMS
  * reply wraps prose in `[[...]]`, so every complete span is scrubbed

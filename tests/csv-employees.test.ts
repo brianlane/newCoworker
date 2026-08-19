@@ -14,7 +14,7 @@ import {
 import { parseCsv } from "../src/lib/csv/csv";
 
 /**
- * Coverage for src/lib/csv/employees.ts — mirrors tests/csv-contacts.test.ts
+ * Coverage for src/lib/csv/employees.ts, mirrors tests/csv-contacts.test.ts
  * (chainable recorded builder popping scripted results).
  */
 

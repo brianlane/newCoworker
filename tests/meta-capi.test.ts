@@ -1,7 +1,7 @@
 /**
  * Meta Conversions API (Conversion Leads) upload client
- * (src/lib/meta/capi.ts): payload building — identifier precedence,
- * hashing, the big-integer lead_id inlining — and the /events POST.
+ * (src/lib/meta/capi.ts): payload building, identifier precedence,
+ * hashing, the big-integer lead_id inlining, and the /events POST.
  */
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +60,7 @@ describe("buildConversionLeadBody", () => {
   };
 
   it("inlines a 17-digit lead_id as a bare number (no precision loss)", () => {
-    // 17 digits — exceeds Number.MAX_SAFE_INTEGER; a JS-number build would
+    // 17 digits, exceeds Number.MAX_SAFE_INTEGER; a JS-number build would
     // corrupt the trailing digits.
     const body = buildConversionLeadBody({ ...base, leadgenId: "12345678901234567" })!;
     expect(body).toContain('"lead_id":12345678901234567');

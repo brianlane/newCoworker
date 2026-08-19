@@ -59,7 +59,7 @@ function textContains(haystack: string, needle: string, caseInsensitive?: boolea
   return haystack.toLowerCase().includes(needle.toLowerCase());
 }
 
-/** Safe regex test — an invalid pattern never throws, it just fails to match. */
+/** Safe regex test, an invalid pattern never throws, it just fails to match. */
 export function safeRegexTest(pattern: string, value: string, caseInsensitive?: boolean): boolean {
   let re: RegExp;
   try {
@@ -98,7 +98,7 @@ function evaluateCondition(
     case "from_matches": {
       // Dynamic sender: match against the referenced person's LIVE identity
       // values (resolved by the caller via resolveFromMatchesRefValues). A ref
-      // with no entry / no values fails closed — an unknown sender never fires.
+      // with no entry / no values fails closed, an unknown sender never fires.
       if (cond.ref) {
         const candidates = refValues?.get(`${cond.ref.source}:${cond.ref.id}`) ?? [];
         return candidates.some((v) => textContains(latestFrom, v, cond.caseInsensitive));
@@ -158,7 +158,7 @@ export function resolvePath(scope: Record<string, unknown>, path: string): unkno
 /**
  * Name-part suffixes: any string value in scope can be addressed as
  * `{{vars.lead_name.first}}` (the first whitespace-separated word) or
- * `{{vars.lead_name.last}}` (everything AFTER the first word — remainder,
+ * `{{vars.lead_name.last}}` (everything AFTER the first word, remainder,
  * not last word, so compound surnames like "de la Cruz" survive). A
  * single-word value has an empty `.last`, which collapseEmpty rendering
  * already tidies. Backward-compatible: these dotted paths previously
@@ -169,7 +169,7 @@ const NAME_PART_SUFFIXES = new Set(["first", "last"]);
 
 /**
  * Resolve a placeholder path with name-part support: the plain path first,
- * then — when it missed and the path ends in `.first`/`.last` — the parent
+ * then, when it missed and the path ends in `.first`/`.last`, the parent
  * path's string value split into its parts.
  */
 export function resolvePlaceholder(scope: Record<string, unknown>, path: string): unknown {
@@ -187,8 +187,8 @@ export function resolvePlaceholder(scope: Record<string, unknown>, path: string)
   if (suffix === "first") {
     // Politely cased: lead forms deliver raw lowercase names ("shabir"),
     // and a greeting should read "Hi Shabir!" (Truly, Jul 21 2026). Casing
-    // is corrected only when the token carries none of its own — all-lower,
-    // or all-UPPER beyond initials length — so "McKenna" and "JD" survive.
+    // is corrected only when the token carries none of its own, all-lower,
+    // or all-UPPER beyond initials length, so "McKenna" and "JD" survive.
     // `.last` stays verbatim (compound surnames like "de la Cruz" must not
     // be re-cased).
     const first = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
@@ -218,8 +218,8 @@ function placeholderValue(scope: Record<string, unknown>, path: string): string 
  * resolves to empty, the whitespace immediately before it is dropped too, so
  * "Hi {{vars.lead_name}}!" with no name renders "Hi!" instead of texting the
  * customer a broken "Hi !" (bug-hunt round 4). Default OFF so every other
- * caller — http_call bodies/paths, emails, when-guards via
- * hasUnresolvedPlaceholders — keeps byte-identical behavior; a present value
+ * caller, http_call bodies/paths, emails, when-guards via
+ * hasUnresolvedPlaceholders, keeps byte-identical behavior; a present value
  * still renders with its original surrounding whitespace intact.
  */
 export function renderTemplate(
@@ -293,7 +293,7 @@ export function hasUnresolvedPlaceholders(template: string, scope: Record<string
 // --- Phone / field extraction ------------------------------------------------
 
 // Digit-run boundaries ((?<!\d) / (?!\d)) so a 3-3-4 shape inside a LONGER
-// digit run — a USPS tracking number, an order id — never reads as a phone.
+// digit run, a USPS tracking number, an order id, never reads as a phone.
 // Production-shaped failure: "Tracking: 9400111202555842332999" used to yield
 // "+19400111202", and the fallback below would text that stranger.
 const PHONE_RE = /(?<!\d)(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/g;
@@ -301,7 +301,7 @@ const PHONE_RE = /(?<!\d)(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)
 /**
  * Normalize a loose North-American phone string to E.164 (+1XXXXXXXXXX), or
  * null if it is not a plausible NANP number: 10 digits (optionally +1), with
- * both the area code and the exchange code starting 2-9 (the NANP N digit) —
+ * both the area code and the exchange code starting 2-9 (the NANP N digit),
  * a 0/1 there is never a real number, so failing fast here beats a
  * guaranteed Telnyx 40310 at send time.
  */
@@ -468,7 +468,7 @@ export function extractPhones(text: string, opts?: PhoneExtractionOpts): string[
 // A lead-phone LABEL immediately before a number ("Phone:", "Cell -",
 // "Mobile no.", "call/text me at") or right after it ("602-686-6672 (cell)").
 // Deliberately tight: "Call Privyr support at …" / "our office line …" must
-// NOT qualify — only first-person contact phrasing ("me") or a field-style
+// NOT qualify, only first-person contact phrasing ("me") or a field-style
 // phone label marks a number as the lead's own. Spanish tokens mirror the
 // same tightness for Mexican lead forms (Cel/Celular, Movil, Telefono,
 // WhatsApp, "llamame/marcame/escribeme al"); bare "numero" is deliberately
@@ -485,7 +485,7 @@ const LABEL_BEFORE_WINDOW = 48;
 const LABEL_AFTER_WINDOW = 14;
 
 /**
- * Extract only phones that are LABELED as a person's contact number — the
+ * Extract only phones that are LABELED as a person's contact number, the
  * safe subset for the extraction fallback. `extractPhones` finds every
  * NANP-shaped number in the text, which is right for "is there a phone
  * here?" questions but wrong for "text this number": a phoneless lead email
@@ -513,7 +513,7 @@ export function extractLabeledPhones(text: string, opts?: PhoneExtractionOpts): 
   return out;
 }
 
-/** Values the extractors use for "no value" — passed through untouched. */
+/** Values the extractors use for "no value", passed through untouched. */
 const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"]);
 
 /**
@@ -522,7 +522,7 @@ const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"])
  *
  * KYP Ads, Jul 23 2026: a Facebook lead typed `492046781` (9 junk digits)
  * into the form; the extraction model "helpfully" E.164-ified it to
- * `+492046781` — which reads as Germany — and the greeting send
+ * `+492046781`, which reads as Germany, and the greeting send
  * dead-lettered at Telnyx with 40306 ("Alpha sender not configured") plus
  * an urgent owner alert. The digits were never dialable; the model
  * invented the `+`.
@@ -531,7 +531,7 @@ const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"])
  *  - empty / "none"-class values pass through unchanged (the extractors'
  *    own no-value convention);
  *  - anything NANP-coercible (10 digits, or 11 starting with 1, loose
- *    formatting) is returned canonical (`+1…`) — same normalization the
+ *    formatting) is returned canonical (`+1…`), same normalization the
  *    fallback path already applies;
  *  - an international `+…` E.164 value is kept ONLY when the source text
  *    itself contains that number WITH the `+` prefix (allowing the usual
@@ -602,7 +602,7 @@ export function sanitizeExtractedPhone(
  * {{vars.group_lead_phone}}: "everyone in the roster except the sender and
  * ourselves is the lead" only holds when the flow author DECLARED who the
  * sender is (a referral service's DID, a saved alert contact). Without a pin
- * the sender of the matched message could be the lead themselves — and the
+ * the sender of the matched message could be the lead themselves, and the
  * roster remainder would then be the SERVICE, a mis-target that could be
  * texted. Matching mirrors evaluateCondition's from_matches arm exactly
  * (substring, case-controlled, ref → pre-resolved live identity values via
@@ -635,7 +635,7 @@ export function senderPinnedByFromMatches(
  * The lead's phone in a group-text thread: the ONE participant left after
  * excluding the business's own numbers and the alert's sender (e.g. a referral
  * service's DID). Both sides are normalized to E.164 so formatting differences
- * never defeat the exclusion. Returns "" when zero or 2+ candidates remain —
+ * never defeat the exclusion. Returns "" when zero or 2+ candidates remain,
  * an ambiguous roster must never guess who the lead is, because the value is
  * templated into owner notifications and can be used as a send target.
  * Backs the engine-provided {{vars.group_lead_phone}}; the worker additionally
@@ -679,7 +679,7 @@ const PHONE_FIELD_TOKEN_RE = /^(?:(?:tele)?phones?|mobile|cell(?:phone)?|tel)$/i
  * so it only ever fires on fields that actually want a phone.
  *
  * Matches a whole phone token (`phone`, `mobile`, `cell`, `tel`…), OR the
- * `contact` + `number`/`no` pair (`contact_number`, `contactNo`) — a common
+ * `contact` + `number`/`no` pair (`contact_number`, `contactNo`), a common
  * phone field name where no single token is a phone word. Bare `number`/`no`
  * is deliberately NOT a match, so `account_number` / `policy_number` /
  * `order_number` stay non-phone fields (the false-positive class the
@@ -742,7 +742,7 @@ const LEAD_NAME_KEYS = [
   "buyer_name",
   "customer_name",
   // Calendar-flow vocabulary (Calendly bookings): the seeded pre-call
-  // reminder / no-show flows extract the booker as invitee_* — without these
+  // reminder / no-show flows extract the booker as invitee_*, without these
   // keys the send-side contact filing filed Kav's real number NAMELESS while
   // his name sat on the junk lead-form number (KYP, Jul 24 2026).
   "invitee_name",
@@ -869,7 +869,7 @@ const EXTRACTION_CLIP_MARKER = "\n[... middle of the text omitted ...]\n";
  * Build the Gemini extraction prompt: ask for a strict JSON object with exactly
  * the requested field names, from the provided page text. Over-long text is
  * clipped from the MIDDLE (head + tail kept, elision marked): head-only
- * clipping silently dropped the newest content of a trigger's windowText —
+ * clipping silently dropped the newest content of a trigger's windowText,
  * a fresh lead block at the end of a long forwarded thread vanished from the
  * prompt entirely, and extraction returned a stale phone from the quoted
  * chatter instead (bug-hunt round 3; the classify twin of this bug was the
@@ -909,7 +909,7 @@ export function buildExtractionPrompt(
     "presents as real attributes of the subject.",
     // Person-role disambiguation (Jul 22 2026 regression): Clever's group
     // intro mentions the AGENT four times and the seller twice, and the
-    // extractor answered the agent's name for "the seller's first name" —
+    // extractor answered the agent's name for "the seller's first name",
     // the greeting then addressed the seller by our own agent's name. Make
     // the model resolve WHO each role-anchored field refers to before
     // answering, instead of grabbing the most prominent name. The
@@ -1001,7 +1001,7 @@ export function buildClassifyPrompt(
 /**
  * Parse the classify response: the chosen value when it is one of the
  * declared categories (case-insensitive, returning the author's exact
- * casing), else the reserved "unclear" fallback. Never throws — an
+ * casing), else the reserved "unclear" fallback. Never throws, an
  * unparseable/hallucinated response is by definition unclear.
  */
 export function parseClassifyChoice(
@@ -1028,7 +1028,7 @@ export function isE164(value: string): boolean {
  * `{"none":true}` when the roster is exhausted. Tolerates fenced code blocks /
  * surrounding prose (scans for the first JSON object) and accepts either an
  * already-E.164 phone or a loose North-American number. Returns null when the
- * reply signals "none", is unparseable, or lacks a usable phone — the worker
+ * reply signals "none", is unparseable, or lacks a usable phone, the worker
  * treats null as "no agent available" and falls back to the owner.
  */
 export function parseRoutedAgent(raw: string): RoutedAgent | null {
@@ -1048,7 +1048,7 @@ export type RosterMember = { name: string; phone: string };
 
 /**
  * Deterministic `route_to_team` selection from a persisted roster. `members`
- * must already be in rotation-priority order (least recently offered first —
+ * must already be in rotation-priority order (least recently offered first,
  * the worker's SQL orders by `last_offered_at` nulls-first). Picks the first
  * member whose phone normalizes to E.164, isn't in `tried`, and isn't the
  * lead's own phone (a corrupt roster row must never text the lead an offer).
@@ -1091,7 +1091,7 @@ export type LocalClock = { isoDate: string; weekday: Weekday; minutes: number };
 
 /**
  * Resolve `now` into the business-local calendar clock. Invalid/missing
- * timezone falls back to UTC — same forgiving posture as currentDateTimeLine,
+ * timezone falls back to UTC, same forgiving posture as currentDateTimeLine,
  * because a typo'd timezone must never stop lead routing.
  */
 export function localClock(now: Date, timeZone?: string | null): LocalClock {
@@ -1206,7 +1206,7 @@ function datePartsInZone(d: Date, timeZone: string): NowDateParts {
 /**
  * Build the `{{now.*}}` scope at `nowMs`, in the business timezone. Tomorrow is
  * "now + 24h" formatted in-zone, which lands on the next calendar day in every
- * case except the rare instant a DST jump straddles local midnight — acceptable
+ * case except the rare instant a DST jump straddles local midnight, acceptable
  * for day-granularity follow-up scheduling.
  */
 export function buildNowScope(nowMs: number, timeZone?: string | null): NowScope {
@@ -1243,13 +1243,13 @@ const DAY_END_MINUTES = 24 * 60;
  * returns null when nothing valid remains, which callers treat as "unset".
  *
  * An end at or before the start (except start === end, which stays invalid)
- * is an OVERNIGHT window — `["18:00","02:00"]` is a night shift crossing
+ * is an OVERNIGHT window, `["18:00","02:00"]` is a night shift crossing
  * midnight, not a typo. It splits into `[start, 24:00)` on its own day plus
  * `[00:00, end)` on the NEXT day, so the flat per-weekday containment check
  * keeps working unchanged. These used to be dropped outright, which
  * hard-skipped night-shift members during their actual working hours (and,
  * when the overnight window was their only one, made the whole schedule read
- * as "unset = always available") — bug-hunt round 3.
+ * as "unset = always available"), bug-hunt round 3.
  */
 export function parseWeeklyWindows(raw: unknown): WeeklyWindows | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -1421,7 +1421,7 @@ function extractFirstJsonObject(raw: string): Record<string, unknown> | null {
 /**
  * Collapse fetched HTML/markup to readable text for extraction: strip script /
  * style blocks and tags, decode a few common entities, and squeeze whitespace.
- * Deliberately simple (no DOM) — good enough to feed an LLM or a phone regex.
+ * Deliberately simple (no DOM), good enough to feed an LLM or a phone regex.
  */
 export function htmlToText(html: string): string {
   return html
@@ -1466,7 +1466,7 @@ export function extractLinkByText(html: string, matchText: string, baseUrl: stri
     if (!visible.includes(needle)) continue;
     try {
       const resolved = new URL(href, baseUrl || undefined);
-      // Only http(s) destinations are useful as a captured link — skip
+      // Only http(s) destinations are useful as a captured link, skip
       // javascript:/mailto:/tel: and keep scanning for a real navigable URL.
       if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
       return resolved.toString();
@@ -1497,19 +1497,19 @@ function isExecutableTrigger(trigger: Record<string, unknown> | undefined): bool
       }
       break;
     case "tenant_email":
-      // The dedicated AI mailbox: push-triggered, so no connectionId — just
+      // The dedicated AI mailbox: push-triggered, so no connectionId, just
       // the AND-ed condition list (which may be empty = match every email).
       if (!Array.isArray(trigger.conditions)) return false;
       break;
     case "webhook":
       // Public-API push (POST /api/public/v1/flow-events): same shape as
-      // tenant_email — an AND-ed condition list, empty = match every event.
+      // tenant_email, an AND-ed condition list, empty = match every event.
       if (!Array.isArray(trigger.conditions)) return false;
       break;
     case "calendar": {
       // Calendar poll (aiflow-calendar-poll): conditions + a firing mode;
       // event_start additionally needs the leadMinutes offset (event_end's
-      // followMinutes is optional — omitted means "right when it ends").
+      // followMinutes is optional, omitted means "right when it ends").
       if (!Array.isArray(trigger.conditions)) return false;
       if (
         trigger.on !== "event_created" &&

@@ -4,7 +4,7 @@
  * Auth + business resolution mirror /api/account/business-name: the newest
  * business under the auth user's owner_email, so a caller can only ever
  * touch their own business. Validation is "can Intl.DateTimeFormat format
- * with it" — the exact consumer of the value downstream.
+ * with it", the exact consumer of the value downstream.
  */
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     await updateBusinessTimezone((biz as { id: string }).id, timezone, db);
     // The timezone appears in the rendered Business-profile block; keep the
     // canonical profile_md fresh and push it to the live agent. Best-effort
-    // after the committed write — never fail the user's successful save.
+    // after the committed write, never fail the user's successful save.
     await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
     void syncVaultToVpsAndLog((biz as { id: string }).id);
     return successResponse({ timezone });

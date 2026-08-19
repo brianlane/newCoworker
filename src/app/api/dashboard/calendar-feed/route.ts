@@ -6,7 +6,7 @@
  *
  * Auth mirrors the integration routes: owner/manager session with
  * `manage_settings` (admins bypass). Works for EVERY tenant, which is the
- * point — Vagaro and Acuity businesses are exactly the ones the shared
+ * point, Vagaro and Acuity businesses are exactly the ones the shared
  * NewCoworker calendar cannot always reach.
  */
 import { z } from "zod";

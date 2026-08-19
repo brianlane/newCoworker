@@ -17,7 +17,7 @@ import {
 /**
  * "Needs human intervention" escalation: when the reply model flags a
  * handoff, the contact is tagged Needs Human (the tag IS the open/closed
- * state — no re-notify while open), the standard tag hooks fire, and the
+ * state, no re-notify while open), the standard tag hooks fire, and the
  * owner is paged through the notifications function. Best-effort: nothing
  * here may break the reply turn that discovered the handoff.
  */
@@ -86,7 +86,7 @@ describe("escalateToHuman", () => {
   it("pages the owner, tags the contact, and fires the tag hooks", async () => {
     const fetchFn = okFetch();
     // Scripted terminal awaits, in call order: contact lookup, team-first
-    // toggle read (OFF), (notify POST — fetch, not db), tag update,
+    // toggle read (OFF), (notify POST, fetch, not db), tag update,
     // goal-event run lookup (empty → no jumps), contact-event flow page
     // (empty). No history-dedupe lookup for a taggable contact: the tag
     // alone is the open/closed state, so an owner clearing it re-arms
@@ -192,7 +192,7 @@ describe("escalateToHuman", () => {
 
   it("no contact row: nothing to tag, but the owner is still paged", async () => {
     const fetchFn = okFetch();
-    // Dedupe lookup returns null data (not an empty page) — same outcome.
+    // Dedupe lookup returns null data (not an empty page), same outcome.
     const { db, calls } = makeDb([{ data: null }, { data: null }]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
     expect(calls.some((c) => c.name === "update")).toBe(false);
@@ -360,7 +360,7 @@ describe("escalateToHuman", () => {
       ]);
       const result = await escalateToHuman(db, input(fetchFn));
       expect(result).toBe("team_offered");
-      // The team offer OWNS notification now — no direct owner page.
+      // The team offer OWNS notification now, no direct owner page.
       expect(fetchFn).not.toHaveBeenCalled();
       // Tag written exactly once (the open/closed state is unchanged).
       const updates = calls.filter((c) => c.table === "contacts" && c.name === "update");
@@ -405,7 +405,7 @@ describe("escalateToHuman", () => {
 
     it("toggle ON but the tag write fails: pages the owner, then RETRIES the tag (never tag-less)", async () => {
       // A transiently failed team-first tag write must not leave a paged
-      // owner with an untagged contact (no open/closed dedupe, no hooks) —
+      // owner with an untagged contact (no open/closed dedupe, no hooks),
       // the post-page block re-attempts it (Bugbot, PR #801).
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       const fetchFn = okFetch();

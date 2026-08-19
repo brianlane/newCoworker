@@ -192,7 +192,7 @@ describe("update_contact", () => {
       alias_e164s: ["+15550009999"]
     } as never);
     await runTool(updateContactTool, { phone: "+15550001111", tags: ["Won"] }, AUTH);
-    // A parked run may be keyed on the merged-away number — both must jump.
+    // A parked run may be keyed on the merged-away number, both must jump.
     expect(fireGoalEvent).toHaveBeenCalledTimes(2);
     expect(fireGoalEvent).toHaveBeenCalledWith("biz-1", "+15550001111", {
       kind: "tag_added",

@@ -8,7 +8,7 @@
  * verifies it end-to-end before storing anything, keeping the connected
  * account's name/email for display.
  *
- * A business can link SEVERAL Calendly accounts — one row per account
+ * A business can link SEVERAL Calendly accounts, one row per account
  * (e.g. a teammate who books on their own Calendly). Bookings on every
  * linked account are seen by the booking machinery; availability offers
  * and booking links keep coming from the FIRST (primary) connection.

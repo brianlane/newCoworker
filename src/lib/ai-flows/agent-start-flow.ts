@@ -1,5 +1,5 @@
 /**
- * start_aiflow_for_contact — the texting coworker's ONLY path into AiFlows.
+ * start_aiflow_for_contact, the texting coworker's ONLY path into AiFlows.
  *
  * The customer-facing SMS persona is deliberately barred from the owner's
  * automations (rowboat-gates.ts: "customers must never enumerate or start
@@ -7,7 +7,7 @@
  * exception behind the tool of the same name:
  *
  *   1. Per-flow owner opt-in: only flows whose definition carries
- *      `options.agentInvocable: true` can be seen or started — everything
+ *      `options.agentInvocable: true` can be seen or started, everything
  *      else refuses with model-facing steering, so a prompt-injected turn
  *      can at worst enroll the texter in a sequence the owner explicitly
  *      approved for exactly that purpose.
@@ -15,7 +15,7 @@
  *      the trigger sender AND a seeded `lead_phone` var, so send steps,
  *      re-entry checks, and stop-on-response all see that one person.
  *   3. Loop guard: a texter who already has a LIVE run of the flow is never
- *      re-enrolled (hasActiveRunForLead, contact-expanded) — a flow-sent
+ *      re-enrolled (hasActiveRunForLead, contact-expanded), a flow-sent
  *      text can't cause the model to restart the same sequence.
  *
  * Modeled on manual-run-tool.ts (the owner-surface run_aiflow); result
@@ -32,7 +32,7 @@ import { hasActiveRunForLead } from "../../../supabase/functions/_shared/ai_flow
 
 export const startAiflowForContactArgsSchema = z.object({
   flow: z.string().min(1).max(200),
-  /** The CURRENT texter's number — the only person the tool may enroll. */
+  /** The CURRENT texter's number, the only person the tool may enroll. */
   phone: z.string().regex(/^\+[1-9]\d{6,14}$/, "phone must be E.164, e.g. +15551234567"),
   /** Why the conversation calls for this flow (lands in the run context). */
   reason: z.string().max(1000).optional()
@@ -52,7 +52,7 @@ export type AgentStartFlowResult =
 
 /**
  * Resolve an agent-invocable flow and enroll the current texter. Refusals
- * are honest and steer the model back to replying normally — never a fake
+ * are honest and steer the model back to replying normally, never a fake
  * success.
  */
 export async function startAiFlowForContactTool(
@@ -70,7 +70,7 @@ export async function startAiFlowForContactTool(
   /* c8 ignore stop */
 
   // The key gate FIRST: resolution only ever sees enabled flows the owner
-  // flagged agentInvocable. Everything else is invisible — a guessed or
+  // flagged agentInvocable. Everything else is invisible, a guessed or
   // partial ref that would hit an owner-only automation gets the same
   // generic "no match" refusal, so refusal text can never leak flow names
   // beyond the preamble's own list (Bugbot Medium on PR #799).
@@ -143,7 +143,7 @@ export async function startAiFlowForContactTool(
   });
   if (!run) {
     // enqueueAiFlowRun answers null when the flow's own re-entry gate
-    // blocked the enrollment — same customer-facing meaning as the live-run
+    // blocked the enrollment, same customer-facing meaning as the live-run
     // guard.
     return {
       ok: false,

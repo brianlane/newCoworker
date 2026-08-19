@@ -4,7 +4,7 @@
  * The platform's generated artifacts (dashboard-chat outlines, Agent run
  * outputs, knowledge documents) are markdown; this module turns that
  * markdown into a real .pptx so "build me a presentation" ends in a file
- * PowerPoint/Keynote/Slides can open — not a wall of text to re-type.
+ * PowerPoint/Keynote/Slides can open, not a wall of text to re-type.
  *
  * Split in two for testability:
  *   - `buildSlideModel` (pure): markdown → a bounded slide model. `#`/`##`
@@ -17,7 +17,7 @@
 
 import PptxGenJS from "pptxgenjs";
 
-/** Deck-wide caps — an export is a convenience, not a data dump. */
+/** Deck-wide caps, an export is a convenience, not a data dump. */
 export const PPTX_MAX_SLIDES = 30;
 export const PPTX_MAX_BULLETS_PER_SLIDE = 12;
 export const PPTX_MAX_CHARS_PER_BULLET = 300;
@@ -35,7 +35,7 @@ export type Slide = {
 };
 
 export type SlideDeck = {
-  /** Deck title (title slide) — the document/agent-artifact name. */
+  /** Deck title (title slide), the document/agent-artifact name. */
   title: string;
   slides: Slide[];
   /** True when slide/bullet caps trimmed content. */

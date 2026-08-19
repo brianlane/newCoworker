@@ -1,11 +1,11 @@
 #!/usr/bin/env tsx
 /**
- * Seed (or inspect) a business's `ai_flow_team_members` roster — the
+ * Seed (or inspect) a business's `ai_flow_team_members` roster, the
  * deterministic source for AiFlow `route_to_team` agent selection.
  *
  * With roster rows present, the ai-flow-worker offers leads to active members
  * in `last_offered_at` order (nulls first) and stamps the cursor on each
- * offer — engine-owned round-robin instead of asking Rowboat's memory. With
+ * offer, engine-owned round-robin instead of asking Rowboat's memory. With
  * no rows, the worker falls back to the legacy Rowboat pick.
  *
  * Usage (reads the repo-root `.env` automatically, like the rest of debug/):
@@ -15,7 +15,7 @@
  *
  * Member args are "<name>=<phone>"; phones may be loose NANP ("480 703 9575")
  * and are normalized to E.164. Existing rows for the same phone are updated
- * (name + reactivated), never duplicated. Rows NOT listed are left untouched —
+ * (name + reactivated), never duplicated. Rows NOT listed are left untouched,
  * deactivate manually if someone leaves the team.
  *
  * Env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.

@@ -1,7 +1,7 @@
 /**
  * Rough token estimate for English-ish markdown (~4 characters per token).
  * The ~2k combined vault target below matches KVM2-style integration expectations
- * (`npm run test:integration`, optional Rowboat bot) — large vaults increase prefill / TTFT risk on starter VPS.
+ * (`npm run test:integration`, optional Rowboat bot), large vaults increase prefill / TTFT risk on starter VPS.
  */
 export function estimateTokenCountRough(text: string): number {
   if (!text) return 0;
@@ -19,13 +19,13 @@ export function starterVaultBudgetStatus(
    * Onboarding-crawled website summary capped at 8k chars (`WEBSITE_INGEST_MAX_SUMMARY_CHARS`).
    * It gets injected into the Gemini Live / Rowboat prompt alongside soul/identity/memory, so
    * it counts against the KVM2 prefill budget and must be included here. The parameter is
-   * optional (default "") to keep older callers — dashboard, prompt composers — compiling
+   * optional (default "") to keep older callers, dashboard, prompt composers, compiling
    * until they opt in.
    */
   websiteMd: string = "",
   maxTokens: number = STARTER_VAULT_MAX_ESTIMATED_TOKENS,
   /**
-   * Client-audience documents digest (titles+summaries, capped at 4k chars —
+   * Client-audience documents digest (titles+summaries, capped at 4k chars,
    * `DOCUMENTS_DIGEST_MAX_CHARS`). Synced into the vault as documents.md, so
    * it counts against the same KVM2 prefill budget. Optional for older callers.
    */

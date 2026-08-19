@@ -4,7 +4,7 @@
  *
  * Why (incident Jul 20 2026): the Cue flow replied "Y" and Clever queued a
  * live transfer, but the concierge called from a number NOT in any per-caller
- * voice routing rule (+18609926975 — the concierge pool rotates), so the AI
+ * voice routing rule (+18609926975, the concierge pool rotates), so the AI
  * answered and ran its intake script instead of bridging to Dave; the lead was
  * lost. The fix: the moment the Cue flow confirms "Y", arm a short
  * voice_expected_transfers window so the NEXT unmatched inbound call bridges
@@ -26,7 +26,7 @@
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
  *   AIFLOW_SEED_NAME                  (default "Clever Cue Text")
- *   AIFLOW_CLEVER_CUE_TRANSFER_TO     (default "+16025245719" — Dave)
+ *   AIFLOW_CLEVER_CUE_TRANSFER_TO     (default "+16025245719", Dave)
  *   AIFLOW_CLEVER_CUE_WINDOW_MINUTES  (default "20")
  */
 import { loadEnv } from "../../debug/_shared.ts";

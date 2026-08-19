@@ -4,7 +4,7 @@
  * One decision point shared by save-artifact and the run download route:
  * text targets pass through as-is (bytes: null → caller stores the artifact
  * text); binary targets render. The run row's `output_mime_type` is the
- * EXPLICIT renderer discriminator — `text/html` (RETYPESET_ARTIFACT_MIME)
+ * EXPLICIT renderer discriminator, `text/html` (RETYPESET_ARTIFACT_MIME)
  * is written only by pdf_retypeset runs and routes to the VPS render
  * sidecar, while `application/pdf`/DOCX artifacts are always markdown and
  * typeset with the pure-JS renderer. A markdown artifact that merely LOOKS
@@ -29,7 +29,7 @@ export type ArtifactBytesResult =
 /**
  * Render an artifact's binary representation. `bytes: null` means the
  * target is a text format (store the artifact text directly); `ok: false`
- * means a required renderer failed (re-typeset with no reachable sidecar) —
+ * means a required renderer failed (re-typeset with no reachable sidecar),
  * callers surface it rather than silently degrading.
  */
 export async function renderAgentArtifactBytes(args: {

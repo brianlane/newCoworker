@@ -10,7 +10,7 @@ import { LeadBacklogImport } from "@/components/dashboard/LeadBacklogImport";
 export const dynamic = "force-dynamic";
 
 /**
- * Import a lead backlog — its own page (linked from the AiFlows header).
+ * Import a lead backlog, its own page (linked from the AiFlows header).
  *
  * The import is a one-off event the owner RUNS (upload a sheet, fire the
  * webhook flows), not a setting that belongs on the AiFlows list, so it gets

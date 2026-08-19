@@ -1,11 +1,11 @@
 /**
- * POST /api/public/v1/flow-events — start `webhook`-triggered AiFlows.
+ * POST /api/public/v1/flow-events, start `webhook`-triggered AiFlows.
  *
  * The inbound half of the public API: a bridge (Zapier "Send Lead to
  * Coworker", a Make.com HTTP module, or any client) POSTs an event payload
  * and every enabled webhook flow whose conditions match gets a queued run.
- * This is how external lead sources — e.g. Meta Lead Ads via an approved
- * bridge — reach the flow engine without a phone/email/browser trigger.
+ * This is how external lead sources, e.g. Meta Lead Ads via an approved
+ * bridge, reach the flow engine without a phone/email/browser trigger.
  *
  * Auth: `Authorization: Bearer nck_…` (public API key). No session, no CSRF.
  * Idempotent per event: redeliveries with the same `event_id` (or identical
@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 // flood the run queue.
 const API_FLOW_EVENT_RATE = { interval: 60 * 1000, maxRequests: 120 };
 
-/** Serialized payload ceiling — a lead form is KBs, not MBs. */
+/** Serialized payload ceiling, a lead form is KBs, not MBs. */
 const MAX_DATA_BYTES = 64 * 1024;
 
 const bodySchema = z.object({
@@ -35,7 +35,7 @@ const bodySchema = z.object({
   source: z.string().min(1).max(120).optional(),
   /** Caller idempotency key (e.g. the Meta leadgen id a bridge forwards). */
   event_id: z.string().min(1).max(180).optional(),
-  /** The event payload — lead fields as a flat-ish JSON object. */
+  /** The event payload, lead fields as a flat-ish JSON object. */
   data: z.record(z.string(), z.unknown())
 });
 

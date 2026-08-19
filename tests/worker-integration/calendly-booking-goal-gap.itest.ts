@@ -1,14 +1,14 @@
 /**
  * Regression: a lead who ALREADY booked on Calendly must get no flow texts.
  *
- * Incident (KYP Ads, Jul 18-19 2026 — Tim Tsai): the booking-goal sweep only
+ * Incident (KYP Ads, Jul 18-19 2026, Tim Tsai): the booking-goal sweep only
  * fired for bookings created inside a 15-minute lookback, so a booking that
  * predated the observers left the lead's parked run nudging at 2 AM. Two
  * fixes are pinned here against the REAL local stack:
  *
  *   1. Young-run widening (src/lib/ai-flows/calendly-booking-goals.ts): a
  *      jumpable run created inside the young window makes the sweep fire
- *      active FUTURE-start bookings regardless of created_at — Tim's exact
+ *      active FUTURE-start bookings regardless of created_at, Tim's exact
  *      shape (booked 10h before the tick, run parked mid-nudges) now jumps.
  *      A run older than the window must NOT jump off a stale booking.
  *   2. Pre-send gate (ai-flow-worker + /api/internal/aiflow-booking-precheck):
@@ -19,7 +19,7 @@
  *      route's own Calendly matching is covered by the unit suite.
  *
  * The sweep runs in-process against the itest Postgres with only the
- * Calendly transport faked (its injectable deps — the same seam the unit
+ * Calendly transport faked (its injectable deps, the same seam the unit
  * suite uses); the worker part ticks the REAL served ai-flow-worker.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -155,7 +155,7 @@ function calendlyFakeFor(businessId: string, lead: { phone: string; email: strin
   };
 }
 
-/** A parked mid-nudges run (awaiting reply_2) — exactly Tim's state. */
+/** A parked mid-nudges run (awaiting reply_2), exactly Tim's state. */
 async function seedParkedRun(
   db: SupabaseClient,
   businessId: string,
@@ -210,7 +210,7 @@ afterAll(async () => {
 });
 
 // Park every leftover queued run (prior suites share this DB and every tick
-// claims ALL due runs) so this file's ticks only execute its own runs — and
+// claims ALL due runs) so this file's ticks only execute its own runs, and
 // no leftover booking-goal run can consume a scripted precheck answer.
 beforeEach(async () => {
   await db
@@ -262,7 +262,7 @@ describe("young-run sweep widening (Tim's timeline)", () => {
     const lead = { phone: "+17805550102", email: "old-lead@example.com" };
     await seedContact(db, businessId, lead.phone, { email: lead.email });
     const flowId = await createFlow(db, businessId, followUpDefinition());
-    // Run created 10 DAYS ago — outside the young window.
+    // Run created 10 DAYS ago, outside the young window.
     const runId = await seedParkedRun(db, businessId, flowId, lead, {
       created_at: new Date(Date.now() - 10 * 24 * 60 * 60_000).toISOString()
     });
@@ -304,7 +304,7 @@ describe("pre-send booking gate (greeting must not send)", () => {
     expect(calls[0].body.businessId).toBe(businessId);
     expect(calls[0].authorization).toBe("Bearer itest-cron-secret");
 
-    // The run finished at its goal — the greeting was SKIPPED, never sent
+    // The run finished at its goal, the greeting was SKIPPED, never sent
     // (an attempted send would have failed loudly: no Telnyx env here).
     const run = await getRun(db, runId);
     expect(run.status).toBe("done");
@@ -339,7 +339,7 @@ describe("pre-send booking gate (greeting must not send)", () => {
     const calls = fakeApp.precheckCalls.filter((c) => c.body.runId === runId);
     expect(calls).toHaveLength(1);
 
-    // The greeting SEND was attempted — in this credential-less harness that
+    // The greeting SEND was attempted, in this credential-less harness that
     // surfaces as the Telnyx-config failure, which is exactly the proof the
     // gate did not block the flow. The once-per-run marker is persisted so a
     // retry never re-pays the round-trip.

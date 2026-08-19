@@ -50,8 +50,8 @@ function readTranslatorCeilingMs(): number {
 
 /**
  * Resolved `@google/genai` package version at boot. Persisted in the
- * `voice_bridge_gemini_session_start` telemetry so we can confirm — without
- * SSHing the VPS — which SDK the running container actually has. A major
+ * `voice_bridge_gemini_session_start` telemetry so we can confirm, without
+ * SSHing the VPS, which SDK the running container actually has. A major
  * bump (1.x → 2.x) changed the Live API contract and is the prime suspect
  * for the May-2026 "greeting then dead air" regression; this lets us verify
  * a redeploy actually reverted the pin. Resolved defensively: some package
@@ -106,19 +106,19 @@ const TOOL_CALL_TIMEOUT_MS = 3500;
 
 /**
  * Per-tool overrides for tools whose app-side work is legitimately slower
- * than the default budget — aborting them early is worse than the wait:
+ * than the default budget, aborting them early is worse than the wait:
  *
  *  - `calendar_book_appointment` COMMITS a provider write. A cold booking
  *    (shared-calendar ensure + Nango proxy to Google/Microsoft) can take
- *    5–10s, and the bridge's abort is client-side only — the app keeps
+ *    5–10s, and the bridge's abort is client-side only, the app keeps
  *    going and the event gets created anyway. On a real Truly Insurance
  *    call (2026-07-15) the 3.5s abort made the model tell the caller their
  *    chosen time was "no longer available" while the booking silently
- *    succeeded, then book a SECOND slot — a double booking. The model can
+ *    succeeded, then book a SECOND slot, a double booking. The model can
  *    narrate ("one moment while I confirm that") so the extra silence is
  *    acceptable for a commit.
  *  - `calendar_find_slots` fans out over provider free/busy reads and was
- *    observed at 2.3–2.8s warm — too close to 3.5s for a cold call.
+ *    observed at 2.3–2.8s warm, too close to 3.5s for a cold call.
  */
 const TOOL_CALL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   calendar_book_appointment: 15_000,
@@ -129,7 +129,7 @@ const TOOL_CALL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
  * Model-facing guidance when a tool call hits the bridge timeout. Booking
  * gets explicit recovery steps because a timed-out booking may have
  * SUCCEEDED app-side (the abort does not cancel the server's work): the
- * idempotency ledger makes an identical retry safe — it returns the
+ * idempotency ledger makes an identical retry safe, it returns the
  * already-created event (`already_booked`) instead of double-booking.
  */
 const TOOL_TIMEOUT_MESSAGES: Record<string, string> = {
@@ -265,14 +265,14 @@ export type IntakeCapability = {
   captureFields?: string[];
   /**
    * What the AI already KNOWS about the person (a place_ai_call step's
-   * rendered contextTemplate) — injected into the system prompt with a
+   * rendered contextTemplate), injected into the system prompt with a
    * never-re-ask rule so the AI doesn't ask for details the flow already
    * extracted.
    */
   contextNote?: string;
   /**
    * place_ai_call live transfer: when true (and the host wired a transfer
-   * capability), the intake session ALSO gets the transfer tool — the flow
+   * capability), the intake session ALSO gets the transfer tool, the flow
    * explicitly authorized connecting this callee to a person once they
    * confirm it's a good time. Off for classic HomeLight intake, which is
    * capture-only by design.
@@ -307,7 +307,7 @@ export type IntakeCapability = {
 export type { CapturedLead } from "./intake.js";
 
 /**
- * Configuration for the voice tool suite — a small set of HTTP adapters the
+ * Configuration for the voice tool suite, a small set of HTTP adapters the
  * platform Next.js app exposes under `/api/voice/tools/*`. The bridge passes
  * every Gemini Live tool call through these adapters, which in turn broker
  * Nango (calendar/email), Telnyx (SMS), and CRM logging.
@@ -328,7 +328,7 @@ export type VoiceToolsConfig = {
   callerE164?: string;
 };
 
-// The system-instruction builder (persona/tool/context prompt composition —
+// The system-instruction builder (persona/tool/context prompt composition,
 // incl. CallerIdentity and the context-block caps) lives in
 // system-instruction.ts so repo-root tests and typecheck can import it
 // without this module's VPS-only runtime deps (@google/genai, ws).
@@ -365,7 +365,7 @@ export type GeminiBridgeOptions = {
    * True when `sessionMaxMs` is the AI-BUDGET-derived cap (the shared AI budget
    * is nearly exhausted), rather than the normal env time limit. Switches the
    * graceful wind-down wording from "someone can help you afterward" to "the
-   * owner isn't available right now, please text us" — we can't fall back to a
+   * owner isn't available right now, please text us", we can't fall back to a
    * local model on a live call, so the honest framing is unavailability.
    */
   budgetCapped?: boolean;
@@ -412,13 +412,13 @@ export type GeminiBridgeOptions = {
    * When set, the session runs the HomeLight lead-intake persona instead of the
    * normal receptionist/staff personas (the live client was connected after both
    * Dave and Amy missed the warm transfer). Mutually exclusive with the customer
-   * CRM/transfer tools — only `capture_lead` is registered.
+   * CRM/transfer tools, only `capture_lead` is registered.
    */
   intake?: IntakeCapability;
   /** Vault markdown (soul/identity/memory/website) rendered into the system prompt. */
   vault?: VaultSnapshot;
   /**
-   * Optional caller E.164 (raw from Telnyx) — forwarded to voice tools so the
+   * Optional caller E.164 (raw from Telnyx), forwarded to voice tools so the
    * app can attribute appointments/capture records to the right contact.
    */
   callerE164?: string;
@@ -451,7 +451,7 @@ export type GeminiBridgeOptions = {
    * restarting intake. Built by loadVoiceFlowContext in
    * vps/voice-bridge/src/flow-run-context.ts; clipped here to
    * VOICE_FLOW_CONTEXT_MAX_CHARS (same 12 KB-ceiling discipline as the
-   * customer-memory snippet). Undefined = no recent automation activity —
+   * customer-memory snippet). Undefined = no recent automation activity,
    * the prompt is identical to the pre-bridge shape.
    */
   flowContextNote?: string;
@@ -468,7 +468,7 @@ export type GeminiBridgeOptions = {
    * the caller's live Calendly state fetched from the platform, so a
    * reschedule/cancel made on calendly.com is visible on the call. Clipped
    * in system-instruction.ts to VOICE_BOOKING_STATUS_MAX_CHARS. Undefined =
-   * no booking context — the prompt is identical to the pre-feature shape.
+   * no booking context, the prompt is identical to the pre-feature shape.
    */
   bookingStatusNote?: string;
   /**
@@ -495,7 +495,7 @@ export type GeminiBridgeOptions = {
   /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
-   * script to an internal-assistant persona — same intent as the SMS worker's
+   * script to an internal-assistant persona, same intent as the SMS worker's
    * team/owner gate. Undefined is treated as a customer (backwards compatible).
    */
   callerIdentity?: CallerIdentity;
@@ -504,8 +504,8 @@ export type GeminiBridgeOptions = {
    * timeline of Gemini Live lifecycle events (session start, setup complete,
    * greeting sent, error, close, teardown) including the close code/reason and
    * audio frame counters. Wired in index.ts to `telemetry_record` so the
-   * timeline lands in `telemetry_events` and can be queried after a test call
-   * — the VPS stdout where these previously lived is not reachable from here.
+   * timeline lands in `telemetry_events` and can be queried after a test call,
+   * the VPS stdout where these previously lived is not reachable from here.
    * Implementations MUST NOT throw; the bridge invokes this defensively but
    * a throwing sink should never tear down a live call.
    */
@@ -543,7 +543,7 @@ function sendPcmToTelnyx(
   // the high watermark. Without this, a slow or stalled Telnyx socket lets every Gemini
   // PCM frame accumulate in Node's send queue, growing RSS unboundedly and making the
   // caller hear stale audio once the socket drains. Dropping the newest frame is the
-  // right call for real-time voice — retries cannot help (the moment has passed).
+  // right call for real-time voice, retries cannot help (the moment has passed).
   if (ws.bufferedAmount > DOWNLINK_BACKPRESSURE_HIGH_WATERMARK_BYTES) {
     telemetry.droppedFrames += 1;
     const now = Date.now();
@@ -557,19 +557,19 @@ function sendPcmToTelnyx(
     return;
   }
   // Telnyx's `stream_bidirectional_mode: "rtp"` `media.payload` is the base64
-  // RTP *payload* — raw codec samples with NO 12-byte RTP header. The Telnyx
+  // RTP *payload*, raw codec samples with NO 12-byte RTP header. The Telnyx
   // media-streaming spec says so explicitly ("base64-encoded RTP payload
   // without RTP headers") and it's symmetric with the inbound frames, which we
   // already consume as header-less raw L16. Prepending an RTP header here made
   // Telnyx render the 12 header bytes as 6 L16 samples of noise at the start of
-  // every chunk — an audible click/"typing" sound under the assistant's voice.
+  // every chunk, an audible click/"typing" sound under the assistant's voice.
   // Send the raw little-endian L16 samples (16 kHz, mono) instead.
   const audio = Buffer.from(pcm16le.buffer, pcm16le.byteOffset, pcm16le.byteLength);
   ws.send(telnyxMediaMessageFromPcmBase64(audio.toString("base64")));
 }
 
 // ---------------------------------------------------------------------------
-// Voice tool adapters — HTTP calls into the platform Next.js app.
+// Voice tool adapters, HTTP calls into the platform Next.js app.
 // ---------------------------------------------------------------------------
 
 type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
@@ -759,14 +759,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     lastDropWarnAtMs: 0
   };
   // Per-call streaming resampler for the Gemini (24 kHz) → Telnyx (16 kHz)
-  // downlink. Stateful across chunks so the phase stays continuous — a stateless
+  // downlink. Stateful across chunks so the phase stays continuous, a stateless
   // per-chunk resample injects a step discontinuity at every chunk boundary,
   // which is audible as a periodic click/"typing" sound during AI speech.
   // Lazily constructed on the first chunk so it locks onto the model's actual
   // output rate (parsed from the chunk mime type), and rebuilt if that changes.
   let downlinkResampler: StreamingResampler | null = null;
   // Uplink framing is a per-stream property, but the only per-frame signal is
-  // the RTP V=2 bits in byte 0 — which raw L16 sample bytes hit ~25% of the
+  // the RTP V=2 bits in byte 0, which raw L16 sample bytes hit ~25% of the
   // time, causing sporadic header-mis-strips that ship malformed PCM to Gemini
   // (WS 1007). Decide the mode by majority vote over the first frames, then
   // lock: a single ambiguous first frame (e.g. a header-only RTP packet, which
@@ -784,7 +784,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // dropping audio. (Belt-and-suspenders behind the mode lock above.)
   let uplinkCarryByte: Buffer | null = null;
   // Diagnostic counters (logged at first occurrence and on teardown). The
-  // counters are kept inexpensive — incrementing booleans/integers — but
+  // counters are kept inexpensive, incrementing booleans/integers, but
   // are critical for diagnosing "ring then silence" in production where
   // the only other tells are Telnyx delivery records and a bridge log
   // that's quiet because the happy path never warns.
@@ -812,7 +812,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Defensive diagnostics emitter. Snapshots the live pipeline counters into
   // every event so a single telemetry row tells the whole story (did setup
   // complete? did the greeting fire? how many frames moved before the close?).
-  // Never throws — a broken sink must not affect the call.
+  // Never throws, a broken sink must not affect the call.
   const emitDiag = (eventType: string, extra: Record<string, unknown> = {}): void => {
     if (!opts.recordDiag) return;
     try {
@@ -844,7 +844,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // WE send to Gemini, but it can't be reproduced synthetically. Tap the Live
   // session's own WebSocket `send` so the trail shows exactly which frames went
   // out (and in what order) right before the close. We record frame *kind* +
-  // size only — never the base64 audio or caller PII.
+  // size only, never the base64 audio or caller PII.
   const sendTrail: string[] = [];
   const pushSend = (tag: string): void => {
     sendTrail.push(tag);
@@ -988,7 +988,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    * `sendClientContent` turn mixes the two turn models: the greeting turn
    * itself succeeds, but the *next* auto-VAD turn (the caller's first real
    * reply) is then rejected by the server with WS close 1007 "Request
-   * contains an invalid argument." — i.e. the AI speaks its opening line and
+   * contains an invalid argument.", i.e. the AI speaks its opening line and
    * the call dies the moment the caller answers. `sendRealtimeInput({ text })`
    * injects the greeting cue inside the realtime stream, keeping every turn
    * consistent.
@@ -1203,15 +1203,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     // Two-part teardown:
     //   (1) Always log the session totals. Previously this was gated on
     //       `!ended`, which silently swallowed the totals when Gemini hung
-    //       up before the Telnyx WS closed — the exact signal we needed to
+    //       up before the Telnyx WS closed, the exact signal we needed to
     //       diagnose the May 2026 "ring then silence" outage.
     //   (2) The transcript recorder must run `finalize` even when `ended`
     //       is already true. An upstream Live-session close (session
     //       expiry, quota, network drop) fires `onclose` first; without
     //       running finalize here, the transcript row stays stuck at
     //       status='in_progress' with a NULL `ended_at`.
-    // Note: `session.close()` itself is one-shot — calling it twice on a
-    // dead session throws — so we still gate the network-side teardown on
+    // Note: `session.close()` itself is one-shot, calling it twice on a
+    // dead session throws, so we still gate the network-side teardown on
     // `!ended`.
     console.log("gemini-bridge: teardown summary", {
       callControlId: opts.callControlId,
@@ -1277,7 +1277,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   const declarations: Array<{ name: string; description: string; parameters: unknown }> = [];
   if (intake) {
-    // Intake sessions get ONLY the capture tool — no transfer / customer CRM
+    // Intake sessions get ONLY the capture tool, no transfer / customer CRM
     // tools. The lead is being captured for a manual call-back, not bridged.
     // Build the schema from the chain's configured capture_fields so a tenant
     // that adds/changes fields can actually persist them (the tool handler and
@@ -1408,7 +1408,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   }
 
   // `end_call` is available to every persona (receptionist, staff, and intake)
-  // whenever the host wired a hangup capability — so the assistant can cleanly
+  // whenever the host wired a hangup capability, so the assistant can cleanly
   // end any call once it's over instead of leaving dead air on the line.
   const hasEndCall = Boolean(opts.hangup);
   if (hasEndCall) {
@@ -1454,7 +1454,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // knows, and on a noisy segment it guesses: Chris Bartelot's Aug 3 2026 call
   // was English throughout, yet one turn transcribed as Portuguese and another
   // as Korean. Hints narrow it to the languages this tenant actually serves
-  // without pinning (Spanish callers must keep working) — see
+  // without pinning (Spanish callers must keep working), see
   // asr-language-hints.ts.
   //
   // The OUTPUT side stays unhinted on purpose: it transcribes our own speech,
@@ -1525,7 +1525,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
         // Capture cumulative token usage for billing. Gemini Live reports
-        // running session totals, so keep the frame with the largest total —
+        // running session totals, so keep the frame with the largest total,
         // metered once at teardown by index.ts (see getUsage()).
         {
           const u = readLiveUsage(message);
@@ -1573,13 +1573,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           console.log("gemini-bridge: setupComplete", { callControlId: opts.callControlId });
           emitDiag("voice_bridge_gemini_setup_complete");
           // Gemini Live waits for the user to speak by default. On a phone
-          // call the caller expects the assistant to greet first — without
+          // call the caller expects the assistant to greet first, without
           // this nudge they hear silence after ringback (no audio activity
           // means VAD never marks a turn complete and the model stays mute).
           //
           // `setupComplete` can be delivered WHILE `ai.live.connect` is still
           // awaiting (the SDK invokes onmessage from inside connect), i.e.
-          // before the outer `session` variable is assigned — sending here
+          // before the outer `session` variable is assigned, sending here
           // would throw and the caller would sit in silence until VAD picks
           // up their voice (the 45-seconds-of-dead-air bug on outbound
           // calls, Jul 15 2026). Defer to sendGreetingCue(), which runs now
@@ -1667,7 +1667,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         ended = true;
         clearTimers();
         // Kick the recorder finalize as soon as the Live session closes.
-        // `teardown` (called from ws.on("close")) will do the same — both paths
+        // `teardown` (called from ws.on("close")) will do the same, both paths
         // hit the recorder's internal `finalized` guard so whichever fires
         // first wins and the second is a no-op. This protects against the
         // case where Gemini closes first (session expiry / upstream drop) and
@@ -1683,7 +1683,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Flush a greeting cue that raced connect: `setupComplete` frequently
   // arrives while `ai.live.connect` is still awaiting (the SDK dispatches
   // onmessage from inside connect), in which case the handler deferred the
-  // cue because `session` wasn't assigned yet. Send it now — without this
+  // cue because `session` wasn't assigned yet. Send it now, without this
   // the callee hears silence until VAD reacts to THEIR voice.
   if (greetingPending) {
     greetingPending = false;
@@ -1696,7 +1696,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   // Live session connected. Record the SDK version + model + capability flags
   // so a single telemetry row confirms exactly what code path this call took
-  // (and which @google/genai is deployed — the regression suspect).
+  // (and which @google/genai is deployed, the regression suspect).
   emitDiag("voice_bridge_gemini_session_start", {
     sdk_version: GENAI_SDK_VERSION,
     model: opts.model,
@@ -2045,7 +2045,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             }
           }
           // On a SUCCESSFUL warm transfer the caller is now bridged to a human,
-          // so the AI must leave the line — otherwise it keeps injecting audio
+          // so the AI must leave the line, otherwise it keeps injecting audio
           // into (and hearing) the bridged leg, talking over both parties. We
           // detach instead of hanging up: hanging up `callControlId` would drop
           // the caller's leg and kill the human-to-human bridge.
@@ -2164,7 +2164,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (!endCallRequested) {
           endCallRequested = true;
           const graceMs = opts.hangup.graceMs ?? 3000;
-          // Deliberately a STANDALONE timer — NOT pushed to `timers`. The PSTN
+          // Deliberately a STANDALONE timer, NOT pushed to `timers`. The PSTN
           // leg is still up during the goodbye grace, so the hangup MUST survive
           // a clearTimers() (which fires on Gemini Live `onclose` and on
           // session-limit teardown). If the Live session drops mid-grace we
@@ -2219,7 +2219,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Scale the lead-in offsets to the ACTUAL session length. A budget-capped
   // session can be shorter than the default 60s `warnBeforeMs`, which would make
   // `sessionMaxMs - warnBeforeMs` clamp to 0 and fire the "start wrapping up" cue
-  // immediately at answer — right over the greeting. Cap the warn lead-in to half
+  // immediately at answer, right over the greeting. Cap the warn lead-in to half
   // the session and the final-nudge lead-in to a quarter so the wind-down always
   // lands near the end, with the greeting given room first. (For a normal
   // ~14-minute session these mins are no-ops.)
@@ -2230,7 +2230,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   // Wind-down coordinator cues. When the binding limit is the AI BUDGET (not the
   // normal time cap) we can't offer "the assistant can keep helping" or "someone
-  // will help you right after" — the AI genuinely can't continue — so we frame
+  // will help you right after", the AI genuinely can't continue, so we frame
   // it as the owner being unavailable and steer the caller to text instead.
   const warnText = budgetCapped
     ? `[Coordinator, speak aloud] You need to start wrapping up this call now. Warmly let the caller know you have to go shortly and that the owner isn't available right now, and invite them to send ${name} a text message so someone can follow up.`
@@ -2407,7 +2407,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     // Always JSON.parse and route by event name. A previous fast-path used
     // `rawUtf8.includes('"event":"media"')` to skip the parse, but that
     // substring check breaks the moment Telnyx serializes the frame with
-    // whitespace between key and value (`"event": "media"`) — every audio
+    // whitespace between key and value (`"event": "media"`), every audio
     // frame would silently land in the non-media branch and be dropped.
     const parsed = parseTelnyxFrame(rawUtf8);
     if (parsed.kind === "unparseable") return;
@@ -2440,7 +2440,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         }
       }
       // Strip only when the stream is (or is leaning) RTP AND this specific
-      // frame actually decoded as RTP — never strip a frame the decoder
+      // frame actually decoded as RTP, never strip a frame the decoder
       // couldn't parse as RTP.
       const stripThisFrame = (uplinkRtpMode ?? decoded.wasRtp) && decoded.wasRtp;
       let payload = stripThisFrame ? decoded.payload : Buffer.from(b64, "base64");
@@ -2461,7 +2461,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       // One-shot first-frame log so we can confirm Telnyx is delivering
       // the negotiated codec/cadence (640 bytes = 20 ms of L16 16 kHz; the
       // header hex starts with `0xff`/`0x80` for RTP, anything else means
-      // raw L16 — both are decoded correctly by `decodeTelnyxMediaPayload`).
+      // raw L16, both are decoded correctly by `decodeTelnyxMediaPayload`).
       if (!diag.firstUplinkLogged) {
         diag.firstUplinkLogged = true;
         const rawBytes = Buffer.from(b64, "base64");
@@ -2498,7 +2498,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       // Gemini Live API now closes the WS on with code 1007:
       //   "realtime_input.media_chunks is deprecated.
       //    Use audio, video, or text instead."
-      // That's exactly what manifested as "ring then silence" on calls —
+      // That's exactly what manifested as "ring then silence" on calls,
       // Gemini accepted ~10 inbound frames, hit the deprecation guard, and
       // hung up before generating any response audio. The SDK's
       // liveSendRealtimeInputParametersToMldev converter routes `audio:`

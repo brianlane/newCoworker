@@ -1,5 +1,5 @@
 /**
- * indexnow-submit.ts — tell the search engines what just changed.
+ * indexnow-submit.ts, tell the search engines what just changed.
  *
  * Two callers:
  *   - CI, after a production deploy, via the `indexnow-ping` job in ci.yml.
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
   done(`FAIL: IndexNow submission did not send (${JSON.stringify(outcome)}).`);
 }
 
-// `done()` exits, so main only rejects on something genuinely unexpected —
+// `done()` exits, so main only rejects on something genuinely unexpected,
 // which still must not fail the job.
 main().catch((err) => {
   report(`FAIL: IndexNow submit threw: ${err instanceof Error ? err.message : String(err)}`);

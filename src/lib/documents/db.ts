@@ -1,12 +1,12 @@
 /**
- * Business Documents knowledge library — DB access.
+ * Business Documents knowledge library, DB access.
  *
  * `business_documents` holds owner-uploaded documents (price sheets,
  * policies, contracts, SOPs) with the agent-facing extracted markdown
  * (`content_md`); `business_document_shares` holds tokenized, revocable
  * share links; `document_signature_requests` holds e-sign requests with
- * their audit trail. All tables are service-role-only (RLS on, no policies)
- * — every access flows through the Next.js server after its own auth
+ * their audit trail. All tables are service-role-only (RLS on, no policies),
+ * every access flows through the Next.js server after its own auth
  * checks, matching the customer_profiles / vps_ssh_keys posture.
  */
 
@@ -35,7 +35,7 @@ export type BusinessDocumentRow = {
   expired_notified_at: string | null;
   /** Contact this document belongs to (policy holder / tenant / member). Null = plain library doc. */
   contact_id: string | null;
-  /** Renewal due date — keeps the doc active, unlike expires_at which retires it. */
+  /** Renewal due date, keeps the doc active, unlike expires_at which retires it. */
   renewal_date: string | null;
   /** Roster member (ai_flow_team_members) who handles the renewal. */
   assigned_employee_id: string | null;
@@ -100,7 +100,7 @@ export async function getBusinessDocument(
 /**
  * Count documents for cap enforcement. `scope` separates the two caps:
  * "library" counts unlinked knowledge-library docs (the per-tier cap),
- * "contact_records" counts contact-linked records (the flat generous cap) —
+ * "contact_records" counts contact-linked records (the flat generous cap),
  * see CONTACT_DOCUMENT_RECORDS_LIMIT in core.ts.
  */
 export async function countBusinessDocuments(
@@ -308,7 +308,7 @@ export type DocumentSignatureRequestRow = {
   signer_ip: string | null;
   signer_user_agent: string | null;
   content_sha256: string | null;
-  /** Snapshot of content_md at signing — what the certificate renders. */
+  /** Snapshot of content_md at signing, what the certificate renders. */
   signed_content_md: string | null;
   expires_at: string;
   created_at: string;
@@ -365,7 +365,7 @@ export async function listDocumentSignatureRequests(
 
 /**
  * First-open stamp: `sent → viewed`. Conditional on the current status so a
- * signed/void request is never regressed. Best-effort — the caller ignores
+ * signed/void request is never regressed. Best-effort, the caller ignores
  * the outcome (a failed stamp must not block rendering the document).
  */
 export async function markSignatureRequestViewed(
@@ -383,8 +383,8 @@ export async function markSignatureRequestViewed(
 
 /**
  * The signing write. TOCTOU-safe: the update is conditional on the request
- * still being signable (`status in sent/viewed`), so a double-submit — or a
- * void racing the signer — loses cleanly. Returns the number of rows
+ * still being signable (`status in sent/viewed`), so a double-submit, or a
+ * void racing the signer, loses cleanly. Returns the number of rows
  * updated (0 = lost the race / no longer signable).
  */
 export async function completeSignatureRequest(
@@ -462,7 +462,7 @@ export async function voidAllSignatureRequestsForDocument(
 
 /**
  * Best-effort access stamp on a successful public download. Read-side
- * telemetry only — failures must never block the file response, so the
+ * telemetry only, failures must never block the file response, so the
  * caller fire-and-forgets this.
  */
 export async function touchDocumentShareAccess(

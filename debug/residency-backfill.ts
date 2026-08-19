@@ -2,11 +2,11 @@
  * Residency backfill kickoff + drain (Phase B2 operator tool).
  *
  * For one enterprise business with data_residency_mode past 'supabase':
- *   1. `residency_backfill_business(uuid)` — snapshots every existing
+ *   1. `residency_backfill_business(uuid)`, snapshots every existing
  *      content row into residency_write_journal as 'upsert' rows, in
  *      FK-dependency order (server-side insert-select, no data transfer).
  *   2. Optionally (`--drain`) runs the replayer loop locally until the
- *      journal is empty or a drain stops on an error — useful right after
+ *      journal is empty or a drain stops on an error, useful right after
  *      a pilot bring-up instead of waiting on the per-minute cron.
  *   3. Prints per-table journal counts and a reconciliation summary
  *      (journal empty = box caught up).

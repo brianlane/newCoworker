@@ -81,7 +81,7 @@ const schema = z.object({
 /**
  * Best-effort signup IP: prefers the left-most (client) value of
  * `x-forwarded-for`, falls back to `x-real-ip`, otherwise `null`. The IP is
- * stored on the customer profile for abuse correlation only — a missing or
+ * stored on the customer profile for abuse correlation only, a missing or
  * spoofed header never blocks checkout, it just weakens later identity
  * merging.
  */
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
         // standard Supabase `resetPasswordForEmail` link delivered to
         // the user's real mailbox) are SEPARATE flows. The anonymous
         // Stripe-first checkout has no business creating a paid
-        // session bound to an email that ALREADY has an auth user —
+        // session bound to an email that ALREADY has an auth user,
         // doing so would either (a) collide with the post-payment
         // create and 409, stranding the customer on a paid checkout,
         // or (b) re-open the registration-injection surface if we
@@ -154,8 +154,8 @@ export async function POST(request: Request) {
     }
 
     // Re-onboarding hard stop: this route exists ONLY to start a brand-new
-    // subscription from the onboarding flow. If the posted business — or any
-    // business the signed-in user owns — already has live/paid service
+    // subscription from the onboarding flow. If the posted business, or any
+    // business the signed-in user owns, already has live/paid service
     // (active, canceled-in-grace, or a paid row mid-webhook), refuse before
     // inserting the `pending` row. A stale onboarding draft once shadowed a
     // live tenant's active subscription this way (the "Amy reset" incident);
@@ -188,7 +188,7 @@ export async function POST(request: Request) {
     // Abuse profile: upsert the `customer_profiles` row for this email + IP
     // and block checkout if the profile has already consumed its lifetime
     // subscription allotment (cap = 3). The count is only incremented on
-    // `checkout.session.completed` — not here — so abandoned checkouts
+    // `checkout.session.completed`, not here, so abandoned checkouts
     // don't burn lifetimes. If the profile cannot be upserted we block
     // checkout; otherwise failures here could bypass the lifetime cap.
     //
@@ -231,7 +231,7 @@ export async function POST(request: Request) {
     if (customerProfileId) {
       // Fail closed: we JUST upserted this profile id above, so a null
       // readback indicates a transient DB fault (replica lag, read
-      // timeout, etc.) — proceeding would silently bypass the lifetime
+      // timeout, etc.), proceeding would silently bypass the lifetime
       // subscription cap enforcement. Surface a 500 so the client
       // retries instead.
       let profile;
@@ -305,7 +305,7 @@ export async function POST(request: Request) {
 
     // Canadian signups pay the labeled monthly messaging surcharge (Canadian
     // carriers charge per-message pass-through fees US traffic doesn't).
-    // Detection uses the phone + timezone the owner entered at onboarding —
+    // Detection uses the phone + timezone the owner entered at onboarding,
     // the same phone that biases their coworker number purchase, so the fee
     // and the CA-enabled messaging capability travel together. A missing
     // business row fails toward NOT charging.
@@ -315,7 +315,7 @@ export async function POST(request: Request) {
     // the owner edited it on Step 1 before retrying. The questionnaire syncs
     // the draft (token-verified) with the CURRENT form values immediately
     // before calling this route, so the draft phone is the same value the
-    // order summary previewed the fee with — prefer it AND write it back to
+    // order summary previewed the fee with, prefer it AND write it back to
     // the row, so provisioning (which classifies from the row) buys the
     // number in the same country the fee was billed for. Best-effort: any
     // draft read/write failure falls back to the row.
@@ -434,7 +434,7 @@ export async function POST(request: Request) {
       ...(promotion?.ok
         ? { discountPromotionCodeId: promotion.promotion.stripe_promotion_code_id }
         : {}),
-      // New signups register a fresh 10DLC campaign — pass the carrier fee
+      // New signups register a fresh 10DLC campaign, pass the carrier fee
       // through as a one-time line item. Plan changes and reactivations
       // (separate routes) keep the existing campaign and never re-charge it.
       // Mexican signups skip the CHARGE (10DLC/TCR is a US-carrier

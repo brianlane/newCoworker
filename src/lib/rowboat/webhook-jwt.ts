@@ -18,7 +18,7 @@ import { getActiveGatewayTokensForProject } from "@/lib/db/vps-gateway-tokens";
  * mints one; the legacy shared token on older boxes). The platform verifies
  * with the per-tenant token resolved by the `projectId` claim
  * (`resolveRowboatWebhookClaims`). The shared env secret is accepted until the
- * tenant has a token CONFIRMED live on its box — once it does, that per-tenant
+ * tenant has a token CONFIRMED live on its box, once it does, that per-tenant
  * token is the EXCLUSIVE signer, so a holder of the shared secret can't forge
  * that tenant's tool-call JWTs. (Accepting shared while a token is only pending
  * is required because the box keeps signing with the shared secret for the whole
@@ -109,8 +109,8 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
  * projectId won't verify under that tenant's secret).
  *
  * We verify against every non-revoked per-tenant token (pending OR confirmed):
- * the VPS starts signing with a freshly deployed token the instant Rowboat restarts
- * — before the app confirms it — and an old + new token briefly coexist during a
+ * the VPS starts signing with a freshly deployed token the instant Rowboat restarts,
+ * before the app confirms it, and an old + new token briefly coexist during a
  * rotation, so checking all of them removes that window.
  *
  * Exclusivity (rejecting the shared env secret) engages ONLY once the project has a
@@ -120,7 +120,7 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
  * we'd 401 every tool-call for the entire (multi-minute) first migration. So while no
  * token is confirmed we accept the pending token(s) AND the shared secret (the box's
  * current real signer); the instant the first token is confirmed the box has switched
- * to it and the shared secret is rejected forever — closing the cross-tenant forgery
+ * to it and the shared secret is rejected forever, closing the cross-tenant forgery
  * hole. A DB error fails open to the shared path so a transient blip doesn't drop live
  * calls.
  */

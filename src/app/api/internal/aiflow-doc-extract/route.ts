@@ -3,7 +3,7 @@
  * attachment), extract the flow's typed fields with Gemini, and optionally
  * file it into Business Documents.
  *
- * Called by the ai-flow-worker for a `doc_extract` step — the worker can't
+ * Called by the ai-flow-worker for a `doc_extract` step, the worker can't
  * run Gemini's document pipeline or touch the documents store from the edge
  * runtime, so it proxies here (same pattern as /api/internal/aiflow-email-fetch).
  *

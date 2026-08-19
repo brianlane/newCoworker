@@ -5,7 +5,7 @@
  *
  * Scoped to the TEST COPY flow's runs ONLY. The harness now lives on the
  * long-lived "New Coworker (HQ, internal)" tenant (homepage demo line + site
- * webchat), so a business-wide delete would destroy real run history —
+ * webchat), so a business-wide delete would destroy real run history,
  * unlike the old throwaway NCW Flow Test tenant this replaced.
  *
  * Why delete instead of aging updated_at out of the 72h window: the runs
@@ -25,7 +25,7 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-/** New Coworker (HQ, internal) — the single internal smoke/e2e tenant. */
+/** New Coworker (HQ, internal), the single internal smoke/e2e tenant. */
 const TEST_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const FLOW_NAME = "Lead intake & follow-up (Privyr) (TEST COPY of Truly)";
 const ALL = process.argv.includes("--all");

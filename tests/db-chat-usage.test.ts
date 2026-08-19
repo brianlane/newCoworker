@@ -96,7 +96,7 @@ describe("getChatSpendSnapshotForBusiness", () => {
 
   it("uses the Stripe period start, spend row, and active credit", async () => {
     // Pin the clock inside the anchor's first monthly window: with real time
-    // this assertion is a time bomb — once "now" crosses the next window
+    // this assertion is a time bomb, once "now" crosses the next window
     // boundary, deriveMonthlyQuotaWindow rolls periodStart forward a month.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
@@ -309,7 +309,7 @@ describe("getFleetCurrentAiSpendMicros", () => {
     const { from } = fleetSpendDb({
       data: [
         { business_id: "biz-a", period_start: "2026-07-01T00:00:00Z", spend_micros: 1_000_000 },
-        // Rolled-over window — omitted from the map entirely.
+        // Rolled-over window, omitted from the map entirely.
         { business_id: "biz-c", period_start: "2026-06-01T00:00:00Z", spend_micros: 750_000 }
       ],
       error: null

@@ -10,7 +10,7 @@ import { lookupBusinessKnowledge, classifyGeminiError } from "@/lib/knowledge-to
 import { logger } from "@/lib/logger";
 
 /**
- * `business_knowledge_lookup` — voice-bridge adapter. Answers a caller's
+ * `business_knowledge_lookup`, voice-bridge adapter. Answers a caller's
  * business-specific question from the vault via the shared core in
  * src/lib/knowledge-tools/handlers.ts (also used by the Rowboat tool
  * webhook for the dashboard + texting surfaces).

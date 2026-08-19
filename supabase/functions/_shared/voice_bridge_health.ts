@@ -8,19 +8,19 @@
  * Supabase client without spinning up the Deno runtime.
  *
  * What we alert on:
- *   1. Stale bridge heartbeats — any tenant with voice routing enabled whose
+ *   1. Stale bridge heartbeats, any tenant with voice routing enabled whose
  *      `business_telnyx_settings.bridge_last_heartbeat_at` is older than the
  *      threshold (default 5 min, matching the 30s heartbeat cadence × 10).
  *      A stale heartbeat means the voice-bridge container is down / wedged /
  *      not reporting, and any inbound calls for that DID will fail.
- *   2. Stuck voice_settlements — rows whose `first_signal_at` landed earlier
+ *   2. Stuck voice_settlements, rows whose `first_signal_at` landed earlier
  *      than the grace window (default 30 min) AND `finalized_at IS NULL`.
  *      This is a liveness check on the settlement sweep itself; it should
  *      never find anything if `edge-voice-settlement-sweep` is firing.
  *
  * Alerts are emitted as telemetry_events (always) and optionally POSTed to a
  * Slack-compatible webhook (`ALERT_WEBHOOK_URL`). Dedup is intentionally
- * lightweight: we post once per run — upstream alert routing should dedupe
+ * lightweight: we post once per run, upstream alert routing should dedupe
  * by event_type + payload hash if it gets noisy.
  */
 
@@ -67,7 +67,7 @@ export function computeStaleBridges(
   const cutoffMs = nowMs - stalenessSeconds * 1000;
   const out: StaleBridge[] = [];
   for (const r of rows) {
-    // Only page tenants that have actually wired Telnyx up — rows with no
+    // Only page tenants that have actually wired Telnyx up, rows with no
     // `telnyx_connection_id` are shell rows created by onboarding and have
     // never been expected to heartbeat.
     if (!r.telnyx_connection_id) continue;

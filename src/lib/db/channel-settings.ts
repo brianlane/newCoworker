@@ -4,12 +4,12 @@
  * Holds the RCS wiring: the tenant's Telnyx RCS agent id and the operator
  * kill switch (`rcs_enabled`, default off). The table is service-role-only
  * for writes (RLS); the admin business page's "Messaging channel (RCS)" card
- * is the operator console — see `POST /api/admin/rcs-channel`.
+ * is the operator console, see `POST /api/admin/rcs-channel`.
  *
  * These settings are only one leg of the send-time gate: outbound messages
  * additionally require the enterprise tier (`rcsTierAllowed` in
  * src/lib/telnyx/messaging.ts and the Edge mirror), so writing a row for a
- * lower-tier tenant is harmless — sends stay plain SMS.
+ * lower-tier tenant is harmless, sends stay plain SMS.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -43,7 +43,7 @@ export async function getChannelSettings(
 /**
  * Upsert a tenant's RCS wiring. The agent id is trimmed; blank collapses to
  * null (so "clear the field" in the admin card really clears it). Enabling
- * without an agent id is allowed at the DB layer — the send-time gate
+ * without an agent id is allowed at the DB layer, the send-time gate
  * requires both, so such a row still sends plain SMS.
  */
 export async function upsertChannelSettings(

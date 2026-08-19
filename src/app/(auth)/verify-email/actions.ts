@@ -26,8 +26,8 @@ export type ConfirmEmailVerificationResult =
  * IMPORTANT: this must NEVER be called from a GET handler. It is the
  * single state-mutating site for email verification, gated behind an
  * explicit form POST so mailbox safe-link scanners (Microsoft Safe
- * Links, Mimecast, Proofpoint, Gmail's TLS inspector, etc.) — which
- * routinely auto-fetch URLs from inbound emails over GET — can NEVER
+ * Links, Mimecast, Proofpoint, Gmail's TLS inspector, etc.), which
+ * routinely auto-fetch URLs from inbound emails over GET, can NEVER
  * silently consume the verification on the human's behalf. An earlier
  * revision of `/verify-email/page.tsx` did the DB flip in the GET path
  * itself; that implementation is what this server action replaces.
@@ -61,7 +61,7 @@ export async function confirmEmailVerificationAction(
     if (!result.ok) {
       logger.warn("verify-email: customer_profile not found for token email", {
         // Email is the only thing carried by a token submitted through
-        // this action — no userId, no businessId. Logging the email at
+        // this action, no userId, no businessId. Logging the email at
         // warn-level is fine: this branch is essentially unreachable in
         // production (`upsertCustomerProfile` runs on /api/checkout
         // before Stripe), so when it fires it's an investigation signal

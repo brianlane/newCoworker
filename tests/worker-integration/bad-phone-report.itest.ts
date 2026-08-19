@@ -29,7 +29,7 @@ import { withResumeMarkerVar } from "../../supabase/functions/_shared/ai_flows/b
  * the note to the owner (anything else).
  *
  * The served worker has no GOOGLE_API_KEY, so a real classify deterministically
- * resolves to the reserved "unclear" fallback — which takes the branch's ELSE
+ * resolves to the reserved "unclear" fallback, which takes the branch's ELSE
  * arm, exactly like a live "other_update". The bad_phone_number arm's category
  * accuracy is pinned by the live-Gemini e2e suite
  * (tests/e2e/bad-phone-classify.e2e.test.ts); the arm's wiring (branch
@@ -91,7 +91,7 @@ async function seedRoster(biz: string): Promise<void> {
 /**
  * Resume a parked route_to_team offer the way telnyx-sms-inbound's live-claim
  * path does. MIRROR of tryAgentClaimWithTimeframe / the bare-"1" resume in
- * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync) — the webhook
+ * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync), the webhook
  * itself can't be invoked here because it verifies Telnyx's Ed25519
  * signature, which a test cannot forge by design.
  */
@@ -124,7 +124,7 @@ async function claimLikeWebhook(runId: string, from: string, timeframe = ""): Pr
 
 /**
  * Retroactive unclaim ("86") the way telnyx-sms-inbound's tryUnclaim does.
- * MIRROR (keep in sync) — including `awaiting_reply` in the status lists,
+ * MIRROR (keep in sync), including `awaiting_reply` in the status lists,
  * which is the fix that lets an "86" beat a parked bad-phone-report wait
  * instead of being swallowed by it as a "report" text. Returns the run id it
  * re-opened, or null when this teammate holds no claimed lead.
@@ -295,7 +295,7 @@ describe("bad-phone report wait (real worker)", () => {
     await tickWorker();
     expect((await getRun(db, runId)).status).toBe("awaiting_reply");
 
-    // The "86" must resolve via the unclaim path — the awaiting_reply status
+    // The "86" must resolve via the unclaim path, the awaiting_reply status
     // is in tryUnclaim's candidate list (the 1c fix). Were it not, the text
     // would fall through to the wait and be recorded as an agent_report.
     const reopened = await unclaimLikeWebhook(biz, AGENT_PHONE);

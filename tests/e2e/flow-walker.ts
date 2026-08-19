@@ -1,8 +1,8 @@
 /**
  * E2E flow walker: executes a REAL AiFlow definition through the REAL shared
- * engine modules — flattenSteps ordering, isOnActivePath branch skips,
+ * engine modules, flattenSteps ordering, isOnActivePath branch skips,
  * per-step `when` guards, planStep templating/validation, chooseBranchArm
- * (via planStep's branch case), and simulateTestAction side-effect capture —
+ * (via planStep's branch case), and simulateTestAction side-effect capture,
  * with LIVE model calls for classify / extract_text.
  *
  * This deliberately reuses the same modules the ai-flow-worker imports; the

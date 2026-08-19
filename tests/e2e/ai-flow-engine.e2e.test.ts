@@ -10,13 +10,13 @@ import { stepOf, walkFlow } from "./flow-walker";
  *
  * The fixture is the Truly Insurance lead-intake flow (condensed, WITH the
  * post-incident fix: a wait_for_reply after the renewal question). The
- * scenarios replay the actual production conversation of 2026-07-11 —
- * Dwight's real messages — plus the other classify arms, and assert the
+ * scenarios replay the actual production conversation of 2026-07-11,
+ * Dwight's real messages, plus the other classify arms, and assert the
  * flow takes the right path, sends the right texts, and keeps ownership of
  * the lead's answers instead of dead-ending.
  *
  * Every branch decision here is a LIVE Gemini classify/extract call using
- * the worker's exact prompts, parsers, and generation config — this is the
+ * the worker's exact prompts, parsers, and generation config, this is the
  * layer unit tests cannot cover (they script the model's answers).
  */
 
@@ -39,7 +39,7 @@ const DWIGHT_REPLY_1 =
   "money.Now my truck has been parked since April 17th and I still have to make " +
   "payments on it. DWIGHT";
 
-/** His answer to the renewal question — the message the dead-end dropped. */
+/** His answer to the renewal question, the message the dead-end dropped. */
 const DWIGHT_REPLY_2 = "Was supposed to of been Apil 17th but they would not Renew it";
 
 /** The classify contract shared by the first-reply and late-reply forks. */
@@ -63,7 +63,7 @@ const CLASSIFY_CATEGORIES = [
  * the wait_renewal fix shipped after the incident AND the late-reply patch
  * (scripts/oneshot/patch-truly-late-reply-and-source.ts, applied 2026-07-10):
  * the reply_fork else-arm forks on the nudge's late reply and mirrors the
- * first-reply arm — classify + route — instead of capturing it and ENDING
+ * first-reply arm, classify + route, instead of capturing it and ENDING
  * (the "Dawnia" dead end). That arm has never fired in production; this is
  * its only execution coverage.
  */
@@ -504,7 +504,7 @@ describe("AiFlow engine e2e (live Gemini decisions)", () => {
   // ── The late-reply patch (the "Dawnia" dead-end fix) ────────────────────
   // Before the oneshot, a reply that arrived AFTER the first nudge was
   // captured, tagged, and dropped: no classify, no routing, and the wait
-  // suppressed the default assistant — "I would like to book a call" got
+  // suppressed the default assistant, "I would like to book a call" got
   // pure silence. These walks prove the patched arm routes every late-reply
   // intent exactly like a first reply.
 
@@ -520,7 +520,7 @@ describe("AiFlow engine e2e (live Gemini decisions)", () => {
       });
       expect(result.vars.reply_text).toBe(NO_REPLY_SENTINEL);
       expect(stepOf(result, "nudge1").status).toBe("done");
-      // Live classify on the LATE reply — the step the dead end never ran.
+      // Live classify on the LATE reply, the step the dead end never ran.
       expect(result.vars.late_intent).toBe("wants_a_call");
       expect(stepOf(result, "late_engaged_1").status).toBe("done");
       expect(stepOf(result, "late_call_ack").status).toBe("done");

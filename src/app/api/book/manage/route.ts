@@ -1,5 +1,5 @@
 /**
- * POST /api/book/manage — the invitee's own reschedule/cancel actions for
+ * POST /api/book/manage, the invitee's own reschedule/cancel actions for
  * one booking made on the public page (/book/manage/<token>).
  *
  * Cookie-free and CSRF-exempt (see src/proxy.ts), authenticated by the

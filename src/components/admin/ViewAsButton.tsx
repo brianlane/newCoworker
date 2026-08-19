@@ -5,7 +5,7 @@ import { Eye } from "lucide-react";
 import { VIEW_AS_BANNER_HIDE_KEY, VIEW_AS_RETURN_TO_KEY } from "./ViewAsBanner";
 
 /**
- * "View dashboard as tenant" — starts an admin view-as session for this
+ * "View dashboard as tenant", starts an admin view-as session for this
  * business and jumps to the owner dashboard. Rendered on the admin business
  * detail page (default bordered button) and in the All Clients table rows
  * (`variant="link"`, matching the compact "Details" link style).

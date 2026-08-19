@@ -28,7 +28,7 @@ import { getActiveCalendlyConnection } from "@/lib/db/calendly-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
-/** The direct PAT connection — the only Calendly transport. */
+/** The direct PAT connection, the only Calendly transport. */
 const CONN = {
   provider: "calendly",
   connectionId: "calendly-row-1",
@@ -487,7 +487,7 @@ describe("findCalendlyScheduledEvent", () => {
   });
 
   it("matches across country-code variants (national vs E.164) but never on loose suffixes", async () => {
-    // Calendly stored the NATIONAL form; our side holds E.164 — still a match.
+    // Calendly stored the NATIONAL form; our side holds E.164, still a match.
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(calendlyDirectRequest).mockResolvedValueOnce(
       inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "(548) 577-3546" }])
@@ -510,7 +510,7 @@ describe("findCalendlyScheduledEvent", () => {
     );
     expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
 
-    // Short strings (below 7 digits) only match on EXACT equality — a bare
+    // Short strings (below 7 digits) only match on EXACT equality, a bare
     // suffix of a real number is too ambiguous to act on.
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(calendlyDirectRequest).mockResolvedValueOnce(
@@ -655,7 +655,7 @@ describe("cancelCalendlyAppointment", () => {
   });
 
   it("a refused cancellation POST is a FAILED MUTATION, never calendar_not_connected", async () => {
-    // The locate steps just succeeded — misreporting a missing calendar
+    // The locate steps just succeeded, misreporting a missing calendar
     // would steer the model to "you cannot cancel any appointment".
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(calendlyDirectRequest)

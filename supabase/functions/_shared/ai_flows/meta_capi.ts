@@ -3,7 +3,7 @@
  *
  * Called from the tag_changed contact-event chokepoint
  * (contact_events.ts), which EVERY stage-tag writer already funnels
- * through — the board's drag/dropdown move, the dashboard tag editor, MCP
+ * through, the board's drag/dropdown move, the dashboard tag editor, MCP
  * contact updates, and the worker's update_contact step. When an ADDED tag
  * is a pipeline stage and the business has a CAPI-ready Meta connection,
  * one outbox row is recorded; the per-minute drain resolves the lead's
@@ -11,7 +11,7 @@
  * Conversions API.
  *
  * Shared (Deno + Node) and DB-only, so both runtimes get the hook without
- * duplicating logic. Never throws — feedback must never break the tag
+ * duplicating logic. Never throws, feedback must never break the tag
  * write that observed the change.
  */
 
@@ -34,7 +34,7 @@ const STAGE_PAGE = 200;
 /**
  * Record one stage change for the CAPI drain when it qualifies. Returns
  * true when an outbox row was inserted (false: not a stage tag, no
- * CAPI-ready connection, duplicate, or error — all non-events).
+ * CAPI-ready connection, duplicate, or error, all non-events).
  */
 export async function recordStageChangeForMeta(
   supabase: AnyClient,
@@ -45,7 +45,7 @@ export async function recordStageChangeForMeta(
     const tag = input.tag.trim();
     if (!tag || !input.contactE164) return false;
 
-    // Only businesses with a Meta connection accumulate outbox rows — but
+    // Only businesses with a Meta connection accumulate outbox rows, but
     // deliberately ANY connection row (paused, mid-reconnect, dataset not
     // yet discovered): readiness is the DRAIN's per-tick check, so a stage
     // move during a pause still uploads once the connection returns inside

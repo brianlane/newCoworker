@@ -3,11 +3,11 @@
  * One-shot: create the FULL-TERM Stripe prices for the 12/24-month plans.
  *
  * Why: the original "24-month" prices were $X/month recurring, so checkout
- * only collected one month — but the tenant's Hostinger VPS is prepaid for
+ * only collected one month, but the tenant's Hostinger VPS is prepaid for
  * the whole contract. These new prices bill the entire commitment upfront
  * (`interval=month`, `interval_count=12|24`, `unit_amount = monthly × months`)
  * while the Stripe subscription still renews per term. Renewal prices
- * (`*_RENEWAL_PRICE_ID`, already plain monthly) are untouched — they drive
+ * (`*_RENEWAL_PRICE_ID`, already plain monthly) are untouched, they drive
  * the month-to-month rollover phase via `ensureCommitmentSchedule`.
  *
  * Idempotent: each price is created with a stable `lookup_key`

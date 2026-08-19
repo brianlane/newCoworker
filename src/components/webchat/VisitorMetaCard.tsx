@@ -1,7 +1,7 @@
 /**
  * "Visitor details" card for webchat transcript views (owner + admin):
- * every passively collected fact about the session — location, device,
- * language, source, page trail — as label/value rows. Renders nothing
+ * every passively collected fact about the session, location, device,
+ * language, source, page trail, as label/value rows. Renders nothing
  * when no metadata was captured (sessions predating collection, or
  * privacy-restrictive browsers). The visitor's IP is never among these:
  * it is never stored.

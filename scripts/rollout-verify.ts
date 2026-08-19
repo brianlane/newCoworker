@@ -2,8 +2,8 @@
 /**
  * Rollout verification for the Telnyx + Gemini Live voice path.
  *
- * Queries `telemetry_events` over a time window and reports — in plain
- * English — whether the voice stack is behaving as expected. Designed to be
+ * Queries `telemetry_events` over a time window and reports, in plain
+ * English, whether the voice stack is behaving as expected. Designed to be
  * run by a human RIGHT AFTER making a test call (or a batch of them) during
  * the staged rollout described in `docs/VOICE-ROLLOUT.md`.
  *
@@ -32,9 +32,9 @@
  *   SUPABASE_SERVICE_ROLE_KEY
  *
  * Exit codes:
- *   0 — all required checks green
- *   1 — at least one check red (see output)
- *   2 — bad args / missing env
+ *   0, all required checks green
+ *   1, at least one check red (see output)
+ *   2, bad args / missing env
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 

@@ -1,6 +1,6 @@
 /**
  * Owner-facing management for the business's DIRECT Calendly connections
- * (Personal Access Tokens — the zero-setup alternative to the Nango OAuth
+ * (Personal Access Tokens, the zero-setup alternative to the Nango OAuth
  * path, mirroring /api/integrations/vagaro).
  *
  * A business can link SEVERAL Calendly accounts (one row per account):
@@ -119,7 +119,7 @@ export async function PATCH(request: Request) {
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
     // Disabling also tears down THIS connection's invitee.created webhook
-    // subscription (best-effort, BEFORE the flip — the remote delete needs
+    // subscription (best-effort, BEFORE the flip, the remote delete needs
     // the still-active token). Re-enabling needs nothing: the booking-goal
     // sweep re-creates subscriptions lazily.
     if (!body.isActive) {

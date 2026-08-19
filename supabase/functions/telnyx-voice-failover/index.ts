@@ -71,7 +71,7 @@ serve(async (req: Request) => {
     }
 
     // Transfer idempotency (§8): retries of this endpoint (cron, manual ops, Telnyx
-    // upstream retry on timeout) must not transfer the same leg twice — a double
+    // upstream retry on timeout) must not transfer the same leg twice, a double
     // transfer causes the caller to be bounced/dropped. We reuse voice_failover_
     // maintenance_at as the "failover action taken" watermark for this leg; the
     // speak path uses the same column, so speak+transfer also can't both fire.

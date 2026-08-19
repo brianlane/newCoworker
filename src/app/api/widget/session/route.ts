@@ -1,5 +1,5 @@
 /**
- * POST /api/widget/session — start a website-chat-widget visitor session.
+ * POST /api/widget/session, start a website-chat-widget visitor session.
  *
  * Cookie-free, CSRF-exempt (see src/proxy.ts): authenticated by the
  * tenant's public site key alone. Returns the one-time session bearer the
@@ -9,7 +9,7 @@
  *
  * When the owner enabled the pre-chat contact form
  * (chat_widget_settings.require_contact_form), a session REQUIRES a name
- * plus at least one of email/phone — enforced server-side so a hand-rolled
+ * plus at least one of email/phone, enforced server-side so a hand-rolled
  * client can't skip the form.
  */
 
@@ -23,7 +23,7 @@ import { buildVisitorMeta, webchatClientMetaSchema } from "@/lib/webchat/visitor
 
 export const dynamic = "force-dynamic";
 
-// New sessions are cheap rows but each one is a fresh anonymous identity —
+// New sessions are cheap rows but each one is a fresh anonymous identity,
 // keep a single IP from minting them in bulk. Durable (Postgres-backed) so
 // the quota binds fleet-wide instead of per Vercel isolate (audit 2026-07,
 // finding M3); it falls back to the in-memory limiter on any DB blip.

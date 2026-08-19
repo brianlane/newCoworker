@@ -383,7 +383,7 @@ describe("proxy", () => {
   it("still runs the Supabase session refresh on session-consuming routes", async () => {
     // /oauth/consent and /contact read the session in their server
     // components (read-only cookies there), so the middleware must keep
-    // refreshing for them — otherwise rotated refresh tokens are lost.
+    // refreshing for them, otherwise rotated refresh tokens are lost.
     for (const path of ["/dashboard", "/api/business/status", "/oauth/consent", "/contact"]) {
       vi.mocked(createServerClient).mockClear();
       const client = mockSupabaseWithUser({ id: "u-1", email: "user@test.com" });

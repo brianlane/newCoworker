@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
  * tools (Apify, PhantomBuster, IGLeads, …): install the no-outreach starter
  * webhook flow, then either import the tool's CSV export on the lead-backlog
  * page or wire a live Make.com/Zapier bridge at the tenant's flow-events
- * endpoint — and watch the test prospects arrive live (the "recent events"
+ * endpoint, and watch the test prospects arrive live (the "recent events"
  * readout below reads webhook_event_received system logs). Mirrors the
  * meta-leads guide page one-for-one in auth and data loading.
  */
@@ -35,7 +35,7 @@ export default async function InstagramLeadsGuidePage() {
   const ctx = await resolveActiveBusinessContext(user);
   const activeBusinessId =
     ctx.businessId && ctx.role && can(ctx.role, "manage_aiflows") ? ctx.businessId : null;
-  // API keys are a manage_billing (owner) capability — managers get the
+  // API keys are a manage_billing (owner) capability, managers get the
   // guide without key metadata (hasApiKey drives copy only).
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db

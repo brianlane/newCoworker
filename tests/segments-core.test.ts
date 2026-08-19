@@ -10,7 +10,7 @@ import {
 /**
  * Smart Lists core: the saved-filter schema and the pure membership matcher
  * (all criteria AND; empty filters match everyone; date-less contacts fail
- * "within" checks and pass "overdue" ones — a never-contacted lead is
+ * "within" checks and pass "overdue" ones, a never-contacted lead is
  * maximally overdue).
  */
 

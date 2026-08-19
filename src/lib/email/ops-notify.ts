@@ -343,7 +343,7 @@ export async function sendOpsNewSignupEmail(
 /**
  * Fire-and-forget "Nango account nearing its connection limit" ops alert;
  * never throws. Not tier-tagged: the quota is platform-wide. Returns true
- * when sent (the caller owns dedupe — see maybeSendNangoQuotaAlert).
+ * when sent (the caller owns dedupe, see maybeSendNangoQuotaAlert).
  */
 export async function sendOpsNangoQuotaEmail(
   input: Omit<OpsNangoQuotaInput, "siteUrl">
@@ -418,7 +418,7 @@ export async function sendOpsProvisioningStuckEmail(
 /**
  * Fire-and-forget "DID release failed" ops alert; never throws. Sent by the
  * lifecycle executor when a terminal teardown can't release the tenant's
- * Telnyx number — the wipe stamp removes the business from every retry
+ * Telnyx number, the wipe stamp removes the business from every retry
  * sweep, so without this alert the number would silently rent forever.
  */
 export async function sendOpsDidReleaseFailedEmail(

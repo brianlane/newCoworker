@@ -4,7 +4,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /**
  * Snapshot of the most recent website crawl, persisted so the dashboard can
- * show "Crawled N pages on <date>" (with the page list) after a reload —
+ * show "Crawled N pages on <date>" (with the page list) after a reload,
  * not just in the live re-crawl stream.
  */
 export type WebsiteCrawlReport = {
@@ -28,9 +28,9 @@ export type ConfigRow = {
    */
   memory_archive_md?: string;
   /**
-   * Memory knowledge-graph rollout mode: 'inherit' (default — follow the
+   * Memory knowledge-graph rollout mode: 'inherit' (default, follow the
    * fleet-wide admin_platform_settings default) | 'off' | 'shadow' |
-   * 'active'. Resolve with resolveMemoryGraphMode — never read raw for
+   * 'active'. Resolve with resolveMemoryGraphMode, never read raw for
    * behavior decisions. Optional on the type: rows read before the
    * 20260820100100_memory_graph migration ran won't have it.
    */
@@ -84,7 +84,7 @@ export async function upsertBusinessConfig(
  * owned by the other writer during the fire-and-forget window after checkout.
  *
  *   1. `upsert({...empty}, { ignoreDuplicates: true })` creates the row if
- *      it doesn't exist, and is a no-op if it does — so fields owned by other
+ *      it doesn't exist, and is a no-op if it does, so fields owned by other
  *      writers (website_md, soul_md, etc.) are never overwritten here.
  *   2. A targeted `update` patches only the fields the caller provided.
  */
@@ -151,7 +151,7 @@ export async function patchBusinessConfig(
 /**
  * Convenience wrapper: idempotently set only `website_md` via
  * `patchBusinessConfig`. Kept as a named export because the website-ingest
- * handler and its tests both import this verb directly — collapsing it to a
+ * handler and its tests both import this verb directly, collapsing it to a
  * thin delegate removes the duplicated skeleton-upsert logic that used to
  * live here while preserving the call-site API.
  */

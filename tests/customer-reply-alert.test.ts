@@ -100,7 +100,7 @@ describe("sendCustomerReplyAlert", () => {
     );
     expect(body.record.log_payload.contact_label).toBe(LEAD);
 
-    // A contact read error still alerts — silence is the worse failure.
+    // A contact read error still alerts, silence is the worse failure.
     const fetchFn2 = okFetch();
     const { db: db2 } = makeDb([
       OPTED_IN,

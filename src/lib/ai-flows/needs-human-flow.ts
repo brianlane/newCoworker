@@ -5,11 +5,11 @@
  *   Needs Human tag added (the escalation hook in _shared/needs_human.ts)
  *     → route_to_team with broadcastAll: every active, available roster
  *       member is texted the handoff offer at once on one 10-minute
- *       deadline — first "1" claims (contact auto-assigned, losers told),
- *       "2" passes — and the OWNER is alerted only by the timeout /
+ *       deadline, first "1" claims (contact auto-assigned, losers told),
+ *       "2" passes, and the OWNER is alerted only by the timeout /
  *       all-passed fallback.
  *
- * The flow is a REGULAR flow — visible and editable on /dashboard/aiflows
+ * The flow is a REGULAR flow, visible and editable on /dashboard/aiflows
  * (owners can reword templates or change the window). The toggle only
  * manages enablement, keyed by the seeded name; escalateToHuman skips its
  * direct owner page purely on "did a run enqueue", so a deleted or disabled
@@ -21,10 +21,10 @@ import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { setNeedsHumanTeamFirst } from "@/lib/db/businesses";
 import { restoreContentRows } from "@/lib/residency/row-delete";
 
-/** Seeded name — the toggle's lookup key. */
+/** Seeded name, the toggle's lookup key. */
 export const NEEDS_HUMAN_TEAM_FLOW_NAME = "Human handoff — offer to team first";
 
-/** Matches _shared/needs_human.ts NEEDS_HUMAN_TAG (kept literal — this
+/** Matches _shared/needs_human.ts NEEDS_HUMAN_TAG (kept literal, this
  * module is Next-side, that one is Deno-side; the unit test pins parity). */
 const NEEDS_HUMAN_TAG = "Needs Human";
 
@@ -69,7 +69,7 @@ async function resolveDb(client?: SupabaseClient): Promise<SupabaseClient> {
  * error so the toggle save fails loudly instead of silently arming a no-op.
  *
  * Soft-deleted rows with this name are restored (stamp cleared + enabled)
- * rather than inserting a duplicate — otherwise Admin restore and the
+ * rather than inserting a duplicate, otherwise Admin restore and the
  * Employees toggle can leave two live handoff flows.
  */
 export async function ensureNeedsHumanTeamFlow(
@@ -138,7 +138,7 @@ export async function ensureNeedsHumanTeamFlow(
 
 /**
  * Enable/disable the seeded flow by its name (toggle-off path). A renamed
- * flow is simply not found — harmless, since escalateToHuman only skips the
+ * flow is simply not found, harmless, since escalateToHuman only skips the
  * owner page when a run actually enqueues.
  */
 export async function setNeedsHumanTeamFlowEnabled(
@@ -158,10 +158,10 @@ export async function setNeedsHumanTeamFlowEnabled(
 
 /**
  * Apply the toggle atomically-in-spirit (the settings route's single entry
- * point). ON: arm the flow FIRST, then flip the column — and if the column
+ * point). ON: arm the flow FIRST, then flip the column, and if the column
  * write fails, best-effort DISARM the flow again before rethrowing, so a
  * half-applied save never leaves an enabled flow beside an OFF column
- * (which would broadcast AND page on every escalation — Bugbot, PR #801).
+ * (which would broadcast AND page on every escalation, Bugbot, PR #801).
  * OFF: disable the flow, then clear the column; a failed column write there
  * leaves flow-disabled + column-ON, which degrades safely (zero enqueued
  * runs → escalations fall through to the direct owner page).

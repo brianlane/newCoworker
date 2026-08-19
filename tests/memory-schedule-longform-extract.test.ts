@@ -1,7 +1,7 @@
 /**
  * scheduleLongFormGraphExtract defers the chunked extraction through
- * next/server's after() — the same keep-alive contract as
- * scheduleVaultSync — and forwards its arguments unchanged.
+ * next/server's after(), the same keep-alive contract as
+ * scheduleVaultSync, and forwards its arguments unchanged.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
  * /admin/gemini (docs/GEMINI-SPEND.md).
  *
  * Vitest isolates each test file in a fresh module registry, so in-memory
- * accumulation would reset per file — the append-only JSONL survives the
+ * accumulation would reset per file, the append-only JSONL survives the
  * whole run instead. Best-effort by design: a recording failure must never
  * fail a contract test. `outputTokens` includes thinking tokens (Google
  * bills them at the output rate), mirroring the production meters.

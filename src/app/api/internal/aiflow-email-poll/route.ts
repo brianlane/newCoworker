@@ -2,13 +2,13 @@
  * Internal endpoint that runs one inbound-email trigger poll.
  *
  * Kicked ~1/min by the ai-flow-worker Edge Function's cron tick (the worker
- * can't poll mailboxes itself — the Nango client + connection verification
+ * can't poll mailboxes itself, the Nango client + connection verification
  * live in this Next.js runtime). Reads recent inbox messages for every
  * mailbox watched by an enabled email-triggered flow and enqueues matching
  * ai_flow_runs; the worker then claims those on its next tick like any other
  * queued run.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape and
+ * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>`, same shape and
  * secret as the other /api/internal/* endpoints.
  *
  * Self-healing: dedupe keys make repeat polls idempotent, so a failed or

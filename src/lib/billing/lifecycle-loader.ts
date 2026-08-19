@@ -7,8 +7,8 @@
  *   * /api/admin/delete-client                              (admin)
  *   * supabase/functions/subscription-grace-sweep           (cron)
  *
- * Emits a typed `reason` when the business is not in a state we can act on
- * — cleaner than throwing.
+ * Emits a typed `reason` when the business is not in a state we can act on,
+ * cleaner than throwing.
  */
 
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -49,7 +49,7 @@ export async function loadLifecycleContextForBusiness(
   // We store the Hostinger VM id as text on `businesses`; coerce to number
   // for client calls. Null-safe on pre-lifecycle rows. Non-hostinger rows
   // carry a non-numeric box id (OVH service name / byos sentinel), which
-  // this regex already rejects — the provider gate makes that explicit.
+  // this regex already rejects, the provider gate makes that explicit.
   const vmIdRaw = business.hostinger_vps_id;
   const virtualMachineId =
     hostingerManaged && vmIdRaw && /^\d+$/.test(vmIdRaw)
@@ -115,7 +115,7 @@ export async function loadLifecycleContextForBusiness(
 
   // Hostinger billing expiration for the cancel-at-period-end renewal
   // guard: only disable auto-renewal when the box's paid Hostinger time
-  // reaches/passes Stripe period end. Best-effort — a lookup failure leaves
+  // reaches/passes Stripe period end. Best-effort, a lookup failure leaves
   // the field null and the planner skips the disable (fail open for uptime).
   let hostingerBillingExpiresAt: string | null = null;
   if (hostingerManaged && subscription.hostinger_billing_subscription_id) {
@@ -142,7 +142,7 @@ export async function loadLifecycleContextForBusiness(
   }
 
   // Sunk-cost never_renew flag: undo-cancel must not re-enable Hostinger
-  // renewal for these boxes. Best-effort — lookup failure leaves null and
+  // renewal for these boxes. Best-effort, lookup failure leaves null and
   // undo enables renewal (tenant safety; posture nags if the flag was real).
   let vpsNeverRenew: boolean | null = null;
   if (virtualMachineId !== null) {

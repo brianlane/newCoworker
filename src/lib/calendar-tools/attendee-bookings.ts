@@ -1,6 +1,6 @@
 /**
  * ONE provider-neutral answer to "does this attendee have an upcoming
- * booking with this business?" — the lookup that used to be implemented
+ * booking with this business?", the lookup that used to be implemented
  * three separate times (the AiFlow booking precheck, the SMS booking-status
  * preamble, and the dedupe ledger's upcoming-claim reads), each with its own
  * Calendly/Vagaro matching code, while the booking core consulted none of
@@ -9,16 +9,16 @@
  *
  * Two layers:
  *
- *  - `lookupProviderBookingsForAttendee` — the connected provider's
+ *  - `lookupProviderBookingsForAttendee`, the connected provider's
  *    OFF-PLATFORM visibility, via a per-provider adapter registered in
  *    `ATTENDEE_BOOKING_LOOKUPS`. Calendly and Vagaro take bookings outside
  *    the platform (calendly.com, the merchant's own Vagaro book), so they
  *    need real adapters; Google/Microsoft/CalDAV only ever gain bookings
- *    through our booking core, so they are registered `ledger_only` — an
+ *    through our booking core, so they are registered `ledger_only`, an
  *    EXPLICIT statement, so the registry parity test can tell "deliberate"
  *    from "forgot to wire the new provider".
  *
- *  - `findUpcomingBookingsForAttendee` — the full picture: the
+ *  - `findUpcomingBookingsForAttendee`, the full picture: the
  *    provider-neutral `calendar_booking_dedupe` ledger first (covers every
  *    platform-created booking on any provider, plus Vagaro's webhook-synced
  *    off-platform rows), then the provider adapter. This is what the booking
@@ -35,14 +35,14 @@
  *    a match, no invitee fetch); miss → full listing + budgeted invitee
  *    fetches matched on SMS-reminder numbers.
  *  - `detail` (the booking-context's shape): ONE listing (email-narrowed
- *    when the email is known — no phone-listing fallback), invitees always
+ *    when the email is known, no phone-listing fallback), invitees always
  *    fetched so the result carries the event name and reschedule lineage
  *    (`old_invitee`).
  *
  * Failure contract: transport refusals (a null transport response) surface
  * as `{ ok: false, reason: "refused" }`; a missing provider connection as
  * `{ ok: false, reason: "not_connected" }`. Adapter functions may THROW on
- * unexpected trouble (e.g. a Vagaro listing exploding) — each consumer
+ * unexpected trouble (e.g. a Vagaro listing exploding), each consumer
  * catches with its own established fail-open logging, and
  * `findUpcomingBookingsForAttendee` catches for the booking guard.
  */
@@ -77,12 +77,12 @@ export const ATTENDEE_BOOKING_HORIZON_DAYS = 90;
 
 /** The attendee's identities, as every consumer already gathers them. */
 export type AttendeeIdentifiers = {
-  /** Phone numbers — E.164 or bare digits (matching is digit-based and
+  /** Phone numbers, E.164 or bare digits (matching is digit-based and
    * country-code-tolerant either way). */
   phones: string[];
   /** Lower-cased email, when known. */
   email: string | null;
-  /** Display name — ledger fallback key only, never used to match provider data. */
+  /** Display name, ledger fallback key only, never used to match provider data. */
   name?: string | null;
 };
 
@@ -109,7 +109,7 @@ export type AttendeeBookingLookupResult =
   | { ok: true; bookings: UpcomingAttendeeBooking[] }
   | { ok: false; reason: "refused" | "not_connected" };
 
-/** Injectable transports/caches — the same seams the precheck exposed. */
+/** Injectable transports/caches, the same seams the precheck exposed. */
 export type AttendeeBookingDeps = {
   /** Injectable Calendly transport (tests). */
   request?: (
@@ -134,7 +134,7 @@ export type AttendeeBookingDeps = {
 };
 
 export type AttendeeBookingLookupOptions = {
-  /** Lookup shape — see the module doc. Defaults to `existence`. */
+  /** Lookup shape, see the module doc. Defaults to `existence`. */
   mode?: "existence" | "detail";
   /**
    * Shared invitee-fetch budget. Callers that run FURTHER provider scans in
@@ -143,7 +143,7 @@ export type AttendeeBookingLookupOptions = {
    */
   budget?: { remaining: number };
   /**
-   * A Calendly user URI the caller already resolved this turn — skips the
+   * A Calendly user URI the caller already resolved this turn, skips the
    * adapter's own (cached) resolution so a turn never pays the /users/me
    * probe twice.
    */
@@ -152,7 +152,7 @@ export type AttendeeBookingLookupOptions = {
 
 /**
  * Resolve the connected Calendly account's user URI, preferring the cached
- * value on the direct-PAT connection row (poller parity — saves the
+ * value on the direct-PAT connection row (poller parity, saves the
  * /users/me probe). Null when the transport refuses. Moved here from the
  * booking precheck so every consumer shares the cache discipline; the log
  * messages keep their historical "booking precheck:" prefix (production log
@@ -207,8 +207,8 @@ type ListedCalendlyInvitee = {
 
 /**
  * Whether an invitee is this attendee: exact (case-insensitive) email or a
- * country-code-tolerant SMS-reminder number. Canceled invitees never match
- * — a canceled invitee on an active event is someone who moved away from it.
+ * country-code-tolerant SMS-reminder number. Canceled invitees never match,
+ * a canceled invitee on an active event is someone who moved away from it.
  */
 export function calendlyInviteeMatchesAttendee(
   invitee: ListedCalendlyInvitee,
@@ -304,7 +304,7 @@ async function calendlyListUpcomingForAttendee(
   };
 
   if (mode === "detail") {
-    // ONE listing — email-narrowed when the contact's email is known (no
+    // ONE listing, email-narrowed when the contact's email is known (no
     // phone-listing fallback: the booking-context's shape), invitees always
     // fetched for the name/lineage. Events need a uri AND a start to be
     // reportable.
@@ -484,7 +484,7 @@ export type AttendeeBookingLookup =
   | {
       /**
        * The provider only ever gains bookings through our booking core, so
-       * the platform ledger IS its complete truth — an explicit statement,
+       * the platform ledger IS its complete truth, an explicit statement,
        * not a missing adapter.
        */
       kind: "ledger_only";
@@ -492,7 +492,7 @@ export type AttendeeBookingLookup =
 
 /**
  * EVERY provider `resolveCalendarConnection` can return must be registered
- * here — adapter for providers that take bookings off-platform, explicit
+ * here, adapter for providers that take bookings off-platform, explicit
  * `ledger_only` for providers whose bookings all flow through our core.
  * Pinned by tests/calendar-attendee-bookings.test.ts: adding a provider
  * without deciding its booking-visibility story fails CI.
@@ -529,9 +529,9 @@ export function hasAttendeeBookingAdapter(
 
 /**
  * The connected provider's OFF-PLATFORM upcoming bookings for this
- * attendee (adapter layer only — no ledger read). Ledger-only providers
+ * attendee (adapter layer only, no ledger read). Ledger-only providers
  * answer an empty ok (nothing off-platform can exist for them). May THROW
- * (Vagaro transport trouble) — callers own their fail-open handling.
+ * (Vagaro transport trouble), callers own their fail-open handling.
  */
 export async function lookupProviderBookingsForAttendee(
   businessId: string,
@@ -550,8 +550,8 @@ export async function lookupProviderBookingsForAttendee(
  * ledger's soonest upcoming confirmed claim for this attendee (exact key,
  * then phone-tolerant), plus the connected provider's off-platform view.
  * Sorted soonest-first, de-duplicated by event id. Fail-open throughout: a
- * refused/throwing provider lookup or ledger error just narrows the result
- * — callers must treat an empty list as "no duplicate visible", never
+ * refused/throwing provider lookup or ledger error just narrows the result,
+ * callers must treat an empty list as "no duplicate visible", never
  * "proven none".
  */
 export async function findUpcomingBookingsForAttendee(
@@ -603,7 +603,7 @@ export async function findUpcomingBookingsForAttendee(
     });
   }
 
-  // Unknown starts (the email fast path can answer without one) sort last —
+  // Unknown starts (the email fast path can answer without one) sort last,
   // a known-time booking is always the more useful thing to surface first.
   const startMs = (b: UpcomingAttendeeBooking) => {
     const ms = Date.parse(b.startIso);

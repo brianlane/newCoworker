@@ -1,22 +1,22 @@
 /**
  * DELETE /api/admin/delete-user
  *
- * Complete account removal for test/junk accounts — the BizBlasts users-admin
+ * Complete account removal for test/junk accounts, the BizBlasts users-admin
  * delete, adapted to newCoworker's shape. For the given email it:
  *   1. refuses when ANY owned business has a Stripe-linked, non-canceled
- *      subscription (cancel billing first via Force-cancel & wipe — this
+ *      subscription (cancel billing first via Force-cancel & wipe, this
  *      route must never orphan live Stripe billing);
  *   2. stops any Hostinger VMs still attached to owned businesses
  *      (best-effort; a 404 means the box is already gone);
  *   3. hard-deletes every owned business row (FK cascades take the tenant's
  *      content, members, logs, and subscription history with it);
  *   4. removes the email's membership grants on OTHER tenants;
- *   5. deletes the Supabase auth user LAST — everything above is keyed on
+ *   5. deletes the Supabase auth user LAST, everything above is keyed on
  *      the email (not the auth id), so a failure at any step leaves the
  *      login intact and the whole DELETE retryable; a failure on the final
  *      auth step is also retryable (the re-run finds no rows and just
  *      removes the auth user); and
- *   6. writes an admin audit entry (payload-only business ids — the FK
+ *   6. writes an admin audit entry (payload-only business ids, the FK
  *      targets are gone).
  *
  * Deliberately NOT a lifecycle flow: no backups, no grace window, no owner
@@ -59,7 +59,7 @@ export async function DELETE(request: Request) {
 
     // Case-INSENSITIVE ownership match (mirrors the user detail page):
     // `businesses.owner_email` keeps signup casing, so an equality lookup on
-    // the lowercased email could miss owned tenants — deleting the auth user
+    // the lowercased email could miss owned tenants, deleting the auth user
     // while their businesses (and the Stripe/VM guards) silently survive.
     const ownedBusinesses = (await listBusinesses()).filter(
       (b) => (b.owner_email ?? "").trim().toLowerCase() === email
@@ -130,12 +130,12 @@ export async function DELETE(request: Request) {
 
     // Rows first, auth user LAST. Unlike delete-client (whose only handle on
     // the auth user is the soon-to-be-deleted business row), everything here
-    // keys on the email — so if a business delete throws partway, the login
+    // keys on the email, so if a business delete throws partway, the login
     // still exists and re-running this same DELETE finishes the job. The
     // opposite order would strand a half-deleted account behind a dead login.
     for (const businessId of businessIds) {
       // Snapshot the Nango connections BEFORE the row delete (the cascade
-      // removes the rows) but revoke them AFTER it commits — a failed
+      // removes the rows) but revoke them AFTER it commits, a failed
       // delete must leave the tenant fully intact, never active with dead
       // integrations. Nango's side would otherwise outlive the tenant and
       // burn account-wide quota forever.
@@ -157,7 +157,7 @@ export async function DELETE(request: Request) {
           supabaseUserId: authUserId,
           error: error.message
         });
-        // The wipe already happened — record it even though the login
+        // The wipe already happened, record it even though the login
         // survived, so the destructive half is never audit-invisible.
         await logAdminAction({
           adminEmail: admin.email,

@@ -3,7 +3,7 @@
  * roster (shared with AiFlow route_to_team), employee_time_off ranges, and
  * per-employee routing stats aggregated from ai_flow_runs.
  *
- * Service-role only — owner authorization is the API route's job
+ * Service-role only, owner authorization is the API route's job
  * (requireOwner before any call here), same trust model as the customers
  * routes.
  */
@@ -148,7 +148,7 @@ export async function createTeamMember(
   if (error) throw new Error(`createTeamMember: ${error.message}`);
   const row = data as unknown as TeamMemberRow;
   // Knowledge graph (kg-source: team_roster): the roster is the canonical
-  // "who works here" — never-throws, mode-gated inside.
+  // "who works here", never-throws, mode-gated inside.
   await ingestRosterMember(businessId, {
     name: row.name,
     phoneE164: row.phone_e164,
@@ -326,7 +326,7 @@ type RoutingRunLike = { created_at: string; context: unknown };
  * every phone that was offered and rejected/timed out, `offered` the phone
  * currently holding the offer, and `claimed_by` the phone that replied "1".
  * A claim does NOT append to `tried`, so offers = tried ∪ offered ∪
- * claimed_by. Timestamps use the run's created_at — close enough for a
+ * claimed_by. Timestamps use the run's created_at, close enough for a
  * "last offered 2d ago" stat without storing per-offer events.
  */
 export function aggregateRoutingStats(
@@ -368,7 +368,7 @@ export function aggregateRoutingStats(
   return stats;
 }
 
-/** How many recent runs feed the stats — bounded so the page stays cheap. */
+/** How many recent runs feed the stats, bounded so the page stays cheap. */
 export const ROUTING_STATS_RUN_LIMIT = 500;
 
 export async function listEmployeeRoutingStats(

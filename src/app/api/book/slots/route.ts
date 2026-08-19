@@ -1,5 +1,5 @@
 /**
- * POST /api/book/slots — public slot listing for the self-serve booking
+ * POST /api/book/slots, public slot listing for the self-serve booking
  * page (/book/<token>).
  *
  * Cookie-free, CSRF-exempt (see src/proxy.ts): authenticated by the page's
@@ -17,7 +17,7 @@ import { listPublicSlots } from "@/lib/booking-page/service";
 export const dynamic = "force-dynamic";
 
 // Slot reads are cheap but each one fans out to the provider free/busy
-// API — keep one IP from hammering it. Durable (Postgres-backed) so the
+// API, keep one IP from hammering it. Durable (Postgres-backed) so the
 // quota binds fleet-wide instead of per Vercel isolate.
 const SLOTS_RATE = { interval: 60 * 1000, maxRequests: 30 };
 

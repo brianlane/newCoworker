@@ -1,5 +1,5 @@
 /**
- * Public payment page for a custom white-glove offer — the durable, emailable
+ * Public payment page for a custom white-glove offer, the durable, emailable
  * link (/offer/<pay_token>) an admin sends to a prospect (or an existing
  * owner). The pay_token is an unguessable capability; the page shows what the
  * offer is and hands off to Stripe Checkout via /offer/<pay_token>/pay, which

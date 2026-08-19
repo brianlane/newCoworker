@@ -36,7 +36,7 @@ import {
 } from "../_shared/telnyx_edge_guard.ts";
 // Operational sends (acks, compliance replies, owner forwards) are METERED
 // against the tenant's monthly pool like all traffic (Jul 14 2026 policy)
-// but never refused — see _shared/sms_operational_meter.ts.
+// but never refused, see _shared/sms_operational_meter.ts.
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import {
@@ -141,7 +141,7 @@ type AiFlowEval = { suppress: boolean; matched: MatchedAiFlow[] };
  * Evaluate enabled AiFlow triggers for a business against the inbound message
  * plus a correlation window of the sender's recent messages (so a "text then
  * link" two-SMS lead still matches). Pure matching is delegated to the tested
- * engine; this only does the DB reads. NEVER throws — the caller treats any
+ * engine; this only does the DB reads. NEVER throws, the caller treats any
  * failure as "no flows matched" so the inbound SMS path is never broken.
  */
 async function evaluateAiFlows(
@@ -221,7 +221,7 @@ async function evaluateAiFlows(
       if (trigger.channel !== "sms") continue;
       // Pre-resolve any from_matches saved-contact refs to live identity values
       // for the pure evaluator. A resolution failure fails CLOSED for this flow
-      // only (no entry ⇒ the ref condition can't match) — never breaks the
+      // only (no entry ⇒ the ref condition can't match), never breaks the
       // inbound path or the other flows.
       let refValues: Map<string, string[]> | undefined;
       try {
@@ -296,7 +296,7 @@ async function evaluateAndEnqueueAiFlows(
 
   // A matched flow may run long after Telnyx's media CDN link expires
   // (deferred quiet-hours/timeWindow runs), and suppressed-reply flows never
-  // pass through the worker's capture path — so make {{trigger.image}}
+  // pass through the worker's capture path, so make {{trigger.image}}
   // DURABLE now: store the photo in generated-images and reference the
   // bucket path. Only costs a download when an MMS actually matched a flow.
   // Best-effort: on a store failure fall back to the raw Telnyx URL, which
@@ -305,7 +305,7 @@ async function evaluateAndEnqueueAiFlows(
   if (ctx.image) {
     triggerImage = ctx.image.url;
     try {
-      // No redirects: only the pinned Telnyx host may serve the bytes — a
+      // No redirects: only the pinned Telnyx host may serve the bytes, a
       // 3xx bouncing elsewhere is a refusal, not a hop (SSRF).
       const res = await fetch(ctx.image.url, { redirect: "manual" });
       if (res.ok) {
@@ -340,7 +340,7 @@ async function evaluateAndEnqueueAiFlows(
     for (const m of evalRes.matched) {
       // Re-entry gate: a flow with allowReentry=false never re-enrolls a
       // sender who already has a (non-test) run. Suppression is NOT granted
-      // by a blocked enqueue — no run was queued to own the reply.
+      // by a blocked enqueue, no run was queued to own the reply.
       if (await reentryBlocked(supabase, businessId, m.id, m.def, ctx.from ?? "")) continue;
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
         flow_id: m.id,
@@ -353,14 +353,14 @@ async function evaluateAndEnqueueAiFlows(
             from: ctx.from ?? "",
             to: ctx.to,
             // The full thread roster (sender + every `to`). More than two
-            // numbers means a group MMS — a send_sms { replyToGroup } step
+            // numbers means a group MMS, a send_sms { replyToGroup } step
             // posts back to everyone except our own DID.
             participants: ctx.participants,
             group: ctx.participants.length > 2,
             event_id: ctx.eventId,
             // Photo the texter attached ("" when none): a durable
             // generated-images path (or the raw Telnyx URL when the store
-            // failed) — consumable by generate_image's inputImageTemplate.
+            // failed), consumable by generate_image's inputImageTemplate.
             image: triggerImage
           }
         },
@@ -406,16 +406,16 @@ async function evaluateAndEnqueueAiFlows(
 
 /**
  * wait_for_reply resume: match this sender to EVERY run parked waiting on
- * their number (status='awaiting_reply', context.waiting_reply.from) — one
+ * their number (status='awaiting_reply', context.waiting_reply.from), one
  * lead can legitimately have several flows waiting, and their single text
  * answers all of them. Each run gets the reply written into
  * context.vars[save_as], the per-step resolution marker stamped, and a
  * re-queue. Revision-gated like the offer-reply resumes so a concurrent
- * timeout sweep can't be clobbered — losing a race means that run's
+ * timeout sweep can't be clobbered, losing a race means that run's
  * no-reply branch already ran. Returns the resumed run ids; a non-empty
  * list makes the caller suppress the default Coworker reply AND skip
  * trigger evaluation (the flow owns this turn), and exempts those runs
- * from the "replied" goal jump — the reply must flow through their
+ * from the "replied" goal jump, the reply must flow through their
  * authored branch logic, not leapfrog it.
  */
 async function resumeAwaitingReplyRun(
@@ -514,7 +514,7 @@ const LATE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
  * without this they never reach the SMS log and the thread shows only the
  * outbound offer. We store a terminal row (`status:'done'`, `suppress_reply`) so
  * the worker never re-processes it, with the confirmation we sent as the durable
- * `assistant_reply_text` — that renders BOTH the teammate's reply and our ack in
+ * `assistant_reply_text`, that renders BOTH the teammate's reply and our ack in
  * one conversational unit. Best-effort and idempotent on `telnyx_event_id`
  * (23505 = a Telnyx redelivery already logged it); a failure here never blocks
  * the offer resume that already happened.
@@ -567,10 +567,10 @@ type LiveOfferRun = {
 /**
  * The sender's most recent LIVE offer run, across BOTH offer shapes:
  * single-offer runs match on routing.offered == sender, and BROADCAST runs
- * (route_to_team agentNames — routing.offered stays unset while the offer is
+ * (route_to_team agentNames, routing.offered stays unset while the offer is
  * live) match when routing.offered_all contains the sender. Spans
  * awaiting_agent AND queued statuses for the same sweep-race reason the
- * bare-digit path documents. When both shapes match, the newest run wins —
+ * bare-digit path documents. When both shapes match, the newest run wins,
  * a human's digit answers their newest offer.
  */
 async function findLiveOfferRunFor(
@@ -943,10 +943,10 @@ type LiveClaimArgs = {
   supabase: any;
   businessId: string;
   from: string;
-  /** DID the inbound arrived on — safest ack sender fallback. */
+  /** DID the inbound arrived on, safest ack sender fallback. */
   ackTo: string;
   eventId: string;
-  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  /** Full Telnyx webhook envelope, persisted so the reply shows in Texts. */
   envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
@@ -973,12 +973,12 @@ type LiveClaimArgs = {
 };
 
 /**
- * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer —
+ * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer,
  * "1, <eta>" (e.g. "1, 20 min"). Resolves the teammate's currently offered run
  * and finalizes it as a claim with the ETA stamped on routing.claim_timeframe
  * (the worker appends it to the owner's claim notice + the outcome). Returns a
  * Response when consumed, or null when it should fall through to the normal
- * path — either this sender has no live offer, OR the leading digit isn't "1"
+ * path, either this sender has no live offer, OR the leading digit isn't "1"
  * (the only claim digit). A "2, can't take it" (2 = PASS) therefore never gets
  * mis-recorded as a claim; tryAgentPassWithReason consumes it instead.
  */
@@ -1013,14 +1013,14 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   prevRouting.claim_timeframe = timeframe;
   // Broadcast: stamp the claimer into routing.offered/offered_name so the
   // worker's shared claim finalization sees them exactly like a single-offer
-  // claim (offered_all stays intact — the worker reads the LOSING offerees
+  // claim (offered_all stays intact, the worker reads the LOSING offerees
   // off it to text them a courtesy notice).
   if (found.broadcast) {
     prevRouting.offered = from;
     prevRouting.offered_name = prevRouting.offered_names?.[from] ?? "";
   }
   // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed by the
-  // worker) belongs to THAT reply — never let it ride along with this claim.
+  // worker) belongs to THAT reply, never let it ride along with this claim.
   delete prevRouting.pass_reason;
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
   // Optimistic concurrency: gate on the revision we read (trigger-bumped on
@@ -1055,7 +1055,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   // Ordinarily no acknowledgement is texted back: the offer SMS already
   // carried the lead details, so "you've claimed this lead..." only promised a
   // recap that never came. The exception is a claim that had to be
-  // disambiguated — the sender picked from several leads by name, and a
+  // disambiguated, the sender picked from several leads by name, and a
   // partial match they cannot see resolve is a guess unless we confirm which
   // one they got. The reply is logged either way so it shows in Texts.
   let ackSent: string | null = null;
@@ -1111,10 +1111,10 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
 }
 
 /**
- * Handle a teammate's "pass WITH a reason" reply to a LIVE offer — "2, <reason>"
+ * Handle a teammate's "pass WITH a reason" reply to a LIVE offer, "2, <reason>"
  * (e.g. "2, out of town"). Only digit "2" is a pass. Resolves the teammate's
  * currently offered run and resumes it as a reject with routing.pass_reason
- * stamped — the worker records the reason in actions_taken and appends it to
+ * stamped, the worker records the reason in actions_taken and appends it to
  * the owner-fallback notice, so the owner learns WHY the lead bounced. Returns
  * a Response when consumed, or null when this sender has no live offer (or the
  * digit isn't a pass) so the caller falls through.
@@ -1128,7 +1128,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
   const offer = found.run;
 
   const prevRouting = parseRouting(offer.context?.routing);
-  // Broadcast: someone else's claim already in flight — this pass changes
+  // Broadcast: someone else's claim already in flight, this pass changes
   // nothing (the sender didn't want the lead and it's taken). Log and stop.
   if (found.broadcast && broadcastClaimConflict(prevRouting, from)) {
     return await consumeRacedOfferReply({
@@ -1140,11 +1140,11 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
   prevRouting.last_event = "reject";
   prevRouting.reply_from = from;
   prevRouting.pass_reason = timeframe;
-  // Broadcast run (offered_all present — regardless of which lookup shape
+  // Broadcast run (offered_all present, regardless of which lookup shape
   // matched): retire just this passer; the offer stays live for the rest
   // (the worker re-parks with the remaining shared deadline, or falls back
   // to the owner when this was the last offeree). A passer who had a still-
-  // pending claim (offered stamped to them) is retracting it — clear the
+  // pending claim (offered stamped to them) is retracting it, clear the
   // pointer so their pass never blocks a competing offeree's "1" and they
   // can't re-claim the lead they just passed on.
   if ((prevRouting.offered_all ?? []).length > 0) {
@@ -1179,7 +1179,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     });
   }
   if (!resumed || (resumed as unknown[]).length === 0) {
-    // A raced pass needs no correction text — the sender didn't want the lead
+    // A raced pass needs no correction text, the sender didn't want the lead
     // and someone/something else already moved it. Log it and stop.
     return await consumeRacedOfferReply({
       ...args,
@@ -1396,12 +1396,12 @@ async function consumeOwnerBlockedClaim(
 }
 
 /**
- * Consume a teammate offer reply that LOST an optimistic-concurrency race —
+ * Consume a teammate offer reply that LOST an optimistic-concurrency race,
  * the run was mutated (e.g. a first-to-claim yank, a concurrent reply, or the
  * escalation sweep) between our read and our gated write. A raced CLAIM texts
  * the sender a correction (they believe they got the lead and must hear
  * otherwise); a raced PASS is just logged (textBack: false). Always returns a
- * 200 Response — the message was a staff reply either way, never customer chat.
+ * 200 Response, the message was a staff reply either way, never customer chat.
  */
 async function consumeRacedOfferReply(
   args: LiveClaimArgs & { telemetryDecision: OfferReplyDecision; textBack?: boolean }
@@ -1473,16 +1473,16 @@ type LateClaimArgs = {
   supabase: any;
   businessId: string;
   from: string;
-  /** DID the inbound arrived on — safest ack/notify sender fallback. */
+  /** DID the inbound arrived on, safest ack/notify sender fallback. */
   ackTo: string;
   eventId: string;
-  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  /** Full Telnyx webhook envelope, persisted so the reply shows in Texts. */
   envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
   /**
-   * The leading reply digit — "1" in "1" / "1, 20 min". "1" is the universal
+   * The leading reply digit, "1" in "1" / "1, 20 min". "1" is the universal
    * claim digit and the only one that late-claims; any other digit never
    * matches, so a comma'd reply meant for something else never re-opens a run.
    */
@@ -1492,11 +1492,11 @@ type LateClaimArgs = {
 };
 
 /**
- * Handle a teammate's retroactive (late) claim — a "1" / "1, <eta>" reply after
- * the offer window lapsed — and the FIRST-TO-CLAIM yank: a bare "1" from a
+ * Handle a teammate's retroactive (late) claim, a "1" / "1, <eta>" reply after
+ * the offer window lapsed, and the FIRST-TO-CLAIM yank: a bare "1" from a
  * teammate the lead was offered earlier takes over an offer currently live
  * with someone else (on by default; a flow opts out with firstToClaim:false).
- * The yank is bare-"1" only — "1, <eta>" from outside the sender's own window
+ * The yank is bare-"1" only, "1, <eta>" from outside the sender's own window
  * never preempts the active countdown, because stating an ETA means "not right
  * now". Returns a Response when the message was consumed (claimed or
  * already-yours), or null when no eligible offer exists so the caller can fall
@@ -1507,7 +1507,7 @@ type LateClaimArgs = {
  * the route step (routing.step_index, stamped by the worker on park), and
  * marks routing.late_claim so the worker's claim path notifies the owner and
  * then finalizes WITHOUT replaying later steps. (A yank leaves late_claim
- * unset — post-route steps haven't run, so the flow continues normally.)
+ * unset, post-route steps haven't run, so the flow continues normally.)
  */
 async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const {
@@ -1589,7 +1589,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // (send_sms-only flows, approvals with no route step, etc.) don't consume
   // the cap and hide an eligible late-claim run within the 24h window.
   // Include awaiting_approval: after the owner fallback the worker can advance
-  // past route_to_team and park a LATER step on an approval gate — that run is
+  // past route_to_team and park a LATER step on an approval gate, that run is
   // still the teammate's most recent offered lead and must be visible to the
   // claim, otherwise an older eligible run within 24h would be claimed instead.
   const { data: rows } = await supabase
@@ -1645,7 +1645,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   if (matched.kind === "mine") {
     // Re-ack a duplicate claim so the sender gets positive feedback (this path
     // now also consumes a repeat bare "1", which the stale-offer ack used to
-    // answer). Idempotent — nothing is re-opened.
+    // answer). Idempotent, nothing is re-opened.
     await ack(
       "You've already got this lead, it's yours. Reply 86 if you need to release it.",
       "late-claim-mine"
@@ -1693,7 +1693,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
 
   const routing = parseRouting(match.context!.routing);
   // First-to-claim yank: retire the teammate whose live window we're taking
-  // over into `tried` — they stay recognized by the stale-offer classifier
+  // over into `tried`, they stay recognized by the stale-offer classifier
   // ("<name> picked it up") and are never re-offered this lead.
   if (isYank) {
     const prevOffered = routing.offered ?? "";
@@ -1758,7 +1758,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     });
   }
   if (!reopened || (reopened as unknown[]).length === 0) {
-    // Lost the race — a concurrent "86" or the worker mutated the row first.
+    // Lost the race, a concurrent "86" or the worker mutated the row first.
     // Consume the message (it's still a teammate reply, never a customer text)
     // but don't claim a second time.
     await ack("Thanks, looks like this lead's already been handled.", "late-claim-race");
@@ -1801,10 +1801,10 @@ type StaleOfferAckArgs = {
   supabase: any;
   businessId: string;
   from: string;
-  /** DID the inbound arrived on — safest ack sender fallback. */
+  /** DID the inbound arrived on, safest ack sender fallback. */
   ackTo: string;
   eventId: string;
-  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  /** Full Telnyx webhook envelope, persisted so the reply shows in Texts. */
   envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
@@ -1819,7 +1819,7 @@ type StaleOfferAckArgs = {
  * late-claim window / not re-openable), but this teammate WAS offered a lead
  * recently. Consume it with a deterministic "here's what happened to that
  * lead" ack instead of letting it fall through to the chat AI, which has no
- * offer context and improvises a baffling reply. This never claims — the
+ * offer context and improvises a baffling reply. This never claims, the
  * "1" claim paths keep that role (and "86" unclaims). Returns a Response when
  * consumed, or null when the reply should fall through to the normal inbound path.
  */
@@ -2108,10 +2108,10 @@ type UnclaimArgs = {
   supabase: any;
   businessId: string;
   from: string;
-  /** DID the inbound arrived on — safest ack sender fallback. */
+  /** DID the inbound arrived on, safest ack sender fallback. */
   ackTo: string;
   eventId: string;
-  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  /** Full Telnyx webhook envelope, persisted so the reply shows in Texts. */
   envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
@@ -2184,7 +2184,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   // the run as 'done' (claimed_by stamped on routing); include the same statuses
   // as late-claim so a re-opened/parked run is still findable. awaiting_reply is
   // included because a post-claim flow can park a wait_for_reply on the CLAIMER
-  // (the bad-phone-report pattern) — without it their "86" would miss the
+  // (the bad-phone-report pattern), without it their "86" would miss the
   // unclaim and be swallowed by that wait as a "report" text.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
@@ -2412,7 +2412,7 @@ serve(async (req: Request) => {
     // then the carrier silently drops it for unregistered A2P (10DLC),
     // policy violations, or destination-unreachable. Without surfacing the
     // `to[].status` from message.finalized we have no way to tell a "queued"
-    // message apart from a "delivery_failed" one. Telemetry-only for now —
+    // message apart from a "delivery_failed" one. Telemetry-only for now,
     // we don't fail the webhook on outbound DLRs.
     if (eventType === "message.finalized" || eventType === "message.sent") {
       const payload = (data?.payload ?? {}) as Record<string, unknown>;
@@ -2455,7 +2455,7 @@ serve(async (req: Request) => {
     const toDid = normalizeE164(telnyxMessagingPhoneString(payload, "to"));
     const from = normalizeE164(telnyxMessagingPhoneString(payload, "from"));
 
-    // RCS inbound carries NO recipient phone number — `to[]` holds the RCS
+    // RCS inbound carries NO recipient phone number, `to[]` holds the RCS
     // agent (`agent_id` + `agent_name`) instead, so the agent id is the only
     // routing key. Resolved against business_channel_settings below.
     const inboundChannel: "sms" | "rcs" = isRcsInboundPayload(payload) ? "rcs" : "sms";
@@ -2486,7 +2486,7 @@ serve(async (req: Request) => {
       businessId = (channelRow?.business_id as string | undefined) ?? null;
       // Resolve the tenant's own DID so every downstream sender fallback
       // ("reply from the DID the message arrived on") keeps working on the
-      // RCS path — replies go out via normal per-tenant sender resolution.
+      // RCS path, replies go out via normal per-tenant sender resolution.
       if (businessId && !toDid) {
         const { data: didRow } = await supabase
           .from("business_telnyx_settings")
@@ -2579,7 +2579,7 @@ serve(async (req: Request) => {
     //     below), and `Idempotency-Key` on the Telnyx send dedupes the reply on Telnyx
     //     side if the webhook is retried after a successful send but a later failure.
     //   - Silently returning 200 on send failure would drop STOP/HELP/START confirmations
-    //     without any retry — a carrier-compliance miss.
+    //     without any retry, a carrier-compliance miss.
     const stopReplyIdem = `${eventId}:compliance-stop`;
     const helpReplyIdem = `${eventId}:compliance-help`;
     const startReplyIdem = `${eventId}:compliance-start`;
@@ -2748,12 +2748,12 @@ serve(async (req: Request) => {
     // offering) rather than awaiting_agent_e164 alone: the escalation sweep can
     // re-queue the run (clearing awaiting_agent_e164) in the same window the
     // agent replies, but it leaves routing.offered set until the worker retires
-    // it — so matching on routing.offered across both 'awaiting_agent' and
+    // it, so matching on routing.offered across both 'awaiting_agent' and
     // 'queued' avoids dropping a raced claim into the customer path. 1/2 don't
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
-      // Comma'd offer reply: "<n>, <text>" — "1, <eta>" (claim + when they'll
+      // Comma'd offer reply: "<n>, <text>", "1, <eta>" (claim + when they'll
       // reach out), "2, <reason>" (pass + why), "86, <note>". The comma is the
       // signal that free text annotates the digit.
       const claimTf = parseClaimWithTimeframe(replyBody);
@@ -2799,7 +2799,7 @@ serve(async (req: Request) => {
       }
 
       // Comma'd reply ("<n>, <text>", n != 86): try a LIVE claim first ("1" is
-      // the only claim digit), then a LIVE pass-with-reason ("2, out of town" —
+      // the only claim digit), then a LIVE pass-with-reason ("2, out of town",
       // the reason is surfaced to the owner). If neither resolves it, try a
       // retroactive/LATE claim ("1, <eta>" re-opens a lapsed offer within 24h).
       // Finally, a reply to an offer that can no longer be claimed gets the
@@ -2952,12 +2952,12 @@ serve(async (req: Request) => {
 
       // Single digits 1-9: agent offers understand 1/2; owner approvals map
       // the digit against the option list stored on the pending run (gates
-      // offer up to 4 options today — approve / skip / bypass quiet hours /
+      // offer up to 4 options today, approve / skip / bypass quiet hours /
       // cancel-last). Anything unmatched falls through to the customer path.
       if (/^[1-9]$/.test(replyBody)) {
         // AiFlow agent/owner acks must reply from the business's OWN number (the
         // per-tenant DID the worker also sends prompts from), NOT the global
-        // TELNYX_SMS_FROM_E164 — otherwise the ack lands in a separate thread
+        // TELNYX_SMS_FROM_E164, otherwise the ack lands in a separate thread
         // from the prompt. Mirror the worker's messagingConfig: per-tenant
         // settings override env, and the DID the message arrived on (`to`) is
         // the safest final fallback (it's always a valid sender on the profile).
@@ -2985,11 +2985,11 @@ serve(async (req: Request) => {
 
         // Matches the sender's newest live offer across BOTH shapes: a
         // single offer (routing.offered) or a broadcast fan-out
-        // (routing.offered_all — route_to_team agentNames).
+        // (routing.offered_all, route_to_team agentNames).
         const found = await findLiveOfferRunFor(supabase, businessId, from);
         const offer = found?.run ?? null;
         const isBroadcast = found?.broadcast === true;
-        // Agent offers: "1" claims, "2" passes — universal on every flow. Any
+        // Agent offers: "1" claims, "2" passes, universal on every flow. Any
         // other digit falls through to the owner-approval check and then the
         // normal customer path.
         const bareClaim = replyBody === "1";
@@ -3103,11 +3103,11 @@ serve(async (req: Request) => {
           if (isBroadcast && claimed) {
             // Stamp the claimer into offered/offered_name so the worker's
             // shared claim finalization sees a normal claim; offered_all
-            // stays intact — the worker texts the losing offerees off it.
+            // stays intact, the worker texts the losing offerees off it.
             prevRouting.offered = from;
             prevRouting.offered_name = prevRouting.offered_names?.[from] ?? "";
           }
-          // Broadcast run (offered_all present — even when this sender
+          // Broadcast run (offered_all present, even when this sender
           // matched via a pending-claim `offered` stamp): a pass retires just
           // this passer, and a passer retracting a still-pending claim loses
           // the `offered` pointer so they can't re-claim what they passed on.
@@ -3121,7 +3121,7 @@ serve(async (req: Request) => {
             }
           }
           // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
-          // by the worker) belongs to THAT reply — a bare digit carries none, so
+          // by the worker) belongs to THAT reply, a bare digit carries none, so
           // clear it or the worker would attribute the old text to this reply.
           delete prevRouting.pass_reason;
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
@@ -3236,12 +3236,12 @@ serve(async (req: Request) => {
         // Owner approval via SMS: the digit maps against the option list the
         // worker STORED on the pending run when it parked (approve and skip
         // lead, optional extras like "bypass quiet hours" in between, cancel
-        // is always the last digit) — mirroring the dashboard buttons
+        // is always the last digit), mirroring the dashboard buttons
         // (decideAiFlowApproval). Only honored when the reply comes from the
         // business's configured owner forward number, and only after no agent
         // offer matched above (an owner who is also a roster agent
         // claims/rejects their own offer first). With multiple pending
-        // approvals the reply resolves the most recently updated one — the
+        // approvals the reply resolves the most recently updated one, the
         // owner can always use the dashboard to disambiguate.
         if (businessId) {
           const ownerForward = normalizeE164(bizSettings?.forward_to_e164 ?? "");
@@ -3266,8 +3266,8 @@ serve(async (req: Request) => {
             if (appr && option) {
               const decision = APPROVAL_OPTION_DECISIONS[option];
               // Replace context.approval wholesale (dropping any stale `consumed`
-              // flag left by an earlier gate) so the worker resumes past THIS gate
-              // — exactly what decideAiFlowApproval does for the dashboard path.
+              // flag left by an earlier gate) so the worker resumes past THIS gate,
+              // exactly what decideAiFlowApproval does for the dashboard path.
               // approve/skip/bypass re-queue the run (the worker consumes the
               // decision at the gate); deny cancels the whole run.
               const nextContext = {
@@ -3450,7 +3450,7 @@ serve(async (req: Request) => {
 
         // Retroactive (late) claim on a bare digit: a "1" (or a flow's stamped
         // legacy late-claim digit) sent AFTER the claim window lapsed simply
-        // claims the lead if it's still unclaimed — seamless, same digit as a
+        // claims the lead if it's still unclaimed, seamless, same digit as a
         // live claim, no ETA required. Runs after the live-offer and owner-
         // approval checks so it can never shadow either.
         {
@@ -3535,15 +3535,15 @@ serve(async (req: Request) => {
       | null;
 
     // Roster lookup for the team-member gate (applied below on BOTH the Safe
-    // Mode path and the normal path — only the kill switch outranks it). A
+    // Mode path and the normal path, only the kill switch outranks it). A
     // roster employee's free-text reply (anything that wasn't a 1/2 offer
     // digit or an approval digit above) must NEVER be treated as a customer
-    // message — no Coworker auto-reply, no AiFlow lead trigger, no
+    // message, no Coworker auto-reply, no AiFlow lead trigger, no
     // customer-memory profile. Fail CLOSED on a lookup error (503 → Telnyx
     // redelivers): silently treating an employee as a customer is exactly
     // what this gate exists to prevent.
     let teamMember: { name?: string | null } | null = null;
-    // Owner vs employee — drives staff_kind on the queued job and the persona
+    // Owner vs employee, drives staff_kind on the queued job and the persona
     // the worker builds. Null whenever teamMember is null (ordinary customer).
     let teamMemberKind: "owner" | "team" | null = null;
     if (from) {
@@ -3566,15 +3566,15 @@ serve(async (req: Request) => {
       // The OWNER's own numbers get the same gate: a free text from the
       // owner is never a customer message, and without this the worker
       // would AI-chat with the owner and auto-create a customer profile for
-      // their cell. Checked against ALL owner-configured numbers — the Safe
+      // their cell. Checked against ALL owner-configured numbers, the Safe
       // Mode forward cell, the notification alert phone, and the onboarding
-      // phone — the same set `resolveContactNames` labels as "owner" on the
+      // phone, the same set `resolveContactNames` labels as "owner" on the
       // dashboard, so gate behavior and labeling can't disagree. The gate's
       // owner-forward is a no-op when sender === forward number.
       //
       // This check runs even when the roster matched: owner > employee, same
       // precedence `resolveContactNames` applies. An owner whose cell is also
-      // on the ai_flow_team_members roster must still be classified "owner" —
+      // on the ai_flow_team_members roster must still be classified "owner",
       // it drives the worker persona AND the forward_owner reply relay below
       // (a roster-shadowed owner could otherwise never answer a "what would
       // you like me to say?" prompt).
@@ -3617,7 +3617,7 @@ serve(async (req: Request) => {
     }
 
     // Staff-SMS behavior flags (default: assistant replies, no owner forward).
-    // Only read when the sender is staff — customers never hit this path.
+    // Only read when the sender is staff, customers never hit this path.
     let staffReplyEnabled = true;
     let staffForwardEnabled = false;
     if (teamMember) {
@@ -3642,7 +3642,7 @@ serve(async (req: Request) => {
     // behaviors, controlled by the caller:
     //   reply=true   → enqueue a STAFF job (suppress_reply=false, staff_kind/
     //                  staff_name set). The worker answers in internal-assistant
-    //                  mode — no lead intake, no customer profile — so staff can
+    //                  mode, no lead intake, no customer profile, so staff can
     //                  text the assistant like they do in the dashboard chat.
     //   reply=false  → the legacy behavior: persist a suppressed `done` job so
     //                  there is no AI reply (used in Safe Mode, or when the
@@ -3685,7 +3685,7 @@ serve(async (req: Request) => {
       }
       // Optional owner forward (mirrors the Safe Mode forward contract,
       // including its truncation caps). Skipped when the sender IS the
-      // owner's forward number — no point forwarding to themselves.
+      // owner's forward number, no point forwarding to themselves.
       if (opts.forward) {
         const { data: fwdSettingsRow } = await supabase
           .from("business_telnyx_settings")
@@ -3748,7 +3748,7 @@ serve(async (req: Request) => {
     // like me to say?", the owner's next free-text reply back to the business
     // number is sent to that customer VERBATIM. Runs only for the owner,
     // only when a fresh unanswered prompt exists, and only for relayable
-    // bodies — digit replies were consumed by the approval/claim handlers
+    // bodies, digit replies were consumed by the approval/claim handlers
     // above and compliance keywords earlier still, so a bare digit here is
     // deliberately NOT relayed (it falls through to the staff assistant).
     // Shared by the Safe Mode and normal paths (a prompt created before Safe
@@ -3811,7 +3811,7 @@ serve(async (req: Request) => {
       );
       const reserve = reserveRaw as { ok?: boolean; source?: string } | null;
       if (reserveErr || !reserve?.ok) {
-        // Over cap (or reserve error): never silently drop — tell the
+        // Over cap (or reserve error): never silently drop, tell the
         // owner why nothing went out. The prompt stays pending. This ack
         // is a REAL Telnyx send, so it is METERED like everything else
         // (operational mode: counted as plan, bonus, or visible overage,
@@ -3994,7 +3994,7 @@ serve(async (req: Request) => {
         // Owner reply relay outranks the Safe-Mode staff forward: a pending
         // "what would you like me to say?" prompt (created before Safe Mode
         // flipped on, or by the worker's Safe-Mode forward for a
-        // forward_owner contact) must still be answerable — otherwise the
+        // forward_owner contact) must still be answerable, otherwise the
         // owner's reply would just be forwarded back to themselves.
         {
           const relayed = await tryOwnerReplyRelay();
@@ -4011,7 +4011,7 @@ serve(async (req: Request) => {
             forward: true
           });
         }
-        // Label is "[Safe Mode]" — Safe Mode is NOT the kill switch (paused path
+        // Label is "[Safe Mode]", Safe Mode is NOT the kill switch (paused path
         // is handled above), so saying "paused" would mislead the owner reading
         // the forwarded text on their phone.
         //
@@ -4025,7 +4025,7 @@ serve(async (req: Request) => {
           `[Safe Mode] From ${from ?? "unknown"}: ${rawBody}`.slice(0, 1600);
         // Per-tenant settings override env fallbacks. `fwdFrom` may legitimately
         // be empty when the tenant relies on the messaging profile's number
-        // pool — telnyxSendSms omits `from` when the string is empty.
+        // pool, telnyxSendSms omits `from` when the string is empty.
         const fwdFrom =
           (settings?.telnyx_sms_from_e164 && settings.telnyx_sms_from_e164.trim()) ||
           smsFromE164;
@@ -4033,7 +4033,7 @@ serve(async (req: Request) => {
           (settings?.telnyx_messaging_profile_id &&
             settings.telnyx_messaging_profile_id.trim()) ||
           messagingProfileId;
-        // DO NOT require `fwdFrom` — profile-only sends are valid on Telnyx and
+        // DO NOT require `fwdFrom`, profile-only sends are valid on Telnyx and
         // requiring it here would silently drop inbound customer SMS whenever
         // TELNYX_SMS_FROM_E164 is unset. The gate only needs api key + profile
         // + destination.
@@ -4065,7 +4065,7 @@ serve(async (req: Request) => {
             forwarded: true
           });
           // Stop on response: cancel this sender's pending runs of flows
-          // that stop when the contact replies — BEFORE the enqueue below,
+          // that stop when the contact replies, BEFORE the enqueue below,
           // so a run this very reply starts is never eaten by its own
           // trigger. (Safe Mode never runs the wait-resume, so there are no
           // freshly-resumed runs to exempt.) Best-effort.
@@ -4087,11 +4087,11 @@ serve(async (req: Request) => {
             participants: normalizedParticipants(payload),
             image: telnyxInboundImages(payload)[0]
           });
-          // Goal Events: Safe Mode changes only who ANSWERS the customer —
+          // Goal Events: Safe Mode changes only who ANSWERS the customer,
           // their text is still a reply, so parked/queued runs jump to a
           // "replied" goal exactly like on the normal path. (Safe Mode never
           // runs the wait-resume, so there are no freshly-resumed runs to
-          // exempt.) Best-effort — never blocks the forward path.
+          // exempt.) Best-effort, never blocks the forward path.
           if (from) {
             await applyGoalEvent(supabase, businessId, from, { kind: "replied" });
             // A lead answering is the "Engaged" moment on the pipeline board.
@@ -4130,7 +4130,7 @@ serve(async (req: Request) => {
         // Fallthrough: Safe Mode is on but forwarding credentials aren't
         // available (e.g. `TELNYX_API_KEY` unset, no messaging profile). We
         // must NOT short-circuit with `{ ok: true, skip: "safe_mode_forwarded",
-        // forwarded: false }` — that silently drops the customer's message.
+        // forwarded: false }`, that silently drops the customer's message.
         // Instead, drop through to the regular enqueue path so:
         //   1. the inbound is persisted in sms_inbound_jobs (audit trail),
         //   2. the worker re-evaluates the gate with the same canForward
@@ -4164,7 +4164,7 @@ serve(async (req: Request) => {
     //
     // ONE exception, for flow testability: when a parked wait_for_reply run is
     // watching THIS staff number (an employee testing a flow with their own
-    // phone), the flow owns the turn — resume the wait with their message and
+    // phone), the flow owns the turn, resume the wait with their message and
     // persist a suppressed audit row instead of the internal-assistant reply.
     // Everything else about staff treatment is unchanged (no lead runs, no
     // customer profile; the contact/tag guards protect staff rows separately),
@@ -4220,7 +4220,7 @@ serve(async (req: Request) => {
 
     // Stop on response: cancel this sender's pending runs of flows that stop
     // when the contact replies. Runs whose wait just consumed this reply are
-    // exempt — the flow authored that wait, so the reply flows through its
+    // exempt, the flow authored that wait, so the reply flows through its
     // branch logic instead of canceling it. Runs BEFORE the goal jump (the
     // schema forbids stopOnResponse + a replied goal on one flow, so the two
     // never compete) and before the enqueue below, so a run this very reply
@@ -4231,8 +4231,8 @@ serve(async (req: Request) => {
 
     // Goal Events: any lead text may fast-forward their OTHER parked/queued
     // runs to a "replied" goal checkpoint. Runs whose wait just consumed this
-    // reply are exempt — the reply must flow through their authored branch
-    // logic, not leapfrog it. Best-effort — never blocks inbound processing.
+    // reply are exempt, the reply must flow through their authored branch
+    // logic, not leapfrog it. Best-effort, never blocks inbound processing.
     if (from) {
       await applyGoalEvent(supabase, businessId, from, { kind: "replied" }, resumedWaitRunIds);
       // A lead answering is the "Engaged" moment on the pipeline board.
@@ -4269,7 +4269,7 @@ serve(async (req: Request) => {
       suppress_reply: suppressingRunQueued || waitReplyResumed,
       // Stamp the sender up front so the contact page + summarizer (which query
       // by this column, not the JSONB payload) see the message even when an
-      // AiFlow suppresses the reply — the worker's suppression branch returns
+      // AiFlow suppresses the reply, the worker's suppression branch returns
       // before it would otherwise denormalize this.
       customer_e164: from,
       outbound_idempotency_key: crypto.randomUUID(),

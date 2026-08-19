@@ -56,7 +56,7 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           {/* The page's own title: show it in full (wrapped) rather than
-              truncating — the category pill hangs off the first line. */}
+              truncating, the category pill hangs off the first line. */}
           <div className="flex items-start gap-2">
             <h1 className="min-w-0 break-words text-2xl font-bold text-parchment">
               {entry.title}

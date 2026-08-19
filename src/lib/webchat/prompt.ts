@@ -5,7 +5,7 @@
  * as a system transcript block, pre-built per-job input so the VPS worker
  * stays business-logic free) but with the CUSTOMER persona flipped the
  * other way: the human is an anonymous website visitor, not the owner, and
- * the surface is info + lead-gen ONLY — the WebchatCoworker agent's tool
+ * the surface is info + lead-gen ONLY, the WebchatCoworker agent's tool
  * declarations, the /api/rowboat/tool-call allowlist, and the worker's
  * sentinel stripping all enforce that independently of this text.
  */
@@ -18,7 +18,7 @@ export const WEBCHAT_HISTORY_TURNS = 20;
 /** Bounded tail resent on every turn (see dashboard chat's RESEND_TAIL_MESSAGES). */
 export const WEBCHAT_RESEND_TAIL_MESSAGES = 8;
 
-// Character caps on the verbatim tail transcript — same rationale as the
+// Character caps on the verbatim tail transcript, same rationale as the
 // dashboard chat route: on the CPU-only local fallback model, prefill cost
 // tracks real prompt size, so a few long turns must not balloon the prompt.
 export const WEBCHAT_TAIL_MESSAGE_MAX_CHARS = 700;
@@ -27,7 +27,7 @@ export const WEBCHAT_TAIL_TRANSCRIPT_MAX_CHARS = 3500;
 /**
  * The always-first system preamble for widget turns. Establishes the
  * anonymous-visitor context and the restricted capability surface. This is
- * guidance for tone/honesty — the actual enforcement is structural (agent
+ * guidance for tone/honesty, the actual enforcement is structural (agent
  * tool declarations + server-side allowlist), so a prompt injection that
  * "overrides" this text still cannot reach SMS/email/call/image tools.
  */
@@ -104,7 +104,7 @@ export type BuildWebchatMessagesArgs = {
   newUserMessage: string;
   visitor: WebchatVisitor;
   /**
-   * webchat_sessions.id — given to the model as an opaque `sessionRef` so
+   * webchat_sessions.id, given to the model as an opaque `sessionRef` so
    * `webchat_capture_lead` calls can be attributed back to this session
    * (the Rowboat tool webhook carries no caller context). Validated
    * server-side against the SAME business before any write.

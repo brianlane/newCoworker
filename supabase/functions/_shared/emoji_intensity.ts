@@ -1,7 +1,7 @@
 /**
  * Per-tenant freeform SMS emoji intensity (0–5).
  *
- * Deno-edge mirror of `src/lib/emoji-intensity.ts`. Keep them in lockstep —
+ * Deno-edge mirror of `src/lib/emoji-intensity.ts`. Keep them in lockstep,
  * `tests/emoji-intensity-parity.test.ts` fails the build on drift.
  */
 

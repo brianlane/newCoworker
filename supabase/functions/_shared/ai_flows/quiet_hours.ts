@@ -97,7 +97,7 @@ export function inDailyWindow(minutesOfDay: number, startMin: number, endMin: nu
  * The next instant (>= now) whose local wall-clock time in `timeZone` is
  * `targetMinutes` since midnight, with seconds zeroed. Returns null on invalid
  * zone. Minute-delta arithmetic is exact for fixed-offset zones (Phoenix has
- * no DST) and within an hour around a DST jump elsewhere — fine for a
+ * no DST) and within an hour around a DST jump elsewhere, fine for a
  * quiet-hours boundary, which is a courtesy line, not a contract.
  */
 export function nextTimeOfDayMs(
@@ -189,7 +189,7 @@ export type TimeWindowDecision = { allowed: true } | { allowed: false; resumeAtM
  * iff the local time in cfg.timezone is inside [start, end) AND the current
  * local day is in daysOfWeek (absent = every day). When blocked, resumeAtMs is
  * the next instant the window opens (the next occurrence of `start` on an
- * allowed day, scanning up to a week ahead in 24h hops — exact for
+ * allowed day, scanning up to a week ahead in 24h hops, exact for
  * fixed-offset zones and within an hour around a DST jump, fine for a
  * business-hours line). Fails OPEN on bad config (invalid tz / malformed
  * HH:MM / zero-length window / no allowed day), matching the other helpers in
@@ -213,7 +213,7 @@ export function timeWindowDecision(nowMs: number, cfg: FlowTimeWindowConfig): Ti
     return { allowed: true };
   }
   // Next open instant: the next occurrence of `start`, then 24h hops until an
-  // allowed weekday (max 7). nextTimeOfDayMs never fails here — zonedClock
+  // allowed weekday (max 7). nextTimeOfDayMs never fails here, zonedClock
   // already succeeded for this zone.
   let resume = nextTimeOfDayMs(nowMs, cfg.timezone, start);
   /* c8 ignore next -- zonedClock succeeded above, so the same zone can't fail here */
@@ -254,7 +254,7 @@ export function applyResumeJitter(
 }
 
 /**
- * Human copy for an instant in the owner's zone, e.g. "8:40 AM on Jun 12" —
+ * Human copy for an instant in the owner's zone, e.g. "8:40 AM on Jun 12",
  * what `{{offer.deadline}}` renders to inside offer templates. Falls back to
  * the UTC ISO string when the zone is invalid.
  */

@@ -2,7 +2,7 @@
  * Voice-bridge CONCURRENCY smoke test.
  *
  * Opens N simultaneous fake-Telnyx media streams against a tenant VPS's
- * voice-bridge (default 3 — the standard tier's maxConcurrentCalls), each of
+ * voice-bridge (default 3, the standard tier's maxConcurrentCalls), each of
  * which makes the bridge spin up a REAL Gemini Live session (vault priming,
  * greeting, two-way audio pipeline), and reports per-call frame throughput.
  * This is the hardware-contention half of the concurrency question: the
@@ -11,7 +11,7 @@
  *
  * What it does per call:
  *   1. mints a stream nonce (INSERT into `stream_url_nonces`) and signs a v2
- *      stream URL with STREAM_URL_SIGNING_SECRET — exactly what
+ *      stream URL with STREAM_URL_SIGNING_SECRET, exactly what
  *      telnyx-voice-inbound does before handing the URL to Telnyx;
  *   2. connects to ws://<vps>:8090/voice/stream and streams 20 ms L16@16kHz
  *      silence frames at real-time cadence (Telnyx `{event:"media"}` JSON);
@@ -19,7 +19,7 @@
  *      flowing back) and reports frames/bytes/close codes at the end.
  *
  * ⚠️ Uses REAL Gemini Live sessions (small spend on the tenant's shared AI
- * budget) and writes transcript/telemetry rows for the target business —
+ * budget) and writes transcript/telemetry rows for the target business,
  * point it at a scratch clone (default: the KVM2 smoke clone), not a live
  * tenant. The bridge's end-of-session Telnyx hangup 404s harmlessly on the
  * fake call_control_ids.
@@ -34,7 +34,7 @@ import { signStreamUrlPayload, newStreamNonce } from "../src/lib/telnyx/stream-u
 
 loadEnv();
 
-// New Coworker (HQ, internal) — the smoke tenants/clones are retired; the
+// New Coworker (HQ, internal), the smoke tenants/clones are retired; the
 // spend + transcript rows this writes land on our own tenant by default.
 const DEFAULT_BUSINESS = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 
@@ -77,7 +77,7 @@ type CallStats = {
 async function resolveIp(): Promise<string> {
   const fromArg = arg("ip");
   if (fromArg) return fromArg;
-  // The smoke clone accumulated key rows across provisioning rounds — take
+  // The smoke clone accumulated key rows across provisioning rounds, take
   // the newest, which is the box the tunnel currently points at.
   const { data: keyRow, error } = await supabase
     .from("vps_ssh_keys")

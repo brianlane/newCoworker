@@ -6,14 +6,14 @@ import { createFlow, enqueueRun, getRun, seedBusiness, serviceDb, tickWorker } f
 /**
  * Opt-in AiFlow failure alerts, end to end against the REAL worker + REAL
  * notifications function: a lead-intake run that dead-letters must page the
- * owner ONLY when `notification_preferences.aiflow_failure_alerts` is true —
+ * owner ONLY when `notification_preferences.aiflow_failure_alerts` is true,
  * the default (false / no prefs row) stays exactly as silent as before.
  *
  * The failure fixture is a lead-intake flow that hands the lead to a roster
  * member who does not exist: `send_sms` with `toAgentName` fails the run
  * permanently with a readable error. (The old fixture relied on a phoneless
  * `upsert_customer` failing, but that step now SKIPS on a missing phone like
- * update_contact/send_sms do — the Kav calendar-filing PR.)
+ * update_contact/send_sms do, the Kav calendar-filing PR.)
  */
 
 let db: SupabaseClient;
@@ -75,7 +75,7 @@ async function failRunForBusiness(biz: string): Promise<string> {
   await tickWorker();
   const run = await getRun(db, runId);
   expect(run.status).toBe("failed");
-  // Readable, owner-facing wording — not a bare technical failure. (The
+  // Readable, owner-facing wording, not a bare technical failure. (The
   // phoneless upsert_customer no longer fails: it skips, so the fixture
   // dead-letters on the nonexistent roster hand-off instead.)
   expect(run.last_error).toContain("is not on the active roster");

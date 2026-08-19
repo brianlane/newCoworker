@@ -3,8 +3,8 @@
  *
  * Lives in its own dependency-free module (rather than
  * src/lib/telnyx/assign-did.ts, its original home, which re-exports it for
- * existing importers) so CLIENT components — the onboarding questionnaire's
- * Step-1 validation — can run the exact same coercion the server routes
+ * existing importers) so CLIENT components, the onboarding questionnaire's
+ * Step-1 validation, can run the exact same coercion the server routes
  * enforce, without dragging server-only Supabase imports into the browser
  * bundle. Mirrors the Edge-side normalizer in
  * `supabase/functions/_shared/normalize_e164.ts`.

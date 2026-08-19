@@ -85,7 +85,7 @@ describe("addPriceBandRouting", () => {
 
   it("stamps a seed-shaped ReferralExchange flow (single 'route' step, name case differs)", () => {
     // The seed creates "ReferralExchange lead" (lowercase l) with ONE route
-    // step id "route" — the $1M rule must land there too, not only on Amy's
+    // step id "route", the $1M rule must land there too, not only on Amy's
     // live route_buyer/route_seller/route_both branches.
     const def: Def = {
       steps: [

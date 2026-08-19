@@ -2,7 +2,7 @@
 /**
  * One-shot: enable customer_reply_alerts for KYP Ads.
  *
- * KYP feedback (Jul 20 2026): James — "You need to let me know when clients
+ * KYP feedback (Jul 20 2026): James, "You need to let me know when clients
  * text back i didnt see his texts". The platform-wide feature (PR for the
  * `sms_customer_reply` alert: opt-in `notification_preferences.
  * customer_reply_alerts`, deterministic dispatch from the sms-inbound-worker,
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   } else {
-    // No prefs row yet: insert one carrying only the opt-in — every other
+    // No prefs row yet: insert one carrying only the opt-in, every other
     // column takes its DB default (identical to the app's first-save shape).
     const { error } = await db
       .from("notification_preferences")

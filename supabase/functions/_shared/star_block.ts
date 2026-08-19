@@ -27,7 +27,7 @@ export function hasStarRow(text: string): boolean {
  * Frame `body` in a row of asterisks above and below. Idempotent: a body
  * that already opens with a star row is returned unchanged, so a re-frame
  * (retried webhook, already-wrapped template) can never stack rows. An
- * empty/whitespace body is returned as-is — framing nothing would send a
+ * empty/whitespace body is returned as-is, framing nothing would send a
  * message made of asterisks.
  */
 export function starBlock(body: string): string {

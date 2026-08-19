@@ -1,5 +1,5 @@
 /**
- * Contact records CSV import/export — the "book of business" loader.
+ * Contact records CSV import/export, the "book of business" loader.
  *
  * A row is a contact-linked record document (insurance policy, lease,
  * service contract, membership): title + the contact's phone number, plus
@@ -10,11 +10,11 @@
  *
  * Import semantics (row-by-row, never all-or-nothing):
  *   * `title` and `contact_phone` are required; the contact must already
- *     exist (primary number OR merged-away alias) — import contacts first.
+ *     exist (primary number OR merged-away alias), import contacts first.
  *   * An existing record with the SAME title on the SAME contact → update,
  *     but only with non-empty cells (blank = keep). Changing a date re-arms
  *     the sweep's reminder stamps. The stored original file is never
- *     rewritten — content_md is the canonical text, same as dashboard edits.
+ *     rewritten, content_md is the canonical text, same as dashboard edits.
  *   * No match → create. The notes (or a rendered field summary) become the
  *     agent-facing content_md AND a small synthesized .md original in the
  *     business-docs bucket, so download/share behave like any other doc.
@@ -25,7 +25,7 @@
  *     good rows still apply.
  *
  * Service-role only. Owner authorization is the API route's job
- * (requireBusinessRole before any call here) — same trust model as
+ * (requireBusinessRole before any call here), same trust model as
  * csv/contacts.
  */
 
@@ -244,7 +244,7 @@ export async function importDocumentsCsv(
 
   // One pre-count + a local increment keeps the flat records cap enforced
   // without a per-row count query. (Concurrent imports could overshoot by a
-  // file's worth — acceptable for an abuse-safety cap.)
+  // file's worth, acceptable for an abuse-safety cap.)
   const { count, error: countErr } = await db
     .from("business_documents")
     .select("id", { count: "exact", head: true })
@@ -304,7 +304,7 @@ export async function importDocumentsCsv(
     const notes = (row.notes ?? "").trim();
 
     try {
-      // The contact must already exist — a record without its person is
+      // The contact must already exist, a record without its person is
       // meaningless, and silently creating bare contacts here would bypass
       // the contacts importer's dedupe/merge logic.
       const { data: contact, error: contactErr } = await db
@@ -364,7 +364,7 @@ export async function importDocumentsCsv(
 
       if (matches.length === 1) {
         const existing = matches[0];
-        // Only write cells the file actually provided — blank means keep.
+        // Only write cells the file actually provided, blank means keep.
         // A changed date re-arms the sweep's one-reminder-per-state stamps.
         const patch: Record<string, unknown> = {
           updated_at: new Date().toISOString(),

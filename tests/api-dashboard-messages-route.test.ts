@@ -245,7 +245,7 @@ describe("GET /api/dashboard/messages/:customerE164", () => {
       email: "o@o.com",
       isAdmin: false
     });
-    // `%E0%A4%A` is a half-encoded UTF-8 byte sequence — decodeURIComponent
+    // `%E0%A4%A` is a half-encoded UTF-8 byte sequence, decodeURIComponent
     // throws URIError on this. The route should catch it and 400 instead
     // of crashing with a 500.
     const res = await GET(

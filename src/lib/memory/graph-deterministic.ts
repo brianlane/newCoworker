@@ -1,5 +1,5 @@
 /**
- * Deterministic knowledge-graph ingestion — structured platform data maps
+ * Deterministic knowledge-graph ingestion, structured platform data maps
  * straight to entities/facts with ZERO model cost (PR 3 of the KG plan).
  *
  * Each builder turns one structured event into a GraphExtraction and lands
@@ -8,7 +8,7 @@
  * owner-stated rule all collapse onto the same canonical nodes with their
  * per-source trust (kg-sources.ts).
  *
- * Every ingest is mode-gated and NEVER throws — hook sites await them
+ * Every ingest is mode-gated and NEVER throws, hook sites await them
  * knowing a graph failure can't break the write they piggyback on.
  */
 
@@ -206,7 +206,7 @@ export async function retirePinnedNote(
     if (mode === "off") return { retired: 0 };
     const entities = await listEntities(businessId);
     // NORMALIZED phone match (same evidence rule as entity resolution) and
-    // person-kind only — an organization sharing the business main line
+    // person-kind only, an organization sharing the business main line
     // must never shadow the actual contact. Every matching person is
     // swept: duplicates are rare but leaving one stale is worse.
     const wanted = normalizePhone(e164);
@@ -298,7 +298,7 @@ export function leadExtraction(lead: {
   email?: string | null;
 }): GraphExtraction {
   // A nameless lead with a phone/email still creates an identifier-named
-  // node (same convention as bookings) — later contact/conversation ingests
+  // node (same convention as bookings), later contact/conversation ingests
   // resolve onto it via phone/email match and enrich the name. Only a lead
   // with NO identity at all builds nothing.
   const name = leadName(lead.fields) || clean(lead.phoneE164) || clean(lead.email);
@@ -406,7 +406,7 @@ export async function ingestBooking(
 // The lead-capture tools are the graph boundary for the DM channels: the
 // model already distilled the conversation into STRUCTURED contact details
 // + interest, so this maps deterministically (no second LLM pass) at each
-// channel's trust — messenger/instagram/whatsapp are connected-account
+// channel's trust, messenger/instagram/whatsapp are connected-account
 // customers (trust 1), webchat visitors are anonymous (trust 0).
 
 export type CapturedLeadChannel = "messenger" | "instagram" | "whatsapp" | "webchat";

@@ -3,12 +3,12 @@
  * (`list_aiflows` / `run_aiflow`), used by BOTH dashboard-chat turn paths:
  *
  *   - the INLINE primary path (src/lib/dashboard-chat/action-tools.ts), and
- *   - the Rowboat fallback path (/api/rowboat/tool-call — the over-budget /
+ *   - the Rowboat fallback path (/api/rowboat/tool-call, the over-budget /
  *     no-platform-key worker turns, tool names `dashboard_list_aiflows` /
  *     `dashboard_run_aiflow`).
  *
  * One implementation keeps the two paths byte-identical in behavior (flow
- * resolution, honest refusals, model steering copy) — the same parity this
+ * resolution, honest refusals, model steering copy), the same parity this
  * module's callers exist to guarantee. Result objects are returned to the
  * model verbatim, so the wording here is model-facing guidance, not UI copy.
  */
@@ -132,7 +132,7 @@ export async function runAiFlowTool(
       message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review, they can enable it at /dashboard/aiflows, then ask again.`
     };
   }
-  // Voice flows run on the real-time call path, not the async worker —
+  // Voice flows run on the real-time call path, not the async worker,
   // same refusal as the dashboard "Run now" endpoint (an enqueued run
   // would only fail while the model tells the owner it started).
   if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {

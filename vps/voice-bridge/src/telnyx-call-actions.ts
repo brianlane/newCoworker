@@ -10,7 +10,7 @@ export type TelnyxTransferOptions = {
   toE164: string;
   /** Caller ID presented to the transfer target. Defaults to the DID (`fromE164`). */
   fromE164?: string;
-  /** Optional AMD / record flags; left empty for now — we don't want recording by default. */
+  /** Optional AMD / record flags; left empty for now, we don't want recording by default. */
   timeLimitSecs?: number;
   /** Optional spoken line before the transfer connects; Telnyx uses this as a whisper greeting. */
   audioUrl?: string;

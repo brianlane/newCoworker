@@ -7,14 +7,14 @@
  *     { action: "add_stage",      stage: { name, color? } }
  *     { action: "update_stage",   stageId, name?, color? }   (rename retags contacts)
  *     { action: "reorder_stages", stageIds: [uuid, ...] }    (exact permutation)
- *     { action: "delete_stage",   stageId, destinationStageId? }
- *       — with a destination, contacts move there (GHL's "move opportunities
+ *     { action: "delete_stage",   stageId, destinationStageId? },
+ *       with a destination, contacts move there (GHL's "move opportunities
  *         to another stage"); without, they keep the now-unmapped tag.
  *
  * DELETE /api/dashboard/pipelines/:pipelineId?businessId=<uuid>
  *   Deletes the board (stages cascade); contacts keep their tags.
  *
- * Auth: manage_settings (manager+) — board administration, same bar as the
+ * Auth: manage_settings (manager+), board administration, same bar as the
  * rest of business config. Bulk retags here deliberately do NOT fire
  * tag_changed automation (see src/lib/pipelines/db.ts); only the per-lead
  * move endpoint does.

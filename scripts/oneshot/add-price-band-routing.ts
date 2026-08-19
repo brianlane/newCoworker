@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * One-shot: $1M+ leads go straight to the owner — never offered to the team.
+ * One-shot: $1M+ leads go straight to the owner, never offered to the team.
  *
  * Two idempotent edits per lead flow (keyed by flow name):
  *   1. Add a `price_band` field to the flow's existing lead-extraction step:
@@ -10,13 +10,13 @@
  *      `ownerDirectWhen: { var: "price_band", equals: "over_1m" }` plus a
  *      flow-specific `ownerDirectTemplate` (the owner SMS with the lead's
  *      details). When it matches, the worker skips ALL team offers, texts the
- *      owner, and sets claimed_agent="none" so claim-gated steps skip — the
+ *      owner, and sets claimed_agent="none" so claim-gated steps skip, the
  *      flow's outcome notification still fires and says why.
  *
  * Requires the ownerDirectWhen engine support (same PR) deployed on the
  * ai-flow-worker BEFORE running with --apply: the schema validates the new
  * fields, and an old worker would ignore them (leads would still route to the
- * team — no breakage, just no $1M rule).
+ * team, no breakage, just no $1M rule).
  *
  * Validates each patched definition through parseAiFlowDefinition before
  * writing; dry-run by default; records the apply in applied_oneshots.

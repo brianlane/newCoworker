@@ -1,5 +1,5 @@
 /**
- * Admin: deletion/refund impact preview for a business — the same counts
+ * Admin: deletion/refund impact preview for a business, the same counts
  * the self-serve delete flow shows owners (contacts, transcripts, messages,
  * flows, DID, VPS), surfaced in the admin confirm dialogs before
  * force-cancel / force-refund execute.

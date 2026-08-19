@@ -1,6 +1,6 @@
 /**
  * Regression pins for KYP Ads' "No-show recovery text" flow definition
- * (scripts/oneshot/kyp-noshow-definition.ts) — the builder
+ * (scripts/oneshot/kyp-noshow-definition.ts), the builder
  * patch-kyp-noshow-links.ts re-applies to the live tenant.
  *
  * Incident (Jul 20 2026, Tim Tsai): the flow hardcoded the $200 booking link

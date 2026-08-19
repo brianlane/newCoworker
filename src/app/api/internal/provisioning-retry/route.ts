@@ -5,11 +5,11 @@
  * this route. Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
  * Claims ONE stalled provisioning job (queued-never-started or running
- * with a heartbeat older than ~10 minutes — see
+ * with a heartbeat older than ~10 minutes, see
  * src/lib/provisioning/jobs.ts) and re-runs the orchestrator, which is
  * idempotent end to end. Exists because the Stripe-webhook function that
  * runs signup provisioning inline can be torn down by the runtime
- * mid-provision (Truly Insurance Jul 8 2026, KYP Ads Jul 14 2026 — both
+ * mid-provision (Truly Insurance Jul 8 2026, KYP Ads Jul 14 2026, both
  * stuck at "started 5%" until a human re-ran them by hand).
  *
  * One job per tick keeps a tick's work bounded; multiple stalled jobs
@@ -33,7 +33,7 @@ import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 // Vercel Pro ceiling: a full adopt/purchase provision runs ~8-12 minutes.
-// The Edge bridge / pg_cron may stop awaiting sooner — harmless, the
+// The Edge bridge / pg_cron may stop awaiting sooner, harmless, the
 // function runs to completion (same acceptance as vps-billing-posture).
 export const maxDuration = 1800;
 export const runtime = "nodejs";
@@ -64,7 +64,7 @@ async function runSweep(request: Request): Promise<Response> {
           skipPoolAdopt: input.skipPoolAdopt,
           notifyOpsNewSignup: input.suppressOwnerNotify !== true
         });
-        // Same post-success persistence the webhook's inline runner does —
+        // Same post-success persistence the webhook's inline runner does,
         // without it a watchdog-recovered signup would be missing the
         // Hostinger billing linkage the cancel lifecycle needs.
         if (out.hostingerBillingSubscriptionId) {
@@ -88,7 +88,7 @@ async function runSweep(request: Request): Promise<Response> {
 
     if (result.kind !== "idle" || result.exhaustedFailed) {
       logger.info("provisioning watchdog tick", result);
-      // Telemetry so ops dashboards/alerts can watch recovery activity —
+      // Telemetry so ops dashboards/alerts can watch recovery activity,
       // a retry firing at all means an inline provision died.
       try {
         const db = await createSupabaseServiceClient();

@@ -1,8 +1,8 @@
 /**
  * Which languages should Gemini Live expect to HEAR on this call?
  *
- * The bridge used to send `inputAudioTranscription: {}` — empty, no hint at
- * all — which leaves the Live API auto-detecting across every language it
+ * The bridge used to send `inputAudioTranscription: {}`, empty, no hint at
+ * all, which leaves the Live API auto-detecting across every language it
  * knows. On a noisy segment it guesses, and the guess lands in the transcript
  * as fact. Chris Bartelot's Aug 3 2026 call is the example: a caller speaking
  * English throughout, with turn 30 transcribed as Portuguese ("Você dizia Qual
@@ -52,7 +52,7 @@ export type AsrLanguagePrefs = {
 
 /**
  * BCP-47 codes to hint, most-likely first. Never empty: with no preferences at
- * all this still returns the full supported set, which is the point — a
+ * all this still returns the full supported set, which is the point, a
  * bounded list beats unbounded auto-detection even when we know nothing about
  * the caller.
  */

@@ -30,7 +30,7 @@ serve(async (req: Request) => {
     return new Response("Server misconfigured", { status: 500 });
   }
   if (!platformBase || !platformBearer) {
-    // Without these we can't dispatch — be loud rather than silently
+    // Without these we can't dispatch, be loud rather than silently
     // succeed-and-do-nothing.
     return new Response(
       JSON.stringify({

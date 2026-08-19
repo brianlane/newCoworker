@@ -2,7 +2,7 @@
  * Tests for the Messenger/Instagram DM Gemini engine
  * (src/lib/messenger/engine.ts): history→contents mapping, the channel
  * preamble, budget refusal, grounding, tool rounds, metering, and the
- * turn deadline — structural parity with the webchat engine suite.
+ * turn deadline, structural parity with the webchat engine suite.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

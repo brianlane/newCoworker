@@ -2,8 +2,8 @@
  * Public tokenized document download: GET /api/public/docs/:token
  *
  * The token is the whole capability (256-bit random, stored only as
- * sha256). The resolver fails closed on every non-servable state — unknown
- * token, revoked, link expired, document expired/deleted/not-ready — so a
+ * sha256). The resolver fails closed on every non-servable state, unknown
+ * token, revoked, link expired, document expired/deleted/not-ready, so a
  * link minted while a document was fresh stops working the moment the
  * document itself expires. Responses for every failure are an identical
  * plain 404 (no reason leaks to strangers probing tokens).
@@ -50,7 +50,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return notFound();
   }
 
-  // Access telemetry is best-effort — never block or fail the download.
+  // Access telemetry is best-effort, never block or fail the download.
   touchDocumentShareAccess(resolved.share.id, resolved.share.access_count).catch(() => {});
 
   const filename = resolved.document.storage_path.split("/").pop() ?? "document";

@@ -80,7 +80,7 @@ describe("variablesPaletteGroups", () => {
     const tePlaceholders = tenantEmail.trigger.map((e) => e.placeholder);
     expect(tePlaceholders).toContain("{{trigger.document}}");
     expect(tePlaceholders).toContain("{{trigger.document_name}}");
-    // document_name is a filename, not a person — no name parts.
+    // document_name is a filename, not a person, no name parts.
     expect(
       tenantEmail.trigger.find((e) => e.placeholder === "{{trigger.document_name}}")?.nameParts
     ).toBeUndefined();

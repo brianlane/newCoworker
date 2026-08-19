@@ -3,7 +3,7 @@
  *
  * Carriers require a signed LOA naming the number, the account holder, and
  * the person authorizing the port. The wizard prefills everything it already
- * collected, the owner downloads → signs → re-uploads — the same flow
+ * collected, the owner downloads → signs → re-uploads, the same flow
  * Telnyx's own portal uses. Keeping generation server-side means the
  * document always matches what we submit on the porting order.
  */

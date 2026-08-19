@@ -1,5 +1,5 @@
 /**
- * CI-readable live-e2e mode — consumed by .github/scripts/e2e-scope.sh at
+ * CI-readable live-e2e mode, consumed by .github/scripts/e2e-scope.sh at
  * the start of every e2e job to decide whether the paid model calls run
  * per change or only on the nightly cron.
  *
@@ -7,7 +7,7 @@
  * is a non-sensitive operational flag (it reveals nothing about tenants or
  * the platform beyond "how often does CI run its AI tests"). Read-only,
  * never cached (the admin expects a flip to apply to the next run), and on
- * ANY server error the caller fails open to "per-change" — an app outage
+ * ANY server error the caller fails open to "per-change", an app outage
  * can never silently drop merge-time coverage.
  */
 

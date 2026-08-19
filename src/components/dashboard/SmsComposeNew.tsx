@@ -42,7 +42,7 @@ export function SmsComposeNew({
   const [notice, setNotice] = useState<string | null>(null);
   const [scheduleMode, setScheduleMode] = useState(false);
   const [sendAtLocal, setSendAtLocal] = useState("");
-  // Per-message channel override for RCS-first tenants (immediate sends only —
+  // Per-message channel override for RCS-first tenants (immediate sends only,
   // the scheduled path has no override, so the toggle hides in schedule mode).
   const [forceSms, setForceSms] = useState(false);
 

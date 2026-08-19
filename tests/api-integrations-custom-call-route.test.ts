@@ -26,10 +26,10 @@ vi.mock("@/lib/db/custom-integrations", async () => {
 
 // The route's gateway auth resolves the bearer against the per-tenant token
 // table (`resolveGatewayTokenBinding`, a DB lookup). Stub it to "no per-tenant
-// binding" so auth is deterministic and never touches a real database — without
+// binding" so auth is deterministic and never touches a real database, without
 // this, a Supabase URL/key in the ambient env (e.g. a sourced production .env)
 // makes the lookup hit prod and these tests 401. With no binding, auth falls to
-// the shared ROWBOAT_GATEWAY_TOKEN path that `beforeEach` configures — exactly
+// the shared ROWBOAT_GATEWAY_TOKEN path that `beforeEach` configures, exactly
 // what every case here intends to exercise.
 vi.mock("@/lib/db/vps-gateway-tokens", async () => {
   const actual = await vi.importActual<
@@ -68,7 +68,7 @@ const ORIGINAL_FETCH = globalThis.fetch;
  * string (NOT the JSON body) so the model has no input surface to
  * influence which tenant's credentials get used. To keep the tests
  * readable we accept `body.businessId` as a convenience and shuttle
- * it into the URL — pass `options.businessId === null` to omit it
+ * it into the URL, pass `options.businessId === null` to omit it
  * entirely (used to test the "missing tenant" rejection path).
  */
 function mkRequest(
@@ -94,7 +94,7 @@ function mkRequest(
     options.businessId === undefined ? body.businessId ?? null : options.businessId;
   if (biz !== null) url.searchParams.set("businessId", biz);
   // body.businessId is removed before serialization so a stale field
-  // can never silently authenticate a request — the route ignores it
+  // can never silently authenticate a request, the route ignores it
   // anyway, but the test surface should match the wire contract.
   const { businessId: _ignored, ...wireBody } = body;
   void _ignored;
@@ -161,7 +161,7 @@ describe("tenant binding (URL query)", () => {
   it("accepts UUID v7 in ?businessId (matches Zod 4.3+ semantics)", async () => {
     // RFC 9562 introduced v6/v7/v8. The platform currently mints v4
     // via `crypto.randomUUID()`, but if it ever adopts v7 for
-    // time-sortable IDs this route MUST keep accepting them — same
+    // time-sortable IDs this route MUST keep accepting them, same
     // semantics as `z.string().uuid()` everywhere else in the
     // codebase. (Bugbot flagged the previous v1–5-only regex.)
     const v7 = "01934d8b-7e8a-7c00-8123-456789abcdef";
@@ -187,7 +187,7 @@ describe("tenant binding (URL query)", () => {
     // Even if a prompt-injected agent stuffs another business UUID
     // in the body, the route uses ONLY the URL query value. Here we
     // smuggle a different UUID into the raw body and confirm the
-    // lookup is called with the URL value — proving the body field
+    // lookup is called with the URL value, proving the body field
     // is dead weight.
     const otherBiz = "22222222-2222-4222-8222-222222222222";
     globalThis.fetch = vi.fn(
@@ -948,7 +948,7 @@ describe("SSRF (DNS resolution)", () => {
 });
 
 describe("body read timeout", () => {
-  // The fetch timeout must remain active during the body-read loop —
+  // The fetch timeout must remain active during the body-read loop,
   // an upstream that sends headers promptly but stalls mid-body would
   // otherwise hang the worker indefinitely.
   it("returns 502 + upstream_timeout when the body stream aborts", async () => {

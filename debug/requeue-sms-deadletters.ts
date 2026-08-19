@@ -11,7 +11,7 @@
  *
  * Dry run lists the dead letters (age, attempts, sender, text preview,
  * last_error). `--apply` resets them to `pending` with attempt_count=0 (the
- * cron drains within a minute). The customer receives the reply late — only
+ * cron drains within a minute). The customer receives the reply late, only
  * requeue conversations where a late reply is better than silence.
  *
  * Usage:
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   );
 
   // Rows the worker itself dead-letters for permanently-invalid input would
-  // just dead-letter again — leave them unless explicitly targeted via --error.
+  // just dead-letter again, leave them unless explicitly targeted via --error.
   const PERMANENT = new Set(["missing_from_or_text", "missing_rowboat_project_or_bearer"]);
   const skippedPermanent = ERROR_SUBSTR
     ? []

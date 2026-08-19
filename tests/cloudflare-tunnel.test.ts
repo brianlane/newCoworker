@@ -19,7 +19,7 @@ type Handler = {
   /**
    * When true, the handler is NOT consumed after matching. Useful for the
    * DNS-records list / POST / PATCH endpoints, which are now called twice
-   * per provisioning (once per public hostname — app + voice bridge). Keep
+   * per provisioning (once per public hostname, app + voice bridge). Keep
    * unset/false for tests that want to assert a handler fires exactly once.
    */
   reuse?: boolean;
@@ -70,11 +70,11 @@ function fail(code: number, message: string) {
 /**
  * Shared handler for the Total TLS PATCH the provisioner now issues at the
  * end of every successful run (so multi-level tunnel hostnames get a Let's
- * Encrypt cert from the CF edge — Universal SSL only covers one wildcard
+ * Encrypt cert from the CF edge, Universal SSL only covers one wildcard
  * level). Matches `PATCH /zones/<id>/acm/total_tls` for any zone id and
  * is `reuse: true` because the call happens once per tenant per
  * provisioning attempt; tests that re-run the provisioner against the same
- * zone reuse the same handler. Idempotent on the CF side too — re-PATCHes
+ * zone reuse the same handler. Idempotent on the CF side too, re-PATCHes
  * are no-ops.
  */
 function totalTlsHandler(): Handler {
@@ -154,7 +154,7 @@ describe("cloudflareTunnelProvisioner", () => {
     });
 
     // Both public hostnames get a CNAME in the same zone, pointing at the same
-    // tunnel target — Cloudflare routes by Host header inside the tunnel.
+    // tunnel target, Cloudflare routes by Host header inside the tunnel.
     const appDnsCreate = calls.find(
       (c) =>
         c.method === "POST" &&
@@ -588,7 +588,7 @@ describe("cloudflareTunnelProvisioner", () => {
         ])
       },
       {
-        // Voice hostname: also already correctly wired — true idempotent
+        // Voice hostname: also already correctly wired, true idempotent
         // rerun means both CNAMEs exist and point at the same tunnel.
         match: (u) =>
           u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`voice-biz-b.${ZONE}`)}`,
@@ -640,13 +640,13 @@ describe("cloudflareTunnelProvisioner", () => {
         body: ok([{ id: "zone-1", name: ZONE }])
       },
       {
-        // App hostname record is stale (wrong target + not proxied) — PATCH it.
+        // App hostname record is stale (wrong target + not proxied), PATCH it.
         match: (u) =>
           u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`biz-c.${ZONE}`)}`,
         body: ok([{ id: "rec-c-app", content: "tun-OLD.cfargotunnel.com", proxied: false }])
       },
       {
-        // Voice hostname has its own stale record — exercise both PATCH calls.
+        // Voice hostname has its own stale record, exercise both PATCH calls.
         match: (u) =>
           u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`voice-biz-c.${ZONE}`)}`,
         body: ok([{ id: "rec-c-voice", content: "tun-OLD.cfargotunnel.com", proxied: false }])
@@ -711,7 +711,7 @@ describe("cloudflareTunnelProvisioner", () => {
     // Cloudflare's envelope.result is *almost* always an array for list
     // endpoints, but misbehaving proxies and schema drift can hand us back an
     // object/null/string. The provisioner falls through to the "create" path
-    // in that case rather than crashing with `.filter is not a function` —
+    // in that case rather than crashing with `.filter is not a function`,
     // this test exercises the `Array.isArray(existing) ? … : []` false branch.
     const { fetchImpl, calls } = makeFetch([
       {
@@ -944,7 +944,7 @@ describe("cloudflareTunnelProvisioner", () => {
       enabled: true,
       certificate_authority: "lets_encrypt"
     });
-    // CNAMEs must be created BEFORE Total TLS — Cloudflare lazily issues
+    // CNAMEs must be created BEFORE Total TLS, Cloudflare lazily issues
     // certs per existing hostname, so the order matters.
     const totalTlsIdx = calls.findIndex(
       (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls/acm/total_tls`
@@ -1012,7 +1012,7 @@ describe("cloudflareTunnelProvisioner", () => {
       (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls-split/acm/total_tls`
     );
     expect(totalTlsCall?.auth).toBe(`Bearer ${SSL_TOKEN}`);
-    // Every other call must NOT use the SSL token — it carries the
+    // Every other call must NOT use the SSL token, it carries the
     // tunnel-scoped one (config.apiToken, set in baseConfig as TOKEN).
     const nonTotalTlsCalls = calls.filter(
       (c) => !(c.method === "PATCH" && c.url.endsWith("/acm/total_tls"))
@@ -1026,7 +1026,7 @@ describe("cloudflareTunnelProvisioner", () => {
   it("falls back to apiToken for Total TLS when sslApiToken is omitted (preserves backward compat)", async () => {
     // Operators whose existing CLOUDFLARE_API_TOKEN already grants
     // SSL scope should not need to set a separate var. When
-    // `sslApiToken` is unset, the Total TLS PATCH uses `apiToken` —
+    // `sslApiToken` is unset, the Total TLS PATCH uses `apiToken`,
     // exact same wire shape as pre-split provisioners.
     const { fetchImpl, calls } = makeFetch([
       {
@@ -1066,7 +1066,7 @@ describe("cloudflareTunnelProvisioner", () => {
 
   it("skips the Total TLS PATCH entirely on the default one-level hostname pattern", async () => {
     // With hostnameSuffix unset (defaults to the zone itself), hostnames are
-    // `<biz>.<zone>` — one wildcard level, fully covered by free Universal
+    // `<biz>.<zone>`, one wildcard level, fully covered by free Universal
     // SSL. Total TLS buys nothing there, and PATCHing it with a token that
     // lacks Zone:SSL:Edit just emits a `10405 Method not allowed` warning on
     // every provision/redeploy. The provisioner must not issue the call.
@@ -1155,7 +1155,7 @@ describe("cloudflareTunnelProvisioner", () => {
 
   it("honors voiceServiceUrl + voiceHostnamePrefix overrides end-to-end", async () => {
     // Covers the "caller supplied a real value (non-empty after trim)" branch
-    // for both voice-bridge knobs — counterpart to the whitespace-only test
+    // for both voice-bridge knobs, counterpart to the whitespace-only test
     // above, which exercises the coercion fallback.
     const { fetchImpl, calls } = makeFetch([
       {
@@ -1184,7 +1184,7 @@ describe("cloudflareTunnelProvisioner", () => {
       serviceUrl: "http://localhost:3000",
       voiceServiceUrl: "http://127.0.0.1:9090",
       voiceHostnamePrefix: "vb-",
-      // Also exercise the render override branch (non-empty after trim) — the
+      // Also exercise the render override branch (non-empty after trim), the
       // counterpart to the whitespace-coercion test below.
       renderServiceUrl: "http://127.0.0.1:9091",
       renderHostnamePrefix: "rb-",
@@ -1301,7 +1301,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       );
       expect(totalTlsCall?.auth).toBe(`Bearer ${SSL_TOKEN}`);
       // And the tunnel-listing call (the very first one) carries the
-      // tunnel-scoped token — proving the split is wired correctly,
+      // tunnel-scoped token, proving the split is wired correctly,
       // not just defaulting to one token everywhere.
       const firstTunnelCall = seen.find((c) => c.url.includes("/cfd_tunnel?name="));
       expect(firstTunnelCall?.auth).toBe(`Bearer ${TUNNEL_TOKEN}`);
@@ -1312,7 +1312,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
 
   it("empty-string CLOUDFLARE_* overrides collapse to defaults (dotenv blank-line regression)", async () => {
     // .env.example documents several CLOUDFLARE_* keys as optional. When the
-    // operator leaves them blank — the `.env` canonical form is `KEY=` — dotenv
+    // operator leaves them blank, the `.env` canonical form is `KEY=`, dotenv
     // hands us `""`, which is NOT caught by `??` or destructuring defaults.
     // Regression: an empty CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX used to produce
     // hostname="<bid>." (trailing-dot label), creating an invalid CNAME record.
@@ -1320,7 +1320,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
     // This test drives the full provisioner with all optional keys set to ""
     // and asserts the hostname / zone-lookup collapse to the documented
     // defaults. We can't observe it from the returned provisioner directly, so
-    // we let it fail at the zone-lookup step and inspect the URL it queried —
+    // we let it fail at the zone-lookup step and inspect the URL it queried,
     // if coercion is missing, the URL would be the literal "zones?name=" with
     // no zone, and the hostname argument passed down would be malformed.
     const seen: string[] = [];
@@ -1372,7 +1372,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       'Cloudflare zone "tunnel.newcoworker.com" not found'
     );
     // The ingress request must have received valid hostnames WITHOUT a
-    // trailing dot — and the voice entry must have picked up the documented
+    // trailing dot, and the voice entry must have picked up the documented
     // default service URL / prefix despite the empty env values.
     expect(lastIngress).toMatchObject({
       config: {
@@ -1461,7 +1461,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
   });
 
   it("honors CLOUDFLARE_TUNNEL_ZONE / CLOUDFLARE_TUNNEL_SERVICE_URL overrides", async () => {
-    // Capture the URL the provisioner queries for its first tunnel lookup — if
+    // Capture the URL the provisioner queries for its first tunnel lookup, if
     // our overrides flow through, the downstream DNS zone lookup will include
     // the custom zone name. We short-circuit early by returning an empty list
     // for the tunnel lookup and a failing zone lookup, asserting on the latter.
@@ -1494,7 +1494,7 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
     });
     await expect(provisioner({ businessId: "biz-x" })).rejects.toThrow("custom.example.org");
     // The zone-name override flows through as the `name` query param on the
-    // zones lookup — `GET https://api.cloudflare.com/client/v4/zones?name=<zone>`.
+    // zones lookup, `GET https://api.cloudflare.com/client/v4/zones?name=<zone>`.
     // Parse each captured URL and assert the lookup actually carried our
     // override as an exact-equality query value. Substring matching on the
     // full URL string is a CodeQL false-positive magnet; hostname/path +

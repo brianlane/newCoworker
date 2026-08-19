@@ -1,5 +1,5 @@
 /**
- * Agents — artifact download.
+ * Agents, artifact download.
  *
  *   GET /api/dashboard/agents/runs/:runId/download?businessId=…
  *
@@ -44,7 +44,7 @@ export async function GET(request: Request, context: RouteContext) {
     // real name for non-ASCII originals.
     const asciiName = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "'");
     // Binary targets are rendered from the stored artifact (typeset
-    // markdown, or the sidecar-printed re-typeset HTML — served with the
+    // markdown, or the sidecar-printed re-typeset HTML, served with the
     // representation's mime, application/pdf); text targets stream the
     // artifact text directly.
     const rendered = await renderAgentArtifactBytes({

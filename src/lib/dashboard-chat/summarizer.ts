@@ -42,7 +42,7 @@
  *
  * NOTE on "use the local model": this routes through Rowboat
  * (callRowboatChat), which IS backed by the per-tenant Ollama on the
- * VPS — no centralized service involved. The agent's system
+ * VPS, no centralized service involved. The agent's system
  * instructions still apply, so some persona bleed in summary text is
  * expected. Acceptable for v1; a dedicated summarizer-only Ollama
  * proxy can replace this without changing the contract.
@@ -152,7 +152,7 @@ export function shouldSummarize(
  * surfaced as `{ ok: false }` so the fire-and-forget call site never
  * needs its own try/catch.
  *
- * The caller MUST verify ownership before invoking — this module
+ * The caller MUST verify ownership before invoking, this module
  * trusts its `(businessId, threadId)` pair.
  */
 export async function summarizeThread(
@@ -222,7 +222,7 @@ export async function summarizeThread(
   }
 
   // Anything that's still in the live tail doesn't need to be in the
-  // summary — Rowboat will see those messages raw on every chat turn.
+  // summary, Rowboat will see those messages raw on every chat turn.
   // Only summarize the part that the live tail will eventually drop.
   const toSummarize = allMessages.slice(0, -SUMMARY_TAIL_KEEP);
   if (toSummarize.length === 0) {
@@ -245,7 +245,7 @@ export async function summarizeThread(
       projectId,
       bearer,
       messages: summarizerMessages,
-      // Deliberately do NOT pass conversationId/state — we want a
+      // Deliberately do NOT pass conversationId/state, we want a
       // fresh, stateless model invocation for summarization. Reusing
       // the thread's continuation would taint the summary with the
       // model's chat-mode rolling state.
@@ -265,7 +265,7 @@ export async function summarizeThread(
   const trimmed = reply.trim();
   if (!trimmed) return { ok: false, reason: "empty_summary" };
   // Hard-truncate so persona bleed or a runaway model can't dominate
-  // the prompt. Truncating in the middle of a sentence is fine — the
+  // the prompt. Truncating in the middle of a sentence is fine, the
   // summary is for the model's benefit, not the user's.
   const summary =
     trimmed.length > SUMMARY_MAX_CHARS ? trimmed.slice(0, SUMMARY_MAX_CHARS) : trimmed;

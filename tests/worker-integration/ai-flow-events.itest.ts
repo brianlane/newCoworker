@@ -19,9 +19,9 @@ import {
 /**
  * Event-driven run transitions against the REAL worker + REAL Postgres:
  * the reply-resume path (webhook-shaped), Goal Event forward jumps
- * (applyGoalEvent — the same shared module every production hook calls,
+ * (applyGoalEvent, the same shared module every production hook calls,
  * here against the real ai_flow_runs/ai_flows tables), and the
- * route_to_team owner-fallback when nobody on the roster is on shift —
+ * route_to_team owner-fallback when nobody on the roster is on shift,
  * the exact `tried: 0` signature from the Truly Insurance incident.
  */
 
@@ -173,7 +173,7 @@ describe("route_to_team owner fallback (the Truly `tried: 0` regression)", () =>
   it("a roster with nobody on shift falls back to the owner without offering anyone", async () => {
     const biz = await seedBusiness(db, "IT route-fallback");
     await seedContact(db, biz, LEAD);
-    // One active broker whose ONLY shift is 3 days from now — deterministic
+    // One active broker whose ONLY shift is 3 days from now, deterministic
     // "not on shift at test time" regardless of when CI runs (the exact
     // state of Truly's roster at 8:39 AM on incident day).
     const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;

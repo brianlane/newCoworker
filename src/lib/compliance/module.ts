@@ -1,16 +1,16 @@
 /**
- * Custom compliance modules (enterprise) — schema + soul.md wiring for
+ * Custom compliance modules (enterprise), schema + soul.md wiring for
  * `businesses.compliance_module` (migration 20260811000000).
  *
  * A module is tenant-authored guardrail text plus a restricted-term list,
- * layered ON TOP of the platform guardrails — the render wrapper makes the
+ * layered ON TOP of the platform guardrails, the render wrapper makes the
  * additive framing explicit ("in addition to, never instead of"), so custom
  * text can never replace the baseline compliance prompt.
  *
  * Delivery: the module is rendered into a MARKER-DELIMITED block inside
  * `business_configs.soul_md` (the single source of truth both provision-time
  * bash and the dashboard-save vault sync read), so an admin save reaches the
- * live agent through the existing scheduleVaultSync path — no redeploy.
+ * live agent through the existing scheduleVaultSync path, no redeploy.
  */
 
 import { z } from "zod";
@@ -70,7 +70,7 @@ export const COMPLIANCE_MODULE_END = "<!-- CUSTOM_COMPLIANCE_MODULE_END -->";
 
 /**
  * The marker-delimited soul.md section for a module. The wrapper text is
- * FIXED — tenant input is only ever appended inside it, so a crafted
+ * FIXED, tenant input is only ever appended inside it, so a crafted
  * customPrompt cannot reframe or disable the platform guardrails above it.
  */
 export function renderComplianceModuleSection(module: ComplianceModule): string {

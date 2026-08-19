@@ -17,7 +17,7 @@ type Props = {
 };
 
 /**
- * "Merge into another customer" — folds THIS profile into a selected one
+ * "Merge into another customer", folds THIS profile into a selected one
  * (this number becomes an alias of the target). Collapsed behind a single
  * button because merging is rare and irreversible.
  */

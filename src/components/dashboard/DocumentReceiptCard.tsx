@@ -4,7 +4,7 @@
  * One-click installer for the "Confirm document receipt" starter flow: when
  * the AI coworker's own mailbox receives an email with attachments, the
  * sender gets an automatic receipt confirmation naming the files and the
- * owner is briefed. No parameters — the install POSTs /api/aiflows with the
+ * owner is briefed. No parameters, the install POSTs /api/aiflows with the
  * code-defined template (created DISABLED so the wording and the sending
  * mailbox are reviewed before anything fires).
  *

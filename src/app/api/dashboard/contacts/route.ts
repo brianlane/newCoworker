@@ -5,7 +5,7 @@
  * DELETE /api/dashboard/contacts?businessId=<uuid>  body: { e164 }
  *
  * Overrides win over derived contact names (owner/employee/customer) in
- * dashboard display — see src/lib/db/contact-names.ts. `e164` accepts a
+ * dashboard display, see src/lib/db/contact-names.ts. `e164` accepts a
  * real E.164 number or a bare 3-8 digit short code (lead sources like
  * ReferralExchange text from short codes).
  *

@@ -31,7 +31,7 @@ function classify(candidates: StaleOfferCandidate[], digit = "1", from = GABBY) 
 describe("classifyStaleOfferReply", () => {
   it("returns live_with_other for a '1' on an offer live with another teammate (first-to-claim on)", () => {
     // Reaching the classifier with a "1" in this state means the sender added
-    // an ETA ("1, a few hours") — the ack teaches the bare-"1" yank instead of
+    // an ETA ("1, a few hours"), the ack teaches the bare-"1" yank instead of
     // pretending the lead moved on for good.
     const r = classify([
       row({
@@ -161,7 +161,7 @@ describe("classifyStaleOfferReply", () => {
   it("returns null for any digit other than the universal 1 (claim) / 2 (pass)", () => {
     const base = row({ routing: { tried: [GABBY], claimed_by: DAVE } });
     expect(classify([base], "7")).toBeNull();
-    // Legacy stamped digits no longer count as offer digits — "1"/"2" only.
+    // Legacy stamped digits no longer count as offer digits, "1"/"2" only.
     const withTf = row({ routing: { tried: [GABBY], claimed_by: DAVE, tf_digit: "3" } });
     expect(classify([withTf], "3")).toBeNull();
     const withLate = row({ routing: { tried: [GABBY], claimed_by: DAVE, late_digit: "4" } });

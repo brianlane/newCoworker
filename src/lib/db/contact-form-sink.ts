@@ -1,7 +1,7 @@
 /**
  * Platform contact-form sink (`businesses.contact_form_sink`).
  *
- * At most ONE business — the internal HQ dogfood tenant — can be designated
+ * At most ONE business, the internal HQ dogfood tenant, can be designated
  * to receive public /contact submissions as webhook-channel AiFlow events
  * (source "contact_form"), so the company's own coworker can triage them.
  * Enforced by the partial unique index `uq_businesses_contact_form_sink`;
@@ -43,7 +43,7 @@ export async function getContactFormSinkBusinessId(
  * Designate (or undesignate) a business as the platform contact-form sink.
  *
  * Enabling first clears any OTHER sink so the partial unique index never
- * rejects the write — two sequential statements, not a transaction, which is
+ * rejects the write, two sequential statements, not a transaction, which is
  * fine for an admin-only, low-frequency toggle: the worst interleaving of
  * two concurrent enables leaves exactly one sink (the index guarantees it),
  * never two.

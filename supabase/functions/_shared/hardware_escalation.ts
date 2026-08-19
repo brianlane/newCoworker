@@ -1,10 +1,10 @@
 /**
- * Hardware-escalation advisor — pure signal evaluation + email shaping.
+ * Hardware-escalation advisor, pure signal evaluation + email shaping.
  *
  * The daily `hardware-escalation-advisor` cron watches every active
  * starter/standard tenant for sustained load that suggests their box is (or
  * soon will be) too small, then emails the OPS inbox recommending a manual
- * escalation (the admin panel's migrate-size flow — escalation itself stays
+ * escalation (the admin panel's migrate-size flow, escalation itself stays
  * a human decision; nothing here moves hardware).
  *
  * Signals (rolling 7-day window over `voice_call_transcripts`,
@@ -13,7 +13,7 @@
  *     (derived from transcript started_at/ended_at overlap via
  *     {@link dailyPeakConcurrency}) reached the tier's advertised cap on
  *     ≥ CONCURRENCY_DAYS days. The tenant is bouncing off their concurrency
- *     ceiling — the strongest "needs bigger box / plan" indicator we
+ *     ceiling, the strongest "needs bigger box / plan" indicator we
  *     collect. NOT `daily_usage.peak_concurrent_calls`: that column has no
  *     live production writer (the SMS reserve path inserts it as zero), so
  *     reading it meant this signal could never fire.
@@ -21,14 +21,14 @@
  *     (`voice_settlements.billable_seconds`, the billing ground truth),
  *     extrapolated to a 30-day month, ≥ VOICE_UTILIZATION of the tier's
  *     included pool. Voice-heavy tenants are the ones that stress CPU
- *     (Gemini Live bridging). NOT `daily_usage.voice_minutes_used` — dead
+ *     (Gemini Live bridging). NOT `daily_usage.voice_minutes_used`, dead
  *     for the same reason as `peak_concurrent_calls`.
  *   - sms_volume: month-to-date SMS ≥ SMS_UTILIZATION of the monthly cap
- *     (`daily_usage.sms_sent` — the one column the SMS reserve functions DO
+ *     (`daily_usage.sms_sent`, the one column the SMS reserve functions DO
  *     write). More an upsell signal than hardware pressure, but the
  *     operator wants to see it in the same digest.
  *   - system_errors: ≥ ERROR_COUNT error-level `system_logs` rows from the
- *     on-box sources (rowboat / ollama / voice) in the window — the "this
+ *     on-box sources (rowboat / ollama / voice) in the window, the "this
  *     box is actually choking" signal (OOM, container crashes).
  *
  * Dependency-free (caller injects rows) so vitest covers it under the
@@ -84,7 +84,7 @@ export type CallInterval = {
  * record each day's maximum live-call count at its event times. A call
  * crossing midnight contributes to its end day via the end event's
  * pre-close count; a day a call spans END TO END with no events records
- * nothing — acceptable, real calls are minutes long.
+ * nothing, acceptable, real calls are minutes long.
  */
 export function dailyPeakConcurrency(intervals: CallInterval[]): Map<string, number> {
   const events: Array<{ atMs: number; delta: 1 | -1 }> = [];
@@ -163,13 +163,13 @@ export function nextSizeUp(size: AdvisorVpsSize): AdvisorVpsSize | null {
 
 /**
  * Fixed rolling window (days) for every signal. Extrapolations divide by
- * this constant — NOT by the number of `daily_usage` rows — because rows
+ * this constant, NOT by the number of `daily_usage` rows, because rows
  * only exist on days with activity: a 2-day burst divided by 2 rows would
  * masquerade as a sustained month-long pace.
  */
 export const ADVISOR_WINDOW_DAYS = 7;
 
-/** ISO date (UTC) of the Monday of `now`'s week — once-per-week dedupe key. */
+/** ISO date (UTC) of the Monday of `now`'s week, once-per-week dedupe key. */
 export function weeklyPeriodKey(now: Date = new Date()): string {
   const utc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const day = utc.getUTCDay(); // 0 = Sunday
@@ -267,7 +267,7 @@ function describeSignal(s: EscalationSignal): string {
 
 /**
  * Ops digest email for every flagged tenant in one send (one email per run,
- * not per business — the operator wants a single morning digest).
+ * not per business, the operator wants a single morning digest).
  */
 export function buildEscalationAdviceEmail(
   advices: BusinessAdvice[],

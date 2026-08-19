@@ -8,10 +8,10 @@
  * Powers two affordances on the Emails page (the email analog of the SMS
  * reply/compose feature):
  *   1. Replying into an existing email thread (Reply button in the reading
- *      pane — recipient + "Re:" subject prefilled).
+ *      pane, recipient + "Re:" subject prefilled).
  *   2. Composing a brand-new email to any address.
  *
- * The subject + body are sent EXACTLY as typed (plain text only — no markup, no
+ * The subject + body are sent EXACTLY as typed (plain text only, no markup, no
  * templating). The sender is chosen by `fromConnectionId`, mirroring the AiFlow
  * send_email "From" picker:
  *   - empty/omitted → the business's AI coworker mailbox (Resend transport,
@@ -154,7 +154,7 @@ export async function POST(request: Request) {
     }
 
     // Best-effort durable log so the email renders in the list. The email
-    // already went out, so this MUST NOT be able to fail the request — a 500
+    // already went out, so this MUST NOT be able to fail the request, a 500
     // here would make the owner retry and send a duplicate. Any throw (client
     // creation, insert) is swallowed to logged:false; the UI then warns instead
     // of promising the row will appear.

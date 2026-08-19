@@ -1,6 +1,6 @@
 /**
  * Wire-level shapes for the memory-graph PostgREST wrappers
- * (src/lib/memory/graph-db.ts) — table names, column filters, update
+ * (src/lib/memory/graph-db.ts), table names, column filters, update
  * payloads, and error mapping, with both the injected-client and
  * default-client paths exercised.
  */

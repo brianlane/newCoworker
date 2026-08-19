@@ -1,5 +1,5 @@
 /**
- * AiFlow render service — headless-Chromium browse backend for AiFlows.
+ * AiFlow render service, headless-Chromium browse backend for AiFlows.
  *
  * The default AiFlows browse backend is a static fetch inside the ai-flow-worker.
  * For JS-rendered (SPA) pages a static fetch can't read, AND for LOGIN-GATED
@@ -22,24 +22,24 @@
  *                                                        failure responses
  *   ... + { actions: [...] }                          -> ACTION mode (below)
  *
- * IMPORTANT — application-level failures (action_failed / login_failed /
+ * IMPORTANT, application-level failures (action_failed / login_failed /
  * auth_config_error / render_failed) are returned with HTTP **200** and an
  * `{ error, detail }` body, NOT a 5xx. This service runs behind a Cloudflare
  * Tunnel, and Cloudflare REPLACES the body of any origin 5xx with its own
- * "error code: 502" page — which would erase the structured error and make the
+ * "error code: 502" page, which would erase the structured error and make the
  * worker retry a permanent failure. The worker classifies on the `error` code
  * (see renderErrorKind) and treats a genuine non-2xx as a transport failure.
- * Only client errors (400/401) keep their status — Cloudflare passes 4xx through.
+ * Only client errors (400/401) keep their status, Cloudflare passes 4xx through.
  *
  * When `auth` is present the service logs in first using the named custom
  * integration's stored credentials (fetched from the platform's gateway-guarded
  * /api/integrations/custom/credentials endpoint), reusing a per-tenant browser
  * context so the session cookie is cached across calls.
  *
- * EXTRACT mode (no `actions`) only READS the page — it fills + submits the
+ * EXTRACT mode (no `actions`) only READS the page, it fills + submits the
  * login form and never clicks lead-page buttons. ACTION mode (the worker's
- * browse_action step) performs an owner-authored ordered click/fill sequence —
- * e.g. posting a "still trying to contact" update on a lead timeline — and
+ * browse_action step) performs an owner-authored ordered click/fill sequence,
+ * e.g. posting a "still trying to contact" update on a lead timeline, and
  * returns { finalUrl, actionsCompleted, text, html } (+ screenshotBase64 when
  * asked) so the worker can extract fields in the same pass. Each action is
  * { kind: click_text | click_selector | fill_selector | fill_placeholder |
@@ -217,7 +217,7 @@ async function acquireSession(key) {
     s.context = await s.ctx;
     return s;
   } catch (e) {
-    // Context creation failed — drop the poisoned entry so we retry cleanly.
+    // Context creation failed, drop the poisoned entry so we retry cleanly.
     s.inUse--;
     if (sessions.get(key) === s) sessions.delete(key);
     throw e;
@@ -228,7 +228,7 @@ async function acquireSession(key) {
  * Release a session after a request finishes. On `poisoned` (bad login / render
  * error) the entry is removed from the map so no NEW request reuses it, but the
  * underlying context is only closed once the LAST in-flight request releases it
- * (inUse === 0) — never yanked out from under a concurrent authed browse.
+ * (inUse === 0), never yanked out from under a concurrent authed browse.
  */
 function finishSession(key, s, poisoned) {
   s.inUse = Math.max(0, s.inUse - 1);
@@ -335,9 +335,9 @@ async function settlePage(page) {
  * each image's position. Some lead pages render a key value ONLY as a logo
  * image (e.g. ReferralExchange's "Web Source" row shows
  * `<img alt="realestateagents">` with no text sibling), which
- * `document.body.innerText` drops entirely — so the worker's Gemini extraction
+ * `document.body.innerText` drops entirely, so the worker's Gemini extraction
  * could never see it. A text node is inserted after each alt-bearing image,
- * innerText is read, then the markers are removed — all inside ONE evaluate
+ * innerText is read, then the markers are removed, all inside ONE evaluate
  * call, so no screenshot or page.content() capture can observe the mutation.
  * Best-effort: returns "" instead of throwing, like the reads it replaces.
  */
@@ -380,7 +380,7 @@ async function captureScreenshot(page) {
     });
     return buf.toString("base64");
   } catch {
-    // A failed screenshot must not fail the browse — text/html still flow.
+    // A failed screenshot must not fail the browse, text/html still flow.
     return null;
   }
 }
@@ -402,8 +402,8 @@ async function capturePageSource(page) {
 /**
  * Loop-over-list: collect every `forEachLink` row's href up front (the list
  * page is replaced as we navigate into each), then visit each href and run the
- * SAME action sequence. Per-item failures are recorded but DON'T abort the loop
- * — a weekly bulk update shouldn't stop because one lead's page changed.
+ * SAME action sequence. Per-item failures are recorded but DON'T abort the loop,
+ * a weekly bulk update shouldn't stop because one lead's page changed.
  */
 async function performForEach(page, forEachLink, actions, matchNames) {
   let hrefs = [];
@@ -413,7 +413,7 @@ async function performForEach(page, forEachLink, actions, matchNames) {
         // `names` is an ARRAY when the caller requested a name filter (act only
         // on rows naming one of them) or NULL when no filter was requested (act
         // on every row). A filter that's present but empty therefore matches
-        // NOTHING — we never silently fall back to acting on every row.
+        // NOTHING, we never silently fall back to acting on every row.
         const filtering = Array.isArray(names);
         const wanted = filtering
           ? names.map((n) => String(n).toLowerCase()).filter(Boolean)
@@ -544,7 +544,7 @@ async function respondWithActions(
     // never advanced), and the worker matches this source against a step's
     // skipWhenText to recognize terminal pages (e.g. a lead already claimed) and
     // end the run gracefully. The before-shot above stays debug-only to bound
-    // cost on the happy path. Best effort — a capture failure must not mask
+    // cost on the happy path. Best effort, a capture failure must not mask
     // action_failed.
     await settlePage(page);
     const screenshotBase64 = await captureScreenshot(page);
@@ -590,10 +590,10 @@ async function respondWithActions(
  * artifact) to PDF. Same bearer auth and rate limit as /render. The page is
  * hermetic by construction: content arrives via setContent (no navigation),
  * JavaScript is disabled at the context level, and EVERY network request is
- * aborted — tenant-influenced HTML can't probe the box's loopback services
+ * aborted, tenant-influenced HTML can't probe the box's loopback services
  * or fetch external resources (inline data: URIs still render). Failures
  * return HTTP 200 with { error, detail } like /render (Cloudflare replaces
- * origin 5xx bodies — see the module doc).
+ * origin 5xx bodies, see the module doc).
  */
 const PDF_HTML_MAX_CHARS = Number(process.env.AIFLOW_PDF_HTML_MAX_CHARS ?? 200_000);
 app.post("/pdf", async (req, res) => {
@@ -833,7 +833,7 @@ app.post("/render", async (req, res) => {
     // just pay the network-quiet wait a third time on a page that never idles.
 
     // ACTION mode runs after any login. An action failure does NOT poison the
-    // session — the login is still good; only the page/selectors disagreed.
+    // session, the login is still good; only the page/selectors disagreed.
     if (actions)
       return await respondWithActions(
         page,

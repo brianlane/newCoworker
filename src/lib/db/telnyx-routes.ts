@@ -7,7 +7,7 @@
  *
  * The voice-inbound Edge function and the SMS worker both read from
  * `telnyx_voice_routes` by `to_e164`, so renaming this table is a cross-
- * function change — see the migration's comment header for details.
+ * function change, see the migration's comment header for details.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -203,7 +203,7 @@ export async function upsertBusinessTelnyxSettings(
 ): Promise<BusinessTelnyxSettingsRow> {
   const db = client ?? (await createSupabaseServiceClient());
   // Build the row from a declarative column map so each optional field is
-  // handled uniformly — no per-field if/else branches, which keeps branch
+  // handled uniformly, no per-field if/else branches, which keeps branch
   // coverage deterministic regardless of which subset of fields the caller
   // supplies.
   const columnMap: Array<[keyof UpsertBusinessTelnyxSettingsInput, string]> = [
@@ -249,12 +249,12 @@ export type TendlcRetryCandidate = {
 /**
  * List per-business DIDs that need a 10DLC campaign re-attach. Returns
  * rows whose status is `pending` or `rejected` AND that haven't been
- * retried within `staleAfterSeconds` (default 5 minutes) — bounded by
+ * retried within `staleAfterSeconds` (default 5 minutes), bounded by
  * `limit` so a backlog of 1k pending DIDs doesn't burn a full Telnyx
  * budget per cron tick.
  *
  * Joined with `telnyx_voice_routes` because the DID lives there, not on
- * `business_telnyx_settings`. Rows missing a route are filtered out — a
+ * `business_telnyx_settings`. Rows missing a route are filtered out, a
  * business without a DID has nothing to attach.
  */
 export async function listBusinessesPendingTendlcAttach(

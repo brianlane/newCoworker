@@ -264,7 +264,7 @@ describe("isRefundExposureOpen", () => {
   });
 
   // A customer who already spent their lifetime-once refund is not exposed
-  // at all, so they are eligible for term hardware immediately — a day-count
+  // at all, so they are eligible for term hardware immediately, a day-count
   // rule would have made them wait 30 days for nothing.
   it("is closed when the lifetime refund was already used", () => {
     expect(

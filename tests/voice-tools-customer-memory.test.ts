@@ -20,7 +20,7 @@ vi.mock("@/lib/customer-memory/db", () => ({
 }));
 
 // The handlers module now imports the summarizer (dashboard rename path);
-// keep this suite hermetic — the voice surface must never trigger it.
+// keep this suite hermetic, the voice surface must never trigger it.
 vi.mock("@/lib/customer-memory/summarizer", () => ({
   summarizeCustomerMemoryAndLog: vi.fn().mockResolvedValue(undefined)
 }));
@@ -187,7 +187,7 @@ describe("POST /api/voice/tools/customer-lookup", () => {
 
   it("treats anonymous/empty callerE164 as 'not found' instead of 400 (Telnyx CNAM gaps are common)", async () => {
     // Envelope says callerE164 is empty. With no args.phone supplied,
-    // we now legitimately have nothing to look up — return a 400.
+    // we now legitimately have nothing to look up, return a 400.
     // But envelope-allowed empty + valid phone arg should NOT be a 400.
     const res = await lookupPOST(
       makeReq("/api/voice/tools/customer-lookup", {
@@ -327,7 +327,7 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
   it("returns name_already_set_matches when the RPC's p_display_name already populated the new row to the same value", async () => {
     // RPC's p_display_name path: when the row didn't exist AND we
     // pass the agent-discovered name, the RPC sets it on the new
-    // row. The follow-up UPDATE is then unnecessary — return a
+    // row. The follow-up UPDATE is then unnecessary, return a
     // distinct reason so callers can tell "redundant write" apart
     // from "owner-curated, do not touch".
     vi.mocked(getCustomerMemory)
@@ -448,7 +448,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     const body = await res.json();
     // Bugbot Low PR #74: previous version compared `prior + 2 (separator)
     // + newLine` against `combined`, which was wrong when prior was
-    // empty (no separator added) — always reported truncated:true on
+    // empty (no separator added), always reported truncated:true on
     // the very first pinned note. Fixed by comparing what we WANTED
     // to write against what we actually persisted.
     expect(body.data.truncated).toBe(false);
@@ -482,7 +482,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
   it("force-create degrades gracefully when the second getCustomerMemory still returns null (RPC raced or RLS quirk), still attempts the UPDATE so we don't fail closed", async () => {
     // Defensive path: record_customer_interaction succeeded but the
     // re-read came back null (rare race or RLS). Rather than abort,
-    // we still UPDATE — if the row really doesn't exist we'll just
+    // we still UPDATE, if the row really doesn't exist we'll just
     // match zero rows again (no worse than before), and if it
     // briefly existed the next interaction will repair things.
     vi.mocked(getCustomerMemory)
@@ -556,7 +556,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
       pinnedMd: string;
     }).pinnedMd;
     expect(newPinned.length).toBeLessThanOrEqual(4000);
-    // The OLDEST chars get clipped — the agent's new note + part of
+    // The OLDEST chars get clipped, the agent's new note + part of
     // the prior owner note remains.
     expect(newPinned.endsWith(newNote)).toBe(true);
     expect(newPinned).not.toContain("OLD NOTE");
@@ -568,7 +568,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     // Actually the per-arg cap is 1500, far below PINNED_MAX_CHARS, so
     // a single note can never trigger note_too_long via that path.
     // The path IS triggered when an attacker / model hands a stamp
-    // longer than expected — pin via direct module test in db.test.ts
+    // longer than expected, pin via direct module test in db.test.ts
     // if we ever expose PINNED_MAX_CHARS as a configurable. For now
     // the practical path is the truncate branch covered above; we
     // just sanity-check the "happy" boundary here.

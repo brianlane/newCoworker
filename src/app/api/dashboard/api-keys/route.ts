@@ -5,7 +5,7 @@
  *   POST /api/dashboard/api-keys              → mint { businessId, name }
  *
  * The POST response is the ONLY time the plaintext key exists outside the
- * owner's clipboard — we store just the SHA-256 hash. Auth: session owner
+ * owner's clipboard, we store just the SHA-256 hash. Auth: session owner
  * (admins may target any business, matching dashboard conventions).
  */
 
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       throw err;
     }
 
-    // `plaintext` is shown once in the UI and never again — not persisted.
+    // `plaintext` is shown once in the UI and never again, not persisted.
     return successResponse(
       {
         id: row.id,

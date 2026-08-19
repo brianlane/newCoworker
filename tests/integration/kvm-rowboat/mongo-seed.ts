@@ -20,7 +20,7 @@ function buildRowboatWorkflow(ollamaModelTag: string) {
           "When someone asks to schedule a showing, acknowledge and ask for preferred times.\n" +
           "Fair Housing Act: never steer or filter by protected classes; use objective property criteria only; offer equal professional service.",
         // REQUIRED: Rowboat's createAgent does `openai(config.model)` with no
-        // fallback — a seeded agent without `model` crashes every turn with
+        // fallback, a seeded agent without `model` crashes every turn with
         // "Cannot read properties of undefined (reading 'startsWith')".
         // Production seeds (deploy-client.sh) always set model; mirror that.
         model: ollamaModelTag,

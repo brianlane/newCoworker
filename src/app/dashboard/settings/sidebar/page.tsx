@@ -28,7 +28,7 @@ export default async function SidebarSettingsPage() {
     metaConnected,
     whatsappConnected
   });
-  // Same connection filter over the untouched catalog — what "Reset to
+  // Same connection filter over the untouched catalog, what "Reset to
   // default" restores in the editor without a round-trip re-render.
   const defaultLayout = filterSidebarItemsForBusiness(mergeSidebarLayout([]), {
     metaConnected,

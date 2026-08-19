@@ -13,7 +13,7 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 type Result = { data: unknown; error: { message: string } | null };
 
 /**
- * Chainable stub whose terminal result depends on the table queried —
+ * Chainable stub whose terminal result depends on the table queried,
  * resolveContactNames hits `ai_flow_team_members` and the unified `contacts`
  * table in parallel with different chain shapes (`.in` only on the team query).
  * Manual labels are `contacts` rows whose `name_source` is 'manual' (the name

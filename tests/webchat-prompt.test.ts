@@ -25,8 +25,8 @@ describe("WEBCHAT_PREAMBLE", () => {
 
   it("redirects booking-status questions to the verified channels (text/call)", () => {
     // The visitor is anonymous: any phone number they type is an unverified
-    // claim, so appointment existence/times must never be disclosed in-chat
-    // — a visitor asking about "their" booking is told to text or call the
+    // claim, so appointment existence/times must never be disclosed in-chat,
+    // a visitor asking about "their" booking is told to text or call the
     // business line, where the sender's number IS verified and the SMS/voice
     // coworker answers with full booking context.
     expect(WEBCHAT_PREAMBLE).toContain("existing appointment or booking");

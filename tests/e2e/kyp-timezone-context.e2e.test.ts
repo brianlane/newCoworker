@@ -21,28 +21,28 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 /**
  * The timezone-question replay (KYP Ads, 2026-07-20): a Mountain-time lead
  * (+1 780, Alberta) asked "What time zone is that?" after the business
- * confirmed a call for "today at 1:00 PM" with no zone — while an earlier
+ * confirmed a call for "today at 1:00 PM" with no zone, while an earlier
  * text had promised "11am your time on Monday". The business runs on
  * America/Toronto (Eastern); 1:00 PM Eastern IS 11:00 AM Mountain, so the
- * two messages agree — but only if the assistant does the reconciliation.
+ * two messages agree, but only if the assistant does the reconciliation.
  *
  * In production the AI never ran (the contact is sms_reply_mode: suppress
  * and the owner answered by hand). This test pins what the assistant WOULD
- * have said: the exact fresh-thread prompt the sms-inbound-worker builds —
+ * have said: the exact fresh-thread prompt the sms-inbound-worker builds,
  * the contact timeline (the "11am your time" and "1:00 PM" texts were both
  * inside the 72h lookback), the memory preamble, and the business-local
- * date line — on the fleet's SMS chat model.
+ * date line, on the fleet's SMS chat model.
  *
- * Contract (semantic, judged — never verbatim): the reply must resolve the
+ * Contract (semantic, judged, never verbatim): the reply must resolve the
  * zone ambiguity (name the zone and/or give the customer-local
  * equivalent), must not assert a WRONG equivalence, and must answer
  * mid-thread rather than asking which call is meant. If this test fails,
  * the finding is that the context is insufficient for zone inference and
- * the fix is a prompt-line change — proposed separately, not bundled here.
+ * the fix is a prompt-line change, proposed separately, not bundled here.
  *
  * Thread lines are the production messages, anonymized (name, links,
- * numbers); the load-bearing facts — the 780 area code, "11am your time",
- * the unlabeled "1:00 PM", America/Toronto — are preserved exactly.
+ * numbers); the load-bearing facts, the 780 area code, "11am your time",
+ * the unlabeled "1:00 PM", America/Toronto, are preserved exactly.
  */
 
 const LEAD = "+17805550142";
@@ -51,7 +51,7 @@ const TURN_AT = new Date("2026-07-20T15:04:07.000Z");
 const QUESTION = "What time zone is that?";
 
 /** Fleet SMS chat model (deploy-client.sh SMS_CHAT_MODEL default after the
- * PR #809 migration — same pin, and the same reason, as the Truly
+ * PR #809 migration, same pin, and the same reason, as the Truly
  * renewal-context replay). */
 const KYP_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 
@@ -126,7 +126,7 @@ async function runTimezoneTurn(): Promise<{
   const contactTimeline = formatContactTimeline(THREAD)!;
   // SMS_TIMEZONE_LINE rides between the quality line and the date line,
   // exactly like the worker's customer preamble (sms-inbound-worker
-  // dateAndPhoneLines). It was MISSING here until Jul 23 2026 — the line
+  // dateAndPhoneLines). It was MISSING here until Jul 23 2026, the line
   // shipped from this very incident (KYP/Ayanna, Jul 20) after this replay
   // was written, and without it the fleet model failed the zone contract
   // on a meaningful share of draws (PR #853's CI run drew "All of our
@@ -187,8 +187,8 @@ async function runTimezoneTurn(): Promise<{
 describe("KYP timezone turn, 'What time zone is that?' (fresh thread, live model)", () => {
   // One retried test instead of beforeAll + four tests (the suite-standard
   // de-flake shape, same restructure as the voice-booking and kyp-operator
-  // suites): a single marginal draw — the 2026-07-23 hammer run drew one
-  // reply the judge scored as not resolving the zone — must re-roll the
+  // suites): a single marginal draw, the 2026-07-23 hammer run drew one
+  // reply the judge scored as not resolving the zone, must re-roll the
   // WHOLE turn, and vitest retry cannot re-run a beforeAll.
   it(
     "resolves the zone mid-thread, no wrong equivalence, no re-ask, with trailer",

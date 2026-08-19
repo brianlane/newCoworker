@@ -6,7 +6,7 @@
  *
  * Operator console for `businesses.contact_form_sink`: when ON, public
  * /contact submissions ALSO enqueue a webhook-channel AiFlow event
- * (source "contact_form") for THIS business — how the internal HQ tenant
+ * (source "contact_form") for THIS business, how the internal HQ tenant
  * triages the site's contact form. At most one business fleet-wide can be
  * the sink; enabling here moves the designation and the panel says whose
  * it was. The notification email to CONTACT_EMAIL is unchanged either way.

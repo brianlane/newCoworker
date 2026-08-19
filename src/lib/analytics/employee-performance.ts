@@ -1,27 +1,27 @@
 /**
- * Owner-only employee performance metrics — BizBlasts'
+ * Owner-only employee performance metrics, BizBlasts'
  * StaffPerformanceService leaderboard translated to the data newCoworker
  * actually has (no bookings/revenue): lead-routing outcomes from AiFlow
  * `context.routing` and forwarded calls from voice transcripts.
  *
  * Per roster member over the trailing window:
- *   - offered      — runs where an offer verifiably reached them. Derived
+ *   - offered, runs where an offer verifiably reached them. Derived
  *     from the union of `routing.offered_log` (who was actually texted an
  *     offer), the current live `routing.offered`, AND `routing.claimed_by`.
  *     The claimed_by leg matters: the engine only finalizes a claim for a
  *     member who WAS offered the lead ("1" claims live/late/yank offers;
  *     see late_claim.ts), but the claim finalization does not append to
  *     offered_log, and runs predating the offered_log bookkeeping
- *     (2026-07-06, #387) never carry it at all — counting offered_log alone
+ *     (2026-07-06, #387) never carry it at all, counting offered_log alone
  *     made Offered undercount and read LOWER than Claimed. This union keeps
  *     the invariant offered ≥ claimed for every member on every run.
- *   - claimed      — runs they hold (claimed_by)
- *   - claimRate    — claimed / offered (≤ 100% by the invariant above)
- *   - medianClaimMs — median run-start → last-update time across their
+ *   - claimed, runs they hold (claimed_by)
+ *   - claimRate, claimed / offered (≤ 100% by the invariant above)
+ *   - medianClaimMs, median run-start → last-update time across their
  *     claimed runs. APPROXIMATE by design: the routing context stamps no
  *     claim timestamp, and updated_at moves again if steps run after the
- *     claim — label it "typical turnaround" in the UI, not a stopwatch.
- *   - forwardedCalls — answered calls the voice line handed to them
+ *     claim, label it "typical turnaround" in the UI, not a stopwatch.
+ *   - forwardedCalls, answered calls the voice line handed to them
  *     (voice_call_transcripts.forwarded_to_e164, missed excluded at the
  *     shared scan layer).
  */
@@ -52,7 +52,7 @@ export type EmployeePerformanceRow = {
 
 export const EMPLOYEE_PERFORMANCE_WINDOW_DAYS = 30;
 
-/** Run rows scanned per window — far above current per-tenant volumes. */
+/** Run rows scanned per window, far above current per-tenant volumes. */
 export const EMPLOYEE_RUN_SCAN_LIMIT = 2000;
 
 /** Middle value (mean of the middle pair for even counts); null for []. */
@@ -65,7 +65,7 @@ export function median(values: number[]): number | null {
 
 /**
  * Leaderboard rows for every roster member (active first, then by claims).
- * Members with zero activity still appear — an owner scanning the card
+ * Members with zero activity still appear, an owner scanning the card
  * should see who ISN'T taking leads, not just who is.
  */
 export async function getEmployeePerformance(
@@ -112,7 +112,7 @@ export async function getEmployeePerformance(
     const routing = routingOfContext(run.context);
     if (!routing) continue;
     // Everyone this run's offer verifiably reached (see module doc): the
-    // offer log, plus a live un-answered offer, plus the claimer — a claim
+    // offer log, plus a live un-answered offer, plus the claimer, a claim
     // is itself proof an offer reached them, including on runs that predate
     // the offered_log bookkeeping.
     const offeredSet = new Set(routing.offered_log ?? []);

@@ -15,14 +15,14 @@ const bodySchema = z.object({
 });
 
 /**
- * Admin toggle for the platform contact-form sink — the operator console
+ * Admin toggle for the platform contact-form sink, the operator console
  * behind the "Contact form (platform)" card on the admin business page.
  *
  * When enabled, public /contact submissions ALSO enqueue a webhook-channel
  * AiFlow event (source "contact_form") for this business, so the internal
  * HQ coworker can triage them; the notification email to CONTACT_EMAIL is
  * unchanged either way. At most one business fleet-wide can be the sink
- * (partial unique index) — enabling here moves the designation. Audit-logged
+ * (partial unique index), enabling here moves the designation. Audit-logged
  * to coworker_logs like the RCS toggle.
  */
 export async function POST(request: Request) {
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
         }
       });
     } catch (err) {
-      // Audit logging is best-effort — the designation is already updated.
+      // Audit logging is best-effort, the designation is already updated.
       logger.warn("contact-form-sink: audit log insert failed", {
         businessId: body.businessId,
         error: err instanceof Error ? err.message : String(err)

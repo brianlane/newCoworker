@@ -1,5 +1,5 @@
 /**
- * src/lib/mcp/server.ts — the route glue that used to sit in
+ * src/lib/mcp/server.ts, the route glue that used to sit in
  * src/app/api/mcp/route.ts, outside the coverage gate.
  *
  * Driven through the real mcp-handler stack over real Request objects,

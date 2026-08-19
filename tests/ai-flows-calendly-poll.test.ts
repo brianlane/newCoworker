@@ -10,7 +10,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
-// Default (non-injected) user-URI cache deps: empty cache, no-op persist —
+// Default (non-injected) user-URI cache deps: empty cache, no-op persist,
 // existing tests keep probing /users/me exactly like before the cache landed.
 vi.mock("@/lib/db/calendly-connections", () => ({
   getCalendlyConnectionUserUriById: vi.fn().mockResolvedValue(null),
@@ -481,7 +481,7 @@ describe("fetchCalendlyCandidateEvents", () => {
 
   it("caps invitee enrichment (overflow-flagged) and DEFERS refused/thrown/capped events to the next tick", async () => {
     // Bugbot High: firing an un-enriched event burns the per-occurrence
-    // dedupe key, permanently locking the flow out of invitee context — so
+    // dedupe key, permanently locking the flow out of invitee context, so
     // failed/skipped enrichment withholds the event this tick instead.
     const many = Array.from({ length: CALENDLY_INVITEE_FETCH_CAP + 2 }, (_, i) =>
       rawEvent(`EV${i}`)
@@ -522,7 +522,7 @@ describe("fetchCalendlyCandidateEvents", () => {
 
   it("prioritizes the soonest-starting due events for the enrichment cap (no reminder starvation)", async () => {
     // Bugbot Medium: created-due events stay due for their whole lookback
-    // and re-occupy cap slots every tick — an imminent event_start reminder
+    // and re-occupy cap slots every tick, an imminent event_start reminder
     // listed after them must still win a slot.
     const laterStart = new Date(NOW + 10 * 24 * 60 * 60_000).toISOString();
     const crowd = Array.from({ length: CALENDLY_INVITEE_FETCH_CAP + 1 }, (_, i) =>

@@ -1,17 +1,17 @@
 /**
- * GET /widget/frame?key=ncw_pub_… — the embeddable chat UI document.
+ * GET /widget/frame?key=ncw_pub_…, the embeddable chat UI document.
  *
  * A ROUTE HANDLER (not a React page) on purpose: the response must carry a
  * PER-TENANT `Content-Security-Policy: frame-ancestors …` header built from
  * chat_widget_settings.allowed_origins, and App Router pages cannot set
  * response headers. The global no-framing headers exclude exactly this path
- * (see next.config.ts) so the dynamic value below is the only CSP here —
+ * (see next.config.ts) so the dynamic value below is the only CSP here,
  * the BROWSER is what stops an unapproved site from embedding the widget.
  *
  * The document is a small self-contained HTML+CSS+JS chat client (no React,
  * no bundle): pre-chat form when the owner requires it, message list, and
  * reply polling that runs ONLY while a turn is in flight AND the tab is
- * visible, with backoff — no standing poll loop.
+ * visible, with backoff, no standing poll loop.
  */
 
 import {
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
         ctx.reason === "offline"
           ? "Chat is offline right now. Please try again later."
           : "This chat widget is not available.";
-      // Unavailable documents carry no tenant data — any ancestor may frame
+      // Unavailable documents carry no tenant data, any ancestor may frame
       // them (the copy is the whole point).
       return htmlResponse(unavailableHtml(message), "*");
     }
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
       maxMessageChars: WEBCHAT_MAX_MESSAGE_CHARS
     };
 
-    // NOTE: config values are embedded two ways — HTML-escaped for static
+    // NOTE: config values are embedded two ways, HTML-escaped for static
     // markup, JSON-in-<script> for the client code. The JSON blob escapes
     // `<` so a malicious greeting can't close the script tag.
     const configJson = JSON.stringify(config).replace(/</g, "\\u003c");

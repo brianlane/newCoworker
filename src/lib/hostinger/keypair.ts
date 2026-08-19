@@ -106,7 +106,7 @@ export async function fingerprintOpenSshPublicKey(publicKeyLine: string): Promis
  *
  * Used to migrate `vps_ssh_keys` rows persisted before
  * {@link generateSshKeypair} switched its PEM emission to OpenSSH format.
- * The keypair material is unchanged — only the wire encoding — so the
+ * The keypair material is unchanged, only the wire encoding, so the
  * matching public key on the VPS's `~/.ssh/authorized_keys` continues to
  * authenticate the converted private half without any VPS-side change.
  */
@@ -139,7 +139,7 @@ export function convertPkcs8Ed25519PemToOpenssh(pkcs8Pem: string, comment = "new
  * public half matches the given OpenSSH public-key line. Used by the SSH
  * executor to catch storage corruption before opening a connection.
  *
- * Accepts both OpenSSH-format ("openssh-key-v1") and PKCS#8 PEMs — the
+ * Accepts both OpenSSH-format ("openssh-key-v1") and PKCS#8 PEMs, the
  * latter still rounds-trips through node:crypto even though ssh2 can't
  * read it directly. This makes the function usable for verifying
  * historical rows that predate the OpenSSH-format export switch.
@@ -228,8 +228,8 @@ function encodeOpensshEd25519PrivateKey(rawPriv32: Buffer, rawPub32: Buffer, com
 
   // Pad to a multiple of the (cipher) block size. For cipher=none,
   // OpenSSH uses block size 8. Pad bytes count up from 1 (1, 2, 3, ...).
-  // The padNeeded === 0 branch fires for comments with length ≡ 5 (mod 8)
-  // — see the dedicated test in tests/hostinger-keypair.test.ts which
+  // The padNeeded === 0 branch fires for comments with length ≡ 5 (mod 8),
+  // see the dedicated test in tests/hostinger-keypair.test.ts which
   // exercises both halves of this conditional.
   const blockSize = 8;
   const padNeeded = (blockSize - (inner.length % blockSize)) % blockSize;
@@ -254,8 +254,8 @@ function encodeOpensshEd25519PrivateKey(rawPriv32: Buffer, rawPub32: Buffer, com
   ]);
 
   // Wrap in PEM at 70-char rows (matches ssh-keygen output). The body is
-  // guaranteed non-empty here — even an empty comment yields a 131-byte
-  // inner blob — so `.match(/.{1,70}/g)` always returns at least one
+  // guaranteed non-empty here, even an empty comment yields a 131-byte
+  // inner blob, so `.match(/.{1,70}/g)` always returns at least one
   // chunk. The `?? b64` fallback is purely a TypeScript narrowing aid
   // for the `RegExpMatchArray | null` return type.
   const b64 = body.toString("base64");
@@ -330,7 +330,7 @@ function base64UrlToBuffer(s: string): Buffer {
 async function sha256Fingerprint(blob: Buffer): Promise<string> {
   const crypto = await import("node:crypto");
   const hash = crypto.createHash("sha256").update(blob).digest("base64");
-  // Trim trailing '=' — matches OpenSSH's `SHA256:…` output.
+  // Trim trailing '=', matches OpenSSH's `SHA256:…` output.
   return `SHA256:${hash.replace(/=+$/, "")}`;
 }
 

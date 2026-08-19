@@ -20,25 +20,25 @@ import { recordGeminiUsage } from "./usage-log";
  * The Messenger/Instagram/WhatsApp customer engine against the LIVE model,
  * through the REAL production code path: `runMessengerGeminiTurn` itself
  * (not a paraphrase of its prompt) builds the vault grounding, the channel
- * preamble, and the tool loop, with the REAL WEBCHAT_TOOL_DECLARATIONS —
+ * preamble, and the tool loop, with the REAL WEBCHAT_TOOL_DECLARATIONS,
  * only the tool EXECUTIONS are stubbed to the executor's response shapes
  * (the kyp-owner-sms-operator pattern).
  *
  * Why this surface needs its own live pin: every persona incident class so
  * far (phantom bookings, phantom sends, restarted intake) was pinned
- * against the SMS worker's prompt lines — but the DM engine runs a
+ * against the SMS worker's prompt lines, but the DM engine runs a
  * DIFFERENT prompt build (buildAgentInstructions + buildMessengerPreamble)
  * on the same model class, and a customer-facing conversational surface
  * has the same stakes as SMS. Contracts pinned here:
  *
  *   1. LEAD CAPTURE: a visitor who shares their number is captured via the
- *      capture tool, with the preamble's sessionRef passed verbatim — and
+ *      capture tool, with the preamble's sessionRef passed verbatim, and
  *      the reply never claims the assistant itself sent/will send a text
  *      (the preamble: "You cannot send SMS or email from this
  *      conversation").
  *   2. GROUNDED BOOKING: the model never books while the visitor is still
  *      choosing between offered slots, books exactly the slot they picked,
- *      and — when the booking tool FAILS — never tells the visitor an
+ *      and, when the booking tool FAILS, never tells the visitor an
  *      appointment was booked (the phantom-booking incident class).
  *
  * Temperature 0 for CI stability (the engine runs 0.3 in production);
@@ -52,11 +52,11 @@ const CONVERSATION_ID = "33333333-cccc-4ccc-8ccc-333333333333";
  * Deliberately plain vault fixture: the contracts under test come from the
  * engine's preamble + tool declarations, not from fixture instructions.
  *
- * The business is UTC-native (Reykjavik — UTC year-round) ON PURPOSE: the
+ * The business is UTC-native (Reykjavik, UTC year-round) ON PURPOSE: the
  * calendar core returns slot ISO strings in Z-form, and a non-UTC business
  * lets the model's free-text rendering of those times drift between turns
  * (observed live: a Phoenix fixture had 17:00Z presented naively as
- * "5 PM", then re-anchored to Phoenix on the booking turn — a timezone-
+ * "5 PM", then re-anchored to Phoenix on the booking turn, a timezone-
  * RENDERING wobble, which is not the slot-FIDELITY contract this suite
  * pins). With UTC the naive and converted readings coincide, so the
  * assertions measure exactly what they claim to.
@@ -127,7 +127,7 @@ type ToolRouter = (name: string, args: Record<string, unknown>) => WebchatToolRe
  * calls pinned to temperature 0 with the suite's transient-retry policy.
  *
  * `messenger_engine_no_reply` (an empty/thinking-only model step) is
- * retried whole-turn, bounded — that throw is exactly what the production
+ * retried whole-turn, bounded, that throw is exactly what the production
  * worker maps to the job's error path, where the job retries. Recorded
  * calls are reset between attempts so a retried turn can't double-count.
  */
@@ -173,7 +173,7 @@ async function engineTurnOnce(
         try {
           // temperature 0 for CI stability (production runs 0.3); the raised
           // output cap keeps the model's thinking budget from swallowing the
-          // whole allowance and yielding an empty (no-text, no-call) step —
+          // whole allowance and yielding an empty (no-text, no-call) step,
           // the geminiChatStep default is 1500 and thinking counts against it.
           // (The engine's own params carry its production thinkingLevel.)
           const result = await geminiChatStep({ ...params, temperature: 0, maxOutputTokens: 6000 });
@@ -210,15 +210,15 @@ async function engineTurnOnce(
 const digits = (v: unknown): string => String(v ?? "").replace(/\D/g, "");
 
 // ---------------------------------------------------------------------------
-// Contract 1 — lead capture with the verbatim sessionRef, no phantom texts
+// Contract 1, lead capture with the verbatim sessionRef, no phantom texts
 // ---------------------------------------------------------------------------
 
 /**
  * Dana explicitly asks for her details to be passed to the team and can't
- * stay in the chat, so answering inline cannot fulfil the request —
+ * stay in the chat, so answering inline cannot fulfil the request,
  * capturing her number is the ONLY correct path. (The first CI run of an
- * earlier wording — "can someone text me your prices?" right after a
- * question the fixture memory answers — drew a turn that just answered the
+ * earlier wording, "can someone text me your prices?" right after a
+ * question the fixture memory answers, drew a turn that just answered the
  * prices inline and never captured. Legitimate-ish, but not the contract
  * under test.)
  */
@@ -256,7 +256,7 @@ describe("DM lead capture (live engine turn, real tool declarations)", () => {
 
       const capture = calls.find((c) => c.name === "webchat_capture_lead");
       if (!capture) {
-        // Surface the live reply — a missing capture is undebuggable from
+        // Surface the live reply, a missing capture is undebuggable from
         // a bare "expected undefined to be defined".
         console.error("live reply (no capture):", reply);
       }
@@ -289,14 +289,14 @@ describe("DM lead capture (live engine turn, real tool declarations)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Contract 2 — grounded booking: pick-then-book, and no phantom bookings
+// Contract 2, grounded booking: pick-then-book, and no phantom bookings
 // ---------------------------------------------------------------------------
 
 /**
  * Slots the find-slots stub offers: TOMORROW relative to the real clock
  * (the engine stamps the actual current datetime into its preamble, so
  * fixed dates would drift into the past and the model would refuse them).
- * 10:00Z / 13:00Z / 15:00Z — local Reykjavik times, see the CONFIG note.
+ * 10:00Z / 13:00Z / 15:00Z, local Reykjavik times, see the CONFIG note.
  */
 function tomorrowSlot(hourUtc: number): { startIso: string; endIso: string } {
   const start = new Date();
@@ -363,7 +363,7 @@ describe("DM grounded booking (live engine turns, stubbed calendar)", () => {
 
   beforeAll(async () => {
     // Turn A: a vague "tomorrow" ask with NO confirmed time. Whether the
-    // model clarifies first or offers slots is its own choice — the HARD
+    // model clarifies first or offers slots is its own choice, the HARD
     // contract is that it never books yet ("Confirm the time with the
     // visitor before booking").
     const vague = await engineTurn(
@@ -380,7 +380,7 @@ describe("DM grounded booking (live engine turns, stubbed calendar)", () => {
     );
     vagueReply = vague.reply;
 
-    // Turn B: the visitor explicitly picked ONE offered slot — the model
+    // Turn B: the visitor explicitly picked ONE offered slot, the model
     // books exactly it (re-checking availability first is fine).
     const booked = await engineTurn(
       PICKED_HISTORY,
@@ -397,7 +397,7 @@ describe("DM grounded booking (live engine turns, stubbed calendar)", () => {
     bookReply = booked.reply;
 
     // Turn C (failure fork): the SAME confirmed pick, but the booking tool
-    // fails and the post-failure re-check no longer offers that slot — the
+    // fails and the post-failure re-check no longer offers that slot, the
     // reply must never claim an appointment exists (the phantom-booking
     // incident class), and the model must not silently book a slot the
     // visitor never confirmed.
@@ -423,7 +423,7 @@ describe("DM grounded booking (live engine turns, stubbed calendar)", () => {
     failReply = fail.reply;
     // Only the HARD incident contract is judged: no phantom-booked claim.
     // The tool guidance's "never blame a technical error" styling is NOT
-    // pinned — a post-merge main run drew the honest-but-borderline "I'm
+    // pinned, a post-merge main run drew the honest-but-borderline "I'm
     // having trouble finding a slot through the system", which production
     // tolerates; pinning phrasing style turns model freedom into flakes.
     failVerdict = await judgeReply(
@@ -468,7 +468,7 @@ describe("DM grounded booking (live engine turns, stubbed calendar)", () => {
   it("the failure turn never books a slot the visitor did not confirm", () => {
     const books = failCalls.filter((c) => c.name === "webchat_calendar_book_appointment");
     for (const book of books) {
-      // Every attempt must be for the slot the visitor said yes to — a
+      // Every attempt must be for the slot the visitor said yes to, a
       // silent re-book of a DIFFERENT slot is the stacked-invitations class.
       expect(new Date(String(book.args.startIso)).toISOString()).toBe(SLOTS[0].startIso);
     }

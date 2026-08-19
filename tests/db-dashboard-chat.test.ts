@@ -193,7 +193,7 @@ describe("db/dashboard-chat, threads", () => {
 
   it("getOrCreateActiveThread recovers from a 23505 race and returns the winner's thread", async () => {
     // Two concurrent first-message POSTs both saw "no active thread" and
-    // raced the insert — one wins, the other gets a unique-violation from
+    // raced the insert, one wins, the other gets a unique-violation from
     // the dashboard_chat_threads_one_active partial index. The loser must
     // re-read instead of bubbling a spurious 500 to the owner.
     const c = chain();
@@ -368,7 +368,7 @@ describe("db/dashboard-chat, messages", () => {
   it("updateThreadConversation writes only updated_at when conversationId is null and state is undefined", async () => {
     // Defense-in-depth: the route layer shouldn't call us in this shape, but
     // if it does we must not clobber the stored conversationId / state with
-    // nulls — only bump updated_at.
+    // nulls, only bump updated_at.
     const c = chain();
     c.eq.mockResolvedValue({ error: null });
     await updateThreadConversation("thread-1", null, undefined, makeDb(c) as never);
@@ -468,7 +468,7 @@ describe("db/dashboard-chat, listThreadsForBusiness", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ id: "t1", message_count: 7 });
     expect(rows[1]).toMatchObject({ id: "t2", message_count: 2, is_active: false });
-    // The embedded aggregate field must be stripped — leaking PostgREST
+    // The embedded aggregate field must be stripped, leaking PostgREST
     // shape into the API surface would couple every consumer to it.
     expect(rows[0]).not.toHaveProperty("dashboard_chat_messages");
   });
@@ -591,7 +591,7 @@ describe("db/dashboard-chat, reactivateThread", () => {
     await reactivateThread(BIZ, "thread-target", db as never);
     // First UPDATE: archives anything currently active for the business
     // *except* the target. This is the partial-unique-index-friendly
-    // way to flip the "active" pointer atomically — without this
+    // way to flip the "active" pointer atomically, without this
     // ordering we'd briefly violate dashboard_chat_threads_one_active.
     expect(c.update).toHaveBeenNthCalledWith(
       1,
@@ -616,7 +616,7 @@ describe("db/dashboard-chat, reactivateThread", () => {
       reactivateThread(BIZ, "t", makeDb(c) as never)
     ).rejects.toThrow(/reactivateThread\/deactivate: deact bad/);
     // Critical: when the deactivate fails we MUST NOT proceed to the
-    // activate — that would risk two active rows once the partial
+    // activate, that would risk two active rows once the partial
     // unique index is restored.
     expect(c.update).toHaveBeenCalledTimes(1);
   });
@@ -690,7 +690,7 @@ describe("db/dashboard-chat, default service client fallback", () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(createThread(BIZ, null)).resolves.toEqual(THREAD);
     }
-    // getOrCreateActiveThread — existing branch
+    // getOrCreateActiveThread, existing branch
     {
       const c = chain();
       c.maybeSingle.mockResolvedValue({ data: THREAD, error: null });
@@ -759,7 +759,7 @@ describe("db/dashboard-chat, default service client fallback", () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(listThreadsForBusiness(BIZ)).resolves.toEqual([]);
     }
-    // reactivateThread — minimal happy-path stub so the default-client
+    // reactivateThread, minimal happy-path stub so the default-client
     // import path is exercised. .neq terminates step 1; the 4th .eq
     // call terminates step 2.
     {

@@ -125,7 +125,7 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   // Spanish. English URLs are untouched; the UI never sniffs Accept-Language.
   if (isSpanishMarketingPath(pathname)) {
     const canonicalPath = stripSpanishPrefix(pathname);
-    // Same limiter as the canonical English path — /es/login POSTs must not
+    // Same limiter as the canonical English path, /es/login POSTs must not
     // dodge the stricter AUTH bucket by riding the mirror.
     const esConfigKey: keyof typeof RATE_LIMITS =
       method === "POST" && canonicalPath.includes("/login") ? "AUTH" : "API";
@@ -186,14 +186,14 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     !pathname.startsWith("/api/internal/") &&
     // /api/integrations/custom/credentials is a server-to-server endpoint
     // authenticated solely by a gateway-token bearer bound to the businessId
-    // (gatewayBusinessGuard) — the per-tenant render service (vps/aiflow-render) POSTs
+    // (gatewayBusinessGuard), the per-tenant render service (vps/aiflow-render) POSTs
     // it to fetch a stored integration's decrypted credentials before driving a
     // login form. It sends no Origin header, so CSRF would 403 it. Same
     // rationale as the /api/voice/tools, /api/internal, /api/rowboat, and
     // /api/webhooks exemptions above.
     pathname !== "/api/integrations/custom/credentials" &&
     // /api/aiflows/send-owner-email is a server-to-server endpoint authenticated
-    // solely by a gateway-token bearer bound to the businessId (gatewayBusinessGuard) — the
+    // solely by a gateway-token bearer bound to the businessId (gatewayBusinessGuard), the
     // ai-flow-worker Edge Function POSTs it to send email from an owner's
     // Nango-connected mailbox (send_email.fromConnectionId / SMS quiet-hours
     // email fallback). It sends no Origin header, so CSRF would 403 every send.
@@ -201,37 +201,37 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     pathname !== "/api/aiflows/send-owner-email" &&
     // /api/vps/posture is the box → platform security-posture heartbeat,
     // authenticated solely by a gateway-token bearer bound to the businessId
-    // (verifyGatewayTokenForBusiness) — heartbeat.sh POSTs it via curl with
+    // (verifyGatewayTokenForBusiness), heartbeat.sh POSTs it via curl with
     // no Origin header, so CSRF was 403ing every fleet posture report. Same
     // rationale as the /api/voice/tools exemption above.
     pathname !== "/api/vps/posture" &&
     // /api/email/inbound is the per-tenant AI mailbox webhook authenticated
-    // solely by `Authorization: Bearer EMAIL_INBOUND_SECRET` (assertEmailInboundAuth)
-    // — the Cloudflare Email Worker POSTs every inbound message here with no Origin
+    // solely by `Authorization: Bearer EMAIL_INBOUND_SECRET` (assertEmailInboundAuth),
+    // the Cloudflare Email Worker POSTs every inbound message here with no Origin
     // header, so CSRF would 403 all inbound mail. Same rationale as the exemptions
     // above.
     pathname !== "/api/email/inbound" &&
     // /api/telnyx/porting-webhook is Telnyx's porting_order.status_changed
     // delivery, authenticated solely by its Ed25519 signature
-    // (verifyTelnyxWebhookSignature) — Telnyx sends no Origin header, so
+    // (verifyTelnyxWebhookSignature), Telnyx sends no Origin header, so
     // CSRF would 403 every status update. Same rationale as the exemptions
     // above.
     pathname !== "/api/telnyx/porting-webhook" &&
     // /api/marketing/unsubscribe is the RFC 8058 one-click unsubscribe
     // target: mail clients (Gmail/Apple Mail) POST it server-to-server with
     // no Origin header, authenticated solely by the per-contact HMAC token
-    // in the URL — never by a session cookie. CSRF would 403 the native
+    // in the URL, never by a session cookie. CSRF would 403 the native
     // one-click opt-out, breaking the compliance path campaign mail
     // advertises. Same rationale as the exemptions above.
     pathname !== "/api/marketing/unsubscribe" &&
     // /api/public/v1/* is the public REST API (Zapier et al.) authenticated
     // solely by an `Authorization: Bearer nck_…` API key hashed against
-    // api_keys (authenticatePublicApiRequest) — never by a session cookie.
+    // api_keys (authenticatePublicApiRequest), never by a session cookie.
     // External clients send no Origin header, so CSRF would 403 every call.
     // Same rationale as the exemptions above.
     !pathname.startsWith("/api/public/") &&
     // The MCP endpoints are authenticated solely by a Supabase OAuth
-    // access-token bearer (verifySupabaseAccessToken) — never by a session
+    // access-token bearer (verifySupabaseAccessToken), never by a session
     // cookie. The assistants' servers POST JSON-RPC with no Origin header, so
     // CSRF would 403 every tool call. Same rationale as the /api/public
     // exemption above. Matched exactly against the known routes rather than
@@ -240,21 +240,21 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     !isMcpRoutePath(pathname) &&
     // /api/widget/* is the website chat widget API, authenticated solely by
     // the tenant's public site key (ncw_pub_…) + a per-session bearer
-    // (ncws_…) — never by a session cookie, so CSRF adds no protection.
+    // (ncws_…), never by a session cookie, so CSRF adds no protection.
     // The iframe is same-origin (its fetches would usually pass anyway),
     // but privacy tooling can blank Origin/Referer inside embedded frames
     // and CSRF must not 403 legitimate visitors. Same rationale as
     // /api/public/ above.
     !pathname.startsWith("/api/widget/") &&
     // /api/book/* is the public self-serve booking page API, authenticated
-    // solely by the page's capability token (ncb_…) — never by a session
+    // solely by the page's capability token (ncb_…), never by a session
     // cookie, so CSRF adds no protection. Visitors arrive from shared links
     // and privacy tooling can blank Origin/Referer; CSRF must not 403 a
     // legitimate booking. Same rationale as /api/widget/ above.
     !pathname.startsWith("/api/book/") &&
     // /api/security/csp-report is the browser's own CSP violation reporter.
     // The browser posts it directly, not from page script, and sends no
-    // Origin — so CSRF would 403 every report and the report-only bake would
+    // Origin, so CSRF would 403 every report and the report-only bake would
     // silently collect nothing. It authenticates nothing and mutates nothing;
     // it only writes a capped log line. Same rationale as /api/book/ above.
     pathname !== "/api/security/csp-report" &&
@@ -395,8 +395,8 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
 
     // Use getClaims() instead of getUser() here. getClaims verifies the JWT
     // locally (against the project's asymmetric signing keys) when possible,
-    // avoiding a network round-trip to Supabase Auth on EVERY matched request
-    // — the single biggest middleware TTFB cost. It still refreshes the
+    // avoiding a network round-trip to Supabase Auth on EVERY matched request,
+    // the single biggest middleware TTFB cost. It still refreshes the
     // session via the cookie setAll above when the token is near expiry. The
     // claims carry the same `sub` (user id) and `email` we need for the
     // admin / protected-route gates below, plus `aal` for admin MFA.
@@ -487,7 +487,7 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     return redirectWithCookies(response, redirectUrl);
   }
 
-  // Redirect admin users away from owner dashboard — UNLESS a view-as
+  // Redirect admin users away from owner dashboard, UNLESS a view-as
   // session is active (cookie set by POST /api/admin/view-as). The cookie's
   // mere presence only opens this routing gate; the dashboard pages
   // themselves re-validate it against isAdmin + a live business row
@@ -516,7 +516,7 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
 
 export const config = {
   matcher: [
-    // logo-\d+.png are the sized favicon/app-icon variants (logo-32 etc.) —
+    // logo-\d+.png are the sized favicon/app-icon variants (logo-32 etc.),
     // static assets the middleware must skip just like logo.png itself.
     "/((?!_next/static|_next/image|favicon.ico|logo.png|logo-\\d+.png|.*\\.svg).*)",
   ],

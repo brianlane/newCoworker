@@ -1,5 +1,5 @@
 /**
- * reenroll-kyp-canceled-runs.ts — resume lead-nurture runs that were canceled
+ * reenroll-kyp-canceled-runs.ts, resume lead-nurture runs that were canceled
  * by a mid-run flow edit (parked step removed), WITHOUT repeating any text
  * the lead already received.
  *
@@ -7,7 +7,7 @@
  * (white-glove build)" replaced the branch-arm step ids (s100_ / s200_) with
  * a linear sequence (s_wait_ / s_nudge_). Four real leads' runs were parked
  * on the removed steps, so the engine's resume-by-step-id safety canceled
- * them ("flow edited mid-run and its parked step was removed") — correct
+ * them ("flow edited mid-run and its parked step was removed"), correct
  * behavior, but those leads silently dropped out of the cadence.
  *
  * This script re-creates each canceled run as a NEW queued run positioned at
@@ -20,7 +20,7 @@
  *   reply_N == no_reply, reply_{N+1}    → resume at nudge N+1 (the next unsent
  *   not yet recorded                      text in the cadence)
  *   any reply var with a real reply     → SKIP (the lead engaged; a human/AI
- *                                         thread exists — never re-automate)
+ *                                         thread exists, never re-automate)
  *
  * Repeat guard: the resume position implies how many texts the lead must have
  * already received (greeting + sent nudges); the script counts the old run's
@@ -171,7 +171,7 @@ for (const run of canceled) {
     continue;
   }
 
-  // The old run's REAL send count to this lead — both the position
+  // The old run's REAL send count to this lead, both the position
   // disambiguator and the repeat guard below.
   const { count: sendCount, error: sendErr } = await db
     .from("sms_outbound_log")
@@ -189,7 +189,7 @@ for (const run of canceled) {
   // no_reply waits say how far the cadence got, and the REAL send count
   // disambiguates the two states a cancel can catch: woke from wait N with
   // nudge N still unsent (sends == recorded: greeting + nudges 1..N-1), vs
-  // nudge N already sent and parked on wait N+1 (sends == recorded + 1) —
+  // nudge N already sent and parked on wait N+1 (sends == recorded + 1),
   // that second state resumes AT the next wait (fresh timeout), so the lead
   // still gets the wrap-up path instead of being skipped.
   let resumeIndex: number;

@@ -1,5 +1,5 @@
 /**
- * Business Documents — share-link management for one document.
+ * Business Documents, share-link management for one document.
  *
  *   GET  /api/dashboard/documents/:documentId/shares?businessId=… → list
  *   POST /api/dashboard/documents/:documentId/shares              → revoke

@@ -1,5 +1,5 @@
 /**
- * Calendar MCP tools — thin adapters over the shared calendar core in
+ * Calendar MCP tools, thin adapters over the shared calendar core in
  * src/lib/calendar-tools/handlers.ts (the same code path the voice bridge
  * and Rowboat tool webhook use), so provider resolution (Vagaro > Acuity > Nango
  * Google/Microsoft > Calendly > CalDAV) and booking semantics come free.
@@ -138,7 +138,7 @@ export const calendarBookAppointmentTool = defineMcpTool({
     });
     if (!result.ok) {
       // The duplicate guard's result carries its own precise guidance
-      // (existing time + keep/move/cancel options) — surface it verbatim.
+      // (existing time + keep/move/cancel options), surface it verbatim.
       throw new McpToolError(result.message ?? calendarFailureMessage(result.detail));
     }
     return result.data;

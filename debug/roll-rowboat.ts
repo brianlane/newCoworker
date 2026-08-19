@@ -3,7 +3,7 @@
  * rebuild/recreate the container, with an HTTP health check at the end.
  *
  * This is how a Rowboat-fork code change (e.g. the newcoworker/start-agent
- * branch) reaches a live tenant box — deploy-client.sh only builds Rowboat at
+ * branch) reaches a live tenant box, deploy-client.sh only builds Rowboat at
  * first provision, and update-all-vps.ts/deploy-worker.ts only refresh the
  * chat-worker, so without this script a fork fix never lands on existing
  * tenants short of a full re-provision.
@@ -31,7 +31,7 @@ if (!REF) {
   console.error("usage: tsx debug/roll-rowboat.ts <sha-or-branch> [businessId]");
   process.exit(1);
 }
-// The ref is interpolated into a root shell on the tenant box — reject
+// The ref is interpolated into a root shell on the tenant box, reject
 // anything with shell metacharacters before it gets near SSH.
 assertSafeGitRef(REF);
 

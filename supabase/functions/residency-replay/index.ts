@@ -4,12 +4,12 @@
  * Per-minute cron bridge for the residency journal replayer. pg_cron hits
  * this with `Authorization: Bearer <INTERNAL_CRON_SECRET>`; we validate the
  * bearer and forward to the Next.js internal endpoint, which does the real
- * work (journal drain → per-tenant box data API) in the Node runtime —
+ * work (journal drain → per-tenant box data API) in the Node runtime,
  * exactly the subscription-grace-sweep bridge pattern.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";

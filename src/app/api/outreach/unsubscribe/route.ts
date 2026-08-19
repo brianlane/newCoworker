@@ -2,7 +2,7 @@
  * Public unsubscribe for cold outreach (Prospecting).
  *
  *   GET  /api/outreach/unsubscribe?bid=<businessId>&p=<prospectId>&t=<hmac>
- *   POST (same query) — the RFC 8058 one-click target Gmail and Apple Mail hit.
+ *   POST (same query), the RFC 8058 one-click target Gmail and Apple Mail hit.
  *
  * The token is an HMAC over (business, prospect), so a link can only
  * unsubscribe the row it was minted for. Prospect-scoped rather than

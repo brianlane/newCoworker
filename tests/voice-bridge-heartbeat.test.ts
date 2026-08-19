@@ -47,7 +47,7 @@ describe("writeHeartbeat", () => {
   it("never rejects when the upsert throws (Bugbot Medium: docstring claim now true)", async () => {
     // Pre-fix the docstring promised "errors are intentionally swallowed by
     // the caller" but `void writeHeartbeat(...)` only suppresses the
-    // floating-promise lint, not actual rejections — an unexpected throw
+    // floating-promise lint, not actual rejections, an unexpected throw
     // would fall through to `unhandledRejection` and crash the bridge,
     // disconnecting live calls. We now wrap inside the function so the
     // returned promise resolves regardless of the upsert outcome.
@@ -129,7 +129,7 @@ describe("writeHeartbeat", () => {
 
   it("ignores an error object that lacks a string `message`", async () => {
     // Defensive against future supabase-js shapes where `error` exists but
-    // `error.message` isn't a string — we shouldn't warn-log the
+    // `error.message` isn't a string, we shouldn't warn-log the
     // un-stringified object, but we also shouldn't reject.
     const upsert = vi.fn().mockResolvedValue({ error: { code: 42 } });
     const client = { from: vi.fn(() => ({ upsert })) };
@@ -205,7 +205,7 @@ describe("startIdleHeartbeatLoop", () => {
     // simulate by mocking the supabase client to make the upsert rejection
     // bubble all the way through (which writeHeartbeat already prevents).
     // The test below proves the .catch exists by spying on console.warn
-    // when the underlying call fails — even if writeHeartbeat's internal
+    // when the underlying call fails, even if writeHeartbeat's internal
     // try/catch were to ever miss a path, the loop wouldn't propagate.
     const upsert = vi.fn().mockResolvedValue({ error: null });
     const client = { from: vi.fn(() => ({ upsert })) };
@@ -218,7 +218,7 @@ describe("startIdleHeartbeatLoop", () => {
 
   it("outer .catch fires if writeHeartbeat ever rejects (e.g. caller-supplied `now` throws)", async () => {
     // The only path that writeHeartbeat's inner try/catch CAN'T shield is
-    // a synchronous throw BEFORE the try block — and the only such site
+    // a synchronous throw BEFORE the try block, and the only such site
     // today is `const ts = now();`. We exercise it here to prove the
     // outer .catch is wired correctly: a thrown `now()` must become a
     // logged warning, never an unhandled rejection that would crash the

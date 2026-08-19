@@ -5,7 +5,7 @@
  * and report how far the cursor may advance.
  *
  * Cursor model: a (timestamp, id) TUPLE per subscription. Timestamp alone
- * would drop rows — two events sharing a created_at would leave the second
+ * would drop rows, two events sharing a created_at would leave the second
  * forever behind a `>` cursor once the first advances it (Bugbot: "Duplicate
  * timestamp skips events"). The tick queries
  *   (cursorCol = ts AND id > cursorId) OR cursorCol > ts
@@ -36,7 +36,7 @@ export const MAX_CONSECUTIVE_FAILURES = 120;
 /** Per-tick row cap so one chatty tenant can't starve the batch. */
 export const MAX_ROWS_PER_TICK = 25;
 
-/** Initial last_cursor_id — sorts before every real uuid. */
+/** Initial last_cursor_id, sorts before every real uuid. */
 export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /**
@@ -104,7 +104,7 @@ export async function dispatchRows(
       return { delivered, newCursor, gone: false, failed: true };
     }
     if (res.status === 410) {
-      // Consumer said Gone — deactivate. The rows delivered so far still
+      // Consumer said Gone, deactivate. The rows delivered so far still
       // advance the cursor so a later re-activation doesn't replay them.
       return { delivered, newCursor, gone: true, failed: false };
     }
@@ -175,7 +175,7 @@ export type DispatchTickSummary = {
  * One cron tick: for every ACTIVE subscription, fetch rows past its cursor
  * tuple from the event's source table, deliver them in order, and persist
  * the cursor/failure/active updates. All per-subscription errors are
- * contained — one broken subscription (or source query) never blocks the
+ * contained, one broken subscription (or source query) never blocks the
  * rest of the batch.
  */
 export async function runWebhookDispatchTick(
@@ -238,7 +238,7 @@ export async function runWebhookDispatchTick(
     try {
       // Claim the dispatch lease (CAS on locked_until). Row-level locking
       // serializes concurrent updates, so exactly one overlapping tick's
-      // WHERE still matches — the loser sees zero rows and skips, which is
+      // WHERE still matches, the loser sees zero rows and skips, which is
       // what prevents double-POSTing the same events.
       const { data: claimRaw, error: claimErr } = await db
         .from("webhook_subscriptions")
@@ -258,7 +258,7 @@ export async function runWebhookDispatchTick(
       const col = source.cursorColumn;
       const cursorId = sub.last_cursor_id || NIL_UUID;
       // Tuple cursor: strictly-later timestamp, OR same timestamp with a
-      // later id — never skips a row that shares the cursor's timestamp.
+      // later id, never skips a row that shares the cursor's timestamp.
       // The readiness condition (when present) is NESTED inside each branch
       // rather than added as a second .or(): PostgREST treats `or` as a
       // single query param, so a second .or() would REPLACE the cursor
@@ -285,7 +285,7 @@ export async function runWebhookDispatchTick(
       }
       const rows = (rowsRaw as WebhookSourceRow[] | null) ?? [];
       if (rows.length === 0) {
-        // Nothing to deliver — release the lease immediately so the next
+        // Nothing to deliver, release the lease immediately so the next
         // tick isn't blocked for the full lease duration.
         await db.from("webhook_subscriptions").update({ locked_until: null }).eq("id", sub.id);
         continue;
@@ -331,7 +331,7 @@ export async function runWebhookDispatchTick(
       });
       if (leaseClaimed) {
         // Best-effort cleanup: release the lease so the hook isn't dead for
-        // the full lease window, and — critically — persist any cursor we
+        // the full lease window, and, critically, persist any cursor we
         // DID advance. Rows were already POSTed, so losing the cursor here
         // would replay them to the consumer next tick (Bugbot: "Persist
         // failure duplicates webhooks"). If this write also fails, the

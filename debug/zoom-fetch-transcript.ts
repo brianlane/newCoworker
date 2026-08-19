@@ -6,7 +6,7 @@
  *
  * Rides the same lib as the dashboard import (fetchZoomMeetingTranscript):
  * the --meeting value can be the numeric meeting ID, the meeting UUID, or
- * the recording page link — instant/ended meetings resolve ONLY by UUID
+ * the recording page link, instant/ended meetings resolve ONLY by UUID
  * (Zoom 404s the numeric id with code 3322), so prefer the link. The VTT is
  * written to debug/.tmp-zoom-transcript-<label>.vtt (gitignored).
  *
@@ -16,7 +16,7 @@
  * Defaults to the New Coworker HQ internal tenant. Requires that business to
  * have an ACTIVE direct Zoom connection whose grant includes the transcript
  * scope (reconnect on /dashboard/integrations if the connection predates the
- * scope change — old tokens do NOT gain new scopes).
+ * scope change, old tokens do NOT gain new scopes).
  */
 import fs from "node:fs";
 import path from "node:path";

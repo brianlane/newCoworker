@@ -1,13 +1,13 @@
 #!/usr/bin/env tsx
 /**
  * Cancel a ghost calendar booking: delete ONE provider event (Microsoft
- * Graph via the tenant's Nango connection — the same `/v1.0/me/events/{id}`
+ * Graph via the tenant's Nango connection, the same `/v1.0/me/events/{id}`
  * DELETE the production cancel core uses) and drop its
  * `calendar_booking_dedupe` ledger row.
  *
  * Why this exists (Truly Insurance, Jul 21 2026): the SMS assistant booked
  * +16136067906 for Wed Jul 22 9:00 AM ET, mislabeled it "today", disowned it
- * as "already passed", and booked a second slot at 12:00 PM ET — leaving an
+ * as "already passed", and booked a second slot at 12:00 PM ET, leaving an
  * orphaned 9:00 AM event on the broker's Outlook that the customer is not
  * expecting. Deleting the Graph event sends the attendee ONE cancellation
  * email (correct: they hold the 9 AM invite), and dropping the ledger row
@@ -21,7 +21,7 @@
  *     --business <uuid> --attendee "phone:+16136067906" \
  *     --start 2026-07-22T13:00:00Z [--apply]
  *
- * Fleet audit mode — report every attendee holding 2+ upcoming confirmed
+ * Fleet audit mode, report every attendee holding 2+ upcoming confirmed
  * bookings (the duplicate class this incident belongs to), no writes:
  *
  *   tsx debug/cancel-ghost-booking.ts --audit
@@ -99,7 +99,7 @@ async function cancelGhost(): Promise<void> {
 
   // 1. The ledger row is the source of truth for WHICH event dies: the
   //    (business, attendee, start) triple must resolve to exactly one
-  //    confirmed row. No free-form event-id input — a typo'd id could
+  //    confirmed row. No free-form event-id input, a typo'd id could
   //    delete a legitimate meeting.
   const { data: rowRaw, error: rowErr } = await db
     .from("calendar_booking_dedupe")
@@ -144,7 +144,7 @@ async function cancelGhost(): Promise<void> {
     connectionId: String(conn.connection_id),
     // Graph otherwise reports start.dateTime as naive local time in the
     // event's own (named) timezone, which cannot be compared to the ledger
-    // instant without a zone conversion — force UTC so the start guard
+    // instant without a zone conversion, force UTC so the start guard
     // below ALWAYS runs (Bugbot Medium on PR #814).
     headers: { Prefer: 'outlook.timezone="UTC"' }
   });
@@ -162,10 +162,10 @@ async function cancelGhost(): Promise<void> {
   console.log(`  cancelled ${ev.isCancelled === true}`);
 
   // Guard: the provider event's start must equal the ledger start we
-  // targeted — a moved event means the ledger drifted; stop and look. The
+  // targeted, a moved event means the ledger drifted; stop and look. The
   // Prefer header above pins the response to UTC; if Graph still answers in
   // another zone (or with no start at all) the start CANNOT be verified, so
-  // refuse rather than guess (fail closed — Bugbot Medium on PR #814).
+  // refuse rather than guess (fail closed, Bugbot Medium on PR #814).
   if ((ev.start?.timeZone ?? "") !== "UTC" || !ev.start?.dateTime) {
     throw new Error(
       `Provider start not verifiable (timeZone=${ev.start?.timeZone ?? "?"}), refusing`
@@ -186,7 +186,7 @@ async function cancelGhost(): Promise<void> {
   }
 
   // 3. Delete the provider event (Graph emails the attendee ONE
-  //    cancellation — they hold this invite), then the ledger row.
+  //    cancellation, they hold this invite), then the ledger row.
   await nango.proxy({
     method: "DELETE",
     endpoint: eventPath,

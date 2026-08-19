@@ -6,7 +6,7 @@
  *
  * Mechanism: an httpOnly cookie carrying the target business id, set by
  * POST /api/admin/view-as (admin-only) and honored ONLY when the signed-in
- * user is the admin — a forged cookie on a non-admin session is inert
+ * user is the admin, a forged cookie on a non-admin session is inert
  * because every read re-checks `user.isAdmin` server-side.
  *
  * Dashboard pages resolve their business by `owner_email`; the resolver here
@@ -116,7 +116,7 @@ async function resolveViewAsContextUncached(user: AuthUser): Promise<ViewAsConte
   // Dashboard pages resolve "the" business as the NEWEST row under
   // owner_email, so view-as is effectively "view as this OWNER". When the
   // owner has multiple businesses, mirror the pages' newest-row pick here so
-  // the banner names the business the pages will actually render — not the
+  // the banner names the business the pages will actually render, not the
   // (possibly older) row the admin clicked.
   const { data: newest } = await db
     .from("businesses")

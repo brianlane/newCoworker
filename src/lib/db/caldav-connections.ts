@@ -8,7 +8,7 @@
  * time so tool calls skip the discovery walk.
  *
  * Service-role only: RLS is on with no policies. The decrypted password
- * never leaves a server-side function — the dashboard gets
+ * never leaves a server-side function, the dashboard gets
  * `toPublicCaldavConnection` (has_password flag, no ciphertext).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -33,7 +33,7 @@ type StoredCaldavConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (direct CalDAV calls). */
+/** Decrypted row, server-side use only (direct CalDAV calls). */
 export type CaldavConnectionRow = Omit<StoredCaldavConnectionRow, "password_encrypted"> & {
   password: string;
 };
@@ -90,7 +90,7 @@ function toDecryptedRow(row: StoredCaldavConnectionRow): CaldavConnectionRow {
   const { password_encrypted: encrypted, ...rest } = row;
   const password = decryptIntegrationSecret(encrypted);
   if (password === null) {
-    // NOT NULL column, so this only happens on a truly empty stored value —
+    // NOT NULL column, so this only happens on a truly empty stored value,
     // fail closed rather than calling the server with an empty password.
     throw new Error("caldav connection has no stored password");
   }
@@ -120,7 +120,7 @@ export async function getCaldavConnection(
   return toDecryptedRow(data as unknown as StoredCaldavConnectionRow);
 }
 
-/** Active connection only — the calendar-tool gate. */
+/** Active connection only, the calendar-tool gate. */
 export async function getActiveCaldavConnection(
   businessId: string,
   client?: SupabaseClient
@@ -148,7 +148,7 @@ export async function getActiveCaldavConnectionId(
   return (data as { id: string } | null)?.id ?? null;
 }
 
-/** Dashboard listing shape (no decrypt — masked). Null when not connected. */
+/** Dashboard listing shape (no decrypt, masked). Null when not connected. */
 export async function getPublicCaldavConnection(
   businessId: string,
   client?: SupabaseClient

@@ -20,7 +20,7 @@ export function generateStaticParams(): Params[] {
   return INDUSTRIES.map((i) => ({ slug: i.slug }));
 }
 
-// Only the industries defined in data.tsx exist — anything else is a 404.
+// Only the industries defined in data.tsx exist, anything else is a 404.
 export const dynamicParams = false;
 
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {

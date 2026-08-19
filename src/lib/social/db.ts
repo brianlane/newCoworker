@@ -1,9 +1,9 @@
 /**
- * Instagram posts — DB access.
+ * Instagram posts, DB access.
  *
  * `social_posts` holds the post lifecycle (draft → scheduled → publishing →
  * published, or failed / cancelled). Service-role-only (RLS on, no
- * policies) — every access flows through the Next.js server after its own
+ * policies), every access flows through the Next.js server after its own
  * auth checks, matching email_campaigns.
  */
 
@@ -29,10 +29,10 @@ export type SocialPostRow = {
   publish_at: string | null;
   started_at: string | null;
   published_at: string | null;
-  /** Publish step 1's container id — persisted before media_publish. */
+  /** Publish step 1's container id, persisted before media_publish. */
   ig_creation_id: string | null;
   ig_media_id: string | null;
-  /** The live post's public URL — fetched best-effort after publishing. */
+  /** The live post's public URL, fetched best-effort after publishing. */
   ig_permalink: string | null;
   /**
    * When the sweep first saw Meta report this media as gone (the owner
@@ -128,7 +128,7 @@ export async function patchSocialPost(
 
 /**
  * Guarded lifecycle transition: applies `patch` only while the post is
- * still in `fromStatus`. Returns whether a row actually moved — the
+ * still in `fromStatus`. Returns whether a row actually moved, the
  * sweep's scheduled→publishing promotion and the owner's cancel both race
  * through here, and the loser must see "no rows" instead of clobbering.
  */
@@ -152,7 +152,7 @@ export async function transitionSocialPost(
 }
 
 /**
- * Delete a post — guarded so a row the sweep just promoted to `publishing`
+ * Delete a post, guarded so a row the sweep just promoted to `publishing`
  * survives (Meta may already hold its container). Returns whether a row
  * was actually deleted.
  */
@@ -192,8 +192,8 @@ export async function listDueScheduledPosts(
 
 /**
  * Every post currently mid-publish, oldest first. The sweep RESOLVES these
- * each pass — Meta's container status_code says whether the post actually
- * went live (or is ready to publish now) — rather than blind-retrying: a
+ * each pass, Meta's container status_code says whether the post actually
+ * went live (or is ready to publish now), rather than blind-retrying: a
  * duplicate feed post is worse than a manual retry. Rows older than the
  * stale window that still can't be resolved are dead-lettered.
  */

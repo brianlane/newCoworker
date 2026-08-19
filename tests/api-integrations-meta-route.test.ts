@@ -1,5 +1,5 @@
 /**
- * PATCH /api/integrations/meta — the two intents this route accepts:
+ * PATCH /api/integrations/meta, the two intents this route accepts:
  * soft-disable/re-enable, and setting the owner-entered Conversions API
  * dataset id (Meta's platform flow has the ADVERTISER create the dataset in
  * Events Manager, so it is an input, never something we discover).

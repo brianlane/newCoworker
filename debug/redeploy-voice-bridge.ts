@@ -5,7 +5,7 @@
  * WHY a dedicated script instead of `scripts/redeploy-deploy-client.ts`:
  * the full deploy-client run rewrites the bridge's `.env` from the caller's
  * environment every time (STREAM_URL_SIGNING_SECRET, SUPABASE_*, GOOGLE_API_KEY,
- * BRIDGE_MEDIA_WSS_ORIGIN — see vps/scripts/deploy-client.sh) AND restarts
+ * BRIDGE_MEDIA_WSS_ORIGIN, see vps/scripts/deploy-client.sh) AND restarts
  * Rowboat + chat-worker + aiflow-render. Our local `.env` does not carry every
  * per-tenant bridge secret, so a full redeploy could blank them and needlessly
  * bounce the whole stack. This script instead:

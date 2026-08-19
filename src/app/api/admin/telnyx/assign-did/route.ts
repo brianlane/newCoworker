@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     // Same loud-on-missing rule as order-did, but only when we're
     // actually going to PATCH the number on Telnyx. associate=false is
     // a manual reroute scenario (admin already wired the DID by hand
-    // and just wants the DB rows updated) — gating that on
+    // and just wants the DB rows updated), gating that on
     // TELNYX_CONNECTION_ID would block legitimate manual recoveries.
     const platformDefaults = readPlatformTelnyxDefaults();
     if (associate) {

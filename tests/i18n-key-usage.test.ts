@@ -2,15 +2,15 @@
  * Guards against translation keys that are referenced in code but missing
  * from the message catalogs. The key-parity test (i18n-messages.test.ts)
  * only compares en.json against es.json, so a key filed under the wrong
- * namespace in BOTH catalogs passes it silently — that is exactly how the
+ * namespace in BOTH catalogs passes it silently, that is exactly how the
  * marketing footer shipped a literal "marketing.nav.vsGohighlevel" label
  * (fixed in #777). This test statically scans src/ for translator bindings
  * (useTranslations / getTranslations) and verifies that:
  *
  *   1. every static string key passed to a translator exists in en.json
  *      under one of that variable's bound namespaces, and
- *   2. for the common indirect idiom — a `*Key: "..."` table resolved
- *      through a translator (`t(item.labelKey)`, `t(descKey)`, ...) — every
+ *   2. for the common indirect idiom, a `*Key: "..."` table resolved
+ *      through a translator (`t(item.labelKey)`, `t(descKey)`, ...), every
  *      literal declared for that property name in the file exists under the
  *      calling translator's namespace(s).
  *
@@ -56,7 +56,7 @@ function* walkSourceFiles(dir: string): Generator<string> {
  * Maps each translator variable in a file to the set of namespaces it is
  * bound to. The same name can be bound in multiple components of one file
  * (e.g. `const t = useTranslations(...)` in two components), so a key is
- * accepted if it resolves under ANY of the variable's namespaces — this
+ * accepted if it resolves under ANY of the variable's namespaces, this
  * avoids false positives at the cost of a narrow false-negative window.
  */
 function translatorBindings(source: string): Map<string, Set<string>> {

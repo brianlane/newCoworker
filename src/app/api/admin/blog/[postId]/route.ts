@@ -1,5 +1,5 @@
 /**
- * Admin blog CRUD — read / update / delete one post.
+ * Admin blog CRUD, read / update / delete one post.
  *
  * PATCH handles field edits AND lifecycle moves short of "publish now"
  * (which is its own route so the fan-out side effects stay explicit):
@@ -16,7 +16,7 @@ import {
   getBlogPost,
   patchBlogPost
 } from "@/lib/blog/db";
-// House rule: no em dashes in blog copy, ever — normalized on save too.
+// House rule: no em dashes in blog copy, ever, normalized on save too.
 import { sanitizeBlogCopyFields } from "@/lib/blog/copy";
 import { slugifyBlogTitle } from "@/lib/blog/slug";
 
@@ -78,7 +78,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
     if (body.status !== undefined && post.status === "published") {
       return errorResponse("CONFLICT", "Published posts cannot go back to draft or scheduled");
     }
-    // A scheduled post must always carry a publish time — whether this
+    // A scheduled post must always carry a publish time, whether this
     // patch sets the status, clears the time, or both. Otherwise the row
     // never becomes due for the publish sweep.
     const effectiveStatus = body.status ?? post.status;

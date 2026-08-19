@@ -1,7 +1,7 @@
 /**
  * Production wiring for the margin alert (config from
  * admin_platform_settings, economics from the fleet margin loader, digest
- * via the ops inbox) — invoked by the internal platform-cost-sync route
+ * via the ops inbox), invoked by the internal platform-cost-sync route
  * right after a sync lands the freshest vendor numbers.
  */
 

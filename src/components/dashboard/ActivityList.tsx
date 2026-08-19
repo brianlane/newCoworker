@@ -23,7 +23,7 @@ const PAGE_SIZE = 25;
  * pages, and at either edge it becomes the server cursor link to the adjacent
  * chunk (`olderHref`/`newerHref`), so walking the entire tier window feels
  * like one continuous list. Cross-chunk steps are real navigations, so they're
- * suppressed while a search query is active — the search box only covers the
+ * suppressed while a search query is active, the search box only covers the
  * currently loaded chunk.
  */
 export function ActivityList({
@@ -52,7 +52,7 @@ export function ActivityList({
         matchesQuery(query, [
           item.label,
           tBadge(ACTIVITY_BADGE[item.kind].labelKey),
-          // The AiFlow origin chip is searchable text too — "aiflow" must
+          // The AiFlow origin chip is searchable text too, "aiflow" must
           // keep matching flow-sent messages now that the tag lives in the
           // chip instead of the label.
           ...(item.origin === "aiflow" ? [tBadge(ACTIVITY_BADGE.aiflow.labelKey)] : [])

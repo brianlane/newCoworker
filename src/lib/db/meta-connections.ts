@@ -10,7 +10,7 @@
  * `getActiveMetaConnectionByPageId`.
  *
  * Service-role only: RLS is on with no policies. Decrypted tokens never
- * leave server-side functions — the dashboard gets
+ * leave server-side functions, the dashboard gets
  * `toPublicMetaConnection` (has_* flags, no ciphertext).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -48,7 +48,7 @@ type StoredMetaConnectionRow = {
   /** IG professional account linked to the Page (null when none). */
   instagram_account_id: string | null;
   instagram_username: string | null;
-  /** Conversions API dataset (pixel) id — null until discoverable. */
+  /** Conversions API dataset (pixel) id, null until discoverable. */
   dataset_id: string | null;
   /** Per-tenant kill switch for the Conversion Leads feedback loop. */
   capi_enabled: boolean;
@@ -57,7 +57,7 @@ type StoredMetaConnectionRow = {
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (Graph API calls). */
+/** Decrypted row, server-side use only (Graph API calls). */
 export type MetaConnectionRow = Omit<
   StoredMetaConnectionRow,
   "user_token_encrypted" | "page_token_encrypted"
@@ -127,7 +127,7 @@ export async function getMetaConnection(
   return toDecryptedRow(data as unknown as StoredMetaConnectionRow);
 }
 
-/** Dashboard listing shape (no decrypt — masked). Null when not connected. */
+/** Dashboard listing shape (no decrypt, masked). Null when not connected. */
 export async function getPublicMetaConnection(
   businessId: string,
   client?: SupabaseClient
@@ -188,7 +188,7 @@ export async function getActiveMetaConnectionByInstagramId(
 }
 
 /**
- * Whoever holds this Page's unique claim (`uq_meta_connections_page`) —
+ * Whoever holds this Page's unique claim (`uq_meta_connections_page`),
  * ACTIVE or PAUSED. Distinct from getActiveMetaConnectionByPageId: paused
  * rows keep both the claim and the Meta subscription, so unsubscribe
  * decisions must consult THIS, never the active-only lookup.
@@ -251,7 +251,7 @@ export async function savePendingMetaConnection(
     status: "pending" as const,
     user_token_encrypted: encryptIntegrationSecret(token),
     // page_id / page_name / dataset_id deliberately NOT cleared (see above);
-    // the page token always is — a pending row must never be able to send.
+    // the page token always is, a pending row must never be able to send.
     page_token_encrypted: null,
     account_name: input.accountName,
     // A fresh OAuth grant is exactly the fix for a dead token, so clear the
@@ -291,7 +291,7 @@ export async function savePendingMetaConnection(
  *
  * Guarded on `status = 'pending'` so concurrent picks can't both win: the
  * second update matches zero rows and fails, and its caller rolls back its
- * own Meta subscription — no orphaned subscription without a routing row.
+ * own Meta subscription, no orphaned subscription without a routing row.
  */
 export async function activateMetaConnection(
   input: {
@@ -337,7 +337,7 @@ export async function activateMetaConnection(
 }
 
 /**
- * Set (or clear) the tenant's Conversions API dataset id — the owner-entered
+ * Set (or clear) the tenant's Conversions API dataset id, the owner-entered
  * value from /dashboard/integrations/meta. Meta's platform flow has the
  * ADVERTISER create the CRM dataset in Events Manager and hand it over;
  * nothing derives it, so this is a plain edit and an owner may correct a
@@ -345,7 +345,7 @@ export async function activateMetaConnection(
  * no Page yet, so it has nothing to attach a dataset to.
  *
  * Returns the updated public row, or null when no ACTIVE row matched
- * (disconnected or still pending between the read and the write) — callers
+ * (disconnected or still pending between the read and the write), callers
  * surface that instead of reporting a save that never landed.
  */
 export async function setMetaConnectionDataset(

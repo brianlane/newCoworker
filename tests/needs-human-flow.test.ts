@@ -22,7 +22,7 @@ import { restoreContentRows } from "@/lib/residency/row-delete";
  * The seeded "Human handoff — offer to team first" flow: created/enabled by
  * the Employees-page toggle, it reacts to the Needs Human tag with a
  * broadcastAll route_to_team (10-minute shared deadline, owner fallback).
- * Visible and editable like any flow — the toggle only manages enablement.
+ * Visible and editable like any flow, the toggle only manages enablement.
  */
 
 const BIZ = "00000000-0000-0000-0000-000000000001";

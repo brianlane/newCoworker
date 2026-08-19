@@ -2,7 +2,7 @@
  * Per-thread management for /dashboard/chat's conversation history.
  *
  * DELETE /api/dashboard/chat/threads/:threadId → { ok: true }
- *   Removes the thread (and, transitively, its messages — they are only
+ *   Removes the thread (and, transitively, its messages, they are only
  *   reachable through the thread) from the owner's view. Soft delete under
  *   the hood (admin-restorable via /api/admin/deleted-items) but behaves
  *   like a hard delete here: idempotent, and the thread never surfaces
@@ -10,7 +10,7 @@
  *   message simply starts a fresh conversation.
  *
  * Auth mirrors the read-only messages route next door: resolve the thread
- * first, then enforce ownership against `thread.business_id` (anti-IDOR) —
+ * first, then enforce ownership against `thread.business_id` (anti-IDOR),
  * the soft-delete update additionally predicates on business_id so a
  * guessed UUID can never touch a foreign tenant's thread.
  */
@@ -38,7 +38,7 @@ export async function DELETE(
     const { threadId: rawThreadId } = await context.params;
     const threadId = threadIdSchema.parse(rawThreadId);
 
-    // Already-deleted/unknown threads read back as null — that's a
+    // Already-deleted/unknown threads read back as null, that's a
     // successful idempotent delete, not an error.
     const thread = await getThreadById(threadId);
     if (!thread) return successResponse({ ok: true });

@@ -1,12 +1,12 @@
 /**
  * Prepare the "New Coworker (HQ, internal)" tenant to exercise Truly
  * Insurance's "Lead intake & follow-up (Privyr) (copy)" flow end to end with
- * a real phone — WITHOUT touching Truly's account (their flow definition is
+ * a real phone, WITHOUT touching Truly's account (their flow definition is
  * read, never written).
  *
  * The HQ tenant (onboarded Jul 16 2026 via scripts/oneshot/onboard-hq-tenant.ts,
  * srv1806097, DID +1 602 313 1823) replaced the throwaway "NCW Flow Test"
- * tenant as the internal smoke/e2e target — one internal tenant, no extra
+ * tenant as the internal smoke/e2e target, one internal tenant, no extra
  * boxes or DIDs. This script therefore never creates a business or buys a
  * number: it asserts the HQ tenant + DID exist and layers the harness on top.
  *
@@ -14,13 +14,13 @@
  *   1. `aiflow_protect_staff_contacts` OFF on the HQ business (so
  *      update_contact tags land on the tester's row; the tester is both the
  *      roster member and the lead). The HQ business row is otherwise never
- *      written — its `phone` must stay NULL / not equal the tester's number,
+ *      written, its `phone` must stay NULL / not equal the tester's number,
  *      or the tester's lead texts get the staff persona.
- *   2. ai_flow_team_members: the tester — the route_to_team roster target.
+ *   2. ai_flow_team_members: the tester, the route_to_team roster target.
  *      Their lead texts still drive the flow via the staff wait-resume
  *      exception; "1"/"2" replies are offer-intercepted. NOTE the roster
  *      self-offer guard means offers NEVER go to the tester while they are
- *      also the lead — expect `owner_fallback` on route steps.
+ *      also the lead, expect `owner_fallback` on route steps.
  *   3. Staff assistant replies disabled on the HQ Telnyx settings, so the
  *      tester's inbound texts feed the flow engine instead of getting a
  *      staff-assistant reply from the (live) HQ box.
@@ -41,7 +41,7 @@ import { loadEnv } from "./_shared.ts";
 loadEnv();
 
 const APPLY = process.argv.includes("--apply");
-/** New Coworker (HQ, internal) — the single internal smoke/e2e tenant. */
+/** New Coworker (HQ, internal), the single internal smoke/e2e tenant. */
 export const FLOW_TEST_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const TESTER_NAME = "Brian";
 const TESTER_E164 = "+16026866672";
@@ -133,7 +133,7 @@ if (!APPLY) {
   console.log(`[setup] roster: ${TESTER_NAME} active`);
 }
 
-// 3. DID: the HQ tenant already owns +1 602 313 1823 (homepage demo line) —
+// 3. DID: the HQ tenant already owns +1 602 313 1823 (homepage demo line),
 //    never buy a number here; just assert routing exists, then suppress
 //    staff-assistant replies so the tester's texts feed the flow engine.
 {

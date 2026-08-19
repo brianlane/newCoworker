@@ -127,7 +127,7 @@ describe("lookupBusinessKnowledge", () => {
     expect(call.userText).toContain("# website.md");
     expect(call.userText).toContain("Caller question: What are your hours?");
     // Regression pin (Truly, 2026-07-15): Gemini 3.x hidden thinking counts
-    // against maxOutputTokens — at the old cap of 200 with default (high)
+    // against maxOutputTokens, at the old cap of 200 with default (high)
     // thinking the visible answer truncated mid-sentence ("D&O"). Gemini 3
     // models must run thinkingLevel=minimal with the 300 answer budget.
     expect(call.maxOutputTokens).toBe(300);
@@ -159,7 +159,7 @@ describe("lookupBusinessKnowledge", () => {
     expect(result.ok).toBe(true);
     const call = gemini.mock.calls[0][0];
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
-    // The archived fact — evicted from active memory — is answerable.
+    // The archived fact, evicted from active memory, is answerable.
     expect(call.userText).toContain("Escalate urgent plumbing issues to Amy Laidlaw");
     // The irrelevant active section stays out of the prompt.
     expect(call.userText).not.toContain("free estimates");
@@ -169,7 +169,7 @@ describe("lookupBusinessKnowledge", () => {
     gemini.mockResolvedValue(geminiOk("answer", null));
     await lookupBusinessKnowledge(BIZ, "zzzqqq?");
     const call = gemini.mock.calls[0][0];
-    // Default mock memory_md is "memory" — carried via the fallback path.
+    // Default mock memory_md is "memory", carried via the fallback path.
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)\nmemory");
   });
 
@@ -231,7 +231,7 @@ describe("lookupBusinessKnowledge", () => {
     expect(call.userText).toContain("# memory graph (facts most relevant to the question)");
     expect(call.userText).toContain("602-695-1142");
     // The graph never crowds out the owner's saved note that answers the
-    // question — both sections ride the prompt (Bugbot High on #847).
+    // question, both sections ride the prompt (Bugbot High on #847).
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
     expect(call.userText).toContain("text before calling");
   });

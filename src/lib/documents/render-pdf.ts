@@ -1,5 +1,5 @@
 /**
- * Render-sidecar PDF client — print self-contained HTML to PDF on the
+ * Render-sidecar PDF client, print self-contained HTML to PDF on the
  * tenant's own VPS render service (vps/aiflow-render, POST /pdf).
  *
  * The sidecar is deployed per tenant on Standard/Enterprise boxes and
@@ -12,7 +12,7 @@
  * The template points at the browse endpoint; the PDF printer lives beside
  * it, so the path is swapped here. There is deliberately NO fallback
  * renderer: a Starter tenant (no sidecar) or an unreachable box is a clear,
- * typed failure — never a silently different-looking document.
+ * typed failure, never a silently different-looking document.
  */
 
 import { logger } from "@/lib/logger";

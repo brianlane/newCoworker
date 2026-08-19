@@ -48,7 +48,7 @@ async function runSweep(request: Request): Promise<Response> {
       hostingerError: status.hostingerError
     });
 
-    // Margin watchdog rides the sync (freshest vendor numbers) —
+    // Margin watchdog rides the sync (freshest vendor numbers),
     // best-effort: an alert failure must never fail the sync itself.
     let marginAlert: MarginAlertRunResult | null = null;
     try {
@@ -66,7 +66,7 @@ async function runSweep(request: Request): Promise<Response> {
     }
 
     // Gemini billed actuals (Cloud Billing BigQuery export) ride the same
-    // daily sync — best-effort like the margin alert, and a recorded skip
+    // daily sync, best-effort like the margin alert, and a recorded skip
     // (not a failure) until the operator finishes the one-time setup.
     let geminiBilled: GeminiBilledSyncStatus | null = null;
     try {

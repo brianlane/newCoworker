@@ -87,7 +87,7 @@ describe("_shared/normalize_e164", () => {
   });
 
   it("returns null when input has no digits after formatting is stripped", () => {
-    // `cleaned` collapses to "" after stripping non-digit/plus chars — we must not fall
+    // `cleaned` collapses to "" after stripping non-digit/plus chars, we must not fall
     // through into the NANP guesser with an empty candidate.
     expect(normalizeE164("abc")).toBeNull();
     expect(normalizeE164("(-)")).toBeNull();
@@ -95,7 +95,7 @@ describe("_shared/normalize_e164", () => {
 
   it("rejects structurally valid but too-short E.164 subscriber numbers", () => {
     // `+123456` passes the /^\+[1-9]\d{0,14}$/ regex (6 digits after +, first digit is 1)
-    // but fails the minimum-length gate (< 7 digits total) — a common typo, not a real DID.
+    // but fails the minimum-length gate (< 7 digits total), a common typo, not a real DID.
     expect(normalizeE164("+123456")).toBeNull();
   });
 });
@@ -403,7 +403,7 @@ describe("_shared/telnyx_sms_compliance", () => {
 
   it("telnyxSendSms omits `from` when fromE164 is empty/whitespace/undefined (profile-pool send)", async () => {
     // When a tenant relies on the messaging profile's number pool (no
-    // dedicated TELNYX_SMS_FROM_E164), we must NOT send from:"" — Telnyx
+    // dedicated TELNYX_SMS_FROM_E164), we must NOT send from:"", Telnyx
     // would reject the request. This guard is what lets Safe Mode forward
     // succeed without requiring an explicit from-number.
     const fetchImpl = vi.fn().mockResolvedValue({

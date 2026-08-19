@@ -4,10 +4,10 @@
  * GET /api/dashboard/analytics/export?businessId=<uuid>&kind=daily|flows|links|link_clicks
  *   → text/csv attachment
  *
- * `daily` — the 30-day volume series (date, calls, texts, voice minutes)
- * `flows` — the per-flow conversion funnel (runs → texts → clicks → goals)
- * `links` — one row per tracked short link (aggregates)
- * `link_clicks` — one row per click event
+ * `daily`, the 30-day volume series (date, calls, texts, voice minutes)
+ * `flows`, the per-flow conversion funnel (runs → texts → clicks → goals)
+ * `links`, one row per tracked short link (aggregates)
+ * `link_clicks`, one row per click event
  *
  * Auth mirrors the analytics page: any dashboard role on the business
  * (view_dashboard), admins bypass; tier-gated like the page itself.

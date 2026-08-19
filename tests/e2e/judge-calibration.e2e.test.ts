@@ -84,7 +84,7 @@ describe("semantic judge calibration (live model)", () => {
     );
     expect(reask.answers.asks_shopping_reason).toBe(true);
 
-    // Deeper follow-ups are progress, not a re-ask — the exact distinction
+    // Deeper follow-ups are progress, not a re-ask, the exact distinction
     // the first judge wording got wrong on a live run (it flagged "new
     // policy or comparing rates for a renewal?" as a motive re-ask).
     for (const text of [

@@ -50,7 +50,7 @@ export async function recordProvisioningProgress(params: {
   };
   const status = resolveStatus(percent, params.status);
 
-  // The coworker_logs row is the authoritative deploy timeline — write it
+  // The coworker_logs row is the authoritative deploy timeline, write it
   // first so the unified stream below can never show an event the timeline
   // doesn't have (recordSystemLog itself never throws).
   const row = await insertCoworkerLog({
@@ -72,8 +72,8 @@ export async function recordProvisioningProgress(params: {
     payload: { phase: params.phase, percent, source: params.source }
   });
 
-  // Liveness signal for the provisioning watchdog: every progress write —
-  // orchestrator phases AND the in-deploy VPS callbacks — proves the run
+  // Liveness signal for the provisioning watchdog: every progress write,
+  // orchestrator phases AND the in-deploy VPS callbacks, proves the run
   // is still alive, so the watchdog only re-claims jobs that truly died.
   // Never throws (see heartbeatProvisioningJob).
   await heartbeatProvisioningJob(params.businessId);
@@ -104,7 +104,7 @@ export function isBusinessRunningStatus(status: string): boolean {
 /**
  * Whether to show the owner-only provisioning progress UI (no labels).
  * Hide when the business is already running (online or high_load) and provisioning is done or never recorded.
- * Also hide the in-progress bar when the latest row is an error (terminal failure — use failed state instead).
+ * Also hide the in-progress bar when the latest row is an error (terminal failure, use failed state instead).
  */
 export function shouldShowProvisioningProgress(
   businessStatus: string,

@@ -4,9 +4,9 @@
  *
  * Registration is best-effort by design: webhooks buy latency, not
  * capability, since the ~1/min poller already observes every change. So the
- * behaviors worth pinning are the ways it legitimately does NOT work — the
+ * behaviors worth pinning are the ways it legitimately does NOT work, the
  * 25-per-account ceiling and an account whose credentials cannot use the
- * Webhooks API at all — because both must degrade to the card's
+ * Webhooks API at all, because both must degrade to the card's
  * paste-this-URL fallback rather than failing a connect.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

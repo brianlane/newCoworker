@@ -10,9 +10,9 @@
  *     milestones (exception / FOC confirmed / ported / cancelled).
  *   - Whenever the row shows ported-but-not-activated, activates the number:
  *     voice routes + messaging settings + 10DLC attach (see
- *     src/lib/byon/activation.ts) — keyed off durable row state so crashed
+ *     src/lib/byon/activation.ts), keyed off durable row state so crashed
  *     activations are retried by later redeliveries.
- *   - Everything else is acknowledged and ignored — returning non-2xx makes
+ *   - Everything else is acknowledged and ignored, returning non-2xx makes
  *     Telnyx retry, which is only correct for genuine processing failures.
  */
 
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
     // EVERY delivery whose row shows ported-but-not-activated attempts the
     // (idempotent) wiring, so a worker that claimed the ported alert and then
     // died before wiring is recovered by the next Telnyx redelivery.
-    // activatePortedNumber never throws — failures alert the owner, leave
+    // activatePortedNumber never throws, failures alert the owner, leave
     // activated_at null for the next retry, and remain recoverable via the
     // admin assign-did tooling.
     let activated: boolean | undefined;

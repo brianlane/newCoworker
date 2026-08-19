@@ -5,7 +5,7 @@
  * Called fire-and-forget AFTER the bullet capture path persisted owner rules
  * (the owner-append route and the inline dashboard capture both call it), so
  * a graph failure can never break or slow a capture. Writes happen in
- * `shadow` AND `active` modes — shadow means retrieval doesn't affect live
+ * `shadow` AND `active` modes, shadow means retrieval doesn't affect live
  * answers yet, but the graph must accumulate for the shadow comparison to
  * mean anything. `off` (the default) is a hard no-op.
  */
@@ -128,7 +128,7 @@ export async function ingestBulletsIntoGraph(
     const extraction = parseGraphExtraction(text, cleaned.length);
     if (extraction.entities.length === 0) return { ran: true, result: undefined };
 
-    // kg-source: owner_chat — owner-stated rules from the capture chokepoint
+    // kg-source: owner_chat, owner-stated rules from the capture chokepoint
     // (dashboard chat + owner SMS both funnel through it). Trust tier from
     // the registry; owner statements carry no attribution.
     const result = await apply(businessId, extraction, cleaned, {}, {

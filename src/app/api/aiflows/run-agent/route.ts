@@ -2,16 +2,16 @@
  * Internal AiFlow adapter: run a saved Agent (business_agents) against
  * flow-rendered text OR a document and return the artifact.
  *
- * Called by the ai-flow-worker when a `run_agent` step executes — this is
+ * Called by the ai-flow-worker when a `run_agent` step executes, this is
  * where agents become event-triggerable: any flow trigger (SMS, email,
  * webhook, schedule, ...) can feed an agent. Two input modes:
- *   - `input` — rendered flow text (the original mode);
- *   - `documentRef` — an `email-attachments:<path>` ({{trigger.document}})
+ *   - `input`, rendered flow text (the original mode);
+ *   - `documentRef`, an `email-attachments:<path>` ({{trigger.document}})
  *     or `business-docs:<id>` ref, resolved through the same tenant-gated
  *     source resolver as doc_extract, so a carrier's emailed PDF can feed a
  *     quote-comparison agent directly.
  * `saveDocument` additionally files the artifact into Business Documents
- * (staff audience — an automated run must never widen output to customer
+ * (staff audience, an automated run must never widen output to customer
  * channels); a filing failure is non-fatal (`fileError`) because the
  * artifact the flow branches on already exists.
  *
@@ -117,7 +117,7 @@ export async function POST(request: Request) {
     });
 
     // executeAgentRun never throws for expected failures; an UNEXPECTED
-    // throw after the insert must still stamp the history row failed —
+    // throw after the insert must still stamp the history row failed,
     // otherwise it sticks in 'running' and the worker's 500-retry could
     // pile up additional orphaned rows.
     let result;
@@ -190,7 +190,7 @@ export async function POST(request: Request) {
     // ── Filing (non-fatal) ──────────────────────────────────────────────
     // The artifact the flow branches on already exists; a filing failure is
     // reported (`fileError`) rather than failing the step. Audience is
-    // hard-pinned to 'staff' — an automated run must never widen an
+    // hard-pinned to 'staff', an automated run must never widen an
     // artifact to customer channels.
     let filed: { documentId: string; title: string } | null = null;
     let fileError: string | undefined;

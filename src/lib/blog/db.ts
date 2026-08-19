@@ -1,8 +1,8 @@
 /**
- * Platform blog — DB access.
+ * Platform blog, DB access.
  *
  * `blog_posts` / `blog_settings` / `blog_subscribers` are service-role-only
- * (RLS on, no policies) — every access flows through the Next.js server
+ * (RLS on, no policies), every access flows through the Next.js server
  * after its own auth checks, matching social_posts / email_campaigns.
  * Public pages read published rows server-side; admin CRUD sits behind
  * requireAdmin.
@@ -239,7 +239,7 @@ export async function listDueScheduledBlogPosts(
 
 /**
  * Guarded lifecycle transition: applies `patch` only while the post is
- * still in `fromStatus`. Returns whether a row actually moved — the
+ * still in `fromStatus`. Returns whether a row actually moved, the
  * sweep's promotion and an admin edit both race through here, and the
  * loser must see "no rows" instead of clobbering.
  */
@@ -261,7 +261,7 @@ export async function transitionBlogPost(
 }
 
 /**
- * Newest weekly PR-DIGEST post (any status — a draft digest still covers
+ * Newest weekly PR-DIGEST post (any status, a draft digest still covers
  * its window). Anchors the next digest's PR window so skipped thin/quiet
  * weeks roll into the following post instead of being lost. Filtered to
  * platform-updates: the rotation's tutorial/tips/deep-dive weeks are also
@@ -285,7 +285,7 @@ export async function getLatestWeeklyDigestPost(
 
 /**
  * Recent post titles in one category, newest first (topic dedupe for the
- * rotation's composers — "don't write this again").
+ * rotation's composers, "don't write this again").
  */
 export async function listRecentTitlesByCategory(
   category: BlogCategory,

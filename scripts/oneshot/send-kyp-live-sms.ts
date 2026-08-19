@@ -1,5 +1,5 @@
 /**
- * send-kyp-live-sms.ts — one-shot: deliver the "your Coworker is live" SMS
+ * send-kyp-live-sms.ts, one-shot: deliver the "your Coworker is live" SMS
  * that KYP Ads' signup (Jul 14 2026) never got. The original send failed on
  * the released platform sender number; the fixed behavior (tenant's own DID
  * → owner's phone) is what this replays: +14388035806 → +15145188192.

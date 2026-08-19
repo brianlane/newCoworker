@@ -453,7 +453,7 @@ describe("compileAiFlowFromDescription, self-repair & salvage", () => {
 
   it("a document-validation failure during salvage degrades to no extra warnings", async () => {
     // Candidate: a schema-invalid extra step forces the salvage path, while
-    // the valid share_document step survives it — so the salvage-time
+    // the valid share_document step survives it, so the salvage-time
     // document re-check runs, and its thrown read is swallowed.
     const withDocAndJunk = JSON.stringify({
       version: 1,
@@ -740,7 +740,7 @@ describe("editAiFlowDefinition, self-repair, NO salvage", () => {
 
   it("REFUSES a salvageable-but-invalid edit instead of salvaging (live flow untouched)", async () => {
     // The same double-invalid sequence that compile SALVAGES (bad step
-    // dropped, warnings surfaced) must refuse on the edit path — an applied
+    // dropped, warnings surfaced) must refuse on the edit path, an applied
     // salvage would silently drop live steps with no review.
     const generate = generateSeq(INVALID_DEFINITION_JSON, INVALID_DEFINITION_JSON);
     const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
@@ -832,7 +832,7 @@ describe("editAiFlowDefinition, self-repair, NO salvage", () => {
 });
 
 // Mailbox bindings (send_email.fromConnectionId) are validated against the
-// business's connected mailboxes — the KYP Jul 22 2026 incident: a flow saved
+// business's connected mailboxes, the KYP Jul 22 2026 incident: a flow saved
 // with a stale connection id failed at SEND time (connection_not_found) and
 // paged the owner; these pin the save/compile-time guard.
 describe("mailbox bindings (fromConnectionId)", () => {

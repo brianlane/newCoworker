@@ -2,8 +2,8 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 /**
- * E2E suite: LIVE Gemini calls exercising the AI contracts unit tests can't
- * — the reply-reasoning trailer round trip and real classify/extract
+ * E2E suite: LIVE Gemini calls exercising the AI contracts unit tests can't,
+ * the reply-reasoning trailer round trip and real classify/extract
  * decisions driving full AiFlow executions (tests/e2e/). Requires
  * GOOGLE_API_KEY; excluded from the unit config (vitest.config.ts) so
  * `npm test` stays hermetic. In CI this runs as the gated `e2e` job AFTER

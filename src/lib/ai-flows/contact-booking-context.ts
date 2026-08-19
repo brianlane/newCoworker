@@ -2,10 +2,10 @@
  * Contact booking context for the SMS agent's preamble.
  *
  * The sms-inbound-worker's reply context carries the contact's memory
- * rollup, AiFlow run context, and the cross-channel timeline — but nothing
+ * rollup, AiFlow run context, and the cross-channel timeline, but nothing
  * about their calendar state. Calendly bookings, reschedules, and
  * cancellations happen on calendly.com, so when Tim Tsai asked "I did
- * propose a new time last week — was that received?" the model had nothing
+ * propose a new time last week, was that received?" the model had nothing
  * to consult and confidently denied the reschedule (KYP, Jul 20 2026).
  *
  * This core answers "what is this texter's booking state?" for one phone
@@ -20,7 +20,7 @@
  *   - none:        nothing found / not a Calendly tenant / lookup refused.
  *
  * The ACTIVE-booking lookup is the shared attendee-bookings adapter
- * (`lookupProviderBookingsForAttendee`, detail mode — one listing,
+ * (`lookupProviderBookingsForAttendee`, detail mode, one listing,
  * email-narrowed when known, invitees fetched for name + lineage, same call
  * pattern this module used before the extraction). The CANCELED scans stay
  * here: "recently canceled" is preamble-specific state no other consumer
@@ -81,7 +81,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const BOOKING_CONTEXT_EVENT_SCAN = ATTENDEE_BOOKING_EVENT_SCAN;
 /** Per-lookup cap on invitee fetches (both listings combined). */
 export const BOOKING_CONTEXT_INVITEE_FETCH_CAP = ATTENDEE_BOOKING_INVITEE_FETCH_CAP;
-/** How far back the CANCELED scan reaches — recent cancels/reschedules only.
+/** How far back the CANCELED scan reaches, recent cancels/reschedules only.
  * (The active scan floors at NOW: only upcoming bookings are reported, and a
  * past-start active event must never shadow the real upcoming slot.) */
 export const BOOKING_CONTEXT_BACK_DAYS = 7;
@@ -145,7 +145,7 @@ export async function contactIdentifiers(
     const trimmed = (row?.email ?? "").trim().toLowerCase();
     if (trimmed.includes("@")) email = trimmed;
   } catch (err) {
-    // Degrades to phone-only matching — a contacts hiccup never fails the
+    // Degrades to phone-only matching, a contacts hiccup never fails the
     // lookup, it just narrows it.
     logger.warn("contact booking context: contact lookup failed", {
       businessId,
@@ -198,7 +198,7 @@ export function acuityAppointmentMatchesContact(
 }
 
 /**
- * The booking start rendered business-local WITH a named timezone — a raw
+ * The booking start rendered business-local WITH a named timezone, a raw
  * UTC ISO invites the model to misconvert silently, and timezone-less times
  * are the defect class that no-showed a Central-time lead told "3:00 PM"
  * for an Eastern-time call (KYP/Ayanna, Jul 20 2026). No timezone on file
@@ -247,7 +247,7 @@ export function bookingContextLine(
 /**
  * The CANCELED-events scan: list recent canceled events (invitee_email-
  * narrowed when the contact's email is known), then fetch invitees per
- * event until a match — bounded by the turn's shared fetch budget. Returns
+ * event until a match, bounded by the turn's shared fetch budget. Returns
  * the first matching (event, invitee) pair, or null. Latest-slot-first so
  * the MOST RECENT cancellation is the one reported.
  */
@@ -294,7 +294,7 @@ async function scanForCanceledMatch(args: {
       method: "GET",
       params: { count: "10" }
     });
-    // A refused invitee fetch degrades to "no match so far" — fail open.
+    // A refused invitee fetch degrades to "no match so far", fail open.
     if (!invRes) continue;
     const invitees =
       ((invRes.data as { collection?: ListedInvitee[] })?.collection ?? []).filter(
@@ -324,7 +324,7 @@ export async function vagaroBookingContextForContact(
   const getVagaroConnection = deps.getVagaroConnection ?? getActiveVagaroConnection;
   const listAppointments = deps.listAppointments ?? listVagaroAppointments;
 
-  // Upcoming active booking first — the strongest, most actionable state.
+  // Upcoming active booking first, the strongest, most actionable state.
   // The adapter answers soonest-first, so [0] is the contact's next slot.
   const upcoming = await lookupProviderBookingsForAttendee(
     businessId,
@@ -357,7 +357,7 @@ export async function vagaroBookingContextForContact(
   // No upcoming booking: a recent canceled one is worth telling the agent
   // about. Most-recent-start first (the cancellation the preamble should
   // describe). Items whose status does not actually mark them canceled are
-  // ignored — if the API ignored the status filter, misreporting a past
+  // ignored, if the API ignored the status filter, misreporting a past
   // visit as "canceled" would be worse than answering none.
   const canceled = (
     await listAppointments(vagaroConn, {
@@ -521,9 +521,9 @@ export async function contactBookingContextForPhone(
     );
     if (!userUri) continue;
 
-    // Upcoming active booking first — the strongest, most actionable state.
+    // Upcoming active booking first, the strongest, most actionable state.
     // The shared adapter's detail mode is this module's original scan: ONE
-    // now-floored listing (email-narrowed when known — a past-start active
+    // now-floored listing (email-narrowed when known, a past-start active
     // event must never shadow the upcoming slot, Bugbot Medium on PR #795),
     // invitees fetched for the event name and reschedule lineage. The budget
     // object is shared with the canceled scan below so the whole turn stays
@@ -536,11 +536,11 @@ export async function contactBookingContextForPhone(
       { mode: "detail", budget, calendlyUserUri: userUri }
     );
     // A refused active listing reads as "no active found" (the canceled
-    // scan below still runs) — the pre-extraction scan behaved the same.
+    // scan below still runs), the pre-extraction scan behaved the same.
     const active = activeRes.ok ? activeRes.bookings[0] : undefined;
     if (active && Date.parse(active.startIso) > nowMs) {
       // `rescheduled` (Calendly `old_invitee`) marks this booking as the
-      // REPLACEMENT slot of a reschedule — exactly the state the agent kept
+      // REPLACEMENT slot of a reschedule, exactly the state the agent kept
       // denying.
       const status = active.rescheduled ? "rescheduled" : "booked";
       return {
@@ -560,7 +560,7 @@ export async function contactBookingContextForPhone(
 
     // No upcoming booking on this account: a recent canceled one is worth
     // telling the agent about ("canceled, not rebooked" vs "rescheduled
-    // away") — remembered, so a later account's ACTIVE booking still wins.
+    // away"), remembered, so a later account's ACTIVE booking still wins.
     if (!canceledAnswer) {
       const canceled = await scanForCanceledMatch({
         businessId,

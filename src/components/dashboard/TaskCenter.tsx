@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Staff Task Center — the working view for a lead pipeline.
+ * Staff Task Center, the working view for a lead pipeline.
  *
  * One card per lead in motion, combining the five facets the Lead
  * Management PRD wants every employee to see at a glance: where the active
@@ -62,7 +62,7 @@ function RunLine({
 }: {
   run: TaskRunView;
   businessId: string;
-  /** Manager+ only — the cancel endpoint requires manage_aiflows. */
+  /** Manager+ only, the cancel endpoint requires manage_aiflows. */
   canDismiss: boolean;
   onDismissed: () => void;
 }) {
@@ -268,7 +268,7 @@ function TaskCard({
       )}
 
       {/* Recent cross-channel activity (calls + texts), linking back to the
-          contact's full timeline — the tasks side of the bidirectional
+          contact's full timeline, the tasks side of the bidirectional
           activity <-> contact/task navigation. */}
       {task.activity.length > 0 && (
         <div className="space-y-1">
@@ -324,7 +324,7 @@ export function TaskCenter({
   /** Staff with a linked roster member start on "mine"; everyone else "all". */
   defaultScope: Scope;
   hasLinkedEmployee: boolean;
-  /** Manager+ (manage_aiflows) — gates the Dismiss-task action. */
+  /** Manager+ (manage_aiflows), gates the Dismiss-task action. */
   canDismissRuns: boolean;
 }) {
   const [scope, setScope] = useState<Scope>(defaultScope);

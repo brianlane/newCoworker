@@ -44,7 +44,7 @@ export async function POST(request: Request) {
         }
       });
     } catch (err) {
-      // Audit logging is best-effort here — the change itself succeeded and
+      // Audit logging is best-effort here, the change itself succeeded and
       // is visible on the business row.
       logger.warn("data-retention: audit log insert failed", {
         businessId: body.businessId,

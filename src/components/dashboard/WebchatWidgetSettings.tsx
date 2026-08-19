@@ -99,8 +99,8 @@ export function WebchatWidgetSettings({
     }
   };
 
-  // The full form state as a POST payload. Every write — including the
-  // enable / pre-chat-form toggles — sends it, so what the owner SEES in
+  // The full form state as a POST payload. Every write, including the
+  // enable / pre-chat-form toggles, sends it, so what the owner SEES in
   // the origins/theme fields is always what gets persisted (a toggle can
   // never silently enable the widget under a stale allowlist).
   const configPayload = () => {
@@ -134,7 +134,7 @@ export function WebchatWidgetSettings({
               onChange={(ev) =>
                 // Enabling persists the WHOLE form so the widget can't go
                 // live under a stale allowlist/theme. Disabling stays a pure
-                // { enabled: false } — the API allows that on ANY tier, so a
+                // { enabled: false }, the API allows that on ANY tier, so a
                 // downgraded tenant can always turn the widget off.
                 post(
                   ev.target.checked

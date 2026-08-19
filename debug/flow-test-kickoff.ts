@@ -3,7 +3,7 @@
  * Truly's Privyr flow, simulating the Privyr "New Lead" alert email for the
  * tester (run flow-test-setup.ts first to lay the harness on the HQ tenant).
  * Each
- * invocation gets a unique dedupe key so scenarios can repeat — but run
+ * invocation gets a unique dedupe key so scenarios can repeat, but run
  * flow-test-reset.ts first, or the duplicate-lead guard will (correctly)
  * suppress the intro for a lead with a recent finished run.
  *
@@ -17,7 +17,7 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-/** New Coworker (HQ, internal) — the single internal smoke/e2e tenant. */
+/** New Coworker (HQ, internal), the single internal smoke/e2e tenant. */
 const TEST_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const FLOW_NAME = "Lead intake & follow-up (Privyr) (TEST COPY of Truly)";
 const TESTER_NAME = "Brian";

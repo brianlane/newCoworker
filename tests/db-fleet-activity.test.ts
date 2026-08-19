@@ -363,7 +363,7 @@ describe("buildFleetActivityFeed", () => {
   });
 
   it("scopes names to the owning business", () => {
-    // The same number resolves for b1 only — b2's row keeps the raw E.164.
+    // The same number resolves for b1 only, b2's row keeps the raw E.164.
     const items = buildFleetActivityFeed({
       ...emptyInput(),
       contactNames: namesFor("b1", { "+16025550122": "Jane Doe" }),

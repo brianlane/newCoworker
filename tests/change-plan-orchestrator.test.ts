@@ -496,7 +496,7 @@ describe("runChangePlanFromCheckout", () => {
 
     it("labels an untracked released box by its ACTUAL Hostinger plan (kvm1)", async () => {
       // A kvm1 box whose purchase-time inventory record failed must not be
-      // seeded into the pool as kvm2 — the teardown asks Hostinger for the
+      // seeded into the pool as kvm2, the teardown asks Hostinger for the
       // released box's real plan.
       hostingerGetVmMock.mockImplementation(async (id: number) => ({
         id,
@@ -623,7 +623,7 @@ describe("runChangePlanFromCheckout", () => {
 
   describe("period-only fast path (same tier, different billing period)", () => {
     function periodOnlySession() {
-      // Old sub fixture is starter/monthly — same tier, new period.
+      // Old sub fixture is starter/monthly, same tier, new period.
       return makeSession({
         metadata: {
           businessId: "biz-1",
@@ -643,7 +643,7 @@ describe("runChangePlanFromCheckout", () => {
       expect(backupBusinessDataMock).not.toHaveBeenCalled();
       expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
       expect(restoreBusinessDataMock).not.toHaveBeenCalled();
-      // CRITICAL: the old Hostinger billing sub is the LIVE box — it must
+      // CRITICAL: the old Hostinger billing sub is the LIVE box, it must
       // never be stopped or canceled on a period-only switch.
       expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
       expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
@@ -709,7 +709,7 @@ describe("runChangePlanFromCheckout", () => {
 
     it("tier change with no old billing id still stops the VM and emails the ops deletion request", async () => {
       // Regression (Bugbot): a missing billing id (e.g. provisioning-time
-      // lookup failed) must not suppress the ops email — the orphaned box
+      // lookup failed) must not suppress the ops email, the orphaned box
       // would otherwise keep running with nobody asked to delete it.
       getSubscriptionMock.mockResolvedValue({
         id: "sub-row-old",
@@ -740,7 +740,7 @@ describe("runChangePlanFromCheckout", () => {
 
     it("emails ops a 'not_needed' contract-switch summary when the box's cycle already covers the target", async () => {
       // Default list mock: billing_old is on a 2-year cycle; target is annual
-      // (12mo) — nothing to change, but ops still hears the switch happened.
+      // (12mo), nothing to change, but ops still hears the switch happened.
       await runChangePlanFromCheckout(periodOnlySession(), "evt_period_only_summary");
       expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -759,7 +759,7 @@ describe("runChangePlanFromCheckout", () => {
 
     it("a tier-change migration with a null provisioning billing id never inherits the old (about-to-be-canceled) billing id", async () => {
       // Regression (Bugbot): the fast-path inheritance must not leak into the
-      // migration path — step 7 cancels billing_old, so pinning it to the new
+      // migration path, step 7 cancels billing_old, so pinning it to the new
       // active row would reference dead billing while the new VPS's real
       // billing id goes untracked.
       orchestrateProvisioningMock.mockResolvedValueOnce({
@@ -963,7 +963,7 @@ describe("runChangePlanFromCheckout", () => {
       await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_err");
       expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
       expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
-      // Live box's billing id still inherited — nothing was migrated.
+      // Live box's billing id still inherited, nothing was migrated.
       expect(createSubscriptionMock).toHaveBeenCalledWith(
         expect.objectContaining({ hostinger_billing_subscription_id: "billing_old" })
       );
@@ -1035,7 +1035,7 @@ describe("runChangePlanFromCheckout", () => {
       hostinger_vps_id: "1001",
       customer_profile_id: "prof-1",
       status: "online",
-      // Operator pinned this business to KVM2 hardware — a tier change must
+      // Operator pinned this business to KVM2 hardware, a tier change must
       // keep the pin (entitlements move, hardware stays).
       vps_size: "kvm2"
     });
@@ -1562,7 +1562,7 @@ describe("runChangePlanFromCheckout", () => {
     // The newly paid Stripe subscription must be canceled so it doesn't
     // silently auto-renew for a customer who'll never be provisioned.
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
-    // The OLD sub is NOT touched — teardown never ran.
+    // The OLD sub is NOT touched, teardown never ran.
     expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
   });
 
@@ -1589,7 +1589,7 @@ describe("runChangePlanFromCheckout", () => {
     // a successful first run would observe `getSubscription(businessId)`
     // returning the new active sub (most-recent row), see its id !==
     // `previousSubscriptionId`, and call `cancelStripeSubscriptionSafely`
-    // on `stripeSubscriptionId` — which is the LIVE customer-paid
+    // on `stripeSubscriptionId`, which is the LIVE customer-paid
     // subscription. Detecting the already-completed signature must
     // short-circuit BEFORE that branch can fire.
     getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
@@ -1641,7 +1641,7 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   it("does NOT short-circuit when the linked row is non-active (e.g. mid-cancellation)", async () => {
-    // A canceled / wiped row is not a "successful prior run" — the
+    // A canceled / wiped row is not a "successful prior run", the
     // orchestrator should be free to proceed (or hit a structural
     // abort) rather than returning silently.
     getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
@@ -1899,7 +1899,7 @@ describe("runResubscribeFromCheckout", () => {
     // recovery") and continued to the optimistic write. The
     // `updateSubscriptionIfNotWiped` guard ONLY blocks when
     // `wiped_at` is set, but the grace-sweep planner used to delete
-    // the backup artifact BEFORE stamping `wiped_at` — so a
+    // the backup artifact BEFORE stamping `wiped_at`, so a
     // partial-execute crash (Vercel timeout, transient Storage
     // error) could leave the backup gone but `wiped_at` still null,
     // and the orchestrator would silently provision an empty
@@ -1935,7 +1935,7 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_restore_fail"
     );
 
-    // No optimistic write — the row stays canceled-in-grace so
+    // No optimistic write, the row stays canceled-in-grace so
     // operators can investigate the missing backup.
     expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
     // Cancel the brand-new Stripe sub so it can't auto-renew for
@@ -2097,7 +2097,7 @@ describe("runResubscribeFromCheckout", () => {
 
   it("continues resubscribe when ONLY the post-restore Stripe subscription lookup fails (period cache is best-effort)", async () => {
     // Stripe.subscriptions.retrieve at the end of the orchestrator
-    // is purely for refreshing the local period cache — its failure
+    // is purely for refreshing the local period cache, its failure
     // must NOT abort because the customer's data restored fine and
     // every other field on the write is already known. The
     // resurrected-row period cache is recomputed on the next
@@ -2292,7 +2292,7 @@ describe("runResubscribeFromCheckout", () => {
     // Grace-state tenant clicks Resubscribe, pays, but the grace-sweep
     // cron wiped the row between session creation and
     // `checkout.session.completed`. The sub is now out-of-grace, so we
-    // refuse to resubscribe — but must not leave the fresh Stripe sub
+    // refuse to resubscribe, but must not leave the fresh Stripe sub
     // auto-renewing.
     getSubscriptionMock.mockResolvedValueOnce({
       id: "sub-row-wiped",
@@ -2436,12 +2436,12 @@ describe("runResubscribeFromCheckout", () => {
   });
 
   it("falls back to old sub's tier/billingPeriod when the checkout session metadata omits them (banner flow)", async () => {
-    // GraceBanner POSTs `{ mode: "resubscribe" }` with no tier/period —
+    // GraceBanner POSTs `{ mode: "resubscribe" }` with no tier/period,
     // the reactivate route fills in defaults from the grace-state sub
     // row before creating Stripe Checkout. If, for any reason, tier/
     // billingPeriod are absent from the returned session metadata, the
     // orchestrator MUST still be able to resubscribe using the old sub
-    // row's plan — otherwise a paid Checkout silently aborts and the
+    // row's plan, otherwise a paid Checkout silently aborts and the
     // customer is charged without being re-provisioned.
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
@@ -2479,7 +2479,7 @@ describe("runResubscribeFromCheckout", () => {
 
   it("cancels the fresh Stripe sub when neither metadata nor old sub yields a supported tier", async () => {
     // If BOTH sources produce an unsupported tier (e.g. enterprise-only
-    // old sub), bail — but cancel the just-minted Stripe subscription
+    // old sub), bail, but cancel the just-minted Stripe subscription
     // so the customer isn't auto-renewed for a service we won't
     // provision. This is the defense-in-depth branch.
     getSubscriptionMock.mockResolvedValue({
@@ -2510,7 +2510,7 @@ describe("runResubscribeFromCheckout", () => {
 
   it("bails cleanly when tier is unresolvable AND no fresh Stripe sub id was issued", async () => {
     // Covers the false branch of the `if (stripeSubscriptionId)` guard
-    // in the unresolvable-tier path — nothing to cancel, just log + return.
+    // in the unresolvable-tier path, nothing to cancel, just log + return.
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",

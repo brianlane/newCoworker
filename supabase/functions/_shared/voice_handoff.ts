@@ -2,8 +2,8 @@
  * Pure helpers for the voice warm-handoff chain (HomeLight live transfer).
  *
  * The state machine itself lives in telnyx-voice-inbound (it needs Telnyx +
- * Supabase), but the branch-free decisions — how to encode/parse the transfer
- * client_state and which step to try next — are isolated here so they can be
+ * Supabase), but the branch-free decisions, how to encode/parse the transfer
+ * client_state and which step to try next, are isolated here so they can be
  * unit-tested without a live call. Imported by both the Deno edge function and
  * the Vitest suite, so this file must stay dependency-free (btoa/atob only).
  */

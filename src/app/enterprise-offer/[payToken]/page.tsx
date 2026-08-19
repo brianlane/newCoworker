@@ -1,5 +1,5 @@
 /**
- * Public payment page for an enterprise deal — the durable, emailable link
+ * Public payment page for an enterprise deal, the durable, emailable link
  * (/enterprise-offer/<pay_token>) an admin sends to an enterprise owner. The
  * pay_token is an unguessable capability; the page shows the deal's setup +
  * monthly price and hands off to Stripe Checkout via

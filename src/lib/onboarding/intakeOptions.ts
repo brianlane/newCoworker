@@ -8,7 +8,7 @@
  * dropdowns on Step 1 trades a tiny amount of "form-y" UX for big
  * wins:
  *
- *   - Deterministic answers — no regex/LLM extraction.
+ *   - Deterministic answers, no regex/LLM extraction.
  *   - Lower token cost on every chat turn (the system prompt no
  *     longer carries the team-size / CRM dead-end question banks).
  *   - The chat interview can focus on what LLMs are actually good at:
@@ -28,7 +28,7 @@ export type TeamSizeOption = {
 /**
  * Coarse buckets (`Just me`, `2–3`, …, `25+`) rather than free
  * numeric input. The downstream system prompts and `identity.md` only
- * need a rough scale — exact headcount adds noise without value, and
+ * need a rough scale, exact headcount adds noise without value, and
  * a closed enum eliminates the "4 or 5" / "couple of agents" /
  * "team of nine or ten" parsing problems.
  */
@@ -47,7 +47,7 @@ export const TEAM_SIZE_OPTIONS: readonly TeamSizeOption[] = [
  * column is `int`, so we need a deterministic projection: previously
  * the route called `parseInt(body.teamSize, 10)`, which silently
  * produced `NaN` for `"Just me"` (breaking create/checkout for the
- * single largest user segment — solo operators) and silently
+ * single largest user segment, solo operators) and silently
  * truncated `"4-5"` to `4` purely by parseInt's trailing-garbage
  * tolerance. Both paths corrupted onboarding data.
  *
@@ -59,7 +59,7 @@ export const TEAM_SIZE_OPTIONS: readonly TeamSizeOption[] = [
  * Falls through to a guarded `parseInt` for legacy localStorage
  * drafts that pre-date the dropdown and may still carry free-text
  * values like `"5"` or `"10 agents"`. If even that fails, defaults to
- * `1` rather than `NaN` — solo is the most common small-team default
+ * `1` rather than `NaN`, solo is the most common small-team default
  * and is recoverable; a NaN insert is not.
  */
 export function teamSizeBucketToInt(value: string | undefined | null): number {
@@ -93,12 +93,12 @@ export type CrmOption = {
  * texts/email/calendar can answer the question without picking
  * something inaccurate. The chat downstream treats both `""` (unset)
  * and `"None — texts, email, or calendar only"` as "no formal CRM",
- * but the latter is what we want once Step 1 has been completed —
+ * but the latter is what we want once Step 1 has been completed,
  * empty-string would imply the user skipped the field.
  */
 export const CRM_OPTIONS: readonly CrmOption[] = [
   // value is a persisted sentinel (referenced by the onboarding chat prompt
-  // and stored drafts) — only the LABEL is user-visible, so only it avoids
+  // and stored drafts), only the LABEL is user-visible, so only it avoids
   // the em dash.
   { value: "None — texts, email, or calendar only", label: "None: texts, email, or calendar only" },
   { value: "HubSpot", label: "HubSpot" },
@@ -126,7 +126,7 @@ export const CRM_OTHER_PREFIX = "Other: ";
  * state would round-trip through `serializeCrmSelection` → `""` →
  * `deriveCrmSelection` as `{ selection: "", … }`, which made the
  * dropdown visually reset to its placeholder and hid the "Which
- * CRM?" text input — Other became fully non-functional. The sentinel
+ * CRM?" text input, Other became fully non-functional. The sentinel
  * preserves the in-flight selection across re-renders while still
  * being recognizable to `isCrmSelectionComplete` as an incomplete
  * answer that should block Step 1 advance.
@@ -187,8 +187,8 @@ export function serializeCrmSelection(selection: string, otherText: string): str
  * True when the stored CRM value represents a completed answer the
  * server can rely on. The empty string, the in-flight sentinel
  * `"Other:"`, AND the bare `"Other"` value all block advance;
- * everything else — including the explicit
- * `"None — texts, email, or calendar only"` entry — counts as a
+ * everything else, including the explicit
+ * `"None — texts, email, or calendar only"` entry, counts as a
  * complete answer.
  *
  * The bare `"Other"` case matters even though
@@ -198,7 +198,7 @@ export function serializeCrmSelection(selection: string, otherText: string): str
  * `Other` entry's `value` straight into storage would land here.
  * `deriveCrmSelection` correctly renders such a value as
  * `{ selection: "Other", otherText: "" }` and shows the empty
- * "Which CRM?" text input — letting the advance gate pass anyway
+ * "Which CRM?" text input, letting the advance gate pass anyway
  * would short-circuit the user past the field.
  */
 export function isCrmSelectionComplete(stored: string | undefined | null): boolean {

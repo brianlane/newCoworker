@@ -9,7 +9,7 @@ import {
 /**
  * Click-through from an admin feed row to the item itself: starts a view-as
  * session for the row's business (same POST + sessionStorage bookkeeping as
- * ViewAsButton) and lands on the item's page in the tenant dashboard —
+ * ViewAsButton) and lands on the item's page in the tenant dashboard,
  * the messages thread, flow run, contact, or the exact alert. The banner's
  * Exit returns the admin to the feed they clicked from.
  */

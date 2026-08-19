@@ -5,7 +5,7 @@
  * The model/UI may hand us a comma/semicolon-separated string OR an array of
  * strings; we normalize to a de-duplicated array of valid, lowercased email
  * addresses, capped so a runaway model can't blast an unbounded recipient list.
- * Invalid entries are dropped rather than throwing — cc/bcc are best-effort
+ * Invalid entries are dropped rather than throwing, cc/bcc are best-effort
  * additions to a send, never the reason a requested email fails.
  */
 

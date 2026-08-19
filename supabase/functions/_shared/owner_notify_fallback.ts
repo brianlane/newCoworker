@@ -69,7 +69,7 @@ export async function sendOwnerNotifyFallback(
   try {
     // Per run+step dedupe: a DELIVERED row means the owner already has this
     // exact notify (skipped/failed rows must not suppress a retry that
-    // could actually reach them — same rule as _shared/needs_human.ts).
+    // could actually reach them, same rule as _shared/needs_human.ts).
     const { data: prior, error: priorErr } = await supabase
       .from("notifications")
       .select("id")

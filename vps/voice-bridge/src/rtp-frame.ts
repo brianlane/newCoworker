@@ -8,14 +8,14 @@
  *     receives clean L16 PCM and not 12 bytes of header garbage every frame.
  *   - Prepend a synthetic 12-byte RTP header on downlink (Gemini → caller)
  *     with a stable SSRC and monotonic sequence/timestamp, otherwise Telnyx
- *     drops the frame — caller hears silence.
+ *     drops the frame, caller hears silence.
  *
  * (May 2026 outage: bridge sat for 32 s on every call accepting the WS but
  *  producing no audio because Gemini saw header-garbled PCM and Telnyx
  *  silently discarded the bridge's bare-PCM downlink frames. The integration
  *  test for L16 RTP echo at team-telnyx/telnyx-samples-pwc round-trips the
  *  payload unchanged, but that only works because echoing replays Telnyx's
- *  own header back — synthesizing audio from scratch requires re-framing.)
+ *  own header back, synthesizing audio from scratch requires re-framing.)
  *
  * RTP header layout (12 bytes, all big-endian):
  *
@@ -48,7 +48,7 @@ export type RtpDecoded = {
   /**
    * Whether the buffer was actually decoded as an RTP packet (vs. passed
    * through as raw L16). The caller uses this to *lock* the per-stream
-   * framing mode after the first frame — see the false-positive note on
+   * framing mode after the first frame, see the false-positive note on
    * `decodeTelnyxMediaPayload`.
    */
   wasRtp: boolean;
@@ -64,7 +64,7 @@ export type RtpDecoded = {
  * RTP is the V=2 bits in byte 0. But byte 0 of a *raw* L16 frame is just the
  * low byte of the first 16-bit sample, which lands in the 0x80–0xBF (V=2)
  * range for ~25% of samples. Mistaking raw L16 for RTP splices real audio
- * bytes off the front and — when the stripped header length is odd — yields a
+ * bytes off the front and, when the stripped header length is odd, yields a
  * PCM chunk that isn't a whole number of 16-bit samples. Gemini Live rejects
  * that with WS close 1007 "Request contains an invalid argument." (the exact
  * failure that killed every call after #67 added uplink RTP-stripping).
@@ -72,7 +72,7 @@ export type RtpDecoded = {
  * Two guards here: (1) require the stripped payload to be a non-empty, even
  * (whole-sample) length before believing it's RTP; (2) report `wasRtp` so the
  * caller can lock the framing mode for the whole stream from the first frame
- * rather than re-guessing — RTP-vs-raw is a per-stream property.
+ * rather than re-guessing, RTP-vs-raw is a per-stream property.
  */
 export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   const buf = Buffer.from(base64, "base64");
@@ -82,7 +82,7 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   const versionFlags = buf[0] ?? 0;
   const version = (versionFlags >> 6) & 0x03;
   if (version !== 2) {
-    // Not an RTP packet — fall back to treating the whole buffer as audio.
+    // Not an RTP packet, fall back to treating the whole buffer as audio.
     return { payload: buf, payloadType: 11, wasRtp: false };
   }
   const padding = ((versionFlags >> 5) & 0x01) === 1;
@@ -98,11 +98,11 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   // (or an upstream codec negotiation) ever does, the prior implementation
   // would splice the extension bytes into the audio stream and ship
   // garbled L16 to Gemini Live. Costs us 4 bytes of bounds-check on every
-  // packet — well worth the future-proofing.
+  // packet, well worth the future-proofing.
   if (extensionFlag) {
     const extHeaderStart = headerLen;
     if (buf.length < extHeaderStart + 4) {
-      // Header claims an extension that doesn't fit — not a real RTP packet.
+      // Header claims an extension that doesn't fit, not a real RTP packet.
       return { payload: buf, payloadType: 11, wasRtp: false };
     }
     const extWords = buf.readUInt16BE(extHeaderStart + 2);
@@ -110,7 +110,7 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   }
 
   if (buf.length <= headerLen) {
-    // Nothing left after the claimed header — treat as raw L16, not RTP.
+    // Nothing left after the claimed header, treat as raw L16, not RTP.
     return { payload: buf, payloadType: 11, wasRtp: false };
   }
 
@@ -131,7 +131,7 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
 
   // Final plausibility gate: a genuine L16 RTP payload is a whole number of
   // 16-bit samples (even length) and non-empty. If "stripping the header"
-  // produced an odd or empty buffer, byte 0 only *looked* like RTP V=2 — it's
+  // produced an odd or empty buffer, byte 0 only *looked* like RTP V=2, it's
   // really raw L16. Returning the untouched buffer here both prevents the
   // malformed-PCM 1007 and preserves the audio we'd otherwise have chopped.
   if (payload.length === 0 || payload.length % 2 !== 0) {
@@ -153,7 +153,7 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
  * downlink. Telnyx's `media.payload` is the RTP *payload* with NO header
  * (per the media-streaming spec, and symmetric with the header-less inbound
  * frames); sending a full packet makes Telnyx play the 12 header bytes as
- * audio — an audible click at every chunk boundary. The bridge sends raw L16
+ * audio, an audible click at every chunk boundary. The bridge sends raw L16
  * directly. This class is retained only for RTP-format tests / potential
  * non-Telnyx transports.
  */
@@ -164,8 +164,8 @@ export class RtpEncoder {
   private payloadType: number;
 
   constructor(opts?: { payloadType?: number }) {
-    // Random initial seq/ts so collisions across reconnects are unlikely
-    // — RFC 3550 §5.1 also recommends randomizing both fields.
+    // Random initial seq/ts so collisions across reconnects are unlikely,
+    // RFC 3550 §5.1 also recommends randomizing both fields.
     this.seq = Math.floor(Math.random() * 0xffff);
     this.ts = Math.floor(Math.random() * 0xffffffff);
     this.ssrc = Math.floor(Math.random() * 0xffffffff);

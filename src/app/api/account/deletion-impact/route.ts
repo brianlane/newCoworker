@@ -32,7 +32,7 @@ export async function GET() {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
     const businessId = (biz as { id: string }).id;
 
-    // Same FAIL-CLOSED, every-row billing lookup as the DELETE handler —
+    // Same FAIL-CLOSED, every-row billing lookup as the DELETE handler,
     // the preview must never advertise deletion the actual request would
     // refuse (including active rows shadowed by a newer pending one).
     const [impact, subLookup] = await Promise.all([

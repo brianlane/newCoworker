@@ -31,7 +31,7 @@ export type GeminiImageAspectRatio = (typeof GEMINI_IMAGE_ASPECT_RATIOS)[number]
 
 export type GeminiInputImage = {
   bytes: Buffer;
-  /** e.g. `image/jpeg` — must be an image type the API accepts. */
+  /** e.g. `image/jpeg`, must be an image type the API accepts. */
   mimeType: string;
 };
 
@@ -108,7 +108,7 @@ function extractInlineImage(json: unknown): { mimeType: string; data: string } |
  * @throws Error `gemini_http_<status>:...` on non-OK HTTP
  * @throws Error `gemini_http_parse` when the body is not JSON
  * @throws GeminiEmptyError when the response parses but carries no image part
- *   (Google still bills these calls — the error carries usage for metering)
+ *   (Google still bills these calls, the error carries usage for metering)
  */
 export async function geminiGenerateImage(
   params: GeminiGenerateImageParams

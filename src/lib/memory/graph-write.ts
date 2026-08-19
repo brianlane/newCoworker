@@ -5,13 +5,13 @@
  * Takes a parsed GraphExtraction (graph-extract.ts) and lands it in the
  * memory_entities / memory_facts tables:
  *
- *   Resolution — an extracted entity collapses onto an existing node when
+ *   Resolution, an extracted entity collapses onto an existing node when
  *   there is identity evidence: the model's own existing_id claim (verified
  *   against the index), a shared normalized phone number, a shared email, or
  *   an exact canonical-name/alias match within the same kind. Anything less
  *   creates a NEW node (upstream rule: same name ≠ same entity).
  *
- *   Supersedence — a new fact for the same (subject, predicate) with a
+ *   Supersedence, a new fact for the same (subject, predicate) with a
  *   different object marks the old active facts inactive (superseded_by →
  *   the new fact) instead of accumulating contradictions. An identical
  *   object is a no-op.
@@ -33,7 +33,7 @@ import {
   type MemoryEntityRow
 } from "./graph-db";
 
-/** Digits-only, last 10 (US-normalized) — matches how numbers are compared. */
+/** Digits-only, last 10 (US-normalized), matches how numbers are compared. */
 export function normalizePhone(raw: string): string | null {
   const digits = raw.replace(/\D+/g, "");
   if (digits.length < 7) return null;
@@ -90,7 +90,7 @@ export function resolveEntity(
 ): MemoryEntityRow | null {
   // Every evidence class is KIND-SCOPED: a person and an organization can
   // legitimately share a main-line phone number or inbox, and the model's
-  // existing_id claim can misfire — cross-kind merges attach facts to the
+  // existing_id claim can misfire, cross-kind merges attach facts to the
   // wrong node forever.
   if (extracted.existingId) {
     const claimed = index.find(
@@ -119,7 +119,7 @@ export function resolveEntity(
 
   // Name/alias evidence is weaker than a shared phone/email: a bare name
   // resolves ONLY when exactly one same-kind entity carries it (upstream
-  // rule — same name is not the same entity). Two "Amy"s → no match, a new
+  // rule, same name is not the same entity). Two "Amy"s → no match, a new
   // node is created rather than merging two people.
   const names = new Set([normalizedName(extracted.name), ...extracted.aliases.map(normalizedName)]);
   const nameMatches: MemoryEntityRow[] = [];
@@ -138,12 +138,12 @@ export function resolveEntity(
 }
 
 /**
- * New aliases/phones/emails the extraction adds to an existing node — plus
+ * New aliases/phones/emails the extraction adds to an existing node, plus
  * a trust bump when a higher-trust source touches it.
  *
  * TRUST GATE: contact points and aliases merge onto the CANONICAL node only
  * from trust ≥ 2 sources. A customer or anonymous visitor (trust ≤ 1)
- * stating "my other number is …" must not rewrite who the entity IS — their
+ * stating "my other number is …" must not rewrite who the entity IS, their
  * statements land as attributed facts instead, and resolution keeps working
  * off owner-established identity evidence.
  */
@@ -214,12 +214,12 @@ export const OWNER_PROVENANCE: GraphProvenance = {
 };
 
 /**
- * Land one extraction in the graph. Sequential by design — captures are
+ * Land one extraction in the graph. Sequential by design, captures are
  * rare (owner chat) and ordering keeps supersedence deterministic.
  *
  * TRUST-AWARE SUPERSEDENCE: a new fact deactivates only same-or-LOWER-trust
  * active facts for its (subject, predicate). A customer claim never
- * supersedes an owner statement — it lands as an additional attributed
+ * supersedes an owner statement, it lands as an additional attributed
  * fact while the owner's stays active (the KYP lesson as a model, not a
  * wall).
  */
@@ -305,7 +305,7 @@ export async function applyGraphExtraction(
     );
     if (sameObject) {
       // Re-stated, not new: bump stated_at so recency reflects the latest
-      // re-confirmation (repeat bookings, owners repeating rules) — the
+      // re-confirmation (repeat bookings, owners repeating rules), the
       // projection notes and any recency-aware packing read it.
       await touchFact(sameObject.id);
       result.factsSkipped += 1;

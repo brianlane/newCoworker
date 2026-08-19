@@ -1,6 +1,6 @@
 # Supabase project config.
 #
-# Only the [functions.*] sections are authoritative right now — we use this
+# Only the [functions.*] sections are authoritative right now, we use this
 # file to pin `verify_jwt` per edge function so a plain `supabase functions
 # deploy <name>` from any developer machine doesn't flip the gateway JWT
 # check on/off depending on local CLI defaults.
@@ -40,7 +40,7 @@ verify_jwt = false
 
 # Drains queued AiFlow runs (queued -> running -> done|failed). Invoked by
 # pg_cron with the plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so
-# the gateway JWT check must stay OFF — same rationale as the workers above.
+# the gateway JWT check must stay OFF, same rationale as the workers above.
 [functions.ai-flow-worker]
 verify_jwt = false
 
@@ -64,7 +64,7 @@ verify_jwt = false
 
 # Dispatches due owner-scheduled texts (scheduled_sms). Invoked by pg_cron with
 # the plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
-# JWT check must stay OFF — same rationale as the workers above.
+# JWT check must stay OFF, same rationale as the workers above.
 [functions.scheduled-sms-sweep]
 verify_jwt = false
 
@@ -77,7 +77,7 @@ verify_jwt = false
 # The cron workers below were historically deployed one-by-one with an
 # explicit `--no-verify-jwt` flag and never got a config.toml pin. CI now
 # bulk-deploys EVERY function on each merge to main, so each one must be
-# pinned here — an unpinned function would pick up the CLI default (JWT
+# pinned here, an unpinned function would pick up the CLI default (JWT
 # check ON) and the plain-hex pg_cron bearer would start bouncing at the
 # gateway with UNAUTHORIZED_INVALID_JWT_FORMAT. All of them authenticate
 # via `_shared/cron_auth.ts::assertCronAuth`.
@@ -179,7 +179,7 @@ verify_jwt = false
 [functions.telnyx-voice-call-end]
 verify_jwt = false
 
-# Outbound origination for `outbound_call` AiFlows. NOT a Telnyx webhook — it is
+# Outbound origination for `outbound_call` AiFlows. NOT a Telnyx webhook, it is
 # invoked server-to-server from the app's Place call route with a service-role
 # bearer that the function checks itself (timing-safe compare), so the gateway
 # JWT check stays OFF like the rest of the voice functions.
@@ -200,13 +200,13 @@ verify_jwt = false
 
 # Daily/weekly digest emails. Invoked by pg_cron with the plain-hex
 # INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway JWT check must
-# stay OFF — same rationale as the cron workers above.
+# stay OFF, same rationale as the cron workers above.
 [functions.notifications-digest]
 verify_jwt = false
 
 # Daily fleet VPS billing-posture check. Invoked by pg_cron with the
 # plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
-# JWT check must stay OFF — same rationale as the cron workers above.
+# JWT check must stay OFF, same rationale as the cron workers above.
 [functions.vps-billing-posture]
 verify_jwt = false
 
@@ -224,19 +224,19 @@ verify_jwt = false
 
 # Signup-provisioning watchdog bridge (pg_cron every 5 min). Auth is the
 # plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
-# JWT check must stay OFF — same rationale as the cron workers above.
+# JWT check must stay OFF, same rationale as the cron workers above.
 [functions.provisioning-watchdog]
 verify_jwt = false
 
 # Blog publish sweep bridge (pg_cron every 5 min). Auth is the plain-hex
 # INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway JWT check
-# must stay OFF — same rationale as the cron workers above.
+# must stay OFF, same rationale as the cron workers above.
 [functions.blog-publish-sweep]
 verify_jwt = false
 
 # Weekly PR-digest blog post bridge (pg_cron Mondays). Auth is the
 # plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
-# JWT check must stay OFF — same rationale as the cron workers above.
+# JWT check must stay OFF, same rationale as the cron workers above.
 [functions.blog-weekly-digest]
 verify_jwt = false
 

@@ -4,7 +4,7 @@
  * The channel toggles (sms_urgent / email_urgent / dashboard_alerts) say HOW
  * the owner wants to be reached; categories say WHICH events are worth
  * reaching them for. An alert is delivered only when both gates pass.
- * Generic urgent alerts ("general") are deliberately never category-gated —
+ * Generic urgent alerts ("general") are deliberately never category-gated,
  * they are the escalation path of last resort.
  */
 

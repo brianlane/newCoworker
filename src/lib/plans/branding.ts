@@ -1,10 +1,10 @@
 /**
- * White-label dashboard branding (enterprise) — schema + parsing for
+ * White-label dashboard branding (enterprise), schema + parsing for
  * `businesses.branding` (migration 20260809000000_business_branding.sql).
  *
  * Same pattern as enterprise-limits: a nullable jsonb column, a strict zod
  * schema at every boundary (unknown keys stripped, values bounded), and
- * ENFORCEMENT AT READ TIME — branding renders only for enterprise-tier
+ * ENFORCEMENT AT READ TIME, branding renders only for enterprise-tier
  * businesses, so a downgraded tenant's stored branding goes dormant instead
  * of needing cleanup.
  */
@@ -14,7 +14,7 @@ import { z } from "zod";
 export const BRANDING_PRODUCT_NAME_MAX = 60;
 export const BRANDING_LOGO_URL_MAX = 500;
 
-/** #rgb or #rrggbb — parsed, never interpolated into CSS as raw text. */
+/** #rgb or #rrggbb, parsed, never interpolated into CSS as raw text. */
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 export const brandingSchema = z
@@ -45,7 +45,7 @@ export function parseBranding(raw: unknown): Branding | null {
 
 /**
  * The branding to RENDER for a business: stored branding when (and only
- * when) the tenant is enterprise tier — white-label is an enterprise
+ * when) the tenant is enterprise tier, white-label is an enterprise
  * feature, enforced at read time.
  */
 export function effectiveBranding(

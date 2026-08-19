@@ -42,7 +42,7 @@ export const WEBSITE_INGEST_DEEP_MAX_PAGES = 80;
 export const WEBSITE_INGEST_PAGE_TIMEOUT_MS = 5000;
 /**
  * Per-page streamed byte cap. Raised from 1 MB after a production Wix
- * homepage (trulyinsurance.ca) grew past 4 MB of served HTML — builder
+ * homepage (trulyinsurance.ca) grew past 4 MB of served HTML, builder
  * platforms routinely inline several MB of CSS/JSON into the document, and
  * tripping `payload_too_large` on the homepage kills the whole crawl.
  */
@@ -53,7 +53,7 @@ export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 8_000_000;
  * through the route; the crawl stops (keeping what it has) once crossed.
  * Sized for real builder platforms: Wix serves ~4 MB of HTML per page, so
  * an 80-page Wix site needs ~320 MB of headroom. Only the extracted text is
- * retained — page bodies are transient (at most 4 in flight).
+ * retained, page bodies are transient (at most 4 in flight).
  */
 export const WEBSITE_INGEST_MAX_TOTAL_BYTES = 400_000_000;
 export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 150_000;
@@ -68,14 +68,14 @@ export const WEBSITE_INGEST_MAX_CHARS_PER_PAGE = 8_000;
  * Low-signal floor: unless at least ONE crawled page carries this many
  * extracted chars, the crawl found nothing usable. Judged per-page (not on
  * the summed corpus) because a deep crawl of a JS-rendered SPA can stack
- * many shell pages whose only text is each page's <title> — the sum would
+ * many shell pages whose only text is each page's <title>, the sum would
  * sneak past a corpus-wide floor and produce a titles-only garbage summary.
  */
 export const WEBSITE_INGEST_MIN_CORPUS_CHARS = 200;
 /** Parallel page fetches per crawl wave. */
 export const WEBSITE_INGEST_CRAWL_CONCURRENCY = 4;
 /**
- * Overall crawl deadline (fetch phase only — the summarizer has its own 20s
+ * Overall crawl deadline (fetch phase only, the summarizer has its own 20s
  * budget). 4-way concurrency over 80 pages at the 5s per-page timeout worst-
  * cases to ~100s, so 120s leaves the route's 300s `maxDuration` plenty of
  * room for the summary + post-response vault re-seed.
@@ -208,14 +208,14 @@ export interface WebsiteIngestOptions {
   maxTotalBytes?: number;
   /**
    * Live progress callback (see {@link WebsiteIngestProgressEvent}). Called
-   * synchronously from the crawl loop — keep it cheap (the ingest route just
+   * synchronously from the crawl loop, keep it cheap (the ingest route just
    * enqueues an NDJSON line).
    */
   onProgress?: (event: WebsiteIngestProgressEvent) => void;
   /**
    * When true, skip the robots.txt fetch and the per-page
-   * `isPathAllowed` check. Intended ONLY for owner-consented contexts
-   * — i.e. the onboarding flow where the business owner has
+   * `isPathAllowed` check. Intended ONLY for owner-consented contexts,
+   * i.e. the onboarding flow where the business owner has
    * explicitly typed in their own site's URL and is asking us to
    * summarize it for their assistant. robots.txt is a directive to
    * third-party crawlers, not to first-party agents the site owner
@@ -225,7 +225,7 @@ export interface WebsiteIngestOptions {
    * their own business.
    *
    * SSRF / DNS-rebinding / private-IP / size / timeout / redirect
-   * defenses are all unaffected by this flag — only the robots.txt
+   * defenses are all unaffected by this flag, only the robots.txt
    * preference layer is bypassed. Callers MUST NOT pass `true` for
    * URLs the user did not explicitly provide.
    */
@@ -233,7 +233,7 @@ export interface WebsiteIngestOptions {
   /**
    * When set, the default Gemini summarizer meters its spend into this
    * business's shared AI budget (`owner_chat_model_spend`). The summary
-   * runs on the gemini-3 tier with a large crawled-text prompt — left
+   * runs on the gemini-3 tier with a large crawled-text prompt, left
    * unmetered it was the biggest gap between the billing page's "AI chat
    * budget" and Google's actual bill. Ignored when a custom `summarize`
    * is injected (tests).
@@ -247,7 +247,7 @@ export interface WebsiteIngestOptions {
    * version of the homepage. Jina runs a real browser pool server-side,
    * so it clears active JS challenges that header/UA/TLS spoofing can't.
    *
-   * This is far lighter than running a headless browser per VPS — it's a
+   * This is far lighter than running a headless browser per VPS, it's a
    * single outbound HTTP GET that already returns summarization-ready
    * markdown. Tradeoff: it sends the (owner-provided, public) URL to a
    * third party and adds a few seconds of latency, so it's gated to the
@@ -262,14 +262,14 @@ export interface WebsiteIngestOptions {
 /**
  * Map an internal fetch-failure message (from {@link fetchWithLimit}) to
  * a sentence the dashboard's `websiteIngestErrorMessage` can render as
- * `detail`. The mapping is intentionally conservative — we only special-
+ * `detail`. The mapping is intentionally conservative, we only special-
  * case the failure modes we've seen in production where the canned
  * "We couldn't reach any pages" copy was actively misleading.
  *
  * Crucially: `status_403` is the symptom of Cloudflare's bot mitigation
  * (`cf-mitigated: challenge`) intercepting the homepage fetch. Owners
  * whose own site is fronted by Cloudflare with bot fight mode on
- * couldn't tell their CDN was blocking us — they assumed our crawler
+ * couldn't tell their CDN was blocking us, they assumed our crawler
  * was broken.
  */
 export function humanizeFetchError(message: string): string {
@@ -295,7 +295,7 @@ export function humanizeFetchError(message: string): string {
     return "We couldn't resolve that domain. Double-check the URL.";
   }
   // Anything else (network resets, abort timeouts, malformed HTML) gets
-  // a clean generic copy — the canned message in the dashboard
+  // a clean generic copy, the canned message in the dashboard
   // ("Check the URL, SSL, or firewall") already covers this case
   // adequately, but returning the raw message also helps support
   // diagnose oddball failures from the logs.
@@ -324,7 +324,7 @@ export async function assertSafeHostname(
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal")) {
     throw new Error("private_address");
   }
-  // Reject bare IP literals outright — legitimate public sites use hostnames.
+  // Reject bare IP literals outright, legitimate public sites use hostnames.
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":")) {
     throw new Error("private_address");
   }
@@ -392,7 +392,7 @@ export function isPathAllowed(pathname: string, disallows: string[]): boolean {
 
 export function extractReadableText(html: string): string {
   // CodeQL (js/bad-tag-filter): HTML parsers accept arbitrary junk between the
-  // tag name and `>` on a closing tag — `</script >`, `</script\t\nfoo>`, and
+  // tag name and `>` on a closing tag, `</script >`, `</script\t\nfoo>`, and
   // `</style bar="baz">` all legally close the element. Our strip pass has to
   // swallow anything up to the next `>` after the tag name (`\b[^>]*>`) so
   // those malformed closers can't leak inline JS/CSS into the text corpus.
@@ -458,14 +458,14 @@ export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
   while ((match = regex.exec(html))) {
     // `match[1] ?? match[2] ?? match[3]` covers the three alternation arms
     // (double / single / unquoted). The final `?? ""` is defensive against a
-    // runtime that invents an empty match object — it's unreachable given the
+    // runtime that invents an empty match object, it's unreachable given the
     // regex always captures one group when it matches.
     /* c8 ignore next */
     const href = (match[1] ?? match[2] ?? match[3] ?? "").trim();
     const lower = href.toLowerCase();
     // Skip XSS-shaped schemes and non-HTTP nav targets. CodeQL flags incomplete
     // allowlists here; we also exclude `data:` and `vbscript:` to match the
-    // DOM-XSS sanitizer guidance even though we never eval these hrefs — the
+    // DOM-XSS sanitizer guidance even though we never eval these hrefs, the
     // origin check below would reject most of them, but enumerating schemes
     // gives a clear audit trail and short-circuits pathological inputs.
     if (
@@ -489,7 +489,7 @@ export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
  * Extract `<loc>` entries from a sitemap document. A `urlset` yields page
  * URLs; a `sitemapindex` yields child-sitemap URLs. Both kinds can appear in
  * the wild with junk whitespace/CDATA around the loc text, so the parser is a
- * tolerant regex pass rather than a full XML parse — sitemaps are flat enough
+ * tolerant regex pass rather than a full XML parse, sitemaps are flat enough
  * that this is robust in practice (and this module already parses HTML the
  * same way).
  */
@@ -513,7 +513,7 @@ export function parseSitemapLocs(xml: string): { pageUrls: string[]; childSitema
  * Discover same-origin page URLs from `/sitemap.xml`, following one level of
  * sitemap-index nesting (Wix/Squarespace publish an index pointing at
  * pages/blog child sitemaps). Best-effort: any fetch or parse failure returns
- * what was collected so far — the crawl then proceeds on link discovery alone.
+ * what was collected so far, the crawl then proceeds on link discovery alone.
  */
 async function discoverSitemapUrls(
   baseUrl: URL,
@@ -591,7 +591,7 @@ const MAX_REDIRECTS = 5;
  * Fetches `url` with four guardrails layered in priority order:
  *
  *  1. Single-host SSRF guard on the initial hostname (caller must also have
- *     called `assertSafeHostname` before the first hop — we re-validate here
+ *     called `assertSafeHostname` before the first hop, we re-validate here
  *     so `fetchRobots` / redirect hops cannot smuggle in a private host).
  *  2. Manual redirect handling. We never let the runtime auto-follow a
  *     `Location:` header into a private IP; each hop is re-validated against
@@ -605,7 +605,7 @@ const MAX_REDIRECTS = 5;
  * connect remains possible because Node's `fetch` does its own resolution. We
  * keep the language honest in docs + logs ("SSRF-checked" not "SSRF-proof").
  * Fully closing that gap requires pinning the resolved IP on the socket,
- * which means bypassing `fetch` for a custom agent — tracked separately.
+ * which means bypassing `fetch` for a custom agent, tracked separately.
  */
 async function fetchWithLimit(
   url: string,
@@ -637,7 +637,7 @@ async function fetchWithLimit(
       if (hopResponse.status >= 300 && hopResponse.status < 400) {
         const location = hopResponse.headers.get("location");
         // Drain the redirect body so the underlying socket can be reused /
-        // released. `cancel()` returns a promise we swallow — failures here
+        // released. `cancel()` returns a promise we swallow, failures here
         // are benign (already-closed streams).
         if (hopResponse.body) {
           /* c8 ignore next -- the `.catch(() => {})` is a swallow-and-move-on
@@ -736,8 +736,8 @@ async function fetchWithLimit(
     const body = new TextDecoder("utf-8", { fatal: false }).decode(merged);
     // `total` is the true number of bytes pulled off the wire (or buffered from
     // arrayBuffer in the no-stream fallback). We return it alongside the decoded
-    // string because callers that report `bytesDownloaded` need real byte counts
-    // — `body.length` is a UTF-16 code-unit count and under-reports non-ASCII
+    // string because callers that report `bytesDownloaded` need real byte counts,
+    // `body.length` is a UTF-16 code-unit count and under-reports non-ASCII
     // payloads by up to 4x.
     return { body, contentType, finalUrl: response.url || currentUrl.toString(), bytes: total };
   } finally {
@@ -748,11 +748,11 @@ async function fetchWithLimit(
 /**
  * Detect a bot-challenge / WAF-block page masquerading as content. Jina's
  * Reader returns HTTP 200 even when the *target* site answered with a
- * Cloudflare challenge — the markdown body then carries explicit markers:
+ * Cloudflare challenge, the markdown body then carries explicit markers:
  * a `Warning: Target URL returned error NNN` metadata line and/or a
  * challenge-page `Title:` ("Just a moment...", "Attention Required! |
  * Cloudflare", …). Without this check the fallback "succeeded" and we
- * summarized the challenge page into website.md — a garbage summary that
+ * summarized the challenge page into website.md, a garbage summary that
  * looked like a clean crawl to the owner.
  *
  * Only the head of the body is inspected: every marker Jina/Cloudflare emits
@@ -781,7 +781,7 @@ export const JINA_READER_BASE = "https://r.jina.ai/";
 /**
  * Reader fetches go through a server-side browser pool, so they're slower than
  * a raw fetch. Give them a generous standalone budget (the per-page 5s cap is
- * far too tight) — the route's `maxDuration` (300s) comfortably covers it.
+ * far too tight), the route's `maxDuration` (300s) comfortably covers it.
  */
 export const WEBSITE_INGEST_READER_TIMEOUT_MS = 25_000;
 
@@ -793,7 +793,7 @@ export const WEBSITE_INGEST_READER_TIMEOUT_MS = 25_000;
  * original crawl error.
  *
  * The embedded target URL has already passed `assertSafeHostname` upstream, so
- * we are not widening the SSRF surface — the only new outbound host is the
+ * we are not widening the SSRF surface, the only new outbound host is the
  * fixed, public `r.jina.ai`.
  */
 async function fetchViaJinaReader(
@@ -913,12 +913,12 @@ async function defaultGeminiSummarize(
         userText: prompt,
         temperature: 0.2,
         // Gemini 3.x hidden thinking counts against maxOutputTokens. At this
-        // 1500 cap with default (dynamic-high) thinking, gemini-3.5-flash —
+        // 1500 cap with default (dynamic-high) thinking, gemini-3.5-flash,
         // reachable here via GEMINI_ROWBOAT_MODEL, which resolveWebsiteSummary
-        // GeminiModel passes through (only 1.x/3.1-era ids are coerced) —
+        // GeminiModel passes through (only 1.x/3.1-era ids are coerced),
         // spent 1126 tokens thinking and truncated the summary at MAX_TOKENS
         // (probed 2026-07-16). `minimal` hands the whole budget to the
-        // summary (probe: STOP, 0 thought tokens, fuller output, fastest) —
+        // summary (probe: STOP, 0 thought tokens, fuller output, fastest),
         // a structured summarization needs no chain-of-thought. Same guard
         // pattern as knowledge-tools (#658); 2.5-era models reject the field.
         maxOutputTokens: 1500,
@@ -938,7 +938,7 @@ async function defaultGeminiSummarize(
       return text;
     } catch (err) {
       // Empty replies (e.g. thinking-only output) are still billed by
-      // Google — meter them before the error is remapped upstream.
+      // Google, meter them before the error is remapped upstream.
       if (err instanceof GeminiEmptyError && meterBusinessId) {
         await meterGeminiSpendForBusiness({
           businessId: meterBusinessId,
@@ -1008,7 +1008,7 @@ export async function ingestWebsite(
   } catch (err) {
     // `assertSafeHostname` only throws `Error("private_address" | "dns_failure")`.
     // The `: ""` fallback is kept so TS doesn't have to trust that invariant,
-    // but it's defensively unreachable — hence the ignore marker.
+    // but it's defensively unreachable, hence the ignore marker.
     /* c8 ignore next */
     const message = err instanceof Error ? err.message : "";
     const code: WebsiteIngestError = message === "dns_failure" ? "dns_failure" : "private_address";
@@ -1018,7 +1018,7 @@ export async function ingestWebsite(
   // Owner-consented contexts (onboarding) skip robots entirely; see
   // the JSDoc on `WebsiteIngestOptions.ignoreRobots`. We log an
   // explicit audit marker so the bypass is greppable in production
-  // logs — robots.txt expresses a third-party-crawler preference, not
+  // logs, robots.txt expresses a third-party-crawler preference, not
   // a first-party-agent prohibition, but the bypass is still worth
   // recording so we have an audit trail per-URL.
   let disallows: string[] = [];
@@ -1045,7 +1045,7 @@ export async function ingestWebsite(
   // `detail` when EVERY page fails. Without this, owners whose site is
   // fronted by Cloudflare bot mitigation (which returns a 403 challenge to
   // any non-browser client) saw the generic "We couldn't reach any pages"
-  // copy and had no idea their CDN was actively blocking us — they
+  // copy and had no idea their CDN was actively blocking us, they
   // concluded the platform was broken when in fact the site itself needed
   // a config tweak.
   let homepageErrorDetail: string | null = null;
@@ -1095,7 +1095,7 @@ export async function ingestWebsite(
       fetchedCount += 1;
       onProgress?.({ type: "page_fetched", url: next, bytes, index: fetchedCount });
       const text = extractReadableText(body);
-      // Extract links even when `text` is empty — JS-heavy pages often
+      // Extract links even when `text` is empty, JS-heavy pages often
       // render their copy through linked subpages, and keying off text
       // presence would silently drop those sites with `fetch_failed`.
       // Best-effort: a malformed `response.url` (finalUrl) must not throw
@@ -1116,7 +1116,7 @@ export async function ingestWebsite(
       logger.warn("website-ingest: fetch failed", { url: next, error: errorMessage });
       onProgress?.({ type: "page_failed", url: next });
       // Only capture the homepage failure as the user-visible `detail`. A
-      // failed sub-page is uninteresting noise — the homepage outcome is
+      // failed sub-page is uninteresting noise, the homepage outcome is
       // what determines whether the crawl as a whole had any chance of
       // success, and surfacing a sub-page error would be actively
       // misleading.
@@ -1186,7 +1186,7 @@ export async function ingestWebsite(
     // The direct crawl recovered nothing usable. Either every fetch failed
     // (almost always Cloudflare or a similar WAF returning a 403
     // JS-challenge to our non-browser fetch), or the pages "succeeded" but
-    // carried no readable text — the JS-rendered-SPA case, where the server
+    // carried no readable text, the JS-rendered-SPA case, where the server
     // returns an HTML shell (<div id="root">) whose only text is the
     // <title>. Header/UA/TLS spoofing can't clear a challenge and a raw
     // fetch can't run React, but the Jina Reader proxy runs a real browser
@@ -1203,7 +1203,7 @@ export async function ingestWebsite(
       if (cleaned.length > 0 && looksLikeWafChallenge(cleaned)) {
         // Jina answered 200 but the body is the WAF's challenge page, not the
         // site. Summarizing it would persist garbage AND hide the real
-        // failure — keep the honest homepage error (403 + paste-source hint)
+        // failure, keep the honest homepage error (403 + paste-source hint)
         // instead.
         logger.warn("website-ingest: reader fallback returned a WAF challenge page; rejecting", {
           url: normalized
@@ -1212,11 +1212,11 @@ export async function ingestWebsite(
         bytesDownloaded += bytes;
         fetchedCount += 1;
         onProgress?.({ type: "page_fetched", url: normalized, bytes, index: fetchedCount });
-        // Jina already returns extracted markdown — do NOT re-run
+        // Jina already returns extracted markdown, do NOT re-run
         // extractReadableText (it's an HTML stripper and would mangle
         // markdown links / headings). Feed it straight to the summarizer.
         // Any low-signal shell pages the direct crawl produced (e.g. a
-        // 41-char SPA <title>) are dropped — the rendered markdown
+        // 41-char SPA <title>) are dropped, the rendered markdown
         // supersedes them.
         pages.length = 0;
         pages.push({ url: normalized, text: cleaned });
@@ -1247,7 +1247,7 @@ export async function ingestWebsite(
   // would "succeed" with a garbage summary whenever the reader fallback is
   // unavailable (disabled, down, or itself blocked). When the homepage
   // itself failed with an actionable error (CDN/WAF 403 etc.), that detail
-  // is the real story — a few low-signal shells recovered from sitemap
+  // is the real story, a few low-signal shells recovered from sitemap
   // subpages must not mask it behind a generic empty_content.
   const finalRichestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
   if (finalRichestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
@@ -1351,8 +1351,8 @@ export const WEBSITE_INGEST_MAX_PASTED_HTML_CHARS = 2_000_000;
  *
  * This is the manual escape hatch for WAF-blocked sites: when Cloudflare
  * (or similar) serves a JS challenge to every non-browser client, no
- * server-side fetch — direct, header-spoofed, or proxied through a
- * browser-pool reader — can see the real page. The owner's browser already
+ * server-side fetch, direct, header-spoofed, or proxied through a
+ * browser-pool reader, can see the real page. The owner's browser already
  * can, so we ask them to right-click → View Page Source and paste it. The
  * HTML runs through the exact same extraction + summarization pipeline as
  * a crawled page, so the resulting website.md is indistinguishable from a

@@ -129,7 +129,7 @@ describe("loadContactTimeline", () => {
   it("merges inbound (incl. flow-suppressed), outbound (all sources), and call summaries", async () => {
     const { db, calls } = makeDb([
       PLAIN_CONTACT,
-      // sms_inbound_jobs — newest-first, exactly like PostgREST returns.
+      // sms_inbound_jobs, newest-first, exactly like PostgREST returns.
       {
         data: [
           inboundJob("July 23, 2026", "2026-07-14T17:10:22Z"),

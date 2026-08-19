@@ -1,5 +1,5 @@
 /**
- * system-logs.ts — tail/filter the unified `system_logs` table from the CLI.
+ * system-logs.ts, tail/filter the unified `system_logs` table from the CLI.
  *
  * The same data the admin business page's "System Logs" card shows: every
  * component serving a client's AI (ai-flow-worker, chat-worker, sms/voice
@@ -129,7 +129,7 @@ const COLOR: Record<string, string> = {
 };
 const RESET = "\x1b[0m";
 
-/** Local wall-clock "YYYY-MM-DD HH:MM:SS" — server timestamps read wrong in UTC. */
+/** Local wall-clock "YYYY-MM-DD HH:MM:SS", server timestamps read wrong in UTC. */
 function localStamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -156,7 +156,7 @@ function printRow(r: LogRow): void {
   );
 }
 
-/** Current max id in system_logs — the follow cursor when the initial query is empty. */
+/** Current max id in system_logs, the follow cursor when the initial query is empty. */
 async function newestId(): Promise<number> {
   const { data, error } = await sb
     .from("system_logs")

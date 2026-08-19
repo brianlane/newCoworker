@@ -1,12 +1,12 @@
 /**
- * Per-business margin engine — the tier-economics canvas methodology
+ * Per-business margin engine, the tier-economics canvas methodology
  * (PRDs/tier-economics-jul-2026.md) as live code.
  *
  * Revenue is the renewal-aware day-current rate the MRR card uses
  * ({@link dayCurrentSubscriptionRateCents}) plus recurring pack add-ons,
  * priced exactly as computeDayCurrentMrr prices them so the two never
  * disagree, or the active enterprise deal's real monthly price. Costs itemize hosting, DID rental, Telnyx
- * usage, Gemini (metered spend actuals — `owner_chat_model_spend` is the
+ * usage, Gemini (metered spend actuals, `owner_chat_model_spend` is the
  * single pool for ALL per-tenant Gemini usage, including Gemini Live audio
  * settled at call teardown, so there is deliberately NO separate
  * rate-estimated voice line: adding one would double-count), and Stripe
@@ -15,7 +15,7 @@
  *
  * Pure computation: callers assemble {@link BusinessMarginInput} (see
  * src/lib/admin/margin-data.ts for the production loader). Nothing bills
- * from these numbers — operator-facing health metrics only.
+ * from these numbers, operator-facing health metrics only.
  */
 
 import { getCommitmentMonths } from "@/lib/plans/tier";
@@ -147,7 +147,7 @@ export function computeBusinessMargin(
   now: Date = new Date()
 ): BusinessMarginEconomics {
   // ---- Revenue: enterprise deal price wins; else the day-current
-  // subscription rate (active + Stripe-backed only — same gate as MRR). ----
+  // subscription rate (active + Stripe-backed only, same gate as MRR). ----
   let revenueCents = 0;
   let revenueSource: RevenueSource = "none";
   let stripeCommitmentMonths = 1;

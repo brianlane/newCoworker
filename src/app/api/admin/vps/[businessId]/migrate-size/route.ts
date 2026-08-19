@@ -2,7 +2,7 @@
  * POST /api/admin/vps/:businessId/migrate-size
  *
  * Admin-only elective hardware migration (escalate/de-escalate a tenant
- * between kvm1/kvm2/kvm4/kvm8 with no entitlement change) — the panel
+ * between kvm1/kvm2/kvm4/kvm8 with no entitlement change), the panel
  * replacement for debug/migrate-vps-size.ts.
  *
  * The migration buys hardware and runs minutes of unattended work

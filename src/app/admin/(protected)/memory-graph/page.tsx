@@ -1,11 +1,11 @@
 /**
- * /admin/memory-graph — the knowledge-graph rollout console.
+ * /admin/memory-graph, the knowledge-graph rollout console.
  *
  * Two levels:
  *   Fleet: the default-mode toggle (what every 'inherit' tenant runs) and
  *     one row per tenant with its effective mode + window stats, linking
  *     into the per-tenant comparison.
- *   Per-tenant (?business=<id>): the at-a-glance graph-vs-memory verdict —
+ *   Per-tenant (?business=<id>): the at-a-glance graph-vs-memory verdict,
  *     a headline split over four buckets, stat tiles, and an event table
  *     whose rows expand to the full side-by-side (graph context vs ranked
  *     memory context vs the answer actually given).
@@ -78,7 +78,7 @@ function sinceIso(window: WindowKey): string {
 /**
  * YYYY-MM-DD (UTC) for the spend roll-up. gemini_spend_daily is UTC-DAY
  * grained, so cost covers whole calendar days from the day containing the
- * window start — a superset of the rolling event window. The UI labels
+ * window start, a superset of the rolling event window. The UI labels
  * cost as "UTC days" so the two never read as the same cutoff.
  */
 function sinceDay(window: WindowKey): string {
@@ -226,7 +226,7 @@ export default async function MemoryGraphAdminPage({
   const FLEET_STATS_LIMIT = 5000;
   const EVENTS_LIMIT = 500;
 
-  // Spend degrades to an EXPLICIT unavailable state — a failed ledger read
+  // Spend degrades to an EXPLICIT unavailable state, a failed ledger read
   // must never render as "$0.00 spent" during a rollout decision.
   const [businesses, defaultSettingRaw, statsRows, spendResult] = await Promise.all([
     listBusinesses(),
@@ -252,7 +252,7 @@ export default async function MemoryGraphAdminPage({
   const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
 
   // Effective mode per tenant, resolved against the SAME freshly-read
-  // default the toggle shows — never the resolver's ~60s cache, so one page
+  // default the toggle shows, never the resolver's ~60s cache, so one page
   // render can't mix values (Bugbot #860).
   const modeRows = await Promise.all(
     businesses.map(async (b) => {
@@ -378,7 +378,7 @@ export default async function MemoryGraphAdminPage({
                   </td>
                   <td className="py-2 pr-4">
                     {/* No roll-up rows with a HEALTHY read = genuinely zero
-                        spend — rendered as $0.00 to match the comparison
+                        spend, rendered as $0.00 to match the comparison
                         tiles; "unavailable" is reserved for failed reads. */}
                     {!spendAvailable
                       ? "unavailable"

@@ -13,7 +13,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 // The route dispatches a real verification email on the happy path. Without
-// this mock the suite calls the live Resend SDK — and when the test process
+// this mock the suite calls the live Resend SDK, and when the test process
 // inherits a real RESEND_API_KEY (e.g. a shell that sourced .env), it sends
 // actual emails to the Stripe-fixture address paid@example.com.
 vi.mock("@/lib/email/client", () => ({
@@ -224,14 +224,14 @@ describe("api/onboard/set-password route", () => {
     );
     // Pin the create-only contract: this route NEVER calls
     // updateUserById. Any future change that re-introduces an update
-    // path on an existing account is a security regression — see the
+    // path on an existing account is a security regression, see the
     // route's docstring.
     expect(admin.updateUserById).not.toHaveBeenCalled();
     // findAuthUserIdByEmail is only consulted on the duplicate-email
     // failure path, never on the happy path.
     expect(vi.mocked(findAuthUserIdByEmail)).not.toHaveBeenCalled();
     // The post-mint verification email goes to the Stripe session's
-    // verified email — through the (mocked) email client, never the
+    // verified email, through the (mocked) email client, never the
     // live Resend SDK.
     expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalledWith(

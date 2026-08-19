@@ -4,7 +4,7 @@
  *
  * NOTE (Jul 2026): the numbered "accept with a timeframe" (claimTimeframeOption)
  * and "retro/late claim" (lateClaimOption) options this script used to APPEND
- * were superseded by the universal "1" claim digit — "1" / "1, <ETA>" now
+ * were superseded by the universal "1" claim digit, "1" / "1, <ETA>" now
  * claims live AND late on every offer, so those patches were removed here and
  * scripts/oneshot/simplify-claim-options.ts strips the options from already-
  * patched flows. What remains:
@@ -72,7 +72,7 @@ const DEFAULT_EMAIL_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 /**
  * The lead-match terms for the HomeLight email fallback: first name + price.
  * price_digits (e.g. "429"), NOT "$429K", because the portal email writes the
- * price in full ("$429,000") — the bare leading digits are the token in BOTH.
+ * price in full ("$429,000"), the bare leading digits are the token in BOTH.
  */
 const EMAIL_MATCH_TEMPLATES = ["{{vars.lead_first_name}}", "{{vars.price_digits}}"];
 

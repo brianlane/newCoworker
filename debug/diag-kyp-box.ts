@@ -1,5 +1,5 @@
 /**
- * diag-kyp-box.ts — one-shot: diagnose KYP Ads' VPS after the tunnel started
+ * diag-kyp-box.ts, one-shot: diagnose KYP Ads' VPS after the tunnel started
  * returning 530s (Jul 15 2026: owner SMS "can i chat here" dead-lettered with
  * rowboat_http_530). Checks cloudflared + docker services.
  *

@@ -22,7 +22,7 @@
  *      datetimes with PHP strtotime() in the business/calendar timezone
  *      unless told otherwise, and its availability responses carry compact
  *      offsets (`-0800`, no colon). `acuityDateTime` and `normalizeAcuityTime`
- *      are the only sanctioned way across that boundary — see their docs.
+ *      are the only sanctioned way across that boundary, see their docs.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { logger } from "@/lib/logger";
@@ -33,7 +33,7 @@ import type { AcuityConnectionRow } from "@/lib/db/acuity-connections";
 /** The versioned API path. The stored base URL is a bare origin. */
 export const ACUITY_API_PATH = "/api/v1";
 
-/** Outbound budget per API call — fail fast on a stuck upstream. */
+/** Outbound budget per API call, fail fast on a stuck upstream. */
 export const ACUITY_REQUEST_TIMEOUT_MS = 15_000;
 
 /**

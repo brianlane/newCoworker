@@ -11,7 +11,7 @@
  *    flows.
  *
  * 2. Pass-reason hint: every offer that advertises "2 to pass" gets one short
- *    line advertising the optional annotated form —
+ *    line advertising the optional annotated form,
  *    `Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").`
  *    The engine (telnyx-sms-inbound `tryAgentPassWithReason` + ai-flow-worker)
  *    records the reason and appends it to the owner-fallback notice.
@@ -59,7 +59,7 @@ const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
 /** The legacy HomeLight confirm phrasing (no pass option advertised). */
 const HOMELIGHT_CONFIRM_PHRASE = "Reply 1 to confirm you're taking it by";
-/** Its replacement — same claim/pass digits as every other flow. */
+/** Its replacement, same claim/pass digits as every other flow. */
 const CLAIM_OR_PASS_PHRASE = "Reply 1 to claim or 2 to pass by";
 
 /**
@@ -97,7 +97,7 @@ export function addPassOptionCopy(def: Definition): boolean {
     }
 
     // A legacy claimTimeframeOption of 2 stamps routing.tf_digit="2" on new
-    // offers, making the engine read a bare "2" (and "2, <text>") as a CLAIM —
+    // offers, making the engine read a bare "2" (and "2, <text>") as a CLAIM,
     // directly contradicting the pass copy above. Clear it whenever the offer
     // advertises "2 to pass". (simplify-claim-options.ts already stripped these
     // fields from live flows; this keeps the two scripts safe in any order.)

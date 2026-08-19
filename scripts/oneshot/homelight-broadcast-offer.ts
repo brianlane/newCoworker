@@ -5,7 +5,7 @@
  *
  * Three idempotent edits:
  *   1. Roster: ensure "Amy Laidlaw" is an ACTIVE ai_flow_team_members row
- *      (broadcast recipients must be roster members — the claim machinery
+ *      (broadcast recipients must be roster members, the claim machinery
  *      matches teammates by roster phone).
  *   2. The flow's route_to_team step: drop the single-agent pin
  *      (agentName "Dave Lane") for `agentNames: ["Dave Lane", "Amy Laidlaw"]`,
@@ -16,7 +16,7 @@
  *      contact card.
  *
  * The $1M+ keep-for-owner rule (ownerDirectWhen/starred alert/nudges) is
- * untouched — it still short-circuits before any offer.
+ * untouched, it still short-circuits before any offer.
  *
  * Requires the broadcast route_to_team engine support (same PR) deployed on
  * the ai-flow-worker + telnyx-sms-inbound BEFORE running with --apply: the
@@ -63,7 +63,7 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const DEFAULT_OWNER_NAME = "Amy Laidlaw";
-// Amy's cell — the same number business_telnyx_settings.forward_to_e164
+// Amy's cell, the same number business_telnyx_settings.forward_to_e164
 // points at, so her broadcast offers land on the phone she already answers.
 const DEFAULT_OWNER_PHONE = "+16026951142";
 const DEFAULT_AGENT_NAME = "Dave Lane";

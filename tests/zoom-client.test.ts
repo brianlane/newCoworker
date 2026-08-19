@@ -248,7 +248,7 @@ describe("getZoomAccessToken", () => {
     refreshZoomTokens.mockRejectedValueOnce(
       new ZoomOAuthError("invalid_grant", "Zoom token endpoint failed (401)")
     );
-    // Re-read shows the SAME row (no concurrent rotation happened) — the
+    // Re-read shows the SAME row (no concurrent rotation happened), the
     // grant really is dead.
     getZoomConnection.mockResolvedValueOnce(stale);
     setZoomConnectionActive.mockResolvedValueOnce(undefined);

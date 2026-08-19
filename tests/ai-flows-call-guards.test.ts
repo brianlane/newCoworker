@@ -189,7 +189,7 @@ describe("callDialGuard: per-lead dial cap", () => {
   });
 
   // A head+count query returns no rows, so a null count means "none", not
-  // "unknown" — and must not read as an error.
+  // "unknown", and must not read as an error.
   it("reads a null count as zero", async () => {
     const { client } = fakeClient({ count: null });
     await expect(

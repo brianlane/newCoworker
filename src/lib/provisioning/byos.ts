@@ -1,5 +1,5 @@
 /**
- * BYOS (bring-your-own-server) enrollment — enterprise-only, SSH handover.
+ * BYOS (bring-your-own-server) enrollment, enterprise-only, SSH handover.
  *
  * The customer supplies a fresh Ubuntu 24.04 box; the platform never
  * purchases anything. Enrollment is a two-step admin flow:
@@ -15,7 +15,7 @@
  *
  *   2. PROVISION: the admin route probes SSH auth ({@link probeByosSsh})
  *      for fast feedback, then runs the standard provisioning orchestrator
- *      with {@link makeByosProvisioner} injected — the provisioner verifies
+ *      with {@link makeByosProvisioner} injected, the provisioner verifies
  *      SSH reachability and returns the same result shape as a Hostinger
  *      purchase, so bootstrap/tunnel/DID/deploy run unchanged.
  *
@@ -63,7 +63,7 @@ export class ByosEnrollmentError extends Error {
 /**
  * Operator-entered box address: a dotted-quad IPv4 or an RFC-1123 hostname.
  * Validated defensively because the value ends up in SSH connect config and
- * on the admin page — a URL, a `user@host` pair, or shell metachars are
+ * on the admin page, a URL, a `user@host` pair, or shell metachars are
  * always operator mistakes worth rejecting loudly.
  */
 export function isValidByosHost(host: string): boolean {
@@ -83,7 +83,7 @@ export type PrepareByosEnrollmentResult = {
   host: string;
   region: VpsRegion;
   /**
-   * True when an existing active key was reused (idempotent re-prepare) —
+   * True when an existing active key was reused (idempotent re-prepare),
    * the customer's already-installed key keeps working; only the host was
    * refreshed.
    */
@@ -237,7 +237,7 @@ export async function probeByosSsh(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Preflight gate (PII hard requirements — see vps/scripts/byos-preflight.sh)
+// Preflight gate (PII hard requirements, see vps/scripts/byos-preflight.sh)
 // ─────────────────────────────────────────────────────────────────────────
 
 export type ByosPreflightStatus = "PASS" | "FAIL" | "WARN";
@@ -249,13 +249,13 @@ export type ByosPreflightCheck = {
 };
 
 export type ByosPreflightReport = {
-  /** True when no check FAILed (WARNs allowed — enforced separately). */
+  /** True when no check FAILed (WARNs allowed, enforced separately). */
   ok: boolean;
   checks: ByosPreflightCheck[];
   /**
    * Disk-encryption posture: 'detected' (dm-crypt/LUKS on the box) or
    * 'attestation_required' (provider-level encryption cannot be verified
-   * remotely — the operator must attest to it explicitly).
+   * remotely, the operator must attest to it explicitly).
    */
   diskEncryption: "detected" | "attestation_required";
 };
@@ -263,7 +263,7 @@ export type ByosPreflightReport = {
 /**
  * Parse the machine-readable `PREFLIGHT <check> <status> <detail>` lines the
  * script emits. Exported for tests; tolerant of interleaved noise lines but
- * NOT of a missing verdict — a script that died mid-run must read as failed.
+ * NOT of a missing verdict, a script that died mid-run must read as failed.
  */
 export function parseByosPreflightOutput(stdout: string): ByosPreflightReport {
   const checks: ByosPreflightCheck[] = [];
@@ -291,7 +291,7 @@ export function parseByosPreflightOutput(stdout: string): ByosPreflightReport {
    throw is a deploy-packaging error surfaced loudly in prod, not a unit-testable
    branch (tests inject loadScript). */
 function loadByosPreflightScript(): string {
-  // Fail closed — unlike soul.md's template fallback, a missing SECURITY
+  // Fail closed, unlike soul.md's template fallback, a missing SECURITY
   // GATE script must abort enrollment, never degrade to "no checks".
   return readFileSync(join(process.cwd(), "vps/scripts/byos-preflight.sh"), "utf-8");
 }
@@ -321,7 +321,7 @@ export async function runByosPreflight(
 
   const row = await requireByosKeyRow(businessId);
   const b64 = Buffer.from(loadScript(), "utf8").toString("base64");
-  // VPS_SIZE is app-resolved (kvm1|kvm2|kvm4|kvm8 union type) — safe to
+  // VPS_SIZE is app-resolved (kvm1|kvm2|kvm4|kvm8 union type), safe to
   // interpolate; the script itself is staged base64 so no quoting hazards.
   const command =
     `printf '%s' '${b64}' | base64 -d > /tmp/newcoworker-byos-preflight.sh` +
@@ -374,7 +374,7 @@ export async function runByosPreflight(
 }
 
 /**
- * VpsProvisioner for BYOS tenants — the no-purchase path injected into the
+ * VpsProvisioner for BYOS tenants, the no-purchase path injected into the
  * standard orchestrator by the enrollment route. Verifies SSH reachability
  * (with the connect-retry loop, since a customer may have just booted the
  * box) and returns the standard result shape so every downstream phase
@@ -401,7 +401,7 @@ export function makeByosProvisioner(deps: ByosSshDeps = {}): VpsProvisioner {
         ),
       deps.sleep ? { sleep: deps.sleep } : undefined
     );
-    // Same success contract as probeByosSsh: exit 0 AND the echoed marker —
+    // Same success contract as probeByosSsh: exit 0 AND the echoed marker,
     // a zero exit with mangled output (broken shell, MOTD-only session)
     // must not pass the orchestrator probe when the admin probe would
     // reject it.

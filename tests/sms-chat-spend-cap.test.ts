@@ -47,7 +47,7 @@ describe("geminiCostMicrosFromTokens", () => {
   });
 
   it("prices the (voice-path, defensively listed) 3.1 models in the flash tier, not the default", () => {
-    // 0.5 in / 3.0 out — same as gemini-3-flash, and cheaper than the 1.5/9.0
+    // 0.5 in / 3.0 out, same as gemini-3-flash, and cheaper than the 1.5/9.0
     // unknown-model default that a missing entry would have hit.
     expect(geminiCostMicrosFromTokens("gemini-3.1-flash", 1000, 100)).toBe(
       Math.ceil(1000 * 0.5 + 100 * 3.0)
@@ -95,7 +95,7 @@ describe("pickSmsTurn", () => {
   });
 
   it("over cap with no local agent (kvm1): REFUSES instead of running Gemini", () => {
-    // Staying on Gemini here would silently defeat the fuse — unbounded
+    // Staying on Gemini here would silently defeat the fuse, unbounded
     // spend on hardware that has nothing to degrade to.
     expect(pickSmsTurn({ overCap: true, geminiAgent: "Coworker", localAgent: "" })).toEqual({
       startAgent: null,

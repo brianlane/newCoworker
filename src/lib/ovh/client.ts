@@ -1,16 +1,16 @@
 /**
  * Typed client for the OVHcloud APIv6.
  *
- * Default endpoint is `ovh-us` (`api.us.ovhcloud.com`) — the platform's
+ * Default endpoint is `ovh-us` (`api.us.ovhcloud.com`), the platform's
  * business entity is US, and the OVHcloud US catalog sells the `-ca`
  * suffixed VPS plan codes whose `vps_datacenter` list includes Beauharnois
  * (BHS), so Canadian-residency boxes are purchased through the US account
  * (verified against the live catalog, Jul 2026). Point `OVH_API_BASE_URL`
  * at another control plane (e.g. `https://ca.api.ovh.com/1.0`) only if the
- * account ever moves entities — the signing scheme is identical everywhere.
+ * account ever moves entities, the signing scheme is identical everywhere.
  *
  * Docs: https://api.us.ovhcloud.com/console/
- * Auth: OVH's application-key scheme — every request carries
+ * Auth: OVH's application-key scheme, every request carries
  *   X-Ovh-Application (app key), X-Ovh-Consumer (consumer key),
  *   X-Ovh-Timestamp, and X-Ovh-Signature where the signature is
  *   "$1$" + SHA1(AS + "+" + CK + "+" + METHOD + "+" + URL + "+" + BODY + "+" + TS)
@@ -23,7 +23,7 @@
  * VPS purchase, status/IP polling, rebuild-with-SSH-key, termination).
  * Orchestration lives in sibling modules.
  *
- * Scope note: only what the OVH provisioner consumes is implemented —
+ * Scope note: only what the OVH provisioner consumes is implemented,
  * see the plan (Enterprise BYOS + Canada residency, PR 4/5).
  */
 
@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 
 type FetchLike = typeof fetch;
 
-/** OVHcloud US control plane — sells BHS boxes via the `-ca` plan codes. */
+/** OVHcloud US control plane, sells BHS boxes via the `-ca` plan codes. */
 export const DEFAULT_OVH_BASE_URL = "https://api.us.ovhcloud.com/1.0";
 
 export type OvhClientOptions = {
@@ -149,7 +149,7 @@ export class OvhClient {
   /**
    * Public VPS catalog for a subsidiary: plan codes, prices, and per-plan
    * configuration value lists (vps_datacenter, vps_os). Unauthenticated
-   * endpoint, but we sign anyway — harmless, and keeps the plumbing single-
+   * endpoint, but we sign anyway, harmless, and keeps the plumbing single-
    * path. Used by the plan-code mapping audit (debug/ovh-catalog.ts).
    */
   async getPublicVpsCatalog(ovhSubsidiary = "US"): Promise<unknown> {
@@ -293,7 +293,7 @@ export class OvhClient {
 
   /**
    * Flip the service to delete-at-expiration (the automated "stop paying"
-   * lever — OVH's analog of Hostinger's disable-auto-renew).
+   * lever, OVH's analog of Hostinger's disable-auto-renew).
    */
   async setDeleteAtExpiration(serviceName: string, deleteAtExpiration: boolean): Promise<void> {
     const infos = await this.getServiceInfos(serviceName);
@@ -340,7 +340,7 @@ export class OvhClient {
     const localSec = Math.floor(this.now() / 1000);
     if (this.timeDeltaSec === null) {
       const url = `${this.baseUrl}/auth/time`;
-      // Same per-request timeout as signed calls — a hung clock endpoint
+      // Same per-request timeout as signed calls, a hung clock endpoint
       // must not hang every client call forever.
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), this.timeoutMs);

@@ -359,7 +359,7 @@ describe("runWebchatGeminiTurn", () => {
     const always = toolStep("webchat_business_knowledge_lookup", { question: "q" });
     const deps = makeDeps({ chatStep: vi.fn(async () => always) });
     await expect(runWebchatGeminiTurn(ARGS, deps)).rejects.toThrow("webchat_engine_no_reply");
-    // 5 steps billed 50/10 each — metering still ran in the failure path.
+    // 5 steps billed 50/10 each, metering still ran in the failure path.
     expect(vi.mocked(deps.meter).mock.calls[0][0].usage).toEqual({
       promptTokens: 250,
       outputTokens: 50

@@ -6,7 +6,7 @@ import type { RefObject } from "react";
  * Markdown formatting toolbar for the blog editor (bizblasts-style):
  * every button wraps the current selection or inserts a snippet at the
  * cursor, then restores focus/selection so typing continues naturally.
- * The stored format stays markdown — the toolbar is convenience, not a
+ * The stored format stays markdown, the toolbar is convenience, not a
  * separate rich-text pipeline.
  */
 

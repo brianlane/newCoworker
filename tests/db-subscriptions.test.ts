@@ -51,7 +51,7 @@ describe("db/subscriptions", () => {
 
   describe("cancelSubscriptionIfStripeless", () => {
     function casDb(result: { data: unknown; error: unknown }) {
-      // Chain: .update().eq().is().neq().select() — select resolves.
+      // Chain: .update().eq().is().neq().select(), select resolves.
       return {
         ...mockDb(),
         is: vi.fn().mockReturnThis(),
@@ -105,7 +105,7 @@ describe("db/subscriptions", () => {
 
   describe("listBusinessIdsWithStripeLinkedSubscription", () => {
     function stripeLinkedDb(result: { data: unknown; error: unknown }) {
-      // Chain: .select().in().not().neq() — the final neq resolves.
+      // Chain: .select().in().not().neq(), the final neq resolves.
       return {
         ...mockDb(),
         in: vi.fn().mockReturnThis(),

@@ -1,5 +1,5 @@
 /**
- * Business Documents — signature requests for one document.
+ * Business Documents, signature requests for one document.
  *
  *   GET   /api/dashboard/documents/:documentId/signature-requests?businessId=…  → list
  *   POST  …/signature-requests                                                  → create + deliver
@@ -10,7 +10,7 @@
  * Creation goes through the same core the dashboard coworker tool uses
  * (requestDocumentSignatureTool), so delivery, opt-out checks, and the
  * void-on-failed-send guarantee are identical on both paths. Signed
- * requests are immutable evidence — void only works before signing.
+ * requests are immutable evidence, void only works before signing.
  */
 
 import { z } from "zod";

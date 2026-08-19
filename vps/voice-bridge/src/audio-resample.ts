@@ -7,14 +7,14 @@
  * stream one chunk at a time (e.g. Gemini Live emits many small 24 kHz PCM
  * chunks per second of speech) each chunk boundary gets BOTH a phase reset and
  * a dropped fractional sample. The result is a tiny step discontinuity at every
- * boundary — audible as a periodic click/"typing" sound under the voice.
+ * boundary, audible as a periodic click/"typing" sound under the voice.
  *
  * This class fixes that by carrying two pieces of state across `process` calls:
  *
- *   - `pos`  — the fractional read position, expressed in the NEXT chunk's
+ *   - `pos`, the fractional read position, expressed in the NEXT chunk's
  *              index space (can be slightly negative, meaning "between the last
  *              sample of the previous chunk and the first of this one").
- *   - `prev` — the final input sample of the previous chunk, used as the left
+ *   - `prev`, the final input sample of the previous chunk, used as the left
  *              interpolation neighbour when `pos` lands before this chunk's
  *              sample 0.
  *

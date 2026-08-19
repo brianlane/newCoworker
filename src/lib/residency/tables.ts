@@ -20,7 +20,7 @@
  * - Engine/job tables (`ai_flow_runs`, `sms_inbound_jobs`,
  *   `dashboard_chat_jobs`, `telnyx_webhook_events`) STAY CENTRAL: they are
  *   written by external webhooks and drained by Supabase Edge workers.
- *   Moving them means moving the engine — out of scope. Their
+ *   Moving them means moving the engine, out of scope. Their
  *   customer-visible OUTPUT lands in the moved content tables.
  *
  * - Billing/metering/provisioning tables STAY CENTRAL by definition
@@ -28,7 +28,7 @@
  *
  * - `customer_profiles` STAYS CENTRAL despite the name: it is the
  *   PLATFORM's abuse/billing identity of the paying business owner
- *   (lifetime refund-once, subscription caps, Stripe ids) — cross-tenant
+ *   (lifetime refund-once, subscription caps, Stripe ids), cross-tenant
  *   control plane, not the tenant's customer data. The tenant's customer
  *   memory lives in `contacts`.
  *

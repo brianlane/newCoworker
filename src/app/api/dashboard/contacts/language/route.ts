@@ -16,7 +16,7 @@ export async function POST(request: Request) {
 
     const body = schema.parse(await request.json());
     // Same permission as contact name/notes overrides on the SMS thread and
-    // contact profile views (operate_messages) — staff who can label a
+    // contact profile views (operate_messages), staff who can label a
     // contact can set its language.
     const businessId = await resolveActiveBusinessIdForAction(user, "operate_messages");
     if (!businessId) return errorResponse("NOT_FOUND", "No business found");

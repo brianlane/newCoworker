@@ -1,5 +1,5 @@
 /**
- * Dashboard-chat INLINE turn engine — platform Gemini with creation tools.
+ * Dashboard-chat INLINE turn engine, platform Gemini with creation tools.
  *
  * Runs one owner-chat turn directly on central Gemini (function calling via
  * geminiChatStep) instead of enqueueing to the VPS chat-worker. This is the
@@ -9,12 +9,12 @@
  *   - read ATTACHMENTS (PDF via native inlineData, text formats inline),
  *   - CREATE things: `create_aiflow` runs the shared compile pipeline
  *     (validated, never trusted blindly) and `create_agent` drafts a
- *     reusable agent — both are returned as DRAFTS the UI hands off to the
+ *     reusable agent, both are returned as DRAFTS the UI hands off to the
  *     builder/editor for review; nothing is persisted here.
  *
  * It also exposes `business_knowledge_lookup` (the same core the Rowboat
  * dashboard agent calls through /api/rowboat/tool-call, staff audience) so
- * the PRIMARY path keeps knowledge-base grounding — without it, owner
+ * the PRIMARY path keeps knowledge-base grounding, without it, owner
  * questions like "what's our renewal process?" would only be answerable on
  * the worker FALLBACK path. Declared only when the owner's Settings →
  * Coworker tools toggle allows it (same gate the Rowboat route checks).
@@ -68,7 +68,7 @@ export const CHAT_ATTACHMENT_TEXT_MIME_TYPES = [
   "text/plain",
   "text/markdown",
   "text/csv",
-  // Meeting transcripts (Zoom/Meet/Teams) — converted from cue soup to
+  // Meeting transcripts (Zoom/Meet/Teams), converted from cue soup to
   // "Speaker: sentence" lines below, NEVER sent as a PDF inline part.
   VTT_MIME_TYPE
 ] as const;
@@ -185,7 +185,7 @@ const DEFAULT_INLINE_MODEL = "gemini-3.7-flash";
 /**
  * Same 404 safety net as knowledge-tools/handlers.ts: a configured (or
  * newly defaulted) model id that Google has retired/renamed must degrade to
- * a known-live id instead of killing the whole inline path — a dead inline
+ * a known-live id instead of killing the whole inline path, a dead inline
  * path silently demotes text turns to the worker and hard-fails attachment
  * turns (exactly what shipped when the default was `gemini-3.1-flash`, an
  * id that does not exist on the Gemini API). The fallback deliberately sits
@@ -245,7 +245,7 @@ export type InlineTurnDeps = {
  * Action tools whose execution commits an IRREVERSIBLE side effect (a text
  * leaves, a calendar mutates, a link is minted). find_slots is a pure read.
  * Once one of these has RUN, a later model-step failure must never bounce
- * the turn to the worker fallback — the worker would re-answer the same
+ * the turn to the worker fallback, the worker would re-answer the same
  * owner message and could re-send/re-book (Bugbot High on PR #668).
  */
 const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
@@ -254,7 +254,7 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
   "calendar_cancel_appointment",
-  // A run_aiflow enqueue is committed the moment it lands in the queue —
+  // A run_aiflow enqueue is committed the moment it lands in the queue,
   // a fallback rerun would enqueue the same automation twice.
   "run_aiflow",
   // An edit_aiflow update is persisted to the live flow the moment the core
@@ -269,13 +269,13 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // nothing had happened when it already had.
   "undo_aiflow_edit",
   // A generated image is stored, metered against the AI budget, and burns
-  // one of the 3 per-conversation slots the moment the core returns ok —
+  // one of the 3 per-conversation slots the moment the core returns ok,
   // a worker-fallback rerun would bill and consume a slot all over again.
   "generate_image",
   // Notification toggles persist the moment the core returns ok. The worker
   // fallback deliberately does NOT declare this tool (no caller role on that
   // path), so a post-write model failure falling back would produce a reply
-  // claiming the change is impossible — contradicting a write that already
+  // claiming the change is impossible, contradicting a write that already
   // happened (Bugbot Medium on PR #805).
   "update_notification_preferences",
   // The spam flag's opt-out write is IRREVERSIBLE the moment the core
@@ -344,7 +344,7 @@ type FlowChangeBudget = { spent: number };
 /**
  * The owner-facing fact line for one confirmed side effect, used when the
  * wrap-up model step fails or goes silent. Without it the degraded reply
- * would swallow load-bearing values — most critically a Calendly
+ * would swallow load-bearing values, most critically a Calendly
  * reschedule/booking LINK the owner still has to send onward.
  */
 function sideEffectNote(name: ActionToolName, result: unknown): string {
@@ -418,7 +418,7 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   }
   if (name === "flag_contact_spam") {
     // The core's note carries the full honest outcome (blocked numbers,
-    // stopped runs, tag state) — keep it, minus the model instruction.
+    // stopped runs, tag state), keep it, minus the model instruction.
     const phone = (r as { phoneE164?: unknown }).phoneE164;
     const target = typeof phone === "string" ? phone : "the number";
     const note = (r as { note?: unknown }).note;
@@ -466,7 +466,7 @@ async function executeToolCall(
   flowChanges: FlowChangeBudget
 ): Promise<unknown> {
   // Action tools (send_sms + calendar lifecycle): only dispatch names that
-  // were actually DECLARED this turn — a Settings-disabled tool the model
+  // were actually DECLARED this turn, a Settings-disabled tool the model
   // hallucinates a call to must fail closed, not execute anyway.
   if (isActionToolName(call.name)) {
     if (!declaredActionTools.has(call.name)) {
@@ -505,7 +505,7 @@ async function executeToolCall(
       return { ok: false, message: "question is required" };
     }
     try {
-      // Owner dashboard reads as staff — sees internal docs, same audience
+      // Owner dashboard reads as staff, sees internal docs, same audience
       // the Rowboat tool-call route resolves for dashboard_* tool names.
       const result = await lookupKnowledge(businessId, question.slice(0, 2000), {
         audience: "staff"
@@ -581,7 +581,7 @@ async function executeToolCall(
   }
   // Extra (bridged) tools, LAST so the built-in names above can never be
   // shadowed by a caller-supplied declaration. Only names the caller
-  // actually declared this turn dispatch — a hallucinated call to a
+  // actually declared this turn dispatch, a hallucinated call to a
   // gate-filtered bridge tool falls through to the unknown-tool refusal.
   if (extraTools && declaredExtraNames.has(call.name)) {
     let result: unknown;
@@ -643,14 +643,14 @@ export async function runInlineChatTurn(
     knowledgeToolEnabled?: boolean;
     /**
      * Settings → Coworker tools gates for the ACTION tools (send_sms +
-     * calendar lifecycle) — worker-path parity: the Rowboat OwnerCoworker
+     * calendar lifecycle), worker-path parity: the Rowboat OwnerCoworker
      * has had these since launch, so the primary path must too. Omitted
      * (e.g. older callers/tests) ⇒ no action tools declared.
      */
     actionToolGates?: ActionToolGates | null;
     /**
      * Declare the create_aiflow / create_agent draft tools (default true).
-     * Surfaces with no builder UI to hand a draft card to — owner-over-SMS —
+     * Surfaces with no builder UI to hand a draft card to, owner-over-SMS,
      * pass false so compile work can't succeed into a void.
      */
     includeCreationTools?: boolean;
@@ -673,7 +673,7 @@ export async function runInlineChatTurn(
      * Whole-turn wall-clock budget (ms). Callers whose OWN caller enforces a
      * hard timeout (the SMS worker aborts owner turns at 75s) MUST pass a
      * smaller budget so this engine stops starting/continuing work before
-     * that abort — otherwise a slow turn can commit tools AFTER the caller
+     * that abort, otherwise a slow turn can commit tools AFTER the caller
      * already fell back to another path, leaving the owner a reply that
      * contradicts actions that really happened. When the budget runs out:
      * committed side effects / drafts degrade to the honest ok:true line;
@@ -762,7 +762,7 @@ export async function runInlineChatTurn(
 
   const drafts: InlineChatDraft[] = [];
   const texts: string[] = [];
-  // Set the moment a SIDE_EFFECT_TOOLS call CONFIRMS (ok:true) — from then
+  // Set the moment a SIDE_EFFECT_TOOLS call CONFIRMS (ok:true), from then
   // on this turn must never resolve ok:false (the worker fallback would
   // rerun the owner's message and duplicate the send/booking). Notes carry
   // the facts a degraded wrap-up must not lose (links, sent bodies).
@@ -805,7 +805,7 @@ export async function runInlineChatTurn(
         signal: controller.signal
       };
       // Gemini 3 dynamic thinking bills as output and counts against the
-      // 4000-token cap — "low" keeps tool-choice reasoning while protecting
+      // 4000-token cap, "low" keeps tool-choice reasoning while protecting
       // the cap and owner-facing latency (same posture as the messenger
       // engine; the heavyweight reasoning lives in the compile pipeline at
       // thinking HIGH, not in this loop). Computed per model because the
@@ -842,7 +842,7 @@ export async function runInlineChatTurn(
         error: detail
       });
       // A wrap-up step that fails AFTER a tool already produced drafts must
-      // not discard them — the compile spend is real and the draft is the
+      // not discard them, the compile spend is real and the draft is the
       // deliverable. Same for a turn that already COMMITTED a side effect
       // (a text sent, an appointment mutated): failing it would bounce the
       // turn to the worker, which re-answers the same owner message and
@@ -912,7 +912,7 @@ export async function runInlineChatTurn(
     return { ok: false, error: "empty" };
   }
   // A tool-created draft (or committed side effect) with a silent final
-  // step still deserves an honest line — and must not fail the turn, which
+  // step still deserves an honest line, and must not fail the turn, which
   // would re-run it on the worker. BOTH facts are reported when both
   // happened: the draft hand-off AND the side-effect notes (links, sent
   // bodies) the lost wrap-up would have relayed.

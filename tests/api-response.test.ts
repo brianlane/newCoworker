@@ -123,7 +123,7 @@ describe("api-response", () => {
     // `{ level, message, timestamp }`, so any context key named `message`
     // (or `level`/`timestamp`) silently overwrites the stable
     // "Unhandled route error" marker that monitoring/alerts pin on. The
-    // fix prefixes the diagnostic fields with `error*` — this test makes
+    // fix prefixes the diagnostic fields with `error*`, this test makes
     // a future "let's just call it `message`" change loud rather than
     // silently breaking observability.
     vi.mocked(logger.error).mockClear();
@@ -137,7 +137,7 @@ describe("api-response", () => {
 
   it("handleRouteError does NOT log when collapsing a known status-coded error", async () => {
     // 401/403/404 errors take their own dedicated branches and are
-    // returned to clients with the same surface message — no need to
+    // returned to clients with the same surface message, no need to
     // double-log them as 'unhandled'.
     vi.mocked(logger.error).mockClear();
     handleRouteError(Object.assign(new Error("nope"), { status: 403 }));

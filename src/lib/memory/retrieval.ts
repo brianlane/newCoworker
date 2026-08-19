@@ -2,8 +2,8 @@
  * Ranked memory retrieval for `business_knowledge_lookup`.
  *
  * Before this module, the lookup context carried the ENTIRE
- * `business_configs.memory_md` blob on every question — no ranking, while
- * documents already got two-stage term-overlap retrieval — and anything the
+ * `business_configs.memory_md` blob on every question, no ranking, while
+ * documents already got two-stage term-overlap retrieval, and anything the
  * append path had evicted was unreachable. Memory now gets the same
  * treatment as documents: split into sections (the same section/chunk
  * boundaries the archive path uses), score by term overlap with the
@@ -12,7 +12,7 @@
  * 14KB window become answerable again.
  *
  * When nothing matches the question (or the question carries no scoreable
- * terms), we fall back to the NEWEST active sections — approximating the
+ * terms), we fall back to the NEWEST active sections, approximating the
  * old whole-blob behavior instead of stripping memory from the prompt.
  *
  * Deterministic and cheap by design: the voice adapter runs under a 3s
@@ -39,7 +39,7 @@ export type MemoryBlock = {
 
 /**
  * Split archive + active memory into scoreable blocks, oldest first
- * (archive precedes active — the archive holds evicted, older sections).
+ * (archive precedes active, the archive holds evicted, older sections).
  */
 export function memoryBlocks(activeMd: string, archiveMd: string): MemoryBlock[] {
   const blocks: MemoryBlock[] = [];
@@ -83,7 +83,7 @@ export function scoreMemoryBlock(text: string, question: string): number {
 }
 
 export type MemorySelection = {
-  /** Rendered context (chronological order) — "" when nothing was selected. */
+  /** Rendered context (chronological order), "" when nothing was selected. */
   context: string;
   /** Number of blocks packed. */
   selected: number;
@@ -96,7 +96,7 @@ export type MemorySelection = {
 /**
  * Pick the memory blocks most relevant to `question` and pack them into
  * `charBudget`, preferring higher scores and (on ties) newer blocks. Blocks
- * that don't fit are skipped, not truncated — chunking already bounds block
+ * that don't fit are skipped, not truncated, chunking already bounds block
  * size at ~2KB so packing granularity stays fine.
  */
 export function selectMemoryForQuestion(
@@ -115,7 +115,7 @@ export function selectMemoryForQuestion(
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score || b.block.order - a.block.order);
 
-  // Fallback: nothing matched — carry the NEWEST active sections so the
+  // Fallback: nothing matched, carry the NEWEST active sections so the
   // prompt never silently loses memory (old behavior injected the blob).
   const fallback = scored.length === 0;
   const ranked = fallback
@@ -137,7 +137,7 @@ export function selectMemoryForQuestion(
     remaining -= cost;
   }
   if (included.length === 0) {
-    // Nothing fit — even a question-relevant block can be a single
+    // Nothing fit, even a question-relevant block can be a single
     // oversized line. Last resort: carry the newest end of ACTIVE memory
     // (the old inject-the-blob behavior never silently dropped memory
     // while some existed).

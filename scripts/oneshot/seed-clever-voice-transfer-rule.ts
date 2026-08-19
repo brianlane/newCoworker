@@ -18,7 +18,7 @@
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
  *   AIFLOW_CLEVER_VOICE_FROM     (default "+18332253837")
- *   AIFLOW_CLEVER_VOICE_TO       (default "+16025245719" — Dave)
+ *   AIFLOW_CLEVER_VOICE_TO       (default "+16025245719", Dave)
  *   AIFLOW_CLEVER_VOICE_WHISPER  (default none; set a short greeting to play first)
  */
 import { createClient } from "@supabase/supabase-js";

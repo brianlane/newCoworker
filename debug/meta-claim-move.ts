@@ -64,7 +64,7 @@ const moved = {
   instagram_username: src.instagram_username,
   is_active: src.is_active,
   // Mirror activateMetaConnection: an activated row holds only the page
-  // token — a pending destination's leftover OAuth user token is cleared.
+  // token, a pending destination's leftover OAuth user token is cleared.
   user_token_encrypted: null,
   updated_at: new Date().toISOString()
 };

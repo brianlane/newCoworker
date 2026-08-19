@@ -5,13 +5,13 @@
  * The vault directory (default `/vault`, mounted read-only from the host's
  * `/opt/rowboat/vault`) is populated by `vps/scripts/deploy-client.sh`:
  *
- *   soul.md      — tone + operating rules
- *   identity.md  — business facts (name, owner, hours, services)
- *   memory.md    — lossless long-form memory
- *   website.md   — optional summarized public-website briefing
- *   profile.md   — optional structured business profile (hours/address/contact)
+ *   soul.md, tone + operating rules
+ *   identity.md, business facts (name, owner, hours, services)
+ *   memory.md, lossless long-form memory
+ *   website.md, optional summarized public-website briefing
+ *   profile.md, optional structured business profile (hours/address/contact)
  *                  rendered from the Settings → Business profile card
- *   documents.md — optional digest (titles + summaries) of the client-facing
+ *   documents.md, optional digest (titles + summaries) of the client-facing
  *                  business documents on file; full contents stay behind the
  *                  business_knowledge_lookup / document_share tools
  *
@@ -30,7 +30,7 @@ export type VaultSnapshot = {
   website: string;
   profile: string;
   documents: string;
-  /** Sum of characters after truncation — useful for logs. */
+  /** Sum of characters after truncation, useful for logs. */
   totalChars: number;
   /** Files that actually had non-empty content after trimming. */
   presentFiles: Array<"soul" | "identity" | "memory" | "website" | "profile" | "documents">;
@@ -102,7 +102,7 @@ export async function loadVaultForPrompt(
     }
   }
 
-  // Global cap across all sections — trim longest first if we overshoot.
+  // Global cap across all sections, trim longest first if we overshoot.
   if (snapshot.totalChars > maxTotal) {
     const entries = FILES.map((f) => ({ key: f.key, keep: f.keep, length: snapshot[f.key].length }));
     entries.sort((a, b) => b.length - a.length);

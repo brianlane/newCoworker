@@ -1,5 +1,5 @@
 /**
- * Per-contact SMS reply mode (contacts.sms_reply_mode) — shared logic for the
+ * Per-contact SMS reply mode (contacts.sms_reply_mode), shared logic for the
  * sms-inbound-worker gate and the telnyx-sms-inbound owner-reply routing.
  *
  * 'auto'          → default Coworker reply (unchanged behavior).
@@ -23,7 +23,7 @@ export function resolveSmsReplyMode(value: unknown): SmsReplyMode {
 /**
  * How long an unanswered "what would you like me to say?" prompt stays
  * routable. An owner text after this window is treated as a normal staff
- * message (internal assistant), never relayed to a customer — bounding the
+ * message (internal assistant), never relayed to a customer, bounding the
  * blast radius of a stale prompt.
  */
 export const OWNER_REPLY_PROMPT_FRESHNESS_MS = 6 * 60 * 60 * 1000;

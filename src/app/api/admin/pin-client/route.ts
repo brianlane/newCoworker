@@ -6,7 +6,7 @@ import { getBusiness, setBusinessAdminPinned } from "@/lib/db/businesses";
 /**
  * Admin-only: pin/unpin a business on the /admin/clients table. Pinned rows
  * always render at the top of the list (surviving column sorts); any number
- * of businesses can be pinned. Admin-facing only — owner dashboards are
+ * of businesses can be pinned. Admin-facing only, owner dashboards are
  * untouched.
  */
 const schema = z.object({

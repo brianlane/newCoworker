@@ -1,5 +1,5 @@
 /**
- * fix-kyp-kav-contact.ts — repair a nameless contact left by a pre-fix send:
+ * fix-kyp-kav-contact.ts, repair a nameless contact left by a pre-fix send:
  * name and email the REAL-number contact row and, when the lead ALSO has a
  * junk-number orphan carrying the name, delete that orphan.
  *
@@ -15,10 +15,10 @@
  *
  * What --apply does (idempotent, fill-only):
  *   1. On the REAL-number contact row: set display_name/email only where
- *      they are currently empty — an owner edit is never clobbered.
+ *      they are currently empty, an owner edit is never clobbered.
  *   2. With --junk: delete the junk-number row, but ONLY while it still
  *      looks exactly like the known orphan (the given name, no aliases, no
- *      tags) — if it has since been edited or merged, it is left alone with
+ *      tags), if it has since been edited or merged, it is left alone with
  *      a note. Without --junk, orphan handling is skipped entirely.
  *
  * Per scripts/oneshot/README.md, every tenant-specific value rides argv/env
@@ -137,7 +137,7 @@ if (EMAIL && (!real.email || real.email.trim() === "")) updates.email = EMAIL;
 
 // The junk row is only deletable while it still looks exactly like the known
 // orphan: the given name, no merged aliases, no tags. Anything else means a
-// human (or a merge) touched it since — leave it for manual review.
+// human (or a merge) touched it since, leave it for manual review.
 const junkDeletable =
   junk != null &&
   junk.display_name === NAME &&

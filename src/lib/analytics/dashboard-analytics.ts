@@ -18,13 +18,13 @@
  *                                written by telnyx-voice-inbound) for the
  *                                answer-rate card
  *
- * No new writers, no cron — the page recomputes on render. Windows are short
+ * No new writers, no cron, the page recomputes on render. Windows are short
  * (30 days) and every query is business-scoped and indexed
  * (idx_daily_usage_biz_date, idx_system_logs_business_created), so a render
  * costs a handful of cheap reads.
  *
  * Residency: `voice_call_transcripts` and `sms_outbound_log` are moved
- * tables — every read of them here routes through the residency layer so
+ * tables, every read of them here routes through the residency layer so
  * vps-mode tenants read their box. `daily_usage`, `system_logs`, and
  * `sms_inbound_jobs` are central control-plane/engine tables.
  */
@@ -53,7 +53,7 @@ export const ANALYTICS_WINDOW_DAYS = 30;
 
 /**
  * Row cap when scanning transcript start times for the peak-hours histogram
- * and sentiment mix. 2000 calls in 30 days is ~65/day — far beyond our
+ * and sentiment mix. 2000 calls in 30 days is ~65/day, far beyond our
  * current tenants; if a business ever exceeds it the histogram degrades to
  * "most recent 2000 calls", which is still representative.
  */
@@ -71,7 +71,7 @@ export type DailyUsageSeries = {
   /** Oldest → newest, zero-filled so charts render a bar per day. */
   days: DailyUsagePoint[];
   totals: { calls: number; sms: number; voiceMinutes: number };
-  /** True when the transcript scan hit its row cap — calls/minutes undercount. */
+  /** True when the transcript scan hit its row cap, calls/minutes undercount. */
   clipped: boolean;
 };
 
@@ -82,7 +82,7 @@ function utcYmd(d: Date): string {
 /**
  * Start of the trailing window: midnight UTC of the day (days - 1) ago, so a
  * 30-day window covers 30 inclusive UTC calendar days ending today. Every
- * card on the analytics page uses this same boundary — the volume series,
+ * card on the analytics page uses this same boundary, the volume series,
  * the answer rate, and the peak-hours histogram must describe the same
  * interval or the page contradicts itself.
  */
@@ -176,10 +176,10 @@ function callSeconds(startedAt: string, endedAt: string | null): number {
  *
  * Calls and voice minutes are derived from `voice_call_transcripts`
  * (answered + forwarded, both directions; missed excluded) because
- * `daily_usage.calls_made` / `voice_minutes_used` have no live writer —
+ * `daily_usage.calls_made` / `voice_minutes_used` have no live writer,
  * reading them rendered permanent zeros next to real calls. Texts stay on
  * `daily_usage.sms_sent`, which the SMS reserve functions do write. Voice
- * minutes are wall-clock call durations rounded per day — an activity
+ * minutes are wall-clock call durations rounded per day, an activity
  * measure, not the billing ledger.
  */
 export async function getDailyUsageSeries(
@@ -257,7 +257,7 @@ export function isValidAnalyticsDay(value: string): boolean {
 
 /** One call row in the drill-down lists, shaped for the analytics page. */
 export type DayDetailCall = {
-  /** Transcript row UUID — links into /dashboard/calls/[id]. */
+  /** Transcript row UUID, links into /dashboard/calls/[id]. */
   id: string;
   callerE164: string | null;
   startedAt: string;
@@ -345,7 +345,7 @@ export type DayDetailText = {
   /** Synthetic id, unique within the day (job/log row id + direction). */
   id: string;
   direction: "inbound" | "outbound";
-  /** Customer-side number — links into /dashboard/messages/[e164]. */
+  /** Customer-side number, links into /dashboard/messages/[e164]. */
   otherE164: string | null;
   content: string;
   timestamp: string;
@@ -370,7 +370,7 @@ export type AnalyticsDayDetail = {
   textsClipped: boolean;
 };
 
-/** Display cap for the day drill-down call list — far above any single tenant's daily volume. */
+/** Display cap for the day drill-down call list, far above any single tenant's daily volume. */
 export const ANALYTICS_DAY_CALL_LIMIT = 200;
 
 /** Display cap for the day drill-down text list. */
@@ -391,7 +391,7 @@ export const ANALYTICS_DAY_TEXT_SCAN_LIMIT = 1000;
  * (deep-linking into /dashboard/messages/[e164]), and the turned-away count.
  *
  * The day is a UTC calendar date because that's how the volume series
- * buckets — the drill-down must slice on the same boundary or its lists
+ * buckets, the drill-down must slice on the same boundary or its lists
  * would disagree with the bar the owner clicked. Day totals for calls and
  * voice minutes are derived from the fetched transcripts (same source as
  * the series); the text total stays on `daily_usage.sms_sent` (metered
@@ -408,7 +408,7 @@ export async function getAnalyticsDayDetail(
   const endIso = new Date(dayStart.getTime() + 86_400_000).toISOString();
 
   // `sms_outbound_log` is a residency-moved table (worker-initiated sends);
-  // `sms_inbound_jobs` is an ENGINE table and always reads central — same
+  // `sms_inbound_jobs` is an ENGINE table and always reads central, same
   // split as the Text history pages.
   const fetchOutboundLog = async (): Promise<DayTextLogRow[]> => {
     const vpsReadMode = await isVpsReadMode(businessId, db);
@@ -491,9 +491,9 @@ export async function getAnalyticsDayDetail(
   );
 
   // Expand inbound jobs into per-direction messages (the job row IS the
-  // conversational unit — same model as the Text history pages), keep the
+  // conversational unit, same model as the Text history pages), keep the
   // ones whose own timestamp falls inside the day, then fold in the
-  // worker-initiated sends. Numeric comparison — PostgREST may format
+  // worker-initiated sends. Numeric comparison, PostgREST may format
   // timestamps as `+00:00` rather than `Z`, which breaks string ordering
   // against the ISO day boundary at exact midnight.
   const dayStartMs = dayStart.getTime();
@@ -591,7 +591,7 @@ type DayTextLogRow = {
 /** Calls in the trailing window matching one drill-down segment. */
 export type CallSegmentDetail = {
   calls: DayDetailCall[];
-  /** True when the list hit its row cap — most recent calls only. */
+  /** True when the list hit its row cap, most recent calls only. */
   clipped: boolean;
 };
 
@@ -600,7 +600,7 @@ export const ANALYTICS_SEGMENT_CALL_LIMIT = 200;
 
 /**
  * Drill-down behind the caller-sentiment card: every summarized inbound
- * call in the window with the given sentiment, newest first — "what made
+ * call in the window with the given sentiment, newest first, "what made
  * all the calls Neutral" is answered by their AI summaries.
  */
 export async function getSentimentCallsDetail(
@@ -635,7 +635,7 @@ export async function getSentimentCallsDetail(
  * attempts landed in that hour.
  *
  * The hour filter can't run in SQL (bucketing is timezone-dependent), so
- * this scans the window like the histogram does and filters in JS — same
+ * this scans the window like the histogram does and filters in JS, same
  * cost, same row cap, same clipping semantics.
  */
 export async function getHourCallsDetail(
@@ -692,7 +692,7 @@ export async function getHourCallsDetail(
 
 /**
  * Hour-of-day (0-23) for an ISO timestamp in the business's IANA timezone.
- * Peak hours only make sense on the owner's clock — a plumber in Phoenix
+ * Peak hours only make sense on the owner's clock, a plumber in Phoenix
  * cares about "9am rush", not "16:00 UTC". Falls back to UTC when the
  * timezone is missing or the runtime can't format it.
  */
@@ -719,7 +719,7 @@ export type InboundCallStats = {
   /** Inbound attempts in the histogram: answered + turned away (≤ 2 × scan limit). */
   callCount: number;
   /**
-   * True when either scan hit ANALYTICS_CALL_SCAN_LIMIT — the histogram then
+   * True when either scan hit ANALYTICS_CALL_SCAN_LIMIT, the histogram then
    * describes the most recent attempts rather than the whole window, and the
    * UI must say so (the answer-rate card uses exact, uncapped counts, so the
    * two cards' totals can legitimately differ at that volume).
@@ -734,8 +734,8 @@ export type InboundCallStats = {
  * One scan of the window's inbound activity feeds two cards: the peak-hours
  * histogram and the caller-sentiment mix.
  *
- * The histogram counts every inbound ATTEMPT — answered calls (transcript
- * rows) plus turned-away calls (`voice_call_blocked` system_logs rows) —
+ * The histogram counts every inbound ATTEMPT, answered calls (transcript
+ * rows) plus turned-away calls (`voice_call_blocked` system_logs rows),
  * because "when do people call" is exactly the question refused calls answer
  * loudest: a tenant whose morning rush is mostly refusals would otherwise see
  * an empty histogram next to an answer-rate card reporting the misses.
@@ -757,7 +757,7 @@ export async function getInboundCallStats(
 
   const [rows, blockedRes] = await Promise.all([
     // A missed forwarded call writes BOTH a status='missed' transcript row
-    // (call history) and a voice_call_blocked ledger row (counted below) —
+    // (call history) and a voice_call_blocked ledger row (counted below),
     // the shared scan excludes it so the attempt isn't bucketed twice.
     fetchTranscriptRows<{ started_at: string; sentiment: string | null }>(businessId, db, {
       columns: ["started_at", "sentiment"],
@@ -839,7 +839,7 @@ export type PreviousPeriodTotals = {
   missed: number;
   /** answered / (answered + missed); null when the prior window had no calls. */
   answerRate: number | null;
-  /** True when the transcript scan hit its row cap — totals undercount. */
+  /** True when the transcript scan hit its row cap, totals undercount. */
   clipped: boolean;
 };
 
@@ -850,7 +850,7 @@ export type PreviousPeriodTotals = {
  * calls/minutes (residency-routed, missed excluded), `daily_usage.sms_sent`
  * for texts, `voice_call_blocked` system_logs for refusals. Unlike the
  * answer-rate card's exact counts, `answered` here derives from the capped
- * scan — `clipped` says when that matters.
+ * scan, `clipped` says when that matters.
  */
 export async function getPreviousPeriodTotals(
   businessId: string,
@@ -899,8 +899,8 @@ export async function getPreviousPeriodTotals(
     (sum, row) => sum + Number(row.sms_sent ?? 0),
     0
   );
-  // Minutes are rounded PER DAY and then summed — the exact aggregation the
-  // current-window series total uses — so the delta never disagrees with the
+  // Minutes are rounded PER DAY and then summed, the exact aggregation the
+  // current-window series total uses, so the delta never disagrees with the
   // card purely over rounding.
   const secondsByDate = new Map<string, number>();
   let answered = 0;
@@ -926,7 +926,7 @@ export async function getPreviousPeriodTotals(
     answered,
     missed,
     // A capped scan undercounts `answered` while `missed` stays exact, which
-    // would SKEW the rate rather than merely shrink it — suppress the rate
+    // would SKEW the rate rather than merely shrink it, suppress the rate
     // (and therefore the delta line) instead of showing a wrong one.
     answerRate: clipped || inboundTotal === 0 ? null : answered / inboundTotal,
     clipped
@@ -944,7 +944,7 @@ export type AnswerRateStats = {
 
 /**
  * Answer rate over the window. "Missed" is every inbound call
- * telnyx-voice-inbound refused before opening the AI bridge — it writes a
+ * telnyx-voice-inbound refused before opening the AI bridge, it writes a
  * `voice_call_blocked` system_logs row on both refusal reasons
  * (concurrent_limit and quota_exhausted), which makes system_logs the
  * complete refusal ledger (missed_call_autotexts is NOT: it's tier-gated,
@@ -960,7 +960,7 @@ export async function getAnswerRateStats(
   const cutoffIso = analyticsWindowStart(now, days).toISOString();
 
   // Missed forwarded calls are counted on the `voice_call_blocked` side
-  // (telnyx-voice-call-end writes both rows) — excluding them here keeps
+  // (telnyx-voice-call-end writes both rows), excluding them here keeps
   // each attempt in exactly one bucket. Answered forwarded calls count
   // as answered: a human picking up IS an answer. The transcript count is
   // residency-routed (moved table); the refusal ledger is central.

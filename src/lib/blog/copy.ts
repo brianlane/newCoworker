@@ -1,8 +1,8 @@
 /**
- * Blog copy policy: NO EM DASHES, ever (operator rule, Jul 2026 — matches
+ * Blog copy policy: NO EM DASHES, ever (operator rule, Jul 2026, matches
  * the marketing-copy stance of PR #716). Enforced in code on every path
- * that writes post copy — the AI composers (digest, rotation topics,
- * admin draft/translate) and the admin editor's save routes — because a
+ * that writes post copy, the AI composers (digest, rotation topics,
+ * admin draft/translate) and the admin editor's save routes, because a
  * prompt instruction alone cannot guarantee it.
  */
 
@@ -14,7 +14,7 @@
 const EM_DASH_RE = /[^\S\n]*[\u2014\u2015]+[^\S\n]*/g;
 
 /**
- * Replace em dashes with a comma joint ("word — word" → "word, word"),
+ * Replace em dashes with a comma joint ("word, word" → "word, word"),
  * then clean the punctuation artifacts a leading/trailing dash leaves.
  */
 export function stripEmDashes(text: string): string {

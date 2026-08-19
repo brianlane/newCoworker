@@ -5,7 +5,7 @@
  *
  * Why: the contact detail page + cross-channel summarizer query SMS by the
  * `customer_e164` COLUMN, but AiFlow-suppressed (and legacy Safe Mode) inbound
- * jobs were persisted without it — only the JSONB `payload` carried the sender.
+ * jobs were persisted without it, only the JSONB `payload` carried the sender.
  * So a contact's texts showed in the raw thread view (which parses payload) but
  * NOT on the contact page, and never counted as interactions. The writer paths
  * (telnyx-sms-inbound + sms-inbound-worker) now stamp the column going forward;

@@ -2,7 +2,7 @@
  * Internal AiFlow adapter: read the best-matching recent inbound message from a
  * connected owner mailbox (workspace_oauth_connections.id → Nango Gmail/Outlook).
  *
- * Called by the ai-flow-worker for an `email_extract` step — the worker can't
+ * Called by the ai-flow-worker for an `email_extract` step, the worker can't
  * reach Nango (the client lives in this Next.js runtime), so it proxies the read
  * here, then runs its own Gemini extraction over the returned body text.
  *

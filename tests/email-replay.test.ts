@@ -79,7 +79,7 @@ const ROW = {
   created_at: "2026-07-11T19:49:54Z"
 };
 
-/** A tenant_email flow with no conditions — matches every message. */
+/** A tenant_email flow with no conditions, matches every message. */
 const FLOW = { id: "flow-1", definition: { trigger: { channel: "tenant_email" } } };
 
 beforeEach(() => {
@@ -513,7 +513,7 @@ describe("replayInboundEmails", () => {
       expect.objectContaining({
         trigger: expect.objectContaining({
           image: "email-attachments:inbound/m/2-pic.jpg",
-          // The pdf is the document — mirrors the live inbound path.
+          // The pdf is the document, mirrors the live inbound path.
           document: "email-attachments:inbound/m/0-notes.pdf",
           document_name: "notes.pdf"
         })
@@ -524,7 +524,7 @@ describe("replayInboundEmails", () => {
 
   it("matches a replayed document by PATH extension (octet-stream PDFs; extensionless skipped)", async () => {
     const attachments = [
-      // Declared PDF but stored without an extension — docExtract can't
+      // Declared PDF but stored without an extension, docExtract can't
       // classify it, so it must not become {{trigger.document}}.
       {
         filename: "renewal-noext",

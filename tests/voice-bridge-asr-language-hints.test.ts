@@ -5,7 +5,7 @@ import {
 } from "../vps/voice-bridge/src/asr-language-hints";
 
 /**
- * Aug 3 2026: the bridge sent `inputAudioTranscription: {}` — no hint at all,
+ * Aug 3 2026: the bridge sent `inputAudioTranscription: {}`, no hint at all,
  * so the Live API auto-detected across every language it knows. Chris
  * Bartelot spoke English for four minutes and two of his turns landed in the
  * transcript as Portuguese and Korean.

@@ -258,7 +258,7 @@ describe("white-glove/intake DB layer", () => {
   });
 
   it("markWhiteGloveIntakeApplied stamps the apply on COMPLETED rows only", async () => {
-    // The update chain ends on the second .eq() — resolve the row there.
+    // The update chain ends on the second .eq(), resolve the row there.
     const db = mockDb();
     db.eq = vi
       .fn()

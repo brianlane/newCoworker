@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const { businessId } = bodySchema.parse(await request.json());
     await requireBusinessRole(businessId, "manage_settings");
 
-    // Tier cap — refuse BEFORE a connect session is even minted, so the
+    // Tier cap, refuse BEFORE a connect session is even minted, so the
     // owner never walks an OAuth flow whose result would be rejected.
     await assertWorkspaceConnectionAllowed(businessId);
 

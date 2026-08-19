@@ -577,7 +577,7 @@ describe("stripe/client", () => {
       schedule: "sub_sched_existing",
       items: { data: [{ price: { id: "price_standard_24mo" }, quantity: 1 }] }
     });
-    // Default mockScheduleRetrieve has phases: [] — no future phase to match.
+    // Default mockScheduleRetrieve has phases: [], no future phase to match.
     const result = await ensureCommitmentSchedule({
       subscriptionId: "sub_nophase",
       tier: "standard",
@@ -589,7 +589,7 @@ describe("stripe/client", () => {
 
   it("ensureCommitmentSchedule repairs an existing schedule whose renewal phase is missing add-on items", async () => {
     // Renewal plan price already matches, but the sub now carries a second
-    // item (the Canada fee) the schedule predates — must rewrite, not
+    // item (the Canada fee) the schedule predates, must rewrite, not
     // early-return, or the fee drops at rollover.
     mockSubscriptionRetrieve.mockResolvedValueOnce({
       schedule: "sub_sched_existing",
@@ -831,7 +831,7 @@ describe("stripe/client", () => {
             quantity: 1
           },
           {
-            // Monthly with no interval_count — treated as interval_count 1
+            // Monthly with no interval_count, treated as interval_count 1
             // and kept by price id.
             price: {
               id: "price_addon_month_nocount",

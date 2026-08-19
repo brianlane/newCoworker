@@ -6,7 +6,7 @@
  * Mirrors the dashboard customers routes: creates fire `contact_created`
  * triggers, tag edits diff against the stored row and fire `tag_changed`
  * (+ goal fast-forward) events, and a new owner assignment fires
- * `owner_assigned` — so automations react identically whether the edit
+ * `owner_assigned`, so automations react identically whether the edit
  * came from the dashboard or from Claude.
  */
 
@@ -146,7 +146,7 @@ export const updateContactTool = defineMcpTool({
       throw new McpToolError(`No contact found for ${phone}, use create_contact.`);
     }
 
-    // An assigned owner must be one of THIS business's roster members —
+    // An assigned owner must be one of THIS business's roster members,
     // the FK alone is cross-tenant, so without this check a member id from
     // another business could be attached (same guard as the dashboard PATCH).
     let assignedOwnerName = "";
@@ -182,7 +182,7 @@ export const updateContactTool = defineMcpTool({
       const after = new Set(nextTags.map((t) => t.toLowerCase()));
       const eventStamp = Date.now();
       // Runs match goal events by the exact number they were triggered
-      // with, which after a profile merge may be an ALIAS — fire for every
+      // with, which after a profile merge may be an ALIAS, fire for every
       // linked number so a parked run keyed on the old number still jumps.
       const goalNumbers = [existing.customer_e164, ...(existing.alias_e164s ?? [])];
       for (const tag of nextTags) {

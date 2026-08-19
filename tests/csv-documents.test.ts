@@ -15,7 +15,7 @@ import {
 import { parseCsv, serializeCsv } from "../src/lib/csv/csv";
 
 /**
- * Coverage for src/lib/csv/documents.ts — the contact-records ("book of
+ * Coverage for src/lib/csv/documents.ts, the contact-records ("book of
  * business") importer/exporter. Mirrors tests/csv-employees.test.ts
  * (chainable recorded builder popping scripted results) plus a scripted
  * storage mock for the synthesized record originals.

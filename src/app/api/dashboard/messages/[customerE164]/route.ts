@@ -18,7 +18,7 @@
  *   Soft delete under the hood (admin-restorable via
  *   /api/admin/deleted-items) but behaves like a hard delete here:
  *   idempotent, and the thread never surfaces again. The contact row is
- *   untouched — it has its own delete on the customers page.
+ *   untouched, it has its own delete on the customers page.
  */
 
 import { z } from "zod";
@@ -33,7 +33,7 @@ const SMS_THREAD_RATE = { interval: 60 * 1000, maxRequests: 60 };
 const DELETE_RATE = { interval: 60 * 1000, maxRequests: 20 };
 
 const paramsSchema = z.object({
-  // E.164 or a bare short code — short-code lead sources (ReferralExchange
+  // E.164 or a bare short code, short-code lead sources (ReferralExchange
   // = 73339) have readable threads too.
   customerE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/)
 });
@@ -53,7 +53,7 @@ export async function GET(
     const raw = (await ctx.params).customerE164;
     // Next decodes path segments, but if the link upstream was double-
     // encoded the `%2B` would arrive as a literal `+` already and the
-    // second decodeURIComponent throws — guard so we always 400 instead
+    // second decodeURIComponent throws, guard so we always 400 instead
     // of 500.
     let decoded: string;
     try {

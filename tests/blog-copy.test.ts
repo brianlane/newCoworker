@@ -1,6 +1,6 @@
 /**
  * Blog copy policy (src/lib/blog/copy.ts): em dashes are banned from all
- * post copy — replacement joints, punctuation cleanup, draft/field
+ * post copy, replacement joints, punctuation cleanup, draft/field
  * helpers.
  */
 import { describe, expect, it } from "vitest";

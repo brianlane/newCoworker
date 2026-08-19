@@ -1,7 +1,7 @@
 /**
  * Cross-channel contact timeline → voice-bridge mirror. Mirrors
  * `supabase/functions/_shared/contact_context.ts` (the bridge is rsynced to
- * the VPS standalone, so it can't import across the repo) — the DATA rules
+ * the VPS standalone, so it can't import across the repo), the DATA rules
  * (query predicates, lookback, caps, merge/order) must stay identical to
  * the shared module; only the surrounding wording is voice-specific.
  * tests/voice-bridge-contact-context.test.ts pins the two implementations
@@ -9,7 +9,7 @@
  *
  * Why this exists: a lead who was just texting the business may CALL
  * instead of texting back. Mid-first-conversation the rolling summary
- * (contacts.summary_md) is still empty — the summarize sweep runs later —
+ * (contacts.summary_md) is still empty, the summarize sweep runs later,
  * so without this the receptionist knew nothing about an SMS exchange from
  * minutes ago (the voice twin of the 2026-07-14 Truly SMS incident).
  *
@@ -23,7 +23,7 @@ export const CONTACT_TIMELINE_LOOKBACK_HOURS = 72;
 /** Most timeline lines included (newest kept when over). */
 export const TIMELINE_MAX_EVENTS = 14;
 
-/** Per-line excerpt cap — keeps one chatty message from dominating. */
+/** Per-line excerpt cap, keeps one chatty message from dominating. */
 export const TIMELINE_MAX_LINE_CHARS = 260;
 
 export type ContactTimelineEvent = {
@@ -95,7 +95,7 @@ type VoiceCallRow = {
 };
 
 /**
- * Inbound text from a stored job envelope ({ data: { payload } }) — a
+ * Inbound text from a stored job envelope ({ data: { payload } }), a
  * dependency-free vendored copy of telnyx_sms_compliance.inboundSmsBody
  * (text / body string / RCS body object), pinned by the parity test.
  */
@@ -124,7 +124,7 @@ export const TIMELINE_MAX_NUMBERS = 6;
 
 /**
  * Every number this caller's history may live under (queried number +
- * surviving primary + merged-away aliases) — mirror of the shared module's
+ * surviving primary + merged-away aliases), mirror of the shared module's
  * resolveContactNumbers; message/call rows stay keyed on the number they
  * flowed over, so a merged caller needs all of them. Best-effort.
  */

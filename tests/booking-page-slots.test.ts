@@ -286,7 +286,7 @@ describe("computePublicSlots", () => {
           businessHours: NIGHT_HOURS
         })
       );
-      // 01:00 occurs twice on the wall clock (EDT then EST) — both offered,
+      // 01:00 occurs twice on the wall clock (EDT then EST), both offered,
       // as distinct instants.
       const oneAm = slots.filter((s) => localHm(s.startIso) === "01:00");
       expect(oneAm).toHaveLength(2);

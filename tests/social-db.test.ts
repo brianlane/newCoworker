@@ -1,6 +1,6 @@
 /**
  * Instagram posts DB access (src/lib/social/db.ts): success + error paths
- * for every helper and the guarded lifecycle transitions — mirrors the
+ * for every helper and the guarded lifecycle transitions, mirrors the
  * email-campaigns db suite.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -2,16 +2,16 @@
  * Reconnect continuity for workspace OAuth connections.
  *
  * A reconnect mints a NEW Nango connection id, which used to insert a NEW
- * `workspace_oauth_connections` row — churning the row id that AiFlow
+ * `workspace_oauth_connections` row, churning the row id that AiFlow
  * mailbox bindings reference (send_email `fromConnectionId`, quiet-hours
  * email fallback, email triggers, `email_extract`). Every flow pointing at
- * the mailbox then failed at send time with `connection_not_found` — the
+ * the mailbox then failed at send time with `connection_not_found`, the
  * KYP Ads Jul 22 2026 incident class.
  *
  * After the account-identity probe resolves a newly completed connection's
  * provider account email, this consolidation checks whether an OLDER row on
  * the same provider already represents the same account. If so, the older
- * row — whose id the flows bind — is KEPT and re-pointed at the fresh Nango
+ * row, whose id the flows bind, is KEPT and re-pointed at the fresh Nango
  * connection; the freshly inserted duplicate row is deleted, and the
  * superseded Nango-side connection is deleted best-effort (freeing a seat
  * on the account-wide Nango connection quota).
@@ -44,7 +44,7 @@ export type ConsolidateReconnectResult =
  *
  * Ordering: the duplicate row is deleted BEFORE the keeper is re-pointed
  * (the unique index on business/provider/nango-id forbids the other order).
- * A crash between the two leaves the keeper on the superseded grant — the
+ * A crash between the two leaves the keeper on the superseded grant, the
  * owner recovers by simply reconnecting again; nothing is lost.
  */
 export async function consolidateReconnectedWorkspaceConnection(
@@ -79,7 +79,7 @@ export async function consolidateReconnectedWorkspaceConnection(
   });
   if (siblings.length === 0) return { consolidated: false };
 
-  // listWorkspaceOAuthConnections orders created_at ASC — the FIRST sibling
+  // listWorkspaceOAuthConnections orders created_at ASC, the FIRST sibling
   // is the oldest row, i.e. the id existing flow bindings point at.
   const keeper = siblings[0];
 
@@ -88,7 +88,7 @@ export async function consolidateReconnectedWorkspaceConnection(
     args.providerConfigKey,
     args.newConnectionId
   );
-  // Raced away (parallel completes / cap eviction) — nothing to consolidate.
+  // Raced away (parallel completes / cap eviction), nothing to consolidate.
   if (!newRow) return { consolidated: false };
 
   // Keeper's app-owned metadata keys survive; the fresh row's identity and
@@ -104,7 +104,7 @@ export async function consolidateReconnectedWorkspaceConnection(
     metadata
   });
 
-  // The old grant is dead weight on Nango's account-wide connection quota —
+  // The old grant is dead weight on Nango's account-wide connection quota,
   // delete it best-effort (it may already be gone on the provider side).
   try {
     await args.deleteNangoConnection(args.providerConfigKey, superseded);

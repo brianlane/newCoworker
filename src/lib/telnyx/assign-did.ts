@@ -70,8 +70,8 @@ export type AssignExistingDidInput = {
  * Accepts 8–15 digits after `+` and requires the first digit to be 1–9 (no
  * leading-zero country codes). This mirrors the DB check constraint on
  * `business_telnyx_settings.forward_to_e164` (`^\+[1-9][0-9]{7,14}$`) so a
- * value that passes this normalizer is guaranteed to pass downstream inserts
- * — `+012345678` used to sneak through app validation and then get rejected
+ * value that passes this normalizer is guaranteed to pass downstream inserts,
+ * `+012345678` used to sneak through app validation and then get rejected
  * by Postgres as a 500, and a 7-digit input that the shared edge normalizer
  * would accept for inbound routing is refused here because it can't be
  * persisted via assign-did.
@@ -100,8 +100,8 @@ export { coerceOwnerPhoneToE164 };
  * result is a US/NANP `+1` number (`+1` followed by exactly 10 digits). The
  * NPA's first digit must be 2-9 (real area codes never start with 0/1), so we
  * never hand Telnyx a `filter[national_destination_code]` value it would
- * reject. Returns `null` for non-`+1`, malformed, or otherwise unusable input
- * — callers fall back to the platform default area code in that case.
+ * reject. Returns `null` for non-`+1`, malformed, or otherwise unusable input,
+ * callers fall back to the platform default area code in that case.
  */
 export function extractNanpAreaCode(raw: string | null | undefined): string | null {
   const e164 = coerceOwnerPhoneToE164(raw);
@@ -134,14 +134,14 @@ function resolveBridgeOriginFromRow(
  *
  * The dashboard "Forwarding phone (E.164)" field used to be blank on every
  * fresh provision because the orchestrator captured `businesses.phone` from
- * onboarding but never propagated it forward — owners had to retype the same
+ * onboarding but never propagated it forward, owners had to retype the same
  * number they'd just submitted. We backfill it here so Safe Mode is one click
  * away on day one.
  *
  * Precedence:
- *   1. Existing `forward_to_e164` on the row (owner override) — never clobber.
+ *   1. Existing `forward_to_e164` on the row (owner override), never clobber.
  *   2. Coerced `businesses.phone` if it's a structurally valid E.164 (NANP-aware).
- *   3. `null` — let the owner enter it manually rather than persist garbage.
+ *   3. `null`, let the owner enter it manually rather than persist garbage.
  */
 export async function resolveDefaultForwardToE164(
   businessId: string,
@@ -160,7 +160,7 @@ export async function resolveDefaultForwardToE164(
   const existingForward = settingsRow?.forward_to_e164?.trim();
   if (existingForward) return existingForward;
   // Defence: a missing or unreadable business row should never abort
-  // DID-assign — fall through to a null forward. Worst case the field
+  // DID-assign, fall through to a null forward. Worst case the field
   // stays blank and the owner sets it from the dashboard like before.
   const business = await getBusiness(businessId, client).catch(() => null);
   return coerceOwnerPhoneToE164(business?.phone ?? null);

@@ -13,7 +13,7 @@
  * also fire its own auto-reply to a message this flow already handles.
  *
  * MUST run only AFTER the ai-flow-worker Edge function knows `extract_text`
- * (i.e. after the Phase 1 deploy) — an older worker would reject the step.
+ * (i.e. after the Phase 1 deploy), an older worker would reject the step.
  *
  * Validates through parseAiFlowDefinition before writing, prints the previous
  * definition for rollback, and is idempotent (re-running is a no-op).

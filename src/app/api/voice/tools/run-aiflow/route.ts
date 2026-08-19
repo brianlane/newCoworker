@@ -11,7 +11,7 @@ import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 import { logger } from "@/lib/logger";
 
 /**
- * `run_aiflow` — voice-bridge adapter, STAFF ONLY.
+ * `run_aiflow`, voice-bridge adapter, STAFF ONLY.
  *
  * Lets the owner (or a roster teammate) start one of their automations from a
  * phone call: "I got a new lead, Jane, 602 555 1212, run my new lead intake".

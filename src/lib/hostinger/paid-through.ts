@@ -3,7 +3,7 @@
  *
  * `vps_inventory.expires_at` is the runway signal the adopt-first claim ranks
  * on (furthest expiry wins, and anything under 72h is skipped), but the two
- * moments that MOVE a box in or out of the pool — a purchase and a cancel —
+ * moments that MOVE a box in or out of the pool, a purchase and a cancel,
  * both used to write the row without it, leaving `expires_at` null until the
  * daily billing-posture cron caught up. Null sorts last, so for up to a day a
  * box with 23 months of prepaid runway could lose the ranking to one with a

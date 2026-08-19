@@ -1,5 +1,5 @@
 /**
- * Dashboard-chat email tool — platform-side EMAIL_SEND block handling.
+ * Dashboard-chat email tool, platform-side EMAIL_SEND block handling.
  *
  * The owner-chat model is taught a deterministic sentinel-block protocol
  * (see EMAIL_TOOL_ENABLED_PREAMBLE in the chat route): it emits
@@ -150,7 +150,7 @@ export function extractEmailSendRequests(content: string): {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  // A dangling OPEN with no CLOSE (truncated generation) — strip from the
+  // A dangling OPEN with no CLOSE (truncated generation), strip from the
   // marker to the end so half a JSON object never reaches the owner.
   const dangling = cleanedContent.indexOf(EMAIL_SEND_OPEN);
   if (dangling !== -1) {

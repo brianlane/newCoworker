@@ -12,8 +12,8 @@
  * main) to the box's two llm-router locations and rebuilds only that one
  * container, then verifies the Gemini path returns clean JSON.
  *
- *   - /opt/rowboat/llm-router        — the compose build context (what runs)
- *   - /opt/newcoworker-repo/vps/...  — the re-stage source (so a later
+ *   - /opt/rowboat/llm-router, the compose build context (what runs)
+ *   - /opt/newcoworker-repo/vps/..., the re-stage source (so a later
  *                                      bootstrap/deploy doesn't regress)
  *
  * Idempotent: re-running rewrites identical files and rebuilds the same image.

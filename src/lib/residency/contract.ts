@@ -7,16 +7,16 @@
  * The dashboard `src/lib/db/*` modules and the Edge `_shared` helpers swap
  * their Supabase client for a client speaking this contract when the
  * tenant's `data_residency_mode` is 'dual' (writes) or 'vps' (reads +
- * writes) — call sites keep their query logic.
+ * writes), call sites keep their query logic.
  *
  * Shape rationale: the platform's content queries are simple per-tenant
- * CRUD (equality/range filters, order, limit — no joins across moved
+ * CRUD (equality/range filters, order, limit, no joins across moved
  * tables), so one generic filter-based endpoint per verb covers every
  * `src/lib/db/*` access pattern without inventing a per-table API surface
  * that would drift.
  *
  * Auth: every request carries `Authorization: Bearer <per-tenant gateway
- * token>` — the same token Rowboat calls already use (vps_gateway_tokens,
+ * token>`, the same token Rowboat calls already use (vps_gateway_tokens,
  * sha256-indexed, centrally revocable). The service must validate with a
  * timing-safe compare and accept every non-revoked token for the tenant so
  * the deploy/rotation overlap window (pending vs confirmed tokens) never
@@ -91,7 +91,7 @@ export type DataApiInsertRequest = {
 export type DataApiUpdateRequest = {
   table: ResidencyMovedTable;
   set: Record<string, unknown>;
-  /** Refuses to run with no filters — no accidental full-table updates. */
+  /** Refuses to run with no filters, no accidental full-table updates. */
   filters: DataApiFilter[];
   returning?: boolean;
 };
@@ -99,7 +99,7 @@ export type DataApiUpdateRequest = {
 /** POST /v1/delete */
 export type DataApiDeleteRequest = {
   table: ResidencyMovedTable;
-  /** Refuses to run with no filters — no accidental full-table deletes. */
+  /** Refuses to run with no filters, no accidental full-table deletes. */
   filters: DataApiFilter[];
   returning?: boolean;
 };
@@ -124,7 +124,7 @@ export type DataApiResponse<Row = Record<string, unknown>> =
       message: string;
     };
 
-/** GET /v1/health — unauthenticated liveness for tunnel/deploy probes. */
+/** GET /v1/health, unauthenticated liveness for tunnel/deploy probes. */
 export type DataApiHealthResponse = {
   ok: boolean;
   /** Applied datastore schema revision (from the versioned DDL). */

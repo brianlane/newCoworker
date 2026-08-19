@@ -79,7 +79,7 @@ export async function POST(request: Request) {
     // businessId pre-claim the slot and 403 the legitimate client's saves.
     // In the normal flow the FIRST save happens before /api/business/create
     // (the businessId is a fresh client-side UUID that has never left the
-    // browser, so it cannot have leaked) — but once the `businesses` row
+    // browser, so it cannot have leaked), but once the `businesses` row
     // exists the id is no longer secret, so claiming a missing draft slot
     // for it requires the HMAC onboardingToken minted by
     // /api/business/create, the same proof of ownership /api/checkout and

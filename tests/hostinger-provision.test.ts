@@ -89,7 +89,7 @@ function usablePaymentMethod(overrides: Record<string, unknown> = {}) {
 
 /**
  * Minimal HostingerApiError-shaped stub. We don't import the real class to
- * keep this test decoupled from the client module — provisionVpsForBusiness
+ * keep this test decoupled from the client module, provisionVpsForBusiness
  * checks `err.name === "HostingerApiError"` duck-typed for the same reason
  * (see the `errStatus` helper in src/lib/hostinger/provision.ts).
  */
@@ -603,7 +603,7 @@ describe("provisionVpsForBusiness", () => {
   it("retries the post-install-script attach once on timeout and uses the second attempt's id", async () => {
     // status 0 = HostingerClient's timeout/network wrapper. First attempt
     // times out, second succeeds → the PIS still lands and purchase carries
-    // its id. (Root cause of the Jul 8 2026 Truly Insurance 5% failure —
+    // its id. (Root cause of the Jul 8 2026 Truly Insurance 5% failure,
     // a single slow POST used to abort the whole provision.)
     const pisStub = vi
       .fn()
@@ -748,7 +748,7 @@ describe("provisionVpsForBusiness", () => {
         }
       )
     ).rejects.toThrow(/HTTP 500/);
-    // Purchase MUST NOT have happened — non-recoverable Hostinger errors
+    // Purchase MUST NOT have happened, non-recoverable Hostinger errors
     // abort before we charge the customer's card.
     expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
   });
@@ -756,8 +756,8 @@ describe("provisionVpsForBusiness", () => {
   it("re-throws when createPostInstallScript throws a HostingerApiError with a non-numeric status", async () => {
     // Branch coverage for `errStatus`: we only swallow 403 when the error's
     // `.status` is the *number* 403. A malformed HostingerApiError that
-    // surfaces `.status: "403"` (string) — which can happen if a future
-    // refactor of the client serialises it via JSON round-trip — must NOT
+    // surfaces `.status: "403"` (string), which can happen if a future
+    // refactor of the client serialises it via JSON round-trip, must NOT
     // hit the 403 fast-path. Instead we re-throw, fail before the purchase,
     // and surface the underlying issue in the orchestrator's `failed` row.
     class StringStatusHostingerError extends Error {
@@ -974,7 +974,7 @@ describe("provisionVpsForBusiness", () => {
             businessId: "biz-1",
             tier: "starter",
             pollIntervalMs: 1,
-            // Deliberately very long — the test asserts we bail on the
+            // Deliberately very long, the test asserts we bail on the
             // terminal state *before* burning this window.
             readyTimeoutMs: 15 * 60 * 1000
           },
@@ -1233,7 +1233,7 @@ describe("buildDefaultPostInstallScript", () => {
     const s = buildDefaultPostInstallScript();
     expect(s).toContain("https://github.com/brianlane/newCoworker.git");
     expect(s).toContain("REPO_REF='main'");
-    // Default tier is "standard" (now KVM 2, the Jul 2026 default flip) —
+    // Default tier is "standard" (now KVM 2, the Jul 2026 default flip),
     // the bootstrap loader emits `TIER='standard' VPS_SIZE='kvm2' bash …`.
     // Must be single-quoted so the values are delivered to bootstrap.sh
     // exactly as-is even if the loader is later sourced from a context that
@@ -1308,7 +1308,7 @@ describe("buildDefaultPostInstallScript", () => {
   it("embeds an authorized_keys write when authorizedSshPublicKey is passed (Hostinger drops public_key_ids)", () => {
     // Hostinger's standalone setup/recreate/attach endpoints all silently
     // drop `public_key_ids` on some VMs (VM 1798267 KVM2 experiment,
-    // VM 1806097 KVM1 Phase E smoke — recreate reported success twice, key
+    // VM 1806097 KVM1 Phase E smoke, recreate reported success twice, key
     // never landed). The PIS-embedded write is the deterministic attach path
     // the adopt flow depends on.
     const pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxxHX3XEbCUn0ZjOJKqqPWw test-comment";
@@ -1411,7 +1411,7 @@ describe("buildDefaultPostInstallScript", () => {
     expect(codeOnly).not.toMatch(/(^|\s|;)cloud-init\s+status\s+--wait/);
     expect(s).toContain("DPkg::Lock::Timeout=300");
     // And both apt invocations (update + install) must use the timeout
-    // option — a regression that drops it from one would silently
+    // option, a regression that drops it from one would silently
     // re-introduce the race.
     expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
     expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
@@ -1478,7 +1478,7 @@ describe("resolvePriceItemId", () => {
 });
 
 describe("deploy-client.sh cloudflared tunnel step (contract)", () => {
-  // Read the tracked script directly — the cloudflared step runs on the VPS
+  // Read the tracked script directly, the cloudflared step runs on the VPS
   // at provision time, so vitest can only pin its shape, not execute it.
   const script = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "vps", "scripts", "deploy-client.sh"),

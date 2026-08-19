@@ -50,7 +50,7 @@ function phoneStringsFromField(raw: unknown): string[] {
  * DID in `to`), so reading `cc` too is what lets a group reply reach everyone
  * in the thread, not just whoever happened to land in `to`. Order: `from`,
  * then `to[]`, then `cc[]`; de-duped, preserving first-seen order. NOT
- * E.164-normalized — the caller normalizes (the inbound handler has normalizeE164).
+ * E.164-normalized, the caller normalizes (the inbound handler has normalizeE164).
  */
 export function telnyxMessagingParticipants(payload: Record<string, unknown>): string[] {
   const seen = new Set<string>();
@@ -72,7 +72,7 @@ export type TelnyxInboundImage = { url: string; contentType: string };
 /** Image content types the AI image tools can consume as an edit source. */
 const INBOUND_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-/** Hosts Telnyx serves inbound MMS media from — the ONLY hosts the platform
+/** Hosts Telnyx serves inbound MMS media from, the ONLY hosts the platform
  * will ever download inbound media from (SSRF guard: the URL comes from a
  * signature-verified webhook, but pin the host anyway). */
 export function isTelnyxMediaUrl(url: string): boolean {

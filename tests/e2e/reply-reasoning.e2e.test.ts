@@ -10,7 +10,7 @@ import { geminiChatReply, type ChatTurn } from "./gemini";
  * worker asks the REAL model to end each reply with a reasoning trailer, and
  * splitReplyReasoning must (a) capture a parsed record and (b) leave ZERO
  * trailer debris in the customer-facing text. The original bug was invisible
- * to unit tests — we only ever parsed trailers we wrote ourselves, while the
+ * to unit tests, we only ever parsed trailers we wrote ourselves, while the
  * model reproduced the exotic ⟦reasoning⟧ marker imperfectly and the exact
  * matcher missed it. This suite sends realistic conversations to the actual
  * model with the actual instruction and asserts the round trip.
@@ -26,7 +26,7 @@ const LEAK_PATTERNS = [
 /**
  * A representative customer-path system prompt: persona + grounding lines in
  * the spirit of the SMS worker's preamble, ending with the REAL
- * REASONING_PROMPT_INSTRUCTION (imported, not copied — if the instruction
+ * REASONING_PROMPT_INSTRUCTION (imported, not copied, if the instruction
  * changes, this suite re-verifies the new wording against the live model).
  */
 const SYSTEM_PROMPT =
@@ -44,7 +44,7 @@ const SCENARIOS: Scenario[] = [
   {
     // The production incident turns, verbatim: the model's answer to this is
     // exactly the message that leaked "[reasoning]{...}" to Dwight. (Turns
-    // start with the user, per the Gemini contents contract — a leading
+    // start with the user, per the Gemini contents contract, a leading
     // model turn makes replies erratic.)
     name: "renewal answer (the leaked production turn)",
     turns: [
@@ -103,7 +103,7 @@ const SCENARIOS: Scenario[] = [
  *  is the invariant whose violation reached a real customer.
  *
  *  AGGREGATE (capture rate): the model does not emit the trailer on 100%
- *  of turns — live runs show it sometimes omits it in longer multi-turn
+ *  of turns, live runs show it sometimes omits it in longer multi-turn
  *  chats, which is the SAFE failure (nothing leaks; the ai_reply_reasoning
  *  row is best-effort by design). We assert a floor across the scenario set
  *  so "the instruction stopped working entirely" still fails the build

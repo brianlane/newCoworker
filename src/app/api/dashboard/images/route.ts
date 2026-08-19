@@ -3,8 +3,8 @@
  *
  * Lets the owner attach a photo in dashboard chat so the coworker can EDIT it
  * (dashboard_generate_image inputImageUrl). The file is stored in the same
- * private generated-images bucket — and under the same
- * `<businessId>/<uuid>.<ext>` shape — that generated images use, so the
+ * private generated-images bucket, and under the same
+ * `<businessId>/<uuid>.<ext>` shape, that generated images use, so the
  * existing owner-authenticated GET proxy ([...path]/route.ts) serves it and
  * the image tools' business-scoped ref validation accepts it with no extra
  * machinery.

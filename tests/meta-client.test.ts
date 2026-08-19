@@ -439,7 +439,7 @@ describe("Instagram content publishing", () => {
     // Not an https URL.
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { permalink: "javascript:alert(1)" }));
     expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
-    // Graph error — swallowed, never thrown past a successful publish.
+    // Graph error, swallowed, never thrown past a successful publish.
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: { message: "boom" } }));
     expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
   });
@@ -766,7 +766,7 @@ describe("registerWhatsAppTemplates", () => {
 
 describe("WHATSAPP_TEMPLATE_LANGUAGE_ES", () => {
   // Meta's supported template languages (Spanish family). `es_US` is NOT
-  // among them — it is an ads locale — which is exactly the bug this
+  // among them, it is an ads locale, which is exactly the bug this
   // constant exists to prevent recurring: an unsupported code makes every
   // Spanish registration fail, and an unapproved Spanish variant silently
   // falls back to the English template.

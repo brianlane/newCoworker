@@ -6,7 +6,7 @@ import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
- * fireGoalEvent: the Node-side wrapper around applyGoalEvent — phone
+ * fireGoalEvent: the Node-side wrapper around applyGoalEvent, phone
  * normalization in front, service client supplied, best-effort throughout.
  * The jump mechanics themselves are covered in ai-flows-goal-events.test.ts;
  * here we verify the wrapper's plumbing.

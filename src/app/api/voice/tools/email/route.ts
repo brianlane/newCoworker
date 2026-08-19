@@ -12,7 +12,7 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
 
 /**
- * `send_follow_up_email` — sends a short email from the owner's connected
+ * `send_follow_up_email`, sends a short email from the owner's connected
  * Google or Microsoft account. We deliberately only allow plain text here so
  * a runaway model can't inject markup/scripts; the voice agent is expected
  * to dictate a 1-3 sentence follow-up, not a newsletter. The actual provider

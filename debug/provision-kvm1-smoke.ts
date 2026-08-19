@@ -1,5 +1,5 @@
 /**
- * provision-kvm1-smoke.ts — Phase E EXPERIMENT: buy + bootstrap a KVM1
+ * provision-kvm1-smoke.ts, Phase E EXPERIMENT: buy + bootstrap a KVM1
  * (1 vCPU / 4GB RAM) VPS and smoke-test the STARTER stack on it, minus
  * Ollama (Gemini-only with the hard budget fuse), per the fleet-economics
  * plan: "If it fits: starter default hardware = KVM1 on term (~$8/mo
@@ -9,14 +9,14 @@
  * experiment), with three deliberate differences:
  *
  *   1. PURCHASE SKU is `hostingercom-vps-kvm1-usd-1m` via the `itemId`
- *      override on provisionVpsForBusiness — but the BOOTSTRAP profile stays
+ *      override on provisionVpsForBusiness, but the BOOTSTRAP profile stays
  *      `VPS_SIZE=kvm2` because "kvm1" is not (yet) a first-class VpsSize;
  *      the kvm2 profile is the constrained-hardware profile (ZRAM 4G lz4,
  *      Ollama single-model tuning) and is the closest match. If the
  *      experiment succeeds, "kvm1" gets its own profile in a follow-up PR.
  *   2. After bootstrap, Ollama is DISABLED over SSH (service + keep-warm
  *      timer stopped, pulled models removed): the KVM1 shape is
- *      "full starter stack minus Ollama" — 4GB RAM has no headroom for a
+ *      "full starter stack minus Ollama", 4GB RAM has no headroom for a
  *      resident 3B model next to Docker + the tenant stack.
  *   3. State file is debug/.kvm1-smoke.json. Teardown:
  *        npx tsx debug/cancel-vps-billing.ts --vm <vmId> --apply
@@ -30,12 +30,12 @@
  * Adopt mode (NO purchase): Hostinger's order API sometimes charges the card
  * and STILL fails the request (observed Jul 5 2026: a 422 on hostname AND a
  * 402 "card payment could not be completed" each left a PAID KVM1 stuck in
- * `initial`). Adopt such a box instead of buying another — same
+ * `initial`). Adopt such a box instead of buying another, same
  * setup→recreate flow provision-kvm2-smoke.ts validated:
  *   npx tsx debug/provision-kvm1-smoke.ts --adopt-vm <vmId>          # dry run
  *   npx tsx debug/provision-kvm1-smoke.ts --adopt-vm <vmId> --apply
  *
- * After it completes, deploy the clone (no Cloudflare tunnel — probes go
+ * After it completes, deploy the clone (no Cloudflare tunnel, probes go
  * over SSH so the experiment never publishes hostnames):
  *   set -a && source .env && set +a
  *   CLOUDFLARE_TUNNEL_TOKEN= npx tsx scripts/redeploy-deploy-client.ts --business <cloneId>
@@ -147,11 +147,11 @@ console.log(`\ncreating clone business ${cloneId}, "${cloneName}"`);
 const { error: insBizErr } = await db.from("businesses").insert({
   id: cloneId,
   name: cloneName,
-  // NOT the source owner's email — see provision-kvm2-smoke.ts for the
+  // NOT the source owner's email, see provision-kvm2-smoke.ts for the
   // session-hijack incident this prevents. Synthetic, undeliverable.
   owner_email: `kvm1-smoke+${cloneId}@invalid.newcoworker.com`,
   tier: "starter",
-  // Closest valid hardware pin ("kvm1" is not a VpsSize) — matches the
+  // Closest valid hardware pin ("kvm1" is not a VpsSize), matches the
   // bootstrap profile actually applied to the box.
   vps_size: "kvm2",
   status: "offline",
@@ -184,7 +184,7 @@ if (insCfgErr) {
 // ------------------------------------------------------- purchase OR adopt
 let result: Awaited<ReturnType<typeof provisionVpsForBusiness>>;
 if (ADOPT_VM_ID !== null) {
-  // Same proven setup→recreate sequence production pool-adopts use —
+  // Same proven setup→recreate sequence production pool-adopts use,
   // adoptVpsForBusiness reuses/mints the key row, registers the TIER=starter
   // VPS_SIZE=kvm2 post-install, recreates until the key attaches, and waits
   // for the box's own post-install run to go quiescent.

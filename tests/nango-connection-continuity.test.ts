@@ -5,7 +5,7 @@ import type { WorkspaceOAuthConnectionRow } from "@/lib/db/workspace-oauth-conne
 /**
  * Reconnect continuity: reconnecting the SAME mailbox used to mint a NEW
  * workspace_oauth_connections row (fresh Nango connection id), stranding
- * every AiFlow mailbox binding on the old row id — the KYP Jul 22 2026
+ * every AiFlow mailbox binding on the old row id, the KYP Jul 22 2026
  * `connection_not_found` incident class. Consolidation keeps the OLD row id
  * and re-points it at the fresh grant.
  */

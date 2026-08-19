@@ -31,14 +31,14 @@ export function TasksWorkspace({
   defaultScope: "mine" | "all";
   hasLinkedEmployee: boolean;
   canManagePipelines: boolean;
-  /** Manager+ (manage_aiflows) — gates the list view's Dismiss-task action. */
+  /** Manager+ (manage_aiflows), gates the list view's Dismiss-task action. */
   canDismissRuns: boolean;
-  /** E.164 from ?lead= — the board scrolls to + highlights this lead's card. */
+  /** E.164 from ?lead=, the board scrolls to + highlights this lead's card. */
   highlightLead: string | null;
 }) {
   const t = useTranslations("dashboard.tasksData");
   // Hydration starts on the default and the effect applies the stored
-  // preference (a brief flash beats an SSR/client mismatch) — same pattern
+  // preference (a brief flash beats an SSR/client mismatch), same pattern
   // as the AiFlows Visual|Classic toggle.
   const [view, setView] = useState<View>("board");
 

@@ -20,8 +20,8 @@ import {
 } from "@/lib/pricing";
 
 /**
- * Single source of truth for how the plan tiers are DISPLAYED — feature
- * bullets, price strings, renewal copy — shared by the public /pricing page
+ * Single source of truth for how the plan tiers are DISPLAYED, feature
+ * bullets, price strings, renewal copy, shared by the public /pricing page
  * and the /onboard plan-selection step so the two can never drift apart.
  * All numbers derive from `tier.ts` / `limits.ts`; nothing is hard-coded here.
  *
@@ -205,7 +205,7 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
 
 /**
  * Every bullet here is SHIPPED product (enterprise feature buildout,
- * Phases 1–6) or an explicit operational commitment — this list is what
+ * Phases 1–6) or an explicit operational commitment, this list is what
  * sales quotes, so keep it honest:
  *  - team roles + access control: business_members + authz matrix (Phase 1)
  *  - multi-business agency dashboard: active-business switcher (Phase 2)
@@ -306,7 +306,7 @@ function buildPaidTierCard(
           : `${price.total} billed today for the ${periodLabel}`
         : undefined,
     // Only the monthly plan carries a first-cycle intro discount today, so
-    // `hasIntroDiscount` alone decides — no separate period check needed.
+    // `hasIntroDiscount` alone decides, no separate period check needed.
     introOffer: price.hasIntroDiscount
       ? es
         ? `El descuento del primer mes te ahorra ${price.firstCycleDiscount}`

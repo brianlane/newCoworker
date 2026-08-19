@@ -7,7 +7,7 @@
  * POSTs a compact JSON payload to the app's /api/email/inbound webhook, which
  * resolves the tenant and triggers any matching `tenant_email` flows.
  *
- * Loop guard: mail FROM the platform domain is dropped — the AI mailbox sends
+ * Loop guard: mail FROM the platform domain is dropped, the AI mailbox sends
  * via Resend from that same domain, so its own bounces/replies must never
  * re-enter the pipeline.
  *
@@ -84,7 +84,7 @@ async function uploadAttachment(
   });
 
   if (!res.ok) {
-    // One bad upload must not fail the whole delivery — log and drop it.
+    // One bad upload must not fail the whole delivery, log and drop it.
     console.error(`attachment upload failed (${res.status}) for ${safeName}`);
     return null;
   }
@@ -132,7 +132,7 @@ export default {
 
     const email = await PostalMime.parse(message.raw);
 
-    // Prefer the text/plain part — UNLESS it is itself tag-stripped template
+    // Prefer the text/plain part, UNLESS it is itself tag-stripped template
     // source (some senders build it by naively flattening the HTML, leaving
     // stylesheets and `*|MC:SUBJECT|*` merge tags in the "text"). In that
     // case, and when there is no text part at all, collapse the HTML part

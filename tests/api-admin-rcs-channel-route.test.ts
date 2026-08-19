@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/rcs-channel — the operator toggle behind the admin
+ * POST /api/admin/rcs-channel, the operator toggle behind the admin
  * "Messaging channel (RCS)" card.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

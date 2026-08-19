@@ -29,8 +29,8 @@ export default async function AdminClientsPage() {
   const prospectOffers = await listProspectWhiteGloveOffers();
   const intakes = await listWhiteGloveIntakes();
 
-  // Per-tenant margin column (src/lib/admin/margin.ts) — best effort: a
-  // failed load renders "—" cells, never an errored page.
+  // Per-tenant margin column (src/lib/admin/margin.ts), best effort: a
+  // failed load renders ", " cells, never an errored page.
   const marginByBusiness = await loadFleetMargins()
     .then((data) => data.byBusiness)
     .catch((err: unknown) => {
@@ -42,7 +42,7 @@ export default async function AdminClientsPage() {
     });
 
   // Churn-risk badge: businesses whose owner hasn't signed in for 90+ days
-  // (see /admin/engagement). Best effort — an auth-directory read failure OR
+  // (see /admin/engagement). Best effort, an auth-directory read failure OR
   // a clipped (partial) directory degrades to "no badges" instead of
   // erroring the page or flagging users the scan never reached.
   const quietOwners = await listPlatformAuthUsers()
@@ -64,8 +64,8 @@ export default async function AdminClientsPage() {
       return new Set<string>();
     });
 
-  // "Active" means a paying client — active subscription backed by a real
-  // Stripe payment — matching the dashboard's day-current MRR definition
+  // "Active" means a paying client, active subscription backed by a real
+  // Stripe payment, matching the dashboard's day-current MRR definition
   // (src/lib/admin/mrr.ts). Wiped rows, canceled internal pilots, and
   // no-subscription smoke clones count only toward the total.
   const activeClientCount = businesses.filter((b) => {

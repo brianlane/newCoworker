@@ -24,7 +24,7 @@ describe("canadianNpaFromPhone", () => {
     expect(canadianNpaFromPhone("no-digits!")).toBeNull();
   });
   it("rejects an NPA that can't exist (leading 0/1)", () => {
-    // +1 followed by 10 digits whose NPA starts with 1 — structurally NANP
+    // +1 followed by 10 digits whose NPA starts with 1, structurally NANP
     // but not a real area code.
     expect(canadianNpaFromPhone("+11234567890")).toBeNull();
   });
@@ -35,7 +35,7 @@ describe("isCanadianBusiness", () => {
     expect(isCanadianBusiness({ phone: "4164560696" })).toBe(true); // Toronto
     expect(isCanadianBusiness({ phone: "+15198006401" })).toBe(true); // Ontario
     expect(isCanadianBusiness({ phone: "6025551234" })).toBe(false); // Phoenix
-    // A US phone wins over a Canadian timezone — the phone drives which
+    // A US phone wins over a Canadian timezone, the phone drives which
     // country the coworker number is purchased in.
     expect(
       isCanadianBusiness({ phone: "6025551234", timezone: "America/Toronto" })

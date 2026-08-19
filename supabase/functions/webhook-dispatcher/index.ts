@@ -1,5 +1,5 @@
 /**
- * Webhook (REST hook) delivery cron — every minute, see
+ * Webhook (REST hook) delivery cron, every minute, see
  * 20260729000001_schedule_webhook_dispatcher.sql.
  *
  * Thin wrapper: cron auth + env plumbing; the cursor-polling delivery

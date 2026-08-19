@@ -211,8 +211,8 @@ export type RowboatChatMessage = { role: "user" | "assistant" | "system"; conten
 
 /**
  * Multi-turn E2E: Rowboat continues a thread via `conversationId` + optional `state` from the prior response.
- * Each leg sends **only** the new user message (see Rowboat HTTP API); do not replay `{ role: "assistant", content }`
- * — upstream Zod expects agent/tool-shaped assistant rows, not plain text.
+ * Each leg sends **only** the new user message (see Rowboat HTTP API); do not replay `{ role: "assistant", content }`,
+ * upstream Zod expects agent/tool-shaped assistant rows, not plain text.
  */
 export async function postRowboatMultiTurnThread(
   rowboatPort: number,

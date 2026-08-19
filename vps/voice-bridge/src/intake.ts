@@ -39,16 +39,16 @@ export function intakeOpener(
  * System instruction for the HomeLight AI-takeover intake call. The live seller
  * was just connected (we pressed 1) after both Dave and Amy missed the warm
  * transfer, so the assistant's whole job is a short, warm intake: confirm who
- * they are, what they're selling, and when — then promise a fast call back.
+ * they are, what they're selling, and when, then promise a fast call back.
  *
  * With `transfer` set (a place_ai_call follow-up call that may live-transfer),
  * the instruction pivots: the persona IS the call script, the goal is asking
  * whether now is a good time, and a yes leads to the `transfer_to_owner` tool
  * instead of the capture checklist (capture_lead stays available for notes).
  *
- * With `outboundCall` (WE dialed them — outbound_call / place_ai_call), the
+ * With `outboundCall` (WE dialed them, outbound_call / place_ai_call), the
  * framing flips from "a live lead was connected to you" to "your call was
- * just answered", and the checklist must NOT ask for a callback number — we
+ * just answered", and the checklist must NOT ask for a callback number, we
  * literally just called it (the first live test's exact complaint: "why do
  * you need my number if you just called it?").
  *
@@ -149,7 +149,7 @@ export function intakeSystemInstruction(
     outboundCall || transfer ? "outbound" : "inbound"
   );
   const allFields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
-  // On a call WE placed, "phone" must not be in the collect list either —
+  // On a call WE placed, "phone" must not be in the collect list either,
   // listing it would contradict the never-ask-for-their-number rule below
   // (the default field set includes it for the inbound live-transfer case).
   // A list that filters to empty (capture_fields: ["phone"]) degrades to
@@ -166,7 +166,7 @@ export function intakeSystemInstruction(
   // as being greeted twice (first live test, Jul 15 2026).
   const greetOnce =
     "Say your opening line only ONCE. If they speak while you're saying it, or you were interrupted, never restart it, acknowledge what they said and continue from where the conversation actually is.";
-  // On a call WE placed, the number is by definition reachable — asking for
+  // On a call WE placed, the number is by definition reachable, asking for
   // it reads as a bot non-sequitur.
   const noNumberAsk =
     "You called them on their own phone just now, so NEVER ask for their phone number, only note a different number if they volunteer one.";
@@ -244,7 +244,7 @@ export function intakeSystemInstruction(
     lines.push(OUTBOUND_VOICEMAIL_TOOL_LINE);
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
-  // must never ask for something the flow already extracted — "why are you
+  // must never ask for something the flow already extracted, "why are you
   // asking my name if you already have it?" (live test, Jul 15 2026).
   if (contextNote && contextNote.trim()) {
     lines.push(
@@ -327,7 +327,7 @@ function fieldLabel(key: string): string {
  *
  * The only trustworthy callback is the phone the AI captured via `capture_lead`
  * (`lead.phone`). The inbound ANI on a live-transfer call is the transfer
- * partner's line (e.g. HomeLight `+14159851909`), NOT the seller — so it is
+ * partner's line (e.g. HomeLight `+14159851909`), NOT the seller, so it is
  * shown only as `transferFromE164` ("Transferred via"), never as the callback,
  * to avoid handing the owner a wrong number/identity.
  *
@@ -354,7 +354,7 @@ export function composeIntakeLeadSms(input: {
   ];
   // Render known fields first in a stable order, then any custom captured
   // fields (capture_lead honors the chain's ai_takeover.capture_fields, so the
-  // SMS must surface whatever the AI stored — not just the standard five).
+  // SMS must surface whatever the AI stored, not just the standard five).
   const rendered = new Set<string>();
   for (const key of Object.keys(INTAKE_FIELD_LABELS)) {
     const v = input.lead[key];

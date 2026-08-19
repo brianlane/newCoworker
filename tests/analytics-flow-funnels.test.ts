@@ -73,7 +73,7 @@ describe("getFlowFunnels", () => {
           { flow_id: "flow-busy", context: { vars: { __goal_g1: "replied" } } },
           { flow_id: "flow-busy", context: { vars: {} } },
           { flow_id: "flow-busy", context: null },
-          // Run for a flow beyond the flow list (deleted flow) — ignored in rows.
+          // Run for a flow beyond the flow list (deleted flow), ignored in rows.
           { flow_id: "flow-gone", context: { vars: { __goal_g1: "claimed" } } }
         ],
         error: null
@@ -170,7 +170,7 @@ describe("getFlowFunnels", () => {
         return [{ id: "flow-1", name: "F", enabled: true }] as never;
       }
       // A FULL raw page whose rows are mostly unattributed: the filtered
-      // list is tiny, but the scan itself was capped — must flag clipped.
+      // list is tiny, but the scan itself was capped, must flag clipped.
       return Array.from({ length: FLOW_FUNNEL_SCAN_LIMIT }, (_, i) => ({
         flow_id: i === 0 ? "flow-1" : null
       })) as never;
@@ -206,7 +206,7 @@ describe("getFlowFunnels", () => {
         return [{ id: "flow-1", name: "Boxed flow", enabled: true }] as never;
       }
       // Box sends include a null flow_id (no "is not null" in the data-api
-      // grammar) — filtered client-side.
+      // grammar), filtered client-side.
       return [{ flow_id: "flow-1" }, { flow_id: null }] as never;
     });
     const { client, chains } = makeClient({

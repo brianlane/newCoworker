@@ -1,5 +1,5 @@
 /**
- * GET /api/public/v1/me — identify the business behind an API key.
+ * GET /api/public/v1/me, identify the business behind an API key.
  *
  * Zapier calls this as its auth "test" endpoint (the label shown next to a
  * connected account), and it doubles as a cheap connectivity check for any

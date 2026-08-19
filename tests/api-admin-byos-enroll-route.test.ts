@@ -211,7 +211,7 @@ describe("api/admin/byos/enroll route", () => {
   });
 
   it("provision: a stale or terminal previous run does not block a retry", async () => {
-    // Stale thinking row (crashed run > 30 min ago) — retry allowed.
+    // Stale thinking row (crashed run > 30 min ago), retry allowed.
     vi.mocked(getLatestProvisioningStatus).mockResolvedValueOnce({
       percent: 40,
       phase: "remote_deploy_starting",
@@ -221,7 +221,7 @@ describe("api/admin/byos/enroll route", () => {
     const stale = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
     expect(stale.status).toBe(200);
 
-    // Terminal error row — retry allowed.
+    // Terminal error row, retry allowed.
     vi.mocked(getLatestProvisioningStatus).mockResolvedValueOnce({
       percent: 95,
       phase: "deploy_failed",

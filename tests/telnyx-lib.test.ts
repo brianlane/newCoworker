@@ -147,7 +147,7 @@ describe("telnyx call-control", () => {
     // Regression: the legacy `stream_sampling_rate` field is NOT in the
     // Telnyx schema and was silently ignored, leaving outbound at the 8 kHz
     // default while the bridge generates 16 kHz frames. The inbound stream
-    // also has to be `L16` — without `stream_codec` Telnyx defaults to the
+    // also has to be `L16`, without `stream_codec` Telnyx defaults to the
     // call's PSTN codec (PCMU 8 kHz µ-law), and the bridge feeds those
     // bytes to Gemini Live as `audio/pcm;rate=16000`, producing speech-
     // recognition garbage. See `_shared/telnyx_call_actions.ts` header
@@ -449,7 +449,7 @@ describe("telnyx call-control", () => {
   });
 
   it("telnyxHangupCall posts /actions/hangup with empty body", async () => {
-    // Used as the Safe Mode recovery step after a failed transfer — the call
+    // Used as the Safe Mode recovery step after a failed transfer, the call
     // has already been answered, so we need a real /actions/hangup, not
     // /actions/reject (which only works pre-answer).
     const fetchMock = vi

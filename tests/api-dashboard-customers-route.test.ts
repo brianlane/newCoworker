@@ -160,7 +160,7 @@ describe("GET /api/dashboard/customers (list)", () => {
     expect(item.totalInteractionCount).toBe(4);
     expect(item.hasPinnedNotes).toBe(true);
     expect(item.hasSummary).toBe(true);
-    // Sensitive content NEVER returned in the list — detail route only.
+    // Sensitive content NEVER returned in the list, detail route only.
     expect(JSON.stringify(item)).not.toContain("secret summary");
     expect(JSON.stringify(item)).not.toContain("secret pinned");
   });
@@ -494,7 +494,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
       birthday: "1990-07-10"
     });
-    // Junk shapes are rejected at the schema layer — BEFORE the contact
+    // Junk shapes are rejected at the schema layer, BEFORE the contact
     // lookup, so no getCustomerMemory mock is queued for this call.
     const bad = await DETAIL_PATCH(
       patchReq({ birthday: "July 10" }),
@@ -523,7 +523,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, PRIMARY, {
       tags: ["Engaged"]
     });
-    // Goal events fan out over every linked number — a parked run may still
+    // Goal events fan out over every linked number, a parked run may still
     // be keyed on the merged-away alias.
     expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, PRIMARY, {
       kind: "tag_added",

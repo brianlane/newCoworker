@@ -33,7 +33,7 @@ import { runTool } from "./helpers/run-mcp-tool";
  * Claude-connector notification tools: manage_settings-gated (manager+, the
  * same matrix as the settings page), boolean toggles only. The update tool
  * rides the shared whitelist core; the read tool answers the toggle map plus
- * whether alert recipients are configured — never the recipients themselves
+ * whether alert recipients are configured, never the recipients themselves
  * (no need to hand PII to the model to answer "is it on?").
  */
 

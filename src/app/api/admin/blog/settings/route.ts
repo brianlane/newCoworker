@@ -1,5 +1,5 @@
 /**
- * Admin blog settings — the weekly-digest toggles and the Instagram
+ * Admin blog settings, the weekly-digest toggles and the Instagram
  * cross-post target/mode (single fixed blog_settings row).
  */
 

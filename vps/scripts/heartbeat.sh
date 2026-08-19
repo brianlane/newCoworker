@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# heartbeat.sh — Monitor Rowboat + Ollama, auto-restart on failure
+# heartbeat.sh, Monitor Rowboat + Ollama, auto-restart on failure
 # Runs every 2 minutes via cron.
 
 set -euo pipefail
@@ -22,7 +22,7 @@ check_ollama() {
   curl -sf --max-time 5 http://127.0.0.1:11434/api/tags > /dev/null 2>&1
 }
 
-# KVM1 boxes ship no local model and no ollama.service at all — checking
+# KVM1 boxes ship no local model and no ollama.service at all, checking
 # (and "restarting") Ollama there failed every 2-minute tick forever,
 # spamming the log and tripping the failure counter for a service the box
 # was never supposed to have.
@@ -82,7 +82,7 @@ report_posture() {
     add_check ufw_active false "ufw inactive or missing"
   fi
 
-  # `sshd -T` occasionally produces no output (transient — observed twice on
+  # `sshd -T` occasionally produces no output (transient, observed twice on
   # HQ while the effective config was verifiably correct), which the old
   # check misread as "allows password auth". Retry, and when the probe never
   # answers, say THAT instead of inventing a config finding.
@@ -112,12 +112,12 @@ report_posture() {
     add_check unattended_upgrades false "unattended-upgrades missing"
   fi
 
-  # Only SSH may listen publicly — everything else binds loopback / the
+  # Only SSH may listen publicly, everything else binds loopback / the
   # docker bridge behind the outbound tunnel. Whitelist:
-  #   - ALL of 127.0.0.0/8 and [::1], not just 127.0.0.1 — systemd-resolved's
+  #   - ALL of 127.0.0.0/8 and [::1], not just 127.0.0.1, systemd-resolved's
   #     DNS stub listens on 127.0.0.53/127.0.0.54:53 (with %iface suffixes),
   #     which is loopback and was false-positiving every fleet report.
-  #   - Host Ollama on :11434 — bootstrap.sh deliberately binds it to
+  #   - Host Ollama on :11434, bootstrap.sh deliberately binds it to
   #     0.0.0.0 so the dockerised llm-router can reach it via the docker
   #     bridge; UFW's INPUT default-deny (a host service, not a Docker
   #     published port) blocks it externally, verified 2026-07-20.
@@ -170,7 +170,7 @@ report_posture() {
     add_check memory_headroom false "cannot read MemTotal from /proc/meminfo"
   fi
 
-  # Ollama must be reachable THROUGH the docker bridge — the path the
+  # Ollama must be reachable THROUGH the docker bridge, the path the
   # dockerised llm-router actually uses (host.docker.internal → host
   # gateway). A loopback-only Ollama passes every host-side probe while the
   # local-model fallback 502s: exactly the July 2026 adopted-box drift

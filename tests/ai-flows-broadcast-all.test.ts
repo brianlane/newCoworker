@@ -5,7 +5,7 @@ import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
 /**
  * `broadcastAll` on route_to_team (team-first human handoff): offer EVERY
- * active, available roster member at once — the roster is resolved at
+ * active, available roster member at once, the roster is resolved at
  * EXECUTION time, so the offer set never desyncs as employees come and go
  * (the fixed `agentNames` list would). Mutually exclusive with every
  * pinned-recipient option; the worker caps the fan-out at the same 10

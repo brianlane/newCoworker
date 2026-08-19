@@ -2,23 +2,23 @@
  * Post-hoc meter for forwarded / transferred call minutes.
  *
  * The platform's Telnyx account pays carrier time for the FULL duration of
- * every leg of a tenant's call — including the human conversation after the AI
+ * every leg of a tenant's call, including the human conversation after the AI
  * warm-transfers (`transfer_to_owner`), safe-mode forwards, per-caller
  * transfer rules, and handoff-chain calls a human answered. AI settlement only
  * bills the AI portion (it stops at bridge media end), and the pure-human
  * paths never reserved at all, so until Jul 2026 that carrier time was
  * unmetered. Policy parity with SMS: NOTHING is exempt from metering, but a
- * post-hoc meter never refuses — the call already happened; the reserve gate
+ * post-hoc meter never refuses, the call already happened; the reserve gate
  * (and the safe-mode pre-check) refuse the NEXT call once the pool is spent.
  *
  * `meterForwardedCallSeconds` resolves the tenant's tier cap and CACHED Stripe
- * period (no JIT refresh — this is bookkeeping, not admission control; the
+ * period (no JIT refresh, this is bookkeeping, not admission control; the
  * monthly window derives via `deriveMonthlyQuotaWindow` exactly like
  * voice_reserve so both write the same usage row), then calls the idempotent
  * `voice_meter_forwarded_call` RPC (per-minute rounding, commit to
  * `voice_billing_period_usage.committed_included_seconds`).
  *
- * Best-effort by contract: NEVER throws — metering must not break webhook
+ * Best-effort by contract: NEVER throws, metering must not break webhook
  * handling. Unresolvable period/tier maps to a `skipped` result + telemetry so
  * ops can backfill.
  */
@@ -72,7 +72,7 @@ export type ForwardedMeterResult =
 /**
  * Included voice seconds per Stripe period for a tier. Exported so the
  * backfill one-shot (`scripts/oneshot/backfill-forwarded-call-minutes.ts`)
- * resolves the cap exactly the way the live meter does — a backfill that
+ * resolves the cap exactly the way the live meter does, a backfill that
  * bootstrapped a usage row with a different `tier_cap_seconds` than the
  * reserve gate reads would make the cap disagree with itself.
  */
@@ -157,7 +157,7 @@ export async function meterForwardedCallSeconds(
       return { status: "skipped", reason: "no_period_bounds" };
     }
     // A cache past its period end would derive a month-window key for the OLD
-    // Stripe period — a different usage row than the reserve gate (which JIT-
+    // Stripe period, a different usage row than the reserve gate (which JIT-
     // refreshes) reads, so the commit would be invisible to the cap. Skip with
     // telemetry instead; ops can backfill once the cache refreshes. Same
     // staleness rule as checkVoiceBudgetAvailable.
@@ -171,7 +171,7 @@ export async function meterForwardedCallSeconds(
       return { status: "skipped", reason: "period_stale" };
     }
 
-    // Same month-window key as voice_reserve/checkVoiceBudgetAvailable — the
+    // Same month-window key as voice_reserve/checkVoiceBudgetAvailable, the
     // meter must write the SAME usage row the gate reads.
     const periodStart = new Date(
       deriveMonthlyQuotaWindow(periodStartRaw, Date.now()).startIso

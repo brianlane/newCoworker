@@ -52,7 +52,7 @@ export function parseWtClientState(raw: string | null | undefined): WtClientStat
     }
   }
   if (!text.startsWith(`${WT_CS_PREFIX}:`)) return null;
-  // businessId is a uuid and both numbers are E.164 — none contain ':', so a
+  // businessId is a uuid and both numbers are E.164, none contain ':', so a
   // plain split yields exactly 4 segments.
   const parts = text.split(":");
   if (parts.length !== 4) return null;

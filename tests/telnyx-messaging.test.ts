@@ -92,7 +92,7 @@ describe("telnyx messaging", () => {
 
   it("sendTelnyxSms skips the RCS-first branch when media is attached", async () => {
     // The RCS payload here is text-only, so an image would be silently
-    // dropped on the rich channel — media sends must go straight to /v2/messages.
+    // dropped on the rich channel, media sends must go straight to /v2/messages.
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ data: { id: "msg_mms2" } })

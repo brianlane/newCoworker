@@ -91,7 +91,7 @@ describe("setContactOverride", () => {
     const update = calls.find((c) => c.method === "update");
     expect(update?.table).toBe("contacts");
     expect(update?.args[0]).toMatchObject({ display_name: "Amy Laidlaw" });
-    // No `type` in an update payload — relabeling never changes classification.
+    // No `type` in an update payload, relabeling never changes classification.
     expect(update?.args[0]).not.toHaveProperty("type");
     const eqArgs = calls.filter((c) => c.method === "eq").map((c) => c.args);
     expect(eqArgs).toContainEqual(["business_id", BIZ]);

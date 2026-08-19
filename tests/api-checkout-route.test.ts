@@ -290,7 +290,7 @@ describe("api/checkout route", () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifySignupIdentity).mockResolvedValue(true);
     // Non-NANP phone (no area-code signal) and a legacy row with no stored
-    // timezone: the body's browser timezone decides — same signal the Step 3
+    // timezone: the body's browser timezone decides, same signal the Step 3
     // order summary previewed with.
     vi.mocked(getBusiness).mockResolvedValue({
       id: businessId,
@@ -325,7 +325,7 @@ describe("api/checkout route", () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifySignupIdentity).mockResolvedValue(true);
     // Row created with a US phone; the owner edited it to a Toronto number
-    // before retrying checkout — the draft (synced just before this call)
+    // before retrying checkout, the draft (synced just before this call)
     // carries the value the order summary previewed the fee with.
     vi.mocked(getBusiness).mockResolvedValue({
       id: businessId,
@@ -363,8 +363,8 @@ describe("api/checkout route", () => {
         canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
       })
     );
-    // The fresher phone is written back to the row — COERCED to E.164, the
-    // only shape /api/business/create persists now — so PROVISIONING (which
+    // The fresher phone is written back to the row, COERCED to E.164, the
+    // only shape /api/business/create persists now, so PROVISIONING (which
     // classifies from the row) buys the number in the same country the fee
     // was billed for.
     expect(updateBusinessPhone).toHaveBeenCalledWith(businessId, "+14164560696");
@@ -747,7 +747,7 @@ describe("api/checkout route", () => {
     // that keeps "account creation" and "password reset" as separate
     // flows. Without it, an attacker could pay a Stripe Checkout for a
     // victim's email and reach /api/onboard/set-password with a
-    // session that names that email — even though set-password itself
+    // session that names that email, even though set-password itself
     // is now create-only, sending a paid customer to a guaranteed 409
     // is poor UX and the right place to refuse is here.
     vi.mocked(getAuthUser).mockResolvedValue(null);
@@ -782,7 +782,7 @@ describe("api/checkout route", () => {
     // `authUserExistsByEmail` throws on lookup failure (vs. the soft
     // `findAuthUserIdByEmail` helper which collapses errors to null).
     // The /api/checkout gate must surface that as a 500 so the client
-    // retries — silently allowing the checkout through would re-open
+    // retries, silently allowing the checkout through would re-open
     // the bypass this entire gate exists to close.
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifyOnboardingToken).mockReturnValue(true);

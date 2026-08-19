@@ -118,7 +118,7 @@ export function CustomerProfileEditor(props: Props) {
   async function remove() {
     // Two-step confirmation so an accidental click doesn't nuke the
     // customer's rolling memory. The underlying SMS/voice history is
-    // NOT touched by this delete — only the rollup row.
+    // NOT touched by this delete, only the rollup row.
     const ok = window.confirm(
       "Delete this customer's rolling memory?\n\nThe customer's SMS and call history stays in the per-channel dashboards. Only the unified profile + pinned notes are removed. Your AI coworker will treat them as a new contact next time they reach out."
     );

@@ -6,12 +6,12 @@
  *
  * The flow it writes:
  *   trigger : inbound SMS that contains a URL (and, by default, mentions the
- *             lead source) within a correlation window — handles the common
+ *             lead source) within a correlation window, handles the common
  *             "text then link" two-message case.
  *   steps   : extract_url -> browse_extract (lead type + contact/details) ->
  *             three send_sms branches (buyer copy when lead_type equals "buyer",
  *             seller copy when "seller", buy-and-sell copy when "both"; only the
- *             matching branch sends — the intro goes out automatically, no
+ *             matching branch sends, the intro goes out automatically, no
  *             approval gate) -> route_to_team (offer the lead to a team agent
  *             over SMS with timed escalation + owner fallback) -> notify_owner.
  *   options : suppressDefaultReply so the lead-source message does NOT also
@@ -64,9 +64,9 @@
  *   AIFLOW_SEED_CORRELATION_MINUTES    (default 15)
  *
  * Exit codes:
- *   0  — seeded, or already existed (idempotent no-op), or dry-run
- *   1  — Supabase error
- *   2  — required env/arg missing or definition invalid
+ *   0, seeded, or already existed (idempotent no-op), or dry-run
+ *   1, Supabase error
+ *   2, required env/arg missing or definition invalid
  */
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -182,7 +182,7 @@ function buildDefinition(opts: {
       },
       // Branch on lead_type: one send_sms per branch sharing a `when` guard so
       // only the matching branch fires. The intro is sent automatically (no
-      // approval gate) — if lead_type matches neither branch, nothing is sent.
+      // approval gate), if lead_type matches neither branch, nothing is sent.
       // `equals` (not `contains`) keeps the guards mutually exclusive so a lead
       // is never double-texted. Matching is case-insensitive and the extraction
       // prompt normalizes lead_type to a single lowercase word.
@@ -228,12 +228,12 @@ function buildDefinition(opts: {
       },
       // Ungated so the owner is always told a lead came in; worded as "handled"
       // (not "sent") because if lead_type matched neither branch no intro went
-      // out — the Outcome line below reflects exactly what happened.
+      // out, the Outcome line below reflects exactly what happened.
       {
         id: "notify",
         type: "notify_owner",
         // Names the lead source and ends with the engine-maintained
-        // {{vars.actions_taken}} so the owner always sees the outcome —
+        // {{vars.actions_taken}} so the owner always sees the outcome,
         // including "lead claimed by <agent>" when a teammate accepts it.
         message:
           "AiFlow handled a {{vars.lead_type}} lead.\n" +

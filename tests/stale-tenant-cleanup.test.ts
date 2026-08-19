@@ -21,7 +21,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     // Default: the email owns nothing else after the row delete → auth user
     // is removable.
     listBusinessIdsForEmail: vi.fn().mockResolvedValue([]),
-    // Default: no stale business has resubscribed — nothing is Stripe-linked.
+    // Default: no stale business has resubscribed, nothing is Stripe-linked.
     listStripeLinkedIds: vi.fn().mockResolvedValue(new Set<string>()),
     findAuthUserId: vi.fn().mockResolvedValue(null),
     deleteAuthUser: vi.fn().mockResolvedValue(undefined),
@@ -71,7 +71,7 @@ describe("cleanupStaleTenantsForVm", () => {
   it("skips (never deletes) a stale business that is Stripe-linked again after release", async () => {
     // Admin released the box, the old owner completed (or is mid-webhook on)
     // a NEW paid checkout before anyone adopted it. Deleting now would
-    // orphan Stripe billing — the guard skips that business and deletes
+    // orphan Stripe billing, the guard skips that business and deletes
     // only the genuinely dead one. The linkage predicate includes `pending`
     // rows with a stripe_subscription_id, so the webhook-activation window
     // is covered too.

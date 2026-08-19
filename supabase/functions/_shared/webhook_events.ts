@@ -1,7 +1,7 @@
 /**
  * Webhook event model shared by the Next.js public API
  * (`/api/public/v1/events`, REST-hook validation) and the
- * `webhook-dispatcher` Edge cron. Pure data + mappers — no I/O — so both
+ * `webhook-dispatcher` Edge cron. Pure data + mappers, no I/O, so both
  * runtimes (Node and Deno) shape identical payloads and the whole module is
  * unit-testable.
  *
@@ -38,7 +38,7 @@ export const CALL_SUMMARY_GRACE_MINUTES = 10;
 export type WebhookEventSource = {
   /** Source table polled by the dispatcher. */
   table: string;
-  /** Columns to select (bounded — payload jsonb only where needed). */
+  /** Columns to select (bounded, payload jsonb only where needed). */
   select: string;
   /**
    * Column the delivery cursor tracks. Usually `created_at`, but
@@ -54,7 +54,7 @@ export type WebhookEventSource = {
   filter: [string, string, string] | null;
   /**
    * Optional readiness condition (PostgREST `.or()` syntax) computed at tick
-   * time — a row is only delivered once it matches. Used to hold
+   * time, a row is only delivered once it matches. Used to hold
    * call.completed rows until the async summary lands (or the grace lapses).
    */
   readyOr: ((nowMs: number) => string) | null;
@@ -116,7 +116,7 @@ export type WebhookSourceRow = {
 export type WebhookPayload = {
   event: WebhookEventType;
   business_id: string;
-  /** Source-row id — idempotency key for consumers. */
+  /** Source-row id, idempotency key for consumers. */
   id: string;
   occurred_at: string;
   data: Record<string, unknown>;
@@ -130,7 +130,7 @@ function str(row: WebhookSourceRow, key: string): string | null {
 /**
  * Inbound SMS text lives inside the raw Telnyx envelope. Mirrors the happy
  * paths of `inboundTextFromPayload` in src/lib/db/sms-history.ts (plain
- * `text`, legacy `body` string) — RCS suggestion taps degrade to "" which
+ * `text`, legacy `body` string), RCS suggestion taps degrade to "" which
  * is acceptable for a webhook feed.
  */
 export function inboundSmsTextFromEnvelope(payload: unknown): string {
@@ -153,7 +153,7 @@ export function buildWebhookPayload(
     business_id: str(row, "business_id") ?? "",
     id: row.id,
     // occurred_at follows the event's cursor column: created_at for most
-    // sources, but ended_at for call.completed — transcript rows are created
+    // sources, but ended_at for call.completed, transcript rows are created
     // at call START, and consumers read occurred_at as "when the call
     // finished" (Bugbot: "Call completed wrong timestamp").
     occurred_at:

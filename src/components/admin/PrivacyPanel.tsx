@@ -4,10 +4,10 @@
  * Admin privacy / data-lifecycle console (security review G6).
  *
  * Two admin-only levers, both audit-logged to coworker_logs server-side:
- *   * Retention window — `businesses.data_retention_days` (min 30, blank =
+ *   * Retention window, `businesses.data_retention_days` (min 30, blank =
  *     keep forever). The daily data-retention-sweep prunes content history
  *     older than the window; contacts are exempt.
- *   * End-user erasure — deletes one person's rows (by E.164 and/or email)
+ *   * End-user erasure, deletes one person's rows (by E.164 and/or email)
  *     across the content tables, central AND the tenant box for residency
  *     tenants. Unrecoverable; runs on a verified privacy request.
  */

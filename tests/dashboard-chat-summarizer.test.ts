@@ -116,7 +116,7 @@ describe("dashboard-chat summarizer, summarizeThread happy path", () => {
       messageCount: 50,
       projectId: "proj-1"
     });
-    // Stateless invocation — must NOT pass conversationId/state, or
+    // Stateless invocation, must NOT pass conversationId/state, or
     // the model's chat-mode rolling state would taint the summary.
     expect(deps.callRowboatChat).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -128,7 +128,7 @@ describe("dashboard-chat summarizer, summarizeThread happy path", () => {
       })
     );
     // Persists with the OVERALL message count, not just the summarized
-    // slice — the trigger gate compares against total messages.
+    // slice, the trigger gate compares against total messages.
     expect(deps.updateThreadSummary).toHaveBeenCalledWith(
       THREAD_ID,
       "compact summary text",
@@ -262,7 +262,7 @@ describe("dashboard-chat summarizer, failure modes (never throws)", () => {
 
   it("returns no_bearer when neither dep nor env supplies a bearer (config bug, not an outage)", async () => {
     const deps = makeDeps({ rowboatBearer: undefined });
-    // No env vars set in beforeEach — afterEach guarantees a clean slate.
+    // No env vars set in beforeEach, afterEach guarantees a clean slate.
     const result = await summarizeThread(BIZ, THREAD_ID, deps);
     expect(result).toEqual({ ok: false, reason: "no_bearer" });
     expect(deps.callRowboatChat).not.toHaveBeenCalled();

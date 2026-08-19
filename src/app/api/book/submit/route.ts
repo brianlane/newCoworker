@@ -1,5 +1,5 @@
 /**
- * POST /api/book/submit — public booking submission for the self-serve
+ * POST /api/book/submit, public booking submission for the self-serve
  * booking page (/book/<token>).
  *
  * Cookie-free, CSRF-exempt (see src/proxy.ts): authenticated by the page's
@@ -17,7 +17,7 @@ import { submitPublicBooking } from "@/lib/booking-page/service";
 
 export const dynamic = "force-dynamic";
 
-// Bookings are real calendar writes plus (when connected) a Zoom meeting —
+// Bookings are real calendar writes plus (when connected) a Zoom meeting,
 // tighter than the slot read. Durable so the quota binds fleet-wide.
 const SUBMIT_RATE = { interval: 10 * 60 * 1000, maxRequests: 10 };
 

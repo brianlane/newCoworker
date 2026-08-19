@@ -127,7 +127,7 @@ export function CustomersList({
   segments?: ContactSegment[];
   owners?: Array<{ id: string; name: string }>;
   canManageSegments?: boolean;
-  /** True when the directory scan hit its cap — counts are partial. */
+  /** True when the directory scan hit its cap, counts are partial. */
   clipped?: boolean;
 }) {
   const [sort, setSort] = usePersistentSort(

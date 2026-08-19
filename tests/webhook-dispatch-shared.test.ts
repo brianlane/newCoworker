@@ -291,7 +291,7 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(noRows.db, fetchReturning());
     expect(summary.subscriptions).toBe(1);
     expect(summary.delivered).toBe(0);
-    // One lease claim, then an immediate lease release — no cursor write.
+    // One lease claim, then an immediate lease release, no cursor write.
     expect(claimPatches(noRows.updates)).toHaveLength(1);
     expect(outcomePatches(noRows.updates)).toEqual([{ locked_until: null }]);
   });
@@ -441,7 +441,7 @@ describe("runWebhookDispatchTick", () => {
     expect(summary.delivered).toBe(1);
     expect(summary.failures).toBe(1);
     // The rows were already POSTed, so the cleanup write retries persisting
-    // the advanced cursor — otherwise the next tick would replay them.
+    // the advanced cursor, otherwise the next tick would replay them.
     expect(outcomePatches(updates)).toEqual([
       {
         locked_until: null,
@@ -603,7 +603,7 @@ describe("runWebhookDispatchTick", () => {
     expect(summary.skippedTier).toBe(1);
     expect(summary.delivered).toBe(0);
     expect(summary.failures).toBe(0);
-    // No lease claim, no cursor writes — the subscription row is untouched
+    // No lease claim, no cursor writes, the subscription row is untouched
     // so an upgrade resumes delivery from the frozen cursor.
     expect(updates).toHaveLength(0);
     expect(vi.mocked(fetchImpl)).not.toHaveBeenCalled();

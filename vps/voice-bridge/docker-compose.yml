@@ -5,8 +5,8 @@
 # defined by /opt/rowboat/docker-compose.yml) so it can reach `rowboat:3000`
 # and `llm-router:11435` by Docker DNS. Going via `host.docker.internal:3000`
 # does NOT work in production: rowboat publishes 127.0.0.1:3000 only, so
-# packets from a sibling container hit the host's docker-bridge IP — where
-# nothing is listening — and time out. (May 2026 outage: bridge accepted the
+# packets from a sibling container hit the host's docker-bridge IP, where
+# nothing is listening, and time out. (May 2026 outage: bridge accepted the
 # WebSocket from Telnyx, opened Gemini Live, then sat silent because every
 # Rowboat tool/turn fetch hung 30s before failing.)
 services:
@@ -15,7 +15,7 @@ services:
     ports:
       # Loopback-only publish: cloudflared (host process) forwards the
       # voice-<biz> tunnel hostname to 127.0.0.1:8090, and sibling containers
-      # reach the bridge via rowboat_default DNS — nothing needs a public
+      # reach the bridge via rowboat_default DNS, nothing needs a public
       # bind. Without the 127.0.0.1 prefix Docker's iptables rules bypass
       # UFW's default-deny entirely and the bridge is internet-reachable
       # (confirmed on the whole fleet, 2026-07-20 posture audit).
@@ -32,7 +32,7 @@ services:
       - VAULT_PATH=${VAULT_PATH:-/vault}
       # Default to the in-network DNS name; override only if Rowboat is on
       # a different host. `host.docker.internal:3000` is intentionally NOT
-      # the default — see header comment.
+      # the default, see header comment.
       - ROWBOAT_URL=${ROWBOAT_URL:-http://rowboat:3000}
       - ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
       - APP_BASE_URL=${APP_BASE_URL:-}

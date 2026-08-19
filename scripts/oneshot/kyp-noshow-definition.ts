@@ -1,9 +1,9 @@
 /**
- * kyp-noshow-definition.ts — the canonical KYP Ads "No-show recovery text"
+ * kyp-noshow-definition.ts, the canonical KYP Ads "No-show recovery text"
  * flow definition, applied to the live tenant by patch-kyp-noshow-links.ts.
  *
  * Incident (Jul 20 2026, Tim Tsai): the flow hardcoded the $200 booking link
- * (kyp-ads-free-strategy-2) for EVERY no-show — Tim, a $100/week lead who
+ * (kyp-ads-free-strategy-2) for EVERY no-show, Tim, a $100/week lead who
  * had booked through my-free-scale-plan, got the $200 event's link in his
  * recovery text. tests/oneshot-kyp-noshow-definition.test.ts pins the
  * routing by booked event type.
@@ -79,7 +79,7 @@ export function buildKypNoShowDefinition(): Record<string, unknown> {
       // always the SAME offer the lead originally booked. Arms are checked
       // top to bottom, so the "| 2" match must precede the plain one (both
       // titles contain "Free Strategy Call"). An unrecognized title texts
-      // the lead NOTHING — a future event type must never leak either rate.
+      // the lead NOTHING, a future event type must never leak either rate.
       id: "route_recovery",
       type: "branch",
       question: "Which event type was no-showed?",

@@ -285,7 +285,7 @@ describe("loadFleetMargins", () => {
       cents: 0,
       source: "actual"
     });
-    // Pilot has no vps_size/vps_provider fields at all — estimate fallbacks.
+    // Pilot has no vps_size/vps_provider fields at all, estimate fallbacks.
     expect(pilot.lines.find((l) => l.key === "hosting")?.source).toBe("estimate");
 
     expect(data.totals.revenueCents).toBe(amy.revenueCents + pilot.revenueCents);
@@ -297,7 +297,7 @@ describe("loadFleetMargins", () => {
 
   it("replaces the synced price with the pinned SKU when the box size contradicts the pin", async () => {
     // Scar Fairy scenario: standard tenant pinned kvm2, but the assigned
-    // (lapsing) billing row is still the old KVM8 at $73.99 — the margin
+    // (lapsing) billing row is still the old KVM8 at $73.99, the margin
     // must reflect the pinned kvm2 SKU, not the outgoing box's bill.
     vi.mocked(listHostingerVpsCosts).mockResolvedValue([
       { ...HOSTINGER_ROW, plan: "KVM 8", monthly_price_cents: 7399, status: "non_renewing" }

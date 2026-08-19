@@ -22,7 +22,7 @@ vi.mock("@/lib/db/voice-transcripts", () => ({
       transcriptId: "t-1"
     },
     // Drop callStartedAt to exercise the `?? "1970-01-01T00:00:00Z"`
-    // fallback inside the wrapper — the summarizer must never let
+    // fallback inside the wrapper, the summarizer must never let
     // a literal "null" reach the model.
     {
       callStartedAt: null,
@@ -84,7 +84,7 @@ describe("summarizeCustomerMemory, default listVoiceTurnsForCustomer path", () =
       getBusinessConfig: (async () => ({ rowboat_project_id: "p-123" })) as never,
       callRowboatChat: callRowboatChat as never,
       listSmsHistoryForCustomer: (async () => []) as never,
-      // INTENTIONALLY OMIT listVoiceTurnsForCustomer — exercises the
+      // INTENTIONALLY OMIT listVoiceTurnsForCustomer, exercises the
       // ?? fallback in summarizer.ts.
       updateCustomerSummary: vi.fn() as never,
       rowboatBearer: "tok"
@@ -96,7 +96,7 @@ describe("summarizeCustomerMemory, default listVoiceTurnsForCustomer path", () =
       expect.objectContaining({ maxCalls: expect.any(Number) })
     );
     // The fallback inlines `?? "1970-01-01T00:00:00Z"` for missing
-    // timestamps — verify by inspecting the user message Rowboat saw.
+    // timestamps, verify by inspecting the user message Rowboat saw.
     const args = (callRowboatChat.mock.calls as unknown as Array<[{
       messages: Array<{ role: string; content: string }>;
     }]>)[0]?.[0] as {
@@ -104,7 +104,7 @@ describe("summarizeCustomerMemory, default listVoiceTurnsForCustomer path", () =
     };
     const user = args.messages[1]?.content ?? "";
     expect(user).toContain("Recent voice call transcripts");
-    // The "null" timestamp turn rendered with the epoch fallback —
+    // The "null" timestamp turn rendered with the epoch fallback,
     // the literal string "null" must NEVER appear inside a turn
     // header or the model will echo it back into its summary.
     expect(user).toContain("[1970-01-01T00:00:00Z VOICE AI assistant]");

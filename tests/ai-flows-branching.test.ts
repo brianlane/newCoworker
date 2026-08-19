@@ -343,7 +343,7 @@ describe("flattenSteps", () => {
     ];
     const flat = flattenSteps(withGoal);
     expect(flat.map((e) => e.step.id)).toEqual(["s1", "s2", "s2a", "s2b", "s2e", "g1", "s3"]);
-    // Trunk goal: empty branchPath — exactly what makes it a legal jump target.
+    // Trunk goal: empty branchPath, exactly what makes it a legal jump target.
     expect(flat[5].branchPath).toEqual([]);
     expect(flattenSteps(withGoal)).toEqual(flattenSteps(withGoal));
   });
@@ -389,7 +389,7 @@ describe("chooseBranchArm + isOnActivePath", () => {
     expect(chooseBranchArm(engineBranchStep(), { vars: { insurance_type: "home only" } })).toBe(
       "b_home"
     );
-    // Matches BOTH arms — the first one checked wins.
+    // Matches BOTH arms, the first one checked wins.
     expect(chooseBranchArm(engineBranchStep(), { vars: { insurance_type: "home + auto" } })).toBe(
       "b_auto"
     );
@@ -446,7 +446,7 @@ describe("resumeMarkerFor + resolveResumeIndex", () => {
 
   it("relocates to the marked step when a flow edit shifted the indices", () => {
     // The Jul 18 incident shape: the run parked at index 1 ("b"), then an
-    // edit inserted steps before it — the stale index now points elsewhere.
+    // edit inserted steps before it, the stale index now points elsewhere.
     const edited = flattenSteps(stepsOf(["new1", "new2", "a", "b", "c"]));
     expect(resolveResumeIndex(edited, 1, "b")).toBe(3);
   });
@@ -463,7 +463,7 @@ describe("resumeMarkerFor + resolveResumeIndex", () => {
 
   it("prefers the stored index over an earlier duplicate id", () => {
     // Duplicate ids are invalid at author time, but a stored row can carry
-    // them — the stored index wins when it still points at a matching id.
+    // them, the stored index wins when it still points at a matching id.
     const flat = flattenSteps(stepsOf(["dup", "x", "dup"]));
     expect(resolveResumeIndex(flat, 2, "dup")).toBe(2);
     // When it does not, the first occurrence is the deterministic fallback.

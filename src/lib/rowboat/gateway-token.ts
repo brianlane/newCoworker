@@ -22,18 +22,18 @@ export function verifyRowboatGatewayToken(request: Request): boolean {
  * Per-tenant, binding-aware gateway auth for VPS → app calls.
  *
  * - If the presented bearer is a known per-tenant token, it MUST resolve to
- *   `businessId` — this is what closes the cross-tenant hole (a leaked tenant
+ *   `businessId`, this is what closes the cross-tenant hole (a leaked tenant
  *   token can only act as ITS tenant, never as another via a forged businessId).
  * - Otherwise the shared `ROWBOAT_GATEWAY_TOKEN` is accepted. The shared token is
  *   a PLATFORM-INTERNAL secret: it is held by the app and by trusted platform
  *   callers (e.g. the Supabase `ai-flow-worker` edge function, which calls these
- *   endpoints on behalf of every tenant), and is NEVER deployed to a tenant VPS
- *   — provisioning injects each box's own per-tenant token as its
+ *   endpoints on behalf of every tenant), and is NEVER deployed to a tenant VPS,
+ *   provisioning injects each box's own per-tenant token as its
  *   `ROWBOAT_GATEWAY_TOKEN`. So the bearer path is intentionally NOT exclusive:
  *   making it exclusive would 401 the platform edge worker for any migrated
  *   tenant. Cross-tenant safety on this path comes from the binding check above,
- *   not from rejecting the shared token. (The JWT path IS exclusive — see
- *   `resolveRowboatWebhookClaims` — because that secret is forgeable by anyone
+ *   not from rejecting the shared token. (The JWT path IS exclusive, see
+ *   `resolveRowboatWebhookClaims`, because that secret is forgeable by anyone
  *   who knows the shared value.)
  * - Any DB error during resolution fails OPEN to the shared check so a transient
  *   blip never 401s a live voice/chat call.
@@ -66,7 +66,7 @@ export async function verifyGatewayTokenForBusiness(
  * box (`getDeployedGatewayTokenForBusiness`), then the legacy
  * `ROWBOAT_VPS_CHAT_BEARER` / `ROWBOAT_GATEWAY_TOKEN` env fallbacks. Using the
  * confirmed token (not a freshly minted, not-yet-deployed one) keeps the app from
- * getting ahead of the VPS — a half-finished deploy never breaks summarizers,
+ * getting ahead of the VPS, a half-finished deploy never breaks summarizers,
  * because the box is still on the shared/old secret which the env fallback
  * supplies. Fails over to the env values on any DB error.
  */

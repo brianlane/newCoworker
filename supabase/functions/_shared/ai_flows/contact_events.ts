@@ -2,7 +2,7 @@
  * Contact-event triggers (contact_created / tag_changed / owner_assigned).
  *
  * Push-based like the webhook channel: the write sites call
- * `enqueueContactEventRuns` when the event happens —
+ * `enqueueContactEventRuns` when the event happens,
  *   - contact_created: dashboard/API contact creation, CSV import, and the
  *     upsert_customer worker step (when it actually created a row);
  *   - tag_changed: dashboard tag edits and the update_contact worker step;
@@ -22,8 +22,8 @@
  *
  * Loop guard: `sourceFlowId` (the flow whose own update_contact step wrote
  * the tag) is excluded, so a flow can never retrigger itself through its own
- * tag writes. Cross-flow chains are allowed by design — they are the
- * state-machine composition this trigger exists for — bounded by each flow's
+ * tag writes. Cross-flow chains are allowed by design, they are the
+ * state-machine composition this trigger exists for, bounded by each flow's
  * dedupe key.
  *
  * Best-effort: a failure here never breaks the contact write that observed
@@ -343,7 +343,7 @@ export async function enqueueContactEventRuns(
       }
 
       // Drip pacing (definition.drip): stagger this run after the flow's
-      // latest scheduled one — a tag storm or bulk import enrolls hundreds
+      // latest scheduled one, a tag storm or bulk import enrolls hundreds
       // of contacts through THIS path, exactly the burst drip exists for.
       // Best-effort: a read failure enqueues immediately (mirrors the
       // Node-side enqueueAiFlowRun).

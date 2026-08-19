@@ -1,17 +1,17 @@
 /**
- * Contact engagement segments + "quiet customers" detection — BizBlasts'
+ * Contact engagement segments + "quiet customers" detection, BizBlasts'
  * RFM segmentation / ChurnPredictionService ported to engagement terms
  * (newCoworker holds no tenant revenue, so interaction recency/frequency
  * stands in for purchase recency/monetary value).
  *
  * Segments (recency bands over `contacts.last_interaction_at`):
- *   - active  — talked to the business in the last 30 days
- *   - cooling — 30–90 days silent
- *   - new     — never interacted (or nothing recent) but added < 30 days ago
- *   - quiet   — 90+ days silent (or never, and not new): the at-risk list
+ *   - active, talked to the business in the last 30 days
+ *   - cooling, 30–90 days silent
+ *   - new, never interacted (or nothing recent) but added < 30 days ago
+ *   - quiet, 90+ days silent (or never, and not new): the at-risk list
  *
- * The quiet list is the actionable output — the owner's natural target for
- * a win-back flow — ordered by lifetime interactions so the most valuable
+ * The quiet list is the actionable output, the owner's natural target for
+ * a win-back flow, ordered by lifetime interactions so the most valuable
  * lapsed customers surface first.
  */
 
@@ -43,7 +43,7 @@ export function classifyEngagement(
     if (age <= ENGAGEMENT_COOLING_DAYS * DAY_MS) return "cooling";
     // A REAL interaction 90+ days back is a lapsed relationship no matter
     // how new the row is (merges backdate created_at; imports can carry
-    // history) — never "new".
+    // history), never "new".
     return "quiet";
   }
   const created = Date.parse(contact.created_at);
@@ -63,16 +63,16 @@ export type QuietCustomer = {
 export type EngagementOverview = {
   counts: Record<EngagementSegment, number>;
   total: number;
-  /** Most-engaged-ever quiet customers first — the win-back shortlist. */
+  /** Most-engaged-ever quiet customers first, the win-back shortlist. */
   quietCustomers: QuietCustomer[];
-  /** True when the directory scan filled its cap — counts are partial. */
+  /** True when the directory scan filled its cap, counts are partial. */
   clipped: boolean;
 };
 
 /** Quiet-list display cap. */
 export const QUIET_CUSTOMER_LIMIT = 8;
 
-/** Contacts scanned per overview — far above any current tenant's directory. */
+/** Contacts scanned per overview, far above any current tenant's directory. */
 export const ENGAGEMENT_SCAN_LIMIT = 5000;
 
 /**

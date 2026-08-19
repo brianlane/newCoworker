@@ -1,5 +1,5 @@
 /**
- * Admin action audit trail — BizBlasts' SecureLogger security-event pattern
+ * Admin action audit trail, BizBlasts' SecureLogger security-event pattern
  * on newCoworker's unified log sink: every destructive / sensitive admin API
  * route records WHO did WHAT to WHICH tenant in `system_logs` (source
  * "admin"), so the per-business SystemLogViewer and the fleet dashboards can

@@ -2,13 +2,13 @@
  * Accessors for the platform cost tables written by the daily
  * platform-cost-sync cron (src/lib/admin/cost-sync.ts):
  *
- *   - `telnyx_cost_daily`     — Telnyx detail records aggregated per UTC
+ *   - `telnyx_cost_daily`, Telnyx detail records aggregated per UTC
  *     day / tenant / record type / direction, in micro-USD.
- *   - `hostinger_vps_costs`   — full snapshot of the Hostinger KVM billing
+ *   - `hostinger_vps_costs`, full snapshot of the Hostinger KVM billing
  *     subscriptions, joined to VMs and (when live) the owning business.
  *
  * Both tables are service-role only (RLS on, no policies). Nothing bills
- * from these rows — they feed the admin Costs/Usage pages and the margin
+ * from these rows, they feed the admin Costs/Usage pages and the margin
  * engine (src/lib/admin/margin.ts).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -106,7 +106,7 @@ export async function replaceTelnyxCostWindow(
 
 /**
  * All Telnyx cost rows with `day >= sinceDay`, oldest first. Paged in
- * 1000-row chunks — PostgREST silently caps a single request at 1000 rows,
+ * 1000-row chunks, PostgREST silently caps a single request at 1000 rows,
  * which would drop the newest days without any error as history grows.
  */
 export async function listTelnyxCostDaily(
@@ -163,7 +163,7 @@ export async function listHostingerVpsCosts(
 /**
  * Every tenant DID that can appear as cli/cld on a Telnyx MDR: the
  * messaging from-number plus every routed voice DID. `businesses.phone` is
- * deliberately NOT included — that's the owner's onboarding cell, not a
+ * deliberately NOT included, that's the owner's onboarding cell, not a
  * Telnyx number, and matching on it would attribute unrelated MDRs.
  */
 export async function listTenantDids(

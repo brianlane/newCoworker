@@ -76,7 +76,7 @@ export default async function AdminGeminiPage({
       return [];
     }),
     getAdminPlatformSetting(GEMINI_BILLED_SYNC_STATUS_KEY).catch(() => null),
-    // Fail closed to the DEFAULT (per-change) for display purposes only —
+    // Fail closed to the DEFAULT (per-change) for display purposes only,
     // the toggle's PUT re-reads the true value.
     getCiE2eMode().catch(() => "per-change" as const)
   ]);
@@ -223,7 +223,7 @@ export default async function AdminGeminiPage({
                     .join("")}`}
                 >
                   {/* Visibility floor applies ONCE to the whole column (not per
-                      segment — per-segment floors would compound and inflate
+                      segment, per-segment floors would compound and inflate
                       days with many small tenants); segments then split the
                       column exactly proportionally. */}
                   {point.costMicros > 0 && (

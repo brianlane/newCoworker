@@ -9,7 +9,7 @@ import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
  * pure-JS fallback; the spawn was retired (it cost ~2.5 s per orchestrator
  * test on macOS due to per-process xprotect/dyld overhead) in favour of the
  * JS path as the only implementation. These tests pin the exact quoting
- * contract — same values, same output — so a future regression won't ship a
+ * contract, same values, same output, so a future regression won't ship a
  * subtly-different deploy command.
  */
 describe("quoteShellEnvValue", () => {
@@ -26,7 +26,7 @@ describe("quoteShellEnvValue", () => {
   });
 
   it("does not escape shell metacharacters inside single quotes", () => {
-    // $, `, *, & etc. are literal inside single quotes — round-tripping
+    // $, `, *, & etc. are literal inside single quotes, round-tripping
     // through bash yields the original string unchanged.
     expect(quoteShellEnvValue("with$shell`stuff")).toBe("'with$shell`stuff'");
   });

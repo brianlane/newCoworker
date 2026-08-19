@@ -12,11 +12,11 @@
 // (cc/bcc are optional arrays of addresses; capped + validated like `to`.)
 //
 // and this module extracts those blocks from the reply, POSTs each one to the
-// platform adapter (/api/voice/tools/dashboard-email — gateway-token authed,
+// platform adapter (/api/voice/tools/dashboard-email, gateway-token authed,
 // re-checks the Settings toggle authoritatively, sends via the owner's Nango
 // mailbox), strips the raw blocks from the visible reply, and appends an
 // HONEST per-email delivery result. The model is explicitly told never to
-// claim an email was sent — only the lines appended here report outcomes.
+// claim an email was sent, only the lines appended here report outcomes.
 //
 // MUST stay in lockstep with:
 //   - src/app/api/dashboard/chat/route.ts (EMAIL_SEND_OPEN/CLOSE + prompt)
@@ -64,10 +64,10 @@ function parseRecipients(value) {
  * Extract every EMAIL_SEND block from an assistant reply.
  *
  * Returns:
- *   cleanedContent — the reply with all blocks (and any code fences that
+ *   cleanedContent, the reply with all blocks (and any code fences that
  *                    immediately wrapped them) removed; never shows raw JSON.
- *   requests       — validated { to, subject, body } objects, in order.
- *   invalidCount   — blocks that failed JSON parsing / validation.
+ *   requests, validated { to, subject, body } objects, in order.
+ *   invalidCount, blocks that failed JSON parsing / validation.
  */
 export function extractEmailSendRequests(content) {
   if (typeof content !== "string" || content.indexOf(EMAIL_SEND_OPEN) === -1) {
@@ -100,7 +100,7 @@ export function extractEmailSendRequests(content) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  // A dangling OPEN with no CLOSE (truncated generation) — strip from the
+  // A dangling OPEN with no CLOSE (truncated generation), strip from the
   // marker to the end so half a JSON object never reaches the owner.
   const dangling = cleanedContent.indexOf(EMAIL_SEND_OPEN);
   if (dangling !== -1) {
@@ -180,7 +180,7 @@ export function appendEmailResults(cleanedContent, results) {
 }
 
 /**
- * POST one send request to the platform adapter. Never throws — every
+ * POST one send request to the platform adapter. Never throws, every
  * failure mode collapses to { ok: false, detail } so the caller can render
  * an honest line.
  */

@@ -58,7 +58,7 @@ export type InboundEmailPayload = {
   text: string;
   /** Raw HTML alternative, when the message had one (sanitized at display). */
   html?: string;
-  /** Provider/RFC Message-Id — drives the run dedupe key. */
+  /** Provider/RFC Message-Id, drives the run dedupe key. */
   messageId: string;
   /**
    * Attachments the worker already uploaded to the email-attachments bucket.
@@ -145,10 +145,10 @@ export async function processInboundTenantEmail(
   const firstImage = ownAttachments.find((a) =>
     ["image/jpeg", "image/png", "image/webp"].includes(a.mimeType.trim().toLowerCase())
   );
-  // First DOCUMENT attachment (pdf/docx/text) → {{trigger.document}} — the
+  // First DOCUMENT attachment (pdf/docx/text) → {{trigger.document}}, the
   // doc_extract step's default source. Gated on the STORED PATH's extension
   // (which the email worker derives from the filename), because that suffix
-  // is exactly what docExtract classifies the type from — a MIME-only match
+  // is exactly what docExtract classifies the type from, a MIME-only match
   // whose path lacks the extension would hand the step a ref it can only
   // fail on. Covers octet-stream PDFs (extension present) by construction;
   // an extensionless attachment simply leaves the trigger document-less and
@@ -158,10 +158,10 @@ export async function processInboundTenantEmail(
   // Record the inbound mail on the Emails page BEFORE enqueueing any run:
   // doc_extract's tenant-ownership gate reads this row's attachment paths,
   // so a worker that claims a freshly-enqueued run must already find the
-  // row (previously the log write came after the enqueue loop — a run
+  // row (previously the log write came after the enqueue loop, a run
   // racing ahead would fail its document read). The flow/run linkage is
   // backfilled below once the first run exists. Always written, matched or
-  // not — the owner should see what their AI mailbox received.
+  // not, the owner should see what their AI mailbox received.
   const attachments = ownAttachments.map((a) => ({
     filename: a.filename,
     mime_type: a.mimeType,
@@ -192,7 +192,7 @@ export async function processInboundTenantEmail(
     toEmail: payload.to,
     ...(emailLogId ? { emailLogId } : {}),
     ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
-    // {{trigger.document}} is only exposed when the log row LANDED — the
+    // {{trigger.document}} is only exposed when the log row LANDED, the
     // ownership gate trusts email_log.attachments alone, so a ref without
     // its row could only fail permanently. A (rare, best-effort) log
     // failure degrades to a document-less trigger and a graceful step skip;
@@ -215,7 +215,7 @@ export async function processInboundTenantEmail(
   let firstRunId: string | null = null;
   for (const flow of flows) {
     // OR across the flow's tenant_email triggers: the first matching
-    // condition list fires the flow (one run — dedupe key is per message).
+    // condition list fires the flow (one run, dedupe key is per message).
     let anyMatched = false;
     for (const conditions of flow.conditionSets) {
       // Pre-resolve any from_matches saved-contact refs to live identity values
@@ -260,7 +260,7 @@ export async function processInboundTenantEmail(
   }
 
   // Backfill the flow/run linkage now that runs exist (the row itself was
-  // written before the enqueue loop — see above). Best-effort.
+  // written before the enqueue loop, see above). Best-effort.
   if (emailLogId && firstFlowId && firstRunId) {
     await linkTenantMailboxInboundRun(
       businessId,
@@ -274,7 +274,7 @@ export async function processInboundTenantEmail(
   // profile, record an `email` interaction so the customer list reflects it
   // ("last via email") and the profile counts mail alongside SMS/voice. The
   // mail already shows on the profile via address match; this just keeps the
-  // unified counters honest. Best-effort — never block on it.
+  // unified counters honest. Best-effort, never block on it.
   let linkedCustomer = false;
   try {
     const customer = await findCustomerByEmail(businessId, fromEmail, db);
@@ -307,10 +307,10 @@ export async function processInboundTenantEmail(
   }
 
   // Knowledge graph (kg-source: email_unanswered): cold inbound mail from a
-  // sender with NO linked contact extracts at ANONYMOUS trust (0) — the
+  // sender with NO linked contact extracts at ANONYMOUS trust (0), the
   // upstream email reply-gate as attribution, not exclusion: everything is
   // captured, but a cold email can never masquerade as a relationship.
-  // Linked senders are skipped here — their mail extracts at trust 1
+  // Linked senders are skipped here, their mail extracts at trust 1
   // through the customer-memory summarizer window (the interaction rollup
   // above is exactly what schedules it). Never-throws + daily-capped inside.
   if (!linkedCustomer) {

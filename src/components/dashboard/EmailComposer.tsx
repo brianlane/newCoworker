@@ -22,7 +22,7 @@ type Props = {
    * is hidden and mail sends as the coworker.
    */
   fromOptions?: FromOption[];
-  /** Which sender id to preselect (defaults to "" — the AI coworker mailbox). */
+  /** Which sender id to preselect (defaults to "", the AI coworker mailbox). */
   initialFromId?: string;
   onCancel: () => void;
   /** Called after a fully-logged send so the parent can collapse/refresh. */
@@ -34,7 +34,7 @@ type Props = {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * Owner email composer — used for both "compose new" and "reply in thread".
+ * Owner email composer, used for both "compose new" and "reply in thread".
  * Sends via /api/dashboard/emails/send from the chosen mailbox (the AI
  * coworker's own address by default, or a connected Gmail/Outlook) and
  * refreshes the server-rendered Emails list so the new row appears. The
@@ -123,7 +123,7 @@ export function EmailComposer({
       // Sent, but the row couldn't be saved (e.g. the owner_manual migration
       // isn't applied). Don't refresh into a list that won't show it. Latch
       // `sent` so the (already-delivered) message can't be edited and re-sent
-      // into a duplicate — the owner closes the panel via Cancel.
+      // into a duplicate, the owner closes the panel via Cancel.
       if (json.data?.logged === false) {
         setNotice(
           "Sent, but it couldn't be saved to the Emails list yet, so it may not appear here. Close this panel; don't resend."

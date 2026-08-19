@@ -18,7 +18,7 @@ export type CapturedCall = Record<string, unknown>;
 /**
  * Fields always published under the prefix, "none" when the AI did not get
  * them. Mirrors WAIT_FOR_CALL_CAPTURED_FIELDS in src/lib/ai-flows/schema.ts (the
- * authoring side registers the same names) — keep the two in lockstep.
+ * authoring side registers the same names), keep the two in lockstep.
  *
  * "none" rather than absent because that is this codebase's explicit-absence
  * idiom: a template can print the line without a dangling label, and a `when`

@@ -2,16 +2,16 @@
  * Billable third-party usage carve-out for the 30-day money-back refund.
  *
  * Policy (Jul 2026): the money-back guarantee refunds the plan price, not
- * the third-party charges the tenant ran up on our vendor accounts — SMS
+ * the third-party charges the tenant ran up on our vendor accounts, SMS
  * sent AND received (Telnyx), voice minutes (Telnyx carriage), and metered
- * Gemini spend. Those are priced AT OUR COST — the same per-unit rates the
+ * Gemini spend. Those are priced AT OUR COST, the same per-unit rates the
  * margin engine and the enterprise deal calculator use
- * (src/lib/plans/enterprise-pricing.ts) — so the carve-out recovers exactly
+ * (src/lib/plans/enterprise-pricing.ts), so the carve-out recovers exactly
  * what we are out of pocket, no markup.
  *
  * Voice is priced at the TELNYX-ONLY per-minute rate on purpose: the Gemini
  * side of a call is NOT estimated here because it arrives as metered
- * actuals in `aiSpendMicros` — `owner_chat_model_spend` is the single pool
+ * actuals in `aiSpendMicros`, `owner_chat_model_spend` is the single pool
  * for ALL per-tenant Gemini usage (llm-router exact tokens for Rowboat
  * chat/SMS/voice_task, platform surfaces via meterGeminiSpendForBusiness
  * incl. image generation, webchat/messenger engines, and Gemini Live audio
@@ -61,14 +61,14 @@ export type BillableUsage = {
   voiceSeconds: number;
   /**
    * Metered Gemini spend, micro-USD (1 cent = 10,000 micros). Covers ALL
-   * per-tenant Gemini usage, not just chat — see the module docstring.
+   * per-tenant Gemini usage, not just chat, see the module docstring.
    */
   aiSpendMicros: number;
 };
 
 /**
  * Price a usage snapshot at platform cost. Rounded once at the end so the
- * components can't each donate a rounding cent. Voice is Telnyx-only — the
+ * components can't each donate a rounding cent. Voice is Telnyx-only, the
  * Gemini component is already inside `aiSpendMicros` (module docstring).
  */
 export function computeBillableUsageCents(usage: BillableUsage): number {
@@ -115,7 +115,7 @@ export type UsageCarveOutWindow = {
    * for the business. Null only in the first-paid fallback: the spend
    * writers key `period_start` at the UTC calendar-month start when the
    * subscription's Stripe period cache is cold, which can predate a
-   * mid-month `first_paid_at` — a `>= sinceIso` filter would silently miss
+   * mid-month `first_paid_at`, a `>= sinceIso` filter would silently miss
    * the current spend row. In that fallback the account is ≤30 days old,
    * so its lifetime spend IS the refundable-window spend.
    */
@@ -132,17 +132,17 @@ export type UsageCarveOutAnchor =
  * The refund executor refunds the LATEST Stripe invoice only, so the usage
  * we may withhold is exactly the usage covered by that invoice's period:
  * the cached `stripe_current_period_start` (for monthly plans the current
- * month; for full-upfront term plans the whole term — the Stripe period IS
+ * month; for full-upfront term plans the whole term, the Stripe period IS
  * the term via `interval_count=12|24`).
  *
  * When the period cache is missing (fresh checkout before the first
  * lifecycle webhook, pre-backfill rows), the profile's `first_paid_at` is a
  * safe substitute ONLY while the lifetime 30-day money-back window is still
- * open — the account is ≤30 days old, so "everything since first payment"
+ * open, the account is ≤30 days old, so "everything since first payment"
  * and "the refunded invoice's period" coincide. Outside that window (admin
  * force-refund of a long-lived subscription with a cold cache) there is NO
  * safe fallback: anchoring on `first_paid_at` would subtract months of
- * prior-period usage from a one-month refund. We FAIL CLOSED instead —
+ * prior-period usage from a one-month refund. We FAIL CLOSED instead,
  * the operator remedy is `scripts/backfill-stripe-subscription-periods.ts`.
  */
 export function resolveUsageCarveOutWindow(input: {
@@ -155,7 +155,7 @@ export function resolveUsageCarveOutWindow(input: {
     Number.isFinite(Date.parse(input.stripeCurrentPeriodStart))
   ) {
     // Spend writers key windows via deriveMonthlyQuotaWindow(periodStart),
-    // which never precedes the period start — the >= filter is exact here.
+    // which never precedes the period start, the >= filter is exact here.
     return {
       ok: true,
       window: {
@@ -168,7 +168,7 @@ export function resolveUsageCarveOutWindow(input: {
     input.profile !== null &&
     isWithinLifetimeRefundWindow(input.profile, input.now ?? new Date())
   ) {
-    // Window-open implies a non-null, parseable first_paid_at — the window
+    // Window-open implies a non-null, parseable first_paid_at, the window
     // is anchored on it (a null/malformed timestamp reads as closed).
     return {
       ok: true,
@@ -185,17 +185,17 @@ export function resolveUsageCarveOutWindow(input: {
  * Sum the tenant's metered usage inside the carve-out window:
  *
  * - Outbound SMS from `daily_usage.sms_sent` (usage_date ≥ the window's UTC
- *   day — the whole signup day counts, which can only over-include the
+ *   day, the whole signup day counts, which can only over-include the
  *   tenant's own sends from earlier that day).
  * - Inbound SMS from `sms_inbound_jobs` (one row per delivered inbound
- *   message, deduped by Telnyx event id — AI-reply jobs, team/owner reply
+ *   message, deduped by Telnyx event id, AI-reply jobs, team/owner reply
  *   captures, and safe-mode forwards all persist here). Counted with a
  *   HEAD count query, so no paging concern. Keyword-only traffic
- *   (STOP/HELP) that short-circuits before the insert is not counted —
+ *   (STOP/HELP) that short-circuits before the insert is not counted,
  *   under-counting in the customer's favor.
  * - Voice from `voice_settlements.billable_seconds` (AI portions) plus
  *   `voice_forwarded_call_meter.billable_seconds` (forwarded/transferred
- *   human legs) — together the same population the quota pool commits.
+ *   human legs), together the same population the quota pool commits.
  * - Metered Gemini spend from `owner_chat_model_spend` rows, filtered by
  *   `period_start` ≥ `aiSpendSinceIso` when set (see
  *   {@link UsageCarveOutWindow.aiSpendSinceIso} for why the first-paid
@@ -203,8 +203,8 @@ export function resolveUsageCarveOutWindow(input: {
  *
  * Every read pages in 1000-row chunks: PostgREST silently caps a single
  * response at 1000 rows, and a silent truncation here would under-withhold
- * (refund money already spent on usage) with no error. Read failures THROW
- * — callers fail closed.
+ * (refund money already spent on usage) with no error. Read failures THROW,
+ * callers fail closed.
  */
 export async function loadBillableUsageSince(
   businessId: string,

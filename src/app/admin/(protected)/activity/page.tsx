@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 /** Bounded depth for the see-all view (the dashboard card shows 15). */
 const ACTIVITY_PAGE_LIMIT = 100;
 
-/** Type chips — values are fetch-layer source groups, labels match the badge
+/** Type chips, values are fetch-layer source groups, labels match the badge
  * terms the rows display. */
 const TYPE_OPTIONS: FeedFilterOption[] = [
   { value: "call", label: "Call" },

@@ -2,7 +2,7 @@
  * Bearer authentication for the public REST API (/api/public/v1/*).
  *
  * Stateless per request: hash the presented `nck_…` token, look it up in
- * `api_keys`, and return the owning business. No cookies, no sessions —
+ * `api_keys`, and return the owning business. No cookies, no sessions,
  * CSRF does not apply (the proxy exempts /api/public/ accordingly).
  */
 
@@ -23,7 +23,7 @@ export type PublicApiAuth = {
 
 /**
  * Resolve the API key on a request. Returns null for missing/invalid/revoked
- * credentials — the route answers 401. The last-used stamp is fire-and-forget.
+ * credentials, the route answers 401. The last-used stamp is fire-and-forget.
  */
 export async function authenticatePublicApiRequest(
   request: Request

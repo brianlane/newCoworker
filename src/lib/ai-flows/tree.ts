@@ -3,13 +3,13 @@
  *
  * A definition's steps form a tree once `branch` steps exist (each arm and the
  * else path carry their own nested step list). The canvas editor addresses
- * nodes by STEP ID (unique across the whole tree — enforced at author time)
+ * nodes by STEP ID (unique across the whole tree, enforced at author time)
  * and edits immutably through these helpers; the classic form editor keeps
  * using flat-array indexing for trunk-only flows.
  *
  * `flattenForDisplay` mirrors the worker's execution flattening
  * (supabase/functions/_shared/ai_flows/branching.ts) so a recorded run step's
- * integer `step_index` can be mapped back to the tree node it executed — the
+ * integer `step_index` can be mapped back to the tree node it executed, the
  * per-node stats overlay depends on the two orders staying identical:
  * branch step first, then every arm's steps in arm order, then the else steps.
  */
@@ -211,7 +211,7 @@ export function varsProducedByStep(step: FlowStep): string[] {
 
 /**
  * All vars produced by steps BEFORE the step with `id` in the worker's flat
- * execution order — the legal targets for its `when` guard / arm conditions
+ * execution order, the legal targets for its `when` guard / arm conditions
  * (matching validateDefinitionSemantics' permissive cross-arm scope).
  */
 export function varsInScopeBefore(steps: FlowStep[], id: string): string[] {

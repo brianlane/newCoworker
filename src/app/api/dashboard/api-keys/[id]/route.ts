@@ -1,5 +1,5 @@
 /**
- * DELETE /api/dashboard/api-keys/:id — revoke a public API key.
+ * DELETE /api/dashboard/api-keys/:id, revoke a public API key.
  *
  * Soft revoke (revoked_at stamp): the row stays for the audit trail and the
  * dashboard list, but findActiveApiKeyByHash stops matching immediately, so

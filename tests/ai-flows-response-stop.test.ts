@@ -129,7 +129,7 @@ describe("stopRunsOnResponse", () => {
 
   it("a run awaiting THIS sender's reply is exempt even when its resume lost the race", async () => {
     // Not in excludeRunIds (its resume lost the revision race and it is
-    // still parked) — the guard must still keep the reply out of a cancel.
+    // still parked), the guard must still keep the reply out of a cancel.
     const { db, calls } = makeDb([
       {
         data: [

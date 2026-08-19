@@ -81,7 +81,7 @@ describe("byos: host validation + box id", () => {
     expect(isValidByosHost("box.example.com:2222")).toBe(false);
     expect(isValidByosHost("box.example.com/path")).toBe(false);
     expect(isValidByosHost("$(reboot).example.com")).toBe(false);
-    // Bare labels (no dot) are rejected — require a resolvable FQDN or IP.
+    // Bare labels (no dot) are rejected, require a resolvable FQDN or IP.
     expect(isValidByosHost("localhost")).toBe(false);
     expect(isValidByosHost("")).toBe(false);
     expect(isValidByosHost(`${"a".repeat(254)}.com`)).toBe(false);

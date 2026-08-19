@@ -79,7 +79,7 @@ export default async function OAuthConsentPage({
     );
   }
 
-  // Already-consented requests return only a redirect_url — send the user
+  // Already-consented requests return only a redirect_url, send the user
   // straight back to the client with their authorization code.
   if (!("authorization_id" in data)) {
     redirect(data.redirect_url);

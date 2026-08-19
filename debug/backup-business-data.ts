@@ -1,6 +1,6 @@
 /**
  * One-shot: SSH-tarball /opt/rowboat/{vault,memory} for a business onto
- * Supabase Storage (data_backups + business-backups bucket). Fail-closed —
+ * Supabase Storage (data_backups + business-backups bucket). Fail-closed,
  * exits non-zero if the backup cannot be verified.
  *
  * Usage:

@@ -608,7 +608,7 @@ if (oldSub.status !== "canceled" || oldSub.cancel_reason !== "upgrade_switch") {
 }
 
 // ------------------------------------------------- 8. old box teardown + pool
-// On resume (adopt already done) oldVmId is null — resolve the retired box
+// On resume (adopt already done) oldVmId is null, resolve the retired box
 // from its Hostinger billing subscription id when we still have one.
 let teardownVmId = oldVmId;
 if (teardownVmId === null && oldBillingId) {

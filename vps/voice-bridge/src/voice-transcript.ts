@@ -8,7 +8,7 @@
  * in `./index.ts` for the production wiring.
  *
  * Resilience: every adapter call is wrapped so a DB failure can never crash
- * the media pipe. Transcripts are best-effort — losing a call's transcript is
+ * the media pipe. Transcripts are best-effort, losing a call's transcript is
  * preferable to hanging up the caller.
  */
 
@@ -35,13 +35,13 @@ export type TranscriptRole = "caller" | "assistant";
  * surface it cannot reach. `outputTranscription` is Gemini's transcription of
  * its own audio, and the punctuation is chosen by the transcriber, not by the
  * model following our instruction. Chris Bartelot's Aug 3 2026 call has two:
- * "Got that one.— And the other place?".
+ * "Got that one., And the other place?".
  *
  * Inaudible on the call, visible in the dashboard transcript, so the fix
  * belongs on write rather than in yet another prompt line.
  *
  * A dash is replaced with a space, not deleted, because it usually sits where
- * two transcribed segments were joined ("still here.— Were you"); dropping it
+ * two transcribed segments were joined ("still here., Were you"); dropping it
  * outright would weld the words together. Runs of whitespace are then
  * collapsed so a dash that already had spaces around it does not leave two.
  *
@@ -170,18 +170,18 @@ export function createTranscriptRecorder(
   // call whose only audio was an answering machine's greeting got its row at
   // stream teardown: started_at (a column default) equalled ended_at, so the
   // dashboard showed 0s for a 30-second call, and the AMD handler's mid-call
-  // `answering_machine_result` update matched zero rows — silently, because
+  // `answering_machine_result` update matched zero rows, silently, because
   // PostgREST reports no error for an update that matches nothing. An answered
   // call with no transcribable speech still gets a row under this contract,
   // which is correct: the call happened.
   void ensureTranscript();
 
   async function flushTurn(): Promise<void> {
-    // Capture AND reserve indices synchronously — before any `await`. If we
+    // Capture AND reserve indices synchronously, before any `await`. If we
     // allocated `turnIndex++` at the insertTurn call sites instead, two
     // concurrent flushes (fire-and-forget ingests for two back-to-back
     // `turnComplete` frames) would interleave at each await boundary and
-    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3 — the
+    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3, the
     // UI sorts by turn_index so the owner would see the conversation in
     // the wrong order. Reserving the slice here locks the ordering to
     // match the synchronous order flushTurn was invoked in, which is the

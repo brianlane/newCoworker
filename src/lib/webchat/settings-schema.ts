@@ -1,6 +1,6 @@
 /**
  * Validation + normalization for owner-configurable widget settings
- * (chat_widget_settings.theme / allowed_origins). Pure functions — no DB.
+ * (chat_widget_settings.theme / allowed_origins). Pure functions, no DB.
  */
 
 import { z } from "zod";
@@ -52,7 +52,7 @@ export function normalizeOrigin(input: string): string | null {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  // NOTE: no empty-hostname guard — WHATWG URL throws on host-less
+  // NOTE: no empty-hostname guard, WHATWG URL throws on host-less
   // http(s) URLs ("https://", "https://#"), so parse success implies a
   // non-empty hostname here.
   return url.port ? `${url.protocol}//${url.hostname}:${url.port}` : `${url.protocol}//${url.hostname}`;
@@ -91,7 +91,7 @@ function stripWww(host: string): string {
  *   * Non-empty ⇒ scheme + host [+ port] must match one entry, with
  *     `www.` treated as equivalent on both sides (small-business owners
  *     routinely save the wrong variant).
- *   * A missing/unparseable Origin fails a non-empty allowlist — browsers
+ *   * A missing/unparseable Origin fails a non-empty allowlist, browsers
  *     always send Origin on cross-site fetch POSTs, so its absence means a
  *     non-browser caller that shouldn't pass an origin-scoped widget.
  */

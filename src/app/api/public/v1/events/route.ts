@@ -66,7 +66,7 @@ export async function GET(request: Request) {
       query = query.filter(column, operator, value);
     }
     if (source.readyOr) {
-      // Same readiness gate as the dispatcher — without it, samples could
+      // Same readiness gate as the dispatcher, without it, samples could
       // include finished calls still awaiting their summary, which would
       // never be POSTed in that shape and would mislead Zap field mapping.
       query = query.or(source.readyOr(Date.now()));

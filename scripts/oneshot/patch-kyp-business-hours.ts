@@ -1,5 +1,5 @@
 /**
- * patch-kyp-business-hours.ts — flow-level business-hours window for KYP Ads.
+ * patch-kyp-business-hours.ts, flow-level business-hours window for KYP Ads.
  *
  * James's white-glove build notes (PRDs/white-glove-build-kyp-ads.md §1) set
  * business hours at 11am–6pm; businesses.timezone = America/Toronto. After
@@ -7,7 +7,7 @@
  *
  *   - "Lead follow-up (white-glove build)" is handled by
  *     patch-kyp-offer-branch.ts (per-step send_sms quietHours on the nudges;
- *     the greeting must keep its 60-second promise) — this script SKIPS it.
+ *     the greeting must keep its 60-second promise), this script SKIPS it.
  *   - Every OTHER flow gets `definition.timeWindow` (11:00–18:00
  *     America/Toronto): the worker defers any communication step outside the
  *     window to the next open slot (send_sms / send_email / notify_owner /
@@ -19,7 +19,7 @@
  *
  * Idempotent: flows already carrying this exact window are left untouched.
  *
- * Usage (business id from --business or KYP_BUSINESS_ID — never hard-coded,
+ * Usage (business id from --business or KYP_BUSINESS_ID, never hard-coded,
  * per scripts/oneshot/README.md):
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/patch-kyp-business-hours.ts --business <uuid>          # dry-run

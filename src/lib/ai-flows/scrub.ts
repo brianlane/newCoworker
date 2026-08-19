@@ -88,7 +88,7 @@ const PROSE_KEYS: ReadonlySet<string> = new Set([
   // A branch step's question is author prose (its arm labels blank via "label").
   "question",
   // Trigger condition (`value`) and per-step gate (`equals`/`contains`/
-  // `notEquals`) comparison literals — free text that can carry names/
+  // `notEquals`) comparison literals, free text that can carry names/
   // addresses/locations.
   "value",
   "equals",
@@ -109,7 +109,7 @@ function blankProse(value: unknown): unknown {
 }
 
 // A run of 9+ digits with optional +, leading paren, spaces, dashes, dots, and
-// parens — covers E.164 (+15551234567) and common US formats ((555) 123-4567,
+// parens, covers E.164 (+15551234567) and common US formats ((555) 123-4567,
 // 555-123-4567). The 9-char floor keeps short counts ("10 minutes", prices like
 // "500000") from matching, and `{{vars.x}}` templates contain no long digit runs.
 const PHONE_RE = /\(?\+?\d(?:[\d\s().-]{7,})\d/g;
@@ -155,11 +155,11 @@ type ScrubOptions = {
 /**
  * Return a PII-scrubbed copy of a definition, safe to publish cross-tenant.
  * Three passes:
- *   1. deep text redaction over every string (phones/emails/known names) — this
+ *   1. deep text redaction over every string (phones/emails/known names), this
  *      mainly covers the recipient fields that survive (`to`/`cc`/`bcc`);
  *   2. blank every author-written prose field (`blankProse`) so no message
  *      body, subject, template, prompt, description, label, or condition value
- *      is ever published — only the flow's structure remains; and
+ *      is ever published, only the flow's structure remains; and
  *   3. structural fixups for tenant-specific fields (mailbox connection ids ->
  *      blanked, pinned roster members -> placeholders, http endpoints dropped).
  * The result is intended for display + later substitution, not for direct schema
@@ -178,7 +178,7 @@ export function scrubDefinition(
   // or neutralize tenant-specific ids and pinned people.
   const trigger = scrubbed.trigger as Record<string, unknown>;
   if (trigger.channel === "email" && typeof trigger.connectionId === "string") {
-    // A specific mailbox uuid — blank to a schema-valid nil so the duplicating
+    // A specific mailbox uuid, blank to a schema-valid nil so the duplicating
     // user re-points it to their own connected inbox in the editor.
     trigger.connectionId = NIL_UUID;
   }
@@ -217,7 +217,7 @@ export function scrubDefinition(
           break;
         case "http_call":
           // The endpoint `path` and `bodyTemplate` can embed webhook URLs, API
-          // keys, or bearer tokens — tenant secrets that must never reach the
+          // keys, or bearer tokens, tenant secrets that must never reach the
           // cross-tenant library. Drop them; the duplicating user re-enters their
           // own endpoint in the editor.
           delete step.path;

@@ -7,8 +7,8 @@
  * becomes {{trigger.url}}), so flows whose first step is extract_url can be
  * exercised by pasting a link.
  *
- * Works for ANY trigger channel — a manual start is how you test an SMS- or
- * email-triggered flow without waiting for a real message — but the flow must
+ * Works for ANY trigger channel, a manual start is how you test an SMS- or
+ * email-triggered flow without waiting for a real message, but the flow must
  * be enabled (the worker cancels runs of disabled flows on claim).
  */
 import { z } from "zod";
@@ -41,7 +41,7 @@ export async function POST(request: Request, { params }: Ctx) {
       return errorResponse("VALIDATION_ERROR", "Enable the flow before running it");
     }
     // Voice flows run on the real-time Telnyx call path (telnyx-voice-inbound),
-    // not the async worker — there's nothing for a "Run now" run to execute, and
+    // not the async worker, there's nothing for a "Run now" run to execute, and
     // the worker has no handler for voice steps. Refuse rather than enqueue a run
     // that would only fail. Place a test call from the trigger number instead.
     if (flow.definition?.trigger?.channel === "voice") {

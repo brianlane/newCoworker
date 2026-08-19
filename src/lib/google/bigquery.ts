@@ -4,8 +4,8 @@
  * Purpose-built for the Gemini billed-actuals sync: Google exposes no direct
  * spend API for the Gemini API, so billed cost comes from the Cloud Billing
  * export table in BigQuery, queried with one aggregate SQL statement a day.
- * That needs exactly two calls — a service-account JWT exchanged for an
- * access token, and `jobs.query` — so a hand-rolled client beats pulling in
+ * That needs exactly two calls, a service-account JWT exchanged for an
+ * access token, and `jobs.query`, so a hand-rolled client beats pulling in
  * google-auth-library + @google-cloud/bigquery for it.
  *
  * Auth: RS256 self-signed JWT (node:crypto) → https://oauth2.googleapis.com/token
@@ -135,7 +135,7 @@ function mapRows(
  * Run one standard-SQL query via `jobs.query`, following `pageToken` pages
  * through `getQueryResults` until drained. Returns rows as name → string
  * maps (BigQuery's JSON wire format stringifies every scalar). Throws on
- * HTTP errors and on a job that misses the completion timeout — the daily
+ * HTTP errors and on a job that misses the completion timeout, the daily
  * sync records the error and retries tomorrow rather than persisting a
  * partial window.
  */

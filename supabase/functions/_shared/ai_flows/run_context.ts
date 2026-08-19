@@ -9,19 +9,19 @@
  * (Truly Insurance, 2026-07-11): the flow asked a question, the run ended,
  * and the lead's answer landed on a model with zero flow context.
  *
- * This module summarizes a lead's recent runs — the workflow name, where it
+ * This module summarizes a lead's recent runs, the workflow name, where it
  * stands, the vars it collected, and the last automated message sent to the
- * lead — into a prompt block reply workers prepend so the model continues
+ * lead, into a prompt block reply workers prepend so the model continues
  * the conversation instead of restarting it. A business-wide variant gives
  * dashboard chat (owner-facing) an "automation activity" digest.
  *
  * The voice bridge vendors a mirror of this module
- * (vps/voice-bridge/src/flow-run-context.ts — it is rsynced to the VPS
+ * (vps/voice-bridge/src/flow-run-context.ts, it is rsynced to the VPS
  * standalone and can't import across the repo). The data rules must stay
  * identical; tests/voice-bridge-flow-run-context.test.ts pins the two.
  *
  * Formatting is pure and unit-tested; the loaders are thin best-effort IO
- * wrappers — a context failure must never break the reply path.
+ * wrappers, a context failure must never break the reply path.
  */
 import { isTestModeTrigger } from "./test_mode.ts";
 
@@ -37,7 +37,7 @@ const MAX_RUNS_PER_BUSINESS = 10;
 /** Vars cap per run (schema-capped flows stay well under this). */
 const MAX_VARS_PER_RUN = 12;
 
-/** Per-value excerpt cap — long lead replies stay readable, not dominant. */
+/** Per-value excerpt cap, long lead replies stay readable, not dominant. */
 const MAX_VALUE_CHARS = 160;
 
 /** Excerpt cap for each already-sent automated message body. */
@@ -160,7 +160,7 @@ export function formatFlowRunContext(
  * just texted. The 2026-07-14 Truly incident (lead Alex) showed the small
  * SMS model ignoring the system-preamble automation context entirely: the
  * flow asked "when does your policy renew?", the lead answered
- * "July 23, 2026", and the model replied "I need a bit more context" — with
+ * "July 23, 2026", and the model replied "I need a bit more context", with
  * the question sitting in its system prompt. The same model reads the note
  * reliably when it is adjacent to the user message, so the worker anchors
  * the LAST automated message right next to the turn it likely answers.
@@ -168,7 +168,7 @@ export function formatFlowRunContext(
  * The ACT-on-it clause exists because acknowledging an answer is not
  * enough: Amy's lead Bryan answered "Now is a good time" to "when is a good
  * time to discuss…?" and the reply re-opened scheduling ("What time works
- * best for you?" / "I can check for some available times") — the answer
+ * best for you?" / "I can check for some available times"), the answer
  * was understood but deferred. An "I'm available now" answer must be acted
  * on in the same reply (continue the conversation immediately or arrange a
  * prompt human follow-up), never bounced back into a calendar negotiation.
@@ -185,7 +185,7 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
     `follow-up; do NOT ask them to schedule for later, offer to find times, ` +
     // The bare-answer clause (Jul 2026): on gemini-3.5-flash-lite the
     // fleet's incident-turn prompt read a bare-date SMS ("July 23, 2026")
-    // as a BLANK message on ~half of temperature-0 draws — the Truly
+    // as a BLANK message on ~half of temperature-0 draws, the Truly
     // 2026-07-14 class resurfacing on the migrated model. Naming the [SMS]
     // line as the message pinned it: 8/8 clean draws on the live probe
     // (surfaced by tests/e2e/truly-renewal-context.e2e.test.ts after the
@@ -266,13 +266,13 @@ async function loadFlowNames(supabase: AnyClient, flowIds: string[]): Promise<Ma
  * PostgREST predicate excluding test runs AT THE QUERY so they can never
  * occupy the page and starve live runs out of the limit. `->>` yields null
  * when the key is absent (every non-test run), and `neq` alone drops null
- * rows — hence the explicit is.null arm.
+ * rows, hence the explicit is.null arm.
  */
 const NOT_TEST_RUN_OR =
   "context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true";
 
 /**
- * Drop test runs — simulated sends never reached the contact. The query
+ * Drop test runs, simulated sends never reached the contact. The query
  * already excludes them (NOT_TEST_RUN_OR); this in-memory sweep is runtime
  * defense for rows that predate the predicate or fakes that ignore it.
  */
@@ -293,7 +293,7 @@ export type FlowRunContextDetailed = {
   /** The formatted system-preamble block (null = nothing to say). */
   block: string | null;
   /** The raw automated messages recently texted to this contact, oldest
-   * first — the same bodies the block quotes. Callers that anchor context
+   * first, the same bodies the block quotes. Callers that anchor context
    * next to the user turn (formatFlowAnswerNote) need the newest one raw. */
   recentMessages: string[];
 };
@@ -348,7 +348,7 @@ export async function loadFlowRunContextDetailed(
     const snapshots = rows.map((row) => toSnapshot(row, names));
 
     // The last few things an automation texted this lead (send_sms steps
-    // only — agent offers and owner notices go to teammates, not the lead).
+    // only, agent offers and owner notices go to teammates, not the lead).
     // Multiple messages, not just the newest: the model must know EVERY
     // recently-delivered automated line so it can't re-send an earlier one.
     let recentFlowMessages: string[] = [];
@@ -422,7 +422,7 @@ export async function loadBusinessFlowActivity(
   }
 }
 
-/** "Dwight Colclough (+14168775223)" — best available lead identity. */
+/** "Dwight Colclough (+14168775223)", best available lead identity. */
 function leadLabelFor(row: RunRow): string | null {
   const vars = runVars(row.context);
   const trigger = runTrigger(row.context);

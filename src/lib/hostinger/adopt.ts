@@ -4,32 +4,32 @@
  * The VPS reuse pool (fleet economics Phase B, `vps_inventory`) exists
  * because Hostinger's refund policy makes canceled boxes sunk cost: 30 days
  * per box AND >180 days since the account's last VPS refund. Adoption turns
- * that sunk cost back into inventory — the orchestrator claims a pooled box
+ * that sunk cost back into inventory, the orchestrator claims a pooled box
  * of the right size and calls this instead of `provisionVpsForBusiness`.
  *
  * The sequence is the one `debug/provision-kvm2-smoke.ts --adopt-vm` and
  * `debug/migrate-vps-size.ts --adopt-vm` proved empirically (July 2026):
  *
  *   1. Reuse the VM's existing `vps_ssh_keys` row when one is active (a
- *      prior partial adopt already uploaded the public half — the table
+ *      prior partial adopt already uploaded the public half, the table
  *      enforces one active row per VPS), otherwise mint + upload + persist.
  *   2. Register the bootstrap as a post-install script WITH THE PUBLIC KEY
  *      EMBEDDED (authorized_keys write, first thing): Hostinger's setup,
  *      recreate, AND attach endpoints all silently drop `public_key_ids` on
  *      some VMs (VM 1798267 in the KVM2 experiment; VM 1806097 in the KVM1
- *      Phase E smoke — two recreates reported success, key never landed).
+ *      Phase E smoke, two recreates reported success, key never landed).
  *      The PIS-embedded write is the only deterministic attach. No 403
  *      fallback on PIS registration: an account that owns an adoptable VPS
  *      is past the "no VPS yet" chicken-and-egg that gates this endpoint
  *      for new accounts.
  *   3. `setup` only if the box is stuck in `initial` (never set up).
- *   4. `recreate` with the same payload — standalone setup 422s on
+ *   4. `recreate` with the same payload, standalone setup 422s on
  *      bare-label hostnames and IGNORES `public_key_ids`; recreate is what
  *      runs the PIS (and with it the embedded key write). We still PROBE
  *      ssh auth and re-run the recreate once before failing.
  *   5. Wait for the box's own post-install run to go quiescent (Hostinger
  *      runs the PIS through its own runner, not cloud-init, so the
- *      orchestrator's `cloud-init status --wait` can't see it) — otherwise
+ *      orchestrator's `cloud-init status --wait` can't see it), otherwise
  *      the orchestrator's SSH bootstrap races it on the apt lock.
  *   6. Monarx (non-fatal) + billing-subscription lookup, mirroring
  *      `provisionVpsForBusiness`.
@@ -77,7 +77,7 @@ export type AdoptVpsDeps = {
   generateKeypair?: typeof generateSshKeypair;
   /** Override the sleep primitive (testing). */
   sleep?: (ms: number) => Promise<void>;
-  /** Override the clock (testing — the wait loops use deadlines). */
+  /** Override the clock (testing, the wait loops use deadlines). */
   now?: () => number;
   db?: {
     insertVpsSshKey?: typeof insertVpsSshKey;
@@ -127,7 +127,7 @@ async function defaultPisQuiescentProbe(host: string, privateKeyPem: string): Pr
     });
     return (res.stdout ?? "").includes("idle");
   } catch {
-    // Transient SSH blip — treat as "still busy" and let the caller retry.
+    // Transient SSH blip, treat as "still busy" and let the caller retry.
     return false;
   }
 }
@@ -166,13 +166,13 @@ export async function adoptVpsForBusiness(
   const readyTimeout = input.readyTimeoutMs ?? 15 * 60 * 1000;
 
   // 1. Key material: reuse the VM's active row (one active row per VPS is
-  //    enforced by a partial unique index — a second insert would violate
+  //    enforced by a partial unique index, a second insert would violate
   //    it) or mint + upload + persist a fresh pair.
   const existingKey = await dbGetKey(String(vmId));
   let sshKeyRow: VpsSshKeyRow;
   let publicKeyId: number;
   // True only when the active key row was minted by a PRIOR ADOPT ATTEMPT
-  // FOR THIS SAME BUSINESS — the one case where a running box with our key
+  // FOR THIS SAME BUSINESS, the one case where a running box with our key
   // attached is known to be a freshly recreated image (safe to skip the
   // destructive recreate below). A key row inherited from a previous tenant
   // must never unlock that fast path: the disk still holds their data.
@@ -220,7 +220,7 @@ export async function adoptVpsForBusiness(
   }
   const privateKeyPem = sshKeyRow.private_key_pem;
 
-  // 2. Bootstrap as a post-install script (no 403 fallback — see header).
+  // 2. Bootstrap as a post-install script (no 403 fallback, see header).
   //    The public key is EMBEDDED in the script because Hostinger's
   //    setup/recreate/attach endpoints drop `public_key_ids` on some VMs;
   //    the PIS write is the deterministic attach path (see header #2).
@@ -259,7 +259,7 @@ export async function adoptVpsForBusiness(
     }
   };
 
-  // 3. A box stuck in `initial` was never set up — run setup first.
+  // 3. A box stuck in `initial` was never set up, run setup first.
   const initialState = (await client.getVirtualMachine(vmId)).state;
   if (initialState === "initial") {
     await client.setupVirtualMachine(vmId, setupPayload);
@@ -301,7 +301,7 @@ export async function adoptVpsForBusiness(
   //    THIS SAME BUSINESS already attached our key (the box is a freshly
   //    recreated image; the orchestrator's idempotent SSH bootstrap
   //    follows). A key inherited from a previous tenant authenticating is
-  //    NOT sufficient — skipping recreate there would hand the new tenant
+  //    NOT sufficient, skipping recreate there would hand the new tenant
   //    the previous tenant's live filesystem. Otherwise recreate (which
   //    wipes the disk), probe, retry once.
   const preState = await client.getVirtualMachine(vmId);
@@ -314,7 +314,7 @@ export async function adoptVpsForBusiness(
     publicIp = preIp;
   } else {
     publicIp = await recreateOnce();
-    // Recreate re-images the disk, which regenerates SSH host keys — a pin
+    // Recreate re-images the disk, which regenerates SSH host keys, a pin
     // captured from the previous image on a REUSED key row would hard-fail
     // every strict connection afterwards (G7). Clear it so the
     // orchestrator's bootstrap re-captures on first connect.
@@ -347,7 +347,7 @@ export async function adoptVpsForBusiness(
     await sleep(15_000);
   }
 
-  // 6. Monarx is defense-in-depth, not a gate — mirror provisionVpsForBusiness.
+  // 6. Monarx is defense-in-depth, not a gate, mirror provisionVpsForBusiness.
   try {
     await client.installMonarx(vmId);
   } catch (err) {
@@ -357,7 +357,7 @@ export async function adoptVpsForBusiness(
     });
   }
 
-  // The VM detail endpoint's `subscription_id` is the reliable mapping —
+  // The VM detail endpoint's `subscription_id` is the reliable mapping,
   // Hostinger's subscriptions LIST stopped returning `resource_id` (verified
   // against the live API Jul 2026), so the historical find-by-resource_id is
   // kept only as a fallback for older API surfaces that still populate it.
@@ -387,12 +387,12 @@ export async function adoptVpsForBusiness(
 
   // Pooled boxes are parked with auto-renew OFF (they lapse at period end
   // unless adopted). Now that a live tenant depends on this box, re-enable
-  // auto-renew — otherwise Hostinger deletes the VM out from under them at
+  // auto-renew, otherwise Hostinger deletes the VM out from under them at
   // the paid period's end. Best-effort with a loud log: a failure here is
   // an ops follow-up (flip it in hPanel), not an adopt abort.
   //
   // EXCEPTION: a box flagged `never_renew` in vps_inventory (sunk-cost
-  // hardware that must lapse no matter what — e.g. KVM8 srv1632631 pooled
+  // hardware that must lapse no matter what, e.g. KVM8 srv1632631 pooled
   // under the kvm2 label) keeps auto-renew OFF: re-enabling would start
   // billing the platform for hardware the tenant's price doesn't cover. The
   // daily billing-posture cron nags ops to migrate the tenant to its correct

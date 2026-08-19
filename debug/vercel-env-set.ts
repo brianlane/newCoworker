@@ -6,10 +6,10 @@
  *
  * Requires VERCEL_TOKEN / VERCEL_PROJECT_ID (and VERCEL_ORG_ID for team
  * projects) in the repo-root .env. Values are printed truncated (first 16
- * chars) — never pass secrets you can't afford in shell history; NEXT_PUBLIC_*
+ * chars), never pass secrets you can't afford in shell history; NEXT_PUBLIC_*
  * and non-secret config IDs are the intended use.
  *
- * A changed value only takes effect on the NEXT production build — follow up
+ * A changed value only takes effect on the NEXT production build, follow up
  * with debug/vercel-redeploy.ts (or merge to main).
  *
  * Dry-run by default (lists the existing rows); ⚠️ --apply writes.
@@ -62,7 +62,7 @@ if (!APPLY) {
   process.exit(0);
 }
 
-// Only touch rows that serve at least one of the requested targets — a run
+// Only touch rows that serve at least one of the requested targets, a run
 // scoped to production must never rewrite a preview-only row.
 const matching = rows.filter((r) => r.target.some((t) => TARGETS.includes(t)));
 const skipped = rows.filter((r) => !matching.includes(r));

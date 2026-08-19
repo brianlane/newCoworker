@@ -191,13 +191,13 @@ function QuestionnaireForm({
   // references their site. Empty string until the preview returns
   // (chat still works without it; the system prompt falls back to
   // mentioning just the URL). Lives in component state rather than
-  // localStorage because it's transient — the persistent ingest at
+  // localStorage because it's transient, the persistent ingest at
   // /api/onboard/website-ingest re-runs at "Proceed to Payment" and is
   // the canonical source for `business_configs.website_md`.
   const [websiteMd, setWebsiteMd] = useState("");
   // Tracks which URL produced the cached `websiteMd`. Without this, a
   // user who clicks Back to Step 1, edits the URL, and advances again
-  // keeps sending the OLD site's summary in chat requests — the
+  // keeps sending the OLD site's summary in chat requests, the
   // assistant references content from a different site than the one
   // currently in the form. The Step 1 → Step 2 gate only refetches
   // when this source URL no longer matches `form.websiteUrl`, and the
@@ -220,7 +220,7 @@ function QuestionnaireForm({
 
   // Mount-only hydration. `searchParams` is read inside a `useEffectEvent`
   // wrapper so the linter's exhaustive-deps rule sees this as a hook with no
-  // reactive dependencies — which is what we want here. Re-running the effect
+  // reactive dependencies, which is what we want here. Re-running the effect
   // when `searchParams` changes would re-apply `?step=1` from the URL after
   // we've explicitly stripped it (line below), yanking the user back to step
   // 1 after they've naturally advanced. The single-shot semantics are the
@@ -235,8 +235,8 @@ function QuestionnaireForm({
       // URL-driven step intent: ONLY `?step=1` is honored. That's the sole deep-link
       // we currently expose (the "Change it" email link from /signup → step 1, which
       // owns the email field). Honoring ?step=2 or ?step=3 would let users bypass the
-      // questionnaire's progression gates — `handleAdvanceStep` requires `chatClosed`
-      // to advance from step 2 to step 3 — and land directly on checkout with an empty
+      // questionnaire's progression gates, `handleAdvanceStep` requires `chatClosed`
+      // to advance from step 2 to step 3, and land directly on checkout with an empty
       // or low-quality assistant profile. ?step=2/3 therefore falls through to the
       // existing localStorage-derived precedence chain instead of overriding it.
       const stepParamRaw = Number(searchParams.get("step"));
@@ -265,9 +265,9 @@ function QuestionnaireForm({
       // Form fields: DRAFT is the source of truth when it exists. It carries the most
       // recent in-progress edits AND the chat transcript (OnboardingAssistantChatState
       // in ONBOARD intentionally omits messages). Only fall back to ONBOARD when DRAFT
-      // is missing — overlaying ONBOARD on top of DRAFT would clobber unsynced field
+      // is missing, overlaying ONBOARD on top of DRAFT would clobber unsynced field
       // edits that the user made between back-navigations. The one downstream-updated
-      // field — ownerEmail — is reconciled separately below (it lives in `signupEmail`,
+      // field, ownerEmail, is reconciled separately below (it lives in `signupEmail`,
       // not in the form payload) so it does not need to participate in this merge.
       if (draft?.form) {
         setForm((prev) => ({ ...prev, ...draft.form }));
@@ -645,7 +645,7 @@ function QuestionnaireForm({
         localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
       } else if (onboardingData.preferredAreaCode?.trim()) {
         // The business row already exists (e.g. a Stripe-cancel return), so
-        // the create call above is skipped — but the user may have edited
+        // the create call above is skipped, but the user may have edited
         // their preferred area code on Step 1 since the row was written.
         // Re-hit the idempotent create route, whose existing-row path
         // updates `preferred_area_code` from the latest valid input.
@@ -869,7 +869,7 @@ function QuestionnaireForm({
         setError(t("errEmailInvalid"));
         return;
       }
-      // Phone is optional, but a PROVIDED value must coerce to E.164 — the
+      // Phone is optional, but a PROVIDED value must coerce to E.164, the
       // same check /api/business/create enforces. Catching it here (with the
       // field still on screen) beats a server rejection at "Proceed to
       // Payment" two steps later. A 7-digit number that slipped through
@@ -903,7 +903,7 @@ function QuestionnaireForm({
       // preflight just spares the user from filling out the rest of
       // the questionnaire only to be rejected at "Proceed to
       // Payment". A network/5xx error here is intentionally treated
-      // as "go ahead" — the server-side gate will catch any false
+      // as "go ahead", the server-side gate will catch any false
       // negative.
       try {
         setEmailChecking(true);
@@ -935,7 +935,7 @@ function QuestionnaireForm({
       // await it: chat starts immediately, the markdown lands once
       // ingest completes (typically within the first 2-3 turns), and
       // subsequent chat POSTs pick it up via the cached `websiteMd`.
-      // Errors are logged silently — chat falls back to the "we can see
+      // Errors are logged silently, chat falls back to the "we can see
       // the URL but not the content" prompt branch in `chat.ts`.
       //
       // Refetch whenever the URL the user typed differs from whatever
@@ -1135,7 +1135,7 @@ function QuestionnaireForm({
                 placeholder={t("serviceAreaPlaceholder")}
                 required
               />
-              {/* Team size — segmented control. Closed-class buckets
+              {/* Team size, segmented control. Closed-class buckets
                   rather than free numeric input: the downstream
                   identity.md only needs a rough scale, and a closed
                   enum eliminates the parsing-by-regex problems we had
@@ -1173,7 +1173,7 @@ function QuestionnaireForm({
                   })}
                 </div>
               </div>
-              {/* CRM — closed-list dropdown with explicit "None" and
+              {/* CRM, closed-list dropdown with explicit "None" and
                   "Other" entries. "None" is a real, common answer for
                   small operators running on texts/calendar/email; the
                   Other escape hatch covers vertical-specific or

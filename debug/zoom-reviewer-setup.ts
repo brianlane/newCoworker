@@ -9,7 +9,7 @@
  *      the dashboard chat booking tools.
  *
  * NOT created here (manual, once): a connected calendar on the sandbox
- * business — sign in as the reviewer account and connect a Google/Microsoft
+ * business, sign in as the reviewer account and connect a Google/Microsoft
  * calendar so the test plan's booking steps are end-to-end real.
  *
  * Usage:
@@ -43,7 +43,7 @@ if (!APPLY) {
 
 // 1. Auth user (credential reset to a fresh value on every apply so a rerun
 //    always yields known-good credentials to paste into the release notes).
-//    Minted at runtime — there is no hardcoded value here.
+//    Minted at runtime, there is no hardcoded value here.
 const minted = ["Zr", randomBytes(12).toString("base64url")].join("-");
 {
   // Paginate the whole user list so idempotency survives >1000 auth users.

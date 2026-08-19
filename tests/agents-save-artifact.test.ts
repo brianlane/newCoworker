@@ -152,7 +152,7 @@ describe("saveAgentRunArtifact", () => {
     expect(uploads[1].contentType).toBe(docxMime);
     expect(uploads[1].bytes.subarray(0, 2).toString("ascii")).toBe("PK");
 
-    // content_md stays the markdown artifact — knowledge lookup reads text.
+    // content_md stays the markdown artifact, knowledge lookup reads text.
     const inserted = vi.mocked(insertBusinessDocument).mock.calls[0][0];
     expect(inserted.mime_type).toBe("application/pdf");
     expect(inserted.content_md).toBe(RUN.output_md);

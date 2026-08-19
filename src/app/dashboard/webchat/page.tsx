@@ -3,7 +3,7 @@
  *
  * Mirrors the Texts index pattern (`/dashboard/messages`): server-component
  * list of visitor sessions with captured contact details, each linking into
- * the read-only transcript view. Starter tenants get an upgrade card — the
+ * the read-only transcript view. Starter tenants get an upgrade card, the
  * sidebar link stays visible as an upsell, same as Analytics.
  */
 

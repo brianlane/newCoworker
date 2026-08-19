@@ -1,5 +1,5 @@
 /**
- * assign-kyp-ads-did-438.ts — one-shot: buy + assign a Montreal-overlay
+ * assign-kyp-ads-did-438.ts, one-shot: buy + assign a Montreal-overlay
  * (438) DID for KYP Ads (056034a7-e84c-444d-8d15-747eeb1fa899), whose
  * signup provisioning could not auto-assign a number: the owner's 514 NPA
  * had no Telnyx inventory and the API's 400/10031 response aborted the
@@ -7,7 +7,7 @@
  *
  * Canadian tenant → the (US+CA) messaging profile, NOT the US default:
  * without CA carrier whitelisting every outbound SMS fails with Telnyx
- * 40309 (the Truly Insurance incident). 10DLC attach is skipped — that is
+ * 40309 (the Truly Insurance incident). 10DLC attach is skipped, that is
  * US A2P registration and does not apply to a CA number.
  *
  * Usage:
@@ -20,7 +20,7 @@ loadEnv();
 
 const APPLY = process.argv.includes("--apply");
 const BUSINESS_ID = "056034a7-e84c-444d-8d15-747eeb1fa899";
-// "New Coworker SMS (US+CA)" — the platform-wide Canadian-capable profile.
+// "New Coworker SMS (US+CA)", the platform-wide Canadian-capable profile.
 const CA_MESSAGING_PROFILE_ID = "40019f47-a642-4b58-9f0e-b456600cc671";
 const SEARCH = { countryCode: "CA", areaCode: "438" } as const;
 

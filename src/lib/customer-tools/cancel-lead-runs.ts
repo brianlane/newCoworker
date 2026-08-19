@@ -1,9 +1,9 @@
 /**
- * Shared "stop this lead's automations" core — revision-gated cancels for
+ * Shared "stop this lead's automations" core, revision-gated cancels for
  * every pending AiFlow run matched to a lead's identity set. Used by BOTH
  * owner intents:
- *   - flag_contact_spam ("he's spam") — canceledBy "owner_declared_spam";
- *   - set_contact_reply_mode suppress ("stop texting Chris") — canceledBy
+ *   - flag_contact_spam ("he's spam"), canceledBy "owner_declared_spam";
+ *   - set_contact_reply_mode suppress ("stop texting Chris"), canceledBy
  *     "owner_stopped_texting" (the Chris Gregoris incident, Jul 24 2026:
  *     the ONLY tool that could stop follow-ups was the irreversible spam
  *     block, so the model used it on a hot lead).
@@ -18,7 +18,7 @@ import type { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 
 /**
- * Every non-terminal run state — human-parked AND `running` included (an
+ * Every non-terminal run state, human-parked AND `running` included (an
  * owner stop means stop). Matches the dashboard owner-stop's
  * CANCELABLE_RUN_STATUSES: a `running` run cancels cooperatively, the
  * worker re-reads status at each step boundary and quits when it sees

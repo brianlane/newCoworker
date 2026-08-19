@@ -21,8 +21,8 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  * The Bryan replay (Amy Laidlaw Real Estate, 2026-07-14): a Clever lead
  * flow texted Bryan "When is a good time to discuss next steps for your
  * FREE Appraisal & your cash offers?", the flow ended, and Bryan answered
- * "Now is a good time" a day later. The generic AI path — WITH the
- * automation context and the fresh-thread answer anchor in place — still
+ * "Now is a good time" a day later. The generic AI path, WITH the
+ * automation context and the fresh-thread answer anchor in place, still
  * replied "Great! What time works best for you?": it understood the answer
  * but bounced it back into a schedule-for-later negotiation instead of
  * acting on "now".

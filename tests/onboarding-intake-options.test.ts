@@ -43,7 +43,7 @@ describe("intakeOptions: CRM_OPTIONS", () => {
   it("starts with the explicit None-CRM entry so single-operator users have a positive answer", () => {
     // Pre-migration the chat had to scan transcripts for "I just use
     // texts/email" and treat that as a CRM-known signal. Now the
-    // dropdown carries an explicit value the user can pick — there
+    // dropdown carries an explicit value the user can pick, there
     // is no ambiguity between "user skipped" and "user said no
     // CRM".
     expect(CRM_OPTIONS[0]?.value).toBe("None — texts, email, or calendar only");
@@ -121,7 +121,7 @@ describe("intakeOptions: deriveCrmSelection / serializeCrmSelection round-trip",
     // Regression: previously this serialized to `""`, which made the
     // dropdown round-trip back to its placeholder on the next render
     // and hid the "Which CRM?" text input. Picking Other became
-    // a UX dead-end — users couldn't fill out or advance Step 1.
+    // a UX dead-end, users couldn't fill out or advance Step 1.
     // The sentinel preserves the in-flight selection across renders
     // while still being recognized as incomplete by
     // `isCrmSelectionComplete`.
@@ -164,7 +164,7 @@ describe("intakeOptions: isCrmSelectionComplete", () => {
   it("rejects empty / nullish / sentinel values as incomplete", () => {
     // These are exactly the states the Step 1 advance gate must
     // block. The sentinel is truthy as a string but represents
-    // "Other selected, no text typed" — letting it through would
+    // "Other selected, no text typed", letting it through would
     // submit `body.crmUsed = "Other:"` to the server.
     expect(isCrmSelectionComplete("")).toBe(false);
     expect(isCrmSelectionComplete("   ")).toBe(false);
@@ -182,7 +182,7 @@ describe("intakeOptions: isCrmSelectionComplete", () => {
     // pulling `CRM_OPTIONS`' Other entry's `value` directly.
     // `deriveCrmSelection("Other")` matches the option entry and
     // renders the dropdown in Other state with an empty "Which
-    // CRM?" text input — so for UX consistency the advance gate
+    // CRM?" text input, so for UX consistency the advance gate
     // MUST also flag this as incomplete. Otherwise the user can
     // bypass the text input entirely and submit `crmUsed: "Other"`
     // as if it were a real answer.
@@ -193,7 +193,7 @@ describe("intakeOptions: isCrmSelectionComplete", () => {
   it("agrees with deriveCrmSelection on every Other-state representation (no UI/gate disagreement)", () => {
     // Whenever `deriveCrmSelection(stored).selection === "Other"`
     // and `otherText === ""`, the UI shows an empty "Which CRM?"
-    // text input — regardless of whether `stored` is the sentinel,
+    // text input, regardless of whether `stored` is the sentinel,
     // the bare "Other", or some legacy unknown free-text value
     // that happens to round-trip into Other. In all of those
     // cases `isCrmSelectionComplete` MUST return false; otherwise
@@ -217,7 +217,7 @@ describe("intakeOptions: isCrmSelectionComplete", () => {
   it("accepts Other only when the prefix has non-empty trailing text", () => {
     expect(isCrmSelectionComplete("Other: Wise Agent")).toBe(true);
     // Prefix with whitespace-only payload is still an in-flight
-    // state — the user hasn't actually named a CRM yet.
+    // state, the user hasn't actually named a CRM yet.
     expect(isCrmSelectionComplete("Other:    ")).toBe(false);
   });
 
@@ -253,7 +253,7 @@ describe("intakeOptions: teamSizeBucketToInt", () => {
   });
 
   it("defaults to 1 (solo) for unparseable input rather than NaN", () => {
-    // Critical: `parseInt("Just me")` was the original bug — `NaN`
+    // Critical: `parseInt("Just me")` was the original bug, `NaN`
     // hits the DB integer column and breaks create/checkout. Solo
     // is the safest default because it's the most common small-team
     // case AND any over/under-count is recoverable from the chat

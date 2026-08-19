@@ -1,10 +1,10 @@
 /**
- * set_contact_reply_mode core — the machinery behind "stop texting Chris".
+ * set_contact_reply_mode core, the machinery behind "stop texting Chris".
  *
  * KYP Ads, Jul 24 2026 (Chris Gregoris incident): James texted "stop
  * texting chris please" about a hot lead who was waiting on a personal
  * call. The only tool that could stop follow-ups was flag_contact_spam, so
- * the model used it — an IRREVERSIBLE STOP-list block plus a spam tag on a
+ * the model used it, an IRREVERSIBLE STOP-list block plus a spam tag on a
  * real customer. The correct primitive existed all along:
  * `contacts.sms_reply_mode='suppress'` (built after the realtor.com
  * bot-loop incident precisely because sms_opt_outs was too blunt). This
@@ -15,13 +15,13 @@
  * the spam flag, `owner_stopped_texting` audit marker). Inbound texts are
  * still received and logged, manual sends from the dashboard still work,
  * and calls are unaffected. Fully reversible: mode "auto" turns the
- * coworker back on. NO opt-out row, NO spam tag — this is thread
+ * coworker back on. NO opt-out row, NO spam tag, this is thread
  * management, not a block.
  *
  * Same surface posture as flag_contact_spam: inline-only (dashboard chat +
  * owner-SMS operator turn), never seeded to the Rowboat agents. Gated by
- * its own Settings toggle at the operate_messages bar — the same
- * permission the dashboard thread's reply-mode control requires — so no
+ * its own Settings toggle at the operate_messages bar, the same
+ * permission the dashboard thread's reply-mode control requires, so no
  * manage_settings requirement (unlike the irreversible spam flag).
  */
 
@@ -76,7 +76,7 @@ type ContactNumbersRow = {
 };
 
 /**
- * Set one contact's texting mode for a business. Never throws — the
+ * Set one contact's texting mode for a business. Never throws, the
  * returned payload is a Gemini functionResponse and must always be
  * relayable.
  */
@@ -100,7 +100,7 @@ export async function setContactTextingMode(
   }
   const phoneE164 = normalized.value;
 
-  // 1. The mode write — load-bearing, fails the whole call honestly. Alias-
+  // 1. The mode write, load-bearing, fails the whole call honestly. Alias-
   // aware and creates a minimal contact row when none exists (same helper
   // the dashboard thread toggle uses).
   try {
@@ -117,7 +117,7 @@ export async function setContactTextingMode(
     };
   }
 
-  // 2. On suppress, also stop their pending automation runs — "stop texting
+  // 2. On suppress, also stop their pending automation runs, "stop texting
   // them" means the scheduled nudges too, not just default replies.
   // Best-effort AFTER the mode write; a missed cancel leaves a run that can
   // still send its authored texts, which the note reports honestly.
@@ -127,7 +127,7 @@ export async function setContactTextingMode(
     try {
       const db = await createDb();
       // Cover the identity set (canonical + merged aliases), same as the
-      // spam flag — flows may hold runs under a different number than the
+      // spam flag, flows may hold runs under a different number than the
       // one the owner quoted.
       let identitySet = [phoneE164];
       const { data: contactRows, error: readErr } = await db
@@ -155,7 +155,7 @@ export async function setContactTextingMode(
       }
       // DRAIN the cancel core: it cancels at most 25 runs per call (the
       // goal-jump parity bound), and unlike the spam flag there is no
-      // opt-out backstop here — suppress does not block AiFlow outbound
+      // opt-out backstop here, suppress does not block AiFlow outbound
       // steps, so every pending run must actually be canceled. Loop until
       // a pass cancels nothing; hitting the pass cap reports an incomplete
       // sweep instead of a false "all stopped" (Bugbot Medium, PR #898).
@@ -186,7 +186,7 @@ export async function setContactTextingMode(
     }
   }
 
-  // The note mirrors what actually happened — the model relays it verbatim.
+  // The note mirrors what actually happened, the model relays it verbatim.
   const note =
     args.mode === "suppress"
       ? `Tell the owner: the coworker will no longer text this contact (no auto-replies), ` +

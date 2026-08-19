@@ -12,7 +12,7 @@
  *      own DID (the engine capability shipped in the Clever engine PR). The reply
  *      auto-sends (no approval gate), matching the live row.
  *
- * IMPORTANT — prerequisites before --apply / --enable:
+ * IMPORTANT, prerequisites before --apply / --enable:
  *   - The ai-flow-worker + telnyx-sms-inbound Edge functions must be on the
  *     Clever-engine build (the inbound handler now records group participants
  *     and the worker honors replyToGroup).

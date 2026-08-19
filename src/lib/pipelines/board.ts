@@ -23,7 +23,7 @@ export {
 /**
  * Distribute cards across a pipeline's columns. Returns a map keyed by
  * stage id, every stage present (empty columns included) so the board can
- * render all of them; cards whose tags match no stage are omitted — they
+ * render all of them; cards whose tags match no stage are omitted, they
  * are simply not on this pipeline.
  */
 export function groupCardsByStage<T extends { tags: string[] }>(

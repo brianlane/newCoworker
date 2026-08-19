@@ -6,12 +6,12 @@
  * can reach more than one business (an agency owner with N businesses, or a
  * Phase-1 team member). This module is the single replacement:
  *
- *  - `listAccessibleBusinesses(user)` — everything the login can open:
+ *  - `listAccessibleBusinesses(user)`, everything the login can open:
  *    businesses they OWN (owner_email match) plus ACTIVE/INVITED memberships
  *    (business_members, Phase 1). Owner rows win when both exist.
  *  - an `active_business` cookie (set by /api/dashboard/active-business via
  *    the sidebar switcher) picks WHICH accessible business the dashboard
- *    shows; it is validated against the accessible set on every read — a
+ *    shows; it is validated against the accessible set on every read, a
  *    forged cookie can never reach a business the login has no role on.
  *  - admin view-as keeps its own pinned business id and bypasses both the
  *    cookie and memberships. This is also what makes impersonation safe to
@@ -46,7 +46,7 @@ export type AccessibleBusiness = {
 
 /**
  * Every business this login can open, owner rows first (then newest-first
- * within each group). Invited-but-unbound memberships count — the invite
+ * within each group). Invited-but-unbound memberships count, the invite
  * email is the grant, and the first dashboard render binds them active.
  */
 export async function listAccessibleBusinesses(
@@ -59,7 +59,7 @@ export async function listAccessibleBusinesses(
 
   // Case-insensitive owner match: businesses.owner_email is NOT lowercased
   // by schema (unlike business_members.email), and getBusinessRoleForEmail
-  // compares case-insensitively — an exact-case eq here would hide owned
+  // compares case-insensitively, an exact-case eq here would hide owned
   // businesses from the switcher while API calls still treat the login as
   // owner. LIKE metacharacters are escaped so an email like a_b@x.com can't
   // wildcard-match other rows.
@@ -164,7 +164,7 @@ async function resolveActiveBusinessContextUncached(
  * previously cost 2 identical DB round-trips (businesses + business_members)
  * per render pass. React `cache()` keys on the `user` object, and every
  * caller gets the SAME object within a request because `getAuthUser` is
- * itself `cache()`d — so layout + page + nested components share one
+ * itself `cache()`d, so layout + page + nested components share one
  * resolution. Outside a request scope (unit tests) `cache` is a pass-through
  * and does not memoize, same as `getAuthUser`.
  */

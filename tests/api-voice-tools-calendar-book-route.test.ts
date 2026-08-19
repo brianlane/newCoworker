@@ -4,7 +4,7 @@
  * guidance attached to notable booking outcomes. Born from the Truly
  * Insurance double-booking (2026-07-15): the bridge timed out a SLOW but
  * ultimately successful booking, the model told the caller the time was
- * "no longer available", and a second slot got booked — the timeout-retry
+ * "no longer available", and a second slot got booked, the timeout-retry
  * protocol (bridge) plus the `already_booked` / `booking_in_progress`
  * guidance here is what makes an identical retry safe and honest.
  */

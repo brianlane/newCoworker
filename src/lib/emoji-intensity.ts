@@ -3,7 +3,7 @@
  *
  * Canonical copy lives here for the Next.js app (Memory UI + API). The Deno
  * SMS worker mirrors the same values in
- * `supabase/functions/_shared/emoji_intensity.ts`. Keep them in lockstep —
+ * `supabase/functions/_shared/emoji_intensity.ts`. Keep them in lockstep,
  * `tests/emoji-intensity-parity.test.ts` fails the build on drift.
  */
 

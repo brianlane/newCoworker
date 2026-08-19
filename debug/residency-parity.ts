@@ -43,7 +43,7 @@ const CHILD_PARENT: Record<string, { parent: string; fk: string }> = {
 
 // Parent-slice ceiling for child-table scoping. Hitting it means the gate
 // CANNOT prove parity for that child table (central and box could slice
-// different parent sets) — treated as a hard failure, never a silent pass.
+// different parent sets), treated as a hard failure, never a silent pass.
 const PARENT_SLICE_LIMIT = 5000;
 
 async function centralCount(table: string): Promise<number> {
@@ -140,7 +140,7 @@ const { count: pending, error: pendingError } = await db
   .eq("business_id", businessId)
   .is("replayed_at", null);
 if (pendingError || pending === null || pending === undefined) {
-  // An unreadable journal is a FAIL, not zero — the gate must never pass on
+  // An unreadable journal is a FAIL, not zero, the gate must never pass on
   // missing evidence.
   console.log(
     `\n[parity] FAIL, journal depth unreadable: ${pendingError?.message ?? "no count returned"}`

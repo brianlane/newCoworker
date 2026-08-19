@@ -12,7 +12,7 @@
  *     is no duplicated catalog to drift;
  *   - for each tenant box it diffs the live Mongo workflow against the
  *     canonical one and reports, per agent: missing tools, extra tools
- *     (NEVER removed — report only), and agents missing entirely (those
+ *     (NEVER removed, report only), and agents missing entirely (those
  *     need a full redeploy via scripts/redeploy-deploy-client.ts);
  *   - with --apply it surgically UNIONS the missing tool names into each
  *     agent and adds/refreshes the workflow-level tool declarations
@@ -20,7 +20,7 @@
  *     scheduling reseed's description converge). Idempotent: a re-run
  *     converges to a no-op.
  *   - it also checks the voice bridge's deployed tool-declarations source
- *     against the repo copy (sha256) and flags stale bridges — voice tools
+ *     against the repo copy (sha256) and flags stale bridges, voice tools
  *     ship with the bridge, not the workflow.
  *
  * DEFAULT IS REPORT-ONLY. Nothing writes without --apply.
@@ -200,9 +200,9 @@ type WorkflowReport = {
 } | null;
 
 /**
- * Print one workflow's diff (live or draft — both are patched, so BOTH count
+ * Print one workflow's diff (live or draft, both are patched, so BOTH count
  * toward clean; a draft-only drift would otherwise go live on the tenant's
- * next workflow publish while the summary claimed full parity — Bugbot,
+ * next workflow publish while the summary claimed full parity, Bugbot,
  * PR #793). Returns whether this workflow had any diff.
  */
 function summarizeWorkflow(project: string, which: "live" | "draft", wf: WorkflowReport): boolean {

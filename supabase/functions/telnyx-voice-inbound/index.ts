@@ -4,8 +4,8 @@
  * Secrets: TELNYX_API_KEY, TELNYX_PUBLIC_KEY, STREAM_URL_SIGNING_SECRET,
  *          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  *          BRIDGE_MEDIA_WSS_ORIGIN (optional fallback when route has no origin)
- * Optional: STRIPE_SECRET_KEY — JIT refresh of subscription period cache (§4.2) when TTL/rollover requires it.
- * Optional: VOICE_AI_STREAM_ENABLED — set to `false` for rollout guard: answer+speak only (no media stream).
+ * Optional: STRIPE_SECRET_KEY, JIT refresh of subscription period cache (§4.2) when TTL/rollover requires it.
+ * Optional: VOICE_AI_STREAM_ENABLED, set to `false` for rollout guard: answer+speak only (no media stream).
  *
  * HTTP semantics: many logical errors (missing call fields, subscription/period issues) respond with **200**
  * and a Telnyx command to reject/hang up so Telnyx treats the webhook as delivered and does not retry.
@@ -76,7 +76,7 @@ const HANDLER_MS = 8000;
 
 // Shared AI-budget cap (micro-USD). Voice reads the SAME env vars as owner chat
 // + SMS (OWNER_CHAT_SPEND_CAP_MICROS / _STARTER) so all three surfaces trip the
-// shared owner_chat_model_spend fuse at the identical total for a tenant —
+// shared owner_chat_model_spend fuse at the identical total for a tenant,
 // hardcoding $5/$10 here would let voice refuse (or allow) calls at a different
 // threshold than chat/SMS whenever ops tune the env caps. Mirrors
 // sms-inbound-worker's CHAT_SPEND_CAP_MICROS(_STARTER). Falls back to the shared
@@ -111,7 +111,7 @@ const GEMINI_LIVE_SESSION_MAX_MS = (() => {
 const AI_BUDGET_MIN_SESSION_MARGIN_MICROS = Math.ceil(
   GEMINI_LIVE_MICROS_PER_MS * GEMINI_LIVE_SESSION_MIN_MS
 );
-// Amount to HOLD against the shared AI budget at answer time — the max a single
+// Amount to HOLD against the shared AI budget at answer time, the max a single
 // Live session could cost (env session cap × burn rate). The reserve RPC clamps
 // this to the remaining headroom, so a fresh pool holds only this (≈ $0.32) per
 // concurrent call while a near-exhausted pool holds exactly what's left.
@@ -143,7 +143,7 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
  * Minimal structural Supabase shape for `sendMissedAiCallSms`. Typed
  * structurally (not `SupabaseClient`) so the esm.sh createClient overloads can't
  * trip Deno's type-checker with a `SupabaseClient<any,...>` vs
- * `SupabaseClient<unknown, never, GenericSchema>` mismatch — same convention the
+ * `SupabaseClient<unknown, never, GenericSchema>` mismatch, same convention the
  * _shared modules use.
  */
 type MissedCallSupabase = {
@@ -159,7 +159,7 @@ type MissedCallSupabase = {
 /**
  * Text the owner that the AI coworker couldn't take a live call because the
  * shared AI budget is exhausted. Reuses the tenant's existing SMS fallback
- * config (`business_telnyx_settings`) — same gate the voice-bridge's missed-call
+ * config (`business_telnyx_settings`), same gate the voice-bridge's missed-call
  * SMS uses: only fires when `sms_fallback_enabled` is on AND a forward number +
  * messaging profile are set. We never text the caller. Best-effort; never
  * throws (the call is already being refused, this is a courtesy notification).
@@ -478,7 +478,7 @@ serve(async (req: Request) => {
   // of texting must not keep receiving automated follow-ups mid-call. Resolve
   // their parked wait_for_reply runs with the customer_called sentinel, defer
   // their queued follow-ups, tag the contact, and (when configured) text the
-  // owner. Fully best-effort and quick (indexed lookups) — call routing below
+  // owner. Fully best-effort and quick (indexed lookups), call routing below
   // must never be delayed or broken by this.
   if (fromE164Informational) {
     try {
@@ -832,7 +832,7 @@ serve(async (req: Request) => {
   const runHandoffChain = async (ctx: HandoffContext): Promise<Response | null> => {
     const first = ctx.steps[0];
     if (!first) {
-      // No ringable human — make the misconfiguration observable, then fall
+      // No ringable human, make the misconfiguration observable, then fall
       // through (AI-only chains aren't supported; we always ring a human first).
       console.warn("handoff: chain has no usable steps; falling through", {
         businessId,
@@ -851,7 +851,7 @@ serve(async (req: Request) => {
     // the call and the batch worker has not run a single step yet.
     const aiFirst = ctx.ai_takeover?.answer_first === true;
     const briefed = aiFirst ? await withPreCallBrief(ctx) : ctx;
-    // Persist the session FIRST — the chain can only advance (call.bridged /
+    // Persist the session FIRST, the chain can only advance (call.bridged /
     // call.hangup → telnyx-voice-call-end) if a session row keyed by this A-leg
     // call_control_id exists. If the write fails, fall through rather than ringing
     // a single dead-end leg with no Amy/AI fallback. Always written as `ringing`,
@@ -909,7 +909,7 @@ serve(async (req: Request) => {
    */
   const runBlindTransfer = async (toDst: string, whisper: string): Promise<Response> => {
     // A warm transfer bridges an *answered* leg. Answer first and gate the
-    // whisper + transfer on it — transferring an unanswered call is rejected by
+    // whisper + transfer on it, transferring an unanswered call is rejected by
     // Telnyx and strands the caller on dead air.
     const ans = await telnyxAnswerPlain(apiKey, callControlId);
     if (!ans.ok) {
@@ -1005,13 +1005,13 @@ serve(async (req: Request) => {
   // authored, CRUD-able replacement for the legacy voice_handoff_chains /
   // voice_caller_transfer_rules rows. Resolve it FIRST; the legacy tables remain
   // a fallback for any caller not yet migrated. A lookup/compile failure must
-  // not strand the caller — log and fall through.
+  // not strand the caller, log and fall through.
   if (fromE164Informational) {
     // Fetch the business's enabled voice flows and match in code: a literal
     // trigger.fromE164 equal to the caller wins first, then a trigger.fromRef
     // whose referenced saved contact/employee's LIVE numbers include the caller
-    // (a ref can't be matched in SQL — the number lives in another table).
-    // Paginate so every flow is considered — a fixed cap would silently skip
+    // (a ref can't be matched in SQL, the number lives in another table).
+    // Paginate so every flow is considered, a fixed cap would silently skip
     // matching flows for businesses with large flow counts.
     const flowRows: { id?: string; definition?: unknown }[] = [];
     const pageSize = 100;
@@ -1044,7 +1044,7 @@ serve(async (req: Request) => {
       try {
         // Resolve dynamic contact refs (toRef/notifyRef → live numbers) BEFORE
         // the pure compiler runs; a resolution/compile failure must not strand
-        // the caller — log and fall through to the legacy tables.
+        // the caller, log and fall through to the legacy tables.
         const resolvedDef = await resolveVoiceContactRefs(
           supabase,
           businessId,
@@ -1077,7 +1077,7 @@ serve(async (req: Request) => {
     }
   }
 
-  // Warm-handoff chain (§voice_handoff_chains) — LEGACY fallback for callers not
+  // Warm-handoff chain (§voice_handoff_chains), LEGACY fallback for callers not
   // yet migrated to a voice AiFlow above. The HomeLight live-transfer line rings
   // Dave, then Amy, then hands to the AI worker.
   if (fromE164Informational) {
@@ -1088,7 +1088,7 @@ serve(async (req: Request) => {
       .eq("from_e164", fromE164Informational)
       .maybeSingle();
     if (chainErr) {
-      // A lookup failure must not strand the caller — log and fall through.
+      // A lookup failure must not strand the caller, log and fall through.
       console.error("voice_handoff_chains", chainErr);
     }
     const chain = chainRow as
@@ -1105,7 +1105,7 @@ serve(async (req: Request) => {
     }
   }
 
-  // Per-caller warm-transfer rules (§voice_caller_transfer_rules) — LEGACY
+  // Per-caller warm-transfer rules (§voice_caller_transfer_rules), LEGACY
   // fallback. Certain inbound numbers (e.g. Clever's live-transfer line) connect
   // straight to a human, bypassing the AI bridge.
   if (fromE164Informational) {
@@ -1116,7 +1116,7 @@ serve(async (req: Request) => {
       .eq("from_e164", fromE164Informational)
       .maybeSingle();
     if (ruleErr) {
-      // A rules lookup failure must not strand the caller — log and fall through
+      // A rules lookup failure must not strand the caller, log and fall through
       // to the normal (AI) path rather than dropping the call.
       console.error("voice_caller_transfer_rules", ruleErr);
     }
@@ -1129,12 +1129,12 @@ serve(async (req: Request) => {
   // Armed expected-transfer window (§voice_expected_transfers): an AiFlow's
   // arm_voice_transfer step (e.g. after confirming a Clever live-transfer cue
   // with "Y") arms a short window during which the NEXT inbound call that
-  // matched no per-caller routing above bridges straight to the target — the
+  // matched no per-caller routing above bridges straight to the target, the
   // concierge calls from a rotating number pool no fromE164 rule can cover.
   // The claim is a single conditional UPDATE (unexpired + unconsumed →
   // consumed), so concurrent calls can never both take one window. No caller-
   // number gate: the whole point is that the caller is unpredictable (and the
-  // window is minutes long). A claim failure must not strand the caller — log
+  // window is minutes long). A claim failure must not strand the caller, log
   // and fall through to the normal (AI) path.
   {
     const { data: windowRow, error: windowErr } = await supabase
@@ -1164,7 +1164,7 @@ serve(async (req: Request) => {
         payload: { call_control_id: callControlId, from: fromE164Informational, to: claimed.to_e164 }
       });
       const transferRes = await runBlindTransfer(claimed.to_e164, (claimed.whisper ?? "").trim());
-      // A refused answer/bridge must not burn the one-shot window — the
+      // A refused answer/bridge must not burn the one-shot window, the
       // concierge may retry within the armed period, and that retry should
       // still reach a human. Re-open the window on failure (keyed to OUR
       // claim stamp, so a newer re-arm is never clobbered); the conditional
@@ -1188,14 +1188,14 @@ serve(async (req: Request) => {
 
   // Missed-call spike alert (Standard/Enterprise perk): once the tenant's
   // refused-call count (`voice_call_blocked` system_logs rows) crosses the
-  // daily threshold, tell the owner — callers hearing "line busy" is
+  // daily threshold, tell the owner, callers hearing "line busy" is
   // otherwise invisible churn. Called from EVERY refusal path that writes
   // the ledger (reserve refusals + safe-mode-no-minutes via
   // missedCallFollowUp, and the AI-budget refusal directly). Never throws;
   // once-per-day dedup + tier gate live inside the helper.
   //
   // `refusedAt` is captured when the refusal happened, NOT when this check
-  // runs — the auto-text work in between can cross UTC midnight, and the
+  // runs, the auto-text work in between can cross UTC midnight, and the
   // spike day-key/count must describe the day the ledger row was written.
   const checkMissedCallSpike = async (refusedAt: Date) => {
     const spike = await maybeSendMissedCallSpikeAlert(supabase, {
@@ -1278,8 +1278,8 @@ serve(async (req: Request) => {
         tier?: string | null;
       }
     | null;
-  // System IVR (no AI stream) speaks the business's default customer language
-  // — live detection is impossible on speak-only paths, per the i18n plan.
+  // System IVR (no AI stream) speaks the business's default customer language,
+  // live detection is impossible on speak-only paths, per the i18n plan.
   const voiceLocale: EdgeLocale = gateBiz?.default_customer_language === "es" ? "es" : "en";
   const voiceTtsLang = telnyxTtsLanguage(voiceLocale);
 
@@ -1320,7 +1320,7 @@ serve(async (req: Request) => {
 
     if (gate.kind === "safe_mode_forward") {
       // Forwarding to the owner's cell still spends Telnyx voice minutes on the
-      // outbound leg. If the tenant is out of voice minutes, DON'T forward —
+      // outbound leg. If the tenant is out of voice minutes, DON'T forward,
       // speak the quota message and hang up (the cheapest path). Voice minutes
       // are a separate meter from the AI budget; this gate is only about Telnyx
       // minutes. Anything other than a definitive "quota_exhausted" (ok /
@@ -1347,7 +1347,7 @@ serve(async (req: Request) => {
           payload: { call_control_id: callControlId, reason: "quota_exhausted" }
         });
         // Also write the refusal ledger row: `voice_call_blocked` is what the
-        // analytics answer-rate card AND the missed-call spike counter read —
+        // analytics answer-rate card AND the missed-call spike counter read,
         // a caller turned away here is just as missed as one refused by the
         // reserve path below. The safe-mode-specific event above stays for
         // ops diagnostics.
@@ -1438,8 +1438,8 @@ serve(async (req: Request) => {
         // Delay so the apology finishes before we tear down. The failure
         // message is ~17 words (~6s of Polly TTS), substantially longer than
         // the "Connecting you now." prompt that sets the pre-transfer delay,
-        // so we can't reuse 2500ms here — the caller would hear a truncated
-        // "We're sorry, we could not con—" and then silence. Tied to the
+        // so we can't reuse 2500ms here, the caller would hear a truncated
+        // "We're sorry, we could not con, " and then silence. Tied to the
         // message content: if VOICE_MSG_SAFE_MODE_FORWARD_FAILED changes,
         // update this constant in the same commit. We still honor the
         // transfer-delay env knob so tests that set it to 0 collapse this
@@ -1651,10 +1651,10 @@ serve(async (req: Request) => {
     });
   }
 
-  // Shared AI-budget gate (hard stop). Placed HERE — after every branch that
+  // Shared AI-budget gate (hard stop). Placed HERE, after every branch that
   // exits without opening the Gemini bridge (paused/channel-off, safe-mode
   // forward, quota, already-answered, bridge-down/degraded, no-origin, and the
-  // VOICE_AI_STREAM_ENABLED speak-only rollout) — so it only fires for calls
+  // VOICE_AI_STREAM_ENABLED speak-only rollout), so it only fires for calls
   // that will actually attach the AI media stream and spend Gemini budget. Those
   // earlier speak-only paths consume NO AI budget, so an exhausted pool must not
   // preempt their intended messages with the "please text us" refusal.
@@ -1662,7 +1662,7 @@ serve(async (req: Request) => {
   // The AI coworker's Gemini spend (voice_task via the router + Gemini Live
   // via the bridge) is billed to the SAME $5/$10 AI budget pool as owner chat +
   // SMS (`owner_chat_model_spend`). Chat/SMS degrade to a local model when the
-  // pool is exhausted, but a LIVE voice call can't — so this is a hard stop:
+  // pool is exhausted, but a LIVE voice call can't, so this is a hard stop:
   // release the voice reservation, speak a short "please text us" message + hang
   // up, and text the owner about the missed call. Voice minutes (checked above)
   // stay a separate meter. Fails OPEN (resolveSmsChatCap never throws) so a read
@@ -1713,7 +1713,7 @@ serve(async (req: Request) => {
         const remaining = Number(row?.remaining_micros ?? 0);
         const duplicate = Boolean(row?.duplicate);
         // On a Telnyx webhook RETRY the RPC returns duplicate=true for the hold
-        // the first attempt already placed — the call was admitted (and may have
+        // the first attempt already placed, the call was admitted (and may have
         // already bridged) then, so we must NOT re-apply the min-session refusal
         // (remaining excludes this call's own hold, so a now-tighter pool could
         // wrongly drop an in-flight call's hold + run the exhausted-speak path).
@@ -1772,7 +1772,7 @@ serve(async (req: Request) => {
   const nonce = crypto.randomUUID().replace(/-/g, "");
   // v2: the caller number is part of the signed canonical so the bridge can
   // trust it for staff detection + customer-memory recognition (issue #268).
-  // Empty string when Telnyx gave no caller id — still signed so the bridge's
+  // Empty string when Telnyx gave no caller id, still signed so the bridge's
   // verify matches exactly.
   const signedFromE164 = fromE164Informational ?? "";
   const streamPayload: StreamPayloadV2 = {
@@ -1804,7 +1804,7 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
-    // Free the AI-budget hold too — this call will never open the Gemini bridge.
+    // Free the AI-budget hold too, this call will never open the Gemini bridge.
     const { error: relAiErr } = await supabase.rpc("owner_chat_ai_release", {
       p_call_control_id: callControlId
     });
@@ -1827,7 +1827,7 @@ serve(async (req: Request) => {
     mac
   });
   // Caller number, transported as `from_e164_info` (unchanged param name) but
-  // now SIGNED in the v2 canonical above — the bridge only trusts it (for staff
+  // now SIGNED in the v2 canonical above, the bridge only trusts it (for staff
   // persona + memory recognition) when the v2 mac verifies. Set it whenever the
   // signed value is non-empty so the param round-trips into the canonical the
   // bridge rebuilds.
@@ -1870,7 +1870,7 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relAnsErr) console.error("voice_release_reservation_on_answer_fail", relAnsErr);
-    // Free the AI-budget hold too — the bridge won't attach on a failed answer.
+    // Free the AI-budget hold too, the bridge won't attach on a failed answer.
     const { error: relAiAnsErr } = await supabase.rpc("owner_chat_ai_release", {
       p_call_control_id: callControlId
     });

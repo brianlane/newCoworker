@@ -11,7 +11,7 @@
  * Billing cascade (Jul 2026): releasing now also settles the account's
  * billing state so nothing keeps looking "live" afterwards:
  *   - the NewCoworker subscription row (if any, and not already canceled)
- *     is flipped to `canceled` WITHOUT a grace deadline — the grace sweep
+ *     is flipped to `canceled` WITHOUT a grace deadline, the grace sweep
  *     ignores rows with a null `grace_ends_at`, so the account is deleted
  *     by the adopt-time cascade, not by a data wipe. This is also what
  *     stops the daily billing-posture findings for Stripe-less internal
@@ -25,8 +25,8 @@
  *   - Refuses while a REAL Stripe subscription is linked and not canceled:
  *     this route never touches Stripe, so releasing would let Stripe keep
  *     charging an account destined for deletion. Force-cancel & wipe (which
- *     cancels Stripe properly) is the right tool there. Stripe-LESS rows —
- *     internal pilots, admin-created enterprise accounts — pass the guard
+ *     cancels Stripe properly) is the right tool there. Stripe-LESS rows,
+ *     internal pilots, admin-created enterprise accounts, pass the guard
  *     regardless of status; there is no payment to orphan.
  */
 
@@ -74,7 +74,7 @@ export async function POST(
     // Stripe guard: this route never touches Stripe, so a linked,
     // not-yet-canceled Stripe subscription (active/past_due billing, or a
     // paid checkout mid-flight in `pending`) must be canceled through the
-    // proper flows first — otherwise Stripe keeps charging an account the
+    // proper flows first, otherwise Stripe keeps charging an account the
     // adopt-time cascade will delete. Stripe-LESS rows carry no payment and
     // pass regardless of status; the cascade below settles them. Uses the
     // SAME any-row predicate as the adopt-time delete guard
@@ -106,11 +106,11 @@ export async function POST(
     // Billing cascade 1/2: settle the internal subscription row so the
     // account stops registering as "live" (dashboard, posture cron, admin
     // list). Compare-and-swap: the cancel only lands if the row is STILL
-    // Stripe-less at write time — a checkout webhook attaching a Stripe id
+    // Stripe-less at write time, a checkout webhook attaching a Stripe id
     // between our guard read and this write must win, because cancelling a
     // just-paid row would hide its Stripe linkage from the adopt-time
     // delete guard (Bugbot High: linkage masked by admin cancel). No
-    // grace_ends_at on purpose — see module header.
+    // grace_ends_at on purpose, see module header.
     let subscriptionCanceled = false;
     if (subscription && subscription.status !== "canceled") {
       subscriptionCanceled = await cancelSubscriptionIfStripeless(subscription.id);
@@ -123,7 +123,7 @@ export async function POST(
     }
 
     // Billing cascade 2/2: park the box's Hostinger billing (pool boxes
-    // lapse unless adopted). Best-effort — a Hostinger hiccup must not fail
+    // lapse unless adopted). Best-effort, a Hostinger hiccup must not fail
     // the release; the daily posture check reports still-renewing available
     // boxes as money leaks, which is the retry path.
     let hostingerAutoRenewDisabled = false;

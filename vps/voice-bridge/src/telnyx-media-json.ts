@@ -13,19 +13,19 @@ export type TelnyxParsedFrame =
  *
  * Why this exists: a previous fast-path used `rawUtf8.includes('"event":"media"')`
  * to short-circuit non-media branches, but that substring check breaks if
- * Telnyx ever serializes JSON with whitespace (`"event": "media"`) — every
+ * Telnyx ever serializes JSON with whitespace (`"event": "media"`), every
  * audio frame would then be misclassified as non-media and silently
  * dropped. JSON.parse is the only correct gate.
  */
 export function parseTelnyxFrame(raw: string): TelnyxParsedFrame {
-  // JSON.parse legitimately returns any JSON value — including `null`,
-  // numbers, strings, booleans, and arrays — so the result is NOT
+  // JSON.parse legitimately returns any JSON value, including `null`,
+  // numbers, strings, booleans, and arrays, so the result is NOT
   // necessarily a `{ event, media }` object. Reading `.event` off `null`
   // throws TypeError, and `onTelnyxMessage` in gemini-telnyx-bridge.ts
   // calls this without a surrounding try-catch (and is itself wired
   // straight into ws.on("message", …)). An unguarded throw there would
   // become an unhandled exception on the WS event emitter and tear down
-  // the call. Validate the shape before any property access — only plain
+  // the call. Validate the shape before any property access, only plain
   // (non-null, non-array) objects are valid Telnyx frames; anything else
   // is treated as unparseable, matching the old defensive behavior of
   // `tryParseTelnyxMediaPayloadBase64` which had the property reads

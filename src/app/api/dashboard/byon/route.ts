@@ -5,10 +5,10 @@
  *          → { requests: NumberPortRequestRow[] } (status card)
  * POST   /api/dashboard/byon?businessId=<uuid>
  *          body: { phone, carrier, serviceAddress, loa, bill, focDatetimeRequested? }
- *          → { rows, submitted, submitError } — creates the Telnyx porting
+ *          → { rows, submitted, submitError }, creates the Telnyx porting
  *            order, uploads the LOA + bill, attaches details, confirms.
  * DELETE /api/dashboard/byon?businessId=<uuid>&id=<uuid>
- *          → { request } — cancels a not-yet-ported order.
+ *          → { request }, cancels a not-yet-ported order.
  *
  * Auth mirrors /api/dashboard/csv: getAuthUser + requireBusinessRole (admins bypass).
  */
@@ -28,7 +28,7 @@ import { assertByonAllowedForBusiness } from "@/lib/byon/tier-gate";
 export const dynamic = "force-dynamic";
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
-// Port submissions upload documents to Telnyx — keep the ceiling low.
+// Port submissions upload documents to Telnyx, keep the ceiling low.
 const CREATE_RATE = { interval: 60 * 60 * 1000, maxRequests: 10 };
 const CANCEL_RATE = { interval: 60 * 1000, maxRequests: 10 };
 

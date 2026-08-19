@@ -1,7 +1,7 @@
 /**
- * Benchmark runner — KVM2-profile local emulation (llama3.2:3b under the
+ * Benchmark runner, KVM2-profile local emulation (llama3.2:3b under the
  * docker-compose.kvm2.yml resource caps: 2 CPUs / 8 GB, OLLAMA_NUM_PARALLEL=1,
- * q4_0 KV cache, flash attention — the same knobs bootstrap.sh sets on a
+ * q4_0 KV cache, flash attention, the same knobs bootstrap.sh sets on a
  * real starter box).
  *
  * Replays the SAME reconstructed /dashboard/chat prompts as bench-local.ts
@@ -31,7 +31,7 @@ const OLLAMA = process.env.KVM2_OLLAMA_URL ?? "http://127.0.0.1:11134";
 const MODEL = process.argv[2] ?? "llama3.2:3b";
 
 // Same cells as bench-local.ts so rows line up 1:1 with the KVM8 run.
-// KVM2_BENCH_QUICK=1 runs only the base stateless cell (cold + warm rep) —
+// KVM2_BENCH_QUICK=1 runs only the base stateless cell (cold + warm rep),
 // needed on laptop Docker where the VM's CPU throughput makes each cold
 // prefill take ~20 min, so the full matrix would run for hours.
 const QUICK = process.env.KVM2_BENCH_QUICK === "1";

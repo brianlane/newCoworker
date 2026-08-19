@@ -1,6 +1,6 @@
 /**
  * Admin blog AI assist: draft from a topic, translate to Spanish, or
- * generate a featured image. Long-running Gemini calls — nodejs runtime
+ * generate a featured image. Long-running Gemini calls, nodejs runtime
  * with an extended budget.
  */
 

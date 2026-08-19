@@ -7,7 +7,7 @@
  * (which runs BEFORE this classifier), so this module only answers the replies
  * that can no longer claim anything: someone else took the lead, the run isn't
  * re-openable, or the digit was a pass. Without it those replies would fall
- * through to the customer-chat AI — which knows nothing about AiFlow offers and
+ * through to the customer-chat AI, which knows nothing about AiFlow offers and
  * improvises a baffling answer ("I can only handle one message at a time").
  * The webhook uses this module to recognize "this teammate is replying to an
  * offer that moved on" and answer deterministically with what actually
@@ -30,13 +30,13 @@ export type StaleOfferCandidate = {
 export type StaleOfferOutcome = {
   runId: string;
   /**
-   * claimed_by_sender — the sender already holds this lead (duplicate claim);
-   * claimed_by_other  — someone else picked it up after the window lapsed;
-   * live_with_other   — unclaimed but actively offered to another teammate,
+   * claimed_by_sender, the sender already holds this lead (duplicate claim);
+   * claimed_by_other, someone else picked it up after the window lapsed;
+   * live_with_other, unclaimed but actively offered to another teammate,
    *                     and the flow allows first-to-claim: a bare "1" would
    *                     take it over, so tell the sender that instead of
    *                     pretending the lead is gone;
-   * moved_on          — nobody has claimed it but the offer left the sender
+   * moved_on, nobody has claimed it but the offer left the sender
    *                     (escalated to the next agent, or back with the owner).
    */
   kind: "claimed_by_sender" | "claimed_by_other" | "live_with_other" | "moved_on";
@@ -48,7 +48,7 @@ export type StaleOfferOutcome = {
  * Find the most recent routed run (newest-first candidates, same set the
  * late-claim path scans) that this SENDER was ever offered, and classify what
  * their stale digit reply refers to. A run only matches when the digit is an
- * offer digit ("1" claim / "2" pass — universal on every flow) — otherwise the
+ * offer digit ("1" claim / "2" pass, universal on every flow), otherwise the
  * scan continues to older candidates. Returns null when the reply should fall
  * through to the normal inbound path instead of being consumed:
  *   - the sender never appeared in a recent offer (a stray digit from staff),
@@ -111,7 +111,7 @@ export function classifyStaleOfferReply(args: {
     }
     // Unclaimed but actively offered to another teammate. When the flow allows
     // first-to-claim (the default), a bare "1" would have yanked it upstream in
-    // tryLateClaim — reaching this classifier with a "1" means the sender added
+    // tryLateClaim, reaching this classifier with a "1" means the sender added
     // an ETA ("1, a few hours"), which must not preempt the active countdown.
     // Tell them the bare-"1" affordance instead of pretending the lead is gone.
     // Gated on routing.offered_log (who actually RECEIVED an offer SMS) so a

@@ -651,7 +651,7 @@ describe("planLifecycleAction: adminForceCancel", () => {
     expect(res.plan.dbUpdates.some((op) => op.type === "mark_business_wiped")).toBe(true);
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(true);
     // Admin force-cancel must NOT wastefully delete the backup + snapshot it
-    // just took — those are retained for audit/recovery.
+    // just took, those are retained for audit/recovery.
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_backup_artifact")).toBe(false);
     expect(res.plan.hostingerOps).toContainEqual({ type: "create_snapshot", virtualMachineId: 42 });
     expect(res.plan.hostingerOps).not.toContainEqual(
@@ -938,7 +938,7 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
           status: "canceled",
           grace_ends_at: "2026-04-01T00:00:00.000Z",
           wiped_at: null,
-          // No Hostinger billing to cancel either — we expect a
+          // No Hostinger billing to cancel either, we expect a
           // completely empty hostingerOps list.
           hostinger_billing_subscription_id: null
         })
@@ -993,7 +993,7 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     // a customer who reactivated during that window could pass both
     // guards, get provisioned, see `restoreBusinessData` throw "no
     // backup recorded" (currently caught + logged), and end up with
-    // an empty workspace they were charged for — silent data loss.
+    // an empty workspace they were charged for, silent data loss.
     // Reordering closes that race because a partial-execute now
     // leaves `wiped_at` stamped, so resubscribe aborts loudly.
     const res = planLifecycleAction(
@@ -1090,7 +1090,7 @@ describe("planLifecycleAction: return_vps_to_pool (fleet economics Phase B)", ()
   it("labels an unpinned starter box kvm2 (historical pre-inventory hardware, NOT the new kvm1 default)", () => {
     // Every kvm1-era box gets a vps_inventory row (with its real plan) at
     // purchase/adopt time, so this fallback only ever fires for
-    // pre-inventory starter boxes — which are all kvm2 hardware.
+    // pre-inventory starter boxes, which are all kvm2 hardware.
     const res = planLifecycleAction({ type: "cancelWithRefund" }, makeCtx());
     expect(poolOp(res)?.plan).toBe("kvm2");
   });
@@ -1156,7 +1156,7 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     const ctx = makeCtx({
       vpsProvider: "byos",
       // A BYOS row can still carry a numeric-looking box id and a billing
-      // id from a past life — the provider gate must win over presence.
+      // id from a past life, the provider gate must win over presence.
       virtualMachineId: 42
     });
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
@@ -1171,7 +1171,7 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     ]);
     // A customer-owned box must never enter the Hostinger reuse pool.
     expect(plan.dbUpdates.some((op) => op.type === "return_vps_to_pool")).toBe(false);
-    // No hPanel entry exists — no ops deletion request.
+    // No hPanel entry exists, no ops deletion request.
     expect(plan.emailsToSend.map((e) => e.type)).toEqual([
       "send_cancel_confirmation",
       "send_refund_issued"
@@ -1235,7 +1235,7 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     // Hostinger teardown stays skipped for a customer-owned box.
     expect(withHost.plan.hostingerOps).toEqual([]);
 
-    // Unknown host (box unreachable): no wipe op this tick — the sweep
+    // Unknown host (box unreachable): no wipe op this tick, the sweep
     // retries idempotently on the next one.
     const noHost = planLifecycleAction(
       { type: "graceExpiredWipe" },
@@ -1244,7 +1244,7 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     if (!noHost.ok) throw new Error(`expected ok, got ${noHost.reason}`);
     expect(noHost.plan.sshOps.some((op) => op.type === "wipe_byos_box")).toBe(false);
 
-    // OVH boxes are platform-owned — terminated provider-side, never wiped
+    // OVH boxes are platform-owned, terminated provider-side, never wiped
     // over SSH like a customer box.
     const ovh = planLifecycleAction(
       { type: "graceExpiredWipe" },

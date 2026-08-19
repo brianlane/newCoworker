@@ -26,7 +26,7 @@ export type VoicePlan =
  * Compile a voice flow definition into a {@link VoicePlan}, or null when the
  * definition isn't a usable voice flow (wrong channel, no transfer target, or a
  * handoff chain with no ringable human). `toE164` is the business number that
- * was dialed — stored on the resulting handoff context for the session row.
+ * was dialed, stored on the resulting handoff context for the session row.
  *
  * Defensive against partially-shaped definitions (the webhook reads raw JSONB):
  * it filters to the recognized voice steps and lets buildHandoffContext drop any
@@ -39,7 +39,7 @@ export function compileVoiceFlow(
 ): VoicePlan | null {
   if (!def || def.trigger?.channel !== "voice") return null;
   // Outbound flows are placed by the origination edge function, not matched by
-  // an inbound caller — they have no inbound VoicePlan.
+  // an inbound caller, they have no inbound VoicePlan.
   if (def.trigger?.direction === "outbound") return null;
   const steps: FlowStep[] = Array.isArray(def.steps) ? def.steps : [];
 

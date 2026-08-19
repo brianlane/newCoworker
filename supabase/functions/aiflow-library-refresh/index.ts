@@ -7,12 +7,12 @@
  *   Authorization: Bearer <INTERNAL_CRON_SECRET>.
  * We validate the bearer, then forward the call to the Next.js internal
  * endpoint, which does the heavy lifting (aggregate successful flows, scrub
- * PII, upsert library entries) in the Node runtime — keeping the scrub/refresh
+ * PII, upsert library entries) in the Node runtime, keeping the scrub/refresh
  * logic in src/lib (under the coverage gate) instead of duplicating it in Deno.
  *
  * Environment:
- *   INTERNAL_CRON_SECRET    (required) — shared with cron and the Next.js app
- *   NEXT_PUBLIC_APP_URL     (required) — base URL of the Next.js deployment
+ *   INTERNAL_CRON_SECRET    (required), shared with cron and the Next.js app
+ *   NEXT_PUBLIC_APP_URL     (required), base URL of the Next.js deployment
  *
  * Mirrors subscription-grace-sweep: forwards the app body/status, returns 502
  * on any bridge-level failure so pg_cron's net.http_post logs a useful reason.

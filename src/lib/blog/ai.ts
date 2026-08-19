@@ -1,6 +1,6 @@
 /**
  * AI assist for the admin blog editor: draft a post from a topic, translate
- * a post to Spanish, and generate a 16:9 featured image — all via the
+ * a post to Spanish, and generate a 16:9 featured image, all via the
  * platform Gemini key (GOOGLE_API_KEY / GEMINI_API_KEY).
  */
 
@@ -63,7 +63,7 @@ export async function draftBlogPostWithAi(
     maxOutputTokens: 8192
   });
   const parsed = JSON.parse(raw) as Partial<BlogAiDraft>;
-  // House rule: no em dashes in blog copy, ever — stripped BEFORE the
+  // House rule: no em dashes in blog copy, ever, stripped BEFORE the
   // emptiness check so a dash-only field counts as missing.
   const title = stripEmDashes(parsed.title ?? "");
   const excerpt = stripEmDashes(parsed.excerpt ?? "");

@@ -1,5 +1,5 @@
 /**
- * Targeted Rowboat-workflow agent reseed — repoint a named agent's MODEL on
+ * Targeted Rowboat-workflow agent reseed, repoint a named agent's MODEL on
  * already-provisioned tenants WITHOUT a full deploy-client.sh re-provision.
  *
  * Why this exists: deploy-client.sh only seeds the Mongo workflow when a tenant
@@ -7,7 +7,7 @@
  * workflow agent runs on (the recurring "move agent X off local Qwen onto
  * Gemini" / "roll agent X back to local" operation), existing tenants keep the
  * old model until something rewrites their Mongo `liveWorkflow`/`draftWorkflow`.
- * A full re-provision churns containers, rewrites `.env`, and reseeds memory —
+ * A full re-provision churns containers, rewrites `.env`, and reseeds memory,
  * far too heavy for a one-field change. This script surgically patches the
  * agent's `model` in place on the live + draft workflows, across one tenant or
  * the whole fleet. (For the bespoke "also create a local fallback twin" case,
@@ -15,7 +15,7 @@
  *
  * Idempotent: re-running sets the same model; a project already on the target
  * model is reported `unchanged`. Projects lacking the named agent are reported
- * `missing` and skipped (the script never CREATES an agent — it only repoints an
+ * `missing` and skipped (the script never CREATES an agent, it only repoints an
  * existing one).
  *
  * Keyless safety (mirrors deploy-client.sh): a `gemini-*` target is only
@@ -26,7 +26,7 @@
  *
  * Effect timing: the patch is read by Rowboat for NEW conversations. Threads
  * already bound to the agent keep the model they were first bound to (Rowboat
- * resumes the bound agent/model and ignores startAgent on resume) — clear the
+ * resumes the bound agent/model and ignores startAgent on resume), clear the
  * relevant thread table if you need existing conversations to re-bind.
  *
  * Usage:

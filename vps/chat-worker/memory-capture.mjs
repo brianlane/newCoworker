@@ -3,7 +3,7 @@
 // Why this exists: the dashboard "OwnerCoworker" agent was supposed to call a
 // Rowboat tool (owner_append_business_memory) whenever the owner stated a
 // durable business rule ("never discuss budget with customers"). In practice
-// that path never persisted anything — Rowboat treats tools without a bound
+// that path never persisted anything, Rowboat treats tools without a bound
 // project-level webhookUrl as MOCKS, so the tool silently no-op'd, and the
 // small per-tenant model (qwen3:4b) frequently hallucinated "saved!" without
 // emitting any tool call at all. Owners lost rules and got lied to about it.
@@ -159,7 +159,7 @@ export function normalizeBullets(raw) {
 /**
  * Parse the extraction model's JSON content into a safe { save, bullets }
  * result. Accepts either a JSON string or an already-parsed object. ANY
- * malformed / unexpected input degrades to { save:false, bullets:[] } — a
+ * malformed / unexpected input degrades to { save:false, bullets:[] }, a
  * capture miss is always preferable to a crash or a bogus write.
  *
  * @param {unknown} content
@@ -300,7 +300,7 @@ export function buildExtractionRequestBodyOpenAI(model, ownerMessage, opts = {})
     model,
     stream: false,
     temperature: 0,
-    // Gemini 3 models default to dynamic thinking that bills as output —
+    // Gemini 3 models default to dynamic thinking that bills as output,
     // a strict JSON classification needs none of it. `reasoning_effort` is
     // the OpenAI-compat mapping of the thinking level; gated on the family
     // so a 2.5/local override keeps its byte-identical body.

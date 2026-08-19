@@ -5,9 +5,9 @@
  * Three independent switches on `businesses`, flipped from the admin business
  * page, that hide one business from the fleet-wide feeds on /admin/dashboard:
  *
- *   * admin_mute_activity — "Recent Activity" (coworker_logs)
- *   * admin_mute_errors   — "System Errors: All Clients" (system_logs errors)
- *   * admin_mute_alerts   — "Recent Alerts" (coworker_logs urgent_alert/error)
+ *   * admin_mute_activity, "Recent Activity" (coworker_logs)
+ *   * admin_mute_errors, "System Errors: All Clients" (system_logs errors)
+ *   * admin_mute_alerts, "Recent Alerts" (coworker_logs urgent_alert/error)
  *
  * Muting only filters the aggregate admin feeds; rows are still written and
  * stay fully visible on the business's own admin page, and owner-facing

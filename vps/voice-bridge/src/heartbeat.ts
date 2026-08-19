@@ -7,7 +7,7 @@
  * heartbeats were only emitted from inside the WebSocket upgrade handler, so
  * a freshly provisioned tenant who hadn't yet received a call would render
  * `pending` forever with the misleading copy "your voice bridge hasn't checked
- * in yet — this is normal right after provisioning". Owners assumed voice was
+ * in yet, this is normal right after provisioning". Owners assumed voice was
  * broken when in fact the container was healthy and just waiting for traffic.
  *
  * Extracting into its own module so it's importable from tests without
@@ -29,14 +29,14 @@ export const IDLE_HEARTBEAT_INTERVAL_MS = 60_000;
 
 /**
  * Write a single heartbeat row. Errors are intentionally swallowed
- * INSIDE this function (logged, never rethrown) — Supabase upsert
+ * INSIDE this function (logged, never rethrown), Supabase upsert
  * failures are transient and the next interval will retry; a one-off
  * network blip should not crash the bridge process and disconnect live
  * calls.
  *
  * Bugbot Medium called out that the previous version relied on
  * `void writeHeartbeat(...)` at the call site to swallow rejections,
- * which only suppresses the floating-promise *lint* — an actual rejection
+ * which only suppresses the floating-promise *lint*, an actual rejection
  * would still surface as `unhandledRejection` and crash the process,
  * the exact scenario the docstring promised to avoid. We now wrap the
  * Supabase call in try/catch here so the returned promise never rejects,
@@ -97,7 +97,7 @@ export function startIdleHeartbeatLoop(
   // Belt & suspenders: writeHeartbeat already wraps its body in try/catch
   // so the returned promise never rejects today, but we attach an explicit
   // `.catch` here so a future refactor that re-introduces a rejection path
-  // can't trigger `unhandledRejection` and crash the bridge mid-call —
+  // can't trigger `unhandledRejection` and crash the bridge mid-call,
   // reviewers shouldn't have to cross-reference writeHeartbeat to convince
   // themselves this loop is process-safe.
   const safeBeat = (): void => {

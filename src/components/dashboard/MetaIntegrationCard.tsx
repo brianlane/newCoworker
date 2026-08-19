@@ -7,7 +7,7 @@
  * The two-click alternative to the Zapier/Make/Privyr bridges: "Connect
  * Facebook" runs our platform Meta app's OAuth (via
  * /api/integrations/meta/connect), then the owner picks which Page to
- * watch — we subscribe it to leadgen webhooks and every new ad lead starts
+ * watch, we subscribe it to leadgen webhooks and every new ad lead starts
  * their webhook AiFlows within seconds (source "facebook_lead_ads").
  *
  * API contract (/api/integrations/meta):

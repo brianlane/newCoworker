@@ -22,7 +22,7 @@ export type AccountDeletionCounts = {
   smsOutbound: number;
   emails: number;
   aiflows: number;
-  /** Employees page roster (ai_flow_team_members — AiFlow routing). */
+  /** Employees page roster (ai_flow_team_members, AiFlow routing). */
   employees: number;
   /** Dashboard logins invited via Settings → Team (business_members). */
   dashboardMembers: number;
@@ -128,13 +128,13 @@ export type AccountDeletionSubscriptionFields = Pick<
 
 /**
  * A paying (or payment-owing) tenant must go through the cancellation
- * lifecycle first — it owns Stripe teardown, the data backup, and the grace
+ * lifecycle first, it owns Stripe teardown, the data backup, and the grace
  * window. A canceled subscription still inside its retention grace window is
  * ALSO refused: the grace sweep owns the eventual wipe, and a hard delete
  * here would skip the backup/reactivation guarantees the owner was promised
  * at cancel time. A non-canceled row that already carries a
  * `stripe_subscription_id` (a paid checkout whose webhook is still in
- * flight — the same state `isCheckoutBlockingSubscription` blocks on) is
+ * flight, the same state `isCheckoutBlockingSubscription` blocks on) is
  * refused too: deleting the tenant then could leave live Stripe billing
  * behind. Eligible: no row, pending with no Stripe subscription (never
  * paid), or canceled with the grace window over (or already wiped).
@@ -162,7 +162,7 @@ export function resolveAccountDeletionEligibility(
 /**
  * Eligibility across EVERY subscription row of the business, not just the
  * newest: an abandoned `pending` row can sit on top of (and hide) an older
- * `active` one — the exact shadowing scenario the checkout guard
+ * `active` one, the exact shadowing scenario the checkout guard
  * (`findCheckoutBlockingSubscription`) exists for. Any blocking row refuses
  * the deletion.
  */

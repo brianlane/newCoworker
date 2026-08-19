@@ -1,5 +1,5 @@
 /**
- * Admin blog CRUD — list + create. Admin-only (requireAdmin), matching the
+ * Admin blog CRUD, list + create. Admin-only (requireAdmin), matching the
  * other /api/admin/* consoles.
  */
 
@@ -12,7 +12,7 @@ import {
   insertBlogPost,
   listPostsAdmin
 } from "@/lib/blog/db";
-// House rule: no em dashes in blog copy, ever — normalized on save too.
+// House rule: no em dashes in blog copy, ever, normalized on save too.
 import { sanitizeBlogCopyFields } from "@/lib/blog/copy";
 import { slugifyBlogTitle, uniqueBlogSlug } from "@/lib/blog/slug";
 

@@ -16,17 +16,17 @@ import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { logger } from "@/lib/logger";
 
-/** Structural E.164 guard — only link the profile when we have a real number. */
+/** Structural E.164 guard, only link the profile when we have a real number. */
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 
 /**
- * `capture_caller_details` — writes caller information (name, phone, email,
+ * `capture_caller_details`, writes caller information (name, phone, email,
  * reason for call, notes) to `coworker_logs` so the owner sees it on the
  * dashboard after the call ends. We keep this separate from SMS/email tools
  * so Gemini can log a call even when no follow-up channel is available.
  *
  * Matches the bridge's declaration (`name`, `phone`, `email`, `reason`,
- * `notes`, `urgency`) — `urgency: 'high'` triggers the shared notifications
+ * `notes`, `urgency`), `urgency: 'high'` triggers the shared notifications
  * dispatcher (see `src/lib/notifications/dispatch.ts`) so the urgent path is
  * the same whether the alert originates from Rowboat or a live voice call.
  */
@@ -107,7 +107,7 @@ export async function POST(request: Request) {
     // the Contacts page shows callers the AI captured), links the email, and
     // fires the `contact_created` AiFlow trigger for genuinely new leads.
     // Prefer the number the caller ASKED to be reached at; fall back to the
-    // trusted caller id. Best-effort inside ensureCapturedContact — never
+    // trusted caller id. Best-effort inside ensureCapturedContact, never
     // fails the capture mid-call.
     const trustedCallerE164 =
       envelope.callerE164 && E164_RE.test(envelope.callerE164)
@@ -146,7 +146,7 @@ export async function POST(request: Request) {
     // reached at a DIFFERENT number, also attach the email to the profile
     // keyed by the real caller id so future inbound mail from that address
     // rolls up to the contact the call itself created. (When the numbers
-    // match, ensureCapturedContact already linked it.) Best-effort — never
+    // match, ensureCapturedContact already linked it.) Best-effort, never
     // fail the capture over a link write.
     if (args.email && trustedCallerE164 && trustedCallerE164 !== contactE164) {
       try {
@@ -162,7 +162,7 @@ export async function POST(request: Request) {
       // High-urgency captures fan out to email/SMS via the shared dispatcher
       // so the same code path handles preferences, recipient resolution, and
       // history-row writes whether the alert originated from Rowboat or here.
-      // Failures are logged but do NOT fail the voice-tool call — the call
+      // Failures are logged but do NOT fail the voice-tool call, the call
       // log is already written, and the customer is mid-conversation.
       try {
         const summary = args.reason

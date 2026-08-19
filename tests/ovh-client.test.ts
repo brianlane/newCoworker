@@ -277,7 +277,7 @@ describe("OvhClient endpoints", () => {
       routes: {
         "GET /vps/vps-a/serviceInfos": {
           // Stored state after a cancel flip: auto-renew OFF. Re-enabling
-          // must NOT inherit it — the intent is "keep the box alive".
+          // must NOT inherit it, the intent is "keep the box alive".
           body: { serviceId: 11, renew: { automatic: false, deleteAtExpiration: true } }
         },
         "PUT /vps/vps-a/serviceInfos": { status: 200, text: "" }
@@ -404,10 +404,10 @@ describe("OvhClient error handling", () => {
       // the signature below.
     });
     expect(DEFAULT_OVH_BASE_URL).toContain("api.us.ovhcloud.com");
-    // Private field access via cast — asserting the trailing-slash strip +
+    // Private field access via cast, asserting the trailing-slash strip +
     // default in one place without exporting internals.
     expect((client as unknown as { baseUrl: string }).baseUrl).toBe(DEFAULT_OVH_BASE_URL);
-    // The mock has no routes for the default base URL, so the call 404s —
+    // The mock has no routes for the default base URL, so the call 404s,
     // which is enough to drive the default clock through the signer.
     const err = (await client.listVps().catch((e: unknown) => e)) as OvhApiError;
     expect(err).toBeInstanceOf(OvhApiError);

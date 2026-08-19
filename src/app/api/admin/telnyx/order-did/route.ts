@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     // Stop the admin from spending money on a number that won't carry
     // calls. The platform-level Call Control connection_id and Messaging
     // Profile id are required for the resulting DID to actually route
-    // inbound voice + SMS — without them Telnyx files the number under
+    // inbound voice + SMS, without them Telnyx files the number under
     // the account but with `connection_id: ""`, exactly the dangling
     // state that produced "the call could not be completed" before
     // this guard existed.

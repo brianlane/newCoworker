@@ -6,7 +6,7 @@
  *
  * The Emails list deliberately omits the full body + attachments (it loads up to
  * 200 rows and only needs the preview). The reading pane fetches them here when a
- * message is opened. Attachment storage paths never reach the client — they're
+ * message is opened. Attachment storage paths never reach the client, they're
  * resolved to short-lived signed download URLs server-side. Scoped by businessId
  * + requireBusinessRole so one tenant can never read another's mail; admins bypass.
  *

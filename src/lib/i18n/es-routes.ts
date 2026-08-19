@@ -1,6 +1,6 @@
 /**
  * Public /es/... SEO mirrors for marketing pages. A Spanish URL rewrites to
- * the unprefixed route and pins the NEXT_LOCALE cookie to "es" — English URLs
+ * the unprefixed route and pins the NEXT_LOCALE cookie to "es", English URLs
  * stay canonical and untouched (localePrefix: 'as-needed').
  */
 

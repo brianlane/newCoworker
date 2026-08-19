@@ -1,5 +1,5 @@
 /**
- * patch-hq-booking-offer.ts — teach the HQ follow-up flows to offer a
+ * patch-hq-booking-offer.ts, teach the HQ follow-up flows to offer a
  * discovery call (the "HQ Discovery-Call Booking" plan, Jul 2026).
  *
  * The two HQ dogfood follow-up flows ("Demo caller follow-up (HQ)" and

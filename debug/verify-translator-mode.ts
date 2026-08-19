@@ -1,5 +1,5 @@
 /**
- * verify-translator-mode.ts — read-only verification for live translator mode.
+ * verify-translator-mode.ts, read-only verification for live translator mode.
  *
  * Translator mode rests on ONE Telnyx behavior we cannot unit test: with
  * `stream_bidirectional_target_legs=both`, is the AI's injected audio actually
@@ -47,7 +47,7 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
   process.exit(1);
 }
 
-/** New Coworker (HQ, internal) — the default smoke tenant (debug/README.md). */
+/** New Coworker (HQ, internal), the default smoke tenant (debug/README.md). */
 const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 
 function arg(name: string): string | undefined {

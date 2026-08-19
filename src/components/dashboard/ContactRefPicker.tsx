@@ -2,12 +2,12 @@
 
 /**
  * A number field that accepts EITHER a hardcoded value (E.164 / template) OR a
- * dynamic reference to a saved person — an employee from the roster or a
- * contact from the directory — whose live number is resolved at run/call time.
+ * dynamic reference to a saved person, an employee from the roster or a
+ * contact from the directory, whose live number is resolved at run/call time.
  *
  * The two modes are mutually exclusive (the schema's "exactly one source"
  * rules): picking a person clears the text value and vice versa. The stored
- * ref is `{ source, id, label }`; `label` is a display hint only — renames and
+ * ref is `{ source, id, label }`; `label` is a display hint only, renames and
  * renumbers propagate automatically because resolution reads the live row.
  */
 
@@ -45,7 +45,7 @@ export function ContactRefPicker({
   /** Current saved-person reference (undefined when in text mode). */
   refValue: PickerRef | undefined;
   people: PickerPerson[];
-  /** route_to_team pins a ROSTER member — contacts are not offerable agents. */
+  /** route_to_team pins a ROSTER member, contacts are not offerable agents. */
   employeesOnly?: boolean;
   onChangeText: (value: string) => void;
   /** Called with the picked ref, or undefined to switch back to text mode. */

@@ -73,7 +73,7 @@ const { mockRunChangePlanFromCheckout, mockRunResubscribeFromCheckout } = vi.hoi
   mockRunResubscribeFromCheckout: vi.fn().mockResolvedValue(undefined)
 }));
 
-// Stub only the heavy orchestrators — keep the real
+// Stub only the heavy orchestrators, keep the real
 // `cancelStripeSubscriptionSafely` so existing assertions on
 // `mockStripeCancel` (which the real impl calls under the hood) still
 // hold.
@@ -362,7 +362,7 @@ describe("stripe webhook route", () => {
       billingPeriod: "annual"
     });
     // The orchestrator dispatch is deferred via after() (the bare floating
-    // promise previously died with the function — Truly Jul 8, KYP Jul 14).
+    // promise previously died with the function, Truly Jul 8, KYP Jul 14).
     expect(orchestrateProvisioning).not.toHaveBeenCalled();
     await flushAfterCallbacks();
     expect(orchestrateProvisioning).toHaveBeenCalledWith({
@@ -581,7 +581,7 @@ describe("stripe webhook route", () => {
     // That's correct for the common case, but if a customer
     // immediately clicks "End at period end" in the Stripe portal
     // during the activation race window, the prior mirror skip would
-    // silently lose the flag — no `customer.subscription.updated`
+    // silently lose the flag, no `customer.subscription.updated`
     // would be re-delivered after our `checkout.session.completed`
     // plants the linkage. Reconcile by reading the live Stripe sub's
     // `cancel_at_period_end` here and applying it inline so the
@@ -629,7 +629,7 @@ describe("stripe webhook route", () => {
       .mocked(updateSubscription)
       .mock.calls.map(([, patch]) => (patch as { cancel_at_period_end?: boolean }).cancel_at_period_end);
     expect(cancelAtPeriodEndPatches).toContain(true);
-    // The final activation write specifically must carry the flag —
+    // The final activation write specifically must carry the flag,
     // that's the row state the dashboard reads after the activation.
     expect(updateSubscription).toHaveBeenCalledWith(
       "local_sub_race",
@@ -678,7 +678,7 @@ describe("stripe webhook route", () => {
 
   it("does not overwrite previously linked stripe ids with null on a session missing subscription/customer", async () => {
     // Defensive branch: a Checkout Session webhook that (for whatever
-    // reason — retry races, unusual metadata, a `mode=payment` session
+    // reason, retry races, unusual metadata, a `mode=payment` session
     // that slips past the earlier voice-bonus guard) carries neither a
     // `subscription` nor a `customer` field must NOT clobber a
     // previously-linked `stripe_subscription_id` / `stripe_customer_id`
@@ -724,7 +724,7 @@ describe("stripe webhook route", () => {
     expect(response.status).toBe(200);
     // The linkage-planting write at the top of activateCheckoutSession is
     // gated on `subscriptionId`, so it should NOT fire when null. The
-    // final status-flip write should still happen — but MUST omit the
+    // final status-flip write should still happen, but MUST omit the
     // nullable fields so the previously-linked ids are preserved.
     expect(updateSubscription).toHaveBeenCalledTimes(1);
     const [, patch] = vi.mocked(updateSubscription).mock.calls[0];
@@ -741,7 +741,7 @@ describe("stripe webhook route", () => {
     // a subscription id but lacks a customer id (retry races, mode=
     // payment sessions slipping past the bonus guard, etc.) was
     // previously writing `stripe_customer_id: null` on the linkage
-    // plant — silently orphaning a customer linkage planted by a prior
+    // plant, silently orphaning a customer linkage planted by a prior
     // `customer.subscription.created` mirror or earlier checkout retry.
     // The defensive policy must be uniform across both writes.
     mockVoiceBonusRpc.mockImplementation((name: string) => {
@@ -790,12 +790,12 @@ describe("stripe webhook route", () => {
     for (const [, patch] of vi.mocked(updateSubscription).mock.calls) {
       expect(patch).not.toHaveProperty("stripe_customer_id");
     }
-    // The first call is the linkage-planting write — it must still
+    // The first call is the linkage-planting write, it must still
     // adopt the new `stripe_subscription_id` so the local row is
     // linked to the freshly-paid Stripe sub.
     const [, linkagePatch] = vi.mocked(updateSubscription).mock.calls[0];
     expect(linkagePatch).toMatchObject({ stripe_subscription_id: "sub_new_linked" });
-    // The second call is the status flip — it must carry `status:
+    // The second call is the status flip, it must carry `status:
     // "active"` and similarly avoid clobbering the customer id.
     const [, statusPatch] = vi.mocked(updateSubscription).mock.calls[1];
     expect(statusPatch).toMatchObject({ status: "active" });
@@ -840,7 +840,7 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    // Linkage write MUST happen first (our idempotency marker) — a
+    // Linkage write MUST happen first (our idempotency marker), a
     // retry would re-enter this branch and double-increment without it.
     expect(updateSubscription).toHaveBeenCalledTimes(1);
     expect(updateSubscription).toHaveBeenCalledWith(
@@ -899,7 +899,7 @@ describe("stripe webhook route", () => {
       }
     } as never);
     // Key: stripe_subscription_id on the existing row already matches the
-    // session's subscription id — classic retry signature.
+    // session's subscription id, classic retry signature.
     vi.mocked(getSubscription).mockResolvedValue({
       id: "local_sub_retry",
       status: "pending",
@@ -1794,7 +1794,7 @@ describe("stripe webhook route", () => {
       })
     );
     expect(response.status).toBe(200);
-    // No support extension and no confirmation email for the second charge —
+    // No support extension and no confirmation email for the second charge,
     // it gets flagged for a refund instead.
     expect(extendPrioritySupport).not.toHaveBeenCalled();
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
@@ -1977,7 +1977,7 @@ describe("stripe webhook route", () => {
 
     expect(response.status).toBe(200);
     expect(updateSubscription).not.toHaveBeenCalled();
-    // No autoCancel dispatch either — that's the active-row path only.
+    // No autoCancel dispatch either, that's the active-row path only.
     expect(afterCallbacks.length).toBe(0);
   });
 
@@ -2414,7 +2414,7 @@ describe("stripe webhook route", () => {
     // status to active), the subsequent activation would see
     // `alreadyLinkedToThisStripeSub === true` AND `status === "active"`,
     // causing `firstActivation` to be false and silently skipping
-    // `incrementLifetimeSubscriptionCount` — a lifetime-cap bypass under
+    // `incrementLifetimeSubscriptionCount`, a lifetime-cap bypass under
     // ordinary webhook delivery. The handler must mirror ONLY rows that
     // are already linked by stripe_subscription_id.
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null);
@@ -2721,7 +2721,7 @@ describe("stripe webhook route", () => {
   it("refuses to resurrect a locally-canceled row when Stripe sends an active subscription.updated", async () => {
     // Bug A regression: Stripe can re-deliver `subscription.updated`
     // with `status="active"` for a row our lifecycle has already moved
-    // into the canceled/grace state — most commonly when an operator
+    // into the canceled/grace state, most commonly when an operator
     // clicks "Resume subscription" in the Stripe dashboard, or on
     // weak webhook ordering during a schedule phase transition.
     // Naively mirroring `status="active"` would leave the row
@@ -2800,7 +2800,7 @@ describe("stripe webhook route", () => {
     // for a canceled row (e.g. operator-clicked "Resume subscription"
     // in the Stripe dashboard, schedule phase transition flipping back
     // to active, or webhook reordering on retry), the resurrection
-    // guard refuses the status flip — but it must NOT re-stamp live
+    // guard refuses the status flip, but it must NOT re-stamp live
     // period bounds either, otherwise the canceled-in-grace row goes
     // back to looking quota-valid and voice usage on the still-running
     // VPS during grace would be billed against a terminated sub.
@@ -2828,7 +2828,7 @@ describe("stripe webhook route", () => {
           cancel_at_period_end: false,
           metadata: { businessId: "biz_quota" },
           // Live period bounds straight from a "Resume" click in the
-          // Stripe dashboard — these MUST NOT be mirrored back onto the
+          // Stripe dashboard, these MUST NOT be mirrored back onto the
           // canceled row.
           items: { data: [{ current_period_start: 1799999000, current_period_end: 1802678400 }] }
         }
@@ -2865,7 +2865,7 @@ describe("stripe webhook route", () => {
     // resubscribe orchestrators short-circuit at `lifecycleAction`
     // dispatch and never reach this branch), the unconditional
     // linkage update would overwrite stripe_subscription_id without
-    // bumping the lifetime counter — a cap bypass. The handler must
+    // bumping the lifetime counter, a cap bypass. The handler must
     // refuse the relink and cancel the new Stripe sub so the customer
     // isn't auto-renewed for service we won't provision.
     let incrementCalls = 0;
@@ -2938,7 +2938,7 @@ describe("stripe webhook route", () => {
     //     attaches the new Stripe sub to the canceled row, the lifetime
     //     counter increments, and the final `status: "active"` write
     //     resurrects the row WITHOUT clearing `grace_ends_at` /
-    //     `wiped_at` / `cancel_at` / `cancel_reason` — a Frankenstein
+    //     `wiped_at` / `cancel_at` / `cancel_reason`, a Frankenstein
     //     state invisible to the grace-sweep cron (which filters
     //     `status="canceled"`).
     // The handler must refuse and cancel the fresh Stripe sub so the
@@ -3013,7 +3013,7 @@ describe("stripe webhook route", () => {
     // is re-delivered for a row that legitimately moved to canceled
     // between the original delivery and the retry (e.g. a concurrent
     // `customer.subscription.deleted` flipped it), the Stripe sub is
-    // already canceled at Stripe's end — no teardown call needed,
+    // already canceled at Stripe's end, no teardown call needed,
     // just bail to preserve the grace state.
     let incrementCalls = 0;
     mockVoiceBonusRpc.mockImplementation((name: string) => {

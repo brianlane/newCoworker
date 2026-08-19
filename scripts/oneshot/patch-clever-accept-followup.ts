@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * One-shot: prepare "Clever Lead - Accept" for the weekly call follow-up flow
- * (see seed-clever-spoke-check-aiflow.ts — Amy's "AI calls the lead weekly
+ * (see seed-clever-spoke-check-aiflow.ts, Amy's "AI calls the lead weekly
  * until Dave has spoken with them" routine).
  *
  * Read-modify-write; two additions, both idempotent:
@@ -12,7 +12,7 @@
  *      follow-up flow can `recall_url` the SAME Clever page weeks later and
  *      read the CURRENT address + cash offers. The step's single action is a
  *      `click_text_while_present` on a marker string that never appears on
- *      the page — zero matches is SUCCESS for that action kind, so this is a
+ *      the page, zero matches is SUCCESS for that action kind, so this is a
  *      deliberate no-op visit whose only effect is the URL memory write (the
  *      accept step itself can't remember: lead_phone is extracted two steps
  *      later, and browse_extract has no remember support).

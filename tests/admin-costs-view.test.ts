@@ -187,7 +187,7 @@ describe("buildRenewalCalendar", () => {
           assigned_business_id: null,
           monthly_price_cents: null
         }),
-        // Cancelled + no dates at all — skipped (NaN branch).
+        // Cancelled + no dates at all, skipped (NaN branch).
         hostingerRow({
           subscription_id: "sub-gone",
           status: "cancelled",
@@ -195,12 +195,12 @@ describe("buildRenewalCalendar", () => {
           next_billing_at: null,
           expires_at: null
         }),
-        // Past date — skipped.
+        // Past date, skipped.
         hostingerRow({
           subscription_id: "sub-past",
           next_billing_at: "2026-07-01T00:00:00.000Z"
         }),
-        // Beyond the horizon — skipped.
+        // Beyond the horizon, skipped.
         hostingerRow({
           subscription_id: "sub-far",
           next_billing_at: "2027-01-01T00:00:00.000Z"

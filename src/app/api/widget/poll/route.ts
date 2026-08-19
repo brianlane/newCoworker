@@ -1,20 +1,20 @@
 /**
- * GET /api/widget/poll — reply delivery for the website chat widget.
+ * GET /api/widget/poll, reply delivery for the website chat widget.
  *
  * The widget calls this ONLY while a job is in flight AND the tab is
- * visible (see public/widget frame JS), with backoff — there is no
+ * visible (see public/widget frame JS), with backoff, there is no
  * standing poll loop. Anonymous visitors can't use Supabase Realtime
  * (deny-by-default RLS), so this is the delivery path.
  *
  * Query: key, jobId (optional), after (message-id cursor, 0 for none).
- * Without a jobId this is a plain history read — the frame uses it to
+ * Without a jobId this is a plain history read, the frame uses it to
  * re-hydrate the transcript when a returning visitor reopens the widget.
  * Auth: public site key + per-session bearer; the job must belong to the
  * bearer's session, so one visitor can never watch another's turn.
  *
  * Gemini reply engine (chat_widget_settings.reply_engine='gemini'): for
  * tenants answered centrally instead of by a box chat-worker, THIS route
- * is the engine's trigger — the first poll that sees the job still queued
+ * is the engine's trigger, the first poll that sees the job still queued
  * claims it (conditional UPDATE, race-safe) and runs the direct-Gemini
  * turn inline, so the same request usually returns the finished reply.
  * Tenants on the default 'vps' engine are untouched.
@@ -50,7 +50,7 @@ const querySchema = z.object({
   after: z.coerce.number().int().min(0).default(0)
 });
 
-/** Visitor-facing copy for a failed turn — never the raw error taxonomy. */
+/** Visitor-facing copy for a failed turn, never the raw error taxonomy. */
 const JOB_ERROR_MESSAGE =
   "Sorry, I couldn't get a reply just now. Please try sending that again.";
 
@@ -124,7 +124,7 @@ async function runPlatformEngineTurn(
     }
   }
 
-  // Best-effort telemetry — dashboards/alerts key off this event type.
+  // Best-effort telemetry, dashboards/alerts key off this event type.
   try {
     const db = await createSupabaseServiceClient();
     await db.rpc("telemetry_record", {
@@ -191,7 +191,7 @@ export async function GET(request: Request) {
         if (outcome) {
           jobStatus = outcome;
         } else {
-          // Claim lost / still healthy — someone is answering; report
+          // Claim lost / still healthy, someone is answering; report
           // their progress.
           const reread = await getWebchatJobById(query.jobId);
           jobStatus = reread?.status ?? jobStatus;

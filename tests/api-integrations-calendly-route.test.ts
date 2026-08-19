@@ -3,7 +3,7 @@
  * business can link SEVERAL Calendly accounts (one row per account).
  *
  * The behaviors worth pinning:
- *  - POST verifies BEFORE saving — a rejected token stores NOTHING (unlike
+ *  - POST verifies BEFORE saving, a rejected token stores NOTHING (unlike
  *    the old single-row route, the account identity decides which row a
  *    token lands on, so an unverifiable token has no home);
  *  - the same account's re-pasted token CONVERGES onto its row (created:

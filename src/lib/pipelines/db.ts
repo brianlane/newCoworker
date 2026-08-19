@@ -5,7 +5,7 @@
  *
  * Stage renames/deletes RETAG the affected contacts (the stage IS its tag),
  * but deliberately do NOT fire tag_changed contact events: those bulk
- * operations are board administration, not per-lead state transitions —
+ * operations are board administration, not per-lead state transitions,
  * firing automation for hundreds of contacts on a rename would be a
  * foot-gun. The single-contact stage MOVE (the drag-and-drop path) does
  * fire the hooks; that lives in its API route.
@@ -39,7 +39,7 @@ export class PipelineError extends Error {
 /**
  * Page size for the bulk-retag scan. Tag matching is case-insensitive,
  * which PostgREST array operators can't express, so we page through every
- * tagged contact (keyset on id) and filter in process — no tenant-size cap,
+ * tagged contact (keyset on id) and filter in process, no tenant-size cap,
  * bounded memory per page.
  */
 export const RETAG_PAGE_SIZE = 1000;
@@ -238,7 +238,7 @@ export async function renamePipeline(
 }
 
 /**
- * Delete a pipeline (stages cascade). Contacts keep their tags — the board
+ * Delete a pipeline (stages cascade). Contacts keep their tags, the board
  * view disappears, the underlying state does not.
  */
 export async function deletePipeline(
@@ -301,7 +301,7 @@ export async function addStage(
   const db = client ?? (await createSupabaseServiceClient());
   const name = cleanStageName(stage.name);
   // A stageless result can't distinguish "empty pipeline" from "someone
-  // else's pipeline UUID" — verify ownership before writing a row that
+  // else's pipeline UUID", verify ownership before writing a row that
   // would pair this business_id with a foreign pipeline_id.
   await assertPipelineOwned(db, businessId, pipelineId);
   const siblings = await getStages(db, businessId, pipelineId);
@@ -334,7 +334,7 @@ export async function addStage(
 
 /**
  * One stage row by id, scoped to the tenant AND the pipeline named in the
- * request path — a stage id from a different board (even the same
+ * request path, a stage id from a different board (even the same
  * business's) is a not-found, so the URL can never lie about what a call
  * mutates.
  */
@@ -359,7 +359,7 @@ async function getStage(
 /**
  * Swap `fromTag` for `toTag` on every tagged contact of the business.
  * Case-insensitive. Pages through the whole tenant (keyset on id, ordered
- * pages of {@link RETAG_PAGE_SIZE}) so large tenants are fully retagged —
+ * pages of {@link RETAG_PAGE_SIZE}) so large tenants are fully retagged,
  * a capped scan would silently strand contacts on the old tag. Returns the
  * number of contacts updated.
  */
@@ -455,7 +455,7 @@ export async function updateStage(
 
 /**
  * Reorder a pipeline's stages. `orderedIds` must be exactly the pipeline's
- * current stage ids (a permutation) — anything else is a stale board.
+ * current stage ids (a permutation), anything else is a stale board.
  */
 export async function reorderStages(
   businessId: string,

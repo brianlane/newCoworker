@@ -1,5 +1,5 @@
 /**
- * Public white-glove intake questionnaire — the durable, emailable link
+ * Public white-glove intake questionnaire, the durable, emailable link
  * (/intake/<token>) an admin sends to a prospective white-glove client.
  * The token is an unguessable capability; the page renders the questionnaire
  * for OPEN intakes and a friendly read-only state for completed/revoked ones.

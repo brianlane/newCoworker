@@ -9,7 +9,7 @@ import {
 import { findCalendarSlots } from "@/lib/calendar-tools/handlers";
 
 /**
- * `calendar_find_slots` — voice-bridge adapter. Gemini Live sends
+ * `calendar_find_slots`, voice-bridge adapter. Gemini Live sends
  * natural-ish args (`purpose`, `earliest`, `latest`); the shared core in
  * src/lib/calendar-tools/handlers.ts (also used by the Rowboat tool
  * webhook for the dashboard + texting surfaces) translates them into the

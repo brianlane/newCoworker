@@ -1,5 +1,5 @@
 /**
- * /api/mcp/chatgpt — the ChatGPT app's remote MCP server.
+ * /api/mcp/chatgpt, the ChatGPT app's remote MCP server.
  *
  * Same tools, same OAuth, same per-business role checks as the Claude
  * connector at /api/mcp. A separate route because in stateless Streamable

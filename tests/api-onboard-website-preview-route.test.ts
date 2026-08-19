@@ -34,7 +34,7 @@ function jsonRequest(body: unknown, headers: Record<string, string> = {}): Reque
 }
 
 /**
- * Default browser-style request headers — same-origin Origin so the
+ * Default browser-style request headers, same-origin Origin so the
  * route's owner-consent gate accepts the request (the production
  * happy path). Negative tests omit/override `origin` to exercise the
  * untrusted path.
@@ -117,7 +117,7 @@ describe("/api/onboard/website-preview", () => {
     // so the robots bypass MUST be conditional on a same-origin signal
     // from a browser tab on our own UI. Otherwise any internet caller
     // could use the endpoint to crawl + summarize sites whose robots
-    // disallow them — turning the route into a free crawler proxy with
+    // disallow them, turning the route into a free crawler proxy with
     // only a 6/min/IP rate limit as mitigation.
 
     it("forwards ignoreRobots=true when Origin matches NEXT_PUBLIC_APP_URL", async () => {
@@ -231,7 +231,7 @@ describe("/api/onboard/website-preview", () => {
   });
 
   it("returns ok:false (200) when ingest fails so the chat client can degrade gracefully", async () => {
-    // Crawl failures are not 500s — the URL was syntactically valid, we
+    // Crawl failures are not 500s, the URL was syntactically valid, we
     // just couldn't pull useful content. The chat client uses this to
     // fall back to the "we can see the URL but not the content" prompt.
     vi.mocked(ingestWebsite).mockResolvedValue({

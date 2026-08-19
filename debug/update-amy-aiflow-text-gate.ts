@@ -4,7 +4,7 @@
  * AiFlow on the lead page actually offering a TEXT contact option.
  *
  * Some ReferralExchange leads only show CALL and EMAIL buttons (no TEXT). For
- * those, the lead should not be texted at all — skip the approval_gate and
+ * those, the lead should not be texted at all, skip the approval_gate and
  * send_sms steps, but still send the owner email and route to the team.
  *
  * A `when` guard holds a single condition, so this works with a combined

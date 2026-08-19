@@ -1,8 +1,8 @@
 /**
  * Dynamic contact reference resolution (see ContactRef in types.ts).
  *
- * A ContactRef points at a saved person — an employee (ai_flow_team_members)
- * or a contact (contacts) — whose phone number is read from the LIVE row at
+ * A ContactRef points at a saved person, an employee (ai_flow_team_members)
+ * or a contact (contacts), whose phone number is read from the LIVE row at
  * run time instead of being hardcoded into the flow definition. That way a
  * rename / renumber / contact-merge after authoring is reflected automatically
  * (the surviving merge row keeps the canonical customer_e164).
@@ -11,7 +11,7 @@
  *   - ai-flow-worker: send_sms.toRef + route_to_team.agentRef (per-step).
  *   - telnyx-voice-inbound / telnyx-voice-originate: resolveVoiceContactRefs
  *     rewrites a voice definition's *Ref fields into their *E164 siblings just
- *     before the pure compilers run (resolve-before-compile — the compilers
+ *     before the pure compilers run (resolve-before-compile, the compilers
  *     stay dependency-free and unit-testable).
  */
 import type { AiFlowDefinition, ContactRef, FlowStep, TriggerCondition } from "./types.ts";
@@ -127,7 +127,7 @@ export async function resolveRefIdentityValues(
 
 /**
  * Resolve every `from_matches` ref in a trigger's conditions to its live
- * identity values, keyed by contactRefKey — the map the pure evaluators
+ * identity values, keyed by contactRefKey, the map the pure evaluators
  * (engine.evaluateSmsTrigger / trigger-eval.evaluateTriggerConditions) take.
  * Missing/unresolvable refs simply have no entry, so their condition fails
  * closed (the flow does not fire for an unknown sender). Memoized per call;
@@ -202,14 +202,14 @@ function isRef(v: unknown): v is ContactRef {
 
 /**
  * Resolve every voice-step ContactRef in `def` into its `*E164` sibling and
- * return a NEW definition (the input — often a cached/raw JSONB read — is not
+ * return a NEW definition (the input, often a cached/raw JSONB read, is not
  * mutated). Non-voice steps and steps without refs pass through unchanged.
  *
  * A ref that does not resolve (deleted/inactive row, no phone) leaves the
  * E164 field unset, so the pure compilers degrade exactly like a malformed
  * step today: buildHandoffContext drops a target-less ring step,
  * compileVoiceFlow returns null for a target-less transfer, and
- * resolveOutboundCallPlan returns null without a notify number — the call
+ * resolveOutboundCallPlan returns null without a notify number, the call
  * falls through to legacy routing instead of stranding the caller.
  *
  * Repeated refs to the same person (e.g. two ring steps to one employee) are

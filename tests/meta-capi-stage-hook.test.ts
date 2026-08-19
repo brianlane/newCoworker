@@ -81,8 +81,8 @@ describe("recordStageChangeForMeta", () => {
   });
 
   it("skips (false) without touching stages when the business has no Meta connection at all", async () => {
-    // Readiness (paused / dataset pending) is deliberately NOT checked here
-    // — the drain re-checks per tick, so a stage move during a pause still
+    // Readiness (paused / dataset pending) is deliberately NOT checked here,
+    // the drain re-checks per tick, so a stage move during a pause still
     // uploads once the connection returns inside the 7-day window.
     const { db, calls } = makeDb([{ data: null, error: null }]);
     expect(await recordStageChangeForMeta(db, BIZ, INPUT)).toBe(false);

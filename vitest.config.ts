@@ -11,14 +11,14 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     // tests/e2e/** are live-model tests (real Gemini) with their own config
-    // (vitest.e2e.config.ts) and CI job — the unit run stays hermetic.
+    // (vitest.e2e.config.ts) and CI job, the unit run stays hermetic.
     exclude: [
       "tests/integration/**",
       "tests/e2e/**",
       "**/gemini-summarize-connectivity-live.test.ts"
     ],
     // Strip live credentials (sourced .env) from the unit-test process so no
-    // test can reach a real external service — see tests/setup-env.ts.
+    // test can reach a real external service, see tests/setup-env.ts.
     setupFiles: ["tests/setup-env.ts"],
     // v8 coverage instrumentation slows some orchestrator tests past the
     // default 5s; give every test a generous 15s budget.

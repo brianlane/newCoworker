@@ -17,7 +17,7 @@ type SendState = "idle" | "sending" | "sent" | "error";
  * didn't click the link yet". The "Resend email" button gives them a
  * single-click recovery path that re-mints a fresh HMAC token and
  * dispatches a new email via `/api/email/send-verification` (which
- * pins the recipient to the signed-in user's account email — see that
+ * pins the recipient to the signed-in user's account email, see that
  * route's docstring for why a body parameter would be a vector).
  *
  * This is intentionally a soft notice, not a hard gate. A hard gate

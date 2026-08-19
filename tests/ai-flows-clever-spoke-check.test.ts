@@ -5,7 +5,7 @@ import { buildSpokeCheckDefinition } from "../scripts/oneshot/clever-spoke-check
 /**
  * The "Clever - Spoke Check & Weekly Call Follow-Up" definition the one-shot
  * seeds (Amy's weekly-call-until-reached routine) must validate through the
- * SAME parser the dashboard + CRUD API use — this is the CI tripwire that a
+ * SAME parser the dashboard + CRUD API use, this is the CI tripwire that a
  * schema change can't silently break the seeded flow shape.
  */
 

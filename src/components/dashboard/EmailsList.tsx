@@ -47,7 +47,7 @@ function emailSortValue(row: EmailLogRow, field: string): string | number | null
  * The server page (dashboard/emails) fetches `email_log` rows and hands them
  * here. Behaves like a normal mail client: a full-width list collapses into a
  * narrow left column when a message is opened, and the message is read in the
- * same view (a right-hand reading pane) — no modal. Sources are labelled +
+ * same view (a right-hand reading pane), no modal. Sources are labelled +
  * colour-coded so the AI coworker's OWN dedicated mailbox (`tenant_mailbox_*`)
  * is visually distinct (signal-teal) from owner-mailbox / flow sends.
  *
@@ -135,7 +135,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
  * From/To/Cc row: splits comma-separated recipient lists and links each
  * address that belongs to a known contact through to their profile page.
  * (Splitting on comma can separate the name half of a quoted
- * `"Last, First" <addr>` — that segment renders as plain text while the
+ * `"Last, First" <addr>`, that segment renders as plain text while the
  * `<addr>` half still resolves and links.)
  */
 function RecipientsRow({
@@ -208,7 +208,7 @@ type BodyState =
  * Sanitized srcdoc for the HTML reading pane. DOMPurify strips scripts, event
  * handlers, and other active content; WHOLE_DOCUMENT keeps the email's
  * <head><style> (most marketing mail styles via a head stylesheet). A
- * <base target="_blank"> is injected so every link opens in a new tab — the
+ * <base target="_blank"> is injected so every link opens in a new tab, the
  * iframe itself is sandboxed without scripts, and links escape via the
  * sandbox's allow-popups-to-escape-sandbox token.
  */
@@ -228,7 +228,7 @@ function formatBytes(bytes: number): string {
 
 /**
  * Reading pane. Mounted with a `key={row.id}` so it remounts (fresh state) per
- * selection — that lets us initialise to "loading" without a synchronous
+ * selection, that lets us initialise to "loading" without a synchronous
  * setState in the effect. The full body is fetched on demand (the list omits it
  * to avoid pulling every message body), falling back to the row's preview while
  * loading or on error.
@@ -541,7 +541,7 @@ function ReadingPane({
           // Sandboxed (no scripts, opaque origin) iframe: the email's own CSS
           // renders inside without leaking into the dashboard, and DOMPurify
           // has already stripped active content. allow-popups (+escape) lets
-          // links — retargeted to _blank via an injected <base> — open in a
+          // links, retargeted to _blank via an injected <base>, open in a
           // normal new tab.
           <iframe
             title="Email message"
@@ -634,7 +634,7 @@ type ComposerState =
 /** Enabled tenant_email flows offered as replay targets (built server-side). */
 export type ReplayFlowOption = { id: string; name: string };
 
-/** Inbound AI-mailbox mail that never matched a flow — the replayable set. */
+/** Inbound AI-mailbox mail that never matched a flow, the replayable set. */
 function isUnmatchedInbound(row: EmailLogRow): boolean {
   return (
     row.direction === "inbound" &&
@@ -658,7 +658,7 @@ type ReplayState =
 /**
  * "Replay missed emails" panel: inbound AI-mailbox messages that arrived
  * while no flow was enabled (flow_id null) can be re-run through an enabled
- * tenant_email flow as BACKFILL runs — brand-new leads get filed + contacted;
+ * tenant_email flow as BACKFILL runs, brand-new leads get filed + contacted;
  * leads already saved as contacts are filed-and-finished without outreach, so
  * a replay can never double-text.
  */

@@ -1,9 +1,9 @@
 /**
- * Custom (admin-authored) white-glove offers — DB access layer.
+ * Custom (admin-authored) white-glove offers, DB access layer.
  *
  * A row here is a bespoke, single-business deal: the admin names it and sets
  * a custom amount; the owner pays it via Stripe Checkout with inline
- * `price_data` (this row IS the pricing source of truth — never trust a
+ * `price_data` (this row IS the pricing source of truth, never trust a
  * client-supplied amount). Lifecycle: open → paid (Stripe webhook) or
  * open → revoked (admin). See migration 20260803000000_white_glove_offers.
  */
@@ -37,7 +37,7 @@ export const WHITE_GLOVE_OFFER_MAX_CENTS = 5_000_000;
 
 /**
  * Escape LIKE/ILIKE pattern metacharacters. `_` (single-char wildcard) is
- * common in real emails — without this, john_doe@x.com would also match
+ * common in real emails, without this, john_doe@x.com would also match
  * johnXdoe@x.com and could attach an offer to the wrong tenant.
  */
 function escapeLikePattern(value: string): string {
@@ -88,7 +88,7 @@ export async function listWhiteGloveOffers(
   return (data ?? []) as WhiteGloveOfferRow[];
 }
 
-/** Prospect (pre-account) offers — business_id is null. Newest first. */
+/** Prospect (pre-account) offers, business_id is null. Newest first. */
 export async function listProspectWhiteGloveOffers(
   client?: SupabaseClient
 ): Promise<WhiteGloveOfferRow[]> {
@@ -103,11 +103,11 @@ export async function listProspectWhiteGloveOffers(
 }
 
 /**
- * Attach the owner's PROSPECT offers to their freshly created business —
+ * Attach the owner's PROSPECT offers to their freshly created business,
  * called from createBusiness so a deal paid before signup follows the account
  * automatically. Matching is by recipient_email (case-insensitive). For every
  * PAID offer attached, the standard 30-day priority call/video support window
- * opens FROM NOW (attach time) — more generous than "from payment", and
+ * opens FROM NOW (attach time), more generous than "from payment", and
  * monotonic via extendPrioritySupport. Billing then sees the paid offer via
  * listWhiteGloveOffers and hides the package upsell.
  *
@@ -144,13 +144,13 @@ function prioritySupportWindowFromNow(): Date {
 /**
  * Inverse attach for the Stripe webhook: a PROSPECT offer was just PAID, and
  * the recipient may already have an account (signed up between receiving the
- * link and paying it). Attaches STRICTLY by the offer's recipient_email — the
+ * link and paying it). Attaches STRICTLY by the offer's recipient_email, the
  * Stripe payer email is never used, because whoever holds the link could pay
  * with any email and must not bind the offer (and its priority-support grant)
  * to a different tenant than the admin addressed. Finds the recipient's
  * newest business, stamps it onto the offer (only while business_id is still
- * null — never re-homes an attached offer), and returns the business id so
- * the caller can open the priority window. Null when no account exists yet —
+ * null, never re-homes an attached offer), and returns the business id so
+ * the caller can open the priority window. Null when no account exists yet,
  * createBusiness's attach picks the offer up at signup instead.
  */
 export async function attachPaidProspectOfferToBusinessByEmail(
@@ -239,7 +239,7 @@ export async function revokeWhiteGloveOffer(
 }
 
 /**
- * Mark an offer paid (Stripe webhook, checkout.session.completed) — an ATOMIC
+ * Mark an offer paid (Stripe webhook, checkout.session.completed), an ATOMIC
  * CLAIM, not a blind write. The update only matches when the offer is not yet
  * paid OR is already paid by THIS same Stripe session (webhook retry →
  * idempotent re-write of identical values). A completion from a DIFFERENT
@@ -247,7 +247,7 @@ export async function revokeWhiteGloveOffer(
  * "duplicate_session": the customer was charged twice (e.g. two Buy tabs both
  * reached Stripe before the first completion) and the caller must alert for a
  * refund instead of re-crediting. An admin revoke that raced the payment
- * still flips to 'paid' — the money is real; support refunds out-of-band.
+ * still flips to 'paid', the money is real; support refunds out-of-band.
  */
 export async function markWhiteGloveOfferPaid(
   offerId: string,
@@ -272,7 +272,7 @@ export async function markWhiteGloveOfferPaid(
 /**
  * Open the business's priority call/video support window after a custom-offer
  * payment. Unlike recordWhiteGlovePurchase (fixed packages), this must NOT
- * touch white_glove_package — that column is the fixed-package enum — and it
+ * touch white_glove_package, that column is the fixed-package enum, and it
  * never SHORTENS an already-open window (a custom offer bought during an
  * existing window extends, not truncates). Monotonic-under-concurrency: the
  * guard lives in the UPDATE's WHERE clause (single statement), so two webhook

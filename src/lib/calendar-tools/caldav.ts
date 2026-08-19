@@ -58,7 +58,7 @@ function failureResult(err: unknown, fallbackDetail: string): CalendarToolResult
 /**
  * The connection's event calendar (URL + display name), using the row cache
  * when present and re-running discovery (persisted best-effort) when it is
- * not — so callers see the discovered name even on the request that had to
+ * not, so callers see the discovered name even on the request that had to
  * re-discover.
  */
 async function resolveCalendar(
@@ -75,7 +75,7 @@ async function resolveCalendar(
       calendarName: picked.name
     });
   } catch (err) {
-    // Cache refresh only — the discovery result still serves this call.
+    // Cache refresh only, the discovery result still serves this call.
     logger.warn("calendar-tools/caldav: calendar cache persist failed", {
       businessId: row.business_id,
       error: err instanceof Error ? err.message : String(err)
@@ -155,7 +155,7 @@ export async function bookCaldavAppointment(
  * `calendar_reschedule_appointment` core for CalDAV connections: rewrites
  * DTSTART/DTEND on the SAME event resource (SEQUENCE bumped so subscribed
  * clients show an update, not a new event). The event UID comes from the
- * caller — resolved via the booking ledger, since CalDAV has no
+ * caller, resolved via the booking ledger, since CalDAV has no
  * search-by-attendee surface in this client.
  *
  * A 404 on the resource means the event was deleted on the provider side

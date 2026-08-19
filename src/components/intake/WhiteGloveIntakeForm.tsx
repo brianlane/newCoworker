@@ -3,7 +3,7 @@
 /**
  * The public white-glove intake questionnaire form (/intake/<token>).
  *
- * Renders INTAKE_QUESTIONS grouped by section — multiple choice first
+ * Renders INTAKE_QUESTIONS grouped by section, multiple choice first
  * wherever possible, free text only where unavoidable. The industry the
  * admin picked at create time pre-fills the suggested greeting +
  * qualification questions (visible as placeholders the prospect can

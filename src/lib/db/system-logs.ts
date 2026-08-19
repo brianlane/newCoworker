@@ -1,5 +1,5 @@
 /**
- * system_logs persistence — the unified operational log sink.
+ * system_logs persistence, the unified operational log sink.
  *
  * Every component that serves a client's AI writes here (Edge functions, the
  * VPS chat-worker, Telnyx webhooks, the app itself) so the admin business page
@@ -7,7 +7,7 @@
  * without SSH-ing into a VPS. Schema: 20260610010000_system_logs.sql.
  *
  * Use `recordSystemLog` from instrumentation call sites: it is fire-and-forget
- * and NEVER throws — logging must never take down the path it observes.
+ * and NEVER throws, logging must never take down the path it observes.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
@@ -33,7 +33,7 @@ const LOG_COLS = "id,business_id,source,level,event,message,payload,created_at";
  * Build the PostgREST `or=(...)` filter that searches `event` and `message` for
  * a literal substring.
  *
- * This used to be `search.replace(/[%_,()]/g, "")` — the five characters that
+ * This used to be `search.replace(/[%_,()]/g, "")`, the five characters that
  * are dangerous here were simply DELETED. Every event name in this system is
  * snake_case, so that quietly broke the search for the exact strings an operator
  * is most likely to paste: `ai_flow_run_failed` became `aiflowrunfailed` and
@@ -81,7 +81,7 @@ export type SystemLogInput = {
   payload?: Record<string, unknown>;
 };
 
-/** Insert one log row. Throws on failure — prefer `recordSystemLog` at call sites. */
+/** Insert one log row. Throws on failure, prefer `recordSystemLog` at call sites. */
 export async function insertSystemLog(
   input: SystemLogInput,
   client?: SupabaseClient
@@ -241,7 +241,7 @@ export async function listSystemLogErrorsAll(
   client?: SupabaseClient,
   options?: {
     /**
-     * Businesses hidden from the feed (admin notification mutes — see
+     * Businesses hidden from the feed (admin notification mutes, see
      * src/lib/db/admin-mutes.ts). Platform rows (business_id null) always
      * stay: a bare NOT IN would drop them because `NULL NOT IN (...)` is
      * never true in SQL, hence the explicit is-null arm.

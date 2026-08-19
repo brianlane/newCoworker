@@ -21,7 +21,7 @@ import {
  * The voice bridge is rsynced to the VPS standalone, so it vendors a mirror
  * of the shared contact-timeline module instead of importing it. The DATA
  * rules (queries, lookback, caps, merge/order, envelope parsing) must stay
- * identical — only the surrounding wording is channel-specific. These tests
+ * identical, only the surrounding wording is channel-specific. These tests
  * pin the two implementations against each other so a one-sided edit is
  * loud (same pattern as tests/voice-bridge-flow-run-context.test.ts).
  */
@@ -158,7 +158,7 @@ describe("loader parity (same wire shape against the same fake client)", () => {
         .filter((c) => c.name !== "from")
         .map((c) =>
           // The lookback bound is Date.now()-derived and the two loaders run
-          // milliseconds apart — normalize the timestamp, compare the shape.
+          // milliseconds apart, normalize the timestamp, compare the shape.
           `${c.table}.${c.name}(${JSON.stringify(c.args)})`.replace(
             /\d{4}-\d{2}-\d{2}T[\d:.]+Z/g,
             "<since>"

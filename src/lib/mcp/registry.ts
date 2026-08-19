@@ -62,7 +62,7 @@ export const allMcpTools: McpToolDef[] = [
 
 /**
  * Extract the verified caller from the server's per-request context
- * (`ctx.http.authInfo.extra`). Returns null when absent/malformed —
+ * (`ctx.http.authInfo.extra`). Returns null when absent/malformed,
  * unreachable behind `withMcpAuth({ required: true })`, but the tool must
  * fail closed rather than run unauthenticated.
  */

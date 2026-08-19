@@ -2,16 +2,16 @@
  * Stop-on-response (GHL "stop on response" / FUB "pause on reply").
  *
  * When a lead texts back, every pending run of a flow whose
- * `options.stopOnResponse` is true is CANCELED for that lead — the whole
+ * `options.stopOnResponse` is true is CANCELED for that lead, the whole
  * point of the setting is "once they answer, stop the scheduled follow-ups".
  * Mirrors goal_events.ts in shape and guarantees:
  *
- *   - only the machine-parked states are touched (queued — including
- *     sleep/quiet-hour deferrals — awaiting_reply, awaiting_call); runs
+ *   - only the machine-parked states are touched (queued, including
+ *     sleep/quiet-hour deferrals, awaiting_reply, awaiting_call); runs
  *     parked on a HUMAN (awaiting_approval / awaiting_agent) are left alone;
  *   - a run waiting for THIS sender's reply is never canceled: the flow
  *     authored that wait, so the reply must flow through its branch logic.
- *     Two layers cover the two timings — `excludeRunIds` exempts runs whose
+ *     Two layers cover the two timings, `excludeRunIds` exempts runs whose
  *     resume already CONSUMED the reply (they are `queued` again by now),
  *     and the awaiting_reply-on-this-sender guard exempts runs whose resume
  *     lost its revision race (still parked), so a race can never turn the
@@ -99,7 +99,7 @@ export async function stopRunsOnResponse(
         !excludeRunIds.includes(r.id) &&
         !isTestModeTrigger(r.context?.trigger as Record<string, unknown> | undefined) &&
         // A run parked awaiting THIS sender's reply owns that reply by
-        // definition — the resume path feeds it through the authored wait
+        // definition, the resume path feeds it through the authored wait
         // logic. excludeRunIds covers resumes that WON their revision race;
         // this guard covers the ones that LOST it (the run is still
         // awaiting_reply here) so a race can never turn the reply into a

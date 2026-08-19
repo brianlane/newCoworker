@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     const db = await createSupabaseServiceClient();
     // Target the newest business, matching how the dashboard layout, billing
     // routes, and the Settings page resolve "the" business for an owner who has
-    // more than one row under the same owner_email — so the rename hits the row
+    // more than one row under the same owner_email, so the rename hits the row
     // the user is actually looking at.
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
     const { data: biz } = await db
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     await updateBusinessName((biz as { id: string }).id, name, db);
     // The business name appears in the rendered Business-profile block; keep
     // the canonical profile_md fresh and push it to the live agent. Both are
-    // best-effort AFTER the committed rename — a refresh/sync hiccup must
+    // best-effort AFTER the committed rename, a refresh/sync hiccup must
     // not fail the save the user already made.
     await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
     void syncVaultToVpsAndLog((biz as { id: string }).id);

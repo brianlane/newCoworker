@@ -1,7 +1,7 @@
 /**
  * Public submit endpoint for the white-glove intake questionnaire
- * (POST /intake/<token>/submit). Unauthenticated by design — the token IS
- * the capability, mirroring /offer/<pay_token> — so it is IP rate-limited,
+ * (POST /intake/<token>/submit). Unauthenticated by design, the token IS
+ * the capability, mirroring /offer/<pay_token>, so it is IP rate-limited,
  * the token shape is checked before any DB hit, and the answers are
  * validated against the questionnaire schema. The underlying UPDATE is
  * guarded on status='sent', so a completed or revoked intake can never be
@@ -57,7 +57,7 @@ export async function POST(
   try {
     const submitted = await submitWhiteGloveIntake(token, parsed.data);
     if (!submitted) {
-      // Unknown token, already completed, or revoked — one answer for all
+      // Unknown token, already completed, or revoked, one answer for all
       // three so the public endpoint doesn't oracle which tokens exist.
       return NextResponse.json(
         { error: "This questionnaire is no longer open." },

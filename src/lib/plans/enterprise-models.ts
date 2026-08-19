@@ -1,12 +1,12 @@
 /**
- * Designated reasoning models + voice picker (enterprise) — schema for
+ * Designated reasoning models + voice picker (enterprise), schema for
  * `businesses.enterprise_models` (migration 20260810000000).
  *
  * Same override pattern as enterprise-limits: nullable jsonb on the
  * business, strict zod at every boundary, omitted keys = platform defaults.
  * Values become deploy env (`OWNER_CHAT_MODEL`, `SMS_CHAT_MODEL`,
  * `GEMINI_LIVE_MODEL`) at the next provision/redeploy of the tenant box, so
- * changes are NOT live-applied — the admin UI says so.
+ * changes are NOT live-applied, the admin UI says so.
  *
  * The VOICE is no longer one of them: it moved to
  * `business_telnyx_settings.voice_name`, read per call by the bridge, so owners
@@ -18,7 +18,7 @@
  * ships new model ids monthly; an allow-list here would rot):
  *  - chat models must be `gemini-*` and NOT live-flavored (the llm-router
  *    meters non-live gemini models through the shared AI budget; a live
- *    model in a chat slot would bypass that metering — see
+ *    model in a chat slot would bypass that metering, see
  *    vps/llm-router/src/routing.js).
  *  - the voice model must be `gemini-*live*` (audio-to-audio).
  *  - the voice NAME is a fixed allow-list: Gemini Live's prebuilt voices.

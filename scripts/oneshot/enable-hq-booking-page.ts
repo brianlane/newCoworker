@@ -1,10 +1,10 @@
 /**
- * enable-hq-booking-page.ts — dogfood the native booking page on the HQ
+ * enable-hq-booking-page.ts, dogfood the native booking page on the HQ
  * tenant (the "HQ Discovery-Call Booking" plan, Jul 2026):
  *
  *   1. validate the flow patches FIRST (both HQ follow-up flows must carry
  *      the expected s_intro / s_nudge steps, and the patched definitions
- *      must pass parseAiFlowDefinition — using a placeholder link when the
+ *      must pass parseAiFlowDefinition, using a placeholder link when the
  *      page row does not exist yet, so even the first dry run surfaces a
  *      validation failure before anything is written);
  *   2. on --apply: create-or-update HQ's booking_pages row (enabled,
@@ -129,7 +129,7 @@ if (missing.length > 0) {
 }
 
 // Step presence + validation run with the real URL when it exists, else a
-// shape-identical placeholder — so a definition that cannot take the link
+// shape-identical placeholder, so a definition that cannot take the link
 // fails HERE, before the page row is ever created.
 const validationUrl = knownUrl ?? PLACEHOLDER_URL;
 for (const flow of flows) {

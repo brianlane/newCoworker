@@ -6,7 +6,7 @@
  *   body: { businessId: uuid, name: string, body: string }
  *
  * Templates are reusable verbatim bodies for the dashboard composer (no
- * variable substitution — owners expect what they saved to be what sends).
+ * variable substitution, owners expect what they saved to be what sends).
  * Tier-gated server-side; the composer hides the picker for Starter tenants
  * but the gate here is what actually enforces it.
  *

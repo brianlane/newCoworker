@@ -1,10 +1,10 @@
 /**
- * Agents — artifact PowerPoint export.
+ * Agents, artifact PowerPoint export.
  *
  *   GET /api/dashboard/agents/runs/:runId/pptx?businessId=…
  *
  * Converts a succeeded run's markdown artifact into a downloadable .pptx
- * deck (headings → slides, bullets → bullets — see
+ * deck (headings → slides, bullets → bullets, see
  * src/lib/pptx/from-markdown.ts). This is how "build me a presentation"
  * agents end in an actual PowerPoint file.
  */

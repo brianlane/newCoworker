@@ -1,12 +1,12 @@
 /**
  * Node-side entry point for AiFlow Goal Events (the GHL-style "jump to the
- * goal once the milestone lands" behavior — see
+ * goal once the milestone lands" behavior, see
  * supabase/functions/_shared/ai_flows/goal_events.ts for the mechanics).
  *
  * The Deno webhooks/worker call applyGoalEvent directly; app-side surfaces
  * (calendar-tool bookings, dashboard contact edits) go through this wrapper,
  * which normalizes the lead phone, supplies the service-role client, and
- * stays best-effort — a goal failure must never break the hosting request.
+ * stays best-effort, a goal failure must never break the hosting request.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -19,7 +19,7 @@ export type { ObservedGoalEvent };
 
 /**
  * Fire one observed milestone for a lead. `phone` may be raw user input
- * (E.164 or a loose NANP number); an unusable phone is a silent no-op — a
+ * (E.164 or a loose NANP number); an unusable phone is a silent no-op, a
  * missing lead phone is a data gap, not an error.
  */
 export async function fireGoalEvent(

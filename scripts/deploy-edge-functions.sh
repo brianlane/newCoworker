@@ -2,10 +2,10 @@
 # The ONLY supported way to deploy Supabase edge functions.
 #
 # Why: every function in this project authenticates its own callers (cron
-# bearer, Telnyx Ed25519 signature, webhook token — see supabase/config.toml),
+# bearer, Telnyx Ed25519 signature, webhook token, see supabase/config.toml),
 # so the gateway JWT check must stay OFF. A plain `supabase functions deploy`
 # has silently flipped `verify_jwt` back ON twice (newer CLI defaults),
-# 401-ing every pg_cron tick and Telnyx webhook until someone noticed —
+# 401-ing every pg_cron tick and Telnyx webhook until someone noticed,
 # stalled AiFlow runs, dropped inbound SMS, bounced voice webhooks.
 #
 # This wrapper always passes --no-verify-jwt and always deploys from the

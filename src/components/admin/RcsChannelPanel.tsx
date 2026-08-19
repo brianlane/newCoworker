@@ -6,7 +6,7 @@
  *
  * Operator console for `business_channel_settings`: the Telnyx RCS agent id
  * and the per-tenant enable switch. This is only one leg of the send-time
- * gate — outbound RCS additionally requires the enterprise tier
+ * gate, outbound RCS additionally requires the enterprise tier
  * (`rcsTierAllowed`), so the panel shows a warning (rather than hiding) when
  * the tier would demote sends to plain SMS anyway.
  *
@@ -32,7 +32,7 @@ export function RcsChannelPanel({
   tierAllows: boolean;
   /**
    * Whether a concrete SMS from-number exists (tenant setting or platform
-   * env). sendTelnyxSms requires one for the RCS sms_fallback leg — without
+   * env). sendTelnyxSms requires one for the RCS sms_fallback leg, without
    * it, sends stay plain SMS regardless of the settings here.
    */
   hasFromNumber: boolean;

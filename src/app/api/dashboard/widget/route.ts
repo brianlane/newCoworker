@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     const body = postSchema.parse(await request.json());
     await requireBusinessRole(body.businessId, "manage_settings");
 
-    // Tier gate on every write except a pure disable — a downgraded tenant
+    // Tier gate on every write except a pure disable, a downgraded tenant
     // can always turn the widget off / shed config, never turn it on.
     const isPureDisable =
       body.enabled === false &&

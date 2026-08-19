@@ -54,7 +54,7 @@ describe("getQuoteFunnel", () => {
         { tags: ["quote-requested"] },
         { tags: ["quote-requested", "quote-received"] },
         { tags: ["quote-presented"] },
-        // Mixed casing still counts — tag normalization preserves the
+        // Mixed casing still counts, tag normalization preserves the
         // owner's original spelling.
         { tags: ["Quote-Won", "quote-requested"] },
         { tags: ["quote-lost", "quote-presented"] },
@@ -73,7 +73,7 @@ describe("getQuoteFunnel", () => {
     expect(funnel.totalTracked).toBe(5);
     expect(funnel.conversionRate).toBe(0.2);
     expect(funnel.clipped).toBe(false);
-    // Full customer scan — a case-sensitive SQL tag filter would drop
+    // Full customer scan, a case-sensitive SQL tag filter would drop
     // "Quote-Won" spellings.
     expect(calls.find((c) => c.name === "eq" && c.args[0] === "type")?.args).toEqual([
       "type",

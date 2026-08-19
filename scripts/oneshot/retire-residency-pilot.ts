@@ -8,15 +8,15 @@
  * cascade never matched it. Nothing external bills or depends on it anymore:
  * no Stripe subscription, no Hostinger box, no Telnyx DID, no auth user.
  *
- * What this removes (in order — read-only validation of every step happens
+ * What this removes (in order, read-only validation of every step happens
  * first, so a missing credential or API failure aborts with nothing lost):
  *   1. Cloudflare: the orphaned per-tenant tunnel `nc-<businessId>` and its
- *      CNAMEs (`<id>`, `voice-<id>`, `render-<id>`, `data-<id>`) — no code
+ *      CNAMEs (`<id>`, `voice-<id>`, `render-<id>`, `data-<id>`), no code
  *      path deletes tunnels, so these outlived the box.
  *   2. Supabase Storage: every encrypted residency DR dump under
  *      business-backups/residency/<businessId>/ (worthless ciphertext once
  *      the `residency_backup_keys` row cascades with the business row).
- *   3. Postgres: the `businesses` row — ON DELETE CASCADE fans out to the
+ *   3. Postgres: the `businesses` row, ON DELETE CASCADE fans out to the
  *      config, contact, logs, gateway token, residency backup key, and the
  *      canceled Stripe-less subscription row. `applied_oneshots` /
  *      `telnyx_cost_daily` FKs are SET NULL (ledgers preserved by design).
@@ -81,7 +81,7 @@ async function assertGuards(db: SupabaseClient): Promise<void> {
 
   // Same predicate as the release-to-pool / adopt-time delete guards
   // (listBusinessIdsWithStripeLinkedSubscription): a Stripe id on a CANCELED
-  // row is a historical stamp, not live billing — only non-canceled
+  // row is a historical stamp, not live billing, only non-canceled
   // Stripe-linked rows block the delete.
   const { data: subs, error: subErr } = await db
     .from("subscriptions")

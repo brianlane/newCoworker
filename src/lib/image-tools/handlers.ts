@@ -9,7 +9,7 @@
  * Cost controls (images are the priciest single tool call we expose):
  *  - hard pre-gate on the shared monthly AI budget (no local-model degrade
  *    path exists for images, so over-budget refuses like voice does);
- *  - a durable 3-per-session limit per asking entity — the dashboard session
+ *  - a durable 3-per-session limit per asking entity, the dashboard session
  *    is the active chat thread, the texting session is the texter's phone
  *    number over a rolling 24h window. AiFlow runs are exempt (owner-authored
  *    and explicitly run) and never call these wrappers.
@@ -92,7 +92,7 @@ const REF_MIME_BY_EXT: Record<string, string> = {
 
 /**
  * Normalize a model-supplied image reference (bare storage path or the
- * dashboard proxy URL form) to a generated-images path — REJECTING any ref
+ * dashboard proxy URL form) to a generated-images path, REJECTING any ref
  * whose business prefix is not the calling business. Returns null when the
  * ref is not acceptable.
  */
@@ -106,7 +106,7 @@ export function normalizeImageRef(businessId: string, ref: unknown): string | nu
 
 /**
  * Download a normalized generated-images ref for use as a Gemini input image.
- * Only our own private bucket is ever read — no arbitrary URL fetching on
+ * Only our own private bucket is ever read, no arbitrary URL fetching on
  * this path (SSRF-safe by construction). Returns null when the ref is
  * invalid, cross-tenant, missing, or oversized.
  */
@@ -153,7 +153,7 @@ export function normalizeAspectRatio(value: unknown): GeminiImageAspectRatio | u
 
 /**
  * Record the "final image slot consumed" alert: always lands in the activity
- * log (coworker_logs urgent_alert — what the Recent Activity feed surfaces as
+ * log (coworker_logs urgent_alert, what the Recent Activity feed surfaces as
  * an alert), and additionally notifies the owner when the
  * `image_limit_alerts` preference (default ON) is enabled. Best-effort: an
  * alerting failure must never fail the generation that triggered it.
@@ -196,7 +196,7 @@ export async function recordImageLimitReached(
     // default is ON.
     if (prefs) prefEnabled = prefs.image_limit_alerts !== false;
   } catch (err) {
-    // Fail open to "alert" — the preference defaults ON, and a missed read
+    // Fail open to "alert", the preference defaults ON, and a missed read
     // should not silently drop an owner alert.
     logger.warn("image-tools: preferences lookup failed (alerting anyway)", {
       businessId,
@@ -224,7 +224,7 @@ export type GenerateBusinessImageOpts = {
   aspectRatio?: GeminiImageAspectRatio;
   /**
    * Optional source image to EDIT (a generated-images ref: bare
-   * `<businessId>/<uuid>.<ext>` path or the dashboard proxy URL form) —
+   * `<businessId>/<uuid>.<ext>` path or the dashboard proxy URL form),
    * an inbound MMS photo, an uploaded dashboard image, or a previously
    * generated image for iterative edits. Must belong to the calling
    * business; an unresolvable ref refuses rather than silently generating
@@ -233,7 +233,7 @@ export type GenerateBusinessImageOpts = {
   inputImageRef?: string;
   /**
    * Session identity for the 3-per-session limit. Omit ONLY for surfaces that
-   * are explicitly exempt (AiFlow runs — owner-authored, explicitly run).
+   * are explicitly exempt (AiFlow runs, owner-authored, explicitly run).
    */
   session?: { surface: "dashboard" | "sms"; key: string };
   /** Telemetry label recorded on the AI-budget spend row. */
@@ -270,7 +270,7 @@ export async function generateBusinessImage(
     db = await createSupabaseServiceClient();
   }
 
-  // 1) Cheap refusals first — a misconfigured key or exhausted budget must
+  // 1) Cheap refusals first, a misconfigured key or exhausted budget must
   // NOT consume a session slot (the limiter below has no release path).
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) {
@@ -317,7 +317,7 @@ export async function generateBusinessImage(
   }
 
   // 3) Per-session limit (AiFlow runs pass no session and skip it). The slot
-  // is consumed for every ATTEMPTED generation from here on — deliberately,
+  // is consumed for every ATTEMPTED generation from here on, deliberately,
   // so a repeatedly-failing expensive call can't be retried unbounded (the
   // limiter is the cost fuse; there is no decrement API).
   if (opts.session) {
@@ -334,7 +334,7 @@ export async function generateBusinessImage(
       };
     }
     if (limit.remaining === 0) {
-      // This call consumes the FINAL slot — alert now (once per session key;
+      // This call consumes the FINAL slot, alert now (once per session key;
       // later calls fail the limiter above and never reach here).
       await recordImageLimitReached(
         businessId,
@@ -361,7 +361,7 @@ export async function generateBusinessImage(
     mimeType = result.mimeType;
   } catch (err) {
     if (err instanceof GeminiEmptyError) {
-      // Google still bills empty responses — meter the token usage it
+      // Google still bills empty responses, meter the token usage it
       // reported (no flat per-image price: no image was produced).
       await meterGeminiSpendForBusiness({
         businessId,
@@ -502,7 +502,7 @@ export async function generateImageForSms(
     const message = err instanceof Error ? err.message : String(err);
     const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
     logger.warn("image-tools: MMS send failed", { businessId, error: message });
-    // The image was already generated (and paid for) — a retry would burn
+    // The image was already generated (and paid for), a retry would burn
     // another session slot and another charge, so steer the model away.
     return {
       ok: false,

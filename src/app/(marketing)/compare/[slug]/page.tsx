@@ -23,7 +23,7 @@ export function generateStaticParams(): Params[] {
   return COMPARISONS.filter((c) => !c.bespoke).map((c) => ({ slug: c.slug }));
 }
 
-// Only the comparisons defined in data.ts exist — anything else is a 404.
+// Only the comparisons defined in data.ts exist, anything else is a 404.
 export const dynamicParams = false;
 
 function templated(slug: string) {

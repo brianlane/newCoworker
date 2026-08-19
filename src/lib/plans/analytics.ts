@@ -4,7 +4,7 @@
  *
  * Competitors gate exactly this behind paid tiers (CloudTalk ties analytics
  * retention to plan level, Aircall sells "Analytics+"); our marginal cost is
- * ~$0 because every input already exists — `daily_usage` counters,
+ * ~$0 because every input already exists, `daily_usage` counters,
  * `voice_call_transcripts` rows, and `system_logs` blocked-call events. The
  * gate lives server-side in the page/route so the sidebar link can stay
  * visible as an upsell without leaking data.

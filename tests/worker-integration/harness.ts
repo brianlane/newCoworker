@@ -1,6 +1,6 @@
 /**
  * Harness for the ai-flow-worker integration suite: a REAL local Supabase
- * stack (`supabase start` — Postgres, PostgREST, RPCs, every migration) with
+ * stack (`supabase start`, Postgres, PostgREST, RPCs, every migration) with
  * the REAL worker served by `supabase functions serve`. Tests seed rows with
  * the service-role client, tick the worker over HTTP exactly like pg_cron
  * does in production, and assert persisted state.
@@ -39,7 +39,7 @@ export function serviceDb(): SupabaseClient {
   });
 }
 
-/** One worker tick — the exact POST pg_cron makes in production. */
+/** One worker tick, the exact POST pg_cron makes in production. */
 export async function tickWorker(): Promise<{ ok: boolean; processed: number }> {
   const res = await fetch(WORKER_URL, {
     method: "POST",
@@ -186,7 +186,7 @@ export function minutesAgo(mins: number): string {
   return new Date(Date.now() - mins * 60_000).toISOString();
 }
 
-/** One sms-inbound-worker tick — the exact POST pg_cron makes. */
+/** One sms-inbound-worker tick, the exact POST pg_cron makes. */
 export async function tickSmsWorker(): Promise<{ ok: boolean; processed: number }> {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/sms-inbound-worker`, {
     method: "POST",
@@ -241,7 +241,7 @@ export async function getSmsJob(db: SupabaseClient, jobId: string): Promise<SmsJ
 /**
  * Resume a parked wait_for_reply run the way the telnyx-sms-inbound webhook
  * does. MIRROR of `resumeAwaitingReplyRun` in
- * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync) — the
+ * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync), the
  * webhook itself can't be invoked here because it verifies Telnyx's
  * Ed25519 signature, which a test cannot forge by design.
  */

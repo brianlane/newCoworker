@@ -1,8 +1,8 @@
 /**
- * Campaign audience preview — "who would this campaign reach, right now?"
+ * Campaign audience preview, "who would this campaign reach, right now?"
  *
  * Mirrors the sweep's snapshot filters (src/lib/campaigns/send.ts
- * `snapshotRecipients` — keep in lockstep): customer contacts with an
+ * `snapshotRecipients`, keep in lockstep): customer contacts with an
  * email, not marketing-unsubscribed, tag-matched case-insensitively,
  * de-duped by address, capped at CAMPAIGN_MAX_RECIPIENTS. The composer
  * calls this before scheduling so "Schedule campaign" is never a blind
@@ -21,7 +21,7 @@ export type CampaignAudiencePreview = {
   recipients: number;
   /** Of those, how many still carry the instagram-prospect review tag. */
   needsReview: number;
-  /** True when the directory scan hit its bound — counts are floors. */
+  /** True when the directory scan hit its bound, counts are floors. */
   clipped: boolean;
   /**
    * Distinct tags across the scanned emailable directory (composer
@@ -75,7 +75,7 @@ async function scanAudience(
   );
 
   // Tag picker: every distinct tag in the emailable directory, before the
-  // audience filter — the composer offers what an owner could target.
+  // audience filter, the composer offers what an owner could target.
   const tagByLower = new Map<string, string>();
   for (const c of scanned) {
     for (const raw of c.tags ?? []) {
@@ -120,7 +120,7 @@ async function scanAudience(
 }
 
 /**
- * How many contacts carry a tag, emailable or not — the Marketing page's
+ * How many contacts carry a tag, emailable or not, the Marketing page's
  * "prospects pending review" counter. Exact-match `contains` because the
  * starter template stamps the tag constant verbatim (owner-typed variants
  * with different casing are a directory-page concern, not a counter one).

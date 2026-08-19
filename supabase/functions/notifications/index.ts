@@ -130,7 +130,7 @@ async function verifyRequest(req: Request): Promise<boolean> {
 }
 
 // ─── Unsubscribe URL ─────────────────────────────────────────────────────────
-// Plain `?bid=<businessId>` parameter — no HMAC. UUID v4 is unguessable and
+// Plain `?bid=<businessId>` parameter, no HMAC. UUID v4 is unguessable and
 // the unsubscribe action is a one-click flag the owner can re-enable from the
 // dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
 // matching handler / threat-model rationale.
@@ -145,7 +145,7 @@ type SupaClient = SupabaseClient<any, any, any>;
 
 /**
  * Where this alert goes. Business preferences first, then the business's
- * onboarding email, then env-level operator fallbacks — and, when the alert
+ * onboarding email, then env-level operator fallbacks, and, when the alert
  * is ABOUT one contact, redirected to whichever teammate owns that contact.
  * Deno mirror of resolveNotificationTargets in
  * src/lib/notifications/dispatch.ts; both import the same resolver so the
@@ -268,10 +268,10 @@ async function recordRow(
 /**
  * Best-effort `sms_outbound_log` row for a Telnyx-accepted owner-alert SMS,
  * so the page renders in the owner's dashboard Messages thread (the thread
- * merges sms_inbound_jobs + sms_outbound_log — see src/lib/db/sms-history.ts).
+ * merges sms_inbound_jobs + sms_outbound_log, see src/lib/db/sms-history.ts).
  * Without this the only record of "the owner was paged" lived in Telnyx
  * (observed live: the Jul 17 2026 needs-human page was sent but invisible).
- * A logging failure must never fail the alert that already went out — same
+ * A logging failure must never fail the alert that already went out, same
  * convention as the ai-flow-worker's logOutboundSms.
  */
 async function logOwnerAlertSms(
@@ -285,7 +285,7 @@ async function logOwnerAlertSms(
   }
 ): Promise<void> {
   // Never throws: this runs inside the SMS-send try block AFTER Telnyx
-  // accepted the alert — a thrown insert (network blip) would otherwise
+  // accepted the alert, a thrown insert (network blip) would otherwise
   // trip the outer catch and record the delivered send as `failed`.
   try {
     const { error } = await supa.from("sms_outbound_log").insert({
@@ -337,12 +337,12 @@ serve(async (req: Request) => {
   }
 
   // Usage-cap alerts carry owner-actionable copy instead of the generic
-  // "URGENT <task_type>" headline — silence (blocked texts / degraded chat /
+  // "URGENT <task_type>" headline, silence (blocked texts / degraded chat /
   // refused callers) must never be the only signal a cap was hit.
   const missedToday = Number(record.log_payload?.missed_calls_today ?? 0);
   // Needs-human escalations (see _shared/needs_human.ts): the texting
   // coworker hit something it couldn't handle and handed the conversation
-  // to the owner — say who and why, not "URGENT sms_needs_human".
+  // to the owner, say who and why, not "URGENT sms_needs_human".
   const needsHumanLabel = String(record.log_payload?.contact_label ?? "a texter");
   // The model writes the reason as a full sentence ending in "." and the
   // summary template below appends its own, which used to yield
@@ -357,13 +357,13 @@ serve(async (req: Request) => {
   // thread (Amy Laidlaw, Jul 31 2026).
   const needsHumanPreview = String(record.log_payload?.inbound_preview ?? "").trim();
   // AiFlow failure alerts (opt-in, _shared/aiflow_failure_alert.ts): a
-  // lead-intake automation died — say which lead and why, not a raw task_type.
+  // lead-intake automation died, say which lead and why, not a raw task_type.
   const aiflowLeadLabel = String(record.log_payload?.lead_label ?? "a lead");
   const aiflowReason = String(record.log_payload?.reason ?? "")
     .trim()
     .replace(/\.+$/, "");
   // Customer reply alerts (opt-in, _shared/customer_reply_alert.ts): a
-  // client texted back — say who and what they said (KYP, Jul 20 2026).
+  // client texted back, say who and what they said (KYP, Jul 20 2026).
   const replyLabel = String(record.log_payload?.contact_label ?? "A contact");
   const replyPreview = String(record.log_payload?.inbound_preview ?? "").trim();
   // Owner-notify SMS fallback (_shared/owner_notify_fallback.ts): a
@@ -434,7 +434,7 @@ serve(async (req: Request) => {
     summary,
     logId: record.id,
     taskType: record.task_type,
-    // Why this alert reached whoever it reached — mirrors the
+    // Why this alert reached whoever it reached, mirrors the
     // notify_lead_owner step's target/matched_by.
     ...(targets.routing
       ? {
@@ -447,7 +447,7 @@ serve(async (req: Request) => {
       : {}),
     // Needs-human escalations and customer-reply alerts stamp the contact so
     // their per-contact dedupe/coalesce lookups (payload->>contactE164) can
-    // find prior pages — see _shared/needs_human.ts and
+    // find prior pages, see _shared/needs_human.ts and
     // _shared/customer_reply_alert.ts.
     ...((record.task_type === "sms_needs_human" || record.task_type === "sms_customer_reply") &&
     record.log_payload?.contact_e164
@@ -459,7 +459,7 @@ serve(async (req: Request) => {
       ? { team_first_fallthrough: true }
       : {}),
     // AiFlow failure alerts stamp the run so the alert module's per-run
-    // dedupe (payload->>runId) can find prior delivered pages — see
+    // dedupe (payload->>runId) can find prior delivered pages, see
     // _shared/aiflow_failure_alert.ts. The flow id rides along so the
     // notifications list can deep-link to that run's group on the runs page,
     // which needs flowId server-side to load it.
@@ -470,7 +470,7 @@ serve(async (req: Request) => {
       ? { flowId: String(record.log_payload.flow_id) }
       : {}),
     // Customer reply alerts stamp the inbound job so a RETRY claim of the
-    // same job never re-pages (payload->>jobId) — see
+    // same job never re-pages (payload->>jobId), see
     // _shared/customer_reply_alert.ts.
     ...(record.task_type === "sms_customer_reply" && record.log_payload?.job_id
       ? { jobId: String(record.log_payload.job_id) }
@@ -551,7 +551,7 @@ serve(async (req: Request) => {
     );
   }
 
-  // 2) SMS channel via Telnyx — with per-business messaging profile / from override
+  // 2) SMS channel via Telnyx, with per-business messaging profile / from override
   let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
   let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
   const { data: trow } = await supa
@@ -566,7 +566,7 @@ serve(async (req: Request) => {
     telnyxFrom = String(trow.telnyx_sms_from_e164);
   }
 
-  // "Has this business ever connected WhatsApp?" — resolved BEFORE the SMS
+  // "Has this business ever connected WhatsApp?", resolved BEFORE the SMS
   // branch because the whatsapp_replaces_sms preference may only suppress
   // SMS while the WhatsApp leg further down can actually fire.
   //
@@ -646,7 +646,7 @@ serve(async (req: Request) => {
     targets.routing?.target !== "contact_owner"
   ) {
     // WhatsApp-instead-of-SMS preference: gated on whatsappDeliverable, NOT
-    // whatsappConnected — an inactive/token-lapsed row would otherwise
+    // whatsappConnected, an inactive/token-lapsed row would otherwise
     // suppress SMS while the WhatsApp leg refuses, leaving no phone channel
     // (Bugbot f574b3a4). Never for an alert redirected to a teammate's
     // phone, whose number may not have WhatsApp at all. Mirrors dispatch.ts.
@@ -675,12 +675,12 @@ serve(async (req: Request) => {
       phiFree?.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     const smsText = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
     // Owner alerts are METERED against the tenant's monthly pool like all
-    // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
+    // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED,
     // the "you hit your SMS cap" alert must outrun the cap it reports.
     // Declared OUTSIDE the try so the catch can release the counted slot
-    // when the fetch itself throws (network error — nothing left Telnyx).
+    // when the fetch itself throws (network error, nothing left Telnyx).
     const smsMeter = await meterOperationalSms(supa, record.business_id, smsTextUnits(smsText));
-    // Slot lifecycle guard: set once the counted slot is SETTLED — either
+    // Slot lifecycle guard: set once the counted slot is SETTLED, either
     // kept (Telnyx accepted the alert) or already released (Telnyx
     // rejected it). A later throw in the same try (recordRow, error-body
     // read) re-enters the catch, which must neither refund a delivered
@@ -709,7 +709,7 @@ serve(async (req: Request) => {
         body: JSON.stringify(body)
       });
       if (!smsRes.ok) {
-        // The alert never left Telnyx — give the counted slot back.
+        // The alert never left Telnyx, give the counted slot back.
         await releaseOperationalSms(supa, record.business_id, smsMeter);
       }
       smsMeterSettled = true;
@@ -755,7 +755,7 @@ serve(async (req: Request) => {
       }
     } catch (e) {
       // Release ONLY when the slot is still unsettled (the fetch itself
-      // threw — nothing left Telnyx). A delivered alert stays counted, and
+      // threw, nothing left Telnyx). A delivered alert stays counted, and
       // an already-released slot is never released twice.
       if (!smsMeterSettled) {
         await releaseOperationalSms(supa, record.business_id, smsMeter);
@@ -929,7 +929,7 @@ serve(async (req: Request) => {
     );
   }
 
-  // 4) WhatsApp channel — delegated to the Next.js internal deliver
+  // 4) WhatsApp channel, delegated to the Next.js internal deliver
   // endpoint (Cloud API client, tenant token decryption, 24h-window +
   // template routing live there). Fully additive: no connected WhatsApp
   // integration comes back as a structured not_connected skip.
@@ -1069,7 +1069,7 @@ serve(async (req: Request) => {
     );
   }
 
-  // 5) Slack channel — delegated to the Next.js internal endpoint (bot
+  // 5) Slack channel, delegated to the Next.js internal endpoint (bot
   // token decryption + the Web API client live there, so no Slack secret
   // lands in an edge function). Same never-connected silence rule as
   // WhatsApp: a business with no slack_connections row records NOTHING

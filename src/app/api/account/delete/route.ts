@@ -1,9 +1,9 @@
 /**
- * DELETE /api/account/delete — self-serve account deletion.
+ * DELETE /api/account/delete, self-serve account deletion.
  *
  * BizBlasts-style guardrails, server-enforced:
  *   - The caller must re-enter their password (verified against Supabase
- *     auth with a throwaway non-persistent client — a hijacked-but-logged-in
+ *     auth with a throwaway non-persistent client, a hijacked-but-logged-in
  *     session can't delete the account).
  *   - The caller must type the exact DELETE confirmation phrase.
  *   - Paying tenants are refused (409) and directed through the
@@ -86,7 +86,7 @@ export async function DELETE(request: Request) {
     const target = await resolveViewAsTargetUser(user);
 
     // Server-side password re-verification. A throwaway client with the
-    // anon key and no session persistence — the sign-in result is discarded;
+    // anon key and no session persistence, the sign-in result is discarded;
     // we only care whether the credentials are valid. Always the CALLER's
     // own password, including under view-as: this is a "prove it is really
     // you" check on the session, not a claim to know the tenant's secret.
@@ -123,7 +123,7 @@ export async function DELETE(request: Request) {
     // FAIL-CLOSED billing lookup: getSubscription collapses query errors
     // into null, which here would read as "never paid" and wave a live
     // subscription through the gate. Query directly and refuse on any read
-    // error — a transient DB hiccup must block deletion, not allow it.
+    // error, a transient DB hiccup must block deletion, not allow it.
     // EVERY row is scanned (not just the newest): an abandoned pending row
     // can shadow an older active one.
     const { data: subRows, error: subError } = await db
@@ -192,7 +192,7 @@ export async function DELETE(request: Request) {
         }
       } else {
         // Mirrors admin delete-client: a non-numeric id (e.g. a corrupted
-        // row) means we can't stop the VM through Hostinger — surface it
+        // row) means we can't stop the VM through Hostinger, surface it
         // loudly so an operator can chase the orphan before it bills on.
         logger.warn("account.delete: hostinger_vps_id is non-numeric; cannot stop VM", {
           businessId,
@@ -220,7 +220,7 @@ export async function DELETE(request: Request) {
     );
 
     // Snapshot the Nango connections BEFORE the row delete (the cascade
-    // removes the rows) but revoke them AFTER it commits — a failed delete
+    // removes the rows) but revoke them AFTER it commits, a failed delete
     // must leave the tenant fully intact, never active with dead
     // integrations. Nango's side would otherwise outlive the tenant and
     // burn account-wide quota forever.
@@ -228,7 +228,7 @@ export async function DELETE(request: Request) {
 
     // Delete the business row FIRST, then the auth user. If the auth delete
     // fails afterwards, the leftover login is harmless (it owns nothing and
-    // the user asked for deletion themselves) — whereas the reverse order
+    // the user asked for deletion themselves), whereas the reverse order
     // would lock the owner out while their data still exists, with no way
     // to sign in and retry.
     await deleteBusiness(businessId, db);

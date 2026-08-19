@@ -1,10 +1,10 @@
 /**
- * Agents — DB access.
+ * Agents, DB access.
  *
  * `business_agents` holds the reusable task templates (name + instructions +
  * output format); `agent_runs` holds every execution with its input binding
  * and produced artifact. Both tables are service-role-only (RLS on, no
- * policies) — every access flows through the Next.js server after its own
+ * policies), every access flows through the Next.js server after its own
  * auth checks, matching the business_documents posture.
  */
 
@@ -48,7 +48,7 @@ export type AgentRunRow = {
   input_storage_path: string | null;
   /**
    * Every attachment of the run, in order (the scalar input_* columns
-   * mirror the first). NULL on pre-multi-file rows — readers treat that as
+   * mirror the first). NULL on pre-multi-file rows, readers treat that as
    * a single-file run described by the scalars.
    */
   input_files: AgentRunInputFileMeta[] | null;
@@ -224,10 +224,10 @@ export async function getAgentRun(
 }
 
 /**
- * Storage paths of every archived run input for an agent — collected before
+ * Storage paths of every archived run input for an agent, collected before
  * an agent delete so the cascade doesn't orphan objects in the bucket.
  * Multi-file runs archive one object per fresh upload (input_files), while
- * the scalar column carries only the first — read both and de-dup.
+ * the scalar column carries only the first, read both and de-dup.
  */
 export async function listAgentRunInputPaths(
   businessId: string,

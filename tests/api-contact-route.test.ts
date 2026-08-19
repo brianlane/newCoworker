@@ -1,5 +1,5 @@
 /**
- * POST /api/contact — the public contact form. Focus: the additive
+ * POST /api/contact, the public contact form. Focus: the additive
  * contact-form-sink flow event (HQ dogfooding) around the pre-existing
  * email-only behavior.
  */

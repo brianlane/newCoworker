@@ -5,7 +5,7 @@
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
  * Promotes due scheduled campaigns (snapshotting their audiences) and
- * drains each sending campaign's pending recipients in bounded batches —
+ * drains each sending campaign's pending recipients in bounded batches,
  * see src/lib/campaigns/send.ts.
  */
 

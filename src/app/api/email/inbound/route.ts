@@ -9,7 +9,7 @@
  * Auth: `Authorization: Bearer <EMAIL_INBOUND_SECRET>`.
  *
  * Always returns 200 on accepted input (even for unknown recipients) so
- * Cloudflare doesn't retry/bounce — mail is already delivered at the edge by
+ * Cloudflare doesn't retry/bounce, mail is already delivered at the edge by
  * the time we run. Only a genuinely malformed body (400) or an internal fault
  * (500) is surfaced, and the worker treats a non-200 as retryable.
  */

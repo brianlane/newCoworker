@@ -265,7 +265,7 @@ describe("savePendingMetaConnection", () => {
     expect(inserted.user_token_encrypted).toBe("enc(user-token)");
     expect(inserted.status).toBe("pending");
     // page_id / page_name / dataset_id are deliberately untouched by the
-    // pending reset (a fresh insert simply has none) — the page token is
+    // pending reset (a fresh insert simply has none), the page token is
     // always cleared so a pending row can never send.
     expect(inserted).not.toHaveProperty("page_id");
     expect(inserted).not.toHaveProperty("dataset_id");

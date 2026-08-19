@@ -12,7 +12,7 @@ import {
  * Re-entry gate: a flow with options.allowReentry === false never re-enrolls
  * a contact who already has a (non-test) run of it. Identity is
  * cross-channel: the caller's phone/email key(s) are expanded through the
- * business's contact records before matching prior runs. Best-effort — a
+ * business's contact records before matching prior runs. Best-effort, a
  * lookup failure fails OPEN (the run enqueues) because a dropped lead is
  * worse than a duplicate follow-up.
  */
@@ -109,7 +109,7 @@ describe("hasPriorRunForLead", () => {
         {
           data: [
             { customer_e164: LEAD, email: LEAD_EMAIL, alias_e164s: ["+16025550999"] },
-            // A second matched row with no aliases (merged duplicate) — its
+            // A second matched row with no aliases (merged duplicate), its
             // null alias list and already-known keys are handled quietly.
             { customer_e164: LEAD, email: null, alias_e164s: null }
           ],
@@ -411,7 +411,7 @@ describe("duplicateLeadRunExists", () => {
  * Var-keyed identity (options.dedupeLeadRunsByVar). HomeLight, Aug 11 2026:
  * the same alert text arrived twice as two inbound events six seconds apart,
  * both runs texted the same teammate, and both parked waiting on a reply.
- * dedupeLeadRuns alone could not help — it bails without a phone or email,
+ * dedupeLeadRuns alone could not help, it bails without a phone or email,
  * and HomeLight reads those off the portal page AFTER its first comm step.
  * Its referral link is unique per lead and is extracted at step 0.
  */

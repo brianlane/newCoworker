@@ -1,7 +1,7 @@
 /**
  * AiFlow safety preferences (Settings page).
  *
- * POST { businessId, protectStaffContacts } — toggle whether update_contact
+ * POST { businessId, protectStaffContacts }, toggle whether update_contact
  * flow steps may write lead-state tags on owner/employee contacts. Default is
  * protected (true); see migration 20260813000000_aiflow_staff_tag_protection.
  *

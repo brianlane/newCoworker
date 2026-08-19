@@ -3,7 +3,7 @@
  *
  * Privacy is the property that matters most: the feed URL is a plaintext
  * capability the owner forwards to staff, so the ICS must carry display
- * names only — a forwarded calendar link must not become a contact-list
+ * names only, a forwarded calendar link must not become a contact-list
  * leak.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,7 +65,7 @@ describe("renderCalendarFeed", () => {
       row({ attendee_name: "Sam +15551234567 sam@example.org" })
     ] as never);
     const ics = (await renderCalendarFeed(BIZ, NOW)) as string;
-    // Only what the name field itself carries appears — nothing is joined
+    // Only what the name field itself carries appears, nothing is joined
     // in from elsewhere.
     expect(ics.match(/15551234567/g)).toHaveLength(1);
   });

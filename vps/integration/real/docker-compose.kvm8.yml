@@ -1,4 +1,4 @@
-# Real stack for integration tests — standard (KVM 8) resource profile.
+# Real stack for integration tests, standard (KVM 8) resource profile.
 # Same Rowboat git pin as kvm2; adds jobs-worker + qdrant like bootstrap.sh standard tier.
 
 name: kvm8-int
@@ -65,7 +65,7 @@ services:
 
   rowboat:
     build:
-      # Pinned to the brianlane/rowboat fork to mirror prod bootstrap.sh —
+      # Pinned to the brianlane/rowboat fork to mirror prod bootstrap.sh,
       # see vps/scripts/bootstrap.sh for the rationale. Same SHA stamped in
       # vps/integration/real/rowboat-git-ref.
       context: https://github.com/brianlane/rowboat.git#f422019ed5d316e402487423fda717d9e9ae091b:apps/rowboat

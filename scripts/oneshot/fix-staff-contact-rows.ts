@@ -206,8 +206,8 @@ for (const row of deletable) {
   // Optimistic concurrency: `updated_at` is stamped by a BEFORE UPDATE trigger
   // on contacts, so matching it covers EVERY keepReason condition at once (and
   // any field a future column adds). A real interaction landing between the
-  // audit read and this write — an inbound text bumping the counters, a tag,
-  // a summarizer pass — moves it and the delete becomes a no-op. The shape
+  // audit read and this write, an inbound text bumping the counters, a tag,
+  // a summarizer pass, moves it and the delete becomes a no-op. The shape
   // columns are re-asserted alongside it so the guarantee is readable in the
   // query itself rather than resting on one timestamp.
   const { data, error } = await db

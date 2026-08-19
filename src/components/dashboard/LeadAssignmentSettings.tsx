@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/Card";
 
 /**
  * Employees-page card for the lead assignment mode (Truly feedback Issue 7).
- * OFF (default): offer-and-claim — the next roster member in rotation is
+ * OFF (default): offer-and-claim, the next roster member in rotation is
  * texted an offer and accepts with "1", so a lead is never silently assigned
  * to someone unavailable. ON: the rotation pick is assigned immediately with
  * an FYI text; Tasks shows the lead as assigned instead of Unclaimed.

@@ -4,18 +4,18 @@
  * The SMS twin of src/lib/email/replay.ts. When an sms-triggered flow is
  * disabled (or doesn't exist yet), inbound texts still land in
  * `sms_inbound_jobs` and get the default Coworker reply, but no flow run is
- * enqueued — the lead is never filed or worked by the automation. Once the
+ * enqueued, the lead is never filed or worked by the automation. Once the
  * owner (re-)enables the flow, this module replays a recent window of
  * inbound texts: each one is re-evaluated against the flow's SMS triggers
  * EXACTLY like the live path (`evaluateAndEnqueueAiFlows` in
- * telnyx-sms-inbound) — same correlation-window semantics, evaluated at the
- * message's original receive time — and matches are enqueued as BACKFILL
+ * telnyx-sms-inbound), same correlation-window semantics, evaluated at the
+ * message's original receive time, and matches are enqueued as BACKFILL
  * runs. The worker's `upsert_customer` step ends a backfill run without
  * outreach when the lead already exists as a contact, so a replay can never
  * double-text someone the business already reached.
  *
- * Idempotent: the dedupe key is the message's Telnyx event id — the SAME key
- * the live webhook enqueue uses — so a replay can never duplicate a run the
+ * Idempotent: the dedupe key is the message's Telnyx event id, the SAME key
+ * the live webhook enqueue uses, so a replay can never duplicate a run the
  * webhook already queued, and re-running the replay is a no-op.
  *
  * Unlike email_log there is no flow/run stamp column on sms_inbound_jobs;
@@ -69,12 +69,12 @@ export type ReplaySmsInput = {
 export type ReplaySmsOutcome = {
   jobId: string;
   /**
-   * enqueued  — a backfill run was queued for this text.
-   * duplicate — a run with this message's event id already exists on the
+   * enqueued, a backfill run was queued for this text.
+   * duplicate, a run with this message's event id already exists on the
    *             flow (live delivery or an earlier replay); nothing new queued.
-   * skipped   — no usable sender, or the flow's trigger conditions don't
+   * skipped, no usable sender, or the flow's trigger conditions don't
    *             match this message's correlation window.
-   * error     — this row's enqueue failed; other rows still apply.
+   * error, this row's enqueue failed; other rows still apply.
    */
   status: "enqueued" | "duplicate" | "skipped" | "error";
   reason?: string;
@@ -90,7 +90,7 @@ export type ReplaySmsSummary = {
   errors: number;
   /**
    * True when the window held more texts than one request evaluates (the
-   * newest MAX_REPLAY_SMS win, or the row load hit its cap) — older texts
+   * newest MAX_REPLAY_SMS win, or the row load hit its cap), older texts
    * were NOT checked. The caller should surface "narrow the window / run
    * again" rather than letting the summary read as complete.
    */
@@ -100,7 +100,7 @@ export type ReplaySmsSummary = {
 
 /**
  * True when the flow starts from an inbound-SMS trigger (primary OR one of
- * the extra `triggers`) — the route's gate, mirroring
+ * the extra `triggers`), the route's gate, mirroring
  * flowHasTenantEmailTrigger for the email replay.
  */
 export function flowHasSmsTrigger(definition: unknown): boolean {
@@ -109,7 +109,7 @@ export function flowHasSmsTrigger(definition: unknown): boolean {
 
 /**
  * Every structurally usable SMS trigger in the definition's OR set, in
- * declaration order — the same set the live webhook iterates (first match
+ * declaration order, the same set the live webhook iterates (first match
  * wins). Malformed entries (no conditions array) are dropped, matching
  * isExecutableTrigger's posture.
  */
@@ -176,7 +176,7 @@ function parseInboundJob(row: InboundJobRow): ParsedInbound {
 
 /**
  * Replay recent inbound texts through `flow` as backfill runs. Rows apply
- * independently — one failure never blocks the rest. The caller (API route)
+ * independently, one failure never blocks the rest. The caller (API route)
  * has already verified the flow: exists for this business, enabled, carries
  * an SMS trigger, and files the lead before any outreach
  * (flowUpsertsBeforeOutreach).
@@ -242,14 +242,14 @@ export async function replayInboundSms(
   if (candidates.length === 0) return summary;
 
   // Live parity: an inbound text consumed by a parked wait_for_reply run
-  // never reaches trigger evaluation (the flow owns that turn — see
+  // never reaches trigger evaluation (the flow owns that turn, see
   // resumeAwaitingReplyRun in telnyx-sms-inbound), so a replay must not
   // treat it as a fresh lead either. The consumption isn't stamped on the
   // job row, but the resumed run persists it: waiting_reply.result="reply",
   // waiting_reply.from=<sender>, and vars[save_as]=<the consumed text>.
   // Rebuild that as a (sender, text) set and skip matching candidates.
   // Conservative on purpose: if the same sender sent the identical text
-  // twice and one answered a wait, both are skipped — skipping a lead beats
+  // twice and one answered a wait, both are skipped, skipping a lead beats
   // double-processing one. A read failure fails the request loudly (replay
   // is an explicit owner action) rather than risking duplicates.
   const senders = [...new Set(candidates.flatMap((c) => (c.from ? [c.from] : [])))];
@@ -320,7 +320,7 @@ export async function replayInboundSms(
       });
       continue;
     }
-    // The sender's messages up to (and including) this one — drawn from
+    // The sender's messages up to (and including) this one, drawn from
     // everything loaded (candidates + pre-window context), chronological.
     // evaluateSmsTrigger applies each trigger's own window cutoff against
     // nowMs = the original receive time, reproducing the live evaluation.
@@ -367,7 +367,7 @@ export async function replayInboundSms(
       if (!run) {
         // The live webhook (or an earlier replay) already queued this
         // message. A FAILED (or key-holding canceled) run still owns the
-        // dedupe key without having recovered anything — surface that
+        // dedupe key without having recovered anything, surface that
         // honestly instead of counting it as handled.
         const { data: existingRun, error: findErr } = await db
           .from("ai_flow_runs")

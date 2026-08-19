@@ -4,7 +4,7 @@
  * pair.
  *
  * Why this exists: the summarizer module lives in src/lib (Next.js
- * runtime) — it imports the platform Supabase client, the Rowboat
+ * runtime), it imports the platform Supabase client, the Rowboat
  * chat client, the business-config helper, etc. that aren't
  * available from a Deno Edge function. The Edge cron sweep
  * (`customer-memory-summarize-sweep`) walks the queue and posts here

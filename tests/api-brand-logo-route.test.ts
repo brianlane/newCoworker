@@ -1,5 +1,5 @@
 /**
- * GET /api/brand-logo — serves the brand logo behind the public /logo.png URL.
+ * GET /api/brand-logo, serves the brand logo behind the public /logo.png URL.
  *
  * The point of this route is that a response Next produces keeps our
  * Access-Control-Allow-Origin, whereas the platform's static serving of

@@ -91,7 +91,7 @@ describe("getAccountDeletionImpact", () => {
 
     const impact = await getAccountDeletionImpact(BIZ, db as never);
 
-    // Revoked invites don't lose anything on delete — the members count
+    // Revoked invites don't lose anything on delete, the members count
     // must exclude them, matching listAccessibleBusinesses.
     expect(db.neqCalls).toEqual([
       { table: "business_members", column: "status", value: "revoked" }
@@ -207,7 +207,7 @@ describe("resolveAccountDeletionEligibility", () => {
         NOW
       )
     ).toEqual({ eligible: false, reason: "checkout_in_flight" });
-    // Fully-canceled rows keep their Stripe id but are still deletable —
+    // Fully-canceled rows keep their Stripe id but are still deletable,
     // the cancellation lifecycle already tore Stripe down.
     expect(
       resolveAccountDeletionEligibility(

@@ -228,7 +228,7 @@ describe("api/onboard/draft route", () => {
   });
 
   it("fails CLOSED (500, no upsert) when the business existence lookup errors", async () => {
-    // A transient DB failure must not be read as "business does not exist" —
+    // A transient DB failure must not be read as "business does not exist",
     // that would skip the token requirement and reopen the pre-claim window.
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
     vi.mocked(businessExists).mockRejectedValue(new Error("businessExists: db down"));

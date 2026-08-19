@@ -20,7 +20,7 @@ type Props = {
   /**
    * Per-business 10DLC (A2P SMS) carrier-registration status. When `pending`
    * or `rejected` we show a callout explaining why outbound SMS may not be
-   * delivering yet — Verizon/AT&T/T-Mobile silently drop A2P traffic from
+   * delivering yet, Verizon/AT&T/T-Mobile silently drop A2P traffic from
    * unregistered numbers, and that failure mode is otherwise invisible to
    * the owner. Pass `null` if 10DLC isn't configured at the platform level
    * yet (e.g. during cold-start before the campaign is created).

@@ -5,7 +5,7 @@
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
  * Promotes due scheduled posts to published and fans out the side effects
- * (subscriber email + Instagram cross-post) — see src/lib/blog/publish.ts.
+ * (subscriber email + Instagram cross-post), see src/lib/blog/publish.ts.
  */
 
 import { assertCronAuth } from "@/lib/cron-auth";

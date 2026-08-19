@@ -40,7 +40,7 @@ export type SmsTrigger = {
 };
 
 /**
- * Manual-only trigger: the flow never starts on its own — the owner starts it
+ * Manual-only trigger: the flow never starts on its own, the owner starts it
  * from the dashboard "Run now" button (optionally with input text that
  * populates {{trigger.windowText}} / {{trigger.url}}). Any flow, regardless
  * of channel, can ALSO be run manually; this channel just opts out of every
@@ -89,7 +89,7 @@ export type EmailTrigger = {
 /**
  * Inbound trigger on the AI coworker's OWN dedicated mailbox
  * (`<tenant>@<platform domain>`). Push-based (Cloudflare Email Routing ->
- * /api/email/inbound enqueues the run) so there is NO connectionId — the
+ * /api/email/inbound enqueues the run) so there is NO connectionId, the
  * mailbox is implicit per business. Same condition semantics as EmailTrigger.
  */
 export type TenantEmailTrigger = {
@@ -102,7 +102,7 @@ export type TenantEmailTrigger = {
  * Inbound-webhook trigger: an authenticated POST to the public API
  * (`/api/public/v1/flow-events`, bearer = the tenant's `nck_` key) enqueues a
  * run for every enabled webhook flow whose conditions match. Push-based like
- * TenantEmailTrigger — the endpoint flattens the event payload into
+ * TenantEmailTrigger, the endpoint flattens the event payload into
  * windowText, so extract_text and templating work unchanged. This is how
  * external lead sources (e.g. Meta Lead Ads via a Zapier/Make bridge) start a
  * flow without a phone/email/browser trigger.
@@ -144,7 +144,7 @@ export type CalendarTrigger = {
 
 /**
  * Inbound-voice trigger: a call FROM `fromE164` to a business voice number fires
- * this flow. Unlike every other channel it does NOT enqueue an ai_flow_run — the
+ * this flow. Unlike every other channel it does NOT enqueue an ai_flow_run, the
  * Telnyx voice webhook resolves the matching enabled voice flow in real time and
  * drives the call-control state machine from its compiled steps. The async
  * worker never claims a voice flow (the cron/sms/email enqueue paths skip them).
@@ -160,7 +160,7 @@ export type VoiceTrigger = {
   /**
    * Dynamic caller match: the flow fires when the caller's number is one of the
    * referenced person's LIVE numbers (employee phone, or contact number +
-   * merge aliases) — resolved by the voice webhook at call time.
+   * merge aliases), resolved by the voice webhook at call time.
    */
   fromRef?: ContactRef;
   /**
@@ -169,7 +169,7 @@ export type VoiceTrigger = {
    */
   direction?: "outbound";
   /**
-   * Optional auto-dial schedule (OUTBOUND only) — same daily/interval shape as
+   * Optional auto-dial schedule (OUTBOUND only), same daily/interval shape as
    * ScheduleTrigger. When set, the ai-flow-worker sweep places the call on each
    * due occurrence (exactly-once via voice_outbound_dial_log). Omitted ⇒ manual.
    */
@@ -192,7 +192,7 @@ export type ContactCreatedTrigger = {
 };
 
 /**
- * Contact-event trigger: a tag was added to / removed from a contact —
+ * Contact-event trigger: a tag was added to / removed from a contact,
  * dashboard edits and update_contact flow steps both fire it. `tag` narrows
  * to one tag (case-insensitive); omitted matches any tag. `change` defaults
  * to "added". Loop-guarded: the flow whose own update_contact step wrote the
@@ -266,7 +266,7 @@ export type ExtractLink = {
  * the named custom integration's stored credentials before reading the page. This
  * is what lets a flow read a login-gated lead page (e.g. a ReferralExchange match
  * behind the agent's account). Requires the per-tenant render service
- * (AIFLOW_RENDER_URL_TEMPLATE) — a static fetch cannot perform a login. The
+ * (AIFLOW_RENDER_URL_TEMPLATE), a static fetch cannot perform a login. The
  * render service only READS the page; it never clicks accept/confirm-style actions.
  */
 export type BrowseAuth = {
@@ -295,7 +295,7 @@ export type StepCondition = {
   equals?: string;
   /** Substring match. */
   contains?: string;
-  /** Whole-value (case-insensitive) inequality — the inverse of `equals`. */
+  /** Whole-value (case-insensitive) inequality, the inverse of `equals`. */
   notEquals?: string;
   /** Default true. Set false for case-sensitive matching. */
   caseInsensitive?: boolean;
@@ -306,7 +306,7 @@ export type StepCondition = {
  * [noSendAfter, resumeAt) local window the worker never sends the SMS: the
  * whole run defers until `resumeAt` via ai_flow_runs.earliest_claim_at (and
  * then texts). When `emailFallbackVar` names a var holding a lead email, the
- * same body is additionally emailed right away — the lead hears back
+ * same body is additionally emailed right away, the lead hears back
  * overnight AND still gets the morning text.
  */
 export type SendSmsQuietHours = {
@@ -463,7 +463,7 @@ export type PlaceCallTransfer = {
   toRef?: ContactRef;
   /**
    * Pre-alert SMS template texted to the transfer target the moment the AI
-   * initiates the transfer ("LIVE TRANSFER incoming — pick up!"). Rendered
+   * initiates the transfer ("LIVE TRANSFER incoming, pick up!"). Rendered
    * against run vars when the call is placed.
    */
   preSmsTemplate?: string;
@@ -487,7 +487,7 @@ export type FlowStep =
        * When true, the render service also captures a screenshot of the page.
        * The worker uploads it to private storage; later steps attach it via
        * `route_to_team.attachScreenshot` (MMS) or `send_email.attachScreenshot`.
-       * Requires the render service — a static fetch cannot screenshot.
+       * Requires the render service, a static fetch cannot screenshot.
        */
       screenshot?: boolean;
       /**
@@ -500,10 +500,10 @@ export type FlowStep =
       /**
        * Terminal-state guard (mirrors browse_action.skipWhenText): when the
        * fetched page contains this marker text (case-insensitive substring of
-       * the page text/source), there is nothing to read — e.g. a lead another
+       * the page text/source), there is nothing to read, e.g. a lead another
        * agent already claimed shows an "already been claimed" banner instead of
-       * the contact card. The run then ENDS gracefully — the step is recorded
-       * "skipped" and the run finishes as done — instead of extracting empty
+       * the contact card. The run then ENDS gracefully, the step is recorded
+       * "skipped" and the run finishes as done, instead of extracting empty
        * fields and failing a downstream step.
        */
       skipWhenText?: string;
@@ -528,7 +528,7 @@ export type FlowStep =
        * Browser-free extraction: run the SAME Gemini structured extraction as
        * browse_extract, but over the inbound message text
        * ({{trigger.windowText}}) instead of a fetched page. Produces
-       * {{vars.<field>}} for each field. No URL/auth/screenshot — use when the
+       * {{vars.<field>}} for each field. No URL/auth/screenshot, use when the
        * triggering message already contains the lead details.
        */
       type: "extract_text";
@@ -539,7 +539,7 @@ export type FlowStep =
       id: string;
       /**
        * Read a recent message from a connected mailbox (workspace_oauth_connections.id
-       * via Nango Gmail/Outlook — the same connections the email trigger uses) and
+       * via Nango Gmail/Outlook, the same connections the email trigger uses) and
        * run the SAME Gemini extraction as extract_text over it. The worker calls
        * back into the app (/api/internal/aiflow-email-fetch, which holds the Nango
        * client) to find the most recent inbox message whose sender contains
@@ -575,8 +575,8 @@ export type FlowStep =
     }
   | {
       /**
-       * Read typed fields out of a DOCUMENT — the triggering email's PDF/text
-       * attachment ({{trigger.document}}, the plan-time default) — via the
+       * Read typed fields out of a DOCUMENT, the triggering email's PDF/text
+       * attachment ({{trigger.document}}, the plan-time default), via the
        * platform's Gemini document pipeline (the worker proxies to
        * /api/internal/aiflow-doc-extract). Produces {{vars.<field>}}; a
        * trigger carrying no document SKIPS the step. `fileAs` additionally
@@ -591,7 +591,7 @@ export type FlowStep =
       /**
        * Filing options. The record sinks (contactPhoneVar /
        * recordFieldsFromExtraction / renewalDateField) turn the filed copy
-       * into a structured contact record — see the schema comments.
+       * into a structured contact record, see the schema comments.
        */
       fileAs?: {
         titleTemplate: string;
@@ -649,7 +649,7 @@ export type FlowStep =
   | {
       id: string;
       /**
-       * WhatsApp outbound to a contact or teammate — recipient semantics
+       * WhatsApp outbound to a contact or teammate, recipient semantics
        * mirror send_sms (minus replyToGroup/MMS). Delivery is delegated to
        * the platform's internal whatsapp-send endpoint (24h-window aware:
        * free-form text inside, approved utility template outside).
@@ -703,12 +703,12 @@ export type FlowStep =
       /**
        * Attach the screenshot captured by an earlier `browse_extract` with
        * `screenshot: true`. Silently sends without an attachment when no
-       * screenshot was captured. Platform (Resend) sends only — not combinable
+       * screenshot was captured. Platform (Resend) sends only, not combinable
        * with `fromConnectionId` (the owner-mailbox path is plain text).
        */
       attachScreenshot?: boolean;
       /**
-       * Template resolving to a `business-docs:<documentId>` ref to attach —
+       * Template resolving to a `business-docs:<documentId>` ref to attach,
        * a picked library document or a run_agent-generated one via
        * `business-docs:{{vars.<saveAs>_document_id}}`. A blank-rendered ref
        * sends without the attachment; a non-blank ref that can't resolve
@@ -797,7 +797,7 @@ export type FlowStep =
        * Share a business document with the lead: mint an expiring tokenized
        * link (business_document_shares) for `documentId` and deliver it via
        * SMS or email. The worker re-checks at execution that the document is
-       * ready, client-audience, and NOT expired — the AiFlow-side half of
+       * ready, client-audience, and NOT expired, the AiFlow-side half of
        * the document-expiration guarantee (an expired doc fails the step
        * loudly, never silently sends a stale link).
        */
@@ -823,10 +823,10 @@ export type FlowStep =
   | {
       id: string;
       /**
-       * Run a saved Agent (business_agents — a reusable AI instruction set
+       * Run a saved Agent (business_agents, a reusable AI instruction set
        * the owner authored on /dashboard/agents) against flow content:
        * either the rendered `input` template (text) or a DOCUMENT
-       * (`documentTemplate` — an email-attachments:<path> / business-docs:
+       * (`documentTemplate`, an email-attachments:<path> / business-docs:
        * <id> ref, usually {{trigger.document}}) is transformed per the
        * agent's instructions on central Gemini (via the platform's
        * gateway-guarded run-agent endpoint) and the artifact lands in
@@ -950,7 +950,7 @@ export type FlowStep =
       /**
        * Pin the offer to the single roster member with this name (e.g. all
        * seller leads go straight to one agent). Falls back to the owner when
-       * that member is missing/opted out — never silently to someone else.
+       * that member is missing/opted out, never silently to someone else.
        */
       agentName?: string;
       /**
@@ -974,7 +974,7 @@ export type FlowStep =
       agentRef?: ContactRef;
       /**
        * BROADCAST mode: offer the lead to ALL of these roster members at the
-       * same time, sharing one claim deadline — first "1" wins, a "2" retires
+       * same time, sharing one claim deadline, first "1" wins, a "2" retires
        * just that teammate, everyone passing (or the deadline lapsing) falls
        * back to the owner. The list IS the offer set: broadcast never
        * escalates into rotation. Mutually exclusive with agentName/agentRef.
@@ -982,7 +982,7 @@ export type FlowStep =
       agentNames?: string[];
       /**
        * BROADCAST-ALL mode: offer EVERY active, available roster member at
-       * once — resolved at EXECUTION time (never desyncs as the roster
+       * once, resolved at EXECUTION time (never desyncs as the roster
        * changes), capped by the worker at the same 10 recipients agentNames
        * allows (rotation order; members beyond the cap are covered by the
        * owner fallback). Same claim semantics as agentNames. Mutually
@@ -1013,7 +1013,7 @@ export type FlowStep =
       /**
        * Keep-for-owner rule: when this condition matches on FIRST entry (e.g.
        * `{ var: "price_band", equals: "over_1m" }` for $1M+ leads), the step
-       * offers NOBODY — it texts the owner `ownerDirectTemplate` instead and
+       * offers NOBODY, it texts the owner `ownerDirectTemplate` instead and
        * sets claimed_agent="none" so claim-gated later steps skip. Evaluated
        * only before any offer goes out; a resumed run (claim/pass/timeout)
        * never re-branches.
@@ -1025,7 +1025,7 @@ export type FlowStep =
        * Keep-for-owner nudges: after the ownerDirect alert the run parks
        * (awaiting_agent on the owner's forward number) and the owner gets an
        * ALL-CAPS reminder at 10 minutes and a final one at 30 minutes,
-       * unless they reply "1" (ack — stops the nudges). claimed_agent stays
+       * unless they reply "1" (ack, stops the nudges). claimed_agent stays
        * "none" throughout; the owner's "1" is an acknowledgement, never a
        * claim. Only meaningful alongside ownerDirectWhen.
        */
@@ -1107,8 +1107,8 @@ export type FlowStep =
        * Terminal-state guard: when a UI action fails AND the loaded page contains
        * this marker text (case-insensitive substring of the page source), the
        * automation's goal is already met (e.g. a lead another agent already
-       * claimed, so there's no "Accept" button). The run then ENDS gracefully —
-       * the step is recorded "skipped" and the run finishes as done — instead of
+       * claimed, so there's no "Accept" button). The run then ENDS gracefully,
+       * the step is recorded "skipped" and the run finishes as done, instead of
        * dead-lettering as a failure. Use for pages whose action can be a legitimate
        * no-op (e.g. Clever's "this referral opportunity has already been claimed").
        */
@@ -1177,7 +1177,7 @@ export type FlowStep =
        * wait_for_reply's saveAs) or, when omitted, the triggering message
        * ({{trigger.windowText}}). The chosen category VALUE lands in
        * {{vars.<saveAs>}}; when the text is empty or nothing fits, the
-       * reserved fallback "unclear" lands instead — so branches always have a
+       * reserved fallback "unclear" lands instead, so branches always have a
        * decidable value. Classification runs on the same spend-gated Gemini
        * extraction path as extract_text.
        */
@@ -1194,7 +1194,7 @@ export type FlowStep =
   | {
       id: string;
       /**
-       * Update the contact's TAGS (the dashboard's lead-state labels — "New
+       * Update the contact's TAGS (the dashboard's lead-state labels, "New
        * Lead", "Engaged", "Appointment Scheduled", ...) from a flow, so
        * automations can maintain the contact lifecycle without manual
        * bookkeeping. `phoneVar` identifies the contact (E.164 or a loose NANP
@@ -1230,12 +1230,12 @@ export type FlowStep =
       id: string;
       /**
        * Generate an AI image from the rendered prompt template and save a
-       * signed URL to the stored image into {{vars.<saveAs>}} — consumable by
+       * signed URL to the stored image into {{vars.<saveAs>}}, consumable by
        * a later send_sms (mediaUrlVar → MMS) or embedded in a send_email
        * body. Runs on the spend-gated Gemini path (flat per-image price into
        * the shared AI budget; hard-refused when the budget is exhausted).
        * AiFlow runs are exempt from the conversational per-session image
-       * limit — flows are owner-authored and explicitly enabled.
+       * limit, flows are owner-authored and explicitly enabled.
        */
       type: "generate_image";
       promptTemplate: string;
@@ -1257,7 +1257,7 @@ export type FlowStep =
        * `rememberUrlKeyedByVar`) for the same person, into {{vars.<saveAs>}}.
        * Keys are gathered from the inbound group thread participants
        * (`keyFromTrigger: "participants"`) and/or vars naming phone numbers
-       * (`keyVars`). Saves "" when nothing matches — guard the consuming step
+       * (`keyVars`). Saves "" when nothing matches, guard the consuming step
        * with a `when` so it skips on a miss.
        */
       type: "recall_url";
@@ -1308,10 +1308,10 @@ export type FlowStep =
        *   - untilTime ("HH:MM") + timezone: wait until the next occurrence of
        *     that local wall-clock time;
        *   - untilDateTemplate: a template rendering to an ISO date/datetime
-       *     (e.g. "{{vars.renewal_date}}") — wake then (a past/unparseable
+       *     (e.g. "{{vars.renewal_date}}"), wake then (a past/unparseable
        *     render fails OPEN: the step skips with a note);
        *   - relativeToTemplate + offsetMinutes: a template rendering to an
-       *     ISO datetime plus a signed offset — negative = BEFORE it (the
+       *     ISO datetime plus a signed offset, negative = BEFORE it (the
        *     GHL "2 hours before the appointment" wait).
        * Implemented as an earliest_claim_at deferral (same machinery as SMS
        * quiet hours): nothing is sent, no attempt is burned, and the worker
@@ -1332,12 +1332,12 @@ export type FlowStep =
       id: string;
       /**
        * Arithmetic on numbers and dates: compute `left <operation> right`
-       * and save the result into {{vars.<saveAs>}} — usable by later `when`
+       * and save the result into {{vars.<saveAs>}}, usable by later `when`
        * guards and branch conditions (lead scoring, "renewal within 30
        * days"). left/right are templates rendered against the run scope.
        * Number ops parse loose numerics ("$1,200" → 1200); date ops parse
        * ISO datetimes. An unparseable operand (or divide-by-zero) saves the
-       * sentinel "not_a_number" instead of failing the run — a data gap is
+       * sentinel "not_a_number" instead of failing the run, a data gap is
        * not a flow bug, and branches can test for it.
        */
       type: "math";
@@ -1368,7 +1368,7 @@ export type FlowStep =
        * its power is the JUMP: when a watched external event (reply, booking,
        * tag, claim) lands for the run's lead while the run is queued/deferred
        * or parked awaiting a reply, the run fast-forwards straight to this
-       * step — every step in between is recorded "skipped" (goal_jump). This
+       * step, every step in between is recorded "skipped" (goal_jump). This
        * is "stop nurturing people who already converted": follow-up sends
        * between here and the current step never fire once the goal is hit.
        * Trunk-only (never inside a branch arm; enforced at author time) so a
@@ -1388,11 +1388,11 @@ export type FlowStep =
        * Park the run until the phone number held in `phoneVar` texts back (or
        * `timeoutMinutes` elapses). The inbound webhook resumes the run with
        * the reply text in {{vars.<saveAs>}} and SUPPRESSES the default AI
-       * conversational reply for that message — the flow owns the turn, like
+       * conversational reply for that message, the flow owns the turn, like
        * options.suppressDefaultReply. On timeout the sweep resumes with
        * {{vars.<saveAs>}} = "no_reply" so later steps branch with
        * `when: { var: saveAs, equals/notEquals "no_reply" }`. An unusable
-       * phone in phoneVar resolves immediately to "no_reply" — a lead-data
+       * phone in phoneVar resolves immediately to "no_reply", a lead-data
        * gap is not a flow bug.
        */
       type: "wait_for_reply";
@@ -1424,7 +1424,7 @@ export type FlowStep =
        *   - "no_answer":   the call rang out / was never answered (also the
        *                    timeout-sweep sentinel for a lost webhook);
        *   - "not_placed":  the callee phone was missing/unusable (lead-data
-       *                    gap — skip, not a failure) or origination refused
+       *                    gap, skip, not a failure) or origination refused
        *                    before dialing;
        *   - "failed":      origination failed after validation.
        * Budget is enforced exactly like every outbound AI call (pre-dial probe
@@ -1439,7 +1439,7 @@ export type FlowStep =
       /**
        * What the AI already KNOWS about the person (var-templated, e.g.
        * "Name: {{vars.lead_name}}. Property: {{vars.lead_address}}."). Injected
-       * into the call's system prompt with a never-re-ask rule — without it
+       * into the call's system prompt with a never-re-ask rule, without it
        * the AI asks for details the flow already extracted ("why are you
        * asking my name if you already have it?", live test Jul 15 2026).
        */
@@ -1502,11 +1502,11 @@ export type FlowStep =
        * upserts the business's voice_expected_transfers row, and while it is
        * unexpired and unconsumed, telnyx-voice-inbound bridges any inbound
        * call that matched NO per-caller voice routing straight to the target
-       * (no AI conversation), then consumes the window — one arming transfers
+       * (no AI conversation), then consumes the window, one arming transfers
        * exactly one call. Built for referral services (e.g. Clever) whose
        * concierges call from a rotating number pool minutes after an SMS cue
        * is confirmed. A BATCH step (runs on the async worker), not a voice
-       * step — it typically sits in an SMS-triggered flow.
+       * step, it typically sits in an SMS-triggered flow.
        */
       type: "arm_voice_transfer";
       /** Exactly one of toE164 / toRef (validated at author time). */
@@ -1685,8 +1685,8 @@ export type AiFlowOptions = {
    */
   suppressDefaultReply?: boolean;
   /**
-   * When true, every browse step captures a screenshot — and a browse_action
-   * that fails captures a before-actions + at-failure pair — stored for the
+   * When true, every browse step captures a screenshot, and a browse_action
+   * that fails captures a before-actions + at-failure pair, stored for the
    * dashboard run "investigate" view. Default off so flows that don't need it
    * pay no extra capture latency/storage.
    */
@@ -1694,9 +1694,9 @@ export type AiFlowOptions = {
   /**
    * GHL "stop on response" / FUB "pause on reply": when true, an inbound SMS
    * from the lead CANCELS their pending runs of this flow (queued /
-   * awaiting_reply / awaiting_call — never the human-parked states) instead
+   * awaiting_reply / awaiting_call, never the human-parked states) instead
    * of letting the remaining follow-ups fire at someone who already answered.
-   * The one run whose wait_for_reply consumed that exact reply is exempt —
+   * The one run whose wait_for_reply consumed that exact reply is exempt,
    * it processes the reply through its authored branch logic. Applied by
    * telnyx-sms-inbound via response_stop.ts. Default off.
    */
@@ -1714,8 +1714,8 @@ export type AiFlowOptions = {
   /**
    * Post-extraction lead dedupe: when true, the worker cancels a run before
    * its FIRST communication step if the extracted lead identity
-   * (vars.lead_phone / vars.lead_email, contact-expanded) — plus the
-   * property (vars.lead_address) when both runs carry one — matches an
+   * (vars.lead_phone / vars.lead_email, contact-expanded), plus the
+   * property (vars.lead_address) when both runs carry one, matches an
    * earlier non-failed, non-test run of the SAME flow. Complements
    * allowReentry (sender-keyed, enqueue-time), which cannot see lead-source
    * relay texts that arrive with an empty or shared sender (realtor.com's
@@ -1726,7 +1726,7 @@ export type AiFlowOptions = {
   /**
    * When true, the TEXTING coworker may enroll the customer it is currently
    * texting with into this flow (the start_aiflow_for_contact tool). This is
-   * the per-flow owner opt-in behind that tool's gate — the customer-facing
+   * the per-flow owner opt-in behind that tool's gate, the customer-facing
    * model can never see or start a flow without it. Default off: nothing
    * changes for existing flows, and the SMS surface stays barred from every
    * other automation.
@@ -1762,7 +1762,7 @@ export type AiFlowOptions = {
    * webhook kicks the worker in the background right after queueing, instead of
    * leaving the run to the next tick (up to about a minute later). The tick is
    * still the retry net, so a failed kick costs only the latency it was trying
-   * to save. Default off — a kick per inbound message is a real invocation cost
+   * to save. Default off, a kick per inbound message is a real invocation cost
    * and a minute is invisible to almost every flow.
    */
   startImmediately?: boolean;
@@ -1788,7 +1788,7 @@ export type AiFlowDefinition = {
    * Additional triggers (OR semantics): the flow starts when ANY trigger in
    * [trigger, ...triggers] fires. Capped at 4 extras (5 total). Voice flows
    * stay single-trigger (they run on the real-time call path, not the batch
-   * worker) — enforced at write time by validateDefinitionSemantics.
+   * worker), enforced at write time by validateDefinitionSemantics.
    */
   triggers?: FlowTrigger[];
   steps: FlowStep[];

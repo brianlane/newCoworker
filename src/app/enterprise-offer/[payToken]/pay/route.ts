@@ -1,5 +1,5 @@
 /**
- * GET /enterprise-offer/<pay_token>/pay — hand off to Stripe Checkout for an
+ * GET /enterprise-offer/<pay_token>/pay, hand off to Stripe Checkout for an
  * enterprise deal.
  *
  * Public by design (mirrors /offer/<pay_token>/pay): the pay_token is the
@@ -7,7 +7,7 @@
  * for the setup + monthly amounts stored on the deal row (never
  * client-supplied), so the emailed link stays valid indefinitely while raw
  * Checkout URLs expire after 24h. Non-open deals bounce back to the offer
- * page, which explains the state instead of double-subscribing — and the
+ * page, which explains the state instead of double-subscribing, and the
  * webhook's atomic active-claim catches any double-pay race that slips
  * through by canceling the duplicate subscription.
  */

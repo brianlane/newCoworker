@@ -107,14 +107,14 @@ async function runIngestAndPersist(
 ): Promise<IngestPayload> {
   const usePastedHtml = Boolean(body.pastedHtml && body.pastedHtml.trim().length > 0);
   const source = usePastedHtml ? ("pasted_html" as const) : ("crawl" as const);
-  // The pasted path never fetches, so it emits no crawl events of its own —
+  // The pasted path never fetches, so it emits no crawl events of its own,
   // signal the summarize phase up front or a streaming client sits on
   // "Contacting your site…" for the whole Gemini call.
   if (usePastedHtml) onProgress?.({ type: "summarizing", pages: 1 });
   const result = usePastedHtml
     ? // WAF escape hatch: the owner pasted their homepage's page source
       // because every server-side fetch path is challenge-blocked. No
-      // crawl, no SSRF surface — same extraction/summarization pipeline.
+      // crawl, no SSRF surface, same extraction/summarization pipeline.
       await ingestWebsiteFromHtml(normalized, body.pastedHtml as string, {
         businessName: body.businessName,
         businessType: body.businessType,
@@ -126,8 +126,8 @@ async function runIngestAndPersist(
         // Meter the Gemini summary into this business's shared AI budget.
         meterBusinessId: body.businessId,
         // Deep crawl: this authenticated, once-per-onboarding (plus manual
-        // re-crawl) path covers the whole site — sitemap-seeded, up to 80
-        // pages — so the vault summary isn't limited to whatever the
+        // re-crawl) path covers the whole site, sitemap-seeded, up to 80
+        // pages, so the vault summary isn't limited to whatever the
         // homepage happens to link. The unauthenticated preview route keeps
         // the shallow default.
         maxPages: WEBSITE_INGEST_DEEP_MAX_PAGES,
@@ -161,7 +161,7 @@ async function runIngestAndPersist(
   }
 
   // Persist results. `setBusinessWebsiteMd` is race-safe against the parallel
-  // `/api/business/config` upsert that runs from checkout — it inserts a
+  // `/api/business/config` upsert that runs from checkout, it inserts a
   // skeleton row with `ignoreDuplicates` (so it never clobbers existing
   // soul/identity/memory drafts) and then targets `website_md` alone.
   await updateBusinessWebsiteUrl(body.businessId, normalized).catch((err) => {
@@ -174,7 +174,7 @@ async function runIngestAndPersist(
   await setBusinessWebsiteMd(body.businessId, result.websiteMd);
 
   // Knowledge graph (kg-source: website): entity extraction over the fresh
-  // crawl, trust 2, attributed to the site URL — marketing copy is the
+  // crawl, trust 2, attributed to the site URL, marketing copy is the
   // business's voice, but a crawl is not the owner speaking. Deferred via
   // after(); mode-gated + daily-capped inside; never blocks the ingest.
   scheduleLongFormGraphExtract(body.businessId, {
@@ -203,7 +203,7 @@ async function runIngestAndPersist(
   // would only reach Supabase; the agent's `instructions` field on
   // the VPS would still reflect the provision-time snapshot. Skipped
   // silently when the business has no VPS yet (pre-checkout draft
-  // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`. Deferred via
+  // ingest), `syncVaultToVpsAndLog` returns `no_vps_assigned`. Deferred via
   // after() so the SSH re-seed reliably completes post-response on Vercel.
   scheduleVaultSync(body.businessId);
 
@@ -244,7 +244,7 @@ export async function POST(request: Request) {
 
     if (body.stream) {
       // NDJSON progress stream. Validation/auth failures above still return
-      // plain JSON — the client only switches to line-reading after it sees
+      // plain JSON, the client only switches to line-reading after it sees
       // the ndjson content type on a 200.
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({

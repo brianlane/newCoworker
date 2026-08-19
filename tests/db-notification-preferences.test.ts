@@ -47,7 +47,7 @@ describe("db/notification-preferences", () => {
     // Opt-in by design: failed-run alerts stay silent until the owner asks.
     expect(row.aiflow_failure_alerts).toBe(false);
     // Opt-in by design: client-reply pages stay silent until the owner asks
-    // (KYP, Jul 20 2026 — enabled per tenant, never fleet-wide by default).
+    // (KYP, Jul 20 2026, enabled per tenant, never fleet-wide by default).
     expect(row.customer_reply_alerts).toBe(false);
     expect(row.category_leads).toBe(true);
     expect(row.category_team).toBe(true);
@@ -78,7 +78,7 @@ describe("db/notification-preferences", () => {
   it("initialNotificationPreferenceContactsFromSeeds fills from user email and E.164-coerces phones", () => {
     const c = initialNotificationPreferenceContactsFromSeeds({
       userEmail: "u@example.com",
-      // Too short to be a real number — coercion drops it and the seed
+      // Too short to be a real number, coercion drops it and the seed
       // falls through to the (coercible) business phone.
       authPhone: "+1999",
       ownerEmail: "owner@biz.com",
@@ -99,7 +99,7 @@ describe("db/notification-preferences", () => {
   });
 
   it("initialNotificationPreferenceContactsFromSeeds drops uncoercible phone seeds (KYP 7-digit regression)", () => {
-    // businesses.phone arrived as the 7-digit "5188192" (Jul 14 2026) —
+    // businesses.phone arrived as the 7-digit "5188192" (Jul 14 2026),
     // seeding it verbatim pre-filled an alert phone Telnyx could never
     // deliver to. An uncoercible seed must leave the field empty instead.
     const c = initialNotificationPreferenceContactsFromSeeds({
@@ -157,7 +157,7 @@ describe("db/notification-preferences", () => {
         userEmail: "",
         authPhone: " ",
         ownerEmail: "",
-        // Not a phone number at all — coercion drops it rather than
+        // Not a phone number at all, coercion drops it rather than
         // persisting a value Telnyx would reject at send time.
         businessPhone: "final-phone "
       })
@@ -778,7 +778,7 @@ describe("db/notification-preferences", () => {
 
   it("updateNotificationPreferences: enabling aiflow_failure_alerts re-subscribes (clears unsubscribed_at)", async () => {
     // After "Unsubscribe from all", opting into failure alerts must clear the
-    // unsubscribed flag — otherwise the notifications function would still
+    // unsubscribed flag, otherwise the notifications function would still
     // treat the business as unsubscribed and skip the delivery the owner just
     // asked for (Bugbot Medium on PR #587).
     const startingPrefs = {
@@ -875,7 +875,7 @@ describe("db/notification-preferences", () => {
     expect(payload.category_leads).toBe(false);
     expect(payload.category_system).toBe(true);
     // Flipping a CATEGORY back on must not silently re-subscribe someone
-    // who hit "Unsubscribe from all" — only channel toggles do that.
+    // who hit "Unsubscribe from all", only channel toggles do that.
     expect(payload.unsubscribed_at).toBeUndefined();
   });
 

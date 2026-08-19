@@ -14,7 +14,7 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 /**
  * The Derek Schultz replay (Amy Laidlaw Real Estate, 2026-07-09): a lead
  * who wanted a phone call "now" was told "I'll call you at 480 703 9575"
- * by a texting assistant that cannot place calls — no tool ran, nobody was
+ * by a texting assistant that cannot place calls, no tool ran, nobody was
  * told to call him, and the number wasn't even the business's line. The
  * same thread also repeated an availability line verbatim two turns in a
  * row.
@@ -53,7 +53,7 @@ const BASE: ChatTurn[] = [
 /**
  * First-person call promises, judged semantically (judge.ts): the original
  * regex (/I('| wi)ll (call|ring|phone)/) missed paraphrases like "expect my
- * call shortly" or "I'm going to give you a buzz" — the phrasing class is
+ * call shortly" or "I'm going to give you a buzz", the phrasing class is
  * unbounded. Calibrated in judge-calibration.e2e.test.ts.
  */
 const CALL_QUESTIONS = {
@@ -87,7 +87,7 @@ describe("no phantom phone calls (Derek Schultz replay, verbatim production line
   }, 120_000);
 
   it("turn 3 does not repeat the previous assistant message verbatim", () => {
-    // Verbatim equality is exact by nature — deliberately lexical.
+    // Verbatim equality is exact by nature, deliberately lexical.
     expect(turn3.trim()).not.toBe(AVAILABILITY_LINE);
     expect(turn3.trim().length).toBeGreaterThan(0);
   });

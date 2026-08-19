@@ -14,7 +14,7 @@
  *      statuses) to telemetry so 10DLC / carrier-block regressions are
  *      visible without combing through Telnyx Mission Control.
  *   3. We don't fail the webhook on outbound DLRs (Telnyx must always see
- *      a 200 — failed retries cause more cascading webhook spam).
+ *      a 200, failed retries cause more cascading webhook spam).
  *
  * Source-string assertions are good enough for that contract and have
  * zero infra cost. If the file's structure changes substantially, this
@@ -39,7 +39,7 @@ describe("telnyx-sms-inbound: outbound DLR telemetry", () => {
       /eventType === "message\.finalized" \|\| eventType === "message\.sent"/
     );
     // The DLR branch must come BEFORE the legacy `eventType !== "message.received"`
-    // skip — otherwise the finalized/sent events fall straight into "skipped"
+    // skip, otherwise the finalized/sent events fall straight into "skipped"
     // without any telemetry being emitted.
     const idxDlr = source.indexOf(
       'eventType === "message.finalized" || eventType === "message.sent"'

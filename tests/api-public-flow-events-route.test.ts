@@ -90,7 +90,7 @@ describe("POST /api/public/v1/flow-events", () => {
 
   it('defaults a blank source to "webhook"', async () => {
     await POST(req({ source: "  ", data: { a: 1 } }));
-    // A whitespace-only source fails min(1)? No — zod sees length 2; the route
+    // A whitespace-only source fails min(1)? No, zod sees length 2; the route
     // trims it to empty and falls back to the default label.
     expect(processWebhookFlowEvent).toHaveBeenCalledWith(
       "biz-1",

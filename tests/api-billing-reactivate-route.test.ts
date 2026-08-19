@@ -31,7 +31,7 @@ const {
 }));
 
 // Phase 2 (agency): the route resolves the ACTIVE business through the
-// cookie-aware helper; pin it to a fixed id here — the supabase chain mock
+// cookie-aware helper; pin it to a fixed id here, the supabase chain mock
 // below still decides which rows come back, so existing fixtures keep
 // driving each scenario.
 vi.mock("@/lib/dashboard/active-business", () => ({

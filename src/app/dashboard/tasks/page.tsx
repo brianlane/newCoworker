@@ -2,7 +2,7 @@
  * Staff Task Center (/dashboard/tasks).
  *
  * The working view for the team, in two layouts:
- *  - Board (default): a GoHighLevel-style pipeline board — columns are the
+ *  - Board (default): a GoHighLevel-style pipeline board, columns are the
  *    stages of an owner-defined pipeline (each stage backed by a contact
  *    tag), cards are leads, and drag-and-drop moves a lead between stages
  *    (firing the same tag automation as any other tag change).
@@ -70,7 +70,7 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   // Pipeline administration (create boards, edit stages) is manager+, same
   // bar as the manage_settings routes it calls.
   const canManagePipelines = ctx.role === "owner" || ctx.role === "manager";
-  // Dismissing a task cancels its AiFlow run — manage_aiflows is manager+,
+  // Dismissing a task cancels its AiFlow run, manage_aiflows is manager+,
   // so staff don't get a Dismiss button that can only 403.
   const canDismissRuns = ctx.role === "owner" || ctx.role === "manager";
   const rawLead = (await searchParams).lead ?? null;
@@ -78,7 +78,7 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   let highlightLead =
     rawLead && /^(\+[1-9]\d{6,15}|\d{3,8})$/.test(rawLead) ? rawLead : null;
   // The deep link may carry a merged-away ALIAS while board cards are keyed
-  // on the surviving profile's primary — resolve alias-aware so the
+  // on the surviving profile's primary, resolve alias-aware so the
   // highlight still lands. Best-effort: an unknown number stays as-is.
   if (highlightLead) {
     const memory = await getCustomerMemory(ctx.businessId, highlightLead).catch(

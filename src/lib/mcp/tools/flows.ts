@@ -1,7 +1,7 @@
 /**
  * AiFlow automation tools: full CRUD over the business's flows plus the
  * webhook-event trigger, with the exact validation stack the dashboard
- * builder uses (`parseAiFlowDefinition` + document/agent binding checks) —
+ * builder uses (`parseAiFlowDefinition` + document/agent binding checks),
  * an invalid definition is refused with the validator's issues instead of
  * being persisted.
  *
@@ -27,7 +27,7 @@ const businessIdField = z
 
 // Same ceiling as the public flow-events endpoint.
 const MCP_FLOW_EVENT_RATE = { interval: 60 * 1000, maxRequests: 120 };
-/** Serialized payload ceiling — a lead form is KBs, not MBs. */
+/** Serialized payload ceiling, a lead form is KBs, not MBs. */
 const MAX_EVENT_DATA_BYTES = 64 * 1024;
 
 /**

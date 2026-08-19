@@ -15,7 +15,7 @@ type TableResult = { data?: unknown; count?: number | null; error: { message: st
 /**
  * Table-keyed scripted mock. Call order is deterministic:
  * snapshots(current), contacts(current), snapshots(previous),
- * contacts(previous) — each table pops its own queue.
+ * contacts(previous), each table pops its own queue.
  */
 function makeDb(queues: Record<string, TableResult[]>) {
   const calls: Record<string, Array<Array<{ name: string; args: unknown[] }>>> = {};

@@ -66,7 +66,7 @@ export async function GET(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
     const row = await getPublicVagaroConnection(parsed.data);
 
-    // `?services=1` — live service catalog for the default-service picker.
+    // `?services=1`, live service catalog for the default-service picker.
     if (url.searchParams.get("services") === "1" && row) {
       try {
         const conn = await getActiveVagaroConnection(parsed.data);
@@ -96,7 +96,7 @@ export async function POST(request: Request) {
     // Verify the credentials end-to-end and hand back the service catalog
     // for the default-service picker. A failed verification keeps the row
     // (the owner can fix a typo'd secret with another save) but reports it.
-    // Verification reads the row regardless of is_active — a soft-disabled
+    // Verification reads the row regardless of is_active, a soft-disabled
     // connection must never short-circuit into a fake `verified: true`.
     try {
       const conn = await getVagaroConnection(body.businessId);

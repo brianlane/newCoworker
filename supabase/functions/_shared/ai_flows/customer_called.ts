@@ -14,7 +14,7 @@
  *   3. tags the contact "Customer Called" for the dashboard CRM view.
  *
  * Everything is best-effort: a failure here must NEVER delay or break call
- * routing — the phone call is the customer's chosen channel and always wins.
+ * routing, the phone call is the customer's chosen channel and always wins.
  */
 
 /** Sentinel written into a wait_for_reply saveAs var when the lead phoned in. */
@@ -26,7 +26,7 @@ export const CUSTOMER_CALLED_TAG = "Customer Called";
 /** How long the lead's queued automation holds off after they call (2h). */
 export const CUSTOMER_CALLED_DEFER_MINUTES = 120;
 
-/** Max contact tags — mirrors contacts_tags_cap_chk / normalizeContactTags. */
+/** Max contact tags, mirrors contacts_tags_cap_chk / normalizeContactTags. */
 const MAX_CONTACT_TAGS = 25;
 
 // Minimal structural client (matches the _shared convention): only the query
@@ -59,7 +59,7 @@ export async function pauseLeadAutomationOnCall(
   try {
     const resumedWaits = await resumeWaitsWithSentinel(supabase, businessId, callerE164);
     const deferredRuns = await deferQueuedRuns(supabase, businessId, callerE164, nowMs);
-    // Only tag when the call actually intersected live automation — a random
+    // Only tag when the call actually intersected live automation, a random
     // caller with no runs is not a "Customer Called" lead-state transition.
     let tagged = false;
     if (resumedWaits > 0 || deferredRuns > 0) {

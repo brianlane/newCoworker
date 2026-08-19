@@ -4,18 +4,18 @@
  *
  * `businesses.vps_provider` records WHICH provider runs the tenant box:
  *
- *   - 'hostinger' (default) — platform-purchased Hostinger box. The full
+ *   - 'hostinger' (default), platform-purchased Hostinger box. The full
  *     historical lifecycle applies: purchase/adopt-first via the
  *     `vps_inventory` pool, Hostinger billing auto-renew management on
  *     cancel, snapshot/stop ops, and the manual hPanel deletion request.
- *   - 'ovh' — platform-purchased OVHcloud box in Beauharnois (Quebec) for
+ *   - 'ovh', platform-purchased OVHcloud box in Beauharnois (Quebec) for
  *     Canadian data residency. None of the Hostinger lifecycle applies.
- *   - 'byos' — customer-owned box enrolled via SSH handover (enterprise
+ *   - 'byos', customer-owned box enrolled via SSH handover (enterprise
  *     deals). No purchase, no pool, no provider billing; cancel wipes the
  *     box over SSH instead of tearing down a VM.
  *
  * `businesses.vps_region` records WHERE the box physically lives ('us' |
- * 'ca') — the at-rest half of the Canadian PII compliance story.
+ * 'ca'), the at-rest half of the Canadian PII compliance story.
  *
  * Non-hostinger providers are ENTERPRISE-ONLY, enforced in code exactly
  * like the residency gate (src/lib/residency/tier-gate.ts): the DB columns
@@ -40,8 +40,8 @@ export function isVpsRegion(value: unknown): value is VpsRegion {
 
 /**
  * Resolve the effective provider from a raw `businesses.vps_provider` value.
- * Anything other than a valid provider — null, undefined, legacy rows
- * pre-dating the column, or a corrupt string — falls back to 'hostinger',
+ * Anything other than a valid provider, null, undefined, legacy rows
+ * pre-dating the column, or a corrupt string, falls back to 'hostinger',
  * so a bad DB value can never route a fleet tenant onto a lifecycle path
  * that skips its Hostinger teardown.
  */
@@ -61,7 +61,7 @@ export const VPS_PROVIDER_TIER_MESSAGE =
 
 /**
  * Non-hostinger providers (customer-owned BYOS boxes, OVH Canada boxes) are
- * enterprise-only — same policy shape as `residencyAllowedForTier`.
+ * enterprise-only, same policy shape as `residencyAllowedForTier`.
  */
 export function providerAllowedForTier(
   provider: VpsProvider,
@@ -96,7 +96,7 @@ export function assertVpsProviderAllowed(
  * Whether the Hostinger-specific lifecycle applies to this box: the
  * `vps_inventory` adopt/return pool, Hostinger billing auto-renew ops,
  * snapshot/stop VM ops, and the manual hPanel deletion request email.
- * BYOS/OVH boxes get none of that — their teardown paths are provider-
+ * BYOS/OVH boxes get none of that, their teardown paths are provider-
  * specific (SSH wipe / OVH service termination) and land in later PRs.
  */
 export function providerUsesHostingerLifecycle(provider: VpsProvider): boolean {

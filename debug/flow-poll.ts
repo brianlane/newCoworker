@@ -87,7 +87,7 @@ for (const j of inMsgs ?? []) {
   const payload = (data?.payload ?? data) as Record<string, unknown> | undefined;
   const from = (payload?.from as Record<string, unknown> | undefined)?.phone_number ?? "";
   const text = (payload?.text as string | undefined) ?? JSON.stringify(p).slice(0, 120);
-  // Only rows provably from the watched number — an unparseable sender must
+  // Only rows provably from the watched number, an unparseable sender must
   // not leak another contact's messages into this number's timeline.
   if (from !== LEAD) continue;
   events.push({ at: j.created_at, line: `IN : ${String(text).slice(0, 220)}` });

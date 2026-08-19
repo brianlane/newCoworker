@@ -5,8 +5,8 @@
  * Chris texts a daily summary from 314-207-7635 (NOT the weekly reminder number
  * the original "Clever Update Leads" flow listens on) with a Clever portal link
  * and the NAMES of the leads that need an update (today's new customers plus any
- * "yet to receive an update"). Unlike the weekly flow — which updates EVERY lead
- * under Needs Action — this flow must touch ONLY the leads Chris named.
+ * "yet to receive an update"). Unlike the weekly flow, which updates EVERY lead
+ * under Needs Action, this flow must touch ONLY the leads Chris named.
  *
  * Flow:
  *   1. extract_url   -> {{vars.portal_url}} (the Active Connections / Needs Action link)
@@ -18,7 +18,7 @@
  *
  * The Provide Update sequence and Needs-Action selector mirror the weekly flow
  * (verified live Jun 2026); see seed-clever-update-leads-aiflow.ts for the
- * selector rationale. suppressDefaultReply is on — no reply is sent to Chris.
+ * selector rationale. suppressDefaultReply is on, no reply is sent to Chris.
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API use.
  * Dry-run by default; idempotent unless --force. Seed DISABLED by default;

@@ -6,7 +6,7 @@ import OnboardPlanClient from "./OnboardPlanClient";
 export const dynamic = "force-dynamic";
 
 export default async function OnboardPage() {
-  // Signed-in owners with live service manage their plan from Billing —
+  // Signed-in owners with live service manage their plan from Billing,
   // re-onboarding from scratch is how a live business once got clobbered.
   if (await hasActiveSubscriptionForCurrentUser()) {
     redirect("/dashboard/billing");

@@ -37,7 +37,7 @@ describe("vps/size", () => {
 
   it("resolveDeployedVpsSize: unpinned starter is legacy KVM2 hardware, pins win", () => {
     // Existing boxes: a null pin predates pin persistence, i.e. the box was
-    // provisioned when starter⇒kvm2 — never stamp the new kvm1 profile on it.
+    // provisioned when starter⇒kvm2, never stamp the new kvm1 profile on it.
     expect(resolveDeployedVpsSize("starter", null)).toBe("kvm2");
     expect(resolveDeployedVpsSize("starter", undefined)).toBe("kvm2");
     expect(resolveDeployedVpsSize("starter", "corrupt")).toBe("kvm2");

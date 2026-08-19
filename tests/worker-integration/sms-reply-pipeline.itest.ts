@@ -26,8 +26,8 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
  *
  * Rowboat itself is the fake in tests/worker-integration/fake-rowboat.ts
  * (the per-tenant agent runtime lives on fleet VPSes and cannot run in CI);
- * everything else in the loop — the worker bundle, Postgres, the
- * notifications function — is real. The live-AI e2e suite separately covers
+ * everything else in the loop, the worker bundle, Postgres, the
+ * notifications function, is real. The live-AI e2e suite separately covers
  * what a real model puts INSIDE the reply.
  *
  * Terminal job state in this harness is dead_letter/missing_telnyx_messaging_env:
@@ -38,7 +38,7 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
 
 const LEAD = "+14165550188";
 const INBOUND_TEXT = "Was supposed to of been Apil 17th but they would not Renew it";
-/** The flow's last outbound text (seeded below) — the fresh-thread anchor
+/** The flow's last outbound text (seeded below), the fresh-thread anchor
  * quotes it inside the user turn. */
 const FLOW_LAST_MESSAGE =
   "Thanks for sharing that - Approximately when does your current policy renew?";
@@ -52,7 +52,7 @@ beforeAll(async () => {
 });
 
 // Hard test-boundary isolation. Every tick claims EVERY pending job in the
-// shared local DB, and the fake's script queue is a global FIFO — so one
+// shared local DB, and the fake's script queue is a global FIFO, so one
 // leftover pending job (a prior run's abort, or this suite's deliberate
 // retry-path scenario) shifts the queue and poisons every later test with
 // someone else's scripted turn (observed live: an escalation-test job
@@ -312,7 +312,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     const callsBefore = rowboat.calls.length;
     await tickSmsWorker();
 
-    // A thumbs down on our question means "no" — swallowing it would strand
+    // A thumbs down on our question means "no", swallowing it would strand
     // the thread waiting on an answer it already got.
     const job = await getSmsJob(db, jobId);
     expect(job.last_error).not.toBe("suppressed_tapback");
@@ -431,7 +431,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     await tickSmsWorker();
 
     // The reply pipeline ran (parks at the missing-Telnyx-env check like
-    // every harness send) — NOT the suppressed_ack short-circuit.
+    // every harness send), NOT the suppressed_ack short-circuit.
     const job = await getSmsJob(db, jobId);
     expect(job.last_error).not.toBe("suppressed_ack");
     expect(job.last_error).toBe("missing_telnyx_messaging_env");
@@ -500,7 +500,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     const jobId = (data as { id: string }).id;
     // One scripted 500 is the whole attempt now: since PR #566, an
     // early-attempt 5xx gets NO stateless retry (it would drop the thread
-    // history for a transient upstream outage) — the job-level retry owns it.
+    // history for a transient upstream outage), the job-level retry owns it.
     rowboat.scriptError(500);
     await tickSmsWorker();
 
@@ -517,7 +517,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     // The live incident, replayed byte-for-byte: Truly's tester asked for a
     // representative six times; every turn came back intent=
     // request_human_agent with handoff:false (the model believed offering to
-    // schedule a broker call handled it), so no tag, no owner page — six
+    // schedule a broker call handled it), so no tag, no owner page, six
     // identical replies. The worker must escalate on the INTENT, not the
     // model's handoff judgment.
     const { biz } = await seedLeadWithContext("IT rep-request escalation");
@@ -556,7 +556,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(await getContactTags(db, biz, LEAD)).toContain(NEEDS_HUMAN_TAG);
 
     // Owner page: the real notifications function recorded history rows
-    // (dashboard delivers with default prefs; SMS/email skip — no channels
+    // (dashboard delivers with default prefs; SMS/email skip, no channels
     // configured in the harness) with owner-actionable copy and the
     // contactE164 stamp the dedupe relies on.
     const pages = await notificationRows(biz);
@@ -574,7 +574,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(dashboard?.payload.contactE164).toBe(LEAD);
     const pageCount = pages.length;
 
-    // A second escalated turn while the tag is still on: already_open — the
+    // A second escalated turn while the tag is still on: already_open, the
     // reply flows normally but the owner is NOT re-paged.
     rowboat.scriptReply(`Understood, the team has been alerted already.\n${trailer}`);
     await enqueueSmsJob(db, biz, LEAD, "Hello?? I said I need a person");
@@ -623,7 +623,7 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     const transports = pages.filter((n) => n.delivery_channel !== "dashboard");
     // Email and SMS are the applicable transports here. This used to assert
     // ">= 3", which quietly required a whatsapp row from a business that
-    // never connected WhatsApp — the dedupe branch was one of the four that
+    // never connected WhatsApp, the dedupe branch was one of the four that
     // wrote whatsapp rows before anything checked for a connection.
     expect(transports.map((n) => n.delivery_channel).sort()).toEqual(["email", "sms"]);
     expect(transports.every((n) => n.status !== "sent")).toBe(true);

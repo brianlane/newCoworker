@@ -4,7 +4,7 @@
  *
  * Why this exists:
  *   The orchestrator best-effort-attaches a brand-new DID to our shared
- *   campaign during onboarding. That call is fire-and-forget — when the
+ *   campaign during onboarding. That call is fire-and-forget, when the
  *   campaign isn't yet ACTIVE (carrier vetting takes 1-2 business days) or
  *   the rollout hasn't populated `TELNYX_10DLC_*` env yet, the DID lands in
  *   `pending`. Without a retry path it would stay there forever and
@@ -26,7 +26,7 @@
  *                  `staleAfterSeconds` are excluded by the SQL filter so
  *                  we don't hammer Telnyx every minute on the same row.
  *
- * Errors per row are isolated — one Telnyx 5xx doesn't block the rest.
+ * Errors per row are isolated, one Telnyx 5xx doesn't block the rest.
  *
  * Response: `{ ok: true, processed, registered, pending, rejected, errors }`
  */
@@ -48,7 +48,7 @@ import {
 // because every row is idempotent.
 const DEFAULT_LIMIT = 25;
 
-// Skip rows that we attempted within the last 5 minutes — a hot retry
+// Skip rows that we attempted within the last 5 minutes, a hot retry
 // loop on a `rejected` row would melt the Telnyx rate limit without
 // changing the outcome. Carrier vetting is slow; one minute of latency
 // per attempt is nothing.
@@ -69,7 +69,7 @@ async function runSweep(request: Request): Promise<Response> {
   }
 
   // Cold-start short-circuit. If 10DLC isn't configured at all, there's
-  // nothing to retry — readTendlcConfig returns null and we exit fast
+  // nothing to retry, readTendlcConfig returns null and we exit fast
   // instead of churning DB queries that will all land in `pending`.
   let configured = true;
   try {
@@ -135,7 +135,7 @@ async function runSweep(request: Request): Promise<Response> {
       else if (outcome.kind === "pending") pending += 1;
       else if (outcome.kind === "rejected") rejected += 1;
       else {
-        // Transient infra error — count as a per-row error so it shows
+        // Transient infra error, count as a per-row error so it shows
         // up in the response, but DON'T persist as `rejected` (the
         // attach helper deliberately leaves the row's status alone for
         // the next tick).

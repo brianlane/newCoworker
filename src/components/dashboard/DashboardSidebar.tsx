@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 /**
- * Icons keyed by the catalog keys in src/lib/dashboard/sidebar-items.ts —
+ * Icons keyed by the catalog keys in src/lib/dashboard/sidebar-items.ts,
  * labels/hrefs/ordering live there (shared with the per-user customization
  * prefs); only the visual layer stays in this client component.
  */
@@ -74,7 +74,7 @@ const POLL_INTERVAL_MS = 60_000;
 /**
  * Polls /api/notifications/unread-count for the bell badge. Backed by a
  * partial index so the cost per poll is O(unread). The poll cadence is
- * deliberately conservative (60s) — we'd rather be a few seconds stale
+ * deliberately conservative (60s), we'd rather be a few seconds stale
  * than spam Postgres on every dashboard tab.
  */
 function useUnreadNotificationCount(businessId: string | null): number {

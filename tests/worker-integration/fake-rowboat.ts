@@ -39,7 +39,7 @@ export type FakeRowboat = {
   scriptReply(content: string): void;
   /** Queue an HTTP failure for the NEXT /chat call (FIFO, shared queue). */
   scriptError(status: number): void;
-  /** Entries still queued — a test that leaves any behind is misaligned. */
+  /** Entries still queued, a test that leaves any behind is misaligned. */
   pendingScripts(): number;
   /** Drop leftover queued entries (test-boundary isolation). */
   clearScript(): void;
@@ -97,7 +97,7 @@ export async function startFakeRowboat(port = FAKE_ROWBOAT_PORT): Promise<FakeRo
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     // 0.0.0.0: the caller is the supabase edge-runtime CONTAINER, not
-    // localhost — the suite passes the host's container-reachable address
+    // localhost, the suite passes the host's container-reachable address
     // via ROWBOAT_CHAT_URL_TEMPLATE.
     server.listen(port, "0.0.0.0", resolve);
   });

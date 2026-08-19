@@ -98,7 +98,7 @@ describe("getEmployeePerformance", () => {
             "2026-07-01T10:00:00Z",
             "2026-07-01T10:30:00Z"
           ),
-          // Both offered (Dave duplicated in the log — counted once), Ana claimed in 90 min.
+          // Both offered (Dave duplicated in the log, counted once), Ana claimed in 90 min.
           run(
             { offered_log: [DAVE, DAVE, ANA], claimed_by: ANA },
             "2026-07-02T10:00:00Z",
@@ -114,12 +114,12 @@ describe("getEmployeePerformance", () => {
           ),
           // A claim on a run with NO offer bookkeeping (pre-offered_log run or
           // late-claim finalization): the claim itself proves an offer reached
-          // Dave, so it counts as offered too — offered can never read lower
+          // Dave, so it counts as offered too, offered can never read lower
           // than claimed. Never updated → no duration.
           run({ claimed_by: DAVE }, "2026-07-03T12:30:00Z", null),
           // A LIVE un-answered offer (routing.offered) also counts as offered.
           run({ offered: ANA }, "2026-07-03T14:00:00Z", null),
-          // Claimed by someone off the roster — ignored in member rows.
+          // Claimed by someone off the roster, ignored in member rows.
           run({ claimed_by: "+19998887777" }, "2026-07-03T13:00:00Z", "2026-07-03T14:00:00Z"),
           // No routing context at all.
           run(null, "2026-07-03T15:00:00Z", null)

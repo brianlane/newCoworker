@@ -30,7 +30,7 @@ import { logger } from "@/lib/logger";
  * Idempotency ledger for calendar_book_appointment. The 2026-07-13 incident:
  * worker-retried model turns re-ran a succeeded booking tool call, creating
  * FOUR identical Outlook events. The ledger makes a repeat attempt inside the
- * dedupe window return the recorded event instead of booking again — and it
+ * dedupe window return the recorded event instead of booking again, and it
  * must FAIL OPEN on every ledger error, because a blocked booking is worse
  * than a missed dedupe.
  */
@@ -273,7 +273,7 @@ describe("confirmBookingDedupe", () => {
 
   it("retries a failed confirm and succeeds without escalating", async () => {
     // A lost confirm re-opens the duplicate window after the in-flight TTL
-    // (Bugbot High on PR #566) — one transient DB error must not be enough
+    // (Bugbot High on PR #566), one transient DB error must not be enough
     // to get there.
     scriptClient([
       { data: null, error: { message: "transient" } },
@@ -385,14 +385,14 @@ describe("findUpcomingBookingClaim (reschedule/cancel event resolution)", () => 
 
 describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
   const ROWS = [
-    // Someone else's booking — must be skipped, not matched.
+    // Someone else's booking, must be skipped, not matched.
     {
       id: "row-other",
       event_id: "evt-other",
       start_at: "2026-07-14T18:00:00Z",
       attendee_key: "phone:+15550001111"
     },
-    // Degenerate key (no digits after the prefix) — skipped.
+    // Degenerate key (no digits after the prefix), skipped.
     { id: "row-bare", event_id: "evt-bare", start_at: "2026-07-14T19:00:00Z", attendee_key: "phone:" },
     // The caller's booking, stored E.164 at booking time.
     {
@@ -405,7 +405,7 @@ describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
 
   it("matches a differently formatted phone against the stored key and returns the ROW's key", async () => {
     const calls = scriptClient([{ data: ROWS, error: null }]);
-    // National pretty-printed form vs the stored E.164 — still a match.
+    // National pretty-printed form vs the stored E.164, still a match.
     expect(await findUpcomingBookingClaimByPhone(BIZ, "(548) 577-3546")).toEqual({
       id: "row-mine",
       eventId: "evt-mine",

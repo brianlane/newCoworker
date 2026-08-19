@@ -84,7 +84,7 @@ describe("isRelayableOwnerReply", () => {
   it("relays ordinary free text", () => {
     expect(isRelayableOwnerReply("Tell him the house sold last week, sorry!")).toBe(true);
     expect(isRelayableOwnerReply("  Yes, 3pm works.  ")).toBe(true);
-    // Digits inside a sentence are fine — only BARE digits are reserved.
+    // Digits inside a sentence are fine, only BARE digits are reserved.
     expect(isRelayableOwnerReply("Call me at 602-555-1234")).toBe(true);
   });
 

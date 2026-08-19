@@ -28,7 +28,7 @@ describe("starterContextBudget", () => {
 
   it("counts websiteMd against the starter budget so the crawl summary cannot silently blow it", () => {
     // Crawl summary is capped at 8k chars (~2k tokens). With soul/identity/memory
-    // empty but a full websiteMd, we should already be at the limit — any more
+    // empty but a full websiteMd, we should already be at the limit, any more
     // content anywhere must flip `overBudget`.
     const websiteMd = "w".repeat(8000);
     const atLimit = starterVaultBudgetStatus("", "", "", websiteMd);

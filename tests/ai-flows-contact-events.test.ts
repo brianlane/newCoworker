@@ -194,7 +194,7 @@ describe("enqueueContactEventRuns", () => {
     });
 
     recordStageChangeForMeta.mockClear();
-    // change omitted defaults to "added" — still hooked.
+    // change omitted defaults to "added", still hooked.
     await enqueueContactEventRuns(makeDb([{ data: [], error: null }]).db, BIZ, input({ change: undefined }));
     expect(recordStageChangeForMeta).toHaveBeenCalledTimes(1);
 

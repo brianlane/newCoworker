@@ -4,7 +4,7 @@
  * The agent calls this when the caller volunteers their name on a
  * call ("Hi, this is Joe Plumber"). We persist it on the
  * customer_memories row so future channels (SMS, dashboard) recognize
- * the caller by name instead of just E.164. Idempotent — calling
+ * the caller by name instead of just E.164. Idempotent, calling
  * with the same name on every call is cheap and safe.
  *
  * Boundaries:
@@ -15,7 +15,7 @@
  *     null/empty. The owner's edit beats the agent's transcription
  *     every time.
  *   - Hard caps the name at 200 chars (mirrors the schema constraint
- *     in customer_memories — see migration 20260507000000).
+ *     in customer_memories, see migration 20260507000000).
  */
 
 import { z } from "zod";
@@ -32,7 +32,7 @@ import { logger } from "@/lib/logger";
 const argsSchema = z.object({
   /**
    * Display name as the agent heard it. Accept ASCII letters / spaces /
-   * common punctuation only — Gemini Live transcription occasionally
+   * common punctuation only, Gemini Live transcription occasionally
    * emits leading/trailing whitespace and punctuation, normalize here.
    */
   displayName: z.string().min(1).max(200),

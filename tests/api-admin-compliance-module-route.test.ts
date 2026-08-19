@@ -99,7 +99,7 @@ describe("api/admin/compliance-module route", () => {
 
   it("refuses when the module would push the soul past the size cap", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValue({
-      // 10 chars of headroom — any module block overflows it.
+      // 10 chars of headroom, any module block overflows it.
       soul_md: "x".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS - 10)
     } as never);
     const res = await post({ businessId: BIZ_ID, complianceModule: MODULE });

@@ -3,7 +3,7 @@ import { TelnyxPortingClient } from "@/lib/telnyx/porting";
 import { TelnyxApiError, DEFAULT_TELNYX_API_BASE_URL } from "@/lib/telnyx/numbers";
 
 /**
- * Coverage for src/lib/telnyx/porting.ts — same mocked-fetch approach as
+ * Coverage for src/lib/telnyx/porting.ts, same mocked-fetch approach as
  * tests/telnyx-numbers.test.ts: pin the wire shape (method, path, headers,
  * body) each wrapper produces so a drive-by edit breaks a fast unit test
  * instead of a live port.

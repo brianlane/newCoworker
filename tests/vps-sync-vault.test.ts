@@ -2,18 +2,18 @@
  * Unit tests for `lib/vps/sync-vault.ts`.
  *
  * Covers:
- *   1. `buildAgentInstructions` ordering, blank-skip, fallback semantics —
+ *   1. `buildAgentInstructions` ordering, blank-skip, fallback semantics,
  *      it's the TS twin of the same composition that runs in
  *      `vps/scripts/deploy-client.sh:422`. A drift in either direction
  *      silently breaks the agent's grounding.
- *   2. `buildSyncVaultCommand` — base64 encoding of vault contents,
+ *   2. `buildSyncVaultCommand`, base64 encoding of vault contents,
  *      mongosh update path, idempotent cleanup. Asserts on key
  *      substrings rather than the full command string so cosmetic
  *      whitespace/line-break tweaks don't churn the suite.
- *   3. `syncVaultToVps` — every guard (no_business / no_business_config /
+ *   3. `syncVaultToVps`, every guard (no_business / no_business_config /
  *      no_vps_assigned / no_ssh_key / no_hostinger_token / no_public_ip)
  *      and the SSH success/failure paths, all via injected deps.
- *   4. `syncVaultToVpsAndLog` — never throws, logs ok/skipped paths.
+ *   4. `syncVaultToVpsAndLog`, never throws, logs ok/skipped paths.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -158,7 +158,7 @@ const originalEnv = { ...process.env };
 beforeEach(() => {
   vi.clearAllMocks();
   // The default IP-resolver short-circuits to `null` when this is unset.
-  // Set it so the env-guard branch in the code doesn't fire — tests
+  // Set it so the env-guard branch in the code doesn't fire, tests
   // exercising that branch override locally.
   process.env.HOSTINGER_API_TOKEN = "test-token";
 });
@@ -230,7 +230,7 @@ describe("buildAgentInstructions", () => {
 
   it("treats a config with non-string fields as blank (defends against a misshapen DB row without crashing)", () => {
     const out = buildAgentInstructions({
-      // Cast through unknown to feed a deliberately misshapen row — the
+      // Cast through unknown to feed a deliberately misshapen row, the
       // production DB column is `text not null` but defense-in-depth
       // matters because a bad migration could leave the row malformed.
       soul_md: null as unknown as string,
@@ -359,7 +359,7 @@ describe("buildSyncVaultCommand", () => {
       mode: "ship",
       tarB64
     });
-    // Unpack into a temp dir FIRST — under `set -e` a truncated bundle
+    // Unpack into a temp dir FIRST, under `set -e` a truncated bundle
     // aborts here, never after anything live was touched.
     expect(cmd).toContain(`printf %s '${tarB64}' | base64 -d | tar -xf - -C "$GRAPH_STAGE"`);
     const extractAt = cmd.indexOf('tar -xf - -C "$GRAPH_STAGE"');
@@ -376,7 +376,7 @@ describe("buildSyncVaultCommand", () => {
     // deliberately untouched.
     expect(cmd).not.toContain('mv "/opt/rowboat/memory"');
     expect(cmd).not.toContain("Projects.new");
-    // The chat-worker container (uid 1000) must be able to write graph.db —
+    // The chat-worker container (uid 1000) must be able to write graph.db,
     // a chown failure fails the sync LOUDLY instead of reporting ok.
     expect(cmd).toContain("chown -R 1000:1000 /opt/rowboat/memory");
     expect(cmd).not.toContain("chown -R 1000:1000 /opt/rowboat/memory || true");
@@ -403,7 +403,7 @@ describe("buildSyncVaultCommand", () => {
       "INST",
       NOW
     );
-    // Empty buffer base64-encodes to the empty string — the line still
+    // Empty buffer base64-encodes to the empty string, the line still
     // executes (`base64 -d > .../website.md` from an empty input) and
     // truncates the file to zero bytes.
     expect(cmd).toContain("printf %s ''");
@@ -430,7 +430,7 @@ describe("buildSyncVaultCommand", () => {
     // validation, but if a malformed value ever slips through (e.g. from
     // a future raw-SQL backfill) JSON.stringify keeps the embedded
     // mongosh string a valid JS string literal instead of a syntax error
-    // or — worse — a code injection.
+    // or, worse, a code injection.
     const cmd = buildSyncVaultCommand(FULL_CONFIG, 'evil"; print("pwned"); //', "INST", NOW);
     // The escaped form makes the dquote literal, so mongosh sees it as
     // a benign string rather than terminating early.
@@ -439,7 +439,7 @@ describe("buildSyncVaultCommand", () => {
 
   it("hard-fails the sync when matchedCount === 0 so a drifted projectId surfaces as ssh_failed instead of silent success", () => {
     const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
-    // `r.matchedCount === 0` is treated as fatal — without this, a tenant
+    // `r.matchedCount === 0` is treated as fatal, without this, a tenant
     // whose project id got out of sync with their VPS Mongo would see
     // `ok: true` while their agent kept serving the stale prompt.
     expect(cmd).toMatch(/r\.matchedCount\s*===\s*0/);
@@ -518,7 +518,7 @@ describe("syncVaultToVps, success path", () => {
     expect(r.hostingerVpsId).toBe("1632631");
     expect(r.publicIp).toBe("203.0.113.1");
     // The default fixture has rowboat_project_id === businessId, so the
-    // resolved target is the businessId — same as the chat route's
+    // resolved target is the businessId, same as the chat route's
     // resolution. The dedicated drift tests below cover the divergent
     // case.
     expect(r.projectId).toBe(BIZ);
@@ -534,7 +534,7 @@ describe("syncVaultToVps, success path", () => {
     // (Aug 2026 "Argument list too long"), so the script must never be
     // passed as the command again.
     expect(call.command).toBe(VAULT_SYNC_STDIN_WRAPPER);
-    // Sanity-check the script body — we already exhaustively test
+    // Sanity-check the script body, we already exhaustively test
     // `buildSyncVaultCommand`, so just confirm the wiring connects.
     expect(call.stdin).toContain('echo "vault_synced=ok"');
   });
@@ -678,7 +678,7 @@ describe("syncVaultToVps, success path", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // The result tells the caller the actual targeted id, NOT the
-    // businessId — observability for tenants on the divergent path.
+    // businessId, observability for tenants on the divergent path.
     expect(r.projectId).toBe("different-id");
     // The bash command targets the same id.
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];

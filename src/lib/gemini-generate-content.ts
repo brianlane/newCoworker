@@ -2,7 +2,7 @@
  * Gemini Developer API (`ai.google.dev` key): native `generateContent` REST calls.
  *
  * Google's OpenAI-compatible `.../openai/chat/completions` route has shown 404 /
- * mismatched model resolution ("v1main") across keys—`generateContent` is the
+ * mismatched model resolution ("v1main") across keys, `generateContent` is the
  * documented, stable surface for `{model}:generateContent`.
  *
  * @see https://ai.google.dev/gemini-api/docs/text-generation
@@ -19,7 +19,7 @@ export type GeminiGenerateTextParams = {
   /**
    * Forces a structured response, e.g. `"application/json"` (Gemini "JSON
    * mode"). When the caller needs strict JSON, this is far more reliable than
-   * prompting alone — it removes code fences/prose and prevents the model from
+   * prompting alone, it removes code fences/prose and prevents the model from
    * trailing off into unparseable output.
    */
   responseMimeType?: string;
@@ -29,7 +29,7 @@ export type GeminiGenerateTextParams = {
    * `maxOutputTokens` budget on hidden thinking and truncate the visible
    * answer. Set `"low"` (or `"minimal"`) for structured-extraction tasks where
    * the output budget must go to the answer, not reasoning. Only valid on
-   * Gemini 3 models — Gemini 2.5 rejects it (those use a numeric budget).
+   * Gemini 3 models, Gemini 2.5 rejects it (those use a numeric budget).
    */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
   /**
@@ -43,7 +43,7 @@ export type GeminiGenerateTextParams = {
 
 /**
  * Billed token counts from the response's `usageMetadata`. `outputTokens`
- * includes thinking tokens (`thoughtsTokenCount`) — Google bills those at the
+ * includes thinking tokens (`thoughtsTokenCount`), Google bills those at the
  * output rate, and models like 2.5 Flash think by default, so visible-text
  * estimates can undercount badly.
  */

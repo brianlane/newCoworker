@@ -6,7 +6,7 @@
 /**
  * Strict voice-seconds parser for Stripe metadata. Only accepts positive integer strings,
  * enforces an upper bound (~one year of call minutes), and refuses scientific notation,
- * floats, and leading-zero/negative/hex strings — all of which `Number.parseInt` silently
+ * floats, and leading-zero/negative/hex strings, all of which `Number.parseInt` silently
  * truncates or mis-parses, and which would otherwise mint a bogus bonus grant.
  */
 /**
@@ -57,7 +57,7 @@ export function parseSmsBonusTextsFromMetadata(raw: unknown): number | null {
 
 /**
  * Chat spend credit (micro-USD) from a Gemini pack checkout. Hard cap $1,000
- * of credit per checkout — far above the catalog — so a forged/corrupt
+ * of credit per checkout, far above the catalog, so a forged/corrupt
  * metadata value can never mint an unbounded cap raise.
  */
 export function parseChatCreditMicrosFromMetadata(raw: unknown): number | null {

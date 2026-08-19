@@ -2,7 +2,7 @@
 
 /**
  * The four REST-hook triggers. Sample payloads must mirror
- * supabase/functions/_shared/webhook_events.ts::buildWebhookPayload —
+ * supabase/functions/_shared/webhook_events.ts::buildWebhookPayload,
  * they are what the Zap editor shows before real data arrives.
  */
 

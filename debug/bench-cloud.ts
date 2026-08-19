@@ -1,5 +1,5 @@
 /**
- * Benchmark runner — CLOUD models (run from a laptop; needs internet + keys).
+ * Benchmark runner, CLOUD models (run from a laptop; needs internet + keys).
  *
  *   - Gemini 2.5 Flash-Lite  via native generateContent (GOOGLE_API_KEY)
  *   - DeepSeek V4 Flash      via OpenRouter chat/completions (ORkey)

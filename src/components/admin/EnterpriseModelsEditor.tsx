@@ -116,7 +116,7 @@ export function EnterpriseModelsEditor({
           size="sm"
           variant="secondary"
           onClick={async () => {
-            // Blank the form only AFTER the clear persists — emptying it
+            // Blank the form only AFTER the clear persists, emptying it
             // eagerly would show "no overrides" while the DB still has them
             // if the API call fails.
             const ok = await submit(null);

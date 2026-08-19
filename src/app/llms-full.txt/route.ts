@@ -4,7 +4,7 @@ import { INDUSTRIES } from "@/app/(marketing)/industries/data";
 import { listPublishedPosts } from "@/lib/blog/db";
 
 // Rendered per request so newly published posts appear without a redeploy,
-// and so the CI build (mock Supabase env) never touches the DB — same
+// and so the CI build (mock Supabase env) never touches the DB, same
 // rationale as src/app/sitemap.ts.
 export const dynamic = "force-dynamic";
 

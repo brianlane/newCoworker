@@ -2,13 +2,13 @@
  * Public marketing unsubscribe (campaign email).
  *
  *   GET  /api/marketing/unsubscribe?bid=<businessId>&c=<contactId>&t=<hmac>
- *   POST (same query) — the RFC 8058 one-click target Gmail/Apple Mail hit.
+ *   POST (same query), the RFC 8058 one-click target Gmail/Apple Mail hit.
  *
  * The token is an HMAC over (business, contact), so a link can only
  * unsubscribe the person it was minted for. Stamping is idempotent; the
  * response never reveals whether the contact existed. Marketing-only:
  * conversational/transactional mail (replies, receipts, reminders) is
- * unaffected — this clears the customer out of campaign audiences.
+ * unaffected, this clears the customer out of campaign audiences.
  */
 
 import { z } from "zod";
@@ -47,7 +47,7 @@ async function handle(request: Request): Promise<Response> {
   const { bid, c, t } = parsed.data;
 
   // Token first, rate limit second: the HMAC check is cheap and an invalid
-  // request never touches the limiter — otherwise anyone knowing a business
+  // request never touches the limiter, otherwise anyone knowing a business
   // id could exhaust the quota with garbage tokens and block real
   // customers from opting out.
   if (!verifyMarketingUnsubscribeToken(bid, c, t)) {

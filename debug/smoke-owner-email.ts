@@ -2,8 +2,8 @@
  * End-to-end smoke test of the AiFlow owner-mailbox email path.
  *
  * POSTs the production /api/aiflows/send-owner-email endpoint EXACTLY the way
- * the ai-flow-worker Edge Function does — bearer ROWBOAT_GATEWAY_TOKEN, NO
- * Origin header — so it also verifies the proxy's CSRF exemption for this
+ * the ai-flow-worker Edge Function does, bearer ROWBOAT_GATEWAY_TOKEN, NO
+ * Origin header, so it also verifies the proxy's CSRF exemption for this
  * route (a missing exemption 403s every worker send with
  * "CSRF validation failed" while a browser-shaped test still passes).
  *
@@ -33,7 +33,7 @@ if (!baseUrl || !token) {
 
 const res = await fetch(`${baseUrl}/api/aiflows/send-owner-email`, {
   method: "POST",
-  // Deliberately no Origin header — mirrors the Edge Function's fetch.
+  // Deliberately no Origin header, mirrors the Edge Function's fetch.
   headers: {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json"

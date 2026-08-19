@@ -2,7 +2,7 @@
  * Platform-side direct-Gemini responder for the website chat widget
  * (chat_widget_settings.reply_engine = 'gemini').
  *
- * Produces one webchat reply CENTRALLY — no tenant VPS involved — with
+ * Produces one webchat reply CENTRALLY, no tenant VPS involved, with
  * structural parity to the box-hosted WebchatCoworker path:
  *
  *   * GROUNDING: the system prompt is buildAgentInstructions() over the
@@ -18,7 +18,7 @@
  *     (over-cap → the chat-worker's honest visitor-facing refusal; there
  *     is no local model centrally, so refusing mirrors the kvm1 worker
  *     semantics), and every billed token meters into
- *     owner_chat_model_spend via meterGeminiSpendForBusiness — the fuse,
+ *     owner_chat_model_spend via meterGeminiSpendForBusiness, the fuse,
  *     credit grants, and the spend-velocity watchdog all see one number.
  *
  * Invoked inline by /api/widget/poll after it claims a queued job (see
@@ -65,7 +65,7 @@ export const WEBCHAT_ENGINE_OVER_CAP_REFUSAL =
 /**
  * Default model matches the box path: WebchatCoworker is seeded with
  * $smsModel = SMS_CHAT_MODEL (default gemini-2.5-flash-lite in
- * deploy-client.sh) — same model, same answers.
+ * deploy-client.sh), same model, same answers.
  */
 export const WEBCHAT_ENGINE_DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
@@ -78,7 +78,7 @@ export function webchatEngineModel(
 /** Tool rounds per turn (each round may carry several parallel calls). */
 export const WEBCHAT_ENGINE_MAX_TOOL_ROUNDS = 4;
 
-/** Whole-turn deadline — poll route maxDuration is 60s; leave headroom. */
+/** Whole-turn deadline, poll route maxDuration is 60s; leave headroom. */
 export const WEBCHAT_ENGINE_TURN_TIMEOUT_MS = 30_000;
 
 export type WebchatJobInputMessage = {
@@ -91,7 +91,7 @@ export type WebchatJobInputMessage = {
  * (preamble, datetime, sessionRef, visitor, history tail) and the new
  * `[Webchat]` user turn. Rowboat consumed these as a messages array;
  * Gemini gets the system blocks in systemInstruction and the user turn as
- * the sole content — semantically identical (every system block was
+ * the sole content, semantically identical (every system block was
  * turn-independent context).
  */
 export function splitWebchatJobInput(messages: WebchatJobInputMessage[]): {
@@ -105,7 +105,7 @@ export function splitWebchatJobInput(messages: WebchatJobInputMessage[]): {
     if (m.role === "system" && m.content.trim().length > 0) {
       systemBlocks.push(m.content);
     } else if (m.role === "user") {
-      // Last user entry wins — the builder emits exactly one.
+      // Last user entry wins, the builder emits exactly one.
       userTurn = m.content;
     }
   }
@@ -116,7 +116,7 @@ export type RunWebchatGeminiTurnArgs = {
   businessId: string;
   /**
    * The job's pre-built input. Callers pass stateless_input_messages when
-   * present, else input_messages — the same precedence the chat-worker
+   * present, else input_messages, the same precedence the chat-worker
    * uses for its always-stateless turns.
    */
   inputMessages: WebchatJobInputMessage[];
@@ -153,7 +153,7 @@ export type WebchatGeminiTurnResult = {
   /** Billed tokens summed across every step; null when Google sent none. */
   usage: GeminiUsage | null;
   /**
-   * Micro-USD this turn cost — the SAME number the AI-budget meter records
+   * Micro-USD this turn cost, the SAME number the AI-budget meter records
    * (exact token math when usage exists, chars/4 estimate otherwise), so
    * per-conversation stats and the shared pool always agree. 0 for an
    * over-cap refusal (no Gemini call).
@@ -165,9 +165,9 @@ export type WebchatGeminiTurnResult = {
  * Run one widget turn against Gemini directly.
  *
  * Throws (after metering whatever Google already billed) on:
- *   * `webchat_engine_no_key` — no GOOGLE_API_KEY/GEMINI_API_KEY in env
- *   * `webchat_engine_no_input` — job carried no user turn
- *   * `webchat_engine_no_reply` — the model never produced text
+ *   * `webchat_engine_no_key`, no GOOGLE_API_KEY/GEMINI_API_KEY in env
+ *   * `webchat_engine_no_input`, job carried no user turn
+ *   * `webchat_engine_no_reply`, the model never produced text
  *   * any `gemini_http_*` transport error from the step client
  * The caller maps a throw to the job's error path (the widget shows its
  * honest retry copy).
@@ -203,7 +203,7 @@ export async function runWebchatGeminiTurn(
 
   const model = webchatEngineModel(env);
 
-  // Shared AI budget fuse FIRST — an over-cap tenant's anonymous traffic
+  // Shared AI budget fuse FIRST, an over-cap tenant's anonymous traffic
   // must not bill Gemini at all. Central has no local model to degrade to,
   // so refuse with the worker's honest copy (kvm1 parity).
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
@@ -221,7 +221,7 @@ export async function runWebchatGeminiTurn(
   // Grounding: the agent instructions exactly as the vault sync would seed
   // them, then the per-turn system blocks. Documents are best-effort (same
   // rationale as the knowledge lookup: a digest failure must not kill the
-  // turn — the document_share tool still resolves titles server-side).
+  // turn, the document_share tool still resolves titles server-side).
   const [config, documents, customerLanguages] = await Promise.all([
     fetchConfig(args.businessId),
     fetchDocuments(args.businessId).catch((err) => {
@@ -309,7 +309,7 @@ export async function runWebchatGeminiTurn(
           try {
             result = await executeTool(args.businessId, call.name, call.args);
           } catch (err) {
-            // One broken tool must not kill the turn — the model gets a
+            // One broken tool must not kill the turn, the model gets a
             // structured failure to explain, same as the webhook path.
             logger.warn("webchat gemini-engine: tool handler failed", {
               businessId: args.businessId,

@@ -4,7 +4,7 @@
  * Builds the extraction request with the CURRENT repo prompt
  * (vps/chat-worker/memory-capture.mjs) and runs a set of scenarios through the
  * worker container's Ollama (`docker exec chat-worker` → host.docker.internal).
- * It does NOT touch memory — purely classifies — so it's safe to run against a
+ * It does NOT touch memory, purely classifies, so it's safe to run against a
  * candidate prompt before deploying. Prints save/bullets per scenario and a
  * PASS/FAIL vs the expected classification.
  *
@@ -55,7 +55,7 @@ const scenarios: Scenario[] = [
   },
   {
     // The 4B model is unreliable at self-suppressing duplicates, so we expect
-    // it MAY still propose this — the authoritative guarantee against
+    // it MAY still propose this, the authoritative guarantee against
     // double-saving lives in the owner-append adapter's deterministic dedup,
     // not here. This scenario documents that the model echoes a known dup;
     // the adapter is what drops it on write.

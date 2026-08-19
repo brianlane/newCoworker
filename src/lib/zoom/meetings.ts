@@ -20,7 +20,7 @@ import { zoomRequestForBusiness, type ZoomApiRequestSpec } from "@/lib/zoom/clie
 /**
  * One Zoom API call for the business. Returns the parsed body (`{ data }`),
  * null when the business has no usable Zoom connection (none, deactivated,
- * or a revoked token). Throws on transport failures — the exported
+ * or a revoked token). Throws on transport failures, the exported
  * operations below catch and degrade.
  */
 async function zoomRequest(
@@ -56,8 +56,8 @@ function zoomStartTimeUtc(iso: string): string {
 
 /**
  * Create the scheduled Zoom meeting for a booking. Null when the business
- * has no Zoom connection or the create didn't yield a usable id + join URL
- * — the booking proceeds without a video link either way.
+ * has no Zoom connection or the create didn't yield a usable id + join URL,
+ * the booking proceeds without a video link either way.
  */
 export async function createZoomMeetingForBooking(
   businessId: string,

@@ -27,7 +27,7 @@ const {
 }));
 
 // Phase 2 (agency): the route resolves the ACTIVE business through the
-// cookie-aware helper; pin it to a fixed id here — the supabase chain mock
+// cookie-aware helper; pin it to a fixed id here, the supabase chain mock
 // below still decides which rows come back, so existing fixtures keep
 // driving each scenario.
 vi.mock("@/lib/dashboard/active-business", () => ({
@@ -559,7 +559,7 @@ describe("/api/billing/change-plan", () => {
     // is set, so this route's null-profile branch fires, upserts by
     // owner email, and may receive a NEW profile id (count=0 fresh).
     // Without the repoint, the cap-check passes on the new id while the
-    // old subscription row keeps pointing at the stale id — splitting
+    // old subscription row keeps pointing at the stale id, splitting
     // lifetime accounting across two rows and effectively bypassing the
     // lifetime cap because the orchestrator's `previousSubscriptionId`
     // lookup still resolves the stale id. The route must update
@@ -616,7 +616,7 @@ describe("/api/billing/change-plan", () => {
         vpsHost: "1.2.3.4",
         context: ctxWithStaleLinkedProfile()
       });
-      // RPC primary-keys on normalized_email — when a profile already
+      // RPC primary-keys on normalized_email, when a profile already
       // exists for the owner email, upsert returns its existing id even
       // if the linked-by-id readback failed. No divergence → no need to
       // touch the subscription row.
@@ -671,7 +671,7 @@ describe("/api/billing/change-plan", () => {
     it("does NOT call updateSubscription when subscription.customer_profile_id is null (pre-lifecycle row)", async () => {
       // Pre-lifecycle businesses can have no linked profile at all.
       // There's no stale id to repoint from, so `updateSubscription`
-      // should stay quiet — `setBusinessCustomerProfile` and the
+      // should stay quiet, `setBusinessCustomerProfile` and the
       // checkout metadata are sufficient to thread the new id through.
       supabaseFromMock.mockReturnValue(makeSupabaseBusinessChain("biz_pre"));
       loadLifecycleContextMock.mockResolvedValue({

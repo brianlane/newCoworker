@@ -5,10 +5,10 @@
  * action the user (or an automated system) wants to take.
  *
  * Output: a typed {@link LifecyclePlan} describing every side effect that
- * must happen — Stripe calls, Hostinger calls, SSH commands, DB updates,
+ * must happen, Stripe calls, Hostinger calls, SSH commands, DB updates,
  * and emails to send. The planner is pure: no network, no I/O, no Date.now
  * unless passed in explicitly via {@link LifecycleContext.now}. This is
- * the heart of deterministic unit tests — one test per action × starting
+ * the heart of deterministic unit tests, one test per action × starting
  * state.
  *
  * The accompanying executor ([./lifecycle-executor.ts]) walks the plan in
@@ -16,13 +16,13 @@
  * integration tests cover executor + planner.
  *
  * Actions (mirrors the plan file):
- *   * cancelWithRefund            — inside 30-day window, lifetime-once refund
- *   * cancelAtPeriodEnd           — stops auto-renew; stays active till period end
- *   * undoCancelAtPeriodEnd       — re-enables auto-renew; must still be active
- *   * reactivate                  — user produces a fresh checkout during grace
- *   * autoCancelOnPaymentFailure  — webhook dispatch on invoice.payment_failed
- *   * adminForceCancel            — operator-triggered immediate wipe, no grace
- *   * graceExpiredWipe            — cron-triggered at grace_ends_at
+ *   * cancelWithRefund, inside 30-day window, lifetime-once refund
+ *   * cancelAtPeriodEnd, stops auto-renew; stays active till period end
+ *   * undoCancelAtPeriodEnd, re-enables auto-renew; must still be active
+ *   * reactivate, user produces a fresh checkout during grace
+ *   * autoCancelOnPaymentFailure, webhook dispatch on invoice.payment_failed
+ *   * adminForceCancel, operator-triggered immediate wipe, no grace
+ *   * graceExpiredWipe, cron-triggered at grace_ends_at
  *
  * See [subscription_lifecycle_overhaul_6ac4c721.plan.md] for the policy and
  * state machine this engine implements.
@@ -40,7 +40,7 @@ export const GRACE_WINDOW_DAYS = 30;
 export const GRACE_WINDOW_MS = GRACE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
 // ───────────────────────────────────────────────────────────────────────
-// Plan ops — flat, serialisable, unit-testable shape.
+// Plan ops, flat, serialisable, unit-testable shape.
 // ───────────────────────────────────────────────────────────────────────
 
 export type StripeOp =
@@ -83,7 +83,7 @@ export type StripeOp =
        */
       /**
        * Billable-usage refund policy (Jul 2026): the tenant's third-party
-       * usage charges — SMS, voice minutes, Gemini spend — are non-refundable
+       * usage charges, SMS, voice minutes, Gemini spend, are non-refundable
        * (we already paid the vendors), so they are withheld from the refund
        * at platform cost. Computed by the refund routes via
        * src/lib/billing/usage-charges.ts and threaded through
@@ -100,7 +100,7 @@ export type HostingerOp =
   | {
       /**
        * Hostinger removed the public cancel-subscription endpoint (DELETE
-       * /api/billing/v1/subscriptions/{id} now 404s — verified Jul 2026), so
+       * /api/billing/v1/subscriptions/{id} now 404s, verified Jul 2026), so
        * the closest automated stop-payment we have is disabling auto-renewal.
        * The VM keeps running until the paid period lapses; actual deletion is
        * manual via hPanel, requested through `send_ops_vps_deletion_request`.
@@ -134,7 +134,7 @@ export type SshOp =
        * Terminal wipe of a CUSTOMER-owned (BYOS) box: remove every platform
        * container, directory, and `.env` secret over SSH and hand the box
        * back to its owner. Emitted only by the grace-expired wipe for
-       * `vps_provider='byos'` tenants — the BYOS replacement for stop_vm +
+       * `vps_provider='byos'` tenants, the BYOS replacement for stop_vm +
        * pool return + hPanel deletion.
        */
       type: "wipe_byos_box";
@@ -179,7 +179,7 @@ export type DbUpdateOp =
       /**
        * Return the tenant's box to the `vps_inventory` reuse pool (fleet
        * economics Phase B). Hostinger boxes are non-refundable for us until
-       * ≈Dec 30 2026, so a canceled tenant's VM stays owned — pooling it
+       * ≈Dec 30 2026, so a canceled tenant's VM stays owned, pooling it
        * lets the next matching-size signup adopt it instead of purchasing.
        * Best-effort in the executor: a pool write failure never fails the
        * cancel.
@@ -250,13 +250,13 @@ export type EmailOp =
 
 /**
  * OVH-side lifecycle ops (platform-owned Canada boxes). Optional on the
- * plan so the vast majority of (Hostinger) plans — and their test
- * fixtures — never mention it.
+ * plan so the vast majority of (Hostinger) plans, and their test
+ * fixtures, never mention it.
  */
 export type OvhOp = {
   /**
    * Stop paying for the OVH box: flip the service to delete-at-expiration.
-   * OVH's analog of Hostinger's disable-billing-auto-renewal — immediate
+   * OVH's analog of Hostinger's disable-billing-auto-renewal, immediate
    * termination requires an emailed confirmation token, so the automated
    * lever is "lapse at period end". Idempotent (re-flipping is a no-op).
    */
@@ -298,7 +298,7 @@ export type LifecycleAction =
 
 export type LifecycleContext = {
   subscription: SubscriptionRow;
-  /** Owner email on the business — used as the send-to address for all emails. */
+  /** Owner email on the business, used as the send-to address for all emails. */
   ownerEmail: string;
   /** Owner display name from the business row, for the ops deletion email. */
   ownerName?: string | null;
@@ -330,7 +330,7 @@ export type LifecycleContext = {
    */
   vpsProvider?: string | null;
   /**
-   * OVH service name (from `businesses.hostinger_vps_id` — the generic box
+   * OVH service name (from `businesses.hostinger_vps_id`, the generic box
    * id column) when the provider is 'ovh'. Drives the
    * `ovh_delete_at_expiration` op; null/omitted skips it.
    */
@@ -347,7 +347,7 @@ export type LifecycleContext = {
   /**
    * The tenant's billable third-party usage since the refunded invoice's
    * period start, priced at platform cost (src/lib/billing/usage-charges.ts).
-   * Computed by the refund routes (cancel / admin force-refund) — the
+   * Computed by the refund routes (cancel / admin force-refund), the
    * planner stays pure and just threads it into the refund op. Null/omitted
    * → 0 (non-refund plans never load it).
    */
@@ -427,7 +427,7 @@ function planCancelWithRefund(ctx: LifecycleContext): LifecyclePlanResult {
     return { ok: false, reason: "subscription_not_active" };
   }
   if (!profile) {
-    // Pre-lifecycle sub with no profile — policy says the refund right is
+    // Pre-lifecycle sub with no profile, policy says the refund right is
     // lifetime-once anchored on first_paid_at. We cannot verify that without
     // a profile, so we refuse and the user should use period-end instead.
     return { ok: false, reason: "missing_context" };
@@ -657,7 +657,7 @@ function planPeriodEndReached(ctx: LifecycleContext): LifecyclePlanResult {
 }
 
 function planReactivateUndoPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
-  // Same as undoCancelAtPeriodEnd — distinct action name for UI clarity.
+  // Same as undoCancelAtPeriodEnd, distinct action name for UI clarity.
   // The grace-period `resubscribe` path is deliberately NOT handled here;
   // it's driven by a fresh Stripe checkout + webhook, not by the planner.
   return planUndoCancelAtPeriodEnd(ctx);
@@ -690,7 +690,7 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
   /* v8 ignore next -- tests use explicit clocks; runtime default is a deterministic fallback. */
   const now = ctx.now ?? new Date();
 
-  // Admin force-cancel skips the grace window — it's an immediate wipe.
+  // Admin force-cancel skips the grace window, it's an immediate wipe.
   const plan = buildCancelPlan({
     ctx,
     now,
@@ -708,7 +708,7 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
   // here: admin force-cancel takes a final backup + Hostinger snapshot
   // (promised to the operator by DeleteClientButton's "takes a final SSH
   // backup + snapshot" copy) so those artifacts stay available for
-  // audit/recovery. The grace-expired wipe path — not admin force — is the
+  // audit/recovery. The grace-expired wipe path, not admin force, is the
   // one that cleans those artifacts up after the 30-day retention window.
   if (ctx.ownerAuthUserId) {
     plan.dbUpdates.push({
@@ -722,7 +722,7 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
   });
 
   // Force-cancel is terminal (no grace, no reactivation), so the tenant's
-  // DID is released immediately — otherwise it rents at Telnyx forever.
+  // DID is released immediately, otherwise it rents at Telnyx forever.
   if (ctx.didE164) {
     plan.telnyxOps.push({
       type: "release_did",
@@ -761,7 +761,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     emailsToSend: []
   };
 
-  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
+  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op,
   // see the LifecycleContext.vpsProvider docstring.
   const vpsProvider = resolveVpsProvider(ctx.vpsProvider);
   const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
@@ -792,7 +792,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // Dashboard, or an `autoCancelOnPaymentFailure` dispatch that failed
   // before the fire-and-forget ran), the VM is still running and
   // Hostinger billing is still charging at grace-end. The sweep is our
-  // only backstop — emit `stop_vm` + `disable_billing_auto_renewal` here
+  // only backstop, emit `stop_vm` + `disable_billing_auto_renewal` here
   // so VPS compute stops and Hostinger billing lapses at its period end
   // regardless of which cancel path got us here. Both ops are idempotent
   // via 404-tolerance in the executor, so re-running against an already
@@ -809,7 +809,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   }
   if (hostingerManaged && ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
-    // Pool the box (idempotent upsert — the cancel path usually already
+    // Pool the box (idempotent upsert, the cancel path usually already
     // did this; wipes reached via the manual-Stripe-cancel backstop haven't).
     plan.dbUpdates.push({
       type: "return_vps_to_pool",
@@ -823,7 +823,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // matters here because both `runResubscribeFromCheckout` (in
   // `change-plan-orchestrator.ts`) and `isCanceledInGrace` (in
   // `subscriptions.ts`) treat `wiped_at !== null` as the authoritative
-  // "this row's data is gone" signal — the resubscribe orchestrator's
+  // "this row's data is gone" signal, the resubscribe orchestrator's
   // pre-flight `isCanceledInGrace(oldSub)` guard AND its final
   // `updateSubscriptionIfNotWiped` write both key on it. If we ran the
   // backup-delete first and then crashed (Vercel timeout, transient
@@ -832,7 +832,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // could pass both guards, get provisioned, see `restoreBusinessData`
   // throw "no backup recorded" (which the orchestrator currently
   // catches and logs), and end up with an empty workspace they were
-  // charged for — silent data loss. Reordering closes that race
+  // charged for, silent data loss. Reordering closes that race
   // because a partial-execute now leaves `wiped_at` stamped, so both
   // the orchestrator's isCanceledInGrace guard and the
   // `updateSubscriptionIfNotWiped` server-side conditional refuse the
@@ -841,7 +841,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   //
   // Trade-off: if `delete_backup_artifact` later fails, we have an
   // orphan Supabase Storage object. That's storage cost but no
-  // correctness issue — subsequent grace-sweep cron runs are
+  // correctness issue, subsequent grace-sweep cron runs are
   // idempotent and will retry the delete (the executor logs but
   // does not throw on `delete_backup_artifact` errors so the rest of
   // the wipe proceeds).
@@ -856,7 +856,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   }
   plan.dbUpdates.push({ type: "mark_business_wiped", businessId: sub.business_id });
 
-  // The grace window is over — nobody can reactivate this subscription, so
+  // The grace window is over, nobody can reactivate this subscription, so
   // release the DID at Telnyx now. Numbers deliberately survive the whole
   // grace period (a reactivating tenant keeps their business line, worth
   // the ~$1.10/mo hold) and are only let go at this terminal wipe.
@@ -872,7 +872,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // Re-request the manual hPanel deletion at wipe time: either the original
   // cancel-path email was already actioned (this one 404s harmlessly when the
   // operator checks) or the box is still alive and this is the last automated
-  // reminder before we stop tracking the subscription. Hostinger-only —
+  // reminder before we stop tracking the subscription. Hostinger-only,
   // there is no hPanel entry for BYOS/OVH boxes.
   if (
     hostingerManaged &&
@@ -908,7 +908,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
  * The fallback deliberately stays kvm2 for starter even though the tier
  * default is now kvm1: every kvm1-era box is recorded in vps_inventory at
  * purchase/adopt time (releaseVpsToPool keeps the recorded plan), so this
- * label only ever seeds PRE-inventory starter boxes — which are all kvm2
+ * label only ever seeds PRE-inventory starter boxes, which are all kvm2
  * hardware.
  */
 function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string {
@@ -923,13 +923,13 @@ function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string
  *
  * Policy (Jul 2026 "middle path"): the guarantee stays on every plan, but a
  * term customer who exits inside 30 days pays for the service they consumed
- * at the UNCOMMITTED price — one month at the tier's monthly-intro rate —
+ * at the UNCOMMITTED price, one month at the tier's monthly-intro rate,
  * instead of keeping the term discount on a contract they didn't complete.
  * Rationale: term signups fund a prepaid 1/2-year Hostinger box that is
  * non-refundable to the platform; this caps the worst case near one month
  * of revenue (plus a poolable box) without dropping the guarantee.
  *
- * Monthly plans return 0 — their latest invoice already IS one month, so
+ * Monthly plans return 0, their latest invoice already IS one month, so
  * the existing carrier-fee carve-out is the only withholding. Enterprise
  * pricing is deal-based (`monthlyCents: 0`), so this returns 0 there too;
  * enterprise refunds remain operator judgment via admin force-refund.
@@ -958,7 +958,7 @@ function buildCancelPlan(args: {
   const sub = ctx.subscription;
   const profileId = sub.customer_profile_id ?? ctx.profile?.id ?? null;
   const graceEndsAtIso = new Date(now.getTime() + graceMs).toISOString();
-  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
+  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op,
   // see the LifecycleContext.vpsProvider docstring.
   const cancelVpsProvider = resolveVpsProvider(ctx.vpsProvider);
   const hostingerManaged = providerUsesHostingerLifecycle(cancelVpsProvider);
@@ -1034,7 +1034,7 @@ function buildCancelPlan(args: {
       // Coalesce vps_stopped_at so an idempotent retry (VM already gone,
       // ctx.virtualMachineId null) doesn't erase the accurate earlier stamp
       // produced on the first run. Only Hostinger boxes are actually
-      // stopped by this plan — a BYOS/OVH cancel must not claim a stop
+      // stopped by this plan, a BYOS/OVH cancel must not claim a stop
       // that never happened.
       vps_stopped_at:
         hostingerManaged && ctx.virtualMachineId !== null
@@ -1045,7 +1045,7 @@ function buildCancelPlan(args: {
       // Edge voice inbound's `cacheLooksValidForQuotaAfterJitFailure` path
       // cannot keep reserving minutes against a stale period after the
       // subscription is terminated. Mirrors the fallback write in the
-      // `customer.subscription.deleted` webhook branch — without this, a
+      // `customer.subscription.deleted` webhook branch, without this, a
       // cancel_at_period_end sub that hits `periodEndReached` here would
       // leave the cache looking live until period_end elapses naturally.
       stripe_current_period_start: null,
@@ -1106,7 +1106,7 @@ function buildCancelPlan(args: {
   }
   // Hostinger deletion is manual-only (panel): every cancel that tears a box
   // down asks ops to finish the job in hPanel. Non-hostinger boxes have no
-  // hPanel entry to delete — their teardown is provider-specific (BYOS SSH
+  // hPanel entry to delete, their teardown is provider-specific (BYOS SSH
   // wipe / OVH service termination).
   if (
     hostingerManaged &&

@@ -157,13 +157,13 @@ export const ONBOARDING_CHAT_RATE_LIMIT = {
 
 /**
  * Topic coverage for the chat-elicited subset of the onboarding
- * brief. Service area, team size, and CRM/tools are NOT here —
+ * brief. Service area, team size, and CRM/tools are NOT here,
  * they're collected on the Step 1 form (closed-class dropdowns,
  * validated before advance) and arrive in `knownContext` directly.
  * Including them here once meant we shipped an entire team-size
  * transcript-detection regex chain (~150 LoC) and a Q/A-pairing
  * disqualifier purely to retro-fit the chat output back into
- * `knownContext.teamSize` — work that the form now does for free.
+ * `knownContext.teamSize`, work that the form now does for free.
  */
 type OnboardingTopicStatus = {
   customerTypesKnown: boolean;
@@ -340,7 +340,7 @@ export function buildOnboardingChatSystemPrompt(
     // answered; re-asking them in chat reads as the assistant
     // ignoring the user. Only if `knownContext` is missing one of
     // them (legacy localStorage drafts that pre-date the Step 1
-    // fields) is it acceptable to confirm the answer in chat — and
+    // fields) is it acceptable to confirm the answer in chat, and
     // even then, ask once and move on.
     "Service area, team size, and CRM/tools are collected on the Step 1 form. The values in `knownContext.{serviceArea,teamSize,crmUsed}` are authoritative: do NOT re-ask those topics. If a value is empty in `knownContext`, treat it as the user choosing not to specify and skip past it rather than re-asking.",
     "If the user has no formal CRM (e.g. `knownContext.crmUsed` says \"None — texts, email, or calendar only\"), keep `profile.crmUsed` empty and capture the real operating tools under `tools` and `factsToRemember` instead.",

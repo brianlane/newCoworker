@@ -4,11 +4,11 @@
  *
  * Roles ladder (highest first): owner > manager > staff.
  *
- *  - owner   — the business's `owner_email` login. Everything, including the
+ *  - owner, the business's `owner_email` login. Everything, including the
  *              money surfaces (billing, cancel, API keys).
- *  - manager — runs the business day to day: settings, AiFlows,
+ *  - manager, runs the business day to day: settings, AiFlows,
  *              integrations, messages, and the team roster. NOT billing.
- *  - staff   — operates: sees the dashboard, works messages/calls/chat.
+ *  - staff, operates: sees the dashboard, works messages/calls/chat.
  *
  * Every business-scoped route asks `requireBusinessRole(businessId, action)`
  * (src/lib/auth.ts) instead of sprinkling its own role/ownership checks;

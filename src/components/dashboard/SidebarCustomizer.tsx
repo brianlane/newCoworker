@@ -78,7 +78,7 @@ export function SidebarCustomizer({
 
   function handleListDragLeave(e: React.DragEvent<HTMLUListElement>) {
     // Clear the target highlight when the pointer leaves the list entirely
-    // mid-drag — otherwise the last hovered row keeps its highlight until
+    // mid-drag, otherwise the last hovered row keeps its highlight until
     // the next dragover/drag-end. Moves between rows fire dragleave too, but
     // with relatedTarget still inside the list, so those are ignored.
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;

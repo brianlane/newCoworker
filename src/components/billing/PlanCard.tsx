@@ -54,7 +54,7 @@ export type PlanCardProps = {
   canChangePlan: boolean;
   changePlanBlockedReason?: string | null;
   stripeCustomerId: string | null;
-  /** subscriptions.contract_auto_renew — term plans only. */
+  /** subscriptions.contract_auto_renew, term plans only. */
   contractAutoRenew: boolean;
   /**
    * True when a term plan's original commitment has passed and the sub is

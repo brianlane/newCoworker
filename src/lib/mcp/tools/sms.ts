@@ -1,5 +1,5 @@
 /**
- * send_sms — the Claude connector's outbound text tool.
+ * send_sms, the Claude connector's outbound text tool.
  *
  * Reuses the EXACT metered send path as the dashboard compose box and the
  * public REST API (`sendTelnyxSms` with `meterBusinessId`), so monthly SMS
@@ -25,7 +25,7 @@ const MCP_SMS_SEND_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
 // Every clock time in a message body carries a named timezone (KYP/Ayanna
 // Jul 20 2026: a "3:00 PM" confirmation with no timezone went to a
-// Central-time lead about an Eastern-time call — a plausible no-show cause).
+// Central-time lead about an Eastern-time call, a plausible no-show cause).
 const MCP_TIMEZONE_RULE =
   ' If the message mentions a clock time, always include the timezone (e.g. "1:00 PM Eastern", never a bare "1:00 PM"), and when the recipient is known to be in a different timezone, give the time in THEIR timezone too.';
 
@@ -42,7 +42,7 @@ const CONTACT_NAME_ARG = z
 /**
  * Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20 2026:
  * a number the owner texted twice via this connector had NO contact row, so
- * the assistant later denied any record of her). Rollup only — deliberately
+ * the assistant later denied any record of her). Rollup only, deliberately
  * NOT the capture path's contact_created event, so an owner-initiated
  * outbound never triggers lead-follow-up automations. Best-effort: a failed
  * upsert never fails a message that already went out.
@@ -123,7 +123,7 @@ export const sendSmsTool = defineMcpTool({
       throw new McpToolError(`Could not send: ${message}`.slice(0, 300));
     }
 
-    // Best-effort log — the SMS already went out; a failed insert only means
+    // Best-effort log, the SMS already went out; a failed insert only means
     // the thread view misses the row (same policy as the dashboard compose).
     const { error: logErr } = await db.from("sms_outbound_log").insert({
       business_id: businessId,

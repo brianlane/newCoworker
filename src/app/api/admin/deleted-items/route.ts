@@ -3,11 +3,11 @@
  * owner delete actions, which look like hard deletes on the dashboard).
  *
  * GET  /api/admin/deleted-items?businessId=<uuid>
- *        → { items: DeletedItem[] } — newest deletion first, SMS rows folded
+ *        → { items: DeletedItem[] }, newest deletion first, SMS rows folded
  *          into one entry per conversation.
  * POST /api/admin/deleted-items
  *        body { businessId, type, id, action: "restore" }
- *        → { restored } — clears the stamp (central + box for residency
+ *        → { restored }, clears the stamp (central + box for residency
  *          tenants); the item instantly reappears for the owner. Audited to
  *          coworker_logs.
  */
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
 
     const { restored } = await restoreDeletedItem(body.businessId, body.type, body.id);
 
-    // Audit the resurrection — an admin restoring tenant-deleted content
+    // Audit the resurrection, an admin restoring tenant-deleted content
     // must be visible in the ops trail. Best-effort: the restore itself
     // already happened.
     try {

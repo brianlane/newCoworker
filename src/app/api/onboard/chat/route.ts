@@ -23,7 +23,7 @@ function resolveOnboardingModels(): string[] {
 
 // Hard ceiling on total route time. Sized so the worst-case negative path
 // (both models exhaust their per-attempt timeout) finishes with comfortable headroom
-// before the platform tears the function down — see the math next to
+// before the platform tears the function down, see the math next to
 // `OPENROUTER_ATTEMPT_TIMEOUT_MS` below.
 export const maxDuration = 45;
 
@@ -52,7 +52,7 @@ const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20_000;
 //   1. Latency: each output token costs ~10-20ms, so an uncapped runaway response could
 //      easily blow past OPENROUTER_ATTEMPT_TIMEOUT_MS even on a healthy provider.
 //   2. Cost: misbehaving models can loop or hallucinate verbosely; the cap caps the bill.
-//   3. Safety: `response_format: { type: "json_object" }` constrains shape, not length —
+//   3. Safety: `response_format: { type: "json_object" }` constrains shape, not length,
 //      without a cap we'd inherit whatever provider default applies (often 4-8K).
 //
 // Sizing: every turn the model has to re-emit the *full* assistant profile (16 fields,
@@ -198,7 +198,7 @@ function shouldSuppressRepeatedToolsQuestion(
 }
 
 // Detects "dead-end" assistant turns: messages with no question for the user to answer.
-// Question-mark presence is a deliberately conservative signal — it catches the failure
+// Question-mark presence is a deliberately conservative signal, it catches the failure
 // mode we've actually observed in production ("you can continue by answering the next
 // question; we should be ready to finalize soon" with no `?`) without false-positives on
 // legitimately question-bearing messages.
@@ -207,7 +207,7 @@ function hasQuestionForUser(message: string): boolean {
 }
 
 // Drives every fallback question off the server-computed `topicStatus`, which now
-// only contains the chat-elicited topics — service area / team size / CRM are
+// only contains the chat-elicited topics, service area / team size / CRM are
 // collected on the Step 1 form (closed-class dropdowns, validated before advance)
 // and never need a chat fallback. The priority order here matches
 // `areAllChatTopicsCovered`'s coverage check, so the dead-end guard's
@@ -301,7 +301,7 @@ export async function POST(request: Request) {
         // - anything else (DNS, TLS, socket reset mid-stream, etc.) -> non-abort failure
         // Flagging both via `attemptFailed` keeps the failure guard below correct even
         // when `fetch()` resolved with `response.ok === true` but `response.text()` then
-        // threw — otherwise we'd fall into JSON parsing and mislabel the failure as
+        // threw, otherwise we'd fall into JSON parsing and mislabel the failure as
         // `invalid_json` in logs.
         attemptFailed = true;
         timedOut =
@@ -386,7 +386,7 @@ export async function POST(request: Request) {
     // `knownContext.crmUsed?.trim()` (form-collected on Step 1) /
     // `profile.{crmUsed,tools}` / a transcript-mention-count
     // threshold, so a redundant outer `topicStatus.toolsKnown` guard
-    // is no longer needed — the inner check is the actual contract.
+    // is no longer needed, the inner check is the actual contract.
     if (
       isRepeatedToolsQuestion(parsed.assistantMessage) &&
       shouldSuppressRepeatedToolsQuestion(body, parsed.profile, body.messages)
@@ -397,7 +397,7 @@ export async function POST(request: Request) {
       };
     }
 
-    // Dead-end guard: the model occasionally telegraphs "we're almost done — answer the
+    // Dead-end guard: the model occasionally telegraphs "we're almost done, answer the
     // next question" without actually asking one and without setting readyToFinalize.
     // That leaves the user stuck (no question to answer, Continue button disabled) and
     // forces a wasted round-trip just to elicit the missing question. The prompt forbids
@@ -408,7 +408,7 @@ export async function POST(request: Request) {
     //     server's view of what's still missing.
     //
     // The "covered" check intentionally ignores the form-collected topics
-    // (serviceArea/teamSize/tools) — they're not chat's responsibility to elicit, and
+    // (serviceArea/teamSize/tools), they're not chat's responsibility to elicit, and
     // gating on `Object.values(topicStatus).every(Boolean)` would deadlock legacy
     // localStorage drafts whose `knownContext.{serviceArea,teamSize,crmUsed}` are
     // empty: those fields would never flip to `known`, so `allTopicsCovered` would
@@ -426,8 +426,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Whenever the conversation is finalized — whether the model set it, or the dead-end
-    // guard forced it above — the brief is by definition complete. Clamp the progress
+    // Whenever the conversation is finalized, whether the model set it, or the dead-end
+    // guard forced it above, the brief is by definition complete. Clamp the progress
     // metadata so downstream consumers (UI summaries, persisted state, future analytics)
     // never see a finalized response carrying a stale "92% captured" + non-empty
     // missingTopics from an earlier turn.

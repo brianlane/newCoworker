@@ -1,5 +1,5 @@
 /**
- * start_aiflow_for_contact — the texting coworker's ONLY path into AiFlows
+ * start_aiflow_for_contact, the texting coworker's ONLY path into AiFlows
  * (src/lib/ai-flows/agent-start-flow.ts).
  *
  * The customer-facing SMS persona is deliberately barred from the owner's
@@ -7,7 +7,7 @@
  * the owner's automations"). This tool is the narrow, double-gated
  * exception: it may enroll ONLY the current texter, ONLY into flows the
  * owner explicitly flagged `options.agentInvocable`, and NEVER when that
- * person already has a live run of the flow (the loop guard — a flow-sent
+ * person already has a live run of the flow (the loop guard, a flow-sent
  * text must not cause the model to re-enroll the same contact).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,12 +1,12 @@
 /**
  * Service-role data access for the website chat widget
  * (chat_widget_settings / webchat_sessions / webchat_messages /
- * webchat_jobs — migration 20260819000000_webchat_widget.sql).
+ * webchat_jobs, migration 20260819000000_webchat_widget.sql).
  *
  * Every table is RLS-on/no-policies, so ALL access flows through here after
  * the caller's own auth: the public widget routes verify the site key +
  * per-session bearer (src/lib/webchat/service.ts) and the dashboard routes
- * gate on requireBusinessRole — same trust model as db/dashboard-chat.ts.
+ * gate on requireBusinessRole, same trust model as db/dashboard-chat.ts.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -26,7 +26,7 @@ export type ChatWidgetSettingsRow = {
   theme: unknown | null;
   /**
    * Who answers widget turns: 'vps' = the box chat-worker (default),
-   * 'gemini' = the platform-side direct responder (no VPS required) —
+   * 'gemini' = the platform-side direct responder (no VPS required),
    * see src/lib/webchat/gemini-engine.ts. Admin-only knob; optional on
    * the type for rows read before 20260805000100_webchat_reply_engine.
    */
@@ -83,18 +83,18 @@ export type WebchatJobRow = {
   completed_at: string | null;
   /**
    * Pre-built turn input (see /api/widget/message). Present only on reads
-   * that select them (getWebchatJobById) — the Gemini reply engine consumes
+   * that select them (getWebchatJobById), the Gemini reply engine consumes
    * stateless_input_messages ?? input_messages, the same precedence the
    * chat-worker applies to its always-stateless turns.
    */
   input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
   stateless_input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
-  /** Present on platform claim/reclaim reads — identifies THIS claim generation. */
+  /** Present on platform claim/reclaim reads, identifies THIS claim generation. */
   claimed_at?: string | null;
 };
 
 /**
- * API-shape projection of stored messages — single source of truth for the
+ * API-shape projection of stored messages, single source of truth for the
  * `{ id, role, content, createdAt }` envelope the widget poll route and the
  * owner transcript route both return (mirrors serializeChatMessages).
  */
@@ -142,7 +142,7 @@ export async function getWidgetSettingsByKeyHash(
 /**
  * Get the business's widget settings, minting the row (disabled, fresh
  * site key) on first touch. Two concurrent first-touches can race the
- * insert; the primary key makes one lose — we swallow that and re-read the
+ * insert; the primary key makes one lose, we swallow that and re-read the
  * winner (same pattern as getOrCreateActiveThread).
  */
 export async function getOrCreateWidgetSettings(
@@ -194,7 +194,7 @@ export async function updateWidgetSettings(
 }
 
 /**
- * Rotate the site key. Old embeds stop resolving immediately — the owner
+ * Rotate the site key. Old embeds stop resolving immediately, the owner
  * settings card shows the new snippet to paste. Returns the updated row
  * (public_key is the new plaintext; it is public by design).
  */
@@ -254,7 +254,7 @@ export async function createWebchatSession(
 
 /**
  * Overwrite the session's visitor_meta (page-trail appends). Best-effort
- * read-modify-write — a lost race drops one page hop, never a message.
+ * read-modify-write, a lost race drops one page hop, never a message.
  */
 export async function updateWebchatSessionMeta(
   sessionId: string,
@@ -469,7 +469,7 @@ export async function listWebchatMessagesSince(
 }
 
 /**
- * Count of VISITOR messages for a business since `sinceIso` — the
+ * Count of VISITOR messages for a business since `sinceIso`, the
  * per-business daily ceiling read (abuse control on an anonymous surface).
  */
 export async function countWebchatUserMessagesSince(
@@ -565,7 +565,7 @@ export async function getWebchatJobById(
 // ---------------------------------------------------------------------
 // Platform-side (Gemini reply engine) job lifecycle. The box chat-worker
 // claims via the claim_webchat_job RPC; the platform engine claims with a
-// conditional UPDATE — the `status = 'queued'` filter is the lock, so a
+// conditional UPDATE, the `status = 'queued'` filter is the lock, so a
 // worker that somehow raced us matches zero rows and exactly one engine
 // ever answers a job.
 // ---------------------------------------------------------------------
@@ -577,7 +577,7 @@ export const WEBCHAT_PLATFORM_WORKER_ID = "platform-gemini-engine";
  * Sentinel stored in webchat_sessions.rowboat_conversation_id after a
  * platform-engine reply. The enqueue route treats ANY non-empty value as
  * "this session has prior history" and switches to the full 20-message
- * stateless tail — without it, gemini-engine tenants would be stuck on the
+ * stateless tail, without it, gemini-engine tenants would be stuck on the
  * 8-message resend tail forever and multi-turn chats would lose context
  * versus the worker path (Bugbot Medium on PR #592). Harmless if the
  * tenant later flips back to 'vps': the worker never RESUMES the id (all
@@ -597,7 +597,7 @@ export const WEBCHAT_PLATFORM_RECLAIM_AFTER_MS = 60_000;
 
 /**
  * Atomically claim a still-queued job for the platform engine. Null when
- * the claim lost (already claimed/answered) — the caller just re-reads.
+ * the claim lost (already claimed/answered), the caller just re-reads.
  */
 export async function claimWebchatJobForPlatform(
   jobId: string,
@@ -627,7 +627,7 @@ export async function claimWebchatJobForPlatform(
  * Steal a WEDGED platform claim: same conditional-UPDATE lock, but against
  * a 'processing' row whose platform claim went stale (route crashed
  * mid-turn, or the error-flip itself failed). Guarded to the platform's
- * own claimed_by — a box worker's in-flight claim is never stolen (its own
+ * own claimed_by, a box worker's in-flight claim is never stolen (its own
  * reclaimer owns that). Null when the row is absent, healthy, or raced.
  */
 export async function reclaimStaleWebchatJobForPlatform(
@@ -664,7 +664,7 @@ export async function reclaimStaleWebchatJobForPlatform(
  *
  * Atomicity is load-bearing (Bugbot High on PR #592): with separate
  * writes, "message inserted but job flip failed" left a 'processing' row
- * the stale-claim reclaim would answer AGAIN — duplicate assistant reply,
+ * the stale-claim reclaim would answer AGAIN, duplicate assistant reply,
  * double Gemini billing. The RPC makes partial states impossible, and a
  * replay against an already-done job idempotently returns the original
  * message id.
@@ -711,7 +711,7 @@ export async function completeWebchatJobFromPlatform(
  * (`claimed_at` is the token): after a stale reclaim, two requests can
  * briefly hold the same turn, and the slow loser's catch path must never
  * stamp 'error' over a job the winner committed as 'done' (Bugbot High on
- * PR #592) — nor over a fresh claim a later reclaimer took. A raced flip
+ * PR #592), nor over a fresh claim a later reclaimer took. A raced flip
  * matches zero rows, which is exactly right.
  */
 export async function failWebchatJobFromPlatform(

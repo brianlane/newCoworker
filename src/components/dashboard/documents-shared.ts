@@ -1,7 +1,7 @@
 /**
  * Shared client-side types + tiny display helpers for the Documents surfaces
  * (the Drive-style list in DocumentsManager and the per-document editor in
- * DocumentDetail). Pure data/formatting only — no fetching.
+ * DocumentDetail). Pure data/formatting only, no fetching.
  */
 
 export type DocumentItem = {
@@ -37,7 +37,7 @@ export const AUDIENCE_LABELS: Record<DocumentItem["audience"], string> = {
   both: "Customers + internal"
 };
 
-/** The folder a document lives in — category, defaulting like the API does. */
+/** The folder a document lives in, category, defaulting like the API does. */
 export function documentFolder(doc: Pick<DocumentItem, "category">): string {
   return doc.category.trim() || "general";
 }
@@ -112,7 +112,7 @@ export async function openOriginalFile(
     }
     // Both modes use a transient anchor click. NOT window.open: with the
     // "noopener" feature it returns null BY SPEC even when the tab opens,
-    // so a null-check misreports success as a blocked pop-up — and anchor
+    // so a null-check misreports success as a blocked pop-up, and anchor
     // clicks aren't subject to pop-up blocking in the first place.
     const a = document.createElement("a");
     a.href = json.data.url;

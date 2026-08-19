@@ -57,7 +57,7 @@ export async function refreshBusinessProfileMd(
 
   // Knowledge graph (kg-source: business_profile): the business's own
   // organization node with its structured facts. Hours deliberately stay
-  // out of the graph — profile_md is the canonical hours answer source in
+  // out of the graph, profile_md is the canonical hours answer source in
   // every prompt already; duplicating a JSON-ish hours blob as a fact adds
   // noise, not signal. Never-throws, mode-gated inside.
   await ingestBusinessProfile(businessId, {

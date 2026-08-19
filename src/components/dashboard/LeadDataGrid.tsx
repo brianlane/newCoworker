@@ -6,7 +6,7 @@
  * Rows come from /api/dashboard/leads-data (lead_submissions folded onto
  * contacts); columns are fixed lead identity/stage fields plus DYNAMIC
  * columns from the submitted answers (whatever the tenant's form collects).
- * The Stage cell is an inline dropdown over the selected pipeline's stages —
+ * The Stage cell is an inline dropdown over the selected pipeline's stages,
  * it calls the same move endpoint as the board's drag-and-drop, so tag
  * automation (tag_changed flows, goal events, Meta CAPI feedback) fires
  * identically. Export downloads the visible rows as CSV.

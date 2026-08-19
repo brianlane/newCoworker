@@ -17,10 +17,10 @@
  *      "{{vars.web_source}}" (owner emails' "lead from ReferralExchange:" and
  *      the route/notify steps' "Lead source: ReferralExchange
  *      (referralexchange.com)" lines). Lead-facing SMS/email copy is left
- *      untouched — it already names RealEstateAgents.com deliberately.
+ *      untouched, it already names RealEstateAgents.com deliberately.
  *
  * NOTE: the "Web Source" value renders as a logo IMAGE (alt="realestateagents"),
- * which document.body.innerText drops — the paired render-service change
+ * which document.body.innerText drops, the paired render-service change
  * (readPageText in vps/aiflow-render/server.mjs) inlines image alt text so the
  * extractor can actually see it. Until that lands on the tenant's VPS the
  * field simply falls back to "ReferralExchange", which matches today's copy.

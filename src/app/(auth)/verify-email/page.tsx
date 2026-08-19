@@ -34,7 +34,7 @@ type Props = {
  * a security pre-flight, often before the human has even opened the
  * inbox. An earlier revision of this page called `markEmailVerifiedByEmail`
  * inline on the GET path, which silently consumed the verification on
- * the scanner's behalf — flipping `customer_profiles.email_verified_at`
+ * the scanner's behalf, flipping `customer_profiles.email_verified_at`
  * for accounts whose owner never actually clicked the link. The
  * dashboard banner would then disappear with no user action, making the
  * verification signal worthless and removing the resend affordance for
@@ -43,7 +43,7 @@ type Props = {
  * Today this page only:
  *   1. Reads the HMAC-signed token from the URL.
  *   2. Decides which static screen to render (valid / expired / invalid /
- *      missing). Token verification is purely cryptographic — no DB
+ *      missing). Token verification is purely cryptographic, no DB
  *      reads, no side effects.
  *   3. For the `valid` branch, mounts {@link ConfirmForm}, which renders
  *      a button that POSTs to {@link confirmEmailVerificationAction}.

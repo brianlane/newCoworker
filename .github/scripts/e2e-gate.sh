@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# e2e-gate.sh — hold a gated job (the Vercel preview deploy, the live-AI e2e
+# e2e-gate.sh, hold a gated job (the Vercel preview deploy, the live-AI e2e
 # suite) until EVERY other signal on the PR is green, then let it run.
 #
 # Why this exists: `needs:` can only gate on jobs in the same workflow file,
 # but the repo's merge bar spans other workflows (CodeQL's Analyze, audit)
-# and GitHub Apps (Cursor Bugbot, GitGuardian, Vercel) — plus "every review
+# and GitHub Apps (Cursor Bugbot, GitGuardian, Vercel), plus "every review
 # thread resolved", which is not a check at all. This script polls the
 # check-runs API, the commit-status API, and the reviewThreads GraphQL until
 # all of them pass, mirroring the repo merge policy:
@@ -13,17 +13,17 @@
 #     NOT a pass: Cursor Bugbot reports neutral ("skipping") exactly when it
 #     has open review conversations, so a neutral Bugbot keeps this gate
 #     closed until the threads are fixed/resolved (Bugbot then flips to
-#     SUCCESS on its own, no new commit needed — re-run this job).
+#     SUCCESS on its own, no new commit needed, re-run this job).
 #   - every commit status context must be "success" (GitGuardian/Vercel
 #     report here on some plans; harmless overlap if they use check runs).
 #   - zero unresolved review threads. Unlike a pending check, a thread can
-#     never resolve itself — someone has to fix the finding — so this fails
+#     never resolve itself, someone has to fix the finding, so this fails
 #     IMMEDIATELY instead of polling out the whole timeout on a wait that
 #     cannot succeed. Resolve the threads, then re-run this job.
 #
 # Hard failures (failure / cancelled / timed_out / action_required / error /
 # unresolved threads) exit immediately; pending or neutral states poll until
-# GATE_TIMEOUT_MINS, then fail with a summary — "Re-run failed jobs" picks
+# GATE_TIMEOUT_MINS, then fail with a summary, "Re-run failed jobs" picks
 # the gate back up after a human resolves whatever it was waiting on.
 #
 # Expected env: GH_TOKEN, REPO ("owner/name"), SHA, PR (number).
@@ -33,7 +33,7 @@ set -euo pipefail
 # "Vercel Deploy" runs the gate before deploying and "E2E (live AI +
 # AiFlows)" `needs` the deploy, so including either would deadlock the
 # deploy's gate against the queued e2e check. The dependabot automation jobs
-# (labeler + auto-merge evaluator) skip BY DESIGN on non-dependabot PRs —
+# (labeler + auto-merge evaluator) skip BY DESIGN on non-dependabot PRs,
 # their "skipped" check runs are plumbing, not merge signals. auto-merge in
 # particular lands mid-run (workflow_run after CI/CodeQL/Dependency Audit
 # complete), so without the exclusion it would hard-fail every human PR's
@@ -59,7 +59,7 @@ while true; do
     map(select(.name as $n | $excluded | index($n) | not))
     | map(select(.status != "completed" or .conclusion != "success"))
     | .[] | "\(.name): \(.status)/\(.conclusion // "-")"' <<<"$check_runs")
-  # Terminal non-success conclusions fail the gate immediately — including
+  # Terminal non-success conclusions fail the gate immediately, including
   # "skipped", which never flips on its own (per the merge policy a skipped
   # check is NOT passing; waiting on it would just burn the timeout). The
   # one deliberately-poll-able non-success state is NEUTRAL: Cursor Bugbot
@@ -76,7 +76,7 @@ while true; do
   fi
   [ -n "$not_green" ] && blockers+="checks not green:"$'\n'"$not_green"$'\n'
 
-  # --- Commit statuses (legacy status API — some apps report here) ---
+  # --- Commit statuses (legacy status API, some apps report here) ---
   statuses=$(gh api "repos/${REPO}/commits/${SHA}/status" -q '
     .statuses | map({context, state}) | unique_by(.context)')
   status_failed=$(jq -r '
@@ -94,7 +94,7 @@ while true; do
   # unresolved thread beyond page one must still hold the gate.
   # Fails FAST: threads only resolve through human/agent action (fix the
   # finding, mark it resolved), which in practice takes longer than the gate
-  # timeout — polling would just burn runner minutes before failing anyway.
+  # timeout, polling would just burn runner minutes before failing anyway.
   owner="${REPO%%/*}"
   name="${REPO##*/}"
   unresolved=$(gh api graphql --paginate \

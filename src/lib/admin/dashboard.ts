@@ -13,7 +13,7 @@ export function formatAdminLabel(value: string): string {
  *
  * `urgent_alert` deliberately does NOT get the loud solid-orange treatment:
  * those rows mean "the tenant's owner was paged" (needs-human, urgent caller
- * capture, notify_team) — the tenant is already handling it, so for the
+ * capture, notify_team), the tenant is already handling it, so for the
  * platform admin they are awareness, not incidents. The outlined-orange
  * `high_load` style keeps them warm without screaming. Only `error` rows
  * (provisioning failures, AI task errors) are admin-actionable and stay loud.
@@ -70,7 +70,7 @@ function payloadString(
 }
 
 /**
- * "Who is this about?" — name + phone when both exist, either alone
+ * "Who is this about?", name + phone when both exist, either alone
  * otherwise. Covers every person-shaped key the coworker_logs writers use
  * (voice capture/notify_team, SMS notify_team, webchat/messenger captures,
  * and the edge alert helpers' contact_label).
@@ -102,7 +102,7 @@ function detailText(payload: Record<string, unknown> | null): string | null {
 }
 
 /**
- * Human one-liner for a fleet alert row, derived from `log_payload` — the
+ * Human one-liner for a fleet alert row, derived from `log_payload`, the
  * admin counterpart of the owner-facing summary builders (the notifications
  * Edge function and the dashboard activity feed's alertLabel). Before this,
  * the Recent Alerts card showed only the raw task_type ("Sms") and a
@@ -169,7 +169,7 @@ export function parseAlertStatusesParam(raw: string | undefined): string[] {
  * `payload.logId` = the coworker_logs id (stamped by the notifications Edge
  * function and the Node dispatch call sites alike), so `?logId=` deep-links
  * to the exact alert. `error` rows (provisioning/system failures) are never
- * dispatched owner-side — they have no tenant page, so callers keep the
+ * dispatched owner-side, they have no tenant page, so callers keep the
  * admin business link.
  */
 export function adminAlertHref(log: { id: string; status: string }): string | null {

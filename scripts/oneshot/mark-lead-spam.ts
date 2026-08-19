@@ -1,12 +1,12 @@
 /**
- * mark-lead-spam.ts — owner declared a lead spam; make the platform actually
+ * mark-lead-spam.ts, owner declared a lead spam; make the platform actually
  * honor it: suppress the number, cancel their pending AiFlow runs, and mark
  * the contact.
  *
  * Background (Jul 23 2026, KYP Ads): a junk Facebook lead ("Hhh",
  * +12038097763) enrolled in "Lead follow-up (white-glove build)". James
  * texted "hes spam" and the owner-operator turn REPLIED "I'll flag Hhh as
- * spam and stop all follow-ups" — but that surface has no tool that can do
+ * spam and stop all follow-ups", but that surface has no tool that can do
  * either, so the run stayed parked in awaiting_reply with three nudges
  * still ahead of it. This script is the hot fix; the permanent fix is the
  * flag_contact_spam coworker tool that gives the promise real machinery.
@@ -15,17 +15,17 @@
  * the lead's FULL identity set (the given number + the matched contact's
  * canonical customer_e164 + every merged alias), since flows may hold runs
  * under a different number than the one the owner quoted:
- *   1. sms_set_opt_out RPC for every number in the set — the same STOP-list
+ *   1. sms_set_opt_out RPC for every number in the set, the same STOP-list
  *      every send path already checks (ai-flow-worker, sms-inbound-worker,
  *      scheduled sends, Node send sites), so nothing can text this lead
  *      again for this business.
  *   2. Cancel every pending AiFlow run for the lead (every non-terminal
- *      state, running included — cooperative cancel) with the owner-stop
+ *      state, running included, cooperative cancel) with the owner-stop
  *      shape (status: canceled + context.canceled audit entry) so the runs
  *      page renders it natively. Unlike stop-on-response, human-parked runs
  *      are canceled too: spam means zero further activity of any kind.
  *   3. Tag the contact "spam" and append a pinned note (dedupe-safe).
- *      Deliberately a direct write: no tag_changed contact-event hook — a
+ *      Deliberately a direct write: no tag_changed contact-event hook, a
  *      spam declaration must never start MORE automation.
  *
  * Usage:
@@ -67,7 +67,7 @@ const db = createClient(
 
 const SPAM_TAG = "spam";
 /**
- * Statuses a spam declaration cancels — every non-terminal state, matching
+ * Statuses a spam declaration cancels, every non-terminal state, matching
  * the dashboard owner-stop's CANCELABLE_RUN_STATUSES (src/lib/ai-flows/db.ts).
  * `running` cancels cooperatively: the worker re-reads status at each step
  * boundary and quits when it sees canceled.
@@ -84,7 +84,7 @@ const PENDING_STATUSES = [
 // ---------------------------------------------------------------------------
 // Current state: contact row, opt-out status, pending runs for this lead.
 // ---------------------------------------------------------------------------
-// Match the primary number OR a merged alias (alias_e164s) — the same
+// Match the primary number OR a merged alias (alias_e164s), the same
 // resolution the interaction writes use, so a merged contact still gets
 // tagged.
 const { data: contactRows, error: contactErr } = await db
@@ -101,7 +101,7 @@ const contact = (contactRows ?? [])[0] ?? null;
 
 // The FULL identity set: the number the owner gave, the contact's canonical
 // number, and every merged alias. Flows may hold runs (and send texts) under
-// the canonical number even when the owner quoted an alias — suppression and
+// the canonical number even when the owner quoted an alias, suppression and
 // run cancels must cover them all.
 const numbers = [
   ...new Set(
@@ -129,7 +129,7 @@ for (const n of numbers) {
 
 // Same lead-identity keys the goal jumps / stop-on-response use (the
 // triggering sender, the extracted lead phone, the number a wait/call is
-// parked on) — across EVERY number in the identity set.
+// parked on), across EVERY number in the identity set.
 const runMatchOr = numbers
   .flatMap((n) => [
     `context->trigger->>from.eq.${n}`,
@@ -174,7 +174,7 @@ if (!APPLY) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Opt-out suppression for the whole identity set (idempotent RPC — same
+// 1. Opt-out suppression for the whole identity set (idempotent RPC, same
 //    store STOP writes).
 // ---------------------------------------------------------------------------
 for (const n of numbers) {
@@ -236,7 +236,7 @@ if (contact) {
   const pinned = typeof contact.pinned_md === "string" ? contact.pinned_md : "";
   const updates: Record<string, unknown> = {};
   if (!tags.includes(SPAM_TAG)) {
-    // contacts_tags_cap_chk caps tags at 25 — a full tag list must not make
+    // contacts_tags_cap_chk caps tags at 25, a full tag list must not make
     // the whole update fail after suppression/cancels already landed. The
     // pinned note still records the declaration.
     if (tags.length >= 25) {

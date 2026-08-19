@@ -112,7 +112,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
 
   it("derives the LEGACY deployed size (kvm8) for an unpinned standard tenant", async () => {
     // vps_size null on a standard tenant = pre-pin era box, which was
-    // deployed on kvm8 hardware — the pool plan must describe the real
+    // deployed on kvm8 hardware, the pool plan must describe the real
     // hardware or the adopt-first size match would hand a kvm8 box to a
     // kvm2 signup.
     const res = await POST(makeRequest(), makeCtx());
@@ -140,7 +140,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     // Compare-and-swap cancel: only lands while the row is still
     // Stripe-less (grace_ends_at cleared inside the helper).
     expect(cancelSubscriptionIfStripeless).toHaveBeenCalledWith("sub-row-1");
-    // Billing id came from the subscription row — no VM detail call needed.
+    // Billing id came from the subscription row, no VM detail call needed.
     expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-pilot");
     expect(getVirtualMachineMock).not.toHaveBeenCalled();
   });

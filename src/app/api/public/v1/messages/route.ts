@@ -1,5 +1,5 @@
 /**
- * POST /api/public/v1/messages — send an SMS through the tenant's number.
+ * POST /api/public/v1/messages, send an SMS through the tenant's number.
  *
  * The Zapier "Send SMS" action (and any other API client) lands here.
  * Reuses the exact metered send path as the dashboard compose box
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Best-effort log — the SMS already went out; a failed insert only means
+    // Best-effort log, the SMS already went out; a failed insert only means
     // the thread view misses the row (same policy as dashboard compose).
     const { data: logRow, error: logErr } = await db
       .from("sms_outbound_log")

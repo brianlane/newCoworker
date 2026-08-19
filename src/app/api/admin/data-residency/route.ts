@@ -15,7 +15,7 @@ const bodySchema = z.object({
 /**
  * Admin-only flip of a tenant's data-residency rollout mode
  * (supabase → dual → vps and back). The enterprise tier gate is enforced
- * inside updateDataResidencyMode, so this route stays a thin shell —
+ * inside updateDataResidencyMode, so this route stays a thin shell,
  * the same gate protects any future caller.
  */
 export async function POST(request: Request) {

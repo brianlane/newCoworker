@@ -32,8 +32,8 @@ export function SearchControl({
 }) {
   const inputId = `${idPrefix}-input`;
   return (
-    // Grows to the available row width below md — the mobile 16px form-control
-    // font needs the room for the placeholder — and hugs the fixed input at md+.
+    // Grows to the available row width below md, the mobile 16px form-control
+    // font needs the room for the placeholder, and hugs the fixed input at md+.
     <div className="relative min-w-0 grow md:grow-0">
       <label htmlFor={inputId} className="sr-only">
         Search

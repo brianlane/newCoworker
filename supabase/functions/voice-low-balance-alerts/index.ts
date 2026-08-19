@@ -89,7 +89,7 @@ serve(async (req: Request) => {
   for (const t of targets) {
     const to = (t.owner_email ?? "").trim();
     if (!to) {
-      // Row was claimed (disarmed) but we can't email — put it back so the next run
+      // Row was claimed (disarmed) but we can't email, put it back so the next run
       // can retry if owner_email is populated by then.
       await rearm(t, "no_owner_email");
       skipped += 1;

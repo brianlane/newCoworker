@@ -6,7 +6,7 @@ import { SITE_URL } from "@/lib/marketing/site-url";
  * Keep in sync with `supabase/functions/_shared/branded_email_html.ts` for Edge.
  *
  * Supabase Dashboard auth templates (Confirm signup, Magic link, Reset password)
- * are not generated here — operators should paste the same visual structure
+ * are not generated here, operators should paste the same visual structure
  * using `{{ .SiteURL }}`, `{{ .ConfirmationURL }}`, `{{ .Email }}`.
  */
 
@@ -52,7 +52,7 @@ export type BrandedEmailHtmlInput = {
   /**
    * When false, omit the platform team signature block. Set false for mail
    * sent under a TENANT identity (e.g. email campaigns from the coworker
-   * mailbox) — the platform's name/phone must not appear under a business's
+   * mailbox), the platform's name/phone must not appear under a business's
    * From header. Defaults to true (platform-sent mail).
    */
   platformSignature?: boolean;
@@ -188,7 +188,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
       : "";
 
   // Platform signature (Truly-style: logo left, stacked details right). The
-  // phone line is the HQ number — answered by our own AI coworker (the demo).
+  // phone line is the HQ number, answered by our own AI coworker (the demo).
   // Deliberately no physical address. Mirrors docs/email-signatures.html.
   const signatureBlock =
     input.platformSignature === false

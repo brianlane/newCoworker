@@ -2,7 +2,7 @@
  * Sanity filter for AI-extracted contact fields.
  *
  * Why: a page/email extraction can grab the BUSINESS'S OWN contact info
- * instead of the lead's — the Jul 7 HomeLight failure re-opened a claim
+ * instead of the lead's, the Jul 7 HomeLight failure re-opened a claim
  * landing page with no lead card, and the extractor answered with Amy's name
  * and her Coworker DID. Downstream that junk became a bogus contact row, a
  * useless "lead is yours" text, and a lead_sms addressed to our own number
@@ -10,7 +10,7 @@
  *
  * A lead's phone can never legitimately equal the business's own numbers, so
  * any extracted value that normalizes to one of them is treated as NOT
- * extracted (cleared to "") — which also re-opens the field for
+ * extracted (cleared to ""), which also re-opens the field for
  * email_extract's fillOnlyEmpty backfill.
  *
  * Pure (callers fetch the self-number list) so it unit-tests under the
@@ -34,7 +34,7 @@ export type ScrubResult = {
 
 /**
  * Does `value` parse to a phone that matches one of the business's own
- * numbers? BOTH sides are normalized to E.164 first — self numbers can be
+ * numbers? BOTH sides are normalized to E.164 first, self numbers can be
  * stored in free-form shapes (businesses.phone is captured verbatim at
  * onboarding), and the compared value may arrive in page formatting. Shared
  * by the extraction scrub AND the worker's send_sms self-send guard so the
@@ -49,7 +49,7 @@ export function isSelfPhone(value: string, selfNumbers: readonly string[]): bool
 /**
  * Clear every extracted field whose value is one of the business's own phone
  * numbers. Non-phone values (names, addresses, emails, "none") are never
- * touched — only a value that PARSES to a phone and MATCHES a self number is
+ * touched, only a value that PARSES to a phone and MATCHES a self number is
  * discarded, so a legitimate lead phone always survives.
  */
 export function scrubSelfPhones(
@@ -72,10 +72,10 @@ export function scrubSelfPhones(
 /**
  * Self-NAME guard (Jul 22 2026 "Hi Amy" regression): the Clever group intro
  * mentions the tenant's own agent four times and the seller twice, and the
- * extractor answered "Amy" (our agent) for "the seller's first name" — the
+ * extractor answered "Amy" (our agent) for "the seller's first name", the
  * canned greeting then addressed the seller by our own agent's name. Unlike
  * a self PHONE (never legitimate), a lead CAN genuinely share a name with
- * the owner or a roster member, so a match here doesn't clear the value —
+ * the owner or a roster member, so a match here doesn't clear the value,
  * it triggers ONE extraction retry with an explicit "that is our own
  * agent" hint (see the worker's extract_text step), and the retry's answer
  * wins only when it names someone else.
@@ -84,7 +84,7 @@ export function scrubSelfPhones(
 /**
  * Is this extraction field asking for a PERSON's name (a lead, seller,
  * customer)? Fields that ask about OUR side (agent/owner/team) or about an
- * organization are excluded — retry-hinting those with "never our agent"
+ * organization are excluded, retry-hinting those with "never our agent"
  * would push the model away from the correct answer.
  */
 export function isPersonNameField(fieldName: string): boolean {
@@ -95,7 +95,7 @@ export function isPersonNameField(fieldName: string): boolean {
 
 /**
  * Does `value` read as one of the business's own people? Matches the full
- * self name or its first name (case-insensitive, whitespace-collapsed) —
+ * self name or its first name (case-insensitive, whitespace-collapsed),
  * "Amy" and "Amy Laidlaw" both match self name "Amy Laidlaw"; "Amy Smith"
  * (a different person) does not.
  */
@@ -115,7 +115,7 @@ export function isSelfNameValue(value: string, selfNames: readonly string[]): bo
  * Should the retry's answer REPLACE the first-pass answer for a suspect
  * field? Only when it actually names someone else: non-empty, different from
  * the first answer, and not ITSELF one of our own names (a retry that
- * "corrects" "Amy" to "Amy Laidlaw" — or to another roster member — is
+ * "corrects" "Amy" to "Amy Laidlaw", or to another roster member, is
  * still the wrong party, so the first answer is kept and the telemetry
  * records the field as confirmed rather than corrected).
  */

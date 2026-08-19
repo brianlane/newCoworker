@@ -1,5 +1,5 @@
 /**
- * SLA + dedicated support (enterprise) — the concrete surface behind the
+ * SLA + dedicated support (enterprise), the concrete surface behind the
  * pricing-page bullet. Enterprise tenants hold a PERMANENT priority
  * call/video window (see hasPrioritySupportForTier) and see a dedicated
  * support card with the SLA response targets and the operator's dedicated

@@ -7,7 +7,7 @@
  *        N+1 fetch per thread.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Mirrors the parent
- * `/api/dashboard/chat` route — read-only here, no rate limiting (the
+ * `/api/dashboard/chat` route, read-only here, no rate limiting (the
  * sidebar polls on mount + after each new conversation, not per-keystroke).
  */
 

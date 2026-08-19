@@ -6,7 +6,7 @@
  *
  * Delivery to the LIVE agent: after persisting the module we rewrite the
  * marker-delimited block inside business_configs.soul_md and schedule a
- * vault sync — the same path dashboard soul edits take — so the change
+ * vault sync, the same path dashboard soul edits take, so the change
  * reaches the tenant box without a redeploy. Not-yet-provisioned tenants
  * skip the soul rewrite; the provisioner bakes the module in at deploy.
  */
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     // module the live prompt doesn't have); if the column write fails after
     // the soul patch, the live prompt is already correct and the admin's
     // retry converges the column. Skipped when the tenant has no config yet
-    // (pre-provision) — the orchestrator bakes the module in at deploy.
+    // (pre-provision), the orchestrator bakes the module in at deploy.
     const config = await getBusinessConfig(body.businessId);
     if (config) {
       const nextSoul = applyComplianceModuleToSoul(config.soul_md ?? "", normalized);

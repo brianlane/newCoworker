@@ -4,7 +4,7 @@
  * Sends the scrubbed library definition + the caller's business details to
  * Gemini (same schema contract + validation as /api/aiflows/compile) and returns
  * a VALIDATED adapted definition the builder loads into the editor. Does NOT
- * persist anything — the owner reviews and saves via POST /api/aiflows.
+ * persist anything, the owner reviews and saves via POST /api/aiflows.
  *
  * Owner-only, rate-limited (paid Gemini call), and metered into the shared AI
  * budget like every other Gemini surface.

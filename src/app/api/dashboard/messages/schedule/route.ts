@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "Too many scheduled sends, please slow down.", 429);
     }
 
-    // At least a minute out (that's the sweep cadence — "now" belongs on the
+    // At least a minute out (that's the sweep cadence, "now" belongs on the
     // immediate-send path) and no more than SCHEDULED_SMS_MAX_DAYS_AHEAD.
     const now = Date.now();
     if (sendAt.getTime() < now + 60 * 1000) {

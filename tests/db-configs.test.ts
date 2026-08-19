@@ -298,7 +298,7 @@ describe("db/configs", () => {
 
     const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.profile_md).toBe("## Business profile");
-    // Other vault fields stay untouched — profile refresh must never
+    // Other vault fields stay untouched, profile refresh must never
     // clobber concurrently-edited memory/website content.
     expect(payload.soul_md).toBeUndefined();
     expect(payload.website_md).toBeUndefined();

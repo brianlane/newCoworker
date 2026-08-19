@@ -7,7 +7,7 @@ import {
 } from "../vps/voice-bridge/src/system-instruction";
 
 /**
- * The voice bridge's system-instruction builder — the single string that
+ * The voice bridge's system-instruction builder, the single string that
  * defines everything Gemini Live is on a call. Previously untested: persona
  * gating (customer vs staff), tool teaching, transfer wording, and the two
  * clipped context blocks (customer memory, AiFlow flow context). These are
@@ -127,7 +127,7 @@ describe("customer persona", () => {
     });
 
     it("stops the AI reporting its own just-made booking as a collision", () => {
-      // "It actually looks like that time was already booked for you" — to the
+      // "It actually looks like that time was already booked for you", to the
       // caller who had just chosen it, that sounds like a stranger took it.
       expect(build()).toContain("Never say the slot was already booked");
     });

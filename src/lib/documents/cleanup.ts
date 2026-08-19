@@ -1,11 +1,11 @@
 /**
- * Contact-linked document cleanup — runs when a contact is deleted.
+ * Contact-linked document cleanup, runs when a contact is deleted.
  *
  * The FK is ON DELETE SET NULL as a safety net, but silently converting a
  * deleted person's records into UNLINKED knowledge-library documents would
  * both leak their data into the general library and mint library docs past
  * the tier cap for free. So the app deletes the person's record documents
- * WITH them — except documents holding a completed signature, which are
+ * WITH them, except documents holding a completed signature, which are
  * retained legal evidence (they unlink via the FK and keep their audit
  * trail), mirroring the document DELETE route's refusal.
  */
@@ -25,13 +25,13 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export type ContactDocumentCleanupResult = {
   /** Record documents deleted with the contact. */
   deleted: number;
-  /** Documents kept (signed evidence) — the FK unlinks them instead. */
+  /** Documents kept (signed evidence), the FK unlinks them instead. */
   keptSigned: number;
 };
 
 /**
  * Delete every document linked to a contact, keeping signed evidence.
- * Throws on failure — the caller must NOT delete the contact when cleanup
+ * Throws on failure, the caller must NOT delete the contact when cleanup
  * failed, or the FK would orphan the remaining records into the library.
  */
 export async function deleteContactLinkedDocuments(
@@ -61,7 +61,7 @@ export async function deleteContactLinkedDocuments(
       continue;
     }
 
-    // Row first (cascades shares), then the stored original — a leftover
+    // Row first (cascades shares), then the stored original, a leftover
     // object with no row is invisible garbage, the reverse would be a live
     // row pointing at nothing.
     await deleteBusinessDocument(businessId, doc.id, db);

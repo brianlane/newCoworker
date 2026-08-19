@@ -34,8 +34,8 @@ describe("computeBillableUsageCents", () => {
         100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
           40 * ENTERPRISE_UNIT_COSTS.smsInboundCentsPerMessage +
           // Telnyx-only on purpose: the Gemini Live component of a call is
-          // metered into owner_chat_model_spend and arrives via aiSpendMicros
-          // — the all-in rate would double-charge it.
+          // metered into owner_chat_model_spend and arrives via aiSpendMicros,
+          // the all-in rate would double-charge it.
           50 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
           123.4999
       )

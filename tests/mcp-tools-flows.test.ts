@@ -203,7 +203,7 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
       { name: "Lead intake", definition: DEFINITION },
       AUTH
     );
-    // createAiFlow's own default is enabled:true — the connector must opt
+    // createAiFlow's own default is enabled:true, the connector must opt
     // model-authored flows OUT unless the caller explicitly enables them.
     expect(createAiFlow).toHaveBeenCalledWith({
       businessId: "biz-1",

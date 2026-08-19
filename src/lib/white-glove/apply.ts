@@ -265,12 +265,12 @@ function parseDaySpec(segment: string): BusinessHoursDay[] | null {
  * Best-effort parse of the intake's free-text business hours ("11am to 6pm",
  * "Mon–Fri 9-5, Sat 10am–2pm") into the `businesses.business_hours` shape.
  * Segments without a day spec default to Monday–Friday. Returns null when
- * nothing usable parses — callers keep the raw text in memory.md either way.
+ * nothing usable parses, callers keep the raw text in memory.md either way.
  */
 export function parseIntakeBusinessHours(text: string): BusinessHours | null {
   const out: BusinessHours = {};
   let any = false;
-  // Segments split on list punctuation only — "Tuesday and Thursday 8:30am
+  // Segments split on list punctuation only, "Tuesday and Thursday 8:30am
   // to 12pm" is ONE segment whose day parser collects both days.
   for (const segment of text.split(/[,;\n]/)) {
     const range = parseTimeRange(segment);
@@ -343,7 +343,7 @@ type FlowStepJson = Record<string, unknown>;
 function nudgeBody(attempt: number, bookingLink: string | null): string {
   if (attempt === 1) {
     return (
-      "Hey {{vars.lead_name}}, just floating this back up — happy to answer any " +
+      "Hey {{vars.lead_name}}, just floating this back up, happy to answer any " +
       "questions whenever you're ready." +
       (bookingLink ? ` You can grab a time here: ${bookingLink}` : "")
     );
@@ -358,7 +358,7 @@ function nudgeBody(attempt: number, bookingLink: string | null): string {
   }
   return (
     "Hey {{vars.lead_name}}, still here whenever you're ready" +
-    (bookingLink ? ` — grab a time that works: ${bookingLink}` : ".")
+    (bookingLink ? `, grab a time that works: ${bookingLink}` : ".")
   );
 }
 
@@ -415,7 +415,7 @@ export function intakeFollowUpFlowTemplate(
       id: "s_notify_new",
       type: "notify_owner",
       message:
-        "New lead: {{vars.lead_name}} — {{vars.lead_phone}} / {{vars.lead_email}}. " +
+        "New lead: {{vars.lead_name}}, {{vars.lead_phone}} / {{vars.lead_email}}. " +
         "Details: {{vars.lead_notes}}. I sent them your greeting and I'm on follow-up duty."
     }
   ];
@@ -455,7 +455,7 @@ export function intakeFollowUpFlowTemplate(
       type: "notify_owner",
       message:
         `Personal touch needed: {{vars.lead_name}} ({{vars.lead_phone}}) hasn't replied ` +
-        `to ${attempts} follow-ups. I've marked them Inactive — they're never deleted, ` +
+        `to ${attempts} follow-ups. I've marked them Inactive, they're never deleted, ` +
         `and if they reply later the conversation picks right back up.`,
       when: { var: "reply_final", equals: "no_reply" }
     },
@@ -563,7 +563,7 @@ export function renderIntakeMemorySection(answers: IntakeAnswers): string {
     "### Follow-up schedule",
     `- First nudge ${FIRST_FOLLOW_UP_LABELS[answers.first_follow_up] ?? answers.first_follow_up}, second nudge ${SECOND_FOLLOW_UP_LABELS[answers.second_follow_up] ?? answers.second_follow_up}.`,
     `- Flag for a personal touch after ${attempts} unanswered follow-ups.`,
-    "- Quiet leads are marked inactive, never deleted — if they reply weeks later, the conversation resumes where it left off.",
+    "- Quiet leads are marked inactive, never deleted, if they reply weeks later, the conversation resumes where it left off.",
     "",
     "### Compliance",
     `- Lead-form text/call consent wording: ${answers.consent_confirmed === "yes" ? "in place" : "needs help adding it"}.`,

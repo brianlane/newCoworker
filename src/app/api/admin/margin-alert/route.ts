@@ -5,7 +5,7 @@
  * POST → update toggle / threshold. Values round-trip through the SAME
  *        parser the daily cost-sync watchdog uses
  *        (src/lib/admin/margin-alert.ts), so what the admin saves is
- *        exactly what the next sync enforces — no redeploy needed.
+ *        exactly what the next sync enforces, no redeploy needed.
  */
 
 import { z } from "zod";

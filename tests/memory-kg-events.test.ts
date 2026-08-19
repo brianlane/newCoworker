@@ -1,7 +1,7 @@
 /**
  * KG retrieval ledger (src/lib/memory/kg-events.ts): PostgREST wire shapes
- * for record/list/prune/summary, and the pure comparison analytics — the
- * verdict matrix, aggregation, per-business grouping, and the headline —
+ * for record/list/prune/summary, and the pure comparison analytics, the
+ * verdict matrix, aggregation, per-business grouping, and the headline,
  * that /admin/memory-graph renders.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -178,7 +178,7 @@ describe("getKgAdminSummary", () => {
   }) {
     const from = vi.fn((table: string) => {
       if (table === "memory_entities") {
-        // Preserve `count: null` exactly — the module's `?? 0` is under test.
+        // Preserve `count: null` exactly, the module's `?? 0` is under test.
         const result = {
           count: opts.entities === undefined ? 0 : opts.entities.count,
           error: opts.entities?.error ?? null
@@ -282,8 +282,8 @@ describe("countUnverifiedClaims / isUnverifiedClaimLine", () => {
   const CONTEXT = [
     "- Amy Laidlaw (person)",
     "- Amy Laidlaw phone: 602-695-1142",
-    "- Bryan Buyer roof_status: replaced 2019 — claimed by +14805551234 (unverified)",
-    "- Bryan Buyer budget: 500k — claimed by webchat (unverified)"
+    "- Bryan Buyer roof_status: replaced 2019, claimed by +14805551234 (unverified)",
+    "- Bryan Buyer budget: 500k, claimed by webchat (unverified)"
   ].join("\n");
 
   it("counts only attributed claim lines; empty contexts count zero", () => {
@@ -293,7 +293,9 @@ describe("countUnverifiedClaims / isUnverifiedClaimLine", () => {
   });
 
   it("classifies single lines for the amber rendering", () => {
+    // Legacy format: rows written before the em dash sweep are still stored.
     expect(isUnverifiedClaimLine("- x — claimed by a@b.co (unverified)")).toBe(true);
+    expect(isUnverifiedClaimLine("- x, claimed by a@b.co (unverified)")).toBe(true);
     expect(isUnverifiedClaimLine("- Amy Laidlaw phone: 602-695-1142")).toBe(false);
   });
 });
@@ -315,7 +317,7 @@ describe("kgKeepVerdict", () => {
     expect(kgKeepVerdict(stats(20, 3, 0))).toBe("borderline");
     expect(kgKeepVerdict(stats(20, 9, 0))).toBe("borderline");
     expect(kgKeepVerdict(stats(20, 2, 0))).toBe("not_earning");
-    // Claim reliance only ever DOWNGRADES — it can't rescue a low win rate.
+    // Claim reliance only ever DOWNGRADES, it can't rescue a low win rate.
     expect(kgKeepVerdict(stats(20, 2, 90))).toBe("not_earning");
   });
 
@@ -465,7 +467,7 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
       // Persisted count says clean.
       { ...base, graph_context_chars: 40, graph_claims: 0 },
       // Pre-migration row: falls back to parsing the context text.
-      { ...base, graph_context_chars: 40, graph_context: "- x — claimed by y (unverified)" },
+      { ...base, graph_context_chars: 40, graph_context: "- x, claimed by y (unverified)" },
       // Pre-migration row with neither count nor text: counts as clean.
       { ...base, graph_context_chars: 40 },
       // Non-contributing rows never enter the denominator.

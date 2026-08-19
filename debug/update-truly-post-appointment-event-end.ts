@@ -5,7 +5,7 @@
  *
  * The flow was authored before after-event triggers existed, so it guesses:
  * it fires 5 minutes BEFORE the appointment starts, then sleeps 75 minutes,
- * then texts — which lands mid-meeting for a 2-hour appointment and ~40
+ * then texts, which lands mid-meeting for a 2-hour appointment and ~40
  * minutes late for a 30-minute one. `event_end` anchors to the event's ACTUAL
  * end time, so the follow-up tracks the appointment's real length:
  *
@@ -22,7 +22,7 @@
  *
  * Env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Optional: AIFLOW_UPDATE_FLOW_ID (default: Truly's flow), AIFLOW_FOLLOW_MINUTES
- * (default 15 — minutes after the appointment ends before the text goes out).
+ * (default 15, minutes after the appointment ends before the text goes out).
  */
 import { createClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";

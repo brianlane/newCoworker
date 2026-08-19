@@ -26,7 +26,7 @@
  *      `cancel_reason = "upgrade_switch"`.
  *
  * All steps after the backup are best-effort guarded: a failure in (6)/(7)
- * leaves the new VM live and the new sub active — an operator can mop up
+ * leaves the new VM live and the new sub active, an operator can mop up
  * the orphan Stripe/Hostinger row via admin tooling. We do NOT unwind the
  * new provisioning on teardown failures because the customer has already
  * paid for the new plan.
@@ -37,7 +37,7 @@
  * monthly renewal (live catalog Jul 2026: kvm1 $19.49/mo monthly renewal vs
  * $6.49/mo first 2-year period; kvm2 $24.49 vs $8.99), and the public API
  * cannot change an existing subscription's billing cycle (only auto-renew
- * on/off — cycle changes are hPanel-only). So:
+ * on/off, cycle changes are hPanel-only). So:
  *
  *   - Customer commits to a LONGER term than the box's current cycle →
  *     run the full migration (steps 1-4, 7) onto a freshly TERM-BOUGHT box
@@ -132,7 +132,7 @@ export type ChangePlanMetadata = {
   sessionEmail: string | null;
   /**
    * Set by /api/billing/change-plan when the old sub's commitment had
-   * elapsed (month-to-month rollover phase) — a same-business re-contract.
+   * elapsed (month-to-month rollover phase), a same-business re-contract.
    * Requests a lifetime-cap exemption; re-verified against the old sub row
    * before the increment is skipped.
    */
@@ -222,7 +222,7 @@ async function resolveVmIp(
 /**
  * Months per billing cycle the box's Hostinger subscription currently runs
  * on (1 = monthly renewal, 12/24 = term-bought). Null when the subscription
- * can't be found or the response lacks cycle fields — callers must treat
+ * can't be found or the response lacks cycle fields, callers must treat
  * null as "can't verify; leave the hardware alone and flag ops".
  */
 async function currentHostingerCycleMonths(
@@ -275,7 +275,7 @@ export async function runChangePlanFromCheckout(
   // (a) miss `previousSubscriptionId` (since `getSubscription` returns
   // most-recent and the new row IS most-recent) and fall into the
   // `sub mismatch` abort branch which calls `cancelStripeSubscriptionSafely`
-  // on `stripeSubscriptionId` — i.e. the LIVE customer-paid subscription —
+  // on `stripeSubscriptionId`, i.e. the LIVE customer-paid subscription,
   // or (b) re-bump the lifetime counter past the cap and hit the
   // cap-rejected branch which also cancels the live sub. Detect the
   // already-completed signature here and bail before either lands.
@@ -327,7 +327,7 @@ export async function runChangePlanFromCheckout(
     // plan, but we can't orchestrate anything without a business row to
     // pin it to. Cancel the freshly-minted Stripe sub here so the user
     // isn't silently auto-renewed on a plan we'll never provision. (An
-    // operator can triage the outstanding first-cycle charge — this path
+    // operator can triage the outstanding first-cycle charge, this path
     // should be vanishingly rare since the checkout route validates the
     // business up front.)
     logger.warn("changePlan: business missing; abort", { businessId });
@@ -383,7 +383,7 @@ export async function runChangePlanFromCheckout(
 
   // Same-business re-contract exemption: when the checkout route stamped
   // `recontract` (old sub was a term plan whose commitment had elapsed),
-  // don't count the new contract against the lifetime abuse cap — a loyal
+  // don't count the new contract against the lifetime abuse cap, a loyal
   // customer re-committing every 1-2 years isn't churning refunds. The flag
   // is re-verified against the old sub row (paid Stripe sub + elapsed
   // commitment) so a stale/forged metadata value can't skip the counter.
@@ -412,7 +412,7 @@ export async function runChangePlanFromCheckout(
       // upstream UI cap check narrows the race (two concurrent checkouts,
       // or a checkout crossing a different change-plan's completion) but
       // cannot close it, so we MUST proactively cancel the new Stripe
-      // subscription here — otherwise it stays live, auto-renews on the
+      // subscription here, otherwise it stays live, auto-renews on the
       // next cycle, and we've charged the customer indefinitely for a
       // service we committed never to provide. Matches the
       // provisioning-failed abort path above.
@@ -442,10 +442,10 @@ export async function runChangePlanFromCheckout(
   // box's Hostinger BILLING TERM may not match the new commitment. Term
   // SKUs are ~40-65% cheaper per month than monthly renewal, and the
   // public API cannot change an existing subscription's cycle (hPanel
-  // only) — so a LONGER commitment triggers the full migration onto a
+  // only), so a LONGER commitment triggers the full migration onto a
   // freshly term-bought box of the same size. Everything else stays on
   // the period-only fast path: skip snapshot / backup / re-provision /
-  // restore (steps 1-4) AND the old-Hostinger teardown (step 7 — the box
+  // restore (steps 1-4) AND the old-Hostinger teardown (step 7, the box
   // keeps its existing Hostinger subscription; touching it would destroy
   // the customer's live VPS). Only the Stripe/DB steps (5, 6, 8) run.
   const sameTier = tier === oldSub.tier;
@@ -514,7 +514,7 @@ export async function runChangePlanFromCheckout(
   // Ops visibility: a tier change OR a term-alignment migration is about to
   // run minutes of unattended hardware migration (snapshot → backup →
   // new-VM purchase → restore → old-box teardown). Tell the operator it
-  // STARTED — the existing deletion-request email only marks the end, so
+  // STARTED, the existing deletion-request email only marks the end, so
   // without this a stuck migration was invisible until a customer
   // complained. Fire-and-forget (sendOpsPlanChangeEmail never throws);
   // fast-path period switches touch no hardware and stay quiet here (they
@@ -555,7 +555,7 @@ export async function runChangePlanFromCheckout(
     }
 
     // ── Step 2: SSH backup of durable data. If the old VPS is unreachable we
-    // continue — a missing backup means the new VM boots with fresh template
+    // continue, a missing backup means the new VM boots with fresh template
     // state, which is better than aborting a paid plan change.
     let backupOk = false;
     if (oldVpsHost) {
@@ -675,7 +675,7 @@ export async function runChangePlanFromCheckout(
     // A fast-path switch keeps the existing box, so the new sub row inherits
     // the old Hostinger billing subscription (still paying for the same VM).
     // On any migration (tier change OR term alignment) we must NOT fall back
-    // to the old billing id — step 7 is about to disable it, and pinning it
+    // to the old billing id, step 7 is about to disable it, and pinning it
     // to the active row would leave the new VPS's real billing untracked
     // while referencing dead billing. A null from provisioning stays null
     // (operator-triaged via the existing lookup fallback inside
@@ -735,9 +735,9 @@ export async function runChangePlanFromCheckout(
 
   // ── Step 7: stop the OLD box and disable its Hostinger auto-renewal.
   // Hostinger removed the public cancel-subscription API (DELETE 404s), so
-  // the old VM can only be deleted manually in hPanel — we email ops the
+  // the old VM can only be deleted manually in hPanel, we email ops the
   // deletion request and let auto-renew-off cap the spend in the meantime.
-  // NEVER runs on the period-only fast path — that box (and its Hostinger
+  // NEVER runs on the period-only fast path, that box (and its Hostinger
   // billing) is still the customer's live workspace.
   // Runs when we know about the billing subscription OR just the VM: a
   // missing billing id (e.g. provisioning-time lookup failed) must not
@@ -770,13 +770,13 @@ export async function runChangePlanFromCheckout(
       }
     }
     // Fleet economics Phase B: the replaced box stays owned (Hostinger
-    // refunds are locked out until ≈Dec 30 2026) — return it to the reuse
+    // refunds are locked out until ≈Dec 30 2026), return it to the reuse
     // pool so the next matching-size signup adopts it instead of buying.
     // Best-effort: pool bookkeeping never fails a plan change.
     if (oldVmId !== null) {
       // Seed label for boxes with no vps_inventory row (releaseVpsToPool
       // keeps the recorded plan for tracked ones). The business's vps_size
-      // pin is useless here — Step 3 already re-pinned it to the NEW box —
+      // pin is useless here, Step 3 already re-pinned it to the NEW box,
       // so ask Hostinger for the released box's ACTUAL plan; that also
       // covers a kvm1 box whose purchase-time inventory record failed,
       // which the historical tier-default fallback would mislabel kvm2.
@@ -842,7 +842,7 @@ export async function runChangePlanFromCheckout(
     });
   }
 
-  // ── Step 8: mark the OLD subscription row canceled. No grace window —
+  // ── Step 8: mark the OLD subscription row canceled. No grace window,
   // the customer is still an active tenant, just on a different plan.
   const upgradeSwitch: CancelReason = "upgrade_switch";
   await updateSubscription(previousSubscriptionId, {
@@ -941,7 +941,7 @@ export async function runResubscribeFromCheckout(
   const business = await getBusiness(businessId);
   if (!business) {
     // Stripe already charged the customer for the new subscription but
-    // we have no business row to attach it to — cancel the new Stripe
+    // we have no business row to attach it to, cancel the new Stripe
     // sub here so we don't auto-renew indefinitely for a resubscribe
     // flow we can't complete. (Matches the changePlan orchestrator.)
     logger.warn("resubscribe: business missing; abort", { businessId });
@@ -955,7 +955,7 @@ export async function runResubscribeFromCheckout(
     // The grace window lapsed (or the old sub was wiped / never
     // canceled) between checkout-creation and checkout-completion. The
     // customer has been charged but we refuse to resubscribe outside of
-    // grace — cancel the brand-new Stripe sub so it can't silently
+    // grace, cancel the brand-new Stripe sub so it can't silently
     // auto-renew forever against a tenant we've stopped serving. The
     // cap-reached branch below already does this; mirror it here.
     logger.warn("resubscribe: latest subscription is not in grace; abort", {
@@ -974,7 +974,7 @@ export async function runResubscribeFromCheckout(
   // `/api/billing/reactivate` route fills in defaults from the old sub
   // row before creating the Stripe Checkout. Mirror that fallback here
   // so a single missing metadata field never silently aborts a webhook
-  // that's already taken the customer's money — if tier/period are
+  // that's already taken the customer's money, if tier/period are
   // present and valid on the session we use them, otherwise we fall back
   // to the same defaults the route would have used.
   const tierRaw = session.metadata?.tier;
@@ -1004,7 +1004,7 @@ export async function runResubscribeFromCheckout(
       metaTier: tierRaw ?? null,
       metaBillingPeriod: billingPeriodRaw ?? null,
       // tier is a non-null enum in the DB schema; billing_period is
-      // nullable, log as-is. No `?? null` fallbacks here — they'd be
+      // nullable, log as-is. No `?? null` fallbacks here, they'd be
       // either dead code (tier) or a no-op (billing_period already null).
       subTier: oldSub.tier,
       subBillingPeriod: oldSub.billing_period
@@ -1114,7 +1114,7 @@ export async function runResubscribeFromCheckout(
       // catches the race where `wiped_at` is set, NOT the broader
       // class of restore failures: missing `data_backups` row (e.g.
       // grace-sweep partially executed and deleted the artifact
-      // before `wiped_at` was stamped — which we also fixed in the
+      // before `wiped_at` was stamped, which we also fixed in the
       // grace-sweep planner ordering, but defense-in-depth catches
       // any other path that nukes the backup early), Supabase
       // Storage download empty/404, sha256 corruption, missing SSH
@@ -1145,7 +1145,7 @@ export async function runResubscribeFromCheckout(
     }
   } else {
     // No reachable VPS host means the just-provisioned VM is
-    // unreachable — same fail-closed reasoning as the restore-throw
+    // unreachable, same fail-closed reasoning as the restore-throw
     // branch above. Proceeding would charge the customer for a
     // workspace they cannot reach, with no operator signal.
     logger.error(
@@ -1188,7 +1188,7 @@ export async function runResubscribeFromCheckout(
   // Between this orchestrator's `getSubscription` (line ~584) and the
   // write below, the grace-sweep cron may have run for this same row,
   // stamped `wiped_at`, deleted the Supabase Storage backup artifact,
-  // stopped the VM, and canceled Hostinger billing — all of which
+  // stopped the VM, and canceled Hostinger billing, all of which
   // finalise the prior lifetime. Naively writing `wiped_at: null` here
   // would silently resurrect that wiped row to active on a fresh VPS
   // that has none of the customer's data (the backup that
@@ -1329,7 +1329,7 @@ export async function cancelStripeSubscriptionSafely(
   } catch (err) {
     const message = errorMessage(err);
     // Don't fail the whole orchestrator if Stripe says the sub is already
-    // gone — the teardown goal is achieved either way.
+    // gone, the teardown goal is achieved either way.
     if (/No such subscription|resource_missing/i.test(message)) {
       logger.info("changePlan: old Stripe sub already gone", { businessId, subscriptionId });
       return;

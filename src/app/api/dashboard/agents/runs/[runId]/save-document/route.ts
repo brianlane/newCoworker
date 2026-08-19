@@ -1,5 +1,5 @@
 /**
- * Agents — save a run's artifact into the Documents knowledge library.
+ * Agents, save a run's artifact into the Documents knowledge library.
  *
  *   POST /api/dashboard/agents/runs/:runId/save-document
  *        { businessId, title? }

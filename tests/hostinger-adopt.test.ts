@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-// Module-level fallbacks for when deps.db omits an override — the fallback
+// Module-level fallbacks for when deps.db omits an override, the fallback
 // import must not hit a real database.
 const moduleGetActiveVpsSshKey = vi.fn();
 const moduleInsertVpsSshKey = vi.fn();
@@ -140,7 +140,7 @@ describe("adoptVpsForBusiness", () => {
   it("embeds the public key in the registered post-install script (deterministic attach)", async () => {
     // Hostinger's setup/recreate/attach endpoints silently drop
     // public_key_ids on some VMs (VM 1798267 KVM2 experiment, VM 1806097
-    // KVM1 Phase E smoke) — the PIS-embedded authorized_keys write is the
+    // KVM1 Phase E smoke), the PIS-embedded authorized_keys write is the
     // only attach path that always works, so the adopt flow must pass the
     // key row's public half into the script builder.
     const client = makeClient();
@@ -164,7 +164,7 @@ describe("adoptVpsForBusiness", () => {
     // Two guarantees in one path: (a) business-scoped lookups (backup/
     // restore, admin console) resolve keys via business_id, so the row must
     // move to the adopting business; (b) the previous tenant's key
-    // authenticating is NOT proof of a fresh image — the disk still holds
+    // authenticating is NOT proof of a fresh image, the disk still holds
     // their data, so the destructive recreate must run regardless.
     const prevTenantRow = { ...keyRow, business_id: "biz-previous" };
     const reassignedRow = { ...keyRow, business_id: "biz-new" };
@@ -278,7 +278,7 @@ describe("adoptVpsForBusiness", () => {
 
   it("freshly minted keys always recreate even when the box is already running", async () => {
     // Mint path (no reusable row): the box may be running with SOME key,
-    // but not ours from a same-business retry — recreate must run.
+    // but not ours from a same-business retry, recreate must run.
     const client = makeClient({
       getVirtualMachine: vi
         .fn()
@@ -503,7 +503,7 @@ describe("adoptVpsForBusiness", () => {
 
   it("gives up waiting for the VM to leave its pre-recreate state after the leave deadline", async () => {
     // The VM reports `running` before recreate and keeps reporting `running`
-    // (the transition was missed) — after 3 minutes the loop warns + assumes
+    // (the transition was missed), after 3 minutes the loop warns + assumes
     // the transition happened; waitRunning then accepts the running VM.
     const client = makeClient({
       getVirtualMachine: vi
@@ -586,7 +586,7 @@ describe("adoptVpsForBusiness", () => {
       deps
     );
     expect(moduleGetActiveVpsSshKey).toHaveBeenCalledWith("1800985");
-    // Reuse path — the fallback insert must never fire.
+    // Reuse path, the fallback insert must never fire.
     expect(moduleInsertVpsSshKey).not.toHaveBeenCalled();
     expect(res.publicIp).toBe("1.2.3.4");
   });
@@ -608,7 +608,7 @@ describe("adoptVpsForBusiness", () => {
       deps
     );
     expect(res.hostingerBillingSubscriptionId).toBeNull();
-    // With no billing id there is nothing to re-enable — the adopt logs a
+    // With no billing id there is nothing to re-enable, the adopt logs a
     // loud follow-up instead (a pooled box left with auto-renew off lapses
     // at period end under the new tenant).
     expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
@@ -616,7 +616,7 @@ describe("adoptVpsForBusiness", () => {
 
   it("leaves auto-renew OFF when the box is flagged never_renew (must lapse at period end)", async () => {
     // srv1632631 case: KVM8 hardware pooled under the kvm2 label whose
-    // $73.99/mo renewal must never be paid for a kvm2-priced tenant — the
+    // $73.99/mo renewal must never be paid for a kvm2-priced tenant, the
     // tenant gets migrated off before the paid period ends instead.
     const client = makeClient({
       getVirtualMachine: vi
@@ -722,7 +722,7 @@ describe("adoptVpsForBusiness", () => {
       { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
       deps
     );
-    // The adopt itself still succeeds — the re-enable is an ops follow-up.
+    // The adopt itself still succeeds, the re-enable is an ops follow-up.
     expect(res.hostingerBillingSubscriptionId).toBe("hsub-adopted");
   });
 
@@ -748,7 +748,7 @@ describe("adoptVpsForBusiness", () => {
 
   it("resolves the billing id from the VM detail's subscription_id without touching the list", async () => {
     // Hostinger's subscriptions LIST stopped returning resource_id
-    // (Jul 2026) — the VM detail endpoint is the reliable mapping.
+    // (Jul 2026), the VM detail endpoint is the reliable mapping.
     const client = makeClient({
       getVirtualMachine: vi
         .fn()

@@ -842,7 +842,7 @@ describe("stepOverridesFlowTimeWindow", () => {
  * Voicemail. AMD shipped in #1214 as detect-and-hang-up: a machine picking up
  * resolved the step `no_answer` / `voicemail_no_message` and the leg was cut,
  * because half a conversation into a recording is worse than none. These pin
- * the message half — the step may now say something, and only when it was
+ * the message half, the step may now say something, and only when it was
  * given something to say.
  */
 describe("place_ai_call: voicemailTemplate", () => {

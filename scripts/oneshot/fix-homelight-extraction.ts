@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * One-shot: stop the HomeLight post-claim extraction from grabbing Amy's own
- * contact info (Jul 7 incident — the run re-opened the hmlt.co claim landing
+ * contact info (Jul 7 incident, the run re-opened the hmlt.co claim landing
  * page, which has NO lead contact card, and the extractor answered with the
  * agent's own name and Coworker DID; the lead_sms then tried to text our own
  * number and burned every retry).
@@ -9,13 +9,13 @@
  * Two idempotent edits to the "HomeLight Referral" flow, in place:
  *   1. The post-claim `card` browse_extract field descriptions now tell the
  *      extractor explicitly: NEVER the agent's own info, and answer 'none'
- *      when the page shows no lead contact card — so a landing/list page
+ *      when the page shows no lead contact card, so a landing/list page
  *      yields empty fields (which email_extract's backfill can then fill)
  *      instead of confident garbage.
  *   2. The `email_card` email_extract match loosens to the lead's FIRST NAME
  *      only. It previously also required {{vars.price_digits}}, but the alert
  *      rounds ($785K → "785") while the email spells the price in full
- *      ($784,663) — the "785" token never appears, so the backfill could
+ *      ($784,663), the "785" token never appears, so the backfill could
  *      never find the email exactly when it was needed.
  *
  * The engine-side guards (self-number scrub, send_sms self/skip handling)

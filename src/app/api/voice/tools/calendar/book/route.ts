@@ -9,7 +9,7 @@ import {
 import { bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 
 /**
- * `calendar_book_appointment` — voice-bridge adapter. Creates an event on
+ * `calendar_book_appointment`, voice-bridge adapter. Creates an event on
  * the first connected calendar via the shared core in
  * src/lib/calendar-tools/handlers.ts (also used by the Rowboat tool webhook
  * for the dashboard + texting surfaces). The caller's number backfills
@@ -17,7 +17,7 @@ import { bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
  */
 
 const argsSchema = z.object({
-  // offset:true — matches the tool contract ("ISO 8601 with timezone
+  // offset:true, matches the tool contract ("ISO 8601 with timezone
   // offset"); the bare .datetime() rejected offset-carrying instants and
   // failed every booking the model formatted per its own instructions.
   startIso: z.string().datetime({ offset: true }),

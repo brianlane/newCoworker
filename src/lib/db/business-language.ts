@@ -17,7 +17,7 @@ const DEFAULTS: BusinessCustomerLanguages = {
 /**
  * Per-tenant customer-language settings. `supported: ["en"]` is the escape
  * hatch that disables Spanish following on every AI channel. Falls back to
- * the platform defaults (en default, en+es supported) on any read failure —
+ * the platform defaults (en default, en+es supported) on any read failure,
  * language-following is additive, so failing open is safe.
  */
 export async function getBusinessCustomerLanguages(

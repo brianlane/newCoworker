@@ -5,7 +5,7 @@
  * Vagaro issues per-merchant Client ID / Secret pairs; access tokens are
  * short-lived, so we exchange + cache them in-memory per business and
  * re-exchange on expiry or a 401 (one retry). The cache is process-local by
- * design — a cold serverless instance just performs one extra exchange.
+ * design, a cold serverless instance just performs one extra exchange.
  *
  * Endpoint paths follow Vagaro's published v3 API surface. They are
  * intentionally centralized in the constants below so the first live
@@ -20,7 +20,7 @@ export const VAGARO_AVAILABILITY_PATH = "/api/v3/availability";
 export const VAGARO_APPOINTMENTS_PATH = "/api/v3/appointments";
 export const VAGARO_SERVICES_PATH = "/api/v3/services";
 
-/** Outbound budget per API call — fail fast on a stuck upstream. */
+/** Outbound budget per API call, fail fast on a stuck upstream. */
 export const VAGARO_REQUEST_TIMEOUT_MS = 15_000;
 /** Re-exchange when the cached token has less than this long to live. */
 const TOKEN_EXPIRY_SLACK_MS = 60_000;
@@ -70,7 +70,7 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
 
 /**
  * Exchange the merchant credentials for an access token (cached). Throws
- * VagaroApiError("auth_failed") on a rejected exchange — the caller surfaces
+ * VagaroApiError("auth_failed") on a rejected exchange, the caller surfaces
  * that as "check your Client ID / Secret".
  */
 export async function getVagaroAccessToken(conn: VagaroConnectionRow): Promise<string> {
@@ -262,7 +262,7 @@ export async function createVagaroAppointment(
 
 /**
  * Move an existing appointment to a new time IN PLACE (PUT on the
- * appointment resource) — Vagaro notifies the customer about the change on
+ * appointment resource), Vagaro notifies the customer about the change on
  * the same appointment; no second booking is created.
  */
 export async function updateVagaroAppointmentTime(

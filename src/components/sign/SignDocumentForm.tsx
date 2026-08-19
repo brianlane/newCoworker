@@ -14,7 +14,7 @@ export function SignDocumentForm({
   contentSha256
 }: {
   token: string;
-  /** Fingerprint of the content rendered above — binds view to signature. */
+  /** Fingerprint of the content rendered above, binds view to signature. */
   contentSha256: string;
 }) {
   const router = useRouter();

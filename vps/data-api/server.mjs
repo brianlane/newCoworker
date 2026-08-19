@@ -1,5 +1,5 @@
 /**
- * Residency data API — single-tenant CRUD front for the box-local Postgres
+ * Residency data API, single-tenant CRUD front for the box-local Postgres
  * that holds this tenant's customer content (the residency moved tables).
  *
  * Deployed by vps/scripts/deploy-client.sh ONLY when the orchestrator passes
@@ -18,7 +18,7 @@
  *
  * HTTP semantics: 401/400 for client errors (Cloudflare passes 4xx bodies
  * through) but HTTP 200 + { ok:false, error:"internal" } for server-side
- * failures — the tunnel REPLACES origin 5xx bodies with its own error page
+ * failures, the tunnel REPLACES origin 5xx bodies with its own error page
  * (same rationale as vps/aiflow-render/server.mjs), which would erase the
  * structured error the caller needs to decide fallback-vs-retry.
  *
@@ -50,7 +50,7 @@ if (!DATABASE_URL) {
 
 /**
  * Tables this API will touch. MUST stay in lockstep with
- * RESIDENCY_MOVED_TABLES in src/lib/residency/tables.ts — this service has
+ * RESIDENCY_MOVED_TABLES in src/lib/residency/tables.ts, this service has
  * no build step against the app repo, so the list is mirrored here the same
  * way the other vps sidecars mirror shared constants.
  */
@@ -170,7 +170,7 @@ function compileFilters(filters, values) {
 function requireTable(body) {
   const requested = body?.table;
   // Resolve to the SET's own member (not the request string) so the value
-  // interpolated into SQL is a trusted constant — taint from the request
+  // interpolated into SQL is a trusted constant, taint from the request
   // body never reaches a query string, whitelist aside.
   const table = [...MOVED_TABLES].find((t) => t === requested);
   if (table === undefined) {
@@ -192,7 +192,7 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
 
 // The platform (dashboard + Edge workers) is the only legitimate caller, so
-// the ceiling is generous — this exists to bound a runaway loop or a stolen
+// the ceiling is generous, this exists to bound a runaway loop or a stolen
 // token's blast radius, not to throttle normal traffic. Same middleware the
 // aiflow-render sidecar uses.
 app.use(
@@ -211,7 +211,7 @@ app.get("/v1/health", async (_req, res) => {
     );
     res.json({ ok: true, schemaVersion: meta.rows[0]?.value ?? "unknown" });
   } catch (err) {
-    // Health must be honest: a broken datastore is NOT healthy — but keep the
+    // Health must be honest: a broken datastore is NOT healthy, but keep the
     // status 200 so the tunnel doesn't mask the body (see header comment).
     res.json({ ok: false, schemaVersion: "unreachable", message: String(err?.message ?? err) });
   }
@@ -392,7 +392,7 @@ app.post("/v1/delete", async (req, res) => {
  * refreshed when an unknown column shows up (a schema upgrade that landed
  * after boot). Needed because the correct wire form of a JS array depends on
  * the COLUMN, not the value: text[]/uuid[] want a JS array (node-pg emits a
- * Postgres array literal), while json/jsonb want JSON text — the old
+ * Postgres array literal), while json/jsonb want JSON text, the old
  * value-only heuristic stringified everything and broke array columns for
  * journal replays that carry full row images.
  */
@@ -444,7 +444,7 @@ function handleError(res, err) {
     return res.status(200).json({ ok: false, error: "conflict", message: err.detail ?? err.message });
   }
   console.error("data-api internal error", { message: String(err?.message ?? err) });
-  // HTTP 200 on purpose — see the header comment (Cloudflare eats 5xx bodies).
+  // HTTP 200 on purpose, see the header comment (Cloudflare eats 5xx bodies).
   return res.status(200).json({ ok: false, error: "internal", message: "internal error" });
 }
 

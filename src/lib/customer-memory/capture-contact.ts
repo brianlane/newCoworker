@@ -4,13 +4,13 @@
  *
  * Historically those tools only wrote `coworker_logs` (plus a counters-only
  * rollup on some surfaces), so a brand-new lead never counted as a contact
- * CREATION as far as AiFlows were concerned — `contact_created` flows fired
+ * CREATION as far as AiFlows were concerned, `contact_created` flows fired
  * for dashboard adds, CSV imports, and the `upsert_customer` worker step,
  * but never for the highest-signal source: a real caller/visitor the AI just
  * talked to. This module closes that gap with the worker step's exact shape:
  *
  *   1. alias-aware existence pre-check (was this lead already a contact?),
- *   2. rollup via `record_customer_interaction` (creates or bumps — the same
+ *   2. rollup via `record_customer_interaction` (creates or bumps, the same
  *      write the capture surfaces already did),
  *   3. best-effort email link (fills an empty email, never clobbers),
  *   4. `contact_created` fires ONLY when this capture created the row.
@@ -38,7 +38,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 /**
  * Source tag stamped on a NEWLY created contact so CRM views and AiFlow
  * `contact_created` trigger conditions can scope to the capture surface
- * (the event windowText carries a `tags:` line). Capture surfaces only —
+ * (the event windowText carries a `tags:` line). Capture surfaces only,
  * other channels create contacts through their own paths.
  */
 export const CAPTURE_SOURCE_TAGS: Partial<Record<CustomerMemoryChannel, string>> = {
@@ -49,7 +49,7 @@ export const CAPTURE_SOURCE_TAGS: Partial<Record<CustomerMemoryChannel, string>>
 };
 
 export type CapturedContactInput = {
-  /** Normalized E.164 — callers coerce/validate before calling. */
+  /** Normalized E.164, callers coerce/validate before calling. */
   e164: string;
   name?: string | null;
   email?: string | null;
@@ -95,7 +95,7 @@ export async function ensureCapturedContact(
   }
 
   // Existence pre-check, alias-aware (a merged-away number lives in
-  // alias_e164s on the surviving row). A read failure means we can't tell —
+  // alias_e164s on the surviving row). A read failure means we can't tell,
   // fail safe by treating the contact as pre-existing so a transient error
   // can never fire contact_created for an old contact (mirrors the worker's
   // upsert_customer step). E.164 is strictly `+digits`, safe in the filter.
@@ -146,7 +146,7 @@ export async function ensureCapturedContact(
   }
 
   // Email link: future inbound mail from this address rolls up to the same
-  // phone-keyed profile. Independent of the rollup outcome — the link helper
+  // phone-keyed profile. Independent of the rollup outcome, the link helper
   // creates a minimal profile itself when needed and never clobbers an
   // owner-set address.
   if (email) {
@@ -164,7 +164,7 @@ export async function ensureCapturedContact(
 
   // Source tag on the NEW row only (never touch an existing contact's tags):
   // lets the owner's CRM views and `contact_created` flow conditions single
-  // out capture-sourced leads. Best-effort — the tag is a nice-to-have.
+  // out capture-sourced leads. Best-effort, the tag is a nice-to-have.
   const sourceTag = input.sourceTag ?? CAPTURE_SOURCE_TAGS[input.channel];
   if (sourceTag) {
     try {
@@ -186,7 +186,7 @@ export async function ensureCapturedContact(
   // watching for new contacts (the demo-caller / web-lead follow-ups).
   // Timestamped dedupe like the dashboard add: a deleted-then-recaptured
   // number is a NEW creation that must refire. Best-effort inside
-  // fireContactEvent — a trigger failure never fails the capture.
+  // fireContactEvent, a trigger failure never fails the capture.
   await fireContactEvent(businessId, {
     kind: "contact_created",
     contact: {

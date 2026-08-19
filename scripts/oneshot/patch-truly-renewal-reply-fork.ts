@@ -1,13 +1,13 @@
 /**
- * patch-truly-renewal-reply-fork.ts — one-shot: classify the RENEWAL reply
+ * patch-truly-renewal-reply-fork.ts, one-shot: classify the RENEWAL reply
  * instead of blindly acking it (live-test feedback, 2026-07-15, NCW Flow
  * Test tenant).
  *
  * The intent_fork else-arm asks "approximately when does your current
  * policy renew?" and then treats WHATEVER the lead texts next as the
  * renewal answer: a lead who replied "Can someone call me right now" got
- * the static ack "Perfect, thank you — I've noted that for your broker…
- * if a specific day or time works best…" — repeating the previous
+ * the static ack "Perfect, thank you, I've noted that for your broker…
+ * if a specific day or time works best…", repeating the previous
  * message's "made a note for your broker" phrasing AND deferring an
  * explicit ask-for-NOW into a schedule-later invitation. The first reply
  * gets a classify + branch; this gives the renewal reply the same.
@@ -94,7 +94,7 @@ const CLASSIFY_CATEGORIES = [
 
 /**
  * Quiet-hours blocks are tenant-specific (the test copy runs widened
- * Phoenix windows) — clone whichever block the arm already uses so the
+ * Phoenix windows), clone whichever block the arm already uses so the
  * patch never reverts the test tenant's deviation.
  */
 /**
@@ -199,7 +199,7 @@ function buildRenewalFork(quietHours: unknown, offerWindow: unknown, offerTeam: 
           type: "send_sms",
           to: "{{vars.lead_phone}}",
           // Reworded: the PREVIOUS message already said "I've made a note
-          // for your broker" — never repeat that phrasing back-to-back.
+          // for your broker", never repeat that phrasing back-to-back.
           body:
             "Perfect, thank you {{vars.lead_name}}! A licensed broker will reach out " +
             "shortly to review your options. If a specific day or time works best for a " +
@@ -215,7 +215,7 @@ function buildRenewalFork(quietHours: unknown, offerWindow: unknown, offerTeam: 
 
 /**
  * The wait3 dead end (live-test feedback, same day): a lead who finally
- * replies AFTER the second nudge gets tagged Engaged and… nothing else —
+ * replies AFTER the second nudge gets tagged Engaged and… nothing else,
  * no classify, no ack, no routing. "Can someone call me right now" must
  * work at EVERY wait, so the wait3 tail gets the same fork treatment:
  *   classify_reply3 (skipped on no_reply) → reply3_fork:
@@ -372,7 +372,7 @@ function patch(def: AiFlowDefinition): { next: AiFlowDefinition; changed: string
         const head = elseSteps.filter(
           (s) => !["final_touch", "tag_inactive"].includes(String(s.id))
         );
-        // Borrow the offer window from any route step in the definition —
+        // Borrow the offer window from any route step in the definition,
         // every Truly route uses the same one; absent means none.
         const anyWindow = JSON.stringify(def).includes('"offerWindow"')
           ? { timezone: "America/New_York", quietStart: "21:00", quietEnd: "08:30", graceMinutes: 15 }

@@ -89,11 +89,11 @@ describe("buildCustomerPreamble", () => {
       }
     });
     expect(out).toContain('Address this person as "Juhu"');
-    // Single-word stored name IS the addressing name — no full-name aside.
+    // Single-word stored name IS the addressing name, no full-name aside.
     expect(out).not.toContain("their stored full name");
     expect(out).toContain("takes precedence over any different or longer name");
     // The precedence must explicitly extend to the pinned notes and rolling
-    // summary below the header — that's where a stale pre-rename name lives.
+    // summary below the header, that's where a stale pre-rename name lives.
     expect(out).toContain("the pinned notes and rolling summary below");
     expect(out).not.toContain("Rolling summary");
     expect(out).not.toContain("Pinned notes");
@@ -101,7 +101,7 @@ describe("buildCustomerPreamble", () => {
 
   it("addresses multi-word stored names by the politely-cased FIRST name (Truly, Jul 21 2026)", () => {
     // The SMS assistant parroted "shabir gulamhussein lukmanji" verbatim in
-    // 9 of 12 replies — the preamble now instructs the first name, cased,
+    // 9 of 12 replies, the preamble now instructs the first name, cased,
     // with the stored full name kept as ground truth.
     const out = buildCustomerPreamble({
       memory: {
@@ -432,7 +432,7 @@ describe("summarizeCustomerMemory", () => {
       expect(result.smsTurnCount).toBe(1);
     }
 
-    // Stateless invocation — never reuse a chat continuation for summarizer turns.
+    // Stateless invocation, never reuse a chat continuation for summarizer turns.
     expect(callRowboatChat.mock.calls.length).toBeGreaterThan(0);
     const firstCall = callRowboatChat.mock.calls[0] as unknown as [
       Parameters<typeof import("../src/lib/rowboat/chat").callRowboatChat>[0]
@@ -443,7 +443,7 @@ describe("summarizeCustomerMemory", () => {
     expect(args.timeoutMs).toBe(60_000);
     expect(args.messages[0]?.role).toBe("system");
     expect(args.messages[0]?.content).toContain("SUMMARIZER MODE");
-    // Summaries are read on later days — relative dates rot ("tomorrow"
+    // Summaries are read on later days, relative dates rot ("tomorrow"
     // written July 13 is wrong by July 14; observed live, Truly July 2026).
     expect(args.messages[0]?.content).toContain("DATES MUST BE ABSOLUTE");
     // The owner's label for the contact must win over any name in the

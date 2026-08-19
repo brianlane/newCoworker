@@ -362,7 +362,7 @@ describe("db/white-glove-offers", () => {
       await attachPaidProspectOfferToBusinessByEmail("offer-1", "john_doe@x.com");
       expect(wildcardDb.ilike).toHaveBeenCalledWith("owner_email", "john\\_doe@x.com");
       expect(db.update).toHaveBeenCalledWith({ business_id: "biz-9" });
-      // Only ever attaches while unattached — never re-homes an offer.
+      // Only ever attaches while unattached, never re-homes an offer.
       expect(db.is).toHaveBeenCalledWith("business_id", null);
     });
 

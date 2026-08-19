@@ -1,5 +1,5 @@
 /**
- * Prospecting — suppression, the one path that must never half-succeed.
+ * Prospecting, suppression, the one path that must never half-succeed.
  *
  * A person who asks to stop hearing from us has to be stopped on BOTH axes,
  * because outreach and campaigns read different tables: the ledger row is what

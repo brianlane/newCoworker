@@ -342,7 +342,7 @@ describe("classifyStaleOfferReply, broadcast offers", () => {
   });
 
   it("a broadcast offeree is recognized as ever-offered via offered_all alone", () => {
-    // No tried/awaiting/offered entry for Amy — only offered_all membership.
+    // No tried/awaiting/offered entry for Amy, only offered_all membership.
     const r = staleRow({
       status: "done",
       routing: { offered_all: [AMY], offered_log: [AMY], claimed_by: DAVE, claimed_name: "Dave" }

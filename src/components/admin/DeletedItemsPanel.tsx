@@ -5,7 +5,7 @@
  *
  * Owner delete actions on the dashboard are SOFT (deleted_at stamp) but
  * look hard to the tenant; this panel is the only place the stamped rows
- * surface — newest deletion first, with a one-click Restore that clears the
+ * surface, newest deletion first, with a one-click Restore that clears the
  * stamp (central + tenant box for residency tenants) and puts the item
  * straight back in the owner's dashboard. Restores are audit-logged
  * server-side. Rows disappear from here for good once the retention sweep

@@ -1,19 +1,19 @@
 /**
- * Meta (Facebook) webhook receiver — lead ads + Messenger/Instagram DMs.
+ * Meta (Facebook) webhook receiver, lead ads + Messenger/Instagram DMs.
  *
- *   GET  — Meta's one-time verification handshake: echo `hub.challenge`
+ *   GET, Meta's one-time verification handshake: echo `hub.challenge`
  *          when `hub.verify_token` matches META_WEBHOOK_VERIFY_TOKEN.
- *   POST — real-time deliveries. The raw body is verified against
+ *   POST, real-time deliveries. The raw body is verified against
  *          `X-Hub-Signature-256` (HMAC-SHA256, app secret) BEFORE parsing;
  *          everything after that lives in src/lib/meta/webhook.ts:
  *          leadgen changes become webhook flow events, conversation
  *          messages land in messenger_conversations/messages and enqueue
  *          messenger_jobs reply jobs. When a reply job was enqueued, the
  *          internal worker is kicked fire-and-forget (via `after()`) so
- *          replies land in seconds — the per-minute cron sweep is only
+ *          replies land in seconds, the per-minute cron sweep is only
  *          the retry net.
  *
- * POST always answers 200 for verified deliveries — an unknown page or a
+ * POST always answers 200 for verified deliveries, an unknown page or a
  * failed lead fetch is logged, not 4xx/5xxed, so Meta doesn't back off or
  * disable the subscription over one tenant's bad row.
  */

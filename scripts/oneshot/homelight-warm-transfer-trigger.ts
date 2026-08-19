@@ -12,7 +12,7 @@
  * line ever started a run. Every warm-transfer opportunity (Jose Jul 20, Salma
  * Jul 25, June Jul 26, Jann Jul 28) was ignored by the flow, and each was
  * followed within seconds by "Sorry, this referral is no longer available for a
- * live transfer" — the exact referrals this flow exists to win.
+ * live transfer", the exact referrals this flow exists to win.
  *
  * Both lines behave identically otherwise: the alert text carries no link, and
  * the link arrives as its own message in the same second, which the trigger's

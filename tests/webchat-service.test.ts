@@ -298,7 +298,7 @@ describe("frameAncestorsValue", () => {
     expect(frameAncestorsValue(["https://example.com"])).toBe(
       "https://example.com https://www.example.com"
     );
-    // www entry collapses to the same pair — no duplicates.
+    // www entry collapses to the same pair, no duplicates.
     expect(frameAncestorsValue(["https://www.example.com", "https://example.com"])).toBe(
       "https://example.com https://www.example.com"
     );

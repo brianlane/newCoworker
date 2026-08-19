@@ -220,7 +220,7 @@ describe("clearStaleSupabaseAuthCookies", () => {
 
   it("ignores empty entries in the cookie string", async () => {
     // Trailing or duplicate separators can produce empty entries when split,
-    // and a bare cookie name with no `=` is also legal — both must not throw.
+    // and a bare cookie name with no `=` is also legal, both must not throw.
     const harness = installFakeDocument([]);
     const fakeDoc = (globalThis as { document?: { cookie: string } }).document!;
     // Seed an unparseable cookie string: leading separator + bare name.

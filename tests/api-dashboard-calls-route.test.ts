@@ -24,7 +24,7 @@ import { rateLimit } from "@/lib/rate-limit";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 // Route segment is `callControlId` for backward compat, but the URL value
-// is now the transcript row UUID — `:` in real call_control_ids breaks
+// is now the transcript row UUID, `:` in real call_control_ids breaks
 // dynamic-segment routing under Cloudflare/Vercel.
 const TRANSCRIPT_ID = "22222222-2222-4222-8222-222222222222";
 const CCI = TRANSCRIPT_ID;

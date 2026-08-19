@@ -1,9 +1,9 @@
 /**
  * Telnyx 10DLC (A2P SMS) API client.
  *
- * Background — why this file exists:
+ * Background, why this file exists:
  *   US carriers (Verizon/AT&T/T-Mobile) silently drop A2P SMS from numbers
- *   that aren't attached to an approved 10DLC campaign — message-detail
+ *   that aren't attached to an approved 10DLC campaign, message-detail
  *   records show `delivery_failed` on the campaign side but the Telnyx
  *   POST /messages call returns 200, so without DLR observability or this
  *   wrapper we have no idea why customers don't see replies. The brand is
@@ -21,11 +21,11 @@
  * the `fetchImpl` so we never hit Telnyx in CI.
  *
  * Telnyx API endpoints used:
- *   POST   /v2/10dlc/campaignBuilder              — submit a campaign for vetting
- *   GET    /v2/10dlc/campaign/{campaignId}        — fetch campaign + status
- *   POST   /v2/10dlc/phoneNumberCampaign          — attach a DID to a campaign
- *   GET    /v2/10dlc/phoneNumberCampaign/{e164}   — read-back the attachment
- *   DELETE /v2/10dlc/phoneNumberCampaign/{e164}   — detach (rotation)
+ *   POST   /v2/10dlc/campaignBuilder, submit a campaign for vetting
+ *   GET    /v2/10dlc/campaign/{campaignId}, fetch campaign + status
+ *   POST   /v2/10dlc/phoneNumberCampaign, attach a DID to a campaign
+ *   GET    /v2/10dlc/phoneNumberCampaign/{e164}, read-back the attachment
+ *   DELETE /v2/10dlc/phoneNumberCampaign/{e164}, detach (rotation)
  */
 
 const DEFAULT_BASE_URL = "https://api.telnyx.com/v2";
@@ -63,7 +63,7 @@ export type TendlcCampaignSubmit = {
   optinKeywords: string;
   optoutKeywords: string;
   helpKeywords: string;
-  /** Sample messages — most usecases require ≥2; we always send 5 to be safe. */
+  /** Sample messages, most usecases require ≥2; we always send 5 to be safe. */
   sample1: string;
   sample2: string;
   sample3?: string;
@@ -83,7 +83,7 @@ export type TendlcCampaignSubmit = {
 export type TendlcCampaign = {
   campaignId: string;
   /**
-   * Vetting state — surfaced verbatim from Telnyx because the set of values
+   * Vetting state, surfaced verbatim from Telnyx because the set of values
    * has historically expanded ("ACTIVE", "PENDING", "FAILED", "EXPIRED",
    * "SUSPENDED", "REJECTED", "DELETED", …). Callers should treat
    * "ACTIVE" as the only state where attaches will succeed.
@@ -108,7 +108,7 @@ export class TendlcApiError extends Error {
   public readonly status: number;
   public readonly endpoint: string;
   public readonly body: string;
-  /** True when Telnyx returns 409 (already exists / duplicate) — caller may
+  /** True when Telnyx returns 409 (already exists / duplicate), caller may
    * treat as success. */
   public readonly conflict: boolean;
   constructor(endpoint: string, status: number, body: string) {
@@ -169,7 +169,7 @@ export class TendlcClient {
   /**
    * Attach a DID to a campaign. The DID must already be on a messaging
    * profile and the campaign must be `ACTIVE`. Telnyx returns 409 if the
-   * pairing already exists — the wrapper still throws but the caller can
+   * pairing already exists, the wrapper still throws but the caller can
    * inspect `err.conflict` to treat as success (idempotency).
    */
   async createPhoneNumberCampaign(opts: {

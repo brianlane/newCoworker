@@ -1,7 +1,7 @@
 /**
  * Display-only (`configurable: false`) behavior of
  * update_coworker_tool_settings. The live registry marks every tool
- * configurable today, so this branch runs against a mocked registry — same
+ * configurable today, so this branch runs against a mocked registry, same
  * approach as tests/agent-tool-settings-display-only.test.ts, and for the
  * same reason: the mechanism must keep working for any future tool we
  * surface for visibility without a platform chokepoint.

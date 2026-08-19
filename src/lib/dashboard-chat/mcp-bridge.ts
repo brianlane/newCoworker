@@ -95,7 +95,7 @@ export function isMcpBridgeToolName(name: string): boolean {
  * The role bar each bridged handler enforces internally
  * (requireMcpBusinessRole's `action` argument), mirrored here so the
  * DECLARATION layer can drop tools the caller's role can only get refused
- * on — a staff turn must not burn scarce tool steps on get_flow calls that
+ * on, a staff turn must not burn scarce tool steps on get_flow calls that
  * always fail (Bugbot Medium on PR #1382). The handlers stay the
  * enforcement point; this mirror only prunes declarations, and the bridge
  * test pins every bridged name to an entry so the map cannot drift silently.
@@ -208,7 +208,7 @@ const BRIDGE_DESCRIPTION_OVERRIDES: Readonly<Record<string, string>> = {
  * path ladder for overlapping capabilities, plus the human-only boundary
  * (the one-shot classes that stay with Settings/support). A function
  * because the automations line must only advertise `create_aiflow` on
- * surfaces that actually declare the creation tools — owner-SMS and Slack
+ * surfaces that actually declare the creation tools, owner-SMS and Slack
  * pass includeCreationTools: false, and a preamble naming a missing tool
  * invites calls to nothing (Bugbot Medium on PR #1382).
  */

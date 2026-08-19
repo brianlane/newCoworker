@@ -1,5 +1,5 @@
 /**
- * Meta Conversions API — Conversion Leads (CRM) uploads.
+ * Meta Conversions API, Conversion Leads (CRM) uploads.
  *
  * The feedback half of the Lead Ads loop: when a lead that arrived from an
  * Instant Form moves pipeline stages (Contacted, Booked, Won, ...), we
@@ -12,7 +12,7 @@
  *   - `action_source` MUST be "system_generated";
  *   - `custom_data.event_source` = "crm", `lead_event_source` = our CRM name;
  *   - at least one customer information parameter: `lead_id` (the 15-17
- *     digit leadgen id — highest priority) or hashed email/phone;
+ *     digit leadgen id, highest priority) or hashed email/phone;
  *   - `event_time` must be after lead creation and no older than 7 days.
  */
 import { createHash } from "node:crypto";
@@ -23,7 +23,7 @@ import {
 } from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
 
-/** custom_data.lead_event_source — the CRM name shown in Events Manager. */
+/** custom_data.lead_event_source, the CRM name shown in Events Manager. */
 export const CAPI_LEAD_EVENT_SOURCE = "New Coworker";
 
 /** Meta discards Conversion Leads events older than this. */

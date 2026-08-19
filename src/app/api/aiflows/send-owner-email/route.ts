@@ -3,7 +3,7 @@
  * owner mailbox (workspace_oauth_connections.id → Nango Gmail/Outlook).
  *
  * Called by the ai-flow-worker when a `send_email` step (or a send_sms
- * quiet-hours email fallback) carries `fromConnectionId` — the owner picked
+ * quiet-hours email fallback) carries `fromConnectionId`, the owner picked
  * "send as me" in the flow editor instead of the platform Resend sender.
  *
  * Auth is gateway-only (ROWBOAT_GATEWAY_TOKEN), like the other VPS/worker

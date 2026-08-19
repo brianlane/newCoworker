@@ -85,7 +85,7 @@ import {
   isBareAcknowledgmentText,
   isEmojiOnlyText
 } from "../_shared/sms_ack.ts";
-// Tracked short links for AI replies — the same rewrite AiFlow sends get, so
+// Tracked short links for AI replies, the same rewrite AiFlow sends get, so
 // one customer thread never mixes raw booking URLs with /s/<code> links
 // (KYP Jul 20 2026) and AI-reply link clicks land in the same analytics.
 import {
@@ -153,7 +153,7 @@ const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 // minus a 10s reserve for Telnyx send + DB writes + telemetry that
 // runs after Rowboat returns. Without this, a slow first failure
 // (~60s timeoutMs) plus a fresh full-window retry could push total
-// Rowboat wall time to ~120s — well past the 90s cron cap, so
+// Rowboat wall time to ~120s, well past the 90s cron cap, so
 // pg_cron disconnects, the outbound never goes out, and the job sits
 // at 'processing' until the stale-claim recovery requeues it.
 // (Codex P1 / Cursor Bugbot Medium feedback on PR #74.)
@@ -163,7 +163,7 @@ const ROWBOAT_RETRY_BUDGET_MS = 80_000;
 // The Rowboat staff persona has no send_sms / automation tools (its tool
 // webhook carries no sender context, so owner-only tools can't be gated
 // there). Owner turns instead run on the PLATFORM's inline dashboard-chat
-// engine via /api/internal/owner-sms-turn — full operator tool surface
+// engine via /api/internal/owner-sms-turn, full operator tool surface
 // (send_sms, calendar, list/run AiFlows) with the owner identity verified
 // server-side. Falls back to the Rowboat staff path on any failure, and is
 // skipped entirely when the platform URL/bearer are not configured (local
@@ -181,7 +181,7 @@ const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
 
 /**
  * Run one owner-operator turn on the platform engine. Null = unavailable /
- * failed / timed out — the caller falls back to the Rowboat staff path.
+ * failed / timed out, the caller falls back to the Rowboat staff path.
  */
 async function callOwnerOperatorTurn(args: {
   businessId: string;
@@ -276,7 +276,7 @@ async function fetchContactBookingLine(
 
 // --- Agent-invocable AiFlows (the start_aiflow_for_contact discovery block) --
 // The customer-facing model may enroll the CURRENT texter into flows the
-// owner explicitly flagged `options.agentInvocable` — and it can only target
+// owner explicitly flagged `options.agentInvocable`, and it can only target
 // what it can see, so this block IS the visibility gate's other half: tenants
 // with no flagged flows get a byte-identical preamble and the tool is never
 // mentioned. Cap keeps a flag-happy tenant from bloating every prompt.
@@ -314,7 +314,7 @@ async function agentInvocableFlowsBlock(
       ...lines
     ].join("\n");
   } catch (e) {
-    // Discovery is best-effort: a lookup hiccup means no block this turn —
+    // Discovery is best-effort: a lookup hiccup means no block this turn,
     // the reply itself must never wait on or fail from it.
     console.error("agent-invocable flows lookup failed", e);
     return null;
@@ -330,7 +330,7 @@ async function agentInvocableFlowsBlock(
 const SMS_CHAT_SPEND_METERING_ENABLED =
   (Deno.env.get("SMS_CHAT_SPEND_METERING_ENABLED") ?? "true").trim().toLowerCase() !== "false";
 // SHARED cap (micro-USD; 1 USD = 1_000_000). SMS deliberately reads the SAME env
-// var as owner chat (OWNER_CHAT_SPEND_CAP_MICROS, default $10) — both surfaces
+// var as owner chat (OWNER_CHAT_SPEND_CAP_MICROS, default $10), both surfaces
 // meter into the same owner_chat_model_spend row and pass p_cap_micros to the
 // same RPC, so a single cap value keeps the fuse consistent. Using a separate
 // SMS_* var risked the two surfaces tripping/falling back at different totals.
@@ -350,7 +350,7 @@ const SMS_CHAT_GEMINI_AGENT = (Deno.env.get("SMS_CHAT_GEMINI_AGENT") ?? "Coworke
 const SMS_CHAT_LOCAL_AGENT = (Deno.env.get("SMS_CHAT_LOCAL_AGENT") ?? "CoworkerLocal").trim();
 
 
-/** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
+/** Best-effort: Telnyx list-messages filter may vary by API version, safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
   const tag = `${NCW_IDEM_TAG_PREFIX}${idem}`;
   const url = new URL(`${TELNYX_API_BASE}/v2/messages`);
@@ -409,7 +409,7 @@ const INBOUND_IMAGE_EXT: Record<string, string> = {
  * Download an inbound MMS photo from Telnyx's media CDN and store it in the
  * generated-images bucket so the texting coworker can edit it (generate_image
  * inputImageRef). Best-effort: any failure returns null and the text is
- * handled as if no photo arrived — a media blip must never block a reply.
+ * handled as if no photo arrived, a media blip must never block a reply.
  * The URL was host-pinned to *.telnyx.com by telnyxInboundImages.
  */
 async function storeInboundImageForEditing(
@@ -418,7 +418,7 @@ async function storeInboundImageForEditing(
   image: TelnyxInboundImage
 ): Promise<string | null> {
   try {
-    // No redirects: only the pinned Telnyx host may serve the bytes — a 3xx
+    // No redirects: only the pinned Telnyx host may serve the bytes, a 3xx
     // bouncing elsewhere is a refusal, not a hop (SSRF).
     const res = await fetch(image.url, { redirect: "manual" });
     if (!res.ok) {
@@ -507,7 +507,7 @@ async function loadLatestAssistantMessage(
 
 /**
  * The assistant's last message stands on its own: it exists and does not end
- * in a question. The gate for suppressing a bare acknowledgment — no prior
+ * in a question. The gate for suppressing a bare acknowledgment, no prior
  * message fails open to replying.
  */
 function assistantMessageStandsAlone(latest: string | null): boolean {
@@ -516,7 +516,7 @@ function assistantMessageStandsAlone(latest: string | null): boolean {
 
 /**
  * The assistant is waiting on an answer: its last message exists and ends in
- * a question. The gate for LETTING A REACTION THROUGH — an unknown last
+ * a question. The gate for LETTING A REACTION THROUGH, an unknown last
  * message keeps the reaction suppressed, which is what the worker did for
  * every tapback before 2026-07-28.
  */
@@ -557,7 +557,7 @@ async function finalizeDeliveredReply(
       rowboat_reply_cached: null,
       assistant_reply_text: replyText,
       // The reply can leave on a different channel than the inbound arrived
-      // on (RCS inbound answered over SMS after an RCS rejection) — the
+      // on (RCS inbound answered over SMS after an RCS rejection), the
       // thread UI badges the outbound bubble off this, not `channel`.
       reply_channel: replyChannel,
       updated_at: new Date().toISOString()
@@ -620,7 +620,7 @@ serve(async (req: Request) => {
   // env fallback it may be fail-open after a transient token-table error, and
   // caching that would keep presenting the (possibly rejected) shared secret
   // to every remaining job for the business even after the lookup recovers.
-  // Fallback tenants just re-query per job — one cheap indexed read.
+  // Fallback tenants just re-query per job, one cheap indexed read.
   const bearerCache = new Map<string, string>();
   const envBearer = sharedEnvRowboatBearer();
   const bearerFor = async (businessId: string): Promise<string> => {
@@ -651,7 +651,7 @@ serve(async (req: Request) => {
     const fromE164 = normalizeE164(fromRaw);
     const inboundImages = telnyxInboundImages(payload);
     // A photo with no caption is a real message (e.g. "edit this picture" is
-    // coming next, or the photo IS the ask) — give the model a stand-in text
+    // coming next, or the photo IS the ask), give the model a stand-in text
     // instead of dead-lettering the job as empty.
     const userText =
       inboundPayloadText(payload).trim() ||
@@ -748,7 +748,7 @@ serve(async (req: Request) => {
         // "[Team] …" owner relay). If Safe Mode / pause flips on before the
         // worker runs, the generic customer forward below would send a SECOND
         // owner SMS ("[Safe Mode] …") for a staff text that may already have
-        // been relayed — and we don't want an assistant reply while paused.
+        // been relayed, and we don't want an assistant reply while paused.
         // Close staff jobs out as audit-only here, before the customer gate.
         if (job.staff_kind) {
           await supabase.rpc("complete_sms_inbound_job", {
@@ -797,7 +797,7 @@ serve(async (req: Request) => {
             p_last_error: "paused"
           });
           await clearJobReplyCache(supabase, job.id);
-          // A paused tenant's client texts are otherwise dropped silently —
+          // A paused tenant's client texts are otherwise dropped silently,
           // the one state where an opted-in owner most needs the page
           // (Bugbot Medium, PR #802). Same helper, same gates and dedupe.
           await sendCustomerReplyAlert(supabase, {
@@ -839,7 +839,7 @@ serve(async (req: Request) => {
             });
             await clearJobReplyCache(supabase, job.id);
             // The Safe-Mode forward could not even be attempted, so the
-            // owner never saw this text — page them if they opted in.
+            // owner never saw this text, page them if they opted in.
             await sendCustomerReplyAlert(supabase, {
               businessId: job.business_id,
               contactE164: fromE164,
@@ -853,7 +853,7 @@ serve(async (req: Request) => {
           }
 
           const idem = job.outbound_idempotency_key;
-          // Label is "[Safe Mode]" (not "[Coworker paused]") — Safe Mode keeps the
+          // Label is "[Safe Mode]" (not "[Coworker paused]"), Safe Mode keeps the
           // owner's dashboard + VPS online; customers just get forwarded. The
           // paused path is handled above and never reaches this branch.
           const forwardText = `[Safe Mode] From ${fromE164}: ${userText.slice(0, 1000)}`;
@@ -894,8 +894,8 @@ serve(async (req: Request) => {
             });
             // Safe-Mode forwards are METERED against the tenant's monthly
             // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
-            // but never refused. Metered AFTER the job completes — not
-            // before the send — so the count lands exactly once: a
+            // but never refused. Metered AFTER the job completes, not
+            // before the send, so the count lands exactly once: a
             // pre-completion failure retries the whole job, and the retry's
             // replayed send is deduped by the Telnyx Idempotency-Key
             // (metering up front would count every retry for one delivered
@@ -943,10 +943,10 @@ serve(async (req: Request) => {
           } catch (e) {
             // Nothing to release: the meter only runs after the job
             // completed, and completion is the last throw-capable step
-            // before it — a failure here means nothing was counted.
+            // before it, a failure here means nothing was counted.
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
-            // Bound the retry budget just like the Rowboat error path below —
+            // Bound the retry budget just like the Rowboat error path below,
             // a persistently-failing forward (bad number, Telnyx outage, etc.)
             // would otherwise burn worker capacity on every cron tick forever.
             if (job.attempt_count >= MAX_ATTEMPTS) {
@@ -990,7 +990,7 @@ serve(async (req: Request) => {
     }
 
     // Opt-in "client replied" owner alert (KYP, Jul 20 2026): deterministic,
-    // fired the moment a claimed job is identified as a customer inbound —
+    // fired the moment a claimed job is identified as a customer inbound,
     // BEFORE the reply branches, so flow-suppressed inbounds, tapbacks, and
     // bare "1" replies alert too. Runs AFTER the kill-switch/Safe-Mode gate
     // (a Safe-Mode forward already put the text on the owner's phone
@@ -1028,7 +1028,7 @@ serve(async (req: Request) => {
       // contact. The normal reply path below denormalizes the sender and bumps
       // the customer-memory counters; since we return early here, do both now so
       // the message shows on the contact page and counts as an interaction.
-      // Skip staff (an owner/employee text must never seed a customer profile) —
+      // Skip staff (an owner/employee text must never seed a customer profile),
       // suppressed jobs come from the customer path, but guard defensively.
       if (fromE164 && !job.staff_kind) {
         // Stamp the column for rows queued before the webhook started doing it.
@@ -1246,11 +1246,11 @@ serve(async (req: Request) => {
     }
 
     // Bare acknowledgments ("Ok", "Okay 👍", "Thanks") get NO generated
-    // reply — answering every closing filler reads as bot noise and burns a
+    // reply, answering every closing filler reads as bot noise and burns a
     // metered SMS per turn (Truly, Jul 21 2026: four consecutive "Ok"s each
     // drew a fresh "Acknowledged!"). ONLY when the assistant's latest
-    // message did not end in a question — an "Ok" answering "Does noon
-    // work?" is an answer and still gets its confirmation turn — and only
+    // message did not end in a question, an "Ok" answering "Does noon
+    // work?" is an answer and still gets its confirmation turn, and only
     // when a prior assistant message EXISTS (a first-contact "Ok" is
     // ambiguous; reply as before). Lookup errors fail open to replying.
     // Same guards and bookkeeping as the tapback branch above.
@@ -1317,7 +1317,7 @@ serve(async (req: Request) => {
     //                   "What would you like me to say?" and record a pending
     //                   prompt so the owner's reply is relayed to the customer
     //                   (telnyx-sms-inbound resolves it). Missing forward
-    //                   config degrades to plain suppress — never a default
+    //                   config degrades to plain suppress, never a default
     //                   reply the owner asked us not to send.
     if (!job.staff_kind) {
       const { data: contactRow } = await supabase
@@ -1354,7 +1354,7 @@ serve(async (req: Request) => {
             (Deno.env.get("TELNYX_SMS_FROM_E164") ?? "");
           if (apiKey && fwdProfile && ownerCell) {
             // Prompt row FIRST, and the send is GATED on it existing: an
-            // owner prompted without a prompt row would reply into the void —
+            // owner prompted without a prompt row would reply into the void,
             // or worse, the webhook would attach their text to a DIFFERENT
             // customer's newest pending prompt. Idempotent on inbound_job_id
             // (a worker retry re-hits the unique index → duplicate is fine).
@@ -1428,9 +1428,9 @@ serve(async (req: Request) => {
                   continue;
                 }
                 // Out of retry budget: the owner never received the prompt,
-                // so the row must not stay routable — an unanswered orphan
+                // so the row must not stay routable, an unanswered orphan
                 // would relay the owner's NEXT unrelated text to this
-                // customer. Delete it, then close the job out as suppressed —
+                // customer. Delete it, then close the job out as suppressed,
                 // still no default reply.
                 const { error: orphanErr } = await supabase
                   .from("sms_owner_reply_prompts")
@@ -1544,8 +1544,8 @@ serve(async (req: Request) => {
 
     const thread = threadRow as ThreadRow | null;
 
-    // Staff texts (owner/team) get the internal-assistant persona — never the
-    // customer lead-intake script — and never a customer-memory profile.
+    // Staff texts (owner/team) get the internal-assistant persona, never the
+    // customer lead-intake script, and never a customer-memory profile.
     const isStaff = Boolean(job.staff_kind);
 
     // Always-injected prompt lines (identity / grounded actions / quality)
@@ -1576,7 +1576,7 @@ serve(async (req: Request) => {
         `You are texting with ${staffName ? `${staffName}, ` : ""}${role}. This person is NOT a customer or a lead.`,
         "Talk to them like a trusted colleague. Do NOT run the customer intake script: never ask them for their name, contact info, address, timeline, or budget, and never try to qualify them. If you know their name, use it.",
         "Help them as their internal assistant: answer questions about the business from what you know, help look something up, take a message for someone on the team, or help them schedule. Keep replies concise and natural for text.",
-        // Staff are not customers — do not create or edit a customer profile
+        // Staff are not customers, do not create or edit a customer profile
         // for their number.
         "Do NOT use the customer CRM tools (customer_lookup_by_phone, customer_set_display_name, customer_append_pinned_note) on this texter.",
         identityLine,
@@ -1644,7 +1644,7 @@ serve(async (req: Request) => {
       // reschedule received?" honestly instead of denying what it can't see.
       // Best-effort; null when the tenant has no calendar or the lookup
       // refused, which keeps the preamble byte-identical to pre-feature.
-      // Skipped entirely on cached re-sends (Telnyx retries) — no Rowboat
+      // Skipped entirely on cached re-sends (Telnyx retries), no Rowboat
       // turn runs there, so the preamble is never used and the platform
       // round-trip would be pure added latency.
       const cachedResend = (job.rowboat_reply_cached ?? "").trim().length > 0;
@@ -1652,7 +1652,7 @@ serve(async (req: Request) => {
         ? null
         : await fetchContactBookingLine(job.business_id, fromE164, businessTimezone);
       const bookingStatus = bookingLine ? `Booking status: ${bookingLine}` : null;
-      // Agent-invocable flows discovery ("Automations you may start") — the
+      // Agent-invocable flows discovery ("Automations you may start"), the
       // visibility half of the start_aiflow_for_contact gate. Null (and a
       // byte-identical preamble) for every tenant with no flagged flows;
       // skipped on cached re-sends for the same reason as the booking line.
@@ -1662,13 +1662,13 @@ serve(async (req: Request) => {
       // AiFlow context bridge: when an automation recently handled this
       // texter (asked them a question, collected their details), the model
       // must continue THAT conversation, not restart intake. Production
-      // showed the post-flow turn asking a lead for their phone number —
+      // showed the post-flow turn asking a lead for their phone number,
       // over SMS (Truly Insurance, 2026-07-11). Best-effort: null on any
       // failure, and the reply proceeds with plain memory context.
       const flowDetail = await loadFlowRunContextDetailed(supabase, job.business_id, fromE164);
       const flowContext = flowDetail.block;
       // Fresh-thread anchor: on a conversation Rowboat hasn't rooted yet, a
-      // small model can ignore the system-preamble automation context — the
+      // small model can ignore the system-preamble automation context, the
       // 2026-07-14 Truly turn answered a bare "July 23, 2026" with "I need
       // more context" while the renewal question sat in its system prompt.
       // Anchoring the LAST automated message adjacent to the user turn
@@ -1690,7 +1690,7 @@ serve(async (req: Request) => {
       ].filter((n): n is string => Boolean(n));
       flowAnswerNote = notes.length > 0 ? notes.join(" ") : null;
       // Cross-channel timeline, FRESH THREADS ONLY: a conversation Rowboat
-      // hasn't rooted yet starts with zero history — and mid-conversation
+      // hasn't rooted yet starts with zero history, and mid-conversation
       // the rolling summary (contacts.summary_md) is typically still empty
       // (the summarize sweep runs later), which is exactly the window the
       // 2026-07-14 Truly turn fell into. The merged timeline (SMS both
@@ -1707,7 +1707,7 @@ serve(async (req: Request) => {
       // The texter's E.164 is ALWAYS stated, even on first contact with no
       // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
       // caller context, so the customer tools require an explicit `phone`
-      // argument — without this line the model has nothing to pass and every
+      // argument, without this line the model has nothing to pass and every
       // tool call fails validation.
       const phoneLine =
         `Current texter phone: ${fromE164}. When calling customer tools ` +
@@ -1723,13 +1723,13 @@ serve(async (req: Request) => {
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply
       // with a machine-read reasoning trailer. splitReplyReasoning strips it
       // before caching/sending, so the customer never sees it. Customer path
-      // only — staff chat is internal and needs no lead-facing rationale.
+      // only, staff chat is internal and needs no lead-facing rationale.
       customerPreamble += REASONING_PROMPT_INSTRUCTION;
     }
 
     // Inbound MMS photo → stored edit source. Only when the reply path is
     // actually about to run (download + store cost nothing on suppressed
-    // jobs, which return before reaching here). Best-effort — but the model
+    // jobs, which return before reaching here). Best-effort, but the model
     // is ALWAYS told a photo arrived, so an edit request after a capture
     // failure gets an honest "please resend" instead of a hallucinated edit.
     if (inboundImages.length > 0) {
@@ -1752,17 +1752,17 @@ serve(async (req: Request) => {
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
     // Short links minted for THIS attempt's fresh reply (empty on cached
-    // re-sends — their links were minted when the reply was first cached).
+    // re-sends, their links were minted when the reply was first cached).
     // Non-delivery terminal paths delete these so no live /s/<code> redirect
     // survives for a reply nobody received; a cached re-send that later
     // dead-letters can leak its earlier attempt's rows (codes aren't in
-    // memory anymore), which is harmless — the redirect target is real.
+    // memory anymore), which is harmless, the redirect target is real.
     let shortenedLinks: ShortenedLink[] = [];
 
     try {
       // Owner-operator turn: the OWNER texting their own line gets the
       // platform engine with the full operator tool surface (send_sms,
-      // calendar, list/run AiFlows) — the Rowboat staff persona below has
+      // calendar, list/run AiFlows), the Rowboat staff persona below has
       // none of those (its tool webhook can't tell who's texting). Any
       // failure falls straight through to the Rowboat staff path, so a
       // platform hiccup never silences the owner.
@@ -1776,12 +1776,12 @@ serve(async (req: Request) => {
         if (operatorReply) {
           // Cache BEFORE the send path can run (same contract as the Rowboat
           // branch below): a Telnyx-send retry must re-deliver the CACHED
-          // reply, never re-invoke the operator turn — that turn may have
+          // reply, never re-invoke the operator turn, that turn may have
           // committed tools (send_sms, run_aiflow) that a re-run would
           // duplicate. Unlike the Rowboat branch, a failed cache write here
           // must NOT throw-and-retry (the retry would re-run those committed
           // tools) and must NOT fall back to Rowboat (a different engine's
-          // reply could contradict actions that really happened) — the job
+          // reply could contradict actions that really happened), the job
           // dead-letters with a loud log instead. The owner's next text gets
           // honest context regardless: committed sends are in the outbound
           // log, which the operator turn's transcript replays.
@@ -1815,7 +1815,7 @@ serve(async (req: Request) => {
             continue;
           }
           reply = operatorReply;
-          // No Rowboat call this turn — keep any existing thread binding
+          // No Rowboat call this turn, keep any existing thread binding
           // untouched for the customer-path turns that still use it.
           convId = thread?.rowboat_conversation_id?.trim() || undefined;
           await telemetryRecord(supabase, "sms_owner_operator_turn", {
@@ -1841,7 +1841,7 @@ serve(async (req: Request) => {
           overCap: cap.overCap,
           geminiAgent: SMS_CHAT_GEMINI_AGENT,
           // kvm1 hardware has no local Ollama model, so there is no
-          // CoworkerLocal to degrade to — over-cap turns must refuse. Keyed
+          // CoworkerLocal to degrade to, over-cap turns must refuse. Keyed
           // on the explicit vps_size pin only: a null pin = legacy kvm2/kvm8
           // box that does have the local model.
           localAgent: tenantHasLocalModel(businessVpsSize)
@@ -1851,7 +1851,7 @@ serve(async (req: Request) => {
 
         if (turnPlan.refuse) {
           // Over cap with no local fallback: complete the job WITHOUT an AI
-          // reply. Silence toward the customer is deliberate — a canned
+          // reply. Silence toward the customer is deliberate, a canned
           // non-AI text would still spend an SMS segment while promising a
           // follow-up nobody is around to give. The owner already got the
           // fuse-tripped alert from the spend meter; log per-message so the
@@ -1901,7 +1901,7 @@ serve(async (req: Request) => {
         // Continuation turns get a fallback transcript: if the stateless
         // retry fires, the freshly-rooted conversation continues the thread
         // instead of restarting intake (2026-07-13 incident). Loaded only
-        // when a continuation exists — a fresh thread has no history to lose.
+        // when a continuation exists, a fresh thread has no history to lose.
         const statelessContextExtra =
           !turnPlan.stateless && existingConv
             ? await loadRecentSmsTranscript(supabase, job.business_id, fromE164, job.id)
@@ -1937,19 +1937,19 @@ serve(async (req: Request) => {
           budgetMs: modelBudgetMs,
           customerPreamble,
           statelessContextExtra,
-          // Fresh-thread anchor for a contact an automation just texted —
+          // Fresh-thread anchor for a contact an automation just texted,
           // the last automated message rides INSIDE the user turn so a
           // small model can't miss it (2026-07-14 Truly incident).
           userTurnNote: flowAnswerNote,
           // A 5xx is usually a transient upstream (Gemini) outage, not a
-          // stale continuation — early attempts surface it to the job-level
+          // stale continuation, early attempts surface it to the job-level
           // retry, which re-runs STATEFUL with the thread intact. Only after
           // repeated failures do we allow the history-dropping stateless
           // reset, as the last resort before dead-letter.
           allowStatelessOnServerErrors: job.attempt_count >= STATELESS_5XX_MIN_ATTEMPT
         });
         // Strip the reasoning trailer BEFORE anything caches or sends the
-        // reply — the trailer is for the ai_reply_reasoning record only.
+        // reply, the trailer is for the ai_reply_reasoning record only.
         const split = splitReplyReasoning(parsed.reply);
         reply = split.reply;
         if (!reply.trim()) {
@@ -1960,12 +1960,12 @@ serve(async (req: Request) => {
         }
         // Tracked short links, AI-reply surface: rewrite long URLs in the
         // customer-facing reply to /s/<code> redirects BEFORE the reply is
-        // cached — the cache is what a Telnyx retry re-delivers, so the
+        // cached, the cache is what a Telnyx retry re-delivers, so the
         // shortened text and its link rows stay identical across attempts.
         // Without this, one thread mixed raw booking URLs (AI replies) with
         // tracked short links (AiFlow texts) and AI-reply clicks were
         // invisible to the flow-funnel analytics (KYP, Jul 20 2026). Staff
-        // and owner turns keep raw URLs — tracking is for lead engagement.
+        // and owner turns keep raw URLs, tracking is for lead engagement.
         // Strictly fail-safe: any trouble leaves the original URL in place.
         if (!isStaff) {
           const shortened = await shortenSmsBodyUrls(supabase, {
@@ -1983,7 +1983,7 @@ serve(async (req: Request) => {
         if (!isStaff && split.reasoning) {
           // The EFFECTIVE decision: the model's handoff flag OR the
           // deterministic human-request intent (Truly 2026-07-20: six
-          // "speak to a representative" turns all came back handoff:false —
+          // "speak to a representative" turns all came back handoff:false,
           // the model judged its schedule-a-call offer to have handled the
           // request, and the escalation never fired).
           const escalate = shouldEscalateToHuman(split.reasoning);
@@ -2001,7 +2001,7 @@ serve(async (req: Request) => {
           if (reasoningErr) console.error("ai_reply_reasoning insert", reasoningErr);
           // Needs-human escalation: a person must take this over (handoff
           // semantics exclude routine bookings). Tags the contact
-          // "Needs Human", fires the tag hooks, and pages the owner —
+          // "Needs Human", fires the tag hooks, and pages the owner,
           // once per open escalation (the tag is the open/closed state).
           // Best-effort: never touches the reply that already carries the
           // model's own "someone will follow up" text.
@@ -2018,8 +2018,8 @@ serve(async (req: Request) => {
           }
         } else if (!isStaff) {
           // The trailer instruction is in EVERY customer preamble, so its
-          // absence means the model disregarded the system prompt this turn
-          // — the loudest early signal of a context-blind reply (the
+          // absence means the model disregarded the system prompt this turn,
+          // the loudest early signal of a context-blind reply (the
           // 2026-07-14 Truly incident turn had exactly this signature and
           // it went unnoticed). Best-effort telemetry + warn log so a
           // dashboard/alert can watch the rate; never touches the reply.
@@ -2051,14 +2051,14 @@ serve(async (req: Request) => {
         if (turnPlan.stateless) {
           // Over-cap local ($0) turn: we forced a stateless call so Rowboat
           // would honor startAgent=CoworkerLocal. Do NOT bind the thread to the
-          // local agent — leave the stored (Gemini-bound) thread untouched so it
+          // local agent, leave the stored (Gemini-bound) thread untouched so it
           // resumes on Gemini once the period resets. The returned (local)
           // conversationId is intentionally discarded. Keep the existing
           // continuation on the completed job row for bookkeeping.
           convId = existingConv ?? undefined;
         } else {
           // When the stateless retry fired, Rowboat treated this turn as
-          // a fresh conversation — its response carries a NEW
+          // a fresh conversation, its response carries a NEW
           // conversationId. We must NOT preserve the stale `existingConv`
           // here; doing so would replay the same fail-then-retry cycle
           // on every subsequent SMS until the model evicts again.
@@ -2092,7 +2092,7 @@ serve(async (req: Request) => {
             }
           } else if (parsed.retriedStateless) {
             // Stateless retry succeeded but Rowboat didn't echo a fresh
-            // conversationId. Clear the stored row anyway — the existing
+            // conversationId. Clear the stored row anyway, the existing
             // conversationId is known-stale (we just proved that by
             // succeeding without it). Leaving it would re-run the
             // fail-then-retry on the next SMS.
@@ -2142,7 +2142,7 @@ serve(async (req: Request) => {
           // Caching the reply is a PREREQUISITE for sending: the cached reply is
           // what lets a Telnyx-send retry re-deliver without re-running Rowboat.
           // If we can't persist it, abort the turn (→ catch → retry/dead-letter)
-          // instead of sending. Sending now would risk a double-SMS on retry —
+          // instead of sending. Sending now would risk a double-SMS on retry,
           // with no cached reply the retry re-runs Rowboat and sends again.
           // Aborting keeps it simple and correct: the retry re-runs, re-caches,
           // and sends exactly once. Cache failures are a rare DB-write error, so
@@ -2152,7 +2152,7 @@ serve(async (req: Request) => {
         }
 
         // Phase 3 write side: bump the customer memory counters in a
-        // single round trip. The summarizer is NOT invoked here —
+        // single round trip. The summarizer is NOT invoked here,
         // post-interaction summarization runs from the nightly cron
         // sweep (Phase 2 batch) so it never preempts the live SMS
         // path. Owner-confirmed gating: 3-interaction threshold +
@@ -2167,7 +2167,7 @@ serve(async (req: Request) => {
             p_display_name: null
           });
           if (memErr) {
-            // Memory tracking is best-effort — a degraded customer page
+            // Memory tracking is best-effort, a degraded customer page
             // is acceptable; failing the SMS reply because we couldn't
             // bump a counter is not.
             console.error("record_customer_interaction (sms)", memErr);
@@ -2230,7 +2230,7 @@ serve(async (req: Request) => {
       // A dead-lettered customer message means SILENCE: the texter asked
       // something and will never get an answer unless a human steps in. Page
       // the owner through the needs-human pipeline (tag + notification, with
-      // its own open-state dedupe) — a system-log row nobody watches is not
+      // its own open-state dedupe), a system-log row nobody watches is not
       // an acceptable end state for a real conversation.
       if (deadLetter && !isStaff) {
         await escalateToHuman(supabase, {
@@ -2449,7 +2449,7 @@ serve(async (req: Request) => {
             messaging_profile_id: messagingProfileId,
             type: "RCS",
             // Full body over RCS (no 160/1600 segmenting); only the plain-text
-            // fallback leg is capped — Telnyx limits fallback text to 3072,
+            // fallback leg is capped, Telnyx limits fallback text to 3072,
             // matching sendTelnyxRcsWithFallback in telnyx_sms_compliance.ts.
             agent_message: { content_message: { text: reply } },
             sms_fallback: { from: platformFrom, text: reply.slice(0, 3072) }
@@ -2464,14 +2464,14 @@ serve(async (req: Request) => {
             replyChannel = "rcs";
           } else {
             // 2xx without a message id means Telnyx did not durably create the
-            // message — without an id the send can't be reconciled or tracked,
+            // message, without an id the send can't be reconciled or tracked,
             // so treat it like a rejection and deliver over plain SMS.
             console.warn("rcs reply accepted but returned no message id, falling back to sms");
           }
         } else {
           // RCS API rejection (agent revoked, destination not routable, …):
           // fall through to plain SMS so the customer never loses a reply to
-          // channel plumbing. The idempotency key is safe to reuse — the
+          // channel plumbing. The idempotency key is safe to reuse, the
           // rejected RCS request created no message.
           console.warn(
             `rcs reply rejected (${rcsRes.status}), falling back to sms:`,
@@ -2566,7 +2566,7 @@ serve(async (req: Request) => {
           p_last_error: msg.slice(0, 2000)
         });
         await clearJobReplyCache(supabase, job.id);
-        // Retries exhausted — the shortened reply is never going out.
+        // Retries exhausted, the shortened reply is never going out.
         // (Transient failures below keep the links: the cached shortened
         // text is exactly what the retry re-delivers.)
         await deleteShortLinks(supabase, shortenedLinks);
@@ -2590,7 +2590,7 @@ serve(async (req: Request) => {
         payload: { job_id: job.id, attempt: job.attempt_count, max_attempts: MAX_ATTEMPTS }
       });
       // Same silence rule as the Rowboat dead letter above: the reply was
-      // composed but never delivered, and retries are exhausted — page the
+      // composed but never delivered, and retries are exhausted, page the
       // owner so a human answers the texter.
       if (deadLetter && !isStaff) {
         await escalateToHuman(supabase, {

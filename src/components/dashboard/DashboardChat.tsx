@@ -3,8 +3,8 @@
 /**
  * The /dashboard/chat page shell. All transport state (optimistic send,
  * inline-vs-worker branch, the Realtime+poll race, thread management)
- * lives in useDashboardChatTransport — shared with the Ask AI companion
- * panel — while this component keeps the page-only concerns: the
+ * lives in useDashboardChatTransport, shared with the Ask AI companion
+ * panel, while this component keeps the page-only concerns: the
  * composer, attachments (file / document / image), draft cards, confirm
  * dialogs, and layout.
  */
@@ -90,14 +90,14 @@ export function DashboardChat({ businessId, businessName }: Props) {
   } = useDashboardChatTransport(businessId);
 
   const [input, setInput] = useState("");
-  // Trimmed length — the route validates AFTER trim(), so a paste with
+  // Trimmed length, the route validates AFTER trim(), so a paste with
   // trailing whitespace/newlines must not be blocked when its real body fits.
   const trimmedInputLength = input.trim().length;
   const inputTooLong = trimmedInputLength > MAX_MESSAGE_CHARS;
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // File/document attachment for the next turn (PDF / text / markdown / CSV
-  // — read by the platform Gemini path; distinct from the image attach).
+  // File/document attachment for the next turn (PDF / text / markdown / CSV,
+  // read by the platform Gemini path; distinct from the image attach).
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [attachedFileName, setAttachedFileName] = useState<string | null>(null);
   const [attachedDocumentId, setAttachedDocumentId] = useState("");
@@ -196,7 +196,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
     evt.preventDefault();
     const trimmed = input.trim();
     // Over-long input BLOCKS the send (highlighted counter) instead of
-    // silently clipping — the old maxLength attribute truncated a pasted
+    // silently clipping, the old maxLength attribute truncated a pasted
     // onboarding brief mid-sentence with zero signal (KYP Ads, Jul 15).
     if (!trimmed || sending || isPaused || trimmed.length > MAX_MESSAGE_CHARS) return;
 
@@ -208,7 +208,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
     const outcome = await send(trimmed, {
       file: attachedFile,
       documentId: attachedDocumentId || undefined,
-      // Clear the attachment UI the moment the server persisted the turn —
+      // Clear the attachment UI the moment the server persisted the turn,
       // the same point the pre-extraction code cleared it.
       onPersisted: clearAttachment
     });

@@ -9,7 +9,7 @@
  *
  * Service-role only: RLS is on with no policies, so every access goes
  * through these helpers after the caller's own auth checks. The decrypted
- * key never leaves a server-side function — the dashboard gets
+ * key never leaves a server-side function, the dashboard gets
  * `toPublicAcuityConnection` (has_api_key flag, no ciphertext).
  *
  * Shape mirrors `@/lib/db/vagaro-connections` on purpose: the two providers
@@ -31,7 +31,7 @@ export const ACUITY_DEFAULT_API_BASE_URL = "https://acuityscheduling.com";
  * How dynamic webhook registration ended. `unsupported` (Acuity refused the
  * Webhooks API for these credentials) and `cap_reached` (the account is at
  * its 25-webhook ceiling) are BOTH normal outcomes the card must explain,
- * not errors — inbound events still arrive if the owner pastes the URL by
+ * not errors, inbound events still arrive if the owner pastes the URL by
  * hand, and the poller covers them regardless.
  */
 export type AcuityWebhookRegistrationStatus =
@@ -67,7 +67,7 @@ type StoredAcuityConnectionRow = {
 };
 
 /**
- * Decrypted row — server-side use only. The API key doubles as the webhook
+ * Decrypted row, server-side use only. The API key doubles as the webhook
  * HMAC secret, so the webhook receiver needs this shape too (it cannot work
  * from the public one).
  */
@@ -80,7 +80,7 @@ export type AcuityConnectionRow = Omit<
 
 /**
  * Dashboard-facing shape: no secret material at all. The webhook token IS
- * included — when dynamic registration is unavailable the owner pastes the
+ * included, when dynamic registration is unavailable the owner pastes the
  * webhook URL (which embeds it) into Acuity's settings, so the card needs
  * it; it only gates inbound deliveries, never API access.
  */
@@ -120,7 +120,7 @@ function toDecryptedRow(row: StoredAcuityConnectionRow): AcuityConnectionRow {
   const { api_key_encrypted: encrypted, ...rest } = row;
   const apiKey = decryptIntegrationSecret(encrypted);
   if (apiKey === null) {
-    // NOT NULL column, so this only happens on a truly empty stored value —
+    // NOT NULL column, so this only happens on a truly empty stored value,
     // fail closed rather than authenticating with an empty key (which Acuity
     // would answer with a 401 we'd surface as "reconnect your account").
     throw new Error("acuity connection has no stored api key");
@@ -151,7 +151,7 @@ export async function getAcuityConnection(
   return toDecryptedRow(data as unknown as StoredAcuityConnectionRow);
 }
 
-/** Active connection only — the calendar-tool and webhook gate. */
+/** Active connection only, the calendar-tool and webhook gate. */
 export async function getActiveAcuityConnection(
   businessId: string,
   client?: SupabaseClient
@@ -179,7 +179,7 @@ export async function getActiveAcuityConnectionId(
   return (data as { id: string } | null)?.id ?? null;
 }
 
-/** Dashboard listing shape (no decrypt — masked). Null when not connected. */
+/** Dashboard listing shape (no decrypt, masked). Null when not connected. */
 export async function getPublicAcuityConnection(
   businessId: string,
   client?: SupabaseClient

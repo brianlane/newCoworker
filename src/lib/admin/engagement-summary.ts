@@ -1,5 +1,5 @@
 /**
- * Pure DAU/WAU/MAU summary over the auth directory — split from
+ * Pure DAU/WAU/MAU summary over the auth directory, split from
  * user-engagement.ts so the client-side KPI component (which must compute
  * "today" in the VIEWER's timezone) can import it without dragging the
  * server-only Supabase client into the browser bundle.
@@ -32,7 +32,7 @@ function dayKey(at: Date, timeZone?: string): string {
  * DAU / WAU / MAU over the auth directory (one count per auth user).
  *
  * "Active today" is a CALENDAR-day match (BizBlasts DAU semantics: signed in
- * on today's date), not a rolling 24-hour window — a sign-in yesterday
+ * on today's date), not a rolling 24-hour window, a sign-in yesterday
  * evening must not read as "active today" the next morning. Pass `timeZone`
  * to pin the day boundary (tests use "UTC"; the KPI component omits it so
  * the viewer's local midnight wins). The 7/30-day counts stay rolling

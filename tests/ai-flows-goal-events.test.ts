@@ -285,7 +285,7 @@ describe("applyGoalEvent", () => {
       waiting_call: Record<string, unknown>;
     };
     // The marker guarantees the place_ai_call step is a no-op on any
-    // re-entry — a goal jump must never cause a second dial.
+    // re-entry, a goal jump must never cause a second dial.
     expect(ctx.vars.__called_c1).toBe("1");
     expect(ctx.vars[goalReachedVar("g1")]).toBe("appointment_booked");
     expect(ctx.waiting_call.result).toBe(GOAL_JUMP_SKIP);

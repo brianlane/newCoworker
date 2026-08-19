@@ -1,5 +1,5 @@
 /**
- * /admin/ai-search — is the AI search work landing?
+ * /admin/ai-search, is the AI search work landing?
  *
  * Two questions, one page. Are the assistants READING us (crawler hits, and
  * which operators are missing)? Are they CITING us (humans arriving from

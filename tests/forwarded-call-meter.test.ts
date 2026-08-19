@@ -83,7 +83,7 @@ describe("meterForwardedCallSeconds", () => {
       p_context: "warm_transfer",
       p_tier_cap_seconds: VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod
     });
-    // deriveMonthlyQuotaWindow of a period start in the current month-window —
+    // deriveMonthlyQuotaWindow of a period start in the current month-window,
     // must be an ISO timestamp (the exact window is covered by its own tests).
     expect(typeof call?.args.p_stripe_period_start).toBe("string");
     // Success telemetry carries the billable figure for ops reconciliation.
@@ -223,7 +223,7 @@ describe("meterForwardedCallSeconds", () => {
   });
 
   it("skips with period_stale when the cache is past its period end (never writes the old row)", async () => {
-    // A stale cache would derive the OLD period's month-window key — a
+    // A stale cache would derive the OLD period's month-window key, a
     // different usage row than the (JIT-refreshing) reserve gate reads.
     const { supabase, rpcCalls } = makeSupabase({
       subscription: {

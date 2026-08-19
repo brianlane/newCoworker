@@ -166,7 +166,7 @@ export class TelnyxNumbersClient {
       // than an empty data array. That is a NO-INVENTORY result, not an
       // API failure: treating it as an error aborted the orchestrator's
       // whole DID search cascade on the first sold-out area code (KYP Ads
-      // Jul 14 2026 — CA/514 was empty and the signup ended with no number
+      // Jul 14 2026, CA/514 was empty and the signup ended with no number
       // even though CA had plenty of inventory elsewhere). Real errors
       // (auth, 5xx, other 4xx codes) still throw.
       if (err instanceof TelnyxApiError && err.status === 400 && err.body.includes('"10031"')) {
@@ -224,7 +224,7 @@ export class TelnyxNumbersClient {
 
   /**
    * Release (delete) a phone number from the Telnyx account, stopping its
-   * monthly rental. Destructive and NOT undoable — once released the number
+   * monthly rental. Destructive and NOT undoable, once released the number
    * returns to Telnyx's pool and may be sold to anyone. Callers should gate
    * this behind terminal teardown paths only (grace-expired wipe / admin
    * force-cancel), never a cancel that can still reactivate.
@@ -244,7 +244,7 @@ export class TelnyxNumbersClient {
 
   /**
    * Poll `getNumberOrder` until `status === "success"` or timeout.
-   * Returns the final order snapshot; does NOT throw on failure — caller
+   * Returns the final order snapshot; does NOT throw on failure, caller
    * should inspect `.status`.
    */
   async waitForNumberOrder(

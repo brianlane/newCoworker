@@ -23,7 +23,7 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  * This suite replays the incident's exact conversation state against the
  * REAL production prompt builders (formatFlowRunContext with the
  * already-sent flow messages; formatSmsTranscript as the stateless-reset
- * context — both imported, not paraphrased) with the live model, pinning
+ * context, both imported, not paraphrased) with the live model, pinning
  * the two hard invariants the fixes exist to enforce:
  *   - never re-send / re-ask an automated message the contact already got;
  *   - a stateless reset with the transcript block continues the thread
@@ -71,7 +71,7 @@ const BASE_LINES = [
 /**
  * Semantic intake contracts, judged by the shared judge (judge.ts) instead
  * of phrasing regexes: /what (prompted|made|led) you/ passed paraphrases
- * like "may I ask the reason you're shopping?" — the class of re-asked
+ * like "may I ask the reason you're shopping?", the class of re-asked
  * questions is unbounded, so a model judges it. Calibrated in
  * judge-calibration.e2e.test.ts.
  */
@@ -85,7 +85,7 @@ const INTAKE_QUESTIONS = {
 // Both scenarios below run as ONE retried test each instead of beforeAll +
 // N tests (the suite-standard de-flake shape, same restructure as the
 // voice-booking / kyp suites): a single marginal draw must re-roll the
-// whole turn — judge included — and vitest retry cannot re-run a beforeAll.
+// whole turn, judge included, and vitest retry cannot re-run a beforeAll.
 // (The 2026-07-23 hammer runs drew one stateless-reset reply the judge
 // scored as not engaging the booking.)
 
@@ -111,7 +111,7 @@ describe("no re-sent automation messages (Juhu replay, real flow-context block)"
 
       expect(reply.trim().length).toBeGreaterThan(0);
 
-      // Verbatim/prefix equality is exact by nature — deliberately NOT
+      // Verbatim/prefix equality is exact by nature, deliberately NOT
       // delegated to the judge (see judge.ts header).
       for (const sent of FLOW_MESSAGES) {
         expect(reply.trim()).not.toBe(sent);
@@ -162,7 +162,7 @@ describe("stateless reset continues the thread (transcript block, real formatter
         {
           ...INTAKE_QUESTIONS,
           // In THIS scenario the renewal question was already asked and
-          // answered during intake, so re-asking it here is a restart — the
+          // answered during intake, so re-asking it here is a restart, the
           // incident's exact repeat. (In the first-contact scenario above it
           // is legitimate progress, hence a scenario-specific question rather
           // than a change to the shared INTAKE_QUESTIONS calibration.)

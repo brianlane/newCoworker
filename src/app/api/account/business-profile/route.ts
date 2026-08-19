@@ -69,7 +69,7 @@ export async function POST(request: Request) {
 
     // Merge submitted days OVER the stored value (zod has already validated
     // shapes). A payload carrying only some weekdays must not silently drop
-    // the previously saved schedule for the others — omitting a day means
+    // the previously saved schedule for the others, omitting a day means
     // "unchanged", an explicit null means "closed".
     let hours: BusinessHours | undefined;
     if (body.hours !== undefined) {

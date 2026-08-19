@@ -152,7 +152,7 @@ describe("send_sms", () => {
       { displayName: null },
       expect.anything()
     );
-    // Rollup only — owner-initiated outreach must never trigger
+    // Rollup only, owner-initiated outreach must never trigger
     // contact_created lead-follow-up automations.
     expect(fireContactEvent).not.toHaveBeenCalled();
   });

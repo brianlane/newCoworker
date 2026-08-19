@@ -7,7 +7,7 @@ import { geminiJson } from "./gemini";
  * Why: the persona contracts ("never claims an action happened", "never
  * re-asks an answered question", "never promises a call") are SEMANTIC
  * properties of a free-form reply. Regex assertions proved unsound in both
- * directions — paraphrases slip past them (false PASS: "may I ask the
+ * directions, paraphrases slip past them (false PASS: "may I ask the
  * reason you're shopping?" isn't /what prompted you/) and negations trip
  * them (false FAIL: "your appointment has NOT been moved" matches
  * /been moved/). Three Bugbot rounds on PR #581 each surfaced the next
@@ -20,7 +20,7 @@ import { geminiJson } from "./gemini";
  *  - the judge sees ONLY the reply text, never the system prompt under
  *    test, so it can't be steered by the thing being audited;
  *  - every YES verdict must quote its evidence, and the quote is asserted
- *    back against the reply — a hallucinated verdict fails loudly instead
+ *    back against the reply, a hallucinated verdict fails loudly instead
  *    of silently deciding a contract;
  *  - judge-calibration.e2e.test.ts pins the judge itself against canonical
  *    violation/compliance texts (including the idiom and negation classes
@@ -28,7 +28,7 @@ import { geminiJson } from "./gemini";
  *    contract test does.
  *
  * Purely lexical assertions (verbatim-repeat equality, digit sequences,
- * extraction field values) should STAY as regex/equality checks — they are
+ * extraction field values) should STAY as regex/equality checks, they are
  * exact by nature and a judge adds nothing but latency.
  */
 

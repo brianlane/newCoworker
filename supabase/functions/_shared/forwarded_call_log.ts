@@ -3,8 +3,8 @@
  *
  * Call history reads `voice_call_transcripts`, which the VPS voice bridge writes
  * ONLY for AI-handled calls. Calls the routing layer transfers/forwards straight
- * to a human — per-caller transfer rules (e.g. Clever's Live-Transfer line →
- * Dave), voice-AiFlow `transfer`/`handoff`, safe-mode forwards — never engage the
+ * to a human, per-caller transfer rules (e.g. Clever's Live-Transfer line →
+ * Dave), voice-AiFlow `transfer`/`handoff`, safe-mode forwards, never engage the
  * bridge, so without this they never appear in the log.
  *
  * telnyx-voice-call-end knows each forwarded call's final outcome, so it calls
@@ -20,11 +20,11 @@
  *     from a reordered webhook and refreshes ended_at on the final hangup.
  *   - 'missed' is INSERT-ONLY (ignoreDuplicates): it can never downgrade an
  *     answered row. The Telnyx wt hangup can carry a non-normal_clearing cause
- *     even after the human answered (call.bridged fired) — without this the
+ *     even after the human answered (call.bridged fired), without this the
  *     hangup would flip a completed call to missed. A blocked missed insert
  *     returns 'superseded' so the caller skips the missed-call follow-ups.
  *
- * Best-effort by contract: NEVER throws — recording a call for the log must never
+ * Best-effort by contract: NEVER throws, recording a call for the log must never
  * break live call routing. Dependency-injected (structural supabase type) so it
  * is unit-tested from vitest under the shared 100% coverage gate.
  */
@@ -174,13 +174,13 @@ export async function recordForwardedCall(
       status: answered ? "completed" : "missed",
       started_at: opts.startedAtIso || now,
       ended_at: answered ? now : null,
-      // No turns to summarize — mark terminal so the summary sweep skips it.
+      // No turns to summarize, mark terminal so the summary sweep skips it.
       summarized_at: now,
       updated_at: now
     };
 
     // answered: overwrite (supersedes an earlier missed, refreshes ended_at).
-    // missed: insert-only — never downgrade an existing (answered) row; the
+    // missed: insert-only, never downgrade an existing (answered) row; the
     // returned rows tell us whether the insert actually landed.
     const { data, error } = await supabase
       .from("voice_call_transcripts")

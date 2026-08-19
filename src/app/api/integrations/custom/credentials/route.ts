@@ -9,7 +9,7 @@
  *   1. Auth is gateway-only (ROWBOAT_GATEWAY_TOKEN). The dashboard never calls
  *      this; only trusted VPS infra (the render service) does.
  *   2. The tenant (businessId) is bound by the URL query (?businessId=<uuid>),
- *      never the JSON body — same anti-injection posture as the call proxy.
+ *      never the JSON body, same anti-injection posture as the call proxy.
  *   3. Credentials are returned ONLY to the gateway holder, never to a browser
  *      or the model. The render service uses them in-process to drive a login
  *      form and never persists or echoes them.

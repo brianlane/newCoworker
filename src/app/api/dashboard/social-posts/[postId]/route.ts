@@ -1,5 +1,5 @@
 /**
- * Instagram posts — single-post management.
+ * Instagram posts, single-post management.
  *
  *   PATCH  /api/dashboard/social-posts/:postId
  *            body: { businessId, caption?, mediaUrl?,

@@ -375,8 +375,8 @@ export default async function BillingPage(props: {
   // Only OPEN custom offers are payable; paid/revoked rows never render here
   // (fetched in the parallel batch above).
   const customWhiteGloveOffers = allCustomOffers.filter((o) => o.status === "open");
-  // A business that has ALREADY received white-glove service — any fixed
-  // package, or a paid custom offer — never sees the package upsell again
+  // A business that has ALREADY received white-glove service, any fixed
+  // package, or a paid custom offer, never sees the package upsell again
   // (not even the setup → buildout upgrade).
   const hasReceivedWhiteGlove =
     ownedWhiteGlove !== null || allCustomOffers.some((o) => o.status === "paid");

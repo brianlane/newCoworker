@@ -181,7 +181,7 @@ describe("fetchMergedPrsFromGithub", () => {
       },
       { number: 4, title: "Null-ish fields", body: "", labels: [], authorLogin: "" }
     ]);
-    // A short page is the last page — no second fetch.
+    // A short page is the last page, no second fetch.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toContain("repos/owner/repo/pulls");

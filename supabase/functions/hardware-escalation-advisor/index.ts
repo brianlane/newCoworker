@@ -11,7 +11,7 @@
  *     the recommended next box size and a deep link to the admin panel's
  *     migrate-size control.
  *
- * Escalation itself stays manual — this only advises. Dedupe: at most one
+ * Escalation itself stays manual, this only advises. Dedupe: at most one
  * email per tenant per ISO week via the `mark_usage_cap_alert` guard
  * (kind `hardware_escalation_advice`), rolled back on send failure so the
  * next run retries.
@@ -45,7 +45,7 @@ import {
 
 const WINDOW_DAYS = ADVISOR_WINDOW_DAYS;
 
-/** PostgREST's default max-rows — page in chunks of this size. */
+/** PostgREST's default max-rows, page in chunks of this size. */
 const PAGE_SIZE = 1000;
 
 function isoDaysAgo(days: number, now: Date): string {
@@ -55,7 +55,7 @@ function isoDaysAgo(days: number, now: Date): string {
 /**
  * Drain a PostgREST query with `.range()` pagination. PostgREST silently
  * truncates at max-rows (1000 default), so a single select over the whole
- * fleet's usage/log rows would skew every signal once the fleet grows —
+ * fleet's usage/log rows would skew every signal once the fleet grows,
  * with no error to catch. Throws on the first page error.
  */
 async function fetchAllPages<T>(
@@ -152,7 +152,7 @@ serve(async (req: Request) => {
     .toISOString()
     .slice(0, 10);
 
-  // daily_usage feeds only the month-to-date SMS total — its voice/peak
+  // daily_usage feeds only the month-to-date SMS total, its voice/peak
   // columns have no live writer (see _shared/hardware_escalation.ts).
   let usageRows: DailyUsageRow[];
   try {

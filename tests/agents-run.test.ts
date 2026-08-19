@@ -112,7 +112,7 @@ describe("executeAgentRun (text)", () => {
       }),
       { generate }
     );
-    // same_as_input still produces markdown for transcripts — echoing VTT
+    // same_as_input still produces markdown for transcripts, echoing VTT
     // back would be subtitle soup, not minutes.
     expect(res).toMatchObject({ ok: true, outputFilename: "meeting.md", outputMime: "text/markdown" });
     const call = generate.mock.calls[0][0];
@@ -185,7 +185,7 @@ describe("executeAgentRun (docx)", () => {
       outputFilename: "quote.docx",
       outputMime: DOCX_MIME_TYPE
     });
-    // The model still writes markdown — the typesetter renders the bytes.
+    // The model still writes markdown, the typesetter renders the bytes.
     expect(generate.mock.calls[0][0].userText).toContain("Produce the result as markdown.");
   });
 
@@ -223,7 +223,7 @@ describe("executeAgentRun (pdf_retypeset)", () => {
     expect(res).toMatchObject({
       ok: true,
       outputFilename: "policy.pdf",
-      // The artifact mime (renderer discriminator) — the downloaded/filed
+      // The artifact mime (renderer discriminator), the downloaded/filed
       // representation becomes application/pdf via renderAgentArtifactBytes.
       outputMime: "text/html"
     });

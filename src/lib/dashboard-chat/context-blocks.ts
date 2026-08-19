@@ -1,12 +1,12 @@
 /**
- * Shared per-turn context blocks for the OWNER-OPERATOR chat surfaces —
+ * Shared per-turn context blocks for the OWNER-OPERATOR chat surfaces,
  * dashboard chat (/api/dashboard/chat) and the owner-over-SMS turn
  * (/api/internal/owner-sms-turn). Extracted from the dashboard chat route
  * so both surfaces ground the model identically:
  *
  *  - `buildIntegrationsStatusLine`: what is ACTUALLY connected (calendar
  *    provider + mailbox), so "are you connected to Calendly?" is answered
- *    from fact — the KYP Ads conversation (Jul 15) had the assistant deny,
+ *    from fact, the KYP Ads conversation (Jul 15) had the assistant deny,
  *    then claim, Calendly access within four turns while a live connection
  *    existed the whole time.
  *  - `buildBusinessContextBlock`: the business identity/memory the worker

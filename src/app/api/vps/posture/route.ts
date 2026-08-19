@@ -26,7 +26,7 @@ const bodySchema = z.object({
  * /api/provisioning/progress: the bearer must be a gateway token bound to
  * this businessId (per-tenant token; the shared fallback still verifies for
  * not-yet-migrated boxes). Drift (any failed check) is persisted, logged,
- * and emitted as a `vps_posture_drift` telemetry event for alerting — it
+ * and emitted as a `vps_posture_drift` telemetry event for alerting, it
  * never auto-pauses the tenant (BYOS customers have root; false positives
  * are possible).
  */

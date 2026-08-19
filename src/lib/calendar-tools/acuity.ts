@@ -196,7 +196,7 @@ export async function resolveAcuityAppointmentType(
 /**
  * Only one-on-one services are bookable here. Acuity's `type` field is an
  * exact discriminator (`"service" | "class" | "series"`), and classes must go
- * through `/availability/classes`, which v1 does not implement — matching one
+ * through `/availability/classes`, which v1 does not implement, matching one
  * by duration would produce confusing failures at booking time.
  */
 function isBookableAcuityType(type: AcuityAppointmentType, defaultCalendarId: string | null): boolean {
@@ -340,7 +340,7 @@ export async function findAcuitySlots(
 }
 
 /**
- * `calendar_book_appointment` core for Acuity connections — creates a real
+ * `calendar_book_appointment` core for Acuity connections, creates a real
  * appointment on the merchant's book.
  *
  * Books in ADMIN mode when a calendar can be pinned, which skips Acuity's own

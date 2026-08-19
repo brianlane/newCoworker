@@ -112,14 +112,14 @@ export default async function CustomerDetailPage({ params }: Props) {
 
   // Phase 4 + 4b: pull SMS + voice in parallel so the page hydrates in
   // one round-trip group rather than serial. Voice list is capped at
-  // 10 — the per-call transcript page is one click away for full detail.
-  // Both lists key off the PROFILE's primary number + its merged aliases —
+  // 10, the per-call transcript page is one click away for full detail.
+  // Both lists key off the PROFILE's primary number + its merged aliases,
   // not the URL value, which after a merge may itself be an alias (the
   // alias-aware getCustomerMemory above already resolved it). Keying off
   // the raw URL number dropped everything stored under the primary.
   // All five reads depend only on `memory` (already resolved), so they run
   // as ONE parallel group. This matters doubly for residency (vps-mode)
-  // tenants, where each read is a tunnel round-trip to their box —
+  // tenants, where each read is a tunnel round-trip to their box,
   // serially these were ~5 RTTs, now the page pays one.
   const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, mailboxAddress, trackedLinks] =
     await Promise.all([
@@ -164,7 +164,7 @@ export default async function CustomerDetailPage({ params }: Props) {
       // Linked records (policies, contracts, memberships); tolerated so a
       // documents-table error never blocks the profile page.
       listBusinessDocumentsForContact(business.id, memory.id, db).catch(() => []),
-      // AI mailbox address for the "Request documents" action; tolerated —
+      // AI mailbox address for the "Request documents" action; tolerated,
       // a mailbox-table error just hides the action.
       ensureTenantMailbox(business.id, db)
         .then((row) => tenantMailboxAddress(row.local_part))
@@ -175,7 +175,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         client: db
       }).catch(() => [])
     ]);
-  // Merge is "same person, two numbers" — only ever fold a customer into another
+  // Merge is "same person, two numbers", only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
   // codes, vendors, testers, owner/employee) so an irreversible merge can never
   // collapse a real person into a lead-source or vendor entry.
@@ -271,15 +271,15 @@ export default async function CustomerDetailPage({ params }: Props) {
         customerE164={memory.customer_e164}
         // Prefill with the EFFECTIVE name shown in the header (resolved
         // owner/employee/manual-label identity), falling back to the stored
-        // display_name — so editing starts from the current value instead of a
+        // display_name, so editing starts from the current value instead of a
         // blank box for derived names. Never seed the bare E.164 (headerName's
         // last-resort fallback): a contact with no name keeps the field empty so
         // the placeholder shows and an unchanged save writes nothing.
         initialDisplayName={headerContact?.name ?? memory.display_name}
         initialPinnedMd={memory.pinned_md}
         initialEmail={memory.email}
-        // Prefill with the EFFECTIVE type shown in the header badge — the
-        // owner/employee overlay wins over the stored type — so editing starts
+        // Prefill with the EFFECTIVE type shown in the header badge, the
+        // owner/employee overlay wins over the stored type, so editing starts
         // from the displayed value, not the raw stored one. (As with the name,
         // an unchanged save writes nothing because this is also the dirty-check
         // baseline.)
@@ -302,7 +302,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         />
       )}
 
-      {/* Document request: customers with a real (textable) number only —
+      {/* Document request: customers with a real (textable) number only,
           short-code/service rows can't receive the request SMS. */}
       {memory.type === "customer" &&
         /^\+[1-9]\d{6,15}$/.test(memory.customer_e164) &&
@@ -318,7 +318,7 @@ export default async function CustomerDetailPage({ params }: Props) {
 
       {/* Merge is customer-to-customer only. Hide it when THIS profile is a
           non-customer (company short code, vendor, tester, owner/employee) so a
-          directory row can never be folded into a customer and deleted — the
+          directory row can never be folded into a customer and deleted, the
           target list is already restricted to customers above. */}
       {memory.type === "customer" && !isEmailContactKey(memory.customer_e164) && (
         <CustomerMergeAction
@@ -587,7 +587,7 @@ export default async function CustomerDetailPage({ params }: Props) {
               // Note: deep-link uses the transcript row UUID, not the
               // Telnyx call_control_id (which contains a `:` that gets
               // path-decoded inconsistently between Cloudflare/Vercel
-              // and Next.js — see getTranscriptById docstring).
+              // and Next.js, see getTranscriptById docstring).
               const durationLabel =
                 t.started_at && t.ended_at
                   ? formatDurationShort(t.started_at, t.ended_at)

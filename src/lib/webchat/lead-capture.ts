@@ -1,5 +1,5 @@
 /**
- * `webchat_capture_lead` core — the ONLY write tool on the widget surface.
+ * `webchat_capture_lead` core, the ONLY write tool on the widget surface.
  *
  * Records visitor contact details + interest as a `coworker_logs` row (so
  * the lead shows up in the owner's activity feed immediately) and merges
@@ -10,7 +10,7 @@
  * Session attribution: the Rowboat tool webhook carries NO caller context,
  * so the prompt gives the model an opaque `sessionRef` (the session UUID)
  * to pass back verbatim. We validate it resolves to a session of the SAME
- * business before writing — a hallucinated/injected ref can at worst tag a
+ * business before writing, a hallucinated/injected ref can at worst tag a
  * sibling session of the same tenant, never cross a tenant boundary, and
  * an invalid ref still records the lead log (attribution is best-effort,
  * the lead itself is not).
@@ -31,7 +31,7 @@ export type CaptureWebchatLeadArgs = {
   name?: string;
   phone?: string;
   email?: string;
-  /** What the visitor wants — service, question, timeline. */
+  /** What the visitor wants, service, question, timeline. */
   interest?: string;
   notes?: string;
   /** Opaque session UUID from the system prompt; validated, best-effort. */
@@ -71,7 +71,7 @@ export async function captureWebchatLead(
 
   // Resolve the session ref FIRST so the log can carry the attribution.
   // Cross-tenant refs are dropped (business_id mismatch), invalid refs are
-  // ignored — the lead log below is written either way.
+  // ignored, the lead log below is written either way.
   let sessionId: string | null = null;
   let sessionHasContact = false;
   const ref = args.sessionRef?.trim();
@@ -94,7 +94,7 @@ export async function captureWebchatLead(
 
   // A lead the team cannot REACH is not a lead. Refuse unless this call
   // (or the session's pre-chat form / an earlier capture) provided a phone
-  // or email — a name or interest alone gives the team nobody to contact.
+  // or email, a name or interest alone gives the team nobody to contact.
   // Interest-only captures stay allowed for sessions whose contact is
   // already on file (they enrich a reachable lead).
   if (!phone && !email && !sessionHasContact) {
@@ -122,7 +122,7 @@ export async function captureWebchatLead(
     }
   });
 
-  // Best-effort session merge — the lead is already durably logged above,
+  // Best-effort session merge, the lead is already durably logged above,
   // so attribution/link failures degrade silently rather than failing the
   // tool call mid-conversation.
   if (sessionId) {
@@ -139,7 +139,7 @@ export async function captureWebchatLead(
 
   // Cross-channel contact rollup: a visitor who left a usable phone number
   // becomes (or bumps) a contact profile with last_channel='webchat', the
-  // same way a texter or caller would — so the owner's Contacts page shows
+  // same way a texter or caller would, so the owner's Contacts page shows
   // web leads alongside everyone else, the email links to the same profile,
   // and a brand-new lead fires the `contact_created` AiFlow trigger.
   // Best-effort inside ensureCapturedContact, like the merges above.
@@ -154,7 +154,7 @@ export async function captureWebchatLead(
   }
 
   // Knowledge graph: structured lead details map deterministically at
-  // webchat's anonymous trust (0) — the visitor's claims can never
+  // webchat's anonymous trust (0), the visitor's claims can never
   // supersede owner facts. Never-throws, mode-gated inside.
   await ingestCapturedLead(businessId, "webchat", {
     name,

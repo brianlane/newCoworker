@@ -1,5 +1,5 @@
 /**
- * GET /s/<code> — tracked SMS short-link redirect.
+ * GET /s/<code>, tracked SMS short-link redirect.
  *
  * Public by design: the code is the capability, exactly like a bit.ly link.
  * The `sms_link_click` RPC atomically logs the click, increments the aggregate
@@ -7,15 +7,15 @@
  * the table itself is RLS-deny-all).
  *
  * Machine traffic never counts: HEAD requests and known link-preview /
- * scanner user agents (messaging-app preview cards, carrier security probes
- * — production showed every link fetched within seconds of DELIVERY) are
+ * scanner user agents (messaging-app preview cards, carrier security probes,
+ * production showed every link fetched within seconds of DELIVERY) are
  * resolved with a plain lookup and redirected without touching the click
  * stats. Human-looking clicks inside the RPC's prefetch window are logged
  * but flagged and never alert.
  *
  * The stored destination is not an open-redirect surface: rows are written
  * ONLY by the platform's own send paths (AiFlow send_sms, voice follow-up
- * SMS) from message bodies the tenant owner authored — the recipient
+ * SMS) from message bodies the tenant owner authored, the recipient
  * already received that exact URL in the text; this route just makes the
  * hop measurable. Unknown/expired codes fall back to the app homepage.
  */
@@ -59,7 +59,7 @@ async function resolveOnly(code: string): Promise<Response> {
   }
 }
 
-/** Preview fetchers commonly probe with HEAD first — never a human tap. */
+/** Preview fetchers commonly probe with HEAD first, never a human tap. */
 export async function HEAD(
   _request: Request,
   context: { params: Promise<{ code: string }> }

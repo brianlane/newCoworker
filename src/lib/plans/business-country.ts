@@ -33,7 +33,7 @@ export type BusinessCountry = "US" | "CA" | "MX";
  * Canadian NANP area codes (NPA). Source: CNAC assignments. Overlays are
  * added rarely; extending this list is a one-line change and a stale entry
  * only ever mislabels a brand-new overlay's tenants as non-Canadian (fee
- * skipped — fails toward not charging).
+ * skipped, fails toward not charging).
  */
 export const CANADIAN_AREA_CODES: ReadonlySet<string> = new Set([
   "204", "226", "236", "249", "250", "257", "263", "289",

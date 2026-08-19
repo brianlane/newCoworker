@@ -8,9 +8,9 @@
  * "Confirm document receipt" starter flow closes the loop when the files
  * arrive at the mailbox.
  *
- * Composed entirely from existing endpoints — the metered dashboard SMS
+ * Composed entirely from existing endpoints, the metered dashboard SMS
  * send and the contacts tag PATCH (which fires the normal tag_changed
- * automation hooks) — so it inherits their quota, validation, and audit
+ * automation hooks), so it inherits their quota, validation, and audit
  * behavior.
  */
 
@@ -48,7 +48,7 @@ export function RequestDocumentsAction({
   const [sentStatus, setSentStatus] = useState<
     "tagged" | "already_tracked" | "tag_failed" | null
   >(null);
-  // Local tag state so a successful tag write is reflected immediately —
+  // Local tag state so a successful tag write is reflected immediately,
   // a second request in the same session must read as already-tracked and
   // must not re-send a stale tag set.
   const [tags, setTags] = useState<string[]>(currentTags);
@@ -79,7 +79,7 @@ export function RequestDocumentsAction({
         return;
       }
       // Tag AFTER the send succeeded so a quota refusal never leaves a
-      // phantom "awaiting" state. The tag write can fail independently —
+      // phantom "awaiting" state. The tag write can fail independently,
       // report that honestly instead of claiming "tracked".
       if (alreadyAwaiting) {
         setSentStatus("already_tracked");

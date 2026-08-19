@@ -1,7 +1,7 @@
 /**
  * Graph extraction prompt plumbing (src/lib/memory/graph-extract.ts):
  * input composition with the entity index, and the defensive parse that
- * turns model JSON into a safe GraphExtraction — malformed input always
+ * turns model JSON into a safe GraphExtraction, malformed input always
  * degrades to empty, facts must reference known refs, and exactly one of
  * object_ref/object_value must be set.
  */

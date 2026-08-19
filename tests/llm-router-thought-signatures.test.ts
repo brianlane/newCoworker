@@ -5,12 +5,12 @@
  * overwrite). Context: Gemini 3.x 400s ("Function call is missing a
  * thought_signature") when a replayed assistant tool call lacks
  * `extra_content.google.thought_signature`, and Rowboat's SDK layers drop the
- * field — the router repairs it transparently (verified live 2026-07-16).
+ * field, the router repairs it transparently (verified live 2026-07-16).
  */
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — sidecar is plain JS without types; importing the pure
+// @ts-expect-error, sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-// prettier-ignore — single line so the ts-expect-error covers the untyped import
+// prettier-ignore, single line so the ts-expect-error covers the untyped import
 import { needsThoughtSignatures, createSignatureCache, harvestThoughtSignatures, injectThoughtSignatures, createSseSignatureHarvester, THOUGHT_SIGNATURE_PLACEHOLDER } from "../vps/llm-router/src/routing.js";
 
 function toolCall(id: string, signature?: string) {

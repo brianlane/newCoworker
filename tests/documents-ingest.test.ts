@@ -171,7 +171,7 @@ describe("ingestDocument → knowledge-graph scheduling (kg-source: document)", 
     expect(failed.ok).toBe(false);
     expect(scheduleGraphExtract).not.toHaveBeenCalled();
 
-    // after() throws outside a request scope — the ingest result must not care.
+    // after() throws outside a request scope, the ingest result must not care.
     const throwing = vi.fn(() => {
       throw new Error("after() called outside a request scope");
     });

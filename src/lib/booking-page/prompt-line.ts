@@ -162,7 +162,7 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
  * The line itself, pure so the live-model e2e can build its system prompt
  * from the REAL string (imported, not paraphrased) without a database.
  */
-/** "Discovery Call (60 minutes)" — how a meeting is named to the model. */
+/** "Discovery Call (60 minutes)", how a meeting is named to the model. */
 function describeMeeting(meeting: BookingMeeting): string {
   return `${meeting.name} (${meeting.durationMinutes} minutes)`;
 }

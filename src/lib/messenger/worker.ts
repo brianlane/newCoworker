@@ -1,5 +1,5 @@
 /**
- * Messenger reply worker — the processing loop behind
+ * Messenger reply worker, the processing loop behind
  * /api/internal/messenger-worker (kicked fire-and-forget by the Meta
  * webhook route, retried by the per-minute cron sweep).
  *
@@ -10,7 +10,7 @@
  *
  * Send-before-commit ordering: a failed send leaves the job claimed and
  * the reclaim sweep retries it; a failed commit AFTER a successful send
- * is logged loudly and left to the reclaim path — the complete RPC's
+ * is logged loudly and left to the reclaim path, the complete RPC's
  * idempotent replay plus the superseded-sibling logic keep a retried
  * turn from double-writing the transcript.
  */
@@ -50,7 +50,7 @@ import { reportMetaCallFailure } from "@/lib/meta/token-health";
 
 export const MESSENGER_WORKER_ID = "platform-messenger-worker";
 
-/** Jobs per invocation — sized against the route's wall-clock budget. */
+/** Jobs per invocation, sized against the route's wall-clock budget. */
 export const MESSENGER_WORKER_BATCH_LIMIT = 8;
 
 /**
@@ -228,7 +228,7 @@ export async function processMessengerJobs(
         continue;
       }
 
-      // Best-effort display name backfill on first touch — the preamble
+      // Best-effort display name backfill on first touch, the preamble
       // and inbox both read better with a real name. WhatsApp skips this:
       // the sender's profile name arrived with the webhook delivery.
       let conversationForTurn = conversation;
@@ -286,7 +286,7 @@ export async function processMessengerJobs(
         // The reply already reached the lead. The job must NOT stay
         // 'processing': the stale reclaim would requeue it and a retry
         // would run a second turn and send a duplicate reply. Flip it to a
-        // terminal error instead — the assistant row is missing from the
+        // terminal error instead, the assistant row is missing from the
         // transcript (loud log), but the lead never sees a double-send.
         logger.error("messenger worker: commit failed AFTER send; failing job to prevent duplicate reply", {
           jobId: job.id,
@@ -301,7 +301,7 @@ export async function processMessengerJobs(
       const detail = err instanceof Error ? err.message : String(err);
       // Terminal conditions must not burn retries: no_input means there is
       // nothing to answer (e.g. the owner's manual reply is the newest
-      // turn), no_key means the platform is misconfigured — retrying
+      // turn), no_key means the platform is misconfigured, retrying
       // cannot change either.
       // A dead Meta token is terminal for EVERY job in the outage, not just
       // the one that noticed first: retrying cannot mint a credential.

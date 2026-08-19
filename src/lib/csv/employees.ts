@@ -4,10 +4,10 @@
  * Same contract as contacts.ts: export includes read-only columns, import
  * recognizes only the editable subset so an exported file re-imports as a
  * no-op-ish update. Schedules travel in the same compact text form the
- * Employees page uses ("mon-fri 09:00-17:00") and are parsed strictly — a
+ * Employees page uses ("mon-fri 09:00-17:00") and are parsed strictly, a
  * typo'd schedule errors the row instead of silently sidelining the member.
  *
- * Upsert key: (business_id, phone) — the roster's DB uniqueness. `phone` is
+ * Upsert key: (business_id, phone), the roster's DB uniqueness. `phone` is
  * normalized like the contacts import but must resolve to full E.164 (the
  * roster check constraint rejects short codes).
  *
@@ -187,7 +187,7 @@ export async function importEmployeesCsv(
       continue;
     }
     const normalized = normalizeContactNumber(row.phone);
-    // Roster numbers must be dialable E.164 — short codes normalize fine for
+    // Roster numbers must be dialable E.164, short codes normalize fine for
     // contacts but can't receive route_to_team offers.
     if (!normalized.ok || !E164_RE.test(normalized.value)) {
       summary.errors.push({
@@ -250,7 +250,7 @@ export async function importEmployeesCsv(
     }
 
     try {
-      // Blank cells mean "keep" — only provided values are written.
+      // Blank cells mean "keep", only provided values are written.
       const patch: Record<string, unknown> = {
         name,
         ...(email ? { email } : {}),
@@ -292,7 +292,7 @@ export async function importEmployeesCsv(
         if (insErr) {
           if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
           // Raced by a concurrent create (second import tab, UI add) between
-          // the lookup and the insert — apply the row as an update instead of
+          // the lookup and the insert, apply the row as an update instead of
           // dropping it, mirroring the contacts importer.
           if (await applyUpdate()) {
             summary.updated += 1;

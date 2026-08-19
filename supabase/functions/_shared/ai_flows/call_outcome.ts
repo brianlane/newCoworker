@@ -7,10 +7,10 @@
  *     "answered" / "no_answer", derived from the session's transfer_initiated
  *     stamp and the reservation's answer_issued_at);
  *   - the VPS voice bridge the moment its live-transfer tool connects the
- *     callee to a human ("transferred" — immediate, because a transferred
+ *     callee to a human ("transferred", immediate, because a transferred
  *     human conversation can outlive the run's wait ceiling). The bridge is a
  *     separate Node codebase, so it carries its own copy of this write (see
- *     vps/voice-bridge/src/index.ts resumeFlowRunWithCallOutcome) — keep the
+ *     vps/voice-bridge/src/index.ts resumeFlowRunWithCallOutcome), keep the
  *     two in lockstep like the chat-spend-cap mirrors.
  *
  * The timeout sweep (resume_overdue_call_waits) is the no-webhook backstop.
@@ -39,7 +39,7 @@ export type FlowRunLink = {
 /**
  * Apply `outcome` to the linked parked run. Returns true when THIS write
  * resumed the run (false: no/invalid link, run not awaiting this call's step,
- * a racing writer won, or a read/write error — all safe to ignore because
+ * a racing writer won, or a read/write error, all safe to ignore because
  * the timeout sweep backstops a never-resumed run).
  *
  * `reason` sharpens the coarse outcome (a machine answering rides `no_answer`

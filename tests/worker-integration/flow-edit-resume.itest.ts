@@ -26,7 +26,7 @@ import {
  * wait_for_reply, the flow DEFINITION EDITED while it waited, then the
  * lead's reply resuming the run.
  *
- * `current_step` is a flat index into flattenSteps() output — only stable
+ * `current_step` is a flat index into flattenSteps() output, only stable
  * while the definition never changes. Pre-fix, the edit shifted every
  * index and the resumed run marched from the stale one, re-executing
  * arbitrary steps: a real lead got the greeting + two nudges re-sent
@@ -35,7 +35,7 @@ import {
  * time. The unit layer pins the remap math; THIS layer pins that the
  * served worker actually stamps the marker on park, that the webhook
  * resume path preserves it, and that a resumed run against an edited
- * definition executes the right steps — and only those — in the database.
+ * definition executes the right steps, and only those, in the database.
  *
  * Steps are update_contact tags (distinct per step) so every execution is
  * observable as a tag + step row, with no Telnyx dependency.
@@ -139,7 +139,7 @@ describe("flow edited while a run is parked (the KYP triple re-send incident)", 
 
     // The incident's edit shape: new steps land ahead of the wait, so the
     // parked flat index (2: the wait) now points at inserted step "new1".
-    // Pre-fix, the resume would march from there — re-running sends the
+    // Pre-fix, the resume would march from there, re-running sends the
     // lead already received. Post-fix it must relocate to "wait"'s new
     // index and continue with ONLY the steps after it.
     await editDefinition(
@@ -169,7 +169,7 @@ describe("flow edited while a run is parked (the KYP triple re-send incident)", 
     expect(tags).not.toContain("InsertedTwo");
 
     // Exactly two update_contact executions total (greet pre-park,
-    // followup post-resume) — a stale-index resume would have produced
+    // followup post-resume), a stale-index resume would have produced
     // more done rows here, the DB shape of the triple re-send.
     const steps = await getSteps(db, runId);
     const contactDone = steps.filter(
@@ -197,7 +197,7 @@ describe("flow edited while a run is parked (the KYP triple re-send incident)", 
     await tickWorker();
     expect((await getRun(db, runId)).status).toBe("awaiting_reply");
 
-    // The edit removes the wait entirely — the marked step no longer
+    // The edit removes the wait entirely, the marked step no longer
     // exists, so there is no correct place to resume. resolveResumeIndex
     // returns null and the worker must stop the run cleanly.
     await editDefinition(
@@ -212,7 +212,7 @@ describe("flow edited while a run is parked (the KYP triple re-send incident)", 
     const run = await getRun(db, runId);
     expect(run.status).toBe("canceled");
     expect(run.last_error).toMatch(/edited while this run was waiting/i);
-    // Nothing after the park executed — the lead was not texted from a
+    // Nothing after the park executed, the lead was not texted from a
     // wrong index on the way down.
     expect(await getContactTags(db, biz, LEAD)).not.toContain("FollowedUp");
   });
@@ -264,7 +264,7 @@ describe("flow edited while a run is parked (the KYP triple re-send incident)", 
     expect((await getRun(db, runId)).status).toBe("awaiting_reply");
 
     // Same insertion shape as the incident, then the wait TIMES OUT (the
-    // resume_overdue_reply_waits RPC re-queues it) — the other real-world
+    // resume_overdue_reply_waits RPC re-queues it), the other real-world
     // way a parked run meets an edited definition.
     await editDefinition(
       db,

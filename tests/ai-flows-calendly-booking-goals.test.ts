@@ -280,7 +280,7 @@ describe("sweepCalendlyBookingGoals", () => {
     const { db } = fakeDb({ ai_flows: [{ data: null }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db);
     // No args at all: covers the client fallback AND the four production
-    // dependency defaults (none is invoked — the listing is empty).
+    // dependency defaults (none is invoked, the listing is empty).
     const result = await sweepCalendlyBookingGoals();
     expect(result.businesses).toBe(0);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
@@ -352,7 +352,7 @@ describe("sweepCalendlyBookingGoals", () => {
       ai_flows: [{ data: [goalFlowRow("f1")] }],
       ai_flow_runs: [{ error: { message: "runs down again" } }],
       // A prior failure row inside the escalation lookback: the last tick
-      // failed too — this is an outage, not a blip.
+      // failed too, this is an outage, not a blip.
       system_logs: [{ data: [{ id: "log-1" }] }]
     });
     await sweepCalendlyBookingGoals(db, deps());
@@ -586,7 +586,7 @@ describe("sweepCalendlyBookingGoals", () => {
     });
     const request = vi.fn(async (biz: string, _c: unknown, config: { endpoint: string }) => {
       if (config.endpoint === "/users/me") return USER_RES;
-      // BIZ2's listing carries no collection at all — still zero bookings.
+      // BIZ2's listing carries no collection at all, still zero bookings.
       if (biz === BIZ2) return { data: {} };
       return {
         data: {
@@ -665,7 +665,7 @@ describe("sweepCalendlyBookingGoals", () => {
       jumpedRuns: 1
     });
     // The swept business also got a webhook fast-path upgrade attempt
-    // (module default — cooldown/plan gating live inside ensure).
+    // (module default, cooldown/plan gating live inside ensure).
     expect(ensureCalendlyWebhookSubscription).toHaveBeenCalledWith(
       BIZ,
       CONN,
@@ -718,7 +718,7 @@ describe("sweepCalendlyBookingGoals", () => {
     const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
       if (config.endpoint === "/users/me") return USER_RES;
       if (config.endpoint === "/scheduled_events") {
-        // EV1 listed first but created LATER — the sweep must walk EV2
+        // EV1 listed first but created LATER, the sweep must walk EV2
         // (closer to aging out of the lookback) first.
         return {
           data: { collection: [booking("EV1", isoAgoMin(1)), booking("EV2", isoAgoMin(5))] }

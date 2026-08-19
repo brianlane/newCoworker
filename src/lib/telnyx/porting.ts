@@ -2,19 +2,19 @@
  * Telnyx number-porting API (bring your own number).
  *
  * Thin, typed wrappers around the Porting v2 REST endpoints, in the same
- * style as `src/lib/telnyx/numbers.ts` — this file stays strictly
+ * style as `src/lib/telnyx/numbers.ts`, this file stays strictly
  * Telnyx-contract-shaped; the BYON orchestration (persisting
  * number_port_requests rows, webhooks, wiring the DID after the port
  * completes) lives in higher-level modules.
  *
  * The port-in lifecycle these methods drive:
  *
- *   1. `checkPortability`     — instant yes/no + FastPort eligibility
- *   2. `createPortingOrder`   — draft order (Telnyx may split into several)
- *   3. `uploadDocument` x2    — LOA + recent invoice PDFs → document ids
- *   4. `updatePortingOrder`   — attach documents, end-user/account details,
+ *   1. `checkPortability`, instant yes/no + FastPort eligibility
+ *   2. `createPortingOrder`, draft order (Telnyx may split into several)
+ *   3. `uploadDocument` x2, LOA + recent invoice PDFs → document ids
+ *   4. `updatePortingOrder`, attach documents, end-user/account details,
  *                               requested FOC date, per-order webhook_url
- *   5. `confirmPortingOrder`  — submit to the losing carrier
+ *   5. `confirmPortingOrder`, submit to the losing carrier
  *   6. `porting_order.status_changed` webhooks report progress; exception
  *      details carry actionable codes (ACCOUNT_NUMBER_MISMATCH, …)
  *
@@ -183,7 +183,7 @@ export class TelnyxPortingClient {
   /**
    * Create a draft porting order. Telnyx may split the numbers into multiple
    * orders (by country / number type / SPID / FastPort eligibility), so the
-   * response is always an array — each order must be updated and confirmed
+   * response is always an array, each order must be updated and confirmed
    * independently.
    */
   async createPortingOrder(opts: {

@@ -9,7 +9,7 @@ import { logger } from "@/lib/logger";
  * browser context? We accept ONLY when `Origin` (or, as a fallback,
  * `Referer`) points at the deployed app host.
  *
- * Used to gate the owner-consented robots.txt bypass below — the
+ * Used to gate the owner-consented robots.txt bypass below, the
  * unauthenticated endpoint must not become a free
  * robots-bypassing crawler proxy for arbitrary URLs (Codex P1 /
  * Cursor Bugbot Medium). Origin is unforgeable from a browser tab
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
     }
 
     // Robots bypass is conditional on demonstrable owner-consent
-    // signal — same-origin browser request → owner is on our
+    // signal, same-origin browser request → owner is on our
     // questionnaire and just typed in their own URL → bypass robots.
     // For everyone else (curl, scrapers, cross-origin browsers) we
     // fall through to strict robots compliance so this route can't
@@ -126,7 +126,7 @@ export async function POST(request: Request) {
     });
 
     if (!result.ok) {
-      // Preview failures are not 500s — the URL itself was valid syntactically,
+      // Preview failures are not 500s, the URL itself was valid syntactically,
       // we just couldn't crawl/summarize it in time. Return ok:true with an
       // ingest-status payload so the chat client can fall back to "we tried
       // your site but couldn't read it; please summarize it for the

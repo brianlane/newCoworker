@@ -6,7 +6,7 @@
  * Sets `businesses.vps_provider` + `vps_region` via POST
  * /api/admin/vps-provider. The pin drives which provisioner the
  * orchestrator uses on the NEXT provision (hostinger purchase/pool, OVH
- * Beauharnois purchase); it never moves a live box — the server refuses a
+ * Beauharnois purchase); it never moves a live box, the server refuses a
  * provider switch while a box exists. BYOS pinning happens through the
  * SSH-handover enrollment card instead.
  */

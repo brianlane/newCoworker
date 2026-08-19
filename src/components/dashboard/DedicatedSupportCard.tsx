@@ -1,6 +1,6 @@
 /**
  * Dedicated support card (enterprise): SLA response targets + the
- * operator's dedicated contact channels. Server component — the settings
+ * operator's dedicated contact channels. Server component, the settings
  * page renders it only for enterprise tenants.
  */
 

@@ -5,7 +5,7 @@
  *
  * Why this is load-bearing rather than cosmetic: the rendered markdown
  * (`renderBusinessProfileMd`) is persisted to `business_configs.profile_md`
- * and composed into the agent's grounding everywhere prompts are built —
+ * and composed into the agent's grounding everywhere prompts are built,
  * `buildAgentInstructions` (vault sync → Rowboat SMS/chat agents), the
  * provision-time seed in `vps/scripts/deploy-client.sh`, and the
  * `business_knowledge_lookup` tool corpus (which the voice agent calls).
@@ -37,7 +37,7 @@ export type BusinessDayHours = { open: string; close: string } | null;
 
 export type BusinessHours = Partial<Record<BusinessHoursDay, BusinessDayHours>>;
 
-/** 24h "HH:MM" — the storage + API wire format for open/close times. */
+/** 24h "HH:MM", the storage + API wire format for open/close times. */
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export function isValidHoursTime(value: string): boolean {
@@ -160,7 +160,7 @@ export function renderBusinessProfileMd(facts: BusinessProfileFacts): string {
     }
   }
 
-  // Structured services (BizBlasts-style catalog): "Name — 60 min — $99 —
+  // Structured services (BizBlasts-style catalog): "Name, 60 min, $99,
   // description". Duration and price only render when set, so half-filled
   // rows stay honest instead of claiming a zero price.
   const serviceLines: string[] = [];

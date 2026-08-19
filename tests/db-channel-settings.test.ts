@@ -1,5 +1,5 @@
 /**
- * src/lib/db/channel-settings.ts — per-tenant RCS wiring reads/writes behind
+ * src/lib/db/channel-settings.ts, per-tenant RCS wiring reads/writes behind
  * the admin "Messaging channel (RCS)" card.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";

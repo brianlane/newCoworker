@@ -1,18 +1,18 @@
 /**
- * Business Documents — e-signatures (BizBlasts client-document signing port).
+ * Business Documents, e-signatures (BizBlasts client-document signing port).
  *
  * The owner sends a document for a DocuSign-style legal sign-off: the
  * recipient opens a tokenized link, reads the document, and signs by typing
  * their legal name with an explicit consent checkbox (ESIGN/UETA-adequate;
  * a drawn-signature pad is a later enhancement). The signed row carries the
- * audit trail — signer name, instant, IP, user agent, and a sha256
- * fingerprint of the exact content_md on screen — so it remains standalone
+ * audit trail, signer name, instant, IP, user agent, and a sha256
+ * fingerprint of the exact content_md on screen, so it remains standalone
  * evidence even if the document is edited afterwards.
  *
  * Token posture mirrors share.ts: 256-bit bearer capability in the URL,
  * sha256-only at rest, fail-closed resolution. Unlike customer shares, the
  * client-audience rule does NOT gate signing (contracts are often
- * internal-audience drafts the owner explicitly sends — the same exemption
+ * internal-audience drafts the owner explicitly sends, the same exemption
  * dashboard-minted share links get); minting is dashboard/owner-side only,
  * which the route/tool layers enforce.
  */
@@ -105,7 +105,7 @@ export type ResolveSignatureRequestResult =
 
 /**
  * Validate a presented signing token. Fails closed on every non-servable
- * state. A SIGNED request still resolves — the page renders the signature
+ * state. A SIGNED request still resolves, the page renders the signature
  * certificate instead of the form.
  */
 export async function resolveSignatureRequestByToken(
@@ -117,7 +117,7 @@ export async function resolveSignatureRequestByToken(
   const request = await getDocumentSignatureRequestByTokenSha(hashShareToken(trimmed));
   if (!request) return { ok: false, detail: "not_found" };
   if (request.status === "void") return { ok: false, detail: "void" };
-  // A completed signature outlives the link's own TTL — it is evidence the
+  // A completed signature outlives the link's own TTL, it is evidence the
   // signer may revisit; only UNSIGNED requests expire.
   if (request.status !== "signed" && Date.parse(request.expires_at) <= now.getTime()) {
     return { ok: false, detail: "expired" };
@@ -125,7 +125,7 @@ export async function resolveSignatureRequestByToken(
   const document = await getBusinessDocument(request.business_id, request.document_id);
   if (!document) return { ok: false, detail: "document_unavailable" };
   // A SIGNED certificate stays viewable even if the document later leaves
-  // `ready` — the evidence must not 404 because of a processing state.
+  // `ready`, the evidence must not 404 because of a processing state.
   // Unsigned requests still require a ready document (nothing signable).
   if (request.status !== "signed" && document.status !== "ready") {
     return { ok: false, detail: "document_unavailable" };
@@ -159,7 +159,7 @@ export async function markSignatureRequestOpened(
 
 export type SignDocumentInput = {
   token: string;
-  /** The typed legal name — the signature itself. */
+  /** The typed legal name, the signature itself. */
   signatureName: string;
   /** The explicit e-sign consent checkbox state. */
   consent: boolean;
@@ -194,7 +194,7 @@ export type SignDocumentResult =
 /**
  * Execute the signature. The completing write is conditional on the request
  * still being signable, so a double-submit (or a racing void) loses instead
- * of double-signing — the port of BizBlasts' `lock!` + re-check. On success
+ * of double-signing, the port of BizBlasts' `lock!` + re-check. On success
  * the owner is notified and an audit log row is written.
  */
 export async function signDocumentRequest(input: SignDocumentInput): Promise<SignDocumentResult> {
