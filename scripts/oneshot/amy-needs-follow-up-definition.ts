@@ -38,6 +38,8 @@
  */
 
 /** The tag that starts the cadence. Written by the "F" reply and the tag editor. */
+import { buildEmailFollowUpBlock } from "./_amy-email-followup-block";
+
 export const FOLLOW_UP_TAG = "Needs Follow Up";
 
 /**
@@ -230,6 +232,38 @@ export const READ_FIELDS = [
       "seller, or both. When the text does not say, answer exactly: seller"
   },
   {
+    name: "lead_email",
+    description:
+      "The lead's email address from the email line. If there is no email address, " +
+      "answer exactly: none"
+  },
+  {
+    /**
+     * How long each round's reply wait should run, in minutes.
+     *
+     * A lead with no phone cannot be called or texted, so every rung's wait
+     * would otherwise park the run for the full three days waiting for an SMS
+     * that can never arrive: nine days before the email arm below is reached.
+     *
+     * This makes the wait RESOLVE almost immediately for them instead of
+     * being skipped, and the difference matters. A skipped wait leaves
+     * `lead_reply` unset, which reads as "" and is therefore "not no_reply",
+     * so `r{n}_tell_owner` would fire and tell the owner the lead came back to
+     * us, quoting nothing, for someone who never said a word (Bugbot #1307,
+     * which is the whole reason that notice sits inside the round). A wait
+     * that resolves writes "no_reply" and every existing guard behaves exactly
+     * as it does for a lead who simply did not answer.
+     *
+     * The safe direction is built in: `timeoutMinutesTemplate` only wins when
+     * it renders to a positive number, so a missing or garbled answer falls
+     * back to `timeoutMinutes` and today's three-day wait.
+     */
+    name: "reply_wait_minutes",
+    description:
+      "Look at the phone line. If it shows a real phone number, answer exactly 4320. " +
+      "If there is no phone number at all, answer exactly 1. Answer with digits only."
+  },
+  {
     name: "lead_intent",
     description:
       "What the lead wants, as a short phrase that fits after 'about': answer exactly " +
@@ -308,7 +342,12 @@ function roundSteps(n: number): Step[] {
       type: "wait_for_reply",
       phoneVar: "lead_phone",
       saveAs: "lead_reply",
-      timeoutMinutes: ROUND_GAP_MINUTES
+      timeoutMinutes: ROUND_GAP_MINUTES,
+      // Collapses to about a minute for a lead with no phone, so the email
+      // arm is reached in minutes instead of nine days. See
+      // reply_wait_minutes in READ_FIELDS for why this resolves the wait
+      // rather than skipping it.
+      timeoutMinutesTemplate: "{{vars.reply_wait_minutes}}"
     },
     /**
      * The notice lives INSIDE the round, immediately after the wait, and that
@@ -509,6 +548,23 @@ export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
     // Note this event is business-wide by lead phone (applyGoalEvent), so the
     // claim that used to end this cadence was often raised by a different
     // flow's route_to_team entirely.
+    /**
+     * The email arm, for a lead the AI has no phone number for.
+     *
+     * PLACED BEFORE `converted`, and that is load-bearing rather than
+     * tidiness. A goal step is a fast-forward TARGET: when the milestone
+     * lands the run jumps straight to it and skips everything in between.
+     * Sitting after the goal, this block would be the first thing a lead who
+     * had just BOOKED walked into, and it would start emailing them. Before
+     * it, a booking jumps over the whole arm, which is the point of the goal.
+     *
+     * The three phone rungs above still run for these leads and all skip
+     * harmlessly: `place_ai_call` with no usable number resolves to
+     * `not_placed` (never a failure), `r{n}_text` is gated on `no_answer` so
+     * it stays quiet, and each wait collapses to about a minute via
+     * reply_wait_minutes.
+     */
+    buildEmailFollowUpBlock() as unknown as Step,
     {
       id: "converted",
       type: "goal",

@@ -643,6 +643,42 @@ Valerie's run is claimed by Gabrielle Mota and still gets the emails.
 Leads WITH a phone are untouched: Brian chose email-only over adding email to
 every round, so a lead getting calls and texts keeps getting exactly those.
 
+### The same arm inside the cadence (Aug 18 2026)
+
+Once a contact can be identified by email as well as phone, an email-only lead
+can be tagged and so can reach "Needs Follow Up (AI cadence)" itself. The
+cadence therefore carries the same block, from the same shared builder
+(`scripts/oneshot/_amy-email-followup-block.ts`), so the copy and timing
+cannot drift between the two places.
+
+Three things made that safe to add to a flow that always has runs parked
+mid-cadence:
+
+- **Nothing before flat index 30 moved.** The block goes in immediately before
+  `converted`, and a pinned test asserts the first 30 flattened ids are
+  unchanged. When applied there were 8 parked runs, the furthest at step 13.
+- **It sits BEFORE the `converted` goal, deliberately.** A goal step is a
+  fast-forward TARGET: the run jumps to it and skips everything between.
+  Placed after it, this arm would be the first thing a lead who had just
+  BOOKED walked into, and it would start emailing them.
+- **The reply wait collapses instead of being skipped.** A lead with no phone
+  would otherwise park three days per rung waiting for an SMS that cannot
+  arrive, nine days before the email arm. A new `reply_wait_minutes` extracted
+  field answers 4320 with a phone and 1 without, fed to each wait through
+  `timeoutMinutesTemplate`. SKIPPING the wait would have been wrong: it leaves
+  `lead_reply` unset, which reads as "" and is therefore "not no_reply", so
+  `r{n}_tell_owner` would tell the owner the lead came back to us, quoting
+  nothing, for someone who never said a word (the Bugbot #1307 bug the notice
+  was moved inside the round to fix). A wait that RESOLVES writes "no_reply"
+  and every existing guard behaves exactly as it does for a lead who did not
+  answer. The template only wins when it renders to a positive number, so a
+  garbled answer falls back to the three-day `timeoutMinutes` and today's
+  behavior.
+
+The phone rungs still run for these leads and skip harmlessly: `place_ai_call`
+with no usable number resolves to `not_placed` rather than failing, and
+`r{n}_text` is gated on `no_answer` so it stays quiet.
+
 ## One-shots
 
 **`amy-email-followup-cadence.ts` (Aug 18 2026):** appends the three-round
