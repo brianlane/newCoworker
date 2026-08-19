@@ -444,10 +444,11 @@ describe("click_text waits for a control that has not hydrated yet", () => {
  *   1 -> 20.0 | 2 -> 32.0 | 3 -> 45.4 | 4 -> 59.0 | 5 -> 60.0 | 0 -> 4.8
  * which fits ~5s fixed plus ~13s per item.
  *
- * If you are here because you want a bigger cap: the fix is to move the loop
- * out of a single response (worker-side iteration, one request per item), not
- * to raise this number. Raising it just moves the failure from "honestly
- * truncated" to "timed out halfway and then did it twice".
+ * If you are here because you want a bigger backlog covered: that already
+ * works. The worker CHAINS capped passes (it reads `remaining` off each
+ * response, defers, and re-enters the same step until the list drains), so
+ * this cap is a per-pass chunk size. Raising it just moves the failure from
+ * "honestly chunked" to "timed out halfway and then did it twice".
  */
 describe("MAX_FOREACH_ITEMS fits inside the Cloudflare edge budget", () => {
   const EDGE_TIMEOUT_S = 100;
