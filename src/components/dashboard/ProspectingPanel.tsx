@@ -42,6 +42,8 @@ type Funnel = {
   discovered: number;
   drafted: number;
   pending: number;
+  /** Prospects that have not gone out: exactly what a per-trade Skip retires. */
+  open: number;
   sent: number;
   replied: number;
   booked: number;
@@ -642,13 +644,19 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                       replied: v.replied,
                       booked: v.booked
                     })}
+                    {v.open > 0 ? ` · ${t("verticalOpen", { count: v.open })}` : ""}
                   </span>
                   {/* Two presses, like the bulk rewrite: this retires work in
                       bulk, and the count makes the size of it plain. */}
-                  {confirmVertical === v.vertical ? (
+                  {v.open === 0 ? (
+                    // Nothing left to call off: this trade only has history now.
+                    // A live button here offers to skip nothing, which is how it
+                    // came to say "skips 0 waiting drafts".
+                    <span className="text-xs text-parchment/40">{t("verticalNothingOpen")}</span>
+                  ) : confirmVertical === v.vertical ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs text-amber-200">
-                        {t("skipVerticalConfirm", { vertical: v.vertical, count: v.pending })}
+                        {t("skipVerticalConfirm", { vertical: v.vertical, count: v.open })}
                       </span>
                       <Button
                         disabled={skippingVertical !== null}

@@ -2598,8 +2598,10 @@
       "rewroteAll": "Wrote {count} drafts again. Read them before you send.",
       "wholeEmailHelp": "The sign-off, the link, the unsubscribe line, and the address are added for you. Only the box above is yours to edit.",
       "wholeEmailStale": "This still shows the saved draft. Save your changes to see them here.",
-      "skipVerticalConfirm": "Stop outreach to every {vertical}? That skips {count} waiting drafts and anything still queued behind them. Nothing already sent is touched.",
-      "skippedVertical": "Skipped {count} {vertical} prospects. Nothing already sent was touched."
+      "skipVerticalConfirm": "Stop outreach to every {vertical}? That skips {count} prospects that have not been emailed yet. Nothing already sent is touched.",
+      "skippedVertical": "Skipped {count} {vertical} prospects. Nothing already sent was touched.",
+      "verticalOpen": "{count} still to go out",
+      "verticalNothingOpen": "Nothing waiting"
     }
   },
   "admin": {

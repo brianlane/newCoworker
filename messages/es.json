@@ -2598,8 +2598,10 @@
       "rewroteAll": "Se reescribieron {count} borradores. Léelos antes de enviarlos.",
       "wholeEmailHelp": "La despedida, el enlace, la línea para darse de baja y la dirección se añaden solos. Solo el cuadro de arriba es tuyo para editar.",
       "wholeEmailStale": "Aquí sigue el borrador guardado. Guarda tus cambios para verlos aquí.",
-      "skipVerticalConfirm": "¿Detener el contacto con todos los {vertical}? Se omiten {count} borradores en espera y todo lo que siga en cola detrás de ellos. No se toca nada que ya se haya enviado.",
-      "skippedVertical": "Se omitieron {count} prospectos de {vertical}. No se tocó nada que ya se hubiera enviado."
+      "skipVerticalConfirm": "¿Detener el contacto con todos los {vertical}? Se omiten {count} prospectos a los que aún no se les ha escrito. No se toca nada que ya se haya enviado.",
+      "skippedVertical": "Se omitieron {count} prospectos de {vertical}. No se tocó nada que ya se hubiera enviado.",
+      "verticalOpen": "faltan {count} por salir",
+      "verticalNothingOpen": "Nada en espera"
     }
   },
   "admin": {
