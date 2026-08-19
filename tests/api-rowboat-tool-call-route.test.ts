@@ -434,6 +434,23 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
 
+  it("refuses send_sms to a non-NANP destination and recommends WhatsApp", async () => {
+    // Long codes cannot originate SMS outside +1 (Telnyx 40309). Before this
+    // gate the route returned a bare sms_send_failed and the model told the
+    // owner to "check that your international number is enabled to receive
+    // standard SMS" (KYP Ads +852 roster test text, Jul 30 2026).
+    const content = makeContent("send_sms", { toE164: "+85260100607", body: "test" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = (await res.json()) as { ok: boolean; detail: string; message?: string };
+    expect(body.ok).toBe(false);
+    expect(body.detail).toBe("sms_unreachable_destination");
+    expect(body.message).toContain("WhatsApp");
+    expect(body.message).toContain("send_whatsapp");
+    expect(checkSmsOptOut).not.toHaveBeenCalled();
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
   it("sends an SMS through the metered Telnyx helper", async () => {
     const content = makeContent("send_sms", { toE164: "+15551230000", body: "On my way" });
     vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));

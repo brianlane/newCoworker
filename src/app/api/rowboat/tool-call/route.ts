@@ -53,6 +53,7 @@ import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
+import { smsReachability } from "@/lib/phone/deliverability";
 import { truncateAtWord } from "../../../../../supabase/functions/_shared/text_truncate";
 import {
   generateImageForDashboard,
@@ -747,6 +748,20 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       const parsed = sendSmsArgsSchema.safeParse(args);
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      // Non-NANP destination: guaranteed to die at Telnyx (long codes are
+      // domestic-only, error 40309), so refuse before the attempt with the
+      // real story and the working alternative. Without this the model saw a
+      // bare sms_send_failed and told the owner to "check that your
+      // international number is enabled to receive standard SMS" (KYP Ads,
+      // Jul 30 2026) instead of recommending WhatsApp.
+      if (smsReachability(parsed.data.toE164) !== "nanp") {
+        return {
+          ok: false,
+          detail: "sms_unreachable_destination",
+          message:
+            "Our texting numbers can only deliver SMS to US and Canada (+1) numbers, so this text will never arrive and no account or number setting changes that. Recommend WhatsApp for this number instead: offer to send it with send_whatsapp if WhatsApp is connected, otherwise point the owner to Integrations to connect WhatsApp Business. Voice calls, email, and dashboard alerts still work internationally."
+        };
       }
       // STOP-list gate (fail closed, matching the Edge send paths).
       const optOut = await checkSmsOptOut(businessId, parsed.data.toE164);

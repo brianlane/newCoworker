@@ -73,4 +73,13 @@ describe("ownerPhoneDeliverabilityWarning", () => {
     // is the number type, not the destination.
     expect(ownerPhoneDeliverabilityWarning("+447700900123")).toMatch(/not reachable by SMS/);
   });
+
+  it("names WhatsApp as the working channel in BOTH unreachable branches", () => {
+    // Since the WhatsApp alert stand-in shipped (PR #1318), WhatsApp is a
+    // real replacement channel for any number SMS cannot reach, not an
+    // MX-only aside, and the warning must say so (KYP Ads +852, Jul 30
+    // 2026: the owner was told to check his number's settings instead).
+    expect(ownerPhoneDeliverabilityWarning("+525512345678")).toMatch(/WhatsApp/);
+    expect(ownerPhoneDeliverabilityWarning("+85261234567")).toMatch(/WhatsApp/);
+  });
 });

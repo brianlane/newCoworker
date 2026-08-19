@@ -30,6 +30,7 @@ import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messa
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import { smsReachability } from "@/lib/phone/deliverability";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import {
   cancelCalendarAppointment,
@@ -876,6 +877,19 @@ export async function executeActionTool(
           return { ok: false, message: "invalid_destination" };
         }
         const toPhone = normalized.value;
+        // Non-NANP destination: the send is guaranteed to die at Telnyx
+        // (long codes are domestic-only, error 40309), so refuse before the
+        // attempt and hand the model the real story plus the working
+        // alternative. Without this the model saw a bare send failure and
+        // invented advice ("check that your number accepts standard SMS",
+        // KYP Ads, Jul 30 2026) instead of recommending WhatsApp.
+        if (smsReachability(toPhone) !== "nanp") {
+          return {
+            ok: false,
+            message:
+              `sms_unreachable_destination, our texting numbers can only deliver SMS to US and Canada (+1) numbers, so a text to ${toPhone} will never arrive and no account or number setting changes that. Recommend WhatsApp for this number instead: offer to send it with send_whatsapp if WhatsApp is connected, otherwise point the owner to /dashboard/integrations/whatsapp to connect it. Voice calls, email, and dashboard alerts still work internationally.`
+          };
+        }
         const optOut = await checkOptOut(businessId, toPhone);
         if (!optOut.ok) {
           logger.error("dashboard-chat send_sms: opt-out check failed; refusing (fail closed)", {

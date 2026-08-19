@@ -647,6 +647,40 @@ describe("send_sms", () => {
     expect(deps.checkOptOut).not.toHaveBeenCalled();
   });
 
+  it("refuses a non-NANP destination up front and recommends WhatsApp", async () => {
+    // Long codes cannot originate SMS outside +1 at all (Telnyx 40309), so
+    // the tool must say so BEFORE attempting the send, or the model invents
+    // wrong advice (KYP Ads +852, Jul 30 2026: "check that your number is
+    // enabled to receive standard SMS").
+    for (const toE164 of ["+85260100607", "+525512345678", "+447700900123"]) {
+      const deps = happyDeps();
+      const res = (await executeActionTool(
+        BIZ,
+        { name: "send_sms", args: { toE164, body: "hi" } },
+        deps
+      )) as { ok: boolean; message?: string };
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain("sms_unreachable_destination");
+      expect(res.message).toContain("WhatsApp");
+      expect(res.message).toContain("send_whatsapp");
+      expect(deps.checkOptOut).not.toHaveBeenCalled();
+      expect(deps.sendSms).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does NOT confuse a 10-digit US number in the 852 area code with Hong Kong", async () => {
+    // Bare "8526010060" is a NANP number (+1 852-601-0060), not +852: the
+    // reachability gate runs on the CANONICAL number, after +1 coercion.
+    const deps = happyDeps();
+    const res = await executeActionTool(
+      BIZ,
+      { name: "send_sms", args: { toE164: "8526010060", body: "hi" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: true, toE164: "+18526010060" });
+    expect(deps.sendSms).toHaveBeenCalled();
+  });
+
   it("fails CLOSED when the opt-out check errors", async () => {
     const deps = happyDeps({
       checkOptOut: vi.fn(async () => ({ ok: false as const, error: "rpc down" }))

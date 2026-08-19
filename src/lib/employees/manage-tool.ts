@@ -32,6 +32,7 @@ import {
 } from "@/lib/db/employees";
 import { parseScheduleText } from "@/lib/employees/schedule-text";
 import { normalizeDialableNumber } from "@/lib/telnyx/format";
+import { smsReachability } from "@/lib/phone/deliverability";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { logger } from "@/lib/logger";
 
@@ -210,6 +211,26 @@ function availabilityNote(e: Extract<ManageEmployeeResult, { ok: true }>["employ
 }
 
 /**
+ * The lead-offer machinery reaches teammates by SMS, and our long codes
+ * deliver SMS to +1 (US/Canada) only, so a roster number outside NANP means
+ * every lead offer and team alert to that person silently dies at Telnyx.
+ * Saying so at save time, with the working alternative (WhatsApp), is the
+ * whole point: on Jul 30 2026 KYP's owner moved his own roster number to a
+ * Hong Kong +852 line, the tool confirmed "all notifications will now be
+ * routed to your new number", and every team text since then went nowhere.
+ */
+function smsReachWarning(phoneE164: string): string {
+  if (smsReachability(phoneE164) === "nanp") return "";
+  return (
+    ` IMPORTANT: ${phoneE164} is outside US/Canada (+1), and our texting lines cannot` +
+    " deliver SMS internationally, so lead offers and team alert texts to this number" +
+    " will never arrive. Recommend connecting WhatsApp (/dashboard/integrations/whatsapp)" +
+    " so they have a working message channel; voice calls, email, and dashboard alerts" +
+    " still work."
+  );
+}
+
+/**
  * Add, edit, deactivate, or reactivate one roster member. Never throws: the
  * returned payload is a Gemini functionResponse (and an MCP tool result) and
  * must always be relayable.
@@ -329,7 +350,8 @@ export async function manageEmployee(
     note:
       `Tell the owner exactly what changed for ${employee.name}. ` +
       availabilityNote(employee) +
-      " Owner alerts are unaffected: keep-for-owner alerts, the nobody-claimed fallback, and claim notices still reach you."
+      " Owner alerts are unaffected: keep-for-owner alerts, the nobody-claimed fallback, and claim notices still reach you." +
+      smsReachWarning(employee.phoneE164)
   };
 }
 
@@ -418,6 +440,7 @@ async function addMember(
     employee,
     note:
       `Tell the owner ${employee.name} is on the roster at ${employee.phoneE164}, and read the number back so a wrong digit is caught now. ` +
-      availabilityNote(employee)
+      availabilityNote(employee) +
+      smsReachWarning(employee.phoneE164)
   };
 }

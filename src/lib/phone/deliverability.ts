@@ -80,9 +80,13 @@ export function ownerPhoneDeliverabilityWarning(e164: string): string | null {
     );
   }
 
+  // WhatsApp is named here for the same reason the MX copy names it: since
+  // the alert stand-in shipped (PR #1318), connecting WhatsApp restores a
+  // real two-way channel for a number SMS can never reach. The localized
+  // dashboard copy (dashboard.settings.smsUnreachable) already says so.
   return (
     "This number's country is not reachable by SMS from our texting lines, " +
     "which can only send to +1 (US and Canada) numbers. SMS alerts will " +
-    "not reach it. Email and dashboard alerts keep working."
+    "not reach it. WhatsApp, email, and dashboard alerts keep working."
   );
 }
