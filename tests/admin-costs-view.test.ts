@@ -798,8 +798,29 @@ describe("buildUnattributedSenders", () => {
       })
     ]);
     expect(senders).toEqual([
-      { sender: "+16028384497", costMicros: 32_100, recordCount: 2 },
-      { sender: "new_coworker_jut3q1af_agent", costMicros: 6_500, recordCount: 3 }
+      {
+        sender: "+16028384497",
+        platformLabel: "retired intl SMS gateway (released Aug 6 2026)",
+        costMicros: 32_100,
+        recordCount: 2
+      },
+      {
+        sender: "new_coworker_jut3q1af_agent",
+        platformLabel: "RCS agent id",
+        costMicros: 6_500,
+        recordCount: 3
+      }
+    ]);
+  });
+
+  it("leaves senders outside the platform registry unlabeled, so they read as worth chasing", () => {
+    const senders = buildUnattributedSenders([
+      telnyxRow({ business_id: null, sender: "+15550009999", cost_micros: 2_000, record_count: 1 }),
+      telnyxRow({ business_id: null, sender: null, cost_micros: 1_000, record_count: 1 })
+    ]);
+    expect(senders).toEqual([
+      { sender: "+15550009999", platformLabel: null, costMicros: 2_000, recordCount: 1 },
+      { sender: null, platformLabel: null, costMicros: 1_000, recordCount: 1 }
     ]);
   });
 

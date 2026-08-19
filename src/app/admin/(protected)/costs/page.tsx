@@ -312,8 +312,8 @@ export default async function AdminCostsPage({
           <div className="mt-3 space-y-1">
             <p className="text-xs text-spark-orange/80">
               {microsToMoney(unattributedMonthMicros)} of Telnyx spend this month matched no tenant
-              DID. Platform senders (the international SMS gateway long code, an RCS agent id) can
-              never match one; anything else here is a leaked number worth chasing.
+              DID. Senders labeled below are platform senders and can never match one; anything
+              unlabeled is a leaked number worth chasing.
             </p>
             <ul className="flex flex-wrap gap-x-4 gap-y-0.5">
               {unattributedSenders.map((entry) => (
@@ -322,7 +322,12 @@ export default async function AdminCostsPage({
                     {entry.sender ?? "sender not recorded"}
                   </span>{" "}
                   {microsToMoney(entry.costMicros)} · {entry.recordCount.toLocaleString("en-US")}{" "}
-                  rec
+                  rec ·{" "}
+                  {entry.platformLabel ? (
+                    <span className="text-parchment/40">{entry.platformLabel}</span>
+                  ) : (
+                    <span className="text-spark-orange/80">worth chasing</span>
+                  )}
                 </li>
               ))}
             </ul>
