@@ -48,14 +48,40 @@ export const WHILE_PRESENT_PROBE_MS = Number(process.env.AIFLOW_WHILE_PRESENT_PR
  * A 524 is strictly worse than a truncation: the worker classifies a non-2xx
  * from the edge as transient and RETRIES the step, so a timed-out pass re-runs
  * its action sequence on every row it already submitted. Truncation, by
- * contrast, is reported honestly (see performForEach: the skipped tail counts
- * as `failed` and carries an explicit error).
+ * contrast, is reported honestly (see capForEachList: the skipped tail counts
+ * as `failed`, carries an explicit error, AND is reported as `remaining`).
  *
- * Raising this only pays off once the loop stops living in one response. See
- * `scripts/oneshot/amy-clever-weekly-update-sweep-definition.ts` for the
- * backlog arithmetic that makes worker-side looping the real fix.
+ * This cap is the PER-PASS chunk size, not the coverage limit. A backlog
+ * larger than one pass is drained by the ai-flow-worker chaining passes: it
+ * reads `remaining` off the response, defers the run, and re-enters the same
+ * step for the next slice (updated cards leave the portal's "Needs Action"
+ * list, so re-listing yields only what is still owed). Raising this number is
+ * still the wrong fix for a big backlog: it just moves the failure from
+ * "honestly chunked" to "timed out halfway and then did it twice".
  */
 export const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 6);
+
+/**
+ * Slice a forEachLink href list to the per-pass cap, reporting the cut.
+ *
+ * Pure and exported so the truncation arithmetic the worker's chaining
+ * depends on is pinned by tests: `remaining` is what tells the worker another
+ * pass is owed, and `capNote` is the human-readable error the skipped tail
+ * shows up as (kept inside `failed` for older workers that predate chaining).
+ */
+export function capForEachList(hrefs) {
+  const total = hrefs.length;
+  const kept = hrefs.slice(0, MAX_FOREACH_ITEMS);
+  const remaining = total - kept.length;
+  return {
+    kept,
+    remaining,
+    capNote:
+      remaining > 0
+        ? `forEachLink matched ${total} items; capped at ${MAX_FOREACH_ITEMS}, ${remaining} not processed`
+        : null
+  };
+}
 /**
  * How long a SINGLE `click_text` waits for its control to turn up before
  * concluding the page does not have one.

@@ -69,8 +69,8 @@ import { chromium } from "playwright";
 // ACTION mode lives in its own module so it can be unit-tested against a stub
 // page (tests/aiflow-render-actions.test.ts) without booting Express or Chromium.
 import {
+  capForEachList,
   condenseError,
-  MAX_FOREACH_ITEMS,
   NAV_TIMEOUT_MS,
   parseActions,
   performActions,
@@ -588,26 +588,25 @@ async function performForEach(page, forEachLink, actions, matchNames) {
       items: 0,
       succeeded: 0,
       failed: 0,
+      remaining: 0,
       actionsCompleted: 0,
       errors: [`forEachLink "${forEachLink}": ${String(e?.message ?? e)}`.slice(0, 200)]
     };
   }
   // Report the TRUE match count and surface any overflow as failures so the
   // worker never logs a misleading "updated N of N" while silently skipping
-  // leads past the cap. (`items` stays the pre-slice total; the skipped tail is
-  // counted as failed with an explicit error.)
+  // leads past the cap. (`items` stays the pre-slice total; the skipped tail
+  // is counted inside `failed` with an explicit error for older workers, AND
+  // reported separately as `remaining`, which is what tells a chaining-aware
+  // worker to defer and come back for the next slice.)
   const totalMatched = hrefs.length;
-  hrefs = hrefs.slice(0, MAX_FOREACH_ITEMS);
-  const skipped = totalMatched - hrefs.length;
+  const cap = capForEachList(hrefs);
+  hrefs = cap.kept;
   let succeeded = 0;
-  let failed = skipped;
+  let failed = cap.remaining;
   let actionsCompleted = 0;
   const errors = [];
-  if (skipped > 0) {
-    errors.push(
-      `forEachLink matched ${totalMatched} items; capped at ${MAX_FOREACH_ITEMS}, ${skipped} not processed`
-    );
-  }
+  if (cap.capNote) errors.push(cap.capNote);
   for (const href of hrefs) {
     try {
       await page.goto(href, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
@@ -626,7 +625,14 @@ async function performForEach(page, forEachLink, actions, matchNames) {
       succeeded++;
     }
   }
-  return { items: totalMatched, succeeded, failed, actionsCompleted, errors: errors.slice(0, 20) };
+  return {
+    items: totalMatched,
+    succeeded,
+    failed,
+    remaining: cap.remaining,
+    actionsCompleted,
+    errors: errors.slice(0, 20)
+  };
 }
 
 /**
@@ -677,6 +683,7 @@ async function respondWithActions(
         items: fe.items,
         succeeded: fe.succeeded,
         failed: fe.failed,
+        remaining: fe.remaining,
         errors: fe.errors
       },
       text: "",

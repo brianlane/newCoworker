@@ -15,6 +15,7 @@
  */
 import type { BranchStep, FlowStep } from "@/lib/ai-flows/schema";
 import { callOutcomeCompanionVars } from "../../../supabase/functions/_shared/ai_flows/call_outcome_meta";
+import { forEachOutcomeVars } from "../../../supabase/functions/_shared/ai_flows/browse";
 
 /** Where a step list lives: the trunk, one branch arm, or a branch's else. */
 export type StepContainerRef =
@@ -190,7 +191,14 @@ export function varsProducedByStep(step: FlowStep): string[] {
     ].filter(Boolean);
   if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "email_extract") return step.fields.map((f) => f.name).filter(Boolean);
-  if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
+  if (step.type === "browse_action") {
+    return [
+      ...(step.fields ?? []).map((f) => f.name).filter(Boolean),
+      // A forEachLink sweep publishes what it measured when the loop ends,
+      // for later alert/branch steps (mirrors validateDefinitionSemantics).
+      ...(step.forEachLink ? forEachOutcomeVars(step.id) : [])
+    ];
+  }
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   if (step.type === "recall_url") return [step.saveAs];
   if (step.type === "wait_for_reply") return [step.saveAs ?? "reply_text"];

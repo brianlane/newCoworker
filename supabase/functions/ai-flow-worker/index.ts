@@ -125,8 +125,13 @@ import {
   readContactLanguageState
 } from "../_shared/customer_language_persist.ts";
 import {
+  decideForEach,
+  encodeForEachProgress,
+  forEachProgressVar,
+  forEachResultVars,
   normalizeBrowseUrl,
   parseActionResponse,
+  parseForEachProgress,
   parseRenderResponse,
   renderErrorFields,
   renderErrorKind
@@ -292,6 +297,22 @@ const RENDER_FETCH_TIMEOUT_MS = Number(
 
 const RENDER_FOREACH_FETCH_TIMEOUT_MS = Number(
   Deno.env.get("AIFLOW_RENDER_FOREACH_FETCH_TIMEOUT_MS") ?? "600000"
+);
+// A backlog larger than one capped pass is covered by CHAINING: the render
+// service reports what the cap left unvisited (`remaining`), and the worker
+// defers the run and re-enters the SAME browse step for another pass. Updated
+// cards leave the portal's "Needs Action" list (verified live 2026-08-18 on
+// Amy Laidlaw's Clever book), so each pass sees only what is still owed and a
+// weekly backlog of 40+ drains in ~7 passes a minute or two apart. The pass
+// cap is a runaway valve, not a throughput knob: at the default it allows
+// 20 x 6 = 120 item visits per run, far past any real weekly book, and it
+// exists so a portal that re-lists updated cards after all (or an unbounded
+// list) stops with an honest "still listed" count instead of looping for
+// hours. The delay between passes only needs to outlive the claim RPC's poll
+// cadence (the cron fires every minute).
+const MAX_FOREACH_PASSES = Number(Deno.env.get("AIFLOW_MAX_FOREACH_PASSES") ?? "20");
+const FOREACH_CONTINUATION_DELAY_MS = Number(
+  Deno.env.get("AIFLOW_FOREACH_CONTINUATION_DELAY_MS") ?? "15000"
 );
 const MAX_REDIRECTS = 5;
 
@@ -1674,7 +1695,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         await stoppedMidExecutionLog(supabase, run, index);
         return;
       }
-      await telemetryRecord(supabase, "ai_flow_run_deferred_quiet_hours", {
+      const deferEvent = outcome.event ?? "ai_flow_run_deferred_quiet_hours";
+      await telemetryRecord(supabase, deferEvent, {
         run_id: run.id,
         business_id: run.business_id,
         step_index: index,
@@ -1684,7 +1706,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         businessId: run.business_id,
         source: "aiflow",
         level: "info",
-        event: "ai_flow_run_deferred_quiet_hours",
+        event: deferEvent,
         message: `Run deferred until ${resumeIso} (${outcome.reason})`,
         payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, resume_at: resumeIso }
       });
@@ -2073,10 +2095,13 @@ type StepOutcome =
       }[];
       respondByMs: number;
     }
-  // Quiet hours: this step (and the rest of the run) must wait until
-  // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
-  // claim RPC skips it until then, no attempt burned, nothing sent.
-  | { kind: "defer"; resumeAtMs: number; reason: string }
+  // Quiet hours, sleeps, and chained forEachLink passes: this step (and the
+  // rest of the run) must wait until resumeAtMs. executeRun re-queues the run
+  // with earliest_claim_at so the claim RPC skips it until then, no attempt
+  // burned, nothing sent. `event` overrides the telemetry/system-log event
+  // name for defers that are not a quiet-hours wait, so ops queries on the
+  // quiet-hours event stop matching sweep continuations.
+  | { kind: "defer"; resumeAtMs: number; reason: string; event?: string }
   // wait_for_reply: park until `e164` texts back (the inbound webhook writes
   // the reply into context.vars[saveAs] and re-queues) or respond_by_at lapses
   // (resume_overdue_reply_waits writes the no_reply sentinel and re-queues).
@@ -2238,7 +2263,9 @@ async function runStep(
       (routing as OfferRouting).route_step_id = step.id;
       return routeToTeamStep(supabase, run, scope, action, routing as OfferRouting, index);
     case "browse_action":
-      return browseActionStep(supabase, run, index, scope, action);
+      // step.id keys the chained-sweep progress var and the published
+      // `<id>_updated`/`<id>_left` vars, edit-proof the way route_step_id is.
+      return browseActionStep(supabase, run, index, scope, action, step.id);
     case "recall_url":
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
@@ -3860,13 +3887,71 @@ async function docExtractStep(
  * config is a permanent setup error. The render service reports how many
  * actions completed; a selector that no longer matches fails the run (the
  * page changed; retrying won't fix it) with the failing action in the error.
+ *
+ * A forEachLink step whose list outruns the per-response cap CHAINS: this
+ * wrapper's inner attempt defers the run between capped passes (see
+ * MAX_FOREACH_PASSES). The wrapper itself handles one hazard of that design:
+ * a PERMANENT failure on pass 2+ (an expired portal magic link, a login that
+ * rotted mid-sweep) must not dead-letter a run whose earlier passes already
+ * posted updates, because failing here also buries the honest-shortfall
+ * alert steps sitting behind the browse step. Those late failures end the
+ * loop gracefully instead: publish the measured totals, log the reason, and
+ * let the rest of the flow report what is still owed. First-pass failures
+ * keep their loud, run-failing semantics unchanged.
  */
 async function browseActionStep(
   supabase: Supabase,
   run: RunRow,
   index: number,
   scope: Scope,
-  action: Extract<StepAction, { kind: "browse_action" }>
+  action: Extract<StepAction, { kind: "browse_action" }>,
+  stepId: string
+): Promise<StepOutcome> {
+  const outcome = await browseActionStepAttempt(supabase, run, index, scope, action, stepId);
+  if (outcome.kind !== "fail" || !action.forEachLink) return outcome;
+  const progressVar = forEachProgressVar(stepId);
+  const prior = parseForEachProgress(scope.vars[progressVar]);
+  if (!prior) return outcome;
+  delete scope.vars[progressVar];
+  const vars = forEachResultVars(stepId, { updated: prior.updated, left: prior.lastRemaining });
+  Object.assign(scope.vars, vars);
+  appendActionTaken(
+    scope,
+    `updated ${prior.updated} list item(s), then pass ${prior.passes + 1} failed permanently`
+  );
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "warn",
+    event: "ai_flow_for_each_partial",
+    message:
+      `forEachLink stopped after ${prior.passes} completed pass(es): ${outcome.error}; ` +
+      `about ${prior.lastRemaining} list item(s) still waiting`,
+    payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, error: outcome.error }
+  });
+  return {
+    kind: "ok",
+    result: {
+      // Keep whatever page evidence the failing pass attached (screenshots,
+      // page source) so the investigate view can still show WHY it stopped.
+      ...(outcome.result ?? {}),
+      passes: prior.passes,
+      updated: prior.updated,
+      left: prior.lastRemaining,
+      terminal: "pass_error",
+      error: outcome.error,
+      vars
+    }
+  };
+}
+
+async function browseActionStepAttempt(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "browse_action" }>,
+  stepId: string
 ): Promise<StepOutcome> {
   const safe = normalizeBrowseUrl(action.url);
   if (!safe) return { kind: "fail", error: `browse_action: unsafe or invalid URL ${action.url}` };
@@ -4118,41 +4203,111 @@ async function browseActionStep(
       };
     }
     const fe = parsed.forEach;
-    if (fe.items === 0) {
-      // Zero items WITH errors means link collection itself failed (e.g. a bad
-      // CSS selector throws in querySelectorAll), fail loudly instead of
-      // treating a broken weekly-update selector as a clean "nothing to do".
-      if (fe.errors.length > 0) {
+    const progressVar = forEachProgressVar(stepId);
+    const prior = parseForEachProgress(scope.vars[progressVar]);
+    const decision = decideForEach(fe, prior, MAX_FOREACH_PASSES);
+    switch (decision.kind) {
+      case "fail_collect":
+        // Zero items WITH errors means link collection itself failed (e.g. a
+        // bad CSS selector throws in querySelectorAll), fail loudly instead of
+        // treating a broken weekly-update selector as a clean "nothing to do".
+        // (On a continuation pass the wrapper converts this to a graceful stop.)
         return {
           kind: "fail",
-          error: `browse_action: forEachLink matched no items (${fe.errors[0]})`
+          error: `browse_action: forEachLink matched no items (${decision.error})`
+        };
+      case "fail_first_pass":
+        // Every attempted item failed on the FIRST pass → the selectors are
+        // wrong (or every page changed). Fail so we notice; nothing was
+        // applied, so a retry won't double-update.
+        return {
+          kind: "fail",
+          error: `browse_action: all ${decision.attempted} attempted list item(s) failed${
+            decision.error ? `: ${decision.error}` : ""
+          }`
+        };
+      case "continue": {
+        // The cap truncated the list and this pass made progress. Updated
+        // cards have left the list, so defer and re-enter this same step for
+        // the next slice until nothing is owed (or a terminal condition ends
+        // the loop). The progress var survives the park via buildContext.
+        scope.vars[progressVar] = encodeForEachProgress(decision.progress);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_foreach_pass",
+          message:
+            `forEachLink pass ${decision.progress.passes}: updated ${fe.succeeded} of ` +
+            `${fe.items} listed; ${fe.remaining} beyond the cap, continuing`,
+          payload: {
+            run_id: run.id,
+            flow_id: run.flow_id,
+            step_index: index,
+            pass: decision.progress.passes,
+            updated_total: decision.progress.updated,
+            remaining: fe.remaining,
+            errors: fe.errors
+          }
+        });
+        return {
+          kind: "defer",
+          resumeAtMs: Date.now() + FOREACH_CONTINUATION_DELAY_MS,
+          reason:
+            `foreach pass ${decision.progress.passes} done; ` +
+            `${fe.remaining} list item(s) still waiting`,
+          event: "ai_flow_foreach_continuation"
         };
       }
-      appendActionTaken(scope, "found no matching list items to update");
-      return { kind: "ok", result: { forEach: fe } };
+      case "done": {
+        delete scope.vars[progressVar];
+        const vars = forEachResultVars(stepId, decision);
+        Object.assign(scope.vars, vars);
+        if (decision.updated === 0 && decision.left === 0) {
+          appendActionTaken(scope, "found no matching list items to update");
+          return { kind: "ok", result: { forEach: fe, passes: decision.passes, vars } };
+        }
+        // Anything still listed (real per-card failures, a stuck head, or the
+        // pass-cap valve): don't fail the run (a retry would re-update the
+        // ones that already succeeded), but log the misses so they can be
+        // checked, and name WHY the loop ended.
+        if (decision.left > 0 || decision.terminal !== "list_drained") {
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "warn",
+            event: "ai_flow_for_each_partial",
+            message:
+              `forEachLink updated ${decision.updated} across ${decision.passes} pass(es); ` +
+              `${decision.left} still listed (${decision.terminal})`,
+            payload: {
+              run_id: run.id,
+              flow_id: run.flow_id,
+              step_index: index,
+              passes: decision.passes,
+              terminal: decision.terminal,
+              errors: fe.errors
+            }
+          });
+        }
+        appendActionTaken(
+          scope,
+          `updated ${decision.updated} of ${decision.updated + decision.left} list item(s)` +
+            (decision.passes > 1 ? ` across ${decision.passes} passes` : "")
+        );
+        return {
+          kind: "ok",
+          result: {
+            forEach: fe,
+            passes: decision.passes,
+            updated: decision.updated,
+            left: decision.left,
+            terminal: decision.terminal,
+            vars
+          }
+        };
+      }
     }
-    // Every item failed → the selectors are wrong (or every page changed). Fail
-    // so we notice; nothing was applied, so a retry won't double-update.
-    if (fe.succeeded === 0) {
-      return {
-        kind: "fail",
-        error: `browse_action: all ${fe.items} list item(s) failed${fe.errors[0] ? `: ${fe.errors[0]}` : ""}`
-      };
-    }
-    // Partial success: don't fail the run (a retry would re-update the ones that
-    // already succeeded), but log the misses so they can be checked.
-    if (fe.failed > 0) {
-      await systemLog(supabase, {
-        businessId: run.business_id,
-        source: "aiflow",
-        level: "warn",
-        event: "ai_flow_for_each_partial",
-        message: `forEachLink updated ${fe.succeeded}/${fe.items}; ${fe.failed} failed`,
-        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, errors: fe.errors }
-      });
-    }
-    appendActionTaken(scope, `updated ${fe.succeeded} of ${fe.items} list item(s)`);
-    return { kind: "ok", result: { forEach: fe } };
   }
 
   // The render service fails fast on the first broken action, so a 200 with a

@@ -1662,6 +1662,48 @@ describe("browse_action step", () => {
     ).toBe(true);
   });
 
+  it("a forEachLink sweep registers its measured-outcome vars for later steps", () => {
+    // The worker publishes `<id>_updated`/`<id>_left` when a chained sweep
+    // ends, so a later alert can report what the sweep actually delivered
+    // (Amy's weekly Clever sweep templates both). Registration must make that
+    // legal to author.
+    const sweep = JSON.parse(JSON.stringify(actionInput));
+    delete sweep.steps[1].screenshot;
+    sweep.steps[1].forEachLink = "a.clickable-card";
+    sweep.steps.push(
+      {
+        id: "left_check",
+        type: "math",
+        operation: "less_than",
+        left: "{{vars.act_left}}",
+        right: "1",
+        saveAs: "all_done"
+      },
+      {
+        id: "tell",
+        type: "notify_owner",
+        message: "Posted {{vars.act_updated}} updates; {{vars.act_left}} still need you."
+      }
+    );
+    const def = parseAiFlowDefinition(sweep);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("without forEachLink the outcome vars stay unregistered", () => {
+    const single = JSON.parse(JSON.stringify(actionInput));
+    single.steps.push({
+      id: "tell",
+      type: "notify_owner",
+      message: "Posted {{vars.act_updated}} updates."
+    });
+    const def = aiFlowDefinitionSchema.parse(single);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("{{vars.act_updated}} before any step produces it")
+      )
+    ).toBe(true);
+  });
+
   it("accepts an optional skipWhenText terminal-state marker", () => {
     const withSkip = JSON.parse(JSON.stringify(actionInput));
     withSkip.steps[1].skipWhenText = "already been claimed";

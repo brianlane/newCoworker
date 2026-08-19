@@ -10,7 +10,8 @@ import {
   AGREE_NAME_RE,
   CLOSE_ATTR_RE,
   CLOSE_ICON_RE,
-  MAX_FOREACH_ITEMS
+  MAX_FOREACH_ITEMS,
+  capForEachList
 } from "../vps/aiflow-render/actions.mjs";
 import { SWEEP_CAPACITY } from "../scripts/oneshot/amy-clever-weekly-update-sweep-definition";
 
@@ -470,14 +471,56 @@ describe("MAX_FOREACH_ITEMS fits inside the Cloudflare edge budget", () => {
     expect(MAX_FOREACH_ITEMS).toBeGreaterThanOrEqual(5);
   });
 
-  it("matches the capacity the Clever alert promises Amy", () => {
-    // The alert tells her how many deals one pass covered. If these drift, the
-    // flow texts her a number the sweep never delivered.
+  it("matches the per-pass capacity the Clever sweep one-shots were sized against", () => {
+    // Since chaining landed, the cap is a chunk size rather than the sweep's
+    // coverage, and the live alert reads measured `<id>_updated`/`<id>_left`
+    // vars instead of baking this number in. The pin stays so the applied
+    // one-shot's recorded arithmetic remains true of the fleet default.
     expect(MAX_FOREACH_ITEMS).toBe(SWEEP_CAPACITY);
   });
 
   it("stays overridable per box for an emergency, without a code change", () => {
     expect(actionsSource).toContain("process.env.AIFLOW_MAX_FOREACH_ITEMS");
+  });
+});
+
+/**
+ * The truncation arithmetic the worker's pass chaining depends on. `remaining`
+ * is the field that tells the worker another pass is owed; the note is the
+ * error string the skipped tail shows up as for workers that predate chaining
+ * (they count it inside `failed`).
+ */
+describe("capForEachList", () => {
+  const href = (n: number) => `https://portal/card/${n}`;
+  const list = (n: number) => Array.from({ length: n }, (_, i) => href(i));
+
+  it("keeps everything and reports nothing remaining under the cap", () => {
+    expect(capForEachList(list(MAX_FOREACH_ITEMS - 1))).toEqual({
+      kept: list(MAX_FOREACH_ITEMS - 1),
+      remaining: 0,
+      capNote: null
+    });
+  });
+
+  it("keeps exactly the cap with nothing remaining at the boundary", () => {
+    expect(capForEachList(list(MAX_FOREACH_ITEMS))).toEqual({
+      kept: list(MAX_FOREACH_ITEMS),
+      remaining: 0,
+      capNote: null
+    });
+  });
+
+  it("slices to the cap and reports the tail, in both the count and the note", () => {
+    const out = capForEachList(list(30));
+    expect(out.kept).toEqual(list(MAX_FOREACH_ITEMS));
+    expect(out.remaining).toBe(30 - MAX_FOREACH_ITEMS);
+    expect(out.capNote).toBe(
+      `forEachLink matched 30 items; capped at ${MAX_FOREACH_ITEMS}, ${30 - MAX_FOREACH_ITEMS} not processed`
+    );
+  });
+
+  it("handles an empty list without inventing a note", () => {
+    expect(capForEachList([])).toEqual({ kept: [], remaining: 0, capNote: null });
   });
 });
 
