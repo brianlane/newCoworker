@@ -57,6 +57,8 @@ type Call = {
   token?: "page" | "user";
   /** The only real test is a mutation; never performed by this script. */
   needsWrite?: string;
+  /** A required object was not discoverable; reported, never silently dropped. */
+  missingAsset?: string;
 };
 
 async function main() {
@@ -176,7 +178,7 @@ async function main() {
           // being credited there, not here.
           ...(mediaId
             ? [{ permission: "instagram_manage_comments", path: `/${mediaId}/comments`, params: { fields: "id", limit: "1" } }]
-            : []),
+            : [{ permission: "instagram_manage_comments", path: "", missingAsset: "no IG media discovered to read comments from" }]),
           { permission: "instagram_manage_insights", path: `/${igId}/insights`, params: { metric: "reach", period: "day", metric_type: "total_value" } },
           { permission: "instagram_content_publish", path: `/${igId}/content_publishing_limit`, params: {} },
           {
@@ -191,16 +193,19 @@ async function main() {
         ] as Call[])
       : []),
     // ---- Lead Ads / CAPI use case ----
+    // Only a /{form}/leads read credits leads_retrieval; the old fallback to
+    // /{page}/leadgen_forms is a pages_manage_ads read and would report OK
+    // while the leads_retrieval row stayed at zero.
     ...(formId
       ? [{ permission: "leads_retrieval", path: `/${formId}/leads`, params: { fields: "id", limit: "1" } }]
-      : [{ permission: "leads_retrieval", path: `/${pageId}/leadgen_forms`, params: { fields: "id,name", limit: "1" } }]),
+      : [{ permission: "leads_retrieval", path: "", missingAsset: "no lead form discovered; /{page}/leadgen_forms would be credited to pages_manage_ads" }]),
     { permission: "pages_manage_ads", path: `/${pageId}/leadgen_forms`, params: { fields: "id,name", limit: "1" } },
     { permission: "public_profile", path: "/me", params: { fields: "id,name" }, token: "user" },
     { permission: "business_management", path: "/me/businesses", params: { fields: "id,name", limit: "1" }, token: "user" },
     { permission: "ads_read", path: "/me/adaccounts", params: { fields: "id,name", limit: "1" }, token: "user" },
     ...(actId
       ? [{ permission: "ads_management", path: `/${actId}/campaigns`, params: { fields: "id,name", limit: "1" }, token: "user" as const }]
-      : [])
+      : [{ permission: "ads_management", path: "", token: "user" as const, missingAsset: "no ad account discovered to read campaigns from" }])
   ];
 
   let ok = 0;
@@ -219,6 +224,11 @@ async function main() {
     if (!token) {
       skipped += 1;
       console.log(`  SKIP ${label} no user token (set META_USER_LONG_TOKEN)`);
+      continue;
+    }
+    if (call.missingAsset) {
+      skipped += 1;
+      console.log(`  SKIP ${label} ${call.missingAsset}`);
       continue;
     }
     if (!scopes.has(call.permission)) {
