@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAiFlowDefinition, validateDefinitionSemantics } from "@/lib/ai-flows/schema";
+import { flattenSteps } from "../supabase/functions/_shared/ai_flows/branching";
 import {
   AUTO_TAG_NOTE,
   FOLLOW_UP_TAG,
@@ -18,6 +19,22 @@ import {
  */
 
 const def = buildNeedsFollowUpDefinition();
+
+/** Find a step by id anywhere in the (possibly nested) definition. */
+function findDeep(steps: unknown[], id: string): unknown {
+  for (const s of steps) {
+    if (!s || typeof s !== "object") continue;
+    const step = s as { id?: string; steps?: unknown[]; branches?: Array<{ steps?: unknown[] }>; else?: unknown[] };
+    if (step.id === id) return step;
+    for (const arm of step.branches ?? []) {
+      const hit = findDeep(arm.steps ?? [], id);
+      if (hit) return hit;
+    }
+    const inElse = findDeep(step.else ?? [], id);
+    if (inElse) return inElse;
+  }
+  return undefined;
+}
 const parsed = parseAiFlowDefinition(def);
 const steps = parsed.steps as Array<Record<string, unknown>>;
 /** Depth-first: rounds 2+ live inside a branch arm. */
@@ -410,5 +427,86 @@ describe("who hears about a reply", () => {
 
   it("quotes the lead's own words back to whoever hears about it", () => {
     expect(String(byId("r1_tell_owner").message)).toContain("{{vars.lead_reply}}");
+  });
+});
+
+/**
+ * The email arm: what the cadence does for a lead it cannot call or text.
+ *
+ * The risky part of adding this was never the emails, it was the flat index.
+ * `ai_flow_runs.current_step` is an index into the FLATTENED definition and
+ * this flow always has runs parked mid-cadence, so anything that renumbers a
+ * step at or before a live run walks that run onto the wrong instruction.
+ */
+describe("the email arm for a lead with no phone", () => {
+  const flat = flattenSteps(def.steps as never).map(
+    (entry: { step: unknown }) => (entry.step as { id: string }).id
+  );
+  const stepIndex = (id: string) => flat.indexOf(id);
+
+  it("leaves every pre-existing step at exactly the index it already had", () => {
+    // Pinned literally, not derived: this is the regression guard for the
+    // index migration, so it has to fail if the shape shifts by one.
+    expect(flat.slice(0, 30)).toEqual([
+      "read_lead",
+      "r1_call", "r1_text", "r1_wait", "r1_classify", "r1_react",
+      "r1_route_buyer", "r1_route_seller", "r1_route_both", "r1_tell_owner",
+      "r2", "r2_call", "r2_text", "r2_wait", "r2_classify", "r2_react",
+      "r2_route_buyer", "r2_route_seller", "r2_route_both", "r2_tell_owner",
+      "r3", "r3_call", "r3_text", "r3_wait", "r3_classify", "r3_react",
+      "r3_route_buyer", "r3_route_seller", "r3_route_both", "r3_tell_owner"
+    ]);
+  });
+
+  it("sits BEFORE the converted goal, so a booking jumps over it", () => {
+    // A goal step is a fast-forward TARGET: the run jumps straight to it and
+    // skips everything between. After the goal, this arm would be the first
+    // thing a lead who had just booked walked into, and it would email them.
+    const converted = stepIndex("converted");
+    expect(converted).toBeGreaterThan(0);
+    for (const id of flat.filter((i) => i.startsWith("efu_"))) {
+      expect(stepIndex(id)).toBeLessThan(converted);
+    }
+  });
+
+  it("extracts the email address the arm needs", () => {
+    const read = findDeep(def.steps as never, "read_lead") as { fields: Array<{ name: string }> };
+    expect(read.fields.map((f) => f.name)).toContain("lead_email");
+  });
+
+  it("leaves the reply wait exactly as it was, because it already self-resolves", () => {
+    // An earlier draft fed each wait a model-extracted timeout so a
+    // phone-less lead would not park. That fixed nothing and risked a lot:
+    // wait_for_reply's planner already resolves straight to the "no_reply"
+    // sentinel when the phone var is not dialable, and a model answering "1"
+    // for a lead who DOES have a phone would have collapsed the three-day
+    // cadence into three minutes of calls and texts.
+    for (const id of ["r1_wait", "r2_wait", "r3_wait"]) {
+      const step = findDeep(def.steps as never, id) as unknown as Record<string, unknown>;
+      expect(step.timeoutMinutes).toBe(ROUND_GAP_MINUTES);
+      expect(step.timeoutMinutesTemplate).toBeUndefined();
+      expect(step.when).toBeUndefined();
+    }
+  });
+
+  it("resolves an email reply to the claiming teammate, not just the team", () => {
+    // notify_lead_owner keys on a phone var first and a name var second. An
+    // email-only lead has no phone to key on, so without nameVar every reply
+    // would take the unowned fallback even when someone had claimed it.
+    const replied = findDeep(def.steps as never, "efu_replied_1") as unknown as Record<string, unknown>;
+    expect(replied.nameVar).toBe("lead_name");
+    expect(replied.unownedFallback).toBe("team");
+  });
+
+  it("only runs for a lead the AI cannot phone", () => {
+    const root = findDeep(def.steps as never, "efu_root") as unknown as {
+      branches: Array<{ condition: unknown; steps: unknown[] }>;
+    };
+    expect(root.branches[0].condition).toEqual({ var: "lead_phone", contains: "+" });
+    expect(root.branches[0].steps).toEqual([]);
+  });
+
+  it("still validates as a whole flow", () => {
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
   });
 });

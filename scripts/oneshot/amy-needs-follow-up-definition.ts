@@ -38,6 +38,8 @@
  */
 
 /** The tag that starts the cadence. Written by the "F" reply and the tag editor. */
+import { buildEmailFollowUpBlock } from "./_amy-email-followup-block";
+
 export const FOLLOW_UP_TAG = "Needs Follow Up";
 
 /**
@@ -228,6 +230,12 @@ export const READ_FIELDS = [
     description:
       "Is this lead buying or selling? Answer exactly one lowercase word: buyer, " +
       "seller, or both. When the text does not say, answer exactly: seller"
+  },
+  {
+    name: "lead_email",
+    description:
+      "The lead's email address from the email line. If there is no email address, " +
+      "answer exactly: none"
   },
   {
     name: "lead_intent",
@@ -509,6 +517,36 @@ export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
     // Note this event is business-wide by lead phone (applyGoalEvent), so the
     // claim that used to end this cadence was often raised by a different
     // flow's route_to_team entirely.
+    /**
+     * The email arm, for a lead the AI has no phone number for.
+     *
+     * PLACED BEFORE `converted`, and that is load-bearing rather than
+     * tidiness. A goal step is a fast-forward TARGET: when the milestone
+     * lands the run jumps straight to it and skips everything in between.
+     * Sitting after the goal, this block would be the first thing a lead who
+     * had just BOOKED walked into, and it would start emailing them. Before
+     * it, a booking jumps over the whole arm, which is the point of the goal.
+     *
+     * The phone rungs above need no gating and get none. Each one already
+     * degrades on its own when there is no dialable number: `place_ai_call`
+     * resolves to `not_placed` rather than failing, `r{n}_text` is gated on
+     * `no_answer` so it stays quiet, and `wait_for_reply`'s planner resolves
+     * straight to the "no_reply" sentinel instead of parking a run that could
+     * never be resumed. An email-only lead therefore reaches this arm in one
+     * pass, with `lead_reply` reading exactly as it would for someone who
+     * simply did not answer, which is what every guard above is already
+     * written against.
+     *
+     * A KNOWN GAP, worth stating rather than implying this arm is airtight:
+     * `applyGoalEvent` matches runs by phone, so an `appointment_booked`
+     * event may never reach an email-only run and the `converted` jump below
+     * may never fire for them. Placing this arm before the goal is still
+     * right (it costs nothing, and it is correct the moment goal matching
+     * learns email identity), but today a lead with no phone who books
+     * elsewhere can still receive the remaining follow-ups. Bounded at three
+     * emails over three days, and it stops the moment they reply.
+     */
+    buildEmailFollowUpBlock() as unknown as Step,
     {
       id: "converted",
       type: "goal",

@@ -643,6 +643,51 @@ Valerie's run is claimed by Gabrielle Mota and still gets the emails.
 Leads WITH a phone are untouched: Brian chose email-only over adding email to
 every round, so a lead getting calls and texts keeps getting exactly those.
 
+### The same arm inside the cadence (Aug 18 2026)
+
+Once a contact can be identified by email as well as phone, an email-only lead
+can be tagged and so can reach "Needs Follow Up (AI cadence)" itself. The
+cadence therefore carries the same block, from the same shared builder
+(`scripts/oneshot/_amy-email-followup-block.ts`), so the copy and timing
+cannot drift between the two places.
+
+Three things made that safe to add to a flow that always has runs parked
+mid-cadence:
+
+- **Nothing before flat index 30 moved.** The block goes in immediately before
+  `converted`, and a pinned test asserts the first 30 flattened ids are
+  unchanged. When applied there were 8 parked runs, the furthest at step 13.
+- **It sits BEFORE the `converted` goal, deliberately.** A goal step is a
+  fast-forward TARGET: the run jumps to it and skips everything between.
+  Placed after it, this arm would be the first thing a lead who had just
+  BOOKED walked into, and it would start emailing them.
+- **The phone rungs need no gating and get none.** Each already degrades on
+  its own with no dialable number: `place_ai_call` resolves to `not_placed`
+  rather than failing, `r{n}_text` is gated on `no_answer`, and
+  `wait_for_reply`'s planner resolves straight to the `no_reply` sentinel
+  instead of parking a run that could never be resumed. An email-only lead
+  reaches the arm in one pass, with `lead_reply` reading exactly as it would
+  for someone who did not answer.
+
+  An earlier draft added a model-extracted `reply_wait_minutes` fed to each
+  wait through `timeoutMinutesTemplate`, on the belief that a phone-less lead
+  would park three days per rung. That belief was wrong (the planner
+  short-circuits), and the mechanism carried a real risk: a model answering
+  "1" for a lead who DOES have a phone would collapse the three-day cadence
+  into three minutes of calls and texts. Removed.
+
+**Known gap.** `applyGoalEvent` matches runs by phone, so an
+`appointment_booked` event may never reach an email-only run and the
+`converted` jump may never fire for them. Placing the arm before the goal is
+still right, and costs nothing, but today a phone-less lead who books
+elsewhere can still receive the remaining follow-ups. Bounded at three emails
+over three days, and it stops the moment they reply.
+
+An email reply resolves to the claiming teammate by NAME (`nameVar:
+"lead_name"` on the notify): the step keys on a phone var first, and an
+email-only lead has none, so without it every reply would take the unowned
+fallback and go to the whole team.
+
 ## One-shots
 
 **`amy-email-followup-cadence.ts` (Aug 18 2026):** appends the three-round
