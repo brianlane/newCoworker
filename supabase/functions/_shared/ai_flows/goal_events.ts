@@ -31,6 +31,11 @@
  */
 import { RESUME_STEP_ID_VAR, flattenSteps } from "./branching.ts";
 import type { FlowStep, GoalEvent, GoalEventKind } from "./types.ts";
+import {
+  contactKeyEmail,
+  emailContactKey,
+  emailIlikePattern
+} from "../contact_key.ts";
 
 /** Skip reason recorded on steps a goal jump short-circuited. */
 export const GOAL_JUMP_SKIP = "goal_jump";
@@ -113,26 +118,66 @@ type CandidateRun = {
  * wait_for_reply that consumed the reply), those must process the event
  * through their authored branch logic, not jump past it.
  */
+/**
+ * The filter that finds a lead's jumpable runs, by whichever identity they
+ * were started with.
+ *
+ * A NUMBER matches the four places a phone can sit in a run's context: the
+ * triggering sender, the extracted lead phone, the number a wait is parked on,
+ * and the number a call is out to (the same identity keys the Customer Called
+ * pause uses).
+ *
+ * An EMAIL-identified lead has none of those, which is why a booking by a
+ * phoneless lead never reached their run and the `converted` jump never fired:
+ * they kept getting follow-ups after they had already booked. Two more places
+ * carry their identity instead. `trigger.from` holds the CONTACT KEY for a
+ * contact-event run, which is how the follow-up cadence starts, and it is set
+ * by the engine rather than by an authored var name, so it is the reliable
+ * one. `vars.lead_email` holds the ADDRESS in a lead-source run. A flow using
+ * a custom email var name matches only on the first, which is the same
+ * degrade-to-previous-behavior the duplicate-lead guard documents for phones.
+ *
+ * Interpolation is safe for every branch: a number key is digits and `+`, and
+ * an address that reached a contact key has already been refused if it carries
+ * a PostgREST filter metacharacter (contact_key.ts).
+ */
+function runMatchFilter(leadKey: string): string {
+  const key = emailContactKey(contactKeyEmail(leadKey) ?? leadKey);
+  if (key) {
+    const address = contactKeyEmail(key) as string;
+    return [
+      // The key is engine-set and always lowercased, so exact equality holds.
+      `context->trigger->>from.eq.${key}`,
+      // `lead_email` is whatever the flow's extraction produced, in whatever
+      // casing it arrived in, so this half has to be case-insensitive. ilike
+      // with the LIKE wildcards escaped is exact-modulo-case; an underscore is
+      // common in a local part and unescaped would match a different person.
+      `context->vars->>lead_email.ilike.${emailIlikePattern(address)}`
+    ].join(",");
+  }
+  return [
+    `context->trigger->>from.eq.${leadKey}`,
+    `context->vars->>lead_phone.eq.${leadKey}`,
+    `context->waiting_reply->>from.eq.${leadKey}`,
+    `context->waiting_call->>to.eq.${leadKey}`
+  ].join(",");
+}
+
 export async function applyGoalEvent(
   supabase: AnyClient,
   businessId: string,
-  leadE164: string,
+  leadKey: string,
   event: ObservedGoalEvent,
   excludeRunIds: string[] = []
 ): Promise<GoalJumpResult> {
-  if (!leadE164) return NOOP;
+  if (!leadKey) return NOOP;
   try {
-    // The lead's jumpable runs: matched by the triggering sender, the
-    // extracted lead phone, or the number a wait is parked on (the same
-    // identity keys the Customer Called pause uses).
     const { data, error } = await supabase
       .from("ai_flow_runs")
       .select("id, flow_id, business_id, status, current_step, context, revision")
       .eq("business_id", businessId)
       .in("status", [...JUMPABLE_STATUSES])
-      .or(
-        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164},context->waiting_call->>to.eq.${leadE164}`
-      )
+      .or(runMatchFilter(leadKey))
       .limit(MAX_RUNS_PER_EVENT);
     if (error) {
       console.error("goal_events: run lookup", error);

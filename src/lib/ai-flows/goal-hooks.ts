@@ -14,26 +14,40 @@ import {
   type ObservedGoalEvent
 } from "../../../supabase/functions/_shared/ai_flows/goal_events";
 import { isE164, normalizeNanpToE164 } from "../../../supabase/functions/_shared/ai_flows/engine";
+import {
+  contactKeyEmail,
+  emailContactKey
+} from "../../../supabase/functions/_shared/contact_key";
 
 export type { ObservedGoalEvent };
 
 /**
- * Fire one observed milestone for a lead. `phone` may be raw user input
- * (E.164 or a loose NANP number); an unusable phone is a silent no-op, a
- * missing lead phone is a data gap, not an error.
+ * Fire one observed milestone for a lead, identified by whatever we have.
+ *
+ * `identity` may be raw user input: an E.164 number, a loose NANP number, a
+ * contact key (including the `email:` form the dashboard passes for an
+ * email-only contact), or a bare email address. An unusable value is a silent
+ * no-op, since a missing lead identity is a data gap, not an error.
+ *
+ * The email forms matter because a lead with no phone still books, still gets
+ * tagged, and still has runs to fast-forward. Before this they were dropped
+ * here, one level above the matching: the milestone never fired at all, so a
+ * phoneless lead who booked kept receiving follow-ups.
  */
 export async function fireGoalEvent(
   businessId: string,
-  phone: string | null | undefined,
+  identity: string | null | undefined,
   event: ObservedGoalEvent
 ): Promise<void> {
-  const raw = (phone ?? "").trim();
+  const raw = (identity ?? "").trim();
   if (!raw) return;
-  const e164 = isE164(raw) ? raw : normalizeNanpToE164(raw);
-  if (!e164) return;
+  const resolved = isE164(raw)
+    ? raw
+    : (normalizeNanpToE164(raw) ?? emailContactKey(contactKeyEmail(raw) ?? raw));
+  if (!resolved) return;
   try {
     const db = await createSupabaseServiceClient();
-    await applyGoalEvent(db, businessId, e164, event);
+    await applyGoalEvent(db, businessId, resolved, event);
   } catch (e) {
     // applyGoalEvent itself never throws; this guards client construction.
     console.error("fireGoalEvent", e);

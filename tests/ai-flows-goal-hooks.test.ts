@@ -37,6 +37,30 @@ beforeEach(() => {
 });
 
 describe("fireGoalEvent", () => {
+  it("accepts an email identity, so a phoneless lead's milestones still fire", async () => {
+    // The gap: this wrapper dropped anything that was not a phone, one level
+    // ABOVE the matching, so a lead with no number never had a milestone fire
+    // at all. They booked and kept receiving follow-ups.
+    for (const identity of [
+      "valm0417@gmail.com",
+      "  VALM0417@Gmail.com ",
+      "email:valm0417@gmail.com"
+    ]) {
+      const { db, calls } = makeDb();
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await fireGoalEvent(BIZ, identity, { kind: "appointment_booked" });
+      const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+      expect(filter, identity).toContain("email:valm0417@gmail.com");
+    }
+  });
+
+  it("still drops a value that is neither a phone nor an address", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(makeDb().db as never);
+    await fireGoalEvent(BIZ, "not-an-identity", { kind: "appointment_booked" });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+
   it("no phone / unusable phone → silent noop, no client created", async () => {
     await fireGoalEvent(BIZ, null, { kind: "appointment_booked" });
     await fireGoalEvent(BIZ, "  ", { kind: "appointment_booked" });

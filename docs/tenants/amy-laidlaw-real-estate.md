@@ -705,12 +705,16 @@ mid-cadence:
   "1" for a lead who DOES have a phone would collapse the three-day cadence
   into three minutes of calls and texts. Removed.
 
-**Known gap.** `applyGoalEvent` matches runs by phone, so an
-`appointment_booked` event may never reach an email-only run and the
-`converted` jump may never fire for them. Placing the arm before the goal is
-still right, and costs nothing, but today a phone-less lead who books
-elsewhere can still receive the remaining follow-ups. Bounded at three emails
-over three days, and it stops the moment they reply.
+**That gap is closed (Aug 19 2026, PR #1497).** `applyGoalEvent` matched runs by
+phone only, so an `appointment_booked` event never reached an email-only run
+and the `converted` jump never fired: a phoneless lead who booked kept getting
+the remaining follow-ups. It now also matches the contact key on
+`trigger.from` (engine-set, so it is the reliable half) and `vars.lead_email`
+case-insensitively. `fireGoalEvent` used to drop anything that was not a phone
+one level above that, so the milestone never fired at all; it takes an address
+or a contact key now. The AI booking path passes the attendee's email when
+there is no phone. The public booking page needs no change: it rejects a
+booking without a valid E.164 number outright.
 
 An email reply resolves to the claiming teammate by NAME (`nameVar:
 "lead_name"` on the notify): the step keys on a phone var first, and an

@@ -113,6 +113,55 @@ describe("applyGoalEvent", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("matches an EMAIL-identified lead on the contact key and lead_email", async () => {
+    // The gap this closes: an email-only lead has no phone in any of the four
+    // number slots, so a booking never reached their run and the `converted`
+    // jump never fired. They kept getting follow-ups after booking.
+    const { db, calls } = makeDb([{ data: [], error: null }]);
+    await applyGoalEvent(db, BIZ, "email:valm0417@gmail.com", { kind: "appointment_booked" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    // trigger.from carries the KEY on a contact-event run (set by the engine,
+    // not by an authored var name), so it is the reliable half.
+    expect(filter).toContain("context->trigger->>from.eq.email:valm0417@gmail.com");
+    expect(filter).toContain("context->vars->>lead_email.ilike.valm0417@gmail.com");
+    // The phone slots are meaningless for this lead and are not searched.
+    expect(filter).not.toContain("lead_phone");
+    expect(filter).not.toContain("waiting_call");
+  });
+
+  it("accepts a BARE address, and matches lead_email case-insensitively", async () => {
+    // Callers hold an address (an attendee email on a booking), not a key. And
+    // `lead_email` stores whatever casing the extraction produced, so an exact
+    // match would silently never fire, which is the same casing trap that bit
+    // the staff guard and the duplicate-lead guard.
+    const { db, calls } = makeDb([{ data: [], error: null }]);
+    await applyGoalEvent(db, BIZ, "Valm0417@Gmail.com", { kind: "appointment_booked" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    expect(filter).toContain("context->trigger->>from.eq.email:valm0417@gmail.com");
+    expect(filter).toContain("context->vars->>lead_email.ilike.valm0417@gmail.com");
+  });
+
+  it("escapes the LIKE wildcards in an address so it cannot match a different person", async () => {
+    const { db, calls } = makeDb([{ data: [], error: null }]);
+    await applyGoalEvent(db, BIZ, "first_last@example.com", { kind: "appointment_booked" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    expect(filter).toContain("lead_email.ilike.first\\_last@example.com");
+  });
+
+  it("keeps all four number slots for a phone lead", async () => {
+    const { db, calls } = makeDb([{ data: [], error: null }]);
+    await applyGoalEvent(db, BIZ, LEAD, { kind: "replied" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    for (const slot of [
+      `context->trigger->>from.eq.${LEAD}`,
+      `context->vars->>lead_phone.eq.${LEAD}`,
+      `context->waiting_reply->>from.eq.${LEAD}`,
+      `context->waiting_call->>to.eq.${LEAD}`
+    ]) {
+      expect(filter).toContain(slot);
+    }
+  });
+
   it("never throws: a client blow-up returns the noop result", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = {
