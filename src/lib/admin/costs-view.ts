@@ -337,9 +337,26 @@ export function buildTelnyxTenantWindowBreakdown(
 export type UnattributedSender = {
   /** Raw Telnyx sender id (a number, or something like an RCS agent id); null for rows synced before the column existed. */
   sender: string | null;
+  /** Set when the sender is the platform's own and can never match a tenant DID; null means worth chasing. */
+  platformLabel: string | null;
   costMicros: number;
   recordCount: number;
 };
+
+/**
+ * The platform's own Telnyx senders, which can never match a tenant DID.
+ * Kept here so a recurring platform sender renders with its role instead of
+ * reading as a fresh leak: the bare "+16028384497" row was chased as a
+ * leaked number on 2026-08-19, and it was our own two test SMS.
+ */
+const PLATFORM_SENDER_LABELS: ReadonlyMap<string, string> = new Map([
+  // Ordered as the dedicated P2P international SMS gateway on 2026-08-06 and
+  // released the same day, after Telnyx ruled US long codes domestic-only.
+  ["+16028384497", "retired intl SMS gateway (released Aug 6 2026)"],
+  // RCS traffic bills against the agent id, not a phone number, so the
+  // digits-only DID matcher can never attribute it.
+  ["new_coworker_jut3q1af_agent", "RCS agent id"]
+]);
 
 /**
  * Unattributed Telnyx spend grouped by the sender that spent it, biggest
@@ -350,9 +367,8 @@ export type UnattributedSender = {
  * sender is the tenant's own DID.
  *
  * This exists because a bare "$0.03 matched no tenant DID" is unactionable.
- * Named, the same number reads as either a platform sender that can never
- * match a DID (the international SMS gateway long code, an RCS agent id) or
- * a genuine leak worth chasing.
+ * Known platform senders carry their role as `platformLabel`; anything
+ * unlabeled is a genuine leak worth chasing.
  */
 export function buildUnattributedSenders(rows: TelnyxCostDailyRow[]): UnattributedSender[] {
   const bySender = new Map<string | null, UnattributedSender>();
@@ -361,7 +377,12 @@ export function buildUnattributedSenders(rows: TelnyxCostDailyRow[]): Unattribut
     const sender = row.sender ?? null;
     let entry = bySender.get(sender);
     if (!entry) {
-      entry = { sender, costMicros: 0, recordCount: 0 };
+      entry = {
+        sender,
+        platformLabel: sender === null ? null : (PLATFORM_SENDER_LABELS.get(sender) ?? null),
+        costMicros: 0,
+        recordCount: 0
+      };
       bySender.set(sender, entry);
     }
     entry.costMicros += row.cost_micros;
