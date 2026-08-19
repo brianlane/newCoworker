@@ -27,6 +27,7 @@ import {
 } from "@/lib/ai-flows/schema";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
 import { BrowseActionPagePicker } from "@/components/dashboard/BrowseActionPagePicker";
+import { BrowseActionTryPanel } from "@/components/dashboard/BrowseActionTryPanel";
 import {
   findStepById,
   flattenForDisplay,
@@ -5182,6 +5183,15 @@ function StepFields({
           onAddAction={(action) =>
             patchStep(index, { actions: [...step.actions, action] })
           }
+        />
+        {/* Pick a control off the page, then prove the sequence still resolves.
+            Together these replace "find out on a live lead, days later". */}
+        <BrowseActionTryPanel
+          businessId={businessId}
+          {...(step.auth?.integrationLabel
+            ? { integrationLabel: step.auth.integrationLabel }
+            : {})}
+          actions={step.actions}
         />
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"

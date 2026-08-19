@@ -50,7 +50,28 @@ POST /render
 200 -> { "error": "render_failed" | "login_failed" | "auth_config_error"
                  | "action_failed", "detail": "...", "actionsCompleted": <n> }
 400 -> { "error": "invalid_or_unsafe_url" | "missing_business_or_label"
-                 | "invalid_actions" }
+                 | "invalid_actions" | "invalid_check_only" }
+
+# DRY RUN, on its OWN PATH: POST /check-actions. Reports whether each action
+# would find something to act on, and performs NONE of them (a separate
+# responder, not a flag threaded through the action path). Requires actions and
+# refuses forEachLink. Powers the dashboard's "Try these actions" button.
+#
+# It is a path rather than a flag on /render because the app ships on merge
+# while this sidecar updates on a manual per-tenant redeploy. A box that has
+# not been redeployed IGNORES an unknown "checkOnly" and its `if (actions)`
+# branch performs them, so a flag alone would let that button click a live
+# claim button during the gap. An old box 404s an unknown path instead, and
+# the app reports that as "not updated yet".
+POST /check-actions
+{ "url": "https://...", "actions": [...] }
+200 -> { "finalUrl": "...", "checks": [
+           { "kind": "click_text", "target": "Claim this lead", "state": "ready" },
+           { "kind": "select_option", "target": "select[name=stage]",
+             "state": "missing_option", "options": ["New", "Spoke with them"] } ] }
+# state: "ready" | "blocked" | "absent" | "missing_option". It judges the page
+# AS LOADED, so an action that only exists after an earlier click reads as
+# "absent"; that is a limit of not clicking, not evidence the action is wrong.
 401 -> { "error": "unauthorized" }                              # bad/no bearer
 ```
 

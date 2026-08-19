@@ -73,6 +73,13 @@ export const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 
  * how the loop knows it is finished.
  */
 export const CLICK_TEXT_APPEAR_MS = Number(process.env.AIFLOW_CLICK_TEXT_APPEAR_MS ?? 5_000);
+/**
+ * Total time a DRY RUN may spend waiting for controls to mount, across the
+ * whole sequence. See checkActions for why this is shared rather than
+ * per-action: 15 absent actions at CLICK_TEXT_APPEAR_MS each would not fit
+ * inside the tunnel's ~100s response ceiling.
+ */
+export const CHECK_TOTAL_APPEAR_MS = Number(process.env.AIFLOW_CHECK_TOTAL_APPEAR_MS ?? 30_000);
 /** Gap between re-checks while waiting for a control to mount. */
 export const CLICK_TEXT_APPEAR_POLL_MS = Number(
   process.env.AIFLOW_CLICK_TEXT_APPEAR_POLL_MS ?? 250
@@ -510,22 +517,37 @@ export async function performActions(page, actions) {
  * and threw, so a referral that HAD been accepted came back as a dead-lettered
  * run and 19 downstream steps never ran.
  */
-async function probeClickable(page, target) {
-  const loc = await resolveClickTarget(page, target, { allowExactTextAnywhere: false });
-  if (!loc) return { state: "absent", loc: null };
+/**
+ * The three-state verdict for a locator that has ALREADY been resolved:
+ * "absent" (never became visible, or detached mid-probe), "ready" (visible and
+ * enabled) or "blocked" (there, but not enabled inside the probe window).
+ *
+ * Split out of probeClickable so the dry run (checkActions) reaches the exact
+ * same verdict the while-present loop acts on. A check that judged
+ * actionability differently from the thing it predicts would be worse than no
+ * check at all.
+ */
+async function probeLocator(loc) {
   try {
     await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
   } catch {
     // Never became visible, or detached mid-probe. The old boolean probe drew
     // the same conclusion here, so this path is unchanged.
-    return { state: "absent", loc: null };
+    return "absent";
   }
   try {
-    if (await loc.isEnabled({ timeout: WHILE_PRESENT_PROBE_MS })) return { state: "ready", loc };
+    if (await loc.isEnabled({ timeout: WHILE_PRESENT_PROBE_MS })) return "ready";
   } catch {
-    return { state: "absent", loc: null };
+    return "absent";
   }
-  return { state: "blocked", loc };
+  return "blocked";
+}
+
+async function probeClickable(page, target) {
+  const loc = await resolveClickTarget(page, target, { allowExactTextAnywhere: false });
+  if (!loc) return { state: "absent", loc: null };
+  const state = await probeLocator(loc);
+  return state === "absent" ? { state, loc: null } : { state, loc };
 }
 
 /** Execute ONE parsed action (see performActions for retry/error semantics). */
@@ -610,4 +632,141 @@ export async function runAction(page, a, opts = {}) {
       .first()
       .fill(a.value, { timeout: ACTION_TIMEOUT_MS });
   }
+}
+
+/**
+ * DRY RUN: would each action find something to act on, on this page?
+ *
+ * Exists because until now the ONLY way to find out whether an owner-authored
+ * sequence still matches a vendor's markup was to let it run on a live lead.
+ * The dashboard's "Test with a contact" simulates browse steps (it echoes the
+ * action list and never opens a browser), so a selector's first real test was
+ * production, days later, silently.
+ *
+ * Resolves every action's target EXACTLY the way runAction would, then reports
+ * what it found. It never clicks, types, chooses or navigates: no locator
+ * returned here is acted on, so the heaviest thing a dry run does is the same
+ * login the tenant's flows already perform many times a day.
+ *
+ * Per-action verdicts:
+ *   "ready"          the control is there, visible and enabled
+ *   "blocked"        on the page and visible, but not enabled in the probe window
+ *   "absent"         nothing matched, or it never became visible
+ *   "missing_option" a <select> matched but offers no such choice
+ *
+ * THE LIMIT, which callers must state plainly rather than paper over: this
+ * judges the page AS LOADED. A sequence whose later steps only exist after an
+ * earlier click (a wizard, a modal, a drawer) will report those as absent, and
+ * that is not evidence they are wrong. Simulating the sequence would mean
+ * performing it, which is the one thing a dry run must not do.
+ */
+export async function checkActions(page, actions, { totalAppearMs } = {}) {
+  const budgetMs = typeof totalAppearMs === "number" ? totalAppearMs : CHECK_TOTAL_APPEAR_MS;
+  const deadline = Date.now() + Math.max(0, budgetMs);
+  const out = [];
+  for (const a of actions) {
+    // Share ONE appear budget across the sequence. Per-action patience is what
+    // makes a verdict trustworthy, but only an ABSENT target ever waits it out,
+    // so a badly broken 15-action sequence would spend 15 x
+    // CLICK_TEXT_APPEAR_MS. That does not fit: the whole dry run is a single
+    // HTTP response behind a Cloudflare Tunnel with the default ~100s 524
+    // timeout (the same ceiling that forced MAX_FOREACH_ITEMS down from 25 to
+    // 6), and a 524 would reach the owner as an unexplained failure of the
+    // button that exists to explain failures.
+    //
+    // The first miss therefore gets the real timeout, which is the case that
+    // matters (one selector went stale). Once the budget is spent, later
+    // actions still get a full immediate resolution pass, so anything actually
+    // present is still found; only the wait-for-it-to-mount grace is gone.
+    const remaining = Math.max(0, deadline - Date.now());
+    out.push(await checkAction(page, a, { appearTimeoutMs: remaining }));
+  }
+  return out;
+}
+
+/**
+ * Locate ONE action's target without acting on it. Mirrors runAction's
+ * resolution per kind; returns a Locator or null.
+ *
+ * `click_text` keeps the same appear timeout the real action uses rather than
+ * a shorter one. An impatient check would report "not found" for a control the
+ * real run resolves a moment later, and a false alarm on a working sequence is
+ * the fastest way to make owners stop trusting the button. The cost is bounded:
+ * only an action that is genuinely absent waits out the timeout, so a healthy
+ * sequence returns fast and the slow case is the one being diagnosed.
+ */
+async function locateActionTarget(page, a, opts = {}) {
+  if (a.kind === "click_text" || a.kind === "click_text_while_present") {
+    return await resolveClickTarget(page, a.target, {
+      allowExactTextAnywhere: a.kind === "click_text",
+      ...(typeof opts.appearTimeoutMs === "number"
+        ? { appearTimeoutMs: Math.min(opts.appearTimeoutMs, CLICK_TEXT_APPEAR_MS) }
+        : {})
+    });
+  }
+  if (a.kind === "click_role") {
+    return page.getByRole(a.target, { name: a.value, exact: false }).first();
+  }
+  if (a.kind === "fill_placeholder") {
+    return page.getByPlaceholder(a.target, { exact: false }).first();
+  }
+  // click_selector, select_option, fill_selector all address by CSS.
+  return page.locator(a.target).first();
+}
+
+/** The choices a matched <select> actually offers (labels and values). */
+async function readSelectOptions(loc) {
+  try {
+    const options = await loc.locator("option").evaluateAll((nodes) =>
+      nodes.map((n) => ({
+        label: String(n.textContent ?? "").trim(),
+        value: String(n.getAttribute("value") ?? "")
+      }))
+    );
+    return Array.isArray(options) ? options : [];
+  } catch {
+    // A custom dropdown that is not a real <select>, or a detached node. We
+    // cannot enumerate it, so we do not claim the option is missing.
+    return [];
+  }
+}
+
+/** Case-insensitive match against an option's label OR its value, like selectOption. */
+function optionMatches(option, wanted) {
+  const want = String(wanted ?? "").trim().toLowerCase();
+  return (
+    option.label.toLowerCase() === want ||
+    option.value.toLowerCase() === want ||
+    option.label.toLowerCase().includes(want)
+  );
+}
+
+export async function checkAction(page, a, opts = {}) {
+  const base = { kind: a.kind, target: a.target };
+  let loc;
+  try {
+    loc = await locateActionTarget(page, a, opts);
+  } catch (e) {
+    // A malformed CSS selector throws at locate time rather than resolving to
+    // zero elements. That is a real authoring answer, so report the reason.
+    return { ...base, state: "absent", detail: condenseError(String(e?.message ?? e)) };
+  }
+  if (!loc) return { ...base, state: "absent" };
+
+  const state = await probeLocator(loc);
+  if (state !== "ready") return { ...base, state };
+
+  if (a.kind === "select_option") {
+    const options = await readSelectOptions(loc);
+    // An empty list means "could not enumerate", not "offers nothing": a
+    // custom dropdown is a real pattern and must not be reported as broken.
+    if (options.length > 0 && !options.some((o) => optionMatches(o, a.value))) {
+      return {
+        ...base,
+        state: "missing_option",
+        options: options.map((o) => o.label || o.value).filter(Boolean).slice(0, 20)
+      };
+    }
+  }
+  return { ...base, state: "ready" };
 }
