@@ -292,6 +292,10 @@ export function forEachResultVars(
  *    take the update), and re-listing would hand back the same head forever.
  *  - "pass_cap": the safety valve fired (maxPasses); a runaway list (or a
  *    portal that re-lists updated cards after all) must not loop for hours.
+ *  - "lost_list": the list came back EMPTY while the previous pass said work
+ *    was still owed. An empty list is normally the finish line, but it cannot
+ *    be one step after "24 still waiting", so this is a lost session or a
+ *    dead link, not a completed sweep. `left` reports what was still owed.
  */
 export type ForEachDecision =
   | { kind: "fail_collect"; error: string }
@@ -302,7 +306,7 @@ export type ForEachDecision =
       passes: number;
       updated: number;
       left: number;
-      terminal: "list_drained" | "no_progress" | "pass_cap";
+      terminal: "list_drained" | "no_progress" | "pass_cap" | "lost_list";
     };
 
 /**
@@ -330,6 +334,17 @@ export function decideForEach(
     return { kind: "fail_collect", error: fe.errors[0] };
   }
   if (fe.items === 0) {
+    // An empty list CONTRADICTS a previous pass that reported work still owed,
+    // and the contradiction is the tell that we stopped seeing the list rather
+    // than finished it. Amy's Clever portal is reached through a single-use
+    // magic link; navigating it a second time renders "Magic link has expired",
+    // a page with no list rows and no error, which is indistinguishable from
+    // "all done" on the numbers alone (observed live 2026-08-19). Reporting the
+    // previous pass's leftover keeps the owner alert truthful instead of
+    // closing a half-finished sweep as clean.
+    if (prior && prior.lastLeft > 0) {
+      return { kind: "done", passes, updated, left: prior.lastLeft, terminal: "lost_list" };
+    }
     return { kind: "done", passes, updated, left: 0, terminal: "list_drained" };
   }
   if (fe.succeeded === 0 && passes === 1) {

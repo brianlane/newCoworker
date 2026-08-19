@@ -384,13 +384,28 @@ describe("decideForEach", () => {
     });
   });
 
-  it("an empty list on a later pass keeps the cumulative total", () => {
-    expect(decideForEach(fe({}), { passes: 6, updated: 36, lastLeft: 5 }, 20)).toEqual({
+  it("an empty list after a pass that owed nothing more is a clean finish", () => {
+    expect(decideForEach(fe({}), { passes: 6, updated: 36, lastLeft: 0 }, 20)).toEqual({
       kind: "done",
       passes: 7,
       updated: 36,
       left: 0,
       terminal: "list_drained"
+    });
+  });
+
+  it("an empty list CONTRADICTING work still owed is a lost list, not a finish", () => {
+    // Observed live 2026-08-19 on Amy's Clever portal: the magic link is
+    // single-use, and navigating it again renders "Magic link has expired",
+    // a page with no rows and no error. On the numbers alone that is
+    // identical to "all done", so without this the sweep would close a
+    // half-finished backlog as clean and the owner alert would stay silent.
+    expect(decideForEach(fe({}), { passes: 1, updated: 6, lastLeft: 24 }, 20)).toEqual({
+      kind: "done",
+      passes: 2,
+      updated: 6,
+      left: 24,
+      terminal: "lost_list"
     });
   });
 

@@ -255,6 +255,32 @@ These are mistakes already made on this account. Do not remake them.
   rather than retargeted. The daily (Chris) flow keeps `We Spoke` deliberately:
   it fires the day a lead arrives, when the card is at "New"/"Tried Reaching
   Out" and that option is offered.
+- **Clever's magic link is SINGLE-USE, and an expired one renders an empty
+  list rather than an error (2026-08-19).** Replaying that day's weekly
+  reminder 1.6h later drove the sweep to
+  `/interstitial/?magic_uuid=...`, which returned a page whose only heading is
+  "Magic link has expired" and whose only link is "Go Back to Login Page". The
+  `forEachLink` selector matched zero rows, the render service reported no
+  error, and the run closed `done` having posted nothing. Probing the portal
+  URL directly (`debug/portal-dom-probe.ts --label Clever`) redirects to
+  `login.listwithclever.com` and fails password login, so once the link is
+  spent there is NO way back in until Clever texts the next one. Three
+  consequences, all of them load-bearing:
+  1. **A sweep can only run in the window right after Clever's text.** Do not
+     bother replaying an older reminder; `amy-clever-sweep-rerun.ts` refuses
+     past `--max-age-hours` for this reason, and even inside that window it
+     only works if the link has not already been spent by the scheduled run.
+  2. **Zero rows is ambiguous, and the ambiguity is dangerous.** "Nothing to
+     do" and "we never got in" produce identical numbers. The engine resolves
+     it with context: an empty list that CONTRADICTS a previous pass's "still
+     owed" count is reported as `lost_list` carrying that leftover, never as a
+     clean finish (`decideForEach`).
+  3. **The flow alerts on "posted nothing" separately from "left some".**
+     A leftovers-only alert is silent exactly when the automation is most
+     broken, and the arithmetic alert it replaced was not, so the measured
+     alert ships with a `posted_nothing` arm whose `notEquals "no"` condition
+     also fires on a missing var. See
+     `amy-clever-sweep-measured-alert-definition.ts`.
 - **An updated Clever card DOES leave "Needs Action".** Confirmed live
   2026-08-18: `Needs Action (0)` / `Recently Updated (87)`, the second section
   labelled "Items in this list do not need to be updated". That is the
