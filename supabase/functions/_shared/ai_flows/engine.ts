@@ -10,6 +10,7 @@
  */
 import { NO_EM_DASH_PROMPT_LINE } from "../sms_prompt_lines.ts";
 import { AI_FLOW_DEFINITION_VERSION } from "./types.ts";
+import { emailContactKey } from "../contact_key.ts";
 import type {
   AiFlowDefinition,
   CorrelationMessage,
@@ -860,6 +861,36 @@ export function extractLeadIdentity(vars: Record<string, unknown>): LeadIdentity
     name: firstLeadName(vars, LEAD_NAME_KEYS),
     email: email ? email.toLowerCase() : null
   };
+}
+
+/**
+ * Which contact should the lead we just EMAILED be filed under, if any?
+ *
+ * The counterpart to the phone check the SMS filing path does, and stricter on
+ * purpose. A flow's send_email steps go to the lead AND to the owner and
+ * teammates, and unlike a phone number, an owner's address is not reliably on
+ * the roster for the non-lead guard to catch. So this answers null unless the
+ * recipient EXACTLY matches the address the extraction captured, and answers
+ * null when the flow captured no lead address at all. Filing the owner as a
+ * customer under a lead's name is the Dave Lane defect (Jul 25 2026), and it is
+ * worse than a missing contact row.
+ *
+ * The returned `key` is the lead's PHONE when the flow captured one, so a lead
+ * we both email and text stays ONE contact, and `email:<addr>` when it did not.
+ * Callers pass `leadPhone` already normalized to E.164 (or null).
+ */
+export function emailedLeadContactKey(
+  vars: Record<string, unknown>,
+  toEmail: string,
+  leadPhone: string | null
+): { key: string; name: string; email: string } | null {
+  const identity = extractLeadIdentity(vars);
+  const leadEmail = (identity.email ?? "").trim().toLowerCase();
+  if (!leadEmail) return null;
+  if (leadEmail !== toEmail.trim().toLowerCase()) return null;
+  const key = (leadPhone ?? "").trim() || emailContactKey(leadEmail);
+  if (!key) return null;
+  return { key, name: identity.name ?? "", email: leadEmail };
 }
 
 /** Marker inserted where an over-long extraction text was cut. */

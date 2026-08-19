@@ -9,6 +9,7 @@ import {
   coerceDialableE164,
   evaluateSmsTrigger,
   evaluateStepCondition,
+  emailedLeadContactKey,
   extractLeadIdentity,
   extractLinkByText,
   extractLabeledPhones,
@@ -47,6 +48,64 @@ import type {
   TriggerCondition,
   TriggerContext
 } from "../supabase/functions/_shared/ai_flows/types";
+
+describe("emailedLeadContactKey", () => {
+  const LEAD = { lead_name: "Valerie Marino", lead_email: "valm0417@gmail.com" };
+
+  it("files a phoneless lead under their address", () => {
+    // The ReferralExchange shape: an emailed lead with no number. Before this,
+    // the lead was emailed, claimed by a teammate, and followed up for days
+    // without ever becoming a contact.
+    expect(emailedLeadContactKey(LEAD, "valm0417@gmail.com", null)).toEqual({
+      key: "email:valm0417@gmail.com",
+      name: "Valerie Marino",
+      email: "valm0417@gmail.com"
+    });
+  });
+
+  it("prefers the PHONE when the flow captured one, so one person is one contact", () => {
+    expect(emailedLeadContactKey(LEAD, "valm0417@gmail.com", "+16025551234")).toEqual({
+      key: "+16025551234",
+      name: "Valerie Marino",
+      email: "valm0417@gmail.com"
+    });
+  });
+
+  it("matches the recipient case-insensitively and ignores surrounding space", () => {
+    expect(emailedLeadContactKey(LEAD, "  VALM0417@Gmail.com ", null)?.key).toBe(
+      "email:valm0417@gmail.com"
+    );
+  });
+
+  it("files NOBODY when the recipient is not the lead", () => {
+    // A flow's send_email steps also go to the owner and teammates. Filing one
+    // of them as a customer under the lead's name is the Dave Lane defect.
+    expect(emailedLeadContactKey(LEAD, "amy@amylaidlaw.com", null)).toBeNull();
+    expect(emailedLeadContactKey(LEAD, "amy@amylaidlaw.com", "+16025551234")).toBeNull();
+  });
+
+  it("files NOBODY when the flow captured no lead address to compare against", () => {
+    // Stricter than the SMS path on purpose: without a captured address there
+    // is nothing to prove this recipient is the lead, and an owner's address is
+    // not reliably on the roster for the non-lead guard to catch.
+    expect(emailedLeadContactKey({ lead_name: "Valerie" }, "someone@x.com", null)).toBeNull();
+    expect(
+      emailedLeadContactKey({ lead_name: "Valerie" }, "someone@x.com", "+16025551234")
+    ).toBeNull();
+  });
+
+  it("files NOBODY when the captured address cannot become a key and there is no phone", () => {
+    expect(
+      emailedLeadContactKey({ lead_email: "a,b@example.com" }, "a,b@example.com", null)
+    ).toBeNull();
+  });
+
+  it("reads the alternate conventional email keys, like the rest of lead identity", () => {
+    expect(emailedLeadContactKey({ seller_email: "s@x.com" }, "s@x.com", null)?.key).toBe(
+      "email:s@x.com"
+    );
+  });
+});
 
 describe("extractLeadIdentity", () => {
   it("reads the canonical lead_name / lead_email keys, trimming + lowercasing email", () => {

@@ -76,6 +76,7 @@ import {
   coerceDialableE164,
   evaluateSmsTrigger,
   evaluateStepCondition,
+  emailedLeadContactKey,
   extractLeadIdentity,
   extractLinkByText,
   filterRosterByAvailability,
@@ -2545,14 +2546,18 @@ async function enrichCustomerProfile(
   customerE164: string,
   name: string,
   email: string,
-  origin?: LeadFilingOrigin
+  origin?: LeadFilingOrigin,
+  // Which surface just touched the lead. Only the email filing path passes
+  // anything else, and it must: stamping "sms" on a contact we have only ever
+  // emailed makes last_channel a lie, and the dashboard reads it.
+  channel: "sms" | "email" = "sms"
 ): Promise<void> {
   if (await isNonLeadNumber(supabase, businessId, customerE164)) return;
 
   const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
     p_business_id: businessId,
     p_customer_e164: customerE164,
-    p_channel: "sms",
+    p_channel: channel,
     p_display_name: name ? name : null
   });
   if (error) {
@@ -2603,6 +2608,51 @@ async function enrichCustomerProfile(
     targetE164 ?? customerE164,
     "lead_filed",
     { sourceFlowId: origin.flowId, dedupeSuffix: origin.runId }
+  );
+}
+
+/**
+ * The email twin of {@link recordLeadCustomerProfile}: file the lead we just
+ * EMAILED, so a lead reached only by email shows up on the Customers page like
+ * every texted one.
+ *
+ * This is the asymmetry that left email-only leads invisible. Filing hung off
+ * the send_sms path alone, so a lead with an address and no number was emailed,
+ * claimed by a teammate, and followed up for three days without ever becoming a
+ * contact: nothing to tag, nothing to own, nothing for a tag-triggered cadence
+ * to start from.
+ *
+ * Keyed by the lead's PHONE when the flow captured one, so an emailed lead we
+ * also text stays one contact rather than two, and by `email:<addr>` when it
+ * did not.
+ *
+ * The recipient guard is deliberately stricter than the SMS one. A flow's
+ * send_email steps go to the lead AND to the owner and teammates, and unlike a
+ * phone, an owner's address is not reliably on the roster for the non-lead
+ * check to catch. So this files ONLY on an exact match with the address the
+ * extraction captured, and files nothing at all when the flow captured no lead
+ * address. Filing the owner as a customer under a lead's name is the Dave Lane
+ * defect (Jul 25 2026), and it is worse than a missing row.
+ */
+async function recordEmailedLeadCustomerProfile(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  toEmail: string
+): Promise<void> {
+  // Every judgement call (is this recipient the lead, which key files them)
+  // lives in emailedLeadContactKey so it is unit-tested rather than only
+  // exercised through a live send.
+  const target = emailedLeadContactKey(scope.vars, toEmail, leadPhoneE164(scope));
+  if (!target) return;
+  await enrichCustomerProfile(
+    supabase,
+    run.business_id,
+    target.key,
+    target.name,
+    target.email,
+    { runId: run.id, flowId: run.flow_id, flowName: scope.flowName },
+    "email"
   );
 }
 
@@ -6389,7 +6439,12 @@ async function sendEmailStep(
     return { kind: "ok", skipped: true, result: { skipped: "invalid_recipient", to: action.to } };
   }
   const sent = await deliverFlowEmail(supabase, run, index, scope, action);
-  if (sent.kind === "ok") appendActionTaken(scope, `emailed ${action.to}`);
+  if (sent.kind === "ok") {
+    appendActionTaken(scope, `emailed ${action.to}`);
+    // Same place the SMS path files its lead: after the send actually
+    // succeeded, so a contact is never created for an email that never went.
+    await recordEmailedLeadCustomerProfile(supabase, run, scope, action.to);
+  }
   return sent;
 }
 
