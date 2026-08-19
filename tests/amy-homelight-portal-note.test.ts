@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   ADD_NOTE_OPENER,
   AUTH_LABEL,
-  GATE_ARM_ID,
+  GATE_OURS_ARM_ID,
   GATE_STEP_ID,
-  HOST_ARM_ID,
-  HOST_BRANCH_ID,
+  NAMED_ARM_ID,
+  NAMED_BRANCH_ID,
   NOTE_EXPECT,
   NOTE_STEP_ID,
   NOTE_SUBMIT,
@@ -63,12 +63,12 @@ function liveish(): AiFlowDefinition {
         ownerFallbackTemplate: "Nobody claimed {{vars.lead_name}}"
       },
       {
-        id: HOST_BRANCH_ID,
+        id: "lost_branch",
         type: "branch",
         question: "Is this referral still ours?",
         branches: [
           {
-            id: HOST_ARM_ID,
+            id: "still_ours",
             label: "Still ours",
             condition: { var: "already_claimed", notEquals: "yes" },
             steps: [
@@ -83,27 +83,33 @@ function liveish(): AiFlowDefinition {
           }
         ],
         else: []
+      },
+      {
+        id: "bp_wait",
+        type: "wait_for_reply",
+        saveAs: "agent_report",
+        phoneVar: "claimed_agent_phone",
+        timeoutMinutes: 60
       }
     ]
   } as unknown as Record<string, unknown>);
 }
 
-/** Dig the still_ours arm's steps back out of a mutated definition. */
-function armSteps(def: AiFlowDefinition): Array<Record<string, unknown>> {
-  const host = def.steps.find((s) => s.id === HOST_BRANCH_ID) as unknown as {
-    branches: Array<{ id: string; steps: Array<Record<string, unknown>> }>;
-  };
-  return host.branches.find((b) => b.id === HOST_ARM_ID)!.steps;
-}
-
 describe("noteActions", () => {
-  it("navigates by nav link, templated name click, then the three drawer controls", () => {
+  it("navigates, posts, and re-clicks the opener as the submit proof", () => {
     expect(noteActions()).toEqual([
       { kind: "click_text", target: "Referrals" },
       { kind: "click_text", target: "{{vars.lead_name}}" },
       { kind: "click_selector", target: ADD_NOTE_OPENER },
       { kind: "fill_selector", target: NOTE_TEXTAREA, valueTemplate: NOTE_TEXT },
-      { kind: "click_selector", target: NOTE_SUBMIT }
+      { kind: "click_selector", target: NOTE_SUBMIT },
+      // The editor REPLACES the opener while open, so this click can only
+      // land after the form accepted the submit and the editor closed. A
+      // swallowed submit leaves the editor up and fails the step loudly,
+      // and with the fresh editor's textarea empty, the expectText fragment
+      // can only be satisfied by the activity feed showing the posted note,
+      // never by the typed draft.
+      { kind: "click_selector", target: ADD_NOTE_OPENER }
     ]);
   });
 
@@ -120,29 +126,44 @@ describe("noteActions", () => {
 });
 
 describe("addPortalNote", () => {
-  it("appends the gate to the still_ours arm and reports the new ids", () => {
+  it("appends the gate as the LAST trunk step and reports the new ids", () => {
     const def = liveish();
+    const trunkBefore = def.steps.length;
     const added = addPortalNote(def);
-    expect(added).toEqual([GATE_STEP_ID, GATE_ARM_ID, NOTE_STEP_ID]);
+    expect(added).toEqual([
+      GATE_STEP_ID,
+      GATE_OURS_ARM_ID,
+      NAMED_BRANCH_ID,
+      NAMED_ARM_ID,
+      NOTE_STEP_ID
+    ]);
 
-    const steps = armSteps(def);
-    const gate = steps[steps.length - 1] as {
+    // End of trunk, deliberately: a note failure is classified permanent, and
+    // mid-trunk it would dead-letter the late-contact ladder and the
+    // claimed-agent report steps behind it (Bugbot, PR #1527).
+    expect(def.steps).toHaveLength(trunkBefore + 1);
+    const gate = def.steps[def.steps.length - 1] as unknown as {
       id: string;
       type: string;
+      else: unknown[];
       branches: Array<{
         id: string;
         condition: Record<string, unknown>;
         steps: Array<Record<string, unknown>>;
       }>;
-      else: unknown[];
     };
     expect(gate.id).toBe(GATE_STEP_ID);
     expect(gate.type).toBe("branch");
     expect(gate.else).toEqual([]);
-    // Two guards ANDed: the arm condition needs the name, the step's own
-    // `when` needs a claiming teammate, matching the sibling sends.
-    expect(gate.branches[0].condition).toEqual({ var: "lead_name", notEquals: "none" });
-    const note = gate.branches[0].steps[0];
+    // Three guards ANDed across the nesting: ours -> named -> claimed.
+    expect(gate.branches[0].condition).toEqual({ var: "already_claimed", notEquals: "yes" });
+    const named = gate.branches[0].steps[0] as {
+      id: string;
+      branches: Array<{ condition: Record<string, unknown>; steps: Array<Record<string, unknown>> }>;
+    };
+    expect(named.id).toBe(NAMED_BRANCH_ID);
+    expect(named.branches[0].condition).toEqual({ var: "lead_name", notEquals: "none" });
+    const note = named.branches[0].steps[0];
     expect(note).toMatchObject({
       id: NOTE_STEP_ID,
       type: "browse_action",
@@ -155,12 +176,10 @@ describe("addPortalNote", () => {
     expect((note as { actions: unknown }).actions).toEqual(noteActions());
   });
 
-  it("does not touch the trunk or any existing step id", () => {
+  it("does not rename or remove any existing step id", () => {
     const def = liveish();
-    const before = def.steps.map((s) => s.id);
     const existing = allStepIds(def);
     addPortalNote(def);
-    expect(def.steps.map((s) => s.id)).toEqual(before);
     for (const id of existing) expect(allStepIds(def)).toContain(id);
   });
 
@@ -171,19 +190,19 @@ describe("addPortalNote", () => {
     expect(allStepIds(def).filter((id) => id === GATE_STEP_ID)).toHaveLength(1);
   });
 
-  it("throws when the host branch is missing rather than silently no-opping", () => {
+  it("throws when the flow no longer produces a var the guards depend on", () => {
     const def = liveish();
-    def.steps = def.steps.filter((s) => s.id !== HOST_BRANCH_ID);
-    expect(() => addPortalNote(def)).toThrow(/No trunk branch "lost_branch"/);
+    const card = def.steps.find((s) => s.id === "card") as unknown as {
+      fields: Array<{ name: string }>;
+    };
+    card.fields = card.fields.filter((f) => f.name !== "already_claimed");
+    expect(() => addPortalNote(def)).toThrow(/no longer produces already_claimed/);
   });
 
-  it("throws when the still_ours arm is missing", () => {
+  it("throws when there is no route_to_team to produce claimed_agent", () => {
     const def = liveish();
-    const host = def.steps.find((s) => s.id === HOST_BRANCH_ID) as unknown as {
-      branches: Array<{ id: string }>;
-    };
-    host.branches[0].id = "renamed_arm";
-    expect(() => addPortalNote(def)).toThrow(/no arm "still_ours"/);
+    def.steps = def.steps.filter((s) => s.id !== "route");
+    expect(() => addPortalNote(def)).toThrow(/claimed_agent/);
   });
 });
 
@@ -191,7 +210,7 @@ describe("buildPortalNote", () => {
   it("returns a mutated copy that still parses and passes semantic validation", () => {
     const live = liveish();
     const { definition, added } = buildPortalNote(live);
-    expect(added).toHaveLength(3);
+    expect(added).toHaveLength(5);
     // The input is untouched (the applier keeps it as the ledger `previous`).
     expect(allStepIds(live)).not.toContain(GATE_STEP_ID);
     const parsed = parseAiFlowDefinition(JSON.parse(JSON.stringify(definition)));
@@ -201,15 +220,12 @@ describe("buildPortalNote", () => {
   it("the templated name target survives parsing verbatim", () => {
     const { definition } = buildPortalNote(liveish());
     const parsed = parseAiFlowDefinition(JSON.parse(JSON.stringify(definition)));
-    const steps = (() => {
-      const host = parsed.steps.find((s) => s.id === HOST_BRANCH_ID) as unknown as {
-        branches: Array<{ id: string; steps: Array<Record<string, unknown>> }>;
-      };
-      return host.branches.find((b) => b.id === HOST_ARM_ID)!.steps;
-    })();
-    const gate = steps[steps.length - 1] as {
-      branches: Array<{ steps: Array<{ actions: Array<{ target: string }> }> }>;
+    const gate = parsed.steps[parsed.steps.length - 1] as unknown as {
+      branches: Array<{
+        steps: Array<{ branches: Array<{ steps: Array<{ actions: Array<{ target: string }> }> }> }>;
+      }>;
     };
-    expect(gate.branches[0].steps[0].actions[1].target).toBe("{{vars.lead_name}}");
+    const actions = gate.branches[0].steps[0].branches[0].steps[0].actions;
+    expect(actions[1].target).toBe("{{vars.lead_name}}");
   });
 });

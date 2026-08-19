@@ -380,9 +380,13 @@ automatic "Connected" would routinely be false, and HomeLight's own AI
 already maintains the stage from its call system ("Stage updated by HomeLight
 AI" on live timelines). A note is append-only free text, so it can carry the
 run's own `actions_taken` log verbatim, the same honesty model as the
-ReferralExchange update. The `hl_note_gate` branch at the end of the
-`still_ours` arm posts, guarded on `lead_name != "none"` (the click needs the
-real name) and `claimed_agent != "none"` (matching the sibling sends):
+ReferralExchange update. The `hl_note_gate` branch is the LAST trunk step
+(step 30 of the schema's 30-step cap, so the flow now has ZERO trunk
+headroom): a note failure is classified permanent, and nested mid-trunk it
+would have dead-lettered the late-contact ladder and the claimed-agent report
+steps behind it (Bugbot, PR #1527). Guards nest to AND three conditions:
+`already_claimed != "yes"` (outer arm), `lead_name != "none"` (inner arm),
+`claimed_agent != "none"` (the step's own `when`, matching the sibling sends):
 
 ```
 click_text      "Referrals"                       (claim page header nav)
@@ -393,9 +397,18 @@ fill_selector   [data-test="referral-add-note-textarea"]
                   -> "Update from Amy's assistant: {{vars.actions_taken}}.
                       Will keep following up."
 click_selector  [data-test="referral-add-note-btn"]
-expectText      "Update from Amy's assistant"     (holds until the note shows
-                                                   in the activity feed)
+click_selector  [data-test="referral-detail-modal-add-note-button"]
+expectText      "Update from Amy's assistant"
 ```
+
+The final opener re-click is the SUBMIT PROOF: the editor replaces the opener
+while it is open, so that click can only land once the form accepted the
+submit and the editor closed; a swallowed submit leaves the editor up and
+fails the step loudly. And because the reopened editor's textarea is empty,
+the `expectText` fragment can only be satisfied by the activity feed showing
+the posted note, never by the typed draft (Bugbot, PR #1527: the draft is
+visible page text, so without the re-click the expectation was provable by
+the very text the step had just typed).
 
 **Navigation traps that remain true, each one paid for:**
 

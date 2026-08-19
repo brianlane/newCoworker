@@ -5,13 +5,15 @@
  *
  * The dashboard nags "Any updates for <Name>?" per referral and referral
  * volume follows engagement, but the flow has never written anything there.
- * This appends one guarded browse_action (wrapped in a `hl_note_gate` branch)
- * to the `still_ours` arm: open the referrals list, click the client's row
+ * This appends one guarded browse_action (wrapped in the `hl_note_gate`
+ * branch) as the LAST trunk step, filling the flow's 30th and final slot:
+ * open the referrals list, click the client's row
  * (`click_text "{{vars.lead_name}}"`, rendered at plan time), open Add Note,
- * and post "Update from Amy's assistant: {{vars.actions_taken}}. Will keep
- * following up." Every selector was read live headless through Amy's render
- * sidecar on 2026-08-19; the reasoning (why a note and not a stage write, why
- * a name click and not a search fill) lives in
+ * post "Update from Amy's assistant: {{vars.actions_taken}}. Will keep
+ * following up.", and re-click the Add Note opener as the submit proof. Every
+ * selector was read live headless through Amy's render sidecar on 2026-08-19;
+ * the reasoning (why a note and not a stage write, why a name click and not a
+ * search fill, why end-of-trunk, how the write proves itself) lives in
  * `amy-homelight-portal-note-definition.ts`.
  *
  * REQUIRES the templated-target engine change (planStep renders a braced
@@ -165,7 +167,8 @@ async function main(): Promise<void> {
     return;
   }
   console.log(
-    `\nTrunk stays at ${definition.steps.length} step(s); ${allStepIds(definition).length} total.`
+    `\nTrunk grows to ${definition.steps.length} step(s) (the schema cap is 30, so this ` +
+      `fills the flow's last trunk slot); ${allStepIds(definition).length} ids total.`
   );
 
   console.log("");
