@@ -117,7 +117,10 @@ describe("checkBrowseActions", () => {
     expect(sent).not.toHaveProperty("forEachLink");
     expect(sent).not.toHaveProperty("expectText");
     expect(sent.auth).toEqual({ integrationLabel: "HomeLight" });
-    expect(endpoint).toBe(`https://render-${BIZ}.example.com/render`);
+    // Its OWN path. A box that has not been redeployed ignores checkOnly and
+    // PERFORMS the actions, so the flag alone would let this button click a
+    // live claim button during the window between merge and redeploy.
+    expect(endpoint).toBe(`https://render-${BIZ}.example.com/check-actions`);
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-123");
   });
 
@@ -379,5 +382,27 @@ describe("checkBrowseActions diagnostics", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(result.ok && result.diagnostics).toBeUndefined();
+  });
+});
+
+
+describe("a sidecar that has not been redeployed", () => {
+  it("is named as such rather than reported as a broken page", async () => {
+    // 404 is the safe answer from an old box: it has never heard of this path.
+    // Saying "the page could not be opened" would send the owner checking an
+    // address that is perfectly fine.
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 404));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({ ok: false, error: "not_updated" });
+  });
+
+  it("still treats other non-2xx statuses as page failures", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 500));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toEqual({ ok: false, error: "render_failed", detail: "sidecar http 500" });
   });
 });

@@ -730,6 +730,22 @@ describe("the dry run cannot perform actions", () => {
     }
   });
 
+  it("gives the dry run its own path, so an un-redeployed box 404s instead of clicking", () => {
+    // The deployment gap is real: the app ships on merge, this sidecar only on
+    // a manual per-tenant redeploy. An old box ignores an unknown checkOnly
+    // flag and falls through to performActions, so the path is what makes the
+    // window safe.
+    const serverSrc = readFileSync(
+      new URL("../vps/aiflow-render/server.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(serverSrc).toContain('app.post("/check-actions"');
+    // And it FORCES the mode rather than defaulting it, so a request that
+    // arrives on that path cannot perform actions however it was shaped.
+    const start = serverSrc.indexOf('app.post("/check-actions"');
+    expect(serverSrc.slice(start, start + 300)).toContain("checkOnly: true");
+  });
+
   it("refuses checkOnly without actions, and alongside forEachLink", () => {
     const serverSrc = readFileSync(
       new URL("../vps/aiflow-render/server.mjs", import.meta.url),

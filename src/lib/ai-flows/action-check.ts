@@ -42,6 +42,7 @@ export type CheckActionsFailure =
   | "not_configured"
   | "unsafe_url"
   | "no_actions"
+  | "not_updated"
   | "render_failed"
   | "login_failed";
 
@@ -84,8 +85,15 @@ export async function checkBrowseActions(
   if (!isProbeableUrl(url)) {
     return { ok: false, error: "unsafe_url", detail: "The address must be a public http(s) page." };
   }
-  const endpoint = resolveRenderProbeUrl(businessId);
-  if (!endpoint) return { ok: false, error: "not_configured" };
+  const base = resolveRenderProbeUrl(businessId);
+  if (!base) return { ok: false, error: "not_configured" };
+  // Its OWN path, not /render with a flag. The app deploys on merge while this
+  // sidecar only updates on a manual per-tenant redeploy, so there is always a
+  // window where the dashboard is new and a box is old. An old box ignores an
+  // unknown `checkOnly` and its `if (actions)` branch PERFORMS them, so a flag
+  // alone would let this button click a live claim button. An old box has
+  // never heard of this path and answers 404, which is safe.
+  const endpoint = `${base.replace(/\/render\/?$/, "").replace(/\/+$/, "")}/check-actions`;
   const token = (process.env.AIFLOW_RENDER_TOKEN ?? "").trim();
 
   const controller = new AbortController();
@@ -101,7 +109,8 @@ export async function checkBrowseActions(
       body: JSON.stringify({
         url,
         businessId,
-        // The flag the sidecar routes to its check-only responder. No
+        // Belt and braces: the path already forces this mode, and the flag
+        // makes the request self-describing if one is ever routed by hand. No
         // forEachLink and no expectText: a dry run is one page, one pass.
         checkOnly: true,
         screenshot: true,
@@ -114,6 +123,11 @@ export async function checkBrowseActions(
       }),
       signal: controller.signal
     });
+    if (res.status === 404) {
+      // Exactly the stale-box case above. Name it, because "the page could not
+      // be opened" would send the owner checking an address that is fine.
+      return { ok: false, error: "not_updated" };
+    }
     if (!res.ok) {
       return { ok: false, error: "render_failed", detail: `sidecar http ${res.status}` };
     }

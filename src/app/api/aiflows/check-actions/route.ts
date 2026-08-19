@@ -49,6 +49,8 @@ const FAILURE_MESSAGES: Record<CheckActionsFailure, string> = {
   not_configured:
     "This business has no browser service running, so the actions cannot be tried from here.",
   unsafe_url: "That address is not a public web page.",
+  not_updated:
+    "This business's browser service has not been updated yet, so the actions cannot be tried safely. Ask us to update it.",
   no_actions: "Add at least one action with something to aim at before trying them.",
   login_failed:
     "The page needs a login and the saved credentials were not accepted. Check that integration's username and password.",

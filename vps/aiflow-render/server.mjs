@@ -709,7 +709,20 @@ app.post("/pdf", async (req, res) => {
   }
 });
 
-app.post("/render", async (req, res) => {
+/**
+ * The dry run gets its OWN PATH, not just a flag on /render.
+ *
+ * The app deploys on merge; this sidecar only updates on a manual per-tenant
+ * redeploy, so there is always a window where the dashboard is new and a box
+ * is old. An old box does not know `checkOnly`, and its `if (actions)` branch
+ * would fall straight through to performActions: the button that promises to
+ * change nothing would CLICK THE CLAIM BUTTON on a live referral. A path an
+ * old box has never heard of returns 404 instead, which is a safe answer.
+ *
+ * Registered against the same handler rather than a copy, so the page load,
+ * the login and the SSRF guard cannot drift between the two modes.
+ */
+const renderHandler = async (req, res) => {
   const safe = safeUrl(String(req.body?.url ?? ""));
   if (!safe) return res.status(400).json({ error: "invalid_or_unsafe_url" });
   const auth = req.body?.auth;
@@ -989,6 +1002,15 @@ app.post("/render", async (req, res) => {
     if (page) await page.close().catch(() => {});
     finishSession(key, session, poisoned);
   }
+};
+
+app.post("/render", renderHandler);
+
+// Forced, not merely defaulted: the mode is a property of the path, so a
+// request that arrives here cannot perform actions however it was shaped.
+app.post("/check-actions", (req, res) => {
+  req.body = { ...(req.body ?? {}), checkOnly: true };
+  return renderHandler(req, res);
 });
 
 app.listen(PORT, () => console.log(`aiflow-render listening on :${PORT}`));
