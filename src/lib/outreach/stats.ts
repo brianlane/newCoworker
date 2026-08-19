@@ -19,6 +19,14 @@ export type OutreachFunnel = {
   drafted: number;
   /** Drafts waiting on the owner (manual mode), not yet outreach. */
   pending: number;
+  /**
+   * Prospects that have not gone out and could still be called off: exactly
+   * the statuses `skipProspectsInVertical` retires, so a row's Skip button and
+   * the number beside it cannot disagree about what pressing it would do.
+   * `queued` is excluded here for the same reason it is excluded there: it is
+   * already in flight.
+   */
+  open: number;
   sent: number;
   replied: number;
   booked: number;
@@ -67,6 +75,7 @@ function emptyFunnel(): OutreachFunnel {
     discovered: 0,
     drafted: 0,
     pending: 0,
+    open: 0,
     sent: 0,
     replied: 0,
     booked: 0,
@@ -83,6 +92,10 @@ function tally(funnel: OutreachFunnel, status: OutreachProspectStatus): void {
   if (SENT_STATUSES.includes(status)) funnel.sent += 1;
   // "Pending" is the owner's queue: drafted, not yet sent, not yet passed on.
   if (status === "drafted" || status === "queued") funnel.pending += 1;
+  // "Open" is what a per-trade Skip would still catch. Kept in lockstep with
+  // CANCELLABLE_STATUSES in db.ts: a row's button offering to skip a count it
+  // cannot actually skip is worse than no count at all.
+  if (status === "discovered" || status === "drafted") funnel.open += 1;
   if (status === "replied" || status === "booked") funnel.replied += 1;
   if (status === "booked") funnel.booked += 1;
   if (status === "unsubscribed") funnel.unsubscribed += 1;
@@ -117,6 +130,12 @@ export function summarizeFunnel(
     total: finalize(total),
     byVertical: [...byVertical.entries()]
       .map(([vertical, funnel]) => ({ vertical, ...finalize(funnel) }))
+      // A trade with nothing sent and nothing left to send answers the question
+      // this table asks ("which trades actually reply") with silence, and it
+      // cannot be acted on either. It is dropped rather than left as a row
+      // whose numbers never move again. Anything with a send stays, however
+      // long ago: that is the reply evidence the table exists for.
+      .filter((v) => v.sent > 0 || v.open > 0)
       .sort((a, b) => b.sent - a.sent || b.discovered - a.discovered)
   };
 }

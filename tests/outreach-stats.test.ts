@@ -82,6 +82,7 @@ describe("summarizeFunnel", () => {
     expect(total).toEqual({
       discovered: 0,
       drafted: 0,
+      open: 0,
       pending: 0,
       sent: 0,
       replied: 0,
@@ -91,5 +92,47 @@ describe("summarizeFunnel", () => {
       failed: 0,
       replyRate: 0
     });
+  });
+});
+
+describe("open, and the trades worth listing", () => {
+  it("counts exactly what a per-trade Skip would catch", () => {
+    // Kept in lockstep with CANCELLABLE_STATUSES in db.ts. A row that offers to
+    // skip a count it cannot actually skip is worse than no count: it is how
+    // the confirm came to say "skips 0 waiting drafts" over 63 prospects.
+    const { total } = summarizeFunnel([
+      { status: "discovered", vertical: "hvac" },
+      { status: "drafted", vertical: "hvac" },
+      // Already in flight, already gone, or already retired: none cancellable.
+      { status: "queued", vertical: "hvac" },
+      { status: "sent", vertical: "hvac" },
+      { status: "skipped", vertical: "hvac" },
+      { status: "failed", vertical: "hvac" }
+    ]);
+    expect(total.open).toBe(2);
+    // `pending` is a different question (the owner's read queue) and still
+    // counts `queued`, so the two must not be swapped for each other.
+    expect(total.pending).toBe(2);
+  });
+
+  it("drops a trade with nothing sent and nothing left, and keeps one with a send", () => {
+    // The dental case: every prospect skipped, none ever sent. The row answered
+    // "which trades reply" with silence and could not be acted on either, but it
+    // kept rendering "63 drafted" beside a live Skip button, so a skip that
+    // worked looked like it had done nothing.
+    const { byVertical } = summarizeFunnel([
+      { status: "skipped", vertical: "dental office" },
+      { status: "skipped", vertical: "dental office" },
+      { status: "skipped", vertical: "law firm" },
+      // One send is reply evidence, however old, so the trade stays listed.
+      { status: "sent", vertical: "law firm" },
+      { status: "drafted", vertical: "plumber" }
+    ]);
+    expect(byVertical.map((v) => v.vertical)).toEqual(["law firm", "plumber"]);
+    // Dropped from the table, still counted in the whole-business funnel: the
+    // prospects exist, and hiding a row must not quietly change the numbers.
+    expect(summarizeFunnel([{ status: "skipped", vertical: "dental office" }]).total.skipped).toBe(
+      1
+    );
   });
 });

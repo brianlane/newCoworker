@@ -2023,6 +2023,18 @@ press would be marked skipped after the fact and vanish from the sent count.
 There is no tier gate on it. Stopping outreach costs nothing and is exactly
 what a downgraded tenant should still be able to do.
 
+**The row has to show what is still live, or a working skip looks broken.** The
+by-trade line is all-time (`drafted` counts every prospect that ever reached a
+draft, skipped ones included), so retiring a whole trade changed nothing on
+screen: "63 drafted" stayed, beside a Skip button that now had nothing to skip
+and a confirm that offered to skip 0. `open` is the fix, counted per trade and
+kept in lockstep with `CANCELLABLE_STATUSES`: the row prints "N still to go
+out", the button only appears while N is above zero, and the confirm counts the
+same N the write will catch. A trade with nothing sent AND nothing open is
+dropped from the table entirely, since it answers "which trades reply" with
+silence and cannot be acted on either. One send keeps it listed forever, because
+that is the reply evidence the table exists for.
+
 Two traps this walked into, both worth keeping in mind for anything else that
 acts on a funnel row:
 
