@@ -2,10 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   NEW_LABEL,
   NEW_QUESTION,
+  NOTHING_ARM_ID,
+  POSTED_STEP_ID,
+  POSTED_VAR,
   buildMeasuredAlert,
-  measuredAlertMessage
+  measuredAlertMessage,
+  postedNothingMessage
 } from "../scripts/oneshot/amy-clever-sweep-measured-alert-definition";
 import {
+  ALERT_ARM_ID,
   ALERT_NOTIFY_ID,
   ALERT_STEP_ID,
   FITS_STEP_ID,
@@ -147,11 +152,13 @@ describe("buildMeasuredAlert", () => {
     const { definition } = buildMeasuredAlert(liveWeekly());
     const branch = definition.steps.find((s) => s.id === ALERT_STEP_ID) as unknown as {
       question: string;
-      branches: Array<{ label: string; steps: Array<{ id: string; message: string }> }>;
+      branches: Array<{ id: string; label: string; steps: Array<{ id: string; message: string }> }>;
     };
     expect(branch.question).toBe(NEW_QUESTION);
-    expect(branch.branches[0].label).toBe(NEW_LABEL);
-    const message = branch.branches[0].steps[0].message;
+    // By id, not position: the saw-nothing arm is deliberately first.
+    const leftoverArm = branch.branches.find((a) => a.id === ALERT_ARM_ID)!;
+    expect(leftoverArm.label).toBe(NEW_LABEL);
+    const message = leftoverArm.steps[0].message;
     expect(message).toBe(measuredAlertMessage("update_each_updated", "update_each_left"));
     expect(message).toContain("{{vars.update_each_updated}}");
     expect(message).toContain("{{vars.update_each_left}}");
@@ -166,6 +173,45 @@ describe("buildMeasuredAlert", () => {
     // rejects any {{vars.x}} no earlier step produces.
     const { definition } = buildMeasuredAlert(liveWeekly());
     expect(() => parseAiFlowDefinition(definition)).not.toThrow();
+  });
+
+  it("alerts on its own arm when the sweep posted nothing at all", () => {
+    // The hole a leftovers-only alert leaves: an expired magic link renders a
+    // page with no rows and no errors, so leftovers are 0 and the owner hears
+    // nothing while the whole compliance ping went undone. Proved live
+    // 2026-08-19 by replaying that day's reminder.
+    const { definition } = buildMeasuredAlert(liveWeekly());
+    const posted = definition.steps.find((s) => s.id === POSTED_STEP_ID) as unknown as {
+      left: string;
+      right: string;
+      operation: string;
+      saveAs: string;
+    };
+    expect(posted.operation).toBe("less_than");
+    expect(posted.left).toBe("{{vars.update_each_updated}}");
+    expect(posted.right).toBe("1");
+    expect(posted.saveAs).toBe(POSTED_VAR);
+
+    const branch = definition.steps.find((s) => s.id === ALERT_STEP_ID) as unknown as {
+      branches: Array<{
+        id: string;
+        condition: { var: string; equals?: string; notEquals?: string };
+        steps: Array<{ message: string }>;
+      }>;
+    };
+    // FIRST, so "could not post anything" wins over a leftover count for a
+    // list that was never read.
+    expect(branch.branches[0].id).toBe(NOTHING_ARM_ID);
+    // Fail-loud polarity: fires on "yes" AND on the not_a_number sentinel.
+    expect(branch.branches[0].condition).toEqual({ var: POSTED_VAR, notEquals: "no" });
+    expect(branch.branches[0].steps[0].message).toBe(postedNothingMessage());
+  });
+
+  it("orders the math step before the branch that consumes it", () => {
+    const { definition } = buildMeasuredAlert(liveWeekly());
+    const ids = definition.steps.map((s) => s.id);
+    expect(ids.indexOf(POSTED_STEP_ID)).toBeGreaterThan(-1);
+    expect(ids.indexOf(POSTED_STEP_ID)).toBeLessThan(ids.indexOf(ALERT_STEP_ID));
   });
 
   it("is idempotent: a second run reports nothing to change", () => {

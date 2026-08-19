@@ -255,6 +255,42 @@ These are mistakes already made on this account. Do not remake them.
   rather than retargeted. The daily (Chris) flow keeps `We Spoke` deliberately:
   it fires the day a lead arrives, when the card is at "New"/"Tried Reaching
   Out" and that option is offered.
+- **Clever's magic link is SINGLE-USE, and an expired one renders an empty
+  list rather than an error (2026-08-19).** Replaying that day's weekly
+  reminder 1.6h later drove the sweep to
+  `/interstitial/?magic_uuid=...`, which returned a page whose only heading is
+  "Magic link has expired" and whose only link is "Go Back to Login Page". The
+  `forEachLink` selector matched zero rows, the render service reported no
+  error, and the run closed `done` having posted nothing. The expired page is
+  NOT login-shaped (a link, not a form), so the sidecar's credential login
+  never triggers on it. Four consequences, all load-bearing:
+  1. **Password login through the sidecar WORKS (fixed 2026-08-19).** It had
+     failed deterministically for months, and the dossier used to call it
+     broken; the credentials were right all along. server.mjs followed
+     performLogin with `waitForLoadState("networkidle")`, a NO-OP on a page
+     that finished loading before the click, then instantly re-navigated,
+     CANCELLING the in-flight auth (Clever hands the
+     `agents.listwithclever.com` session to a cross-subdomain redirect from
+     `login.listwithclever.com`, which takes seconds). `waitForLoginToResolve`
+     (login.mjs) now waits out the submitted login. Navigating the STABLE
+     portal URL logged-out redirects to the login form and signs in with the
+     stored "Clever" custom-integration credentials.
+  2. **A spent-link replay needs `--portal-url`.** `amy-clever-sweep-rerun.ts
+     --portal-url "https://agents.listwithclever.com/portal/<id>/active"`
+     seeds `vars.portal_url` with the stable URL and starts the run at the
+     browse step, riding the credential login instead of the dead link. A
+     bare replay still only works while the link is unspent.
+  3. **Zero rows is ambiguous, and the ambiguity is dangerous.** "Nothing to
+     do" and "we never got in" produce identical numbers. The engine resolves
+     it with context: an empty list that CONTRADICTS a previous pass's "still
+     owed" count is reported as `lost_list` carrying that leftover, never as a
+     clean finish (`decideForEach`).
+  4. **The flow alerts on "posted nothing" separately from "left some".**
+     A leftovers-only alert is silent exactly when the automation is most
+     broken, and the arithmetic alert it replaced was not, so the measured
+     alert ships with a `posted_nothing` arm whose `notEquals "no"` condition
+     also fires on a missing var. See
+     `amy-clever-sweep-measured-alert-definition.ts`.
 - **An updated Clever card DOES leave "Needs Action".** Confirmed live
   2026-08-18: `Needs Action (0)` / `Recently Updated (87)`, the second section
   labelled "Items in this list do not need to be updated". That is the

@@ -30,6 +30,23 @@
  * is REMOVED rather than repointed: nothing consumes `deals_left` once the
  * message reads the measured var.
  *
+ * THE HOLE MEASURING LEFTOVERS ALONE LEAVES, and the second arm that closes
+ * it. A sweep that never reaches the list reports zero cards and zero errors,
+ * so leftovers are zero and a leftovers-only alert stays SILENT precisely
+ * when the automation is most broken. This is not hypothetical: replaying the
+ * 2026-08-19 reminder rendered "Magic link has expired" (Clever's link is
+ * single-use), the loop matched no rows, and the run closed green having
+ * posted nothing. Note the old arithmetic alert did NOT have this hole, since
+ * backlog-minus-six always fired on a stated backlog, so shipping the
+ * measured alert without this arm would have been a REGRESSION.
+ *
+ * So the flow also measures `less_than(updated, 1)` and alerts on its own arm,
+ * placed FIRST because "we could not post anything" is the accurate sentence
+ * when both arms would fire. Its condition is `notEquals "no"`, the fail-loud
+ * polarity: it fires on "yes" (nothing posted) and on the not_a_number
+ * sentinel a missing var produces, so a run against an engine that does not
+ * publish these vars still pages the owner rather than going quiet.
+ *
  * Var names come from `forEachOutcomeVars(<browse step id>)`, the same
  * function the worker writes with and the authoring validator registers, so
  * the names cannot drift from what the run actually produces.
@@ -53,10 +70,18 @@ export const NEW_QUESTION = "Did the chained sweep leave any cards for a human?"
 /** Arm label: the arm now means measured leftovers, not backlog arithmetic. */
 export const NEW_LABEL = "cards the sweep could not update";
 
+/** Step + var for "did the sweep post anything at all". */
+export const POSTED_STEP_ID = "sweep_posted_check";
+export const POSTED_VAR = "sweep_posted_none";
+/** Arm + notify ids for the saw-nothing alert. */
+export const NOTHING_ARM_ID = "posted_nothing";
+export const NOTHING_NOTIFY_ID = "nothing_notify";
+export const NOTHING_LABEL = "the sweep could not post anything";
+
 /**
- * The owner alert, driven entirely by measured vars. Fires only when the
- * chained sweep ended with cards still listed (per-card failures, a stuck
- * list head, the pass-cap valve, or a mid-sweep permanent failure), so a
+ * The owner alert, driven entirely by measured vars. Fires when the chained
+ * sweep ended with cards still listed (per-card failures, a stuck list head,
+ * the pass-cap valve, a mid-sweep permanent failure, or a lost list), so a
  * clean sweep of any backlog size stays silent.
  */
 export function measuredAlertMessage(updatedVar: string, leftVar: string): string {
@@ -65,6 +90,27 @@ export function measuredAlertMessage(updatedVar: string, leftVar: string): strin
     `Your AI coworker posted {{vars.${updatedVar}}} updates in the portal; ` +
     `about {{vars.${leftVar}}} could not be updated automatically and still ` +
     `need you: {{vars.portal_url}}`
+  );
+}
+
+/**
+ * The alert for a sweep that posted NOTHING.
+ *
+ * A sweep that never reached the list reports zero cards and zero errors,
+ * which arithmetic cannot tell apart from "the book was already clean": Amy's
+ * Clever magic link is single-use, and a second visit renders "Magic link has
+ * expired", a page with no rows (proved live 2026-08-19). Measuring leftovers
+ * alone therefore has a hole exactly where the automation is most broken, and
+ * it is a hole the OLD arithmetic alert did not have, since backlog-minus-six
+ * always fired on a stated backlog. This arm closes it.
+ */
+export function postedNothingMessage(): string {
+  return (
+    `Your AI coworker could not post any Clever updates this week: it opened ` +
+    `the portal and found no cards it could update, which usually means the ` +
+    `login link had already been used or expired. Clever says ` +
+    `{{vars.${BACKLOG_VAR}}} deals are awaiting an update, so they need you in ` +
+    `the portal: {{vars.portal_url}}`
   );
 }
 
@@ -131,6 +177,24 @@ export function buildMeasuredAlert(live: AiFlowDefinition): BuildResult {
     changes.push(`- math step "${REMAINDER_STEP_ID}" (nothing consumes deals_left now)`);
   }
 
+  // 2b. "Did the sweep post anything at all?" A sweep that never reached the
+  //     list looks identical to a finished one on leftovers alone, so this is
+  //     measured separately and alerted on its own arm.
+  const postedAt = steps.findIndex((s) => s.id === POSTED_STEP_ID);
+  if (postedAt < 0) {
+    const fitsAt = steps.findIndex((s) => s.id === FITS_STEP_ID);
+    const insertAt = fitsAt >= 0 ? fitsAt + 1 : steps.length;
+    steps.splice(insertAt, 0, {
+      id: POSTED_STEP_ID,
+      type: "math",
+      operation: "less_than",
+      left: `{{vars.${updatedVar}}}`,
+      right: "1",
+      saveAs: POSTED_VAR
+    } as unknown as FlowStep);
+    changes.push(`+ math step "${POSTED_STEP_ID}" (${updatedVar} < 1)`);
+  }
+
   // 3. The branch keeps its ids (run history stays legible) but says what it
   //    now means, and the alert reports the measured totals.
   const alert = steps.find((s) => s.id === ALERT_STEP_ID);
@@ -142,7 +206,7 @@ export function buildMeasuredAlert(live: AiFlowDefinition): BuildResult {
       branches: Array<{
         id: string;
         label: string;
-        condition: { var: string; equals?: string };
+        condition: { var: string; equals?: string; notEquals?: string };
         steps: Array<Record<string, unknown>>;
       }>;
     };
@@ -150,6 +214,29 @@ export function buildMeasuredAlert(live: AiFlowDefinition): BuildResult {
       branch.question = NEW_QUESTION;
       changes.push(`${ALERT_STEP_ID}: question -> "${NEW_QUESTION}"`);
     }
+    // The saw-nothing arm goes FIRST: when the sweep posted nothing, that is
+    // the accurate thing to say, and the leftover arm would otherwise claim a
+    // count for a list we never read. `notEquals "no"` is the fail-loud
+    // polarity: it fires on "yes" (nothing posted) AND on the not_a_number
+    // sentinel a missing var produces, so a sweep whose vars never arrived
+    // (an engine older than the one that publishes them) still pages the
+    // owner instead of going quiet.
+    if (!branch.branches.some((a) => a.id === NOTHING_ARM_ID)) {
+      branch.branches.unshift({
+        id: NOTHING_ARM_ID,
+        label: NOTHING_LABEL,
+        condition: { var: POSTED_VAR, notEquals: "no" },
+        steps: [
+          {
+            id: NOTHING_NOTIFY_ID,
+            type: "notify_owner",
+            message: postedNothingMessage()
+          }
+        ]
+      });
+      changes.push(`+ branch arm "${NOTHING_ARM_ID}" (fires when the sweep posted nothing)`);
+    }
+
     const arm = branch.branches.find((a) => a.id === ALERT_ARM_ID);
     if (!arm) {
       issues.push(`branch "${ALERT_STEP_ID}" has no "${ALERT_ARM_ID}" arm`);

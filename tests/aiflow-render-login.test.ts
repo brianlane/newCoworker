@@ -11,6 +11,7 @@ import {
   resolveSubmit,
   SUBMIT_SELECTORS,
   USERNAME_SELECTORS,
+  waitForLoginToResolve,
   waitForPasswordField
 } from "../vps/aiflow-render/login.mjs";
 
@@ -848,5 +849,155 @@ describe("the placeholder match is a last resort on both lists", () => {
     expect(diag.selectors.user).toBe('input[name*="user" i]');
     const filled = page.calls.filled.map((f) => f.selector);
     expect(filled).not.toContain('input[placeholder*="email" i]');
+  });
+});
+
+/**
+ * The post-submit wait (waitForLoginToResolve), added 2026-08-19.
+ *
+ * The production failure it pins: server.mjs used to follow performLogin with
+ * waitForLoadState("networkidle"), which is a no-op on a page that finished
+ * loading before the click (load states are reached once per document), and
+ * then immediately re-navigated, cancelling the in-flight authentication.
+ * Amy's Clever login failed deterministically that way with correct
+ * credentials and a landed click: the submit swaps to a spinner, the auth
+ * round-trips for a few seconds, and the session arrives on a cross-subdomain
+ * redirect (login.listwithclever.com -> agents.listwithclever.com) that the
+ * premature re-goto kept aborting.
+ */
+describe("waitForLoginToResolve", () => {
+  /**
+   * Purpose-built mini page: waitForLoginToResolve touches only url(),
+   * waitForTimeout(), and what looksLikeLogin reads (locator counts). `ticks`
+   * advances once per waitForTimeout call, modelling time passing between
+   * polls.
+   */
+  function resolvingPage(opts: {
+    /** url() per tick; last value repeats. */
+    urls?: string[];
+    /** Whether the login form (email+password) is present, per tick. */
+    formPresent?: boolean[];
+    /** Make url() throw on these tick numbers (mid-navigation). */
+    urlThrowsOnTicks?: number[];
+    /** Make evaluate() reject on these ticks (execution context destroyed). */
+    contextDeadOnTicks?: number[];
+  }) {
+    let tick = 0;
+    const at = <T,>(seq: T[] | undefined, fallback: T): T =>
+      seq && seq.length > 0 ? seq[Math.min(tick, seq.length - 1)] : fallback;
+    return {
+      url() {
+        if (opts.urlThrowsOnTicks?.includes(tick)) throw new Error("Execution context destroyed");
+        return at(opts.urls, "https://login.example.com/");
+      },
+      locator(selector: string) {
+        const dead = opts.contextDeadOnTicks?.includes(tick) ?? false;
+        const present =
+          at(opts.formPresent, true) &&
+          (selector === 'input[type="email"]' || selector === 'input[type="password"]');
+        const self = {
+          first: () => self,
+          // A rejecting count is what firstSelector maps to "no match", the
+          // exact false-negative the health probe exists to gate.
+          count: async () => {
+            if (dead) throw new Error("Execution context was destroyed");
+            return present ? 1 : 0;
+          },
+          isEnabled: async () => true
+        };
+        return self;
+      },
+      evaluate: async () => {
+        if (opts.contextDeadOnTicks?.includes(tick)) {
+          throw new Error("Execution context was destroyed");
+        }
+        return "Log In";
+      },
+      waitForTimeout: async () => {
+        tick += 1;
+      }
+    };
+  }
+
+  it("resolves via navigation when the URL changes a few polls in", async () => {
+    const page = resolvingPage({
+      urls: [
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://agents.example.com/portal/1/active"
+      ]
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
+    expect(out.resolved).toBe(true);
+    expect(out.via).toBe("navigation");
+  });
+
+  it("resolves via form_gone when the app swaps the form out in place", async () => {
+    const page = resolvingPage({ formPresent: [true, true, false] });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
+    expect(out.resolved).toBe(true);
+    expect(out.via).toBe("form_gone");
+  });
+
+  it("times out unresolved when nothing moves (a rejected password)", async () => {
+    const page = resolvingPage({});
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 40, pollMs: 1 });
+    expect(out.resolved).toBe(false);
+    expect(out.via).toBe("timeout");
+    expect(out.waitedMs).toBeGreaterThanOrEqual(40);
+  });
+
+  it("treats a url() that throws mid-navigation as movement in progress, not a crash", async () => {
+    const page = resolvingPage({
+      urls: [
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://agents.example.com/auth/callback",
+        "https://agents.example.com/portal/1/active"
+      ],
+      urlThrowsOnTicks: [1]
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
+    expect(out.resolved).toBe(true);
+    expect(out.via).toBe("navigation");
+  });
+
+  it("a dying execution context is movement, not a vanished form (Bugbot's catch)", async () => {
+    // Right after submit, Playwright rejects count()/evaluate() with
+    // "Execution context destroyed" while the page navigates. count() failures
+    // read as zero matches inside looksLikeLogin, so without the health probe
+    // this returned form_gone on the FIRST poll and the caller re-navigated
+    // straight into the in-flight auth again. The navigation must win instead.
+    const page = resolvingPage({
+      urls: [
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://login.example.com/",
+        "https://agents.example.com/portal/1/active"
+      ],
+      contextDeadOnTicks: [0, 1, 2]
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 5000, pollMs: 1 });
+    expect(out.resolved).toBe(true);
+    expect(out.via).toBe("navigation");
+  });
+
+  it("a context that stays dead without ever navigating times out, not form_gone", async () => {
+    const page = resolvingPage({
+      contextDeadOnTicks: Array.from({ length: 200 }, (_, i) => i)
+    });
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 40, pollMs: 1 });
+    expect(out.resolved).toBe(false);
+    expect(out.via).toBe("timeout");
+  });
+
+  it("never lets a looksLikeLogin crash end the wait early", async () => {
+    const page = resolvingPage({ urls: ["https://login.example.com/"] });
+    (page as { locator: unknown }).locator = () => {
+      throw new Error("page closed");
+    };
+    const out = await waitForLoginToResolve(page as never, undefined, { timeoutMs: 30, pollMs: 1 });
+    expect(out.via).toBe("timeout");
   });
 });

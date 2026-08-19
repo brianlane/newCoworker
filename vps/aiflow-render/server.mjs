@@ -78,8 +78,10 @@ import {
   checkActions
 } from "./actions.mjs";
 // Same reasoning for the login form: see the Clever 2026-08-17 incident in
-// login.mjs for why the submit control needs an enabled check and a blur.
-import { looksLikeLogin, performLogin } from "./login.mjs";
+// login.mjs for why the submit control needs an enabled check and a blur, and
+// the 2026-08-19 one for why a submitted login must be WAITED OUT before any
+// re-navigation (waitForLoginToResolve).
+import { looksLikeLogin, performLogin, waitForLoginToResolve } from "./login.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 /**
@@ -1023,10 +1025,23 @@ const renderHandler = async (req, res) => {
       // run immediately instead of retrying as transient IO.
       let creds;
       let loginDiagnostics = null;
+      let loginResolve = null;
       try {
         creds = await fetchCredentials(businessId, label);
         loginDiagnostics = await performLogin(page, creds, auth?.login);
-        await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+        // Wait for the submitted login to actually RESOLVE before touching the
+        // page again. The old wait here was waitForLoadState("networkidle"),
+        // which is a NO-OP on a page that finished loading before the click
+        // (load states are reached once per document), so the re-goto below
+        // fired instantly and CANCELLED the in-flight authentication. Amy's
+        // Clever login failed deterministically through this service, with
+        // correct credentials and a landed click, for exactly that reason:
+        // login.listwithclever.com hands the agents.listwithclever.com session
+        // to a cross-subdomain redirect the re-goto kept aborting.
+        loginResolve = await waitForLoginToResolve(page, auth?.login);
+        // Let the post-login redirect chain and app boot finish before the
+        // re-goto, so the target navigation starts from a settled session.
+        await settlePage(page);
       } catch (e) {
         poisoned = true;
         console.error(`[render] auth_config_error for ${key}: ${String(e).slice(0, 200)}`);
@@ -1061,7 +1076,11 @@ const renderHandler = async (req, res) => {
               : "") +
             `submit=${loginDiagnostics.selectors.submit ?? "none"} ` +
             `enabled=${loginDiagnostics.submitEnabled} blurred=${loginDiagnostics.blurred}` +
-            (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "")
+            (loginDiagnostics.clickError ? ` clickError=${loginDiagnostics.clickError}` : "") +
+            // How the post-submit wait ended. "timeout" with a landed click
+            // usually means the portal rejected the credentials; "navigation"
+            // followed by a login-shaped page means the session did not stick.
+            (loginResolve ? ` resolve=${loginResolve.via}:${loginResolve.waitedMs}ms` : "")
           : "no login diagnostics";
         console.error(`[render] login_failed for ${key}: ${detail}`);
         const screenshotBase64 = await captureScreenshot(page);
