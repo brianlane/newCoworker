@@ -104,18 +104,25 @@ const OBSERVATION_BY_FINDING: Record<string, string> = {
  * the fastest way to be caught out by the one reader who knows the real one.
  */
 const COST_BY_FINDING: Record<string, string> = {
+  // "Either way" because the observation names two routes in, a call and a
+  // form. A cost line that answers only the call contradicts the sentence it
+  // is sitting next to.
   no_online_booking:
-    "Every one of those depends on somebody being free to pick up, and the ones who cannot get through rarely try twice.",
+    "Either way the job waits on somebody getting back to them, and people who are still deciding rarely wait long.",
   no_chat_widget:
-    "Most people will not ring a business over one question, so the question goes unasked and so does the job.",
+    "Plenty of people will not make a call over one question, so the question goes unasked and so does the job.",
+  // Says nothing about what else is on their page: the finding establishes that
+  // texting is missing, not that nothing else is there.
   no_text_option:
-    "Plenty of people will not ring somewhere they have never used, and there is nothing else on the page for them to do.",
+    "Plenty of people will not ring somewhere they have never used before, and they will not chase a business for the chance to spend money.",
   no_tap_to_call:
-    "On a phone that is enough friction to lose the call to whoever is one tap away.",
+    "On a phone that is enough friction to lose a call that was one tap from happening.",
   closed_weekends:
-    "The weekend is when most people finally get round to sorting this kind of thing out, and by Monday they have usually called somebody else.",
+    "The weekend is when a lot of people finally get round to sorting this kind of thing out, and by Monday it is usually sorted.",
+  // "Waits until the morning" rather than "goes to voicemail": we read their
+  // opening hours, we know nothing about what answers the phone after them.
   after_hours_gap:
-    "Anything that lands after that goes to voicemail, and someone who is still shopping around does not leave one."
+    "Anything that comes in after that waits until the morning, and somebody still ringing round does not usually wait."
 };
 
 /** Findings we lead with, best first: the ones that map to lost work. */
@@ -279,10 +286,12 @@ export const PITCH_POLISH_INSTRUCTION = [
   "You rewrite the body of a short cold outreach email so it reads like one",
   "person writing to another, and so the reader can see what the gap you",
   "mention is costing them. Keep it under 120 words.",
-  "Keep all four beats, in order: the greeting, what was noticed about them,",
-  "what usually happens because of it, what the sender does about it, and the",
-  "ask at the end. Write plainly and specifically. Cut anything that reads like",
-  "a brochure.",
+  "Keep every paragraph you are given, in the order you are given them, and do",
+  "not split one in two or merge two into one. The second paragraph says what",
+  "was noticed about the recipient AND what usually happens because of it: those",
+  "two sentences belong together and must stay in one paragraph. The paragraph",
+  "after it says what the sender does about it, and the last one is the ask.",
+  "Write plainly and specifically. Cut anything that reads like a brochure.",
   "Rules you must not break: keep every factual claim exactly as given, never",
   "add a claim about the recipient's business that is not already there, never",
   "invent names, numbers, percentages, statistics, prices, or results, never",

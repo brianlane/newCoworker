@@ -1974,12 +1974,22 @@ and names the count.
 
 ### What makes the pitch persuasive, and the line it will not cross
 
-The mail has four beats: the greeting, what was noticed about them, what that
-usually costs, and the ask. The third one is the one that earns a reply. An
-observation on its own ("there is no way to book you online") is an interesting
-fact about somebody's website; `COST_BY_FINDING` adds the sentence that makes it
-worth answering ("the ones who cannot get through rarely try twice"), in the
-same paragraph, so the gap and what falls through it read as one thought.
+The mail is four paragraphs: the greeting; what was noticed about them AND what
+that usually costs, together in one; what the sender does about it; and the ask.
+The cost sentence is the one that earns a reply. An observation on its own
+("there is no way to book you online") is an interesting fact about somebody's
+website; `COST_BY_FINDING` adds the sentence that makes it worth answering
+("people who are still deciding rarely wait long"). The two share a paragraph on
+purpose, so the gap and what falls through it read as one thought, and
+`PITCH_POLISH_INSTRUCTION` tells the tone pass not to split them apart again.
+
+Each cost line also has to agree with the opening it follows. The
+`no_online_booking` opening names two routes in, a call and a form, so its cost
+line answers both ("either way the job waits on somebody getting back to them");
+answering only the call would contradict the sentence beside it. None of them
+may assert a site fact the finding did not establish: "there is no way to text
+you" says nothing about what else is on the page, and knowing when their hours
+end says nothing about what answers the phone afterwards.
 
 Every cost line describes GENERAL behaviour, never this prospect. No
 percentages, no revenue figures, no "you are losing N calls a week", and no

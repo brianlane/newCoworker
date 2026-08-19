@@ -135,6 +135,13 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    */
   const [bulk, setBulk] = useState<null | "confirm" | { done: number; total: number }>(null);
   const bulkRunning = bulk !== null && bulk !== "confirm";
+  /**
+   * The same fact as `bulkRunning`, readable synchronously. Two clicks landing
+   * in one frame both see the pre-render state, and a second loop would open
+   * its own cursor and rewrite the same drafts again, at a second model call
+   * each. `setState` cannot stop that; a ref can.
+   */
+  const bulkRunningRef = useRef(false);
 
   const markDirty = () => {
     dirtyRef.current = true;
@@ -267,6 +274,8 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    * sweep sends mid-run cannot strand the loop.
    */
   const rewriteAll = async () => {
+    if (bulkRunningRef.current) return;
+    bulkRunningRef.current = true;
     const total = view?.funnel.pending ?? 0;
     setBulk({ done: 0, total });
     setError(null);
@@ -299,15 +308,19 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         if (json.data.rewritten + json.data.skipped === 0) break;
       }
       setNotice(t("rewroteAll", { count: done }));
-      // Drops every local edit: the rewrite replaced the stored text under all
-      // of them, so keeping one would show the owner their old words over a
-      // draft that no longer says that.
-      setDrafts({});
-      await refresh();
     } catch {
       setError(t("actionFailed"));
     } finally {
+      // Re-read on EVERY exit, including the failed ones. A run that dies in
+      // the middle has still replaced the drafts of every batch that finished,
+      // so returning without this would leave the queue showing pre-rewrite
+      // copy over rewritten rows, with Send re-enabled above it: the owner
+      // reads the old email and dispatches the new one. Dropping the local
+      // edits goes with it, for the same reason.
+      setDrafts({});
+      await refresh();
       setBulk(null);
+      bulkRunningRef.current = false;
     }
   };
 
@@ -604,7 +617,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                 <span className="text-xs text-amber-200">
                   {t("rewriteAllConfirm", { count: view.funnel.pending })}
                 </span>
-                <Button onClick={() => void rewriteAll()}>{t("actions.rewriteAllYes")}</Button>
+                <Button disabled={bulkRunning} onClick={() => void rewriteAll()}>
+                  {t("actions.rewriteAllYes")}
+                </Button>
                 <Button variant="secondary" onClick={() => setBulk(null)}>
                   {t("actions.cancel")}
                 </Button>

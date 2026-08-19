@@ -127,9 +127,21 @@ describe("leadFinding / isPitchable", () => {
         { businessName: "Acme", city: "Mesa", findings: [] },
         { code, detail: "d" }
       );
-      const cost = paragraphs[1];
+      // The opener paragraph is the observation and the cost joined. Only the
+      // cost is under test here: the observations DO talk about the site,
+      // because a probe read it. Neither observation contains a sentence break,
+      // so everything after the first one is the cost.
+      const [observation, ...rest] = paragraphs[1].split(". ");
+      const cost = rest.join(". ");
+      expect(observation).not.toBe("");
+      expect(cost).not.toBe("");
       expect(cost).not.toMatch(/\d/);
       expect(cost).not.toMatch(/percent|%|competitor|revenue/i);
+      // Nor a fact about their site or their phone that the finding never
+      // established. Knowing there is no text link says nothing about what else
+      // is on the page; knowing when their hours end says nothing about what
+      // answers the phone afterwards. These are the words that smuggle one in.
+      expect(cost).not.toMatch(/voicemail|answering service|the page|the site|their website/i);
     }
     expect(PITCH_POLISH_INSTRUCTION).toContain("percentages");
     expect(PITCH_POLISH_INSTRUCTION).toContain("never");
