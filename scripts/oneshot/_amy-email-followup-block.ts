@@ -176,6 +176,11 @@ function stopSteps(round: number): Step[] {
       id: `${EFU}_replied_${round}`,
       type: "notify_lead_owner",
       when: { var: stopVar(round), equals: "replied" },
+      // Resolve the owner by NAME. This step keys on a phone var first and a
+      // name var second, and an email-only lead has no phone to key on, so
+      // without this every reply would take the unowned fallback and go to
+      // the team even when a teammate has claimed the lead.
+      nameVar: "lead_name",
       message:
         `{{vars.lead_name}} REPLIED to the AI follow-up email (round ${round}). ` +
         "They have no phone number on file, so answer them by email at {{vars.lead_email}}. " +

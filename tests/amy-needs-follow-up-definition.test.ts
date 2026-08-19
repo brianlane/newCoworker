@@ -474,26 +474,28 @@ describe("the email arm for a lead with no phone", () => {
     expect(read.fields.map((f) => f.name)).toContain("lead_email");
   });
 
-  it("collapses the reply wait for a lead with no phone, without skipping it", () => {
-    // Skipping the wait would leave lead_reply unset, which reads as "" and
-    // is therefore "not no_reply", firing r{n}_tell_owner to tell the owner a
-    // lead came back who never said a word (Bugbot #1307). Resolving it
-    // writes "no_reply" and every existing guard behaves normally.
-    const read = findDeep(def.steps as never, "read_lead") as {
-      fields: Array<{ name: string; description: string }>;
-    };
-    const field = read.fields.find((f) => f.name === "reply_wait_minutes");
-    expect(field).toBeDefined();
-    expect(field?.description).toContain(String(ROUND_GAP_MINUTES));
-
+  it("leaves the reply wait exactly as it was, because it already self-resolves", () => {
+    // An earlier draft fed each wait a model-extracted timeout so a
+    // phone-less lead would not park. That fixed nothing and risked a lot:
+    // wait_for_reply's planner already resolves straight to the "no_reply"
+    // sentinel when the phone var is not dialable, and a model answering "1"
+    // for a lead who DOES have a phone would have collapsed the three-day
+    // cadence into three minutes of calls and texts.
     for (const id of ["r1_wait", "r2_wait", "r3_wait"]) {
       const step = findDeep(def.steps as never, id) as unknown as Record<string, unknown>;
-      expect(step.timeoutMinutesTemplate).toBe("{{vars.reply_wait_minutes}}");
-      // The fallback is today's behavior: the template only wins when it
-      // renders to a positive number, so a garbled answer changes nothing.
       expect(step.timeoutMinutes).toBe(ROUND_GAP_MINUTES);
+      expect(step.timeoutMinutesTemplate).toBeUndefined();
       expect(step.when).toBeUndefined();
     }
+  });
+
+  it("resolves an email reply to the claiming teammate, not just the team", () => {
+    // notify_lead_owner keys on a phone var first and a name var second. An
+    // email-only lead has no phone to key on, so without nameVar every reply
+    // would take the unowned fallback even when someone had claimed it.
+    const replied = findDeep(def.steps as never, "efu_replied_1") as unknown as Record<string, unknown>;
+    expect(replied.nameVar).toBe("lead_name");
+    expect(replied.unownedFallback).toBe("team");
   });
 
   it("only runs for a lead the AI cannot phone", () => {

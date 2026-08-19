@@ -238,32 +238,6 @@ export const READ_FIELDS = [
       "answer exactly: none"
   },
   {
-    /**
-     * How long each round's reply wait should run, in minutes.
-     *
-     * A lead with no phone cannot be called or texted, so every rung's wait
-     * would otherwise park the run for the full three days waiting for an SMS
-     * that can never arrive: nine days before the email arm below is reached.
-     *
-     * This makes the wait RESOLVE almost immediately for them instead of
-     * being skipped, and the difference matters. A skipped wait leaves
-     * `lead_reply` unset, which reads as "" and is therefore "not no_reply",
-     * so `r{n}_tell_owner` would fire and tell the owner the lead came back to
-     * us, quoting nothing, for someone who never said a word (Bugbot #1307,
-     * which is the whole reason that notice sits inside the round). A wait
-     * that resolves writes "no_reply" and every existing guard behaves exactly
-     * as it does for a lead who simply did not answer.
-     *
-     * The safe direction is built in: `timeoutMinutesTemplate` only wins when
-     * it renders to a positive number, so a missing or garbled answer falls
-     * back to `timeoutMinutes` and today's three-day wait.
-     */
-    name: "reply_wait_minutes",
-    description:
-      "Look at the phone line. If it shows a real phone number, answer exactly 4320. " +
-      "If there is no phone number at all, answer exactly 1. Answer with digits only."
-  },
-  {
     name: "lead_intent",
     description:
       "What the lead wants, as a short phrase that fits after 'about': answer exactly " +
@@ -342,12 +316,7 @@ function roundSteps(n: number): Step[] {
       type: "wait_for_reply",
       phoneVar: "lead_phone",
       saveAs: "lead_reply",
-      timeoutMinutes: ROUND_GAP_MINUTES,
-      // Collapses to about a minute for a lead with no phone, so the email
-      // arm is reached in minutes instead of nine days. See
-      // reply_wait_minutes in READ_FIELDS for why this resolves the wait
-      // rather than skipping it.
-      timeoutMinutesTemplate: "{{vars.reply_wait_minutes}}"
+      timeoutMinutes: ROUND_GAP_MINUTES
     },
     /**
      * The notice lives INSIDE the round, immediately after the wait, and that
@@ -558,11 +527,24 @@ export function buildNeedsFollowUpDefinition(): Record<string, unknown> {
      * had just BOOKED walked into, and it would start emailing them. Before
      * it, a booking jumps over the whole arm, which is the point of the goal.
      *
-     * The three phone rungs above still run for these leads and all skip
-     * harmlessly: `place_ai_call` with no usable number resolves to
-     * `not_placed` (never a failure), `r{n}_text` is gated on `no_answer` so
-     * it stays quiet, and each wait collapses to about a minute via
-     * reply_wait_minutes.
+     * The phone rungs above need no gating and get none. Each one already
+     * degrades on its own when there is no dialable number: `place_ai_call`
+     * resolves to `not_placed` rather than failing, `r{n}_text` is gated on
+     * `no_answer` so it stays quiet, and `wait_for_reply`'s planner resolves
+     * straight to the "no_reply" sentinel instead of parking a run that could
+     * never be resumed. An email-only lead therefore reaches this arm in one
+     * pass, with `lead_reply` reading exactly as it would for someone who
+     * simply did not answer, which is what every guard above is already
+     * written against.
+     *
+     * A KNOWN GAP, worth stating rather than implying this arm is airtight:
+     * `applyGoalEvent` matches runs by phone, so an `appointment_booked`
+     * event may never reach an email-only run and the `converted` jump below
+     * may never fire for them. Placing this arm before the goal is still
+     * right (it costs nothing, and it is correct the moment goal matching
+     * learns email identity), but today a lead with no phone who books
+     * elsewhere can still receive the remaining follow-ups. Bounded at three
+     * emails over three days, and it stops the moment they reply.
      */
     buildEmailFollowUpBlock() as unknown as Step,
     {

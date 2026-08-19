@@ -661,23 +661,32 @@ mid-cadence:
   fast-forward TARGET: the run jumps to it and skips everything between.
   Placed after it, this arm would be the first thing a lead who had just
   BOOKED walked into, and it would start emailing them.
-- **The reply wait collapses instead of being skipped.** A lead with no phone
-  would otherwise park three days per rung waiting for an SMS that cannot
-  arrive, nine days before the email arm. A new `reply_wait_minutes` extracted
-  field answers 4320 with a phone and 1 without, fed to each wait through
-  `timeoutMinutesTemplate`. SKIPPING the wait would have been wrong: it leaves
-  `lead_reply` unset, which reads as "" and is therefore "not no_reply", so
-  `r{n}_tell_owner` would tell the owner the lead came back to us, quoting
-  nothing, for someone who never said a word (the Bugbot #1307 bug the notice
-  was moved inside the round to fix). A wait that RESOLVES writes "no_reply"
-  and every existing guard behaves exactly as it does for a lead who did not
-  answer. The template only wins when it renders to a positive number, so a
-  garbled answer falls back to the three-day `timeoutMinutes` and today's
-  behavior.
+- **The phone rungs need no gating and get none.** Each already degrades on
+  its own with no dialable number: `place_ai_call` resolves to `not_placed`
+  rather than failing, `r{n}_text` is gated on `no_answer`, and
+  `wait_for_reply`'s planner resolves straight to the `no_reply` sentinel
+  instead of parking a run that could never be resumed. An email-only lead
+  reaches the arm in one pass, with `lead_reply` reading exactly as it would
+  for someone who did not answer.
 
-The phone rungs still run for these leads and skip harmlessly: `place_ai_call`
-with no usable number resolves to `not_placed` rather than failing, and
-`r{n}_text` is gated on `no_answer` so it stays quiet.
+  An earlier draft added a model-extracted `reply_wait_minutes` fed to each
+  wait through `timeoutMinutesTemplate`, on the belief that a phone-less lead
+  would park three days per rung. That belief was wrong (the planner
+  short-circuits), and the mechanism carried a real risk: a model answering
+  "1" for a lead who DOES have a phone would collapse the three-day cadence
+  into three minutes of calls and texts. Removed.
+
+**Known gap.** `applyGoalEvent` matches runs by phone, so an
+`appointment_booked` event may never reach an email-only run and the
+`converted` jump may never fire for them. Placing the arm before the goal is
+still right, and costs nothing, but today a phone-less lead who books
+elsewhere can still receive the remaining follow-ups. Bounded at three emails
+over three days, and it stops the moment they reply.
+
+An email reply resolves to the claiming teammate by NAME (`nameVar:
+"lead_name"` on the notify): the step keys on a phone var first, and an
+email-only lead has none, so without it every reply would take the unowned
+fallback and go to the whole team.
 
 ## One-shots
 
