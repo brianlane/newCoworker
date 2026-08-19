@@ -84,10 +84,17 @@ const FLOW_PAGE = 100;
 export function contactEventText(input: ContactEventInput): string {
   const c = input.contact;
   const tags = c.tags ?? [];
+  // `e164` is the contact KEY, and a key is not always a phone number. For an
+  // email-keyed contact it is `email:<addr>`, and printing that under a
+  // `phone:` label tells every reader of this text, including the Gemini
+  // extraction that lifts lead_phone out of it, that the person's phone number
+  // is "email:val@example.com". A contact with no phone gets no phone line;
+  // the `email:` line below already carries their identity.
+  const phone = isEmailContactKey(c.e164) ? "" : c.e164;
   const lines = [
     `event: ${input.kind}`,
     c.name ? `name: ${c.name}` : "",
-    `phone: ${c.e164}`,
+    phone ? `phone: ${phone}` : "",
     c.email ? `email: ${c.email}` : "",
     tags.length > 0 ? `tags: ${tags.join(", ")}` : "",
     input.kind === "tag_changed" ? `tag: ${input.tag ?? ""}` : "",
@@ -104,7 +111,13 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     channel: input.kind,
     windowText: contactEventText(input),
     url: "",
-    from: input.contact.e164,
+    // The sender identity a from_matches condition compares against. For an
+    // email-keyed contact that is their ADDRESS, not the `email:` key: the key
+    // is an internal identifier, and resolveRefIdentityValues (the other side
+    // of that comparison) deliberately returns the address for exactly this
+    // reason. Leaving the key here would make from_matches unmatchable for the
+    // contacts email keys were added to serve.
+    from: contactKeyEmail(input.contact.e164) ?? input.contact.e164,
     contact_name: input.contact.name ?? "",
     contact_email: input.contact.email ?? "",
     note: input.note ?? "",
@@ -318,9 +331,22 @@ export async function enqueueContactEventRuns(
           console.error("contact_events: ref resolution", e);
           continue;
         }
+        // Same sender identity contactEventTriggerScope stores, and for the
+        // same reason: an email-keyed contact matches on their ADDRESS, which
+        // is what resolveRefIdentityValues returns for them. Matching on the
+        // `email:` key here would evaluate a from_matches condition against a
+        // value no identity list ever contains.
         const res = evaluateSmsTrigger(
           { channel: "sms", conditions },
-          { messages: [{ text: windowText, from: hydrated.contact.e164, atMs: Date.now() }] },
+          {
+            messages: [
+              {
+                text: windowText,
+                from: contactKeyEmail(hydrated.contact.e164) ?? hydrated.contact.e164,
+                atMs: Date.now()
+              }
+            ]
+          },
           refValues
         );
         if (res.matched) {

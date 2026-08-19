@@ -709,10 +709,18 @@ same person. The split above is the whole design. The lead-source flows serve
 their own email-only leads in-flow; the cadence's arm serves an email-only lead
 that arrives tagged from somewhere else.
 
-Nothing tags one today: a fleet-wide scan on Aug 18 2026 found ZERO live
-`update_contact` steps with an `emailVar`, so the cadence's email arm is built
-and currently unreached. Whoever wires the first one should check the host flow
-does not already carry the in-flow block.
+No FLOW tags one today: a fleet-wide scan on Aug 18 2026 found zero live
+`update_contact` steps with an `emailVar`. Whoever wires the first one should
+check the host flow does not already carry the in-flow block, or that lead gets
+both ladders.
+
+A person tagging an email-only contact from the Contacts page reaches the arm
+today, and that path was quietly broken until PR #1489: `contactEventText`
+printed the contact KEY under a `phone:` label, so the window the cadence's
+`read_lead` extraction reads said `phone: email:valm0417@gmail.com`. A contact
+with no phone now gets no phone line, and `trigger.from` carries the ADDRESS,
+which is what `resolveRefIdentityValues` returns for these contacts and
+therefore what a `from_matches` condition compares against.
 
 ## One-shots
 
