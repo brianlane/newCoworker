@@ -119,7 +119,6 @@ function extractCandidateContent(json: unknown): GeminiChatContent | null {
  * @throws Error `gemini_http_parse` on an unparseable body
  */
 export async function geminiChatStep(params: GeminiChatStepParams): Promise<GeminiChatStepResult> {
-  const model = encodeURIComponent(params.model.trim());
   // Endpoint AND auth come from the surface resolver, so a HIPAA tenant
   // can never be sent to the AI Studio host no BAA covers. Non-HIPAA
   // callers pass no surface and resolve to exactly the previous URL.

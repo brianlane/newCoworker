@@ -172,7 +172,6 @@ export function thinkingLevelFallback(
 export async function geminiGenerateTextDetailed(
   params: GeminiGenerateTextParams
 ): Promise<GeminiGenerateTextResult> {
-  const model = encodeURIComponent(params.model.trim());
   // Endpoint AND auth come from the surface resolver, so a HIPAA tenant
   // can never be sent to the AI Studio host no BAA covers. Non-HIPAA
   // callers pass no surface and resolve to exactly the previous URL.
