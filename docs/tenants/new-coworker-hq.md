@@ -150,6 +150,13 @@ visitor actually books.
 
 ## One-shots
 
+**Em dash sweep (2026-08-18):** `strip-em-dashes-flows.ts --apply` cleaned the
+live `ai_flows` copy for this tenant, closing the last gap left by the repo-wide
+sweep in PRs #1474 and #1475. 2 flows, 3 copy fields: the contact-form triage alert, and the Meta lead follow-up (both its customer-facing SMS and the owner alert). Both were `enabled=true`, so this changed copy that is actively sending. Flow NAMES are untouched
+by design: they are the lookup keys the one-shots resolve rows by. Re-running
+the script now reports "No em dashes in any flow's copy fields".
+
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker

@@ -83,6 +83,13 @@ cancel; do not re-enable them while the account is lapsing.
 
 ## One-shots
 
+**Em dash sweep (2026-08-18):** `strip-em-dashes-flows.ts --apply` cleaned the
+live `ai_flows` copy for this tenant, closing the last gap left by the repo-wide
+sweep in PRs #1474 and #1475. 4 flows, 7 copy fields: the 24-hour and 1-hour appointment reminders, the Privyr lead intake follow-up bodies, and the post-appointment status nudge. All four were `enabled=false` at the time, so no customer message changed mid-flight. Flow NAMES are untouched
+by design: they are the lookup keys the one-shots resolve rows by. Re-running
+the script now reports "No em dashes in any flow's copy fields".
+
+
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
 app + outbound voice profile (both named with the searchable marker
