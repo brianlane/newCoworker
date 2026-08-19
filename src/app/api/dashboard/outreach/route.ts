@@ -41,7 +41,9 @@ const saveSchema = z.object({
   sendWindowEndHour: z.number().int().min(1).max(24),
   postalAddress: z.string().max(300),
   valueProp: z.string().max(600),
-  senderName: z.string().max(120)
+  senderName: z.string().max(120),
+  /** A workspace_oauth_connections id, or "" for whichever mailbox is connected. */
+  fromConnectionId: z.union([z.literal(""), z.string().uuid()]).default("")
 });
 
 export async function GET(request: Request) {

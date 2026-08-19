@@ -38,7 +38,11 @@ import {
   type OwnerMailboxSendResult
 } from "@/lib/email/owner-mailbox";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
-import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
+import {
+  isEmailProviderConfigKey,
+  providerFromKey,
+  resolveEmailConnection
+} from "@/lib/voice-tools/connections";
 import { rememberSentThread } from "@/lib/email-coworker/threads";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
@@ -139,6 +143,7 @@ export type OutreachSweepDeps = {
   sendEmailImpl?: typeof sendFromOwnerMailbox;
   sendFromConnectionImpl?: typeof sendFromMailboxConnection;
   getMailboxConnectionImpl?: typeof getWorkspaceOAuthConnection;
+  resolveEmailConnectionImpl?: typeof resolveEmailConnection;
   rememberThreadImpl?: typeof rememberSentThread;
   getBusinessImpl?: typeof getBusiness;
   schedulingLinkImpl?: typeof schedulingLink;
@@ -158,6 +163,7 @@ type Resolved = {
   sendEmail: typeof sendFromOwnerMailbox;
   sendFromConnection: typeof sendFromMailboxConnection;
   getMailboxConnection: typeof getWorkspaceOAuthConnection;
+  resolveEmailConnection: typeof resolveEmailConnection;
   rememberThread: typeof rememberSentThread;
   getBusiness: typeof getBusiness;
   schedulingLink: typeof schedulingLink;
@@ -178,6 +184,7 @@ async function resolveDeps(deps: OutreachSweepDeps): Promise<Resolved> {
     sendEmail: deps.sendEmailImpl ?? sendFromOwnerMailbox,
     sendFromConnection: deps.sendFromConnectionImpl ?? sendFromMailboxConnection,
     getMailboxConnection: deps.getMailboxConnectionImpl ?? getWorkspaceOAuthConnection,
+    resolveEmailConnection: deps.resolveEmailConnectionImpl ?? resolveEmailConnection,
     rememberThread: deps.rememberThreadImpl ?? rememberSentThread,
     getBusiness: deps.getBusinessImpl ?? getBusiness,
     schedulingLink: deps.schedulingLinkImpl ?? schedulingLink,
@@ -666,6 +673,36 @@ async function deliverPitch(
 }
 
 /**
+ * Is there a mailbox to send from at all, before anything is claimed?
+ *
+ * Without this the answer arrived one prospect at a time, and destructively: a
+ * tenant with no connected mailbox (or a pinned one since disconnected) had
+ * every draft claimed, attempted, and stamped `failed`, which is terminal. A
+ * whole queue could burn down over a few passes, and the owner's only clue was
+ * a funnel where drafted fell and failed rose. A missing mailbox is a
+ * configuration problem, not a per-prospect delivery failure, so it stops the
+ * pass with a note and leaves the drafts exactly where they are.
+ *
+ * Checked with the same two lookups the send path itself uses, so the two
+ * cannot disagree about whether a mailbox is usable.
+ */
+async function outreachMailboxMissing(
+  settings: OutreachSettingsRow,
+  r: Resolved
+): Promise<string | null> {
+  const chosen = settings.from_connection_id?.trim();
+  if (!chosen) {
+    const conn = await r.resolveEmailConnection(settings.business_id);
+    return conn ? null : "no mailbox connected to send from";
+  }
+  const row = await r.getMailboxConnection(settings.business_id, chosen);
+  if (!row || !isEmailProviderConfigKey(row.provider_config_key)) {
+    return "the mailbox chosen for outreach is no longer connected";
+  }
+  return null;
+}
+
+/**
  * Send through the mailbox the owner PICKED for outreach when they picked one,
  * and the business's default email connection otherwise.
  *
@@ -806,6 +843,7 @@ export type SendNowResult =
         | "cap_reached"
         | "not_configured"
         | "tier_blocked"
+        | "no_mailbox"
         | "send_failed";
       detail?: string;
     };
@@ -858,6 +896,12 @@ export async function sendProspectNow(
     );
     return { ok: false, reason: "not_drafted", detail: "the draft has no address or pitch text" };
   }
+
+  // Same gate as the sweep, and for the same reason: without it one press on a
+  // tenant with no mailbox marks the draft `failed`, which is terminal, and the
+  // owner loses the draft as well as the send.
+  const noMailbox = await outreachMailboxMissing(settings, r);
+  if (noMailbox) return { ok: false, reason: "no_mailbox", detail: noMailbox };
 
   const dayStart = utcDayStartIso(r.now);
   const [sentToday, nudgedToday] = await Promise.all([
@@ -1171,6 +1215,14 @@ async function sweepBusiness(
   const allowance = settings.daily_cap - sentToday - nudgedToday;
   if (allowance <= 0) {
     result.notes.push({ businessId: settings.business_id, note: "daily cap reached" });
+    return;
+  }
+  // Last gate before anything is claimed. Drafting above is unaffected: a
+  // tenant can queue drafts while they get round to connecting a mailbox, and
+  // they will go out on the first pass after it is connected.
+  const noMailbox = await outreachMailboxMissing(settings, r);
+  if (noMailbox) {
+    result.notes.push({ businessId: settings.business_id, note: noMailbox });
     return;
   }
   const justSent = await sendForBusiness(settings, resolved.tenant, r, result, allowance);

@@ -127,6 +127,13 @@ function baseDeps(over: Record<string, unknown> = {}) {
       connection_id: "nango-conn",
       provider_config_key: "google-mail"
     })),
+    // A connected mailbox is the normal case; the tests that care about its
+    // absence override this with null.
+    resolveEmailConnectionImpl: vi.fn(async () => ({
+      provider: "google" as const,
+      providerConfigKey: "google-mail",
+      connectionId: "nango-conn"
+    })),
     rememberThreadImpl: vi.fn(async () => {}),
     getBusinessImpl: vi.fn(async () => ({
       id: BIZ,
@@ -1015,7 +1022,13 @@ describe("phase 3: sending", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("fails rather than silently sending from the wrong address when that mailbox is gone", async () => {
+  it("stops the pass rather than sending from the wrong address when that mailbox is gone", async () => {
+    // Never sending from an address the owner did not choose is the original
+    // rule and it still holds. What changed is the shape of the refusal: this
+    // used to be discovered one prospect at a time, AFTER the claim, so every
+    // draft was stamped `failed`, which is terminal. A disconnected mailbox is
+    // a configuration problem, and it must not eat the queue on the way to
+    // being noticed.
     for (const getMailboxConnectionImpl of [
       vi.fn(async () => null),
       vi.fn(async () => ({
@@ -1029,15 +1042,69 @@ describe("phase 3: sending", () => {
           settings({ from_connection_id: "conn-row" })
         ])
       });
-      const result = await processOutreachSweep(baseDeps({ getMailboxConnectionImpl }));
+      const deps = baseDeps({ getMailboxConnectionImpl });
+      const result = await processOutreachSweep(deps);
       expect(result.sent).toBe(0);
-      expect(ledger.patchProspect).toHaveBeenCalledWith(
-        BIZ,
-        prospect().id,
-        expect.objectContaining({ status: "failed", status_detail: "email_not_connected" }),
-        expect.anything()
-      );
+      expect(result.notes).toContainEqual({
+        businessId: BIZ,
+        note: "the mailbox chosen for outreach is no longer connected"
+      });
+      // Nothing claimed, nothing stamped, nothing sent: the drafts survive to
+      // go out on the first pass after the mailbox is reconnected.
+      expect(ledger.transitionProspect).not.toHaveBeenCalled();
+      expect(ledger.patchProspect).not.toHaveBeenCalled();
+      expect(
+        (deps as unknown as { sendFromConnectionImpl: ReturnType<typeof vi.fn> })
+          .sendFromConnectionImpl
+      ).not.toHaveBeenCalled();
     }
+  });
+
+  it("still refuses mid-pass if the mailbox disappears after the pre-flight", async () => {
+    // The pre-flight narrows this window, it does not close it: the owner can
+    // disconnect between the check and the provider call. The send path keeps
+    // its own guard so the race fails closed rather than quietly falling back
+    // to the default address, which is the whole point of pinning one.
+    const ledger = sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ from_connection_id: "conn-row" })])
+    });
+    const getMailboxConnectionImpl = vi
+      .fn()
+      // The pre-flight sees it.
+      .mockResolvedValueOnce({
+        id: "conn-row",
+        connection_id: "nango-conn",
+        provider_config_key: "google-mail"
+      })
+      // By the time the send looks, it is gone.
+      .mockResolvedValue(null);
+    const result = await processOutreachSweep(baseDeps({ getMailboxConnectionImpl }));
+    expect(result.sent).toBe(0);
+    // Here the claim HAS happened, so the row is released the normal way.
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      expect.objectContaining({ status: "failed", status_detail: "email_not_connected" }),
+      expect.anything()
+    );
+  });
+
+  it("stops the pass when no mailbox is connected at all", async () => {
+    // The commoner case, and the one that used to burn a whole queue quietly:
+    // an owner who switched Prospecting on before connecting a mailbox watched
+    // drafted fall and failed rise with no explanation anywhere on the page.
+    const ledger = sendLedger();
+    const deps = baseDeps({ resolveEmailConnectionImpl: vi.fn(async () => null) });
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(0);
+    expect(result.notes).toContainEqual({
+      businessId: BIZ,
+      note: "no mailbox connected to send from"
+    });
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
   });
 
   it("keeps the send when the flow hand-off itself fails, however it failed", async () => {
@@ -1949,5 +2016,29 @@ describe("rewriteAllProspectDrafts (Write it again, for every waiting draft)", (
       reason: "not_configured",
       detail: "no postal address configured"
     });
+  });
+});
+
+describe("sendProspectNow with no mailbox (the owner pressed Send too early)", () => {
+  it("refuses without touching the draft", async () => {
+    // One press used to claim the draft, fail the send, and stamp it `failed`,
+    // which is terminal: the owner lost the draft as well as the send, and the
+    // fix (connect a mailbox) could not bring it back.
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      getProspect: vi.fn(async () => prospect())
+    });
+    const result = await sendProspectNow(
+      BIZ,
+      prospect().id,
+      baseDeps({ resolveEmailConnectionImpl: vi.fn(async () => null) })
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: "no_mailbox",
+      detail: "no mailbox connected to send from"
+    });
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    expect(ledger.patchProspect).not.toHaveBeenCalled();
   });
 });

@@ -2523,7 +2523,8 @@
         "postalAddress": "Agrega la dirección postal que va en el pie de cada correo.",
         "valueProp": "Di qué quieres que ofrezca el correo.",
         "searchTerms": "Agrega al menos un tipo de negocio que buscar.",
-        "cities": "Agrega al menos una ciudad donde buscar."
+        "cities": "Agrega al menos una ciudad donde buscar.",
+        "mailbox": "Conecta el buzón desde el que se debe enviar tu prospección, en la página de Integraciones. Los borradores se seguirán acumulando hasta que lo hagas, y no podrá salir nada."
       },
       "stats": {
         "discovered": "Encontrados",
@@ -2551,7 +2552,8 @@
         "postalAddressOptional": "Dirección postal para el pie del correo (opcional)",
         "draftSubject": "Asunto",
         "draftBody": "Lo que dice el correo",
-        "wholeEmail": "El correo completo, tal como se enviará"
+        "wholeEmail": "El correo completo, tal como se enviará",
+        "fromMailbox": "Enviar desde"
       },
       "placeholders": {
         "searchTerms": "plomero, técnico de aire acondicionado, techador",
@@ -2601,7 +2603,9 @@
       "skipVerticalConfirm": "¿Detener el contacto con todos los {vertical}? Se omiten {count} prospectos a los que aún no se les ha escrito. No se toca nada que ya se haya enviado.",
       "skippedVertical": "Se omitieron {count} prospectos de {vertical}. No se tocó nada que ya se hubiera enviado.",
       "verticalOpen": "faltan {count} por salir",
-      "verticalNothingOpen": "Nada en espera"
+      "verticalNothingOpen": "Nada en espera",
+      "senderNameHelp": "El nombre al final del correo. No cambia la dirección desde la que se envía.",
+      "fromMailboxHelp": "La dirección desde la que sale el correo, y donde llegan las respuestas. Automático usa el buzón que tengas conectado."
     }
   },
   "admin": {

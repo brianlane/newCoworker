@@ -35,6 +35,7 @@ import {
   type OutreachSettingsRow
 } from "./db";
 import { summarizeFunnel, type OutreachFunnel, type VerticalFunnel } from "./stats";
+import { listOutreachSendFromOptions, type SendFromOption } from "@/lib/email/mailbox-options";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -78,6 +79,11 @@ export type ProspectingView = {
    * the blocker and explains the fallback instead of demanding a field.
    */
   postalAddressRequired: boolean;
+  /**
+   * Mailboxes cold email may leave from, "Automatic" first. Empty when the
+   * tenant has connected none, which is a blocker rather than a preference.
+   */
+  mailboxes: SendFromOption[];
 };
 
 /** The two tier-derived gates the panel needs, resolved from one lookup. */
@@ -114,11 +120,12 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue, gates] = await Promise.all([
+  const [settings, outcomes, queue, gates, mailboxes] = await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
-    resolveTierGates(businessId, db)
+    resolveTierGates(businessId, db),
+    listOutreachSendFromOptions(businessId)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -129,10 +136,12 @@ export async function loadProspectingView(
     clipped: outcomes.length >= OUTREACH_SCAN_LIMIT,
     blockers: describeBlockers(settings, {
       placesKeyConfigured: Boolean((process.env.GOOGLE_PLACES_API_KEY ?? "").trim()),
-      postalAddressRequired: gates.postalAddressRequired
+      postalAddressRequired: gates.postalAddressRequired,
+      mailboxConnected: mailboxes.length > 0
     }),
     tierAllowed: gates.tierAllowed,
-    postalAddressRequired: gates.postalAddressRequired
+    postalAddressRequired: gates.postalAddressRequired,
+    mailboxes
   };
 }
 
@@ -145,13 +154,22 @@ export async function loadProspectingView(
  */
 export function describeBlockers(
   settings: OutreachSettingsRow | null,
-  env: { placesKeyConfigured?: boolean; postalAddressRequired?: boolean } = {}
+  env: {
+    placesKeyConfigured?: boolean;
+    postalAddressRequired?: boolean;
+    mailboxConnected?: boolean;
+  } = {}
 ): string[] {
   if (!settings) return [];
   const blockers: string[] = [];
   // Platform blocker first: without the key, nothing the owner edits below
   // can make discovery run.
   if (env.placesKeyConfigured === false) blockers.push("placesKey");
+  // No mailbox means no send path at all. It is listed here because the fix is
+  // NOT a field on this page (it lives on Integrations), and an owner watching
+  // drafts pile up with nothing going out has no other way to learn why.
+  // Defaults to connected, so a caller that has not looked cannot invent one.
+  if (env.mailboxConnected === false) blockers.push("mailbox");
   // Defaults to required, so every caller that has not resolved a tier keeps
   // the old, stricter behavior.
   if (env.postalAddressRequired !== false && !settings.postal_address?.trim()) {
@@ -173,6 +191,11 @@ export type ProspectingSettingsInput = {
   postalAddress: string;
   valueProp: string;
   senderName: string;
+  /**
+   * Which connected mailbox cold email leaves from. Empty means "whichever one
+   * is connected", the behavior from before there was a choice.
+   */
+  fromConnectionId: string;
 };
 
 export class ProspectingSettingsError extends Error {}
@@ -247,6 +270,21 @@ export async function saveProspectingSettings(
       ? [input.sendWindowStartHour, input.sendWindowEndHour]
       : [DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR];
 
+  // A pinned mailbox has to be one of this tenant's, checked here rather than
+  // trusted from the form. The send path fails closed on an id it cannot
+  // resolve (it will not quietly fall back to a different address), so an
+  // unchecked value would be stored happily and then stop outreach dead. Only
+  // verified while switching on, so the kill switch is never blocked by it.
+  const fromConnectionId = input.fromConnectionId.trim();
+  if (strict && fromConnectionId) {
+    const options = await listOutreachSendFromOptions(businessId);
+    if (!options.some((o) => o.id === fromConnectionId)) {
+      throw new ProspectingSettingsError(
+        "That mailbox is not connected any more. Pick another one, or choose Automatic."
+      );
+    }
+  }
+
   return upsertOutreachSettings(
     businessId,
     {
@@ -259,7 +297,8 @@ export async function saveProspectingSettings(
       postal_address: postalAddress || null,
       postal_address_exempt: postalAddressExempt,
       value_prop: valueProp || null,
-      sender_name: input.senderName.trim() || null
+      sender_name: input.senderName.trim() || null,
+      from_connection_id: fromConnectionId || null
     },
     db
   );
@@ -352,6 +391,7 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     sendWindowEndHour: DEFAULT_WINDOW_END_HOUR,
     postalAddress: "",
     valueProp: "",
-    senderName: ""
+    senderName: "",
+    fromConnectionId: ""
   };
 }

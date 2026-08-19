@@ -66,19 +66,54 @@ export async function listSendFromOptions(
   const mailbox = await getTenantMailbox(businessId);
   const localPart = mailbox?.local_part ?? businessId.toLowerCase();
   const coworkerAddress = tenantMailboxAddress(localPart);
-  const options: SendFromOption[] = [
-    { id: "", label: `AI coworker: ${coworkerAddress}`, email: coworkerAddress }
+  return [
+    { id: "", label: `AI coworker: ${coworkerAddress}`, email: coworkerAddress },
+    ...(await listConnectedMailboxes(businessId))
   ];
+}
 
+/**
+ * The owner's connected Gmail/Outlook mailboxes, in connection order.
+ *
+ * Split out from `listSendFromOptions` because not every sender picker may
+ * offer the coworker mailbox: see `listOutreachSendFromOptions`.
+ */
+export async function listConnectedMailboxes(businessId: string): Promise<SendFromOption[]> {
   const conns = await listWorkspaceOAuthConnections(businessId);
+  const options: SendFromOption[] = [];
   for (const c of conns) {
     if (!isEmailProviderConfigKey(c.provider_config_key)) continue;
     const email = connectionEmail(c.metadata);
     options.push({
       id: c.id,
-      label: email ? `${providerLabel(c.provider_config_key)}: ${email}` : providerLabel(c.provider_config_key),
+      label: email
+        ? `${providerLabel(c.provider_config_key)}: ${email}`
+        : providerLabel(c.provider_config_key),
       email
     });
   }
   return options;
+}
+
+/**
+ * Sender options for PROSPECTING, which is deliberately a shorter list.
+ *
+ * No AI coworker mailbox. Cold outreach has to leave from the tenant's own
+ * domain: it is the address replies come back to, and the reputation it burns
+ * when a stranger marks it spam should be the sender's own, not a platform
+ * domain shared by every tenant. The prospecting send path only speaks
+ * Gmail/Outlook for the same reason.
+ *
+ * The empty-id entry means "whichever mailbox is connected", which is what the
+ * sweep already did before there was a choice to make. A tenant with one
+ * mailbox never has to touch this.
+ */
+export async function listOutreachSendFromOptions(
+  businessId: string
+): Promise<SendFromOption[]> {
+  const connected = await listConnectedMailboxes(businessId);
+  // With nothing connected there is no choice to offer, and an "automatic"
+  // entry alone would read as though outreach were ready to send.
+  if (connected.length === 0) return [];
+  return [{ id: "", label: "Automatic", email: null }, ...connected];
 }

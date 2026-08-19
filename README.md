@@ -2003,6 +2003,44 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### Which mailbox cold email leaves from
+
+Prospecting sends through the owner's connected Gmail or Outlook mailbox. With
+one connected there is nothing to decide and no control is shown. With several,
+a **Send from** picker writes `outreach_settings.from_connection_id`, and the
+sweep sends through exactly that one; "Automatic" (a null column) means
+whichever mailbox resolves, which is what it always did.
+
+`listOutreachSendFromOptions` is deliberately a SHORTER list than the Emails
+composer's `listSendFromOptions`: no AI coworker mailbox. Cold outreach has to
+leave from the tenant's own domain, since that is the address replies come back
+to and the reputation a stranger's spam report burns should be the sender's own,
+not a platform domain shared by every tenant. The prospecting send path only
+speaks Gmail/Outlook for the same reason, so offering it would be a dropdown
+entry that cannot send.
+
+A pinned id is verified against the tenant's own connections on save. The send
+path fails closed on an id it cannot resolve (it will not fall back to a
+different address), so an unchecked value would store happily and then stop
+outreach dead.
+
+**No mailbox at all is a blocker, and it used to eat the queue.** The absence
+was discovered one prospect at a time, AFTER the claim, so every draft was
+attempted and stamped `failed`, which is terminal. A tenant who switched
+Prospecting on before connecting a mailbox watched drafted fall and failed rise
+with no explanation anywhere on the page, and connecting one afterwards could
+not bring those drafts back. `outreachMailboxMissing` now runs once per pass,
+before anything is claimed: the pass stops with a note and the drafts survive to
+go out on the first pass after a mailbox is connected. Manual Send has the same
+gate, so one early press cannot burn a draft either, and the panel carries a
+`mailbox` blocker pointing at Integrations, since the fix is not a field on this
+page.
+
+The send path keeps its own guard as well. The pre-flight narrows the window
+between checking and sending, it cannot close it, and a mailbox disconnected
+inside that window must still fail rather than quietly send from the default
+address.
+
 ### Calling off a whole kind of business
 
 Removing a trade from "Kinds of business to look for" only stops the NEXT

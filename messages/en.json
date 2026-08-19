@@ -2523,7 +2523,8 @@
         "postalAddress": "Add the postal address that goes in the footer of every email.",
         "valueProp": "Say what you want the email to offer.",
         "searchTerms": "Add at least one kind of business to look for.",
-        "cities": "Add at least one town or city to look in."
+        "cities": "Add at least one town or city to look in.",
+        "mailbox": "Connect the mailbox your outreach should be sent from, on the Integrations page. Drafts will keep piling up until you do, and nothing can go out."
       },
       "stats": {
         "discovered": "Found",
@@ -2551,7 +2552,8 @@
         "postalAddressOptional": "Postal address for the email footer (optional)",
         "draftSubject": "Subject",
         "draftBody": "What the email says",
-        "wholeEmail": "The whole email, as it will send"
+        "wholeEmail": "The whole email, as it will send",
+        "fromMailbox": "Send from"
       },
       "placeholders": {
         "searchTerms": "plumber, HVAC contractor, roofer",
@@ -2601,7 +2603,9 @@
       "skipVerticalConfirm": "Stop outreach to every {vertical}? That skips {count} prospects that have not been emailed yet. Nothing already sent is touched.",
       "skippedVertical": "Skipped {count} {vertical} prospects. Nothing already sent was touched.",
       "verticalOpen": "{count} still to go out",
-      "verticalNothingOpen": "Nothing waiting"
+      "verticalNothingOpen": "Nothing waiting",
+      "senderNameHelp": "The name at the bottom of the email. It does not change the address it is sent from.",
+      "fromMailboxHelp": "The address the email comes from, and where replies land. Automatic uses whichever mailbox you have connected."
     }
   },
   "admin": {
