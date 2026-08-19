@@ -344,6 +344,15 @@ twice by selectors written from a guess
 (`debug/update-amy-aiflow-re-update-actions.ts`, and the Aug 16 claim click
 that reported success and changed nothing).
 
-Next step: re-probe with `--expect` on a marker from the hydrated editor rather
-than from the static text, and capture the 40px control's real selector and its
-option labels.
+Next step: get the skeletons to resolve. Five candidate post-hydration markers
+were tried and none appeared within `expectText`'s 10s window ("Add a note",
+"Activity Feed", "Select a stage", "Update Stage", "Save"). Since the panel's
+own DATE values are skeleton-wrapped too, the likely cause is the panel's data
+fetch not completing in the headless session rather than a wrong marker: this
+is a waiting problem, not a selector problem. Worth trying next, in order: a
+longer settle (`AIFLOW_RENDER_TIMEOUT_MS` on the box), a screenshot via
+`--shot` to see what the panel actually looks like once open, and
+`--read-network`-style inspection of whether the panel's XHR is being blocked
+by the SSRF guard the render service attaches to every page
+(`attachSsrfGuard`), which is the one thing in our stack that could stop a
+same-origin data fetch a real browser would allow.
