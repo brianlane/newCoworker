@@ -41,6 +41,11 @@
  * before the block are unaffected: the block is last in every target flow, so
  * nothing before it renumbers.
  *
+ * The check runs over EVERY target before anything is written, in a separate
+ * pass. Checking and writing in one loop would update the first flows, hit a
+ * stranded run on the fourth, and exit with half the fleet on the new shape,
+ * half on the old, and no ledger row recording it.
+ *
  * Usage:
  *   npx tsx scripts/oneshot/amy-email-followup-via-tag.ts            # dry run
  *   npx tsx scripts/oneshot/amy-email-followup-via-tag.ts --apply
@@ -125,8 +130,21 @@ async function main(): Promise<void> {
     .is("deleted_at", null);
   if (error) throw new Error(`read flows: ${error.message}`);
 
-  const touched: Array<Record<string, unknown>> = [];
-  let stranded = 0;
+  // TWO PASSES, deliberately. The index-safety check has to cover EVERY target
+  // before anything is written: a single pass that wrote as it went would
+  // update the first flows, hit a stranded run on the fourth, and exit leaving
+  // half the fleet on the new shape, half on the old, and no ledger row saying
+  // so. Nothing is written until every flow has been cleared.
+  type Planned = {
+    id: string;
+    name: string;
+    def: Definition;
+    previous: unknown;
+    notes: string[];
+  };
+  const planned: Planned[] = [];
+  const stranded: string[] = [];
+
   for (const name of TARGET_FLOWS) {
     const row = (data ?? []).find((f) => f.name === name);
     if (!row) {
@@ -134,10 +152,8 @@ async function main(): Promise<void> {
       continue;
     }
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
-    const previous = row.definition;
     const notes: string[] = [];
 
-    // Index safety, checked per flow against the LIVE runs rather than assumed.
     const start = revert ? null : inlineBlockStartIndex(def);
     if (start !== null) {
       const { data: runs, error: runErr } = await db
@@ -148,9 +164,8 @@ async function main(): Promise<void> {
         .gte("current_step", start);
       if (runErr) throw new Error(`read runs for ${name}: ${runErr.message}`);
       for (const r of (runs ?? []) as Array<{ id: string; status: string; current_step: number }>) {
-        stranded += 1;
-        console.log(
-          `  !! ${name}: run ${r.id} is parked at step ${r.current_step}, inside the block ` +
+        stranded.push(
+          `${name}: run ${r.id} is parked at step ${r.current_step}, inside the block ` +
             `starting at ${start} (${r.status}). Migrate it (contact + "${FOLLOW_UP_TAG}" tag) first.`
         );
       }
@@ -161,30 +176,35 @@ async function main(): Promise<void> {
       console.log(`SKIP  ${name}: already in the desired state`);
       continue;
     }
-    console.log(`${apply ? "APPLY" : "DRY  "} ${name}: ${notes.join("; ")}`);
+    planned.push({ id: row.id, name, def, previous: row.definition, notes });
+  }
+
+  for (const line of stranded) console.log(`  !! ${line}`);
+  if (stranded.length > 0 && !force) {
+    console.error(
+      `\nREFUSED: ${stranded.length} run(s) are parked inside the block this removes. ` +
+        `Nothing was written. Migrate them, or re-run with --force to strand them deliberately.`
+    );
+    process.exit(1);
+  }
+
+  const touched: Array<Record<string, unknown>> = [];
+  for (const p of planned) {
+    console.log(`${apply ? "APPLY" : "DRY  "} ${p.name}: ${p.notes.join("; ")}`);
     if (!apply) continue;
-    if (stranded > 0 && !force) continue;
     const { error: upErr } = await db
       .from("ai_flows")
       .update({
-        definition: def,
+        definition: p.def,
         edit_source: "oneshot",
         edit_actor: "amy-email-followup-via-tag.ts"
       })
       .eq("business_id", AMY_BUSINESS_ID)
-      .eq("id", row.id)
+      .eq("id", p.id)
       .select("id")
       .single();
-    if (upErr) throw new Error(`update ${name}: ${upErr.message}`);
-    touched.push({ flow_id: row.id, name, notes, previous_definition: previous });
-  }
-
-  if (stranded > 0 && !force) {
-    console.error(
-      `\nREFUSED: ${stranded} run(s) are parked inside the block this removes. ` +
-        `Migrate them, or re-run with --force to strand them deliberately.`
-    );
-    process.exit(1);
+    if (upErr) throw new Error(`update ${p.name}: ${upErr.message}`);
+    touched.push({ flow_id: p.id, name: p.name, notes: p.notes, previous_definition: p.previous });
   }
 
   if (apply && touched.length > 0) {
