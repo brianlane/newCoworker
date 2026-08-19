@@ -108,6 +108,21 @@ describe("the tag block", () => {
     expect(kinds).not.toContain("email_extract");
     expect(kinds).not.toContain("sleep");
   });
+
+  it("FILES the lead before tagging, so it does not depend on an earlier email", () => {
+    // update_contact skips when there is no contact row. Tagging alone would
+    // have leaned on an earlier send_email in the flow having succeeded (that
+    // is what files an emailed lead), so a skipped or failed intro email would
+    // silently end all outreach. The inline rounds needed no contact at all.
+    const steps = allSteps([buildEmailOnlyTagBlock()]);
+    const file = steps.find((s) => s.id === `${EFU_TAG}_file`)!;
+    expect(file.type).toBe("upsert_customer");
+    expect(file.emailVar).toBe("lead_email");
+    expect(file.phoneVar).toBe("lead_phone");
+    // Order matters: the row has to exist before the tag looks for it.
+    const ids = steps.map((s) => s.id);
+    expect(ids.indexOf(`${EFU_TAG}_file`)).toBeLessThan(ids.indexOf(EFU_TAG));
+  });
 });
 
 describe("swapping the inline rounds for the tag", () => {

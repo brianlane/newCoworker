@@ -280,12 +280,32 @@ export function buildEmailOnlyTagBlock(): Step {
             condition: { var: "lead_email", contains: "@" },
             steps: [
               {
+                // File the lead FIRST, in this same run.
+                //
+                // update_contact skips when there is no contact row, so
+                // tagging alone would have depended on an earlier send_email
+                // in this flow having succeeded (that is what files an emailed
+                // lead, PR #1486). A skipped or failed intro email would then
+                // silently end all outreach: no contact, no tag, no cadence.
+                // The inline rounds it replaces needed no contact at all, so
+                // leaning on that side effect would have been a real
+                // regression rather than a refactor.
+                //
+                // Keyed by the address because there is no phone
+                // (upsert_customer falls back to emailVar, PR #1473), and
+                // idempotent, so the common case where the intro email already
+                // filed them just bumps the existing row.
+                id: `${EFU_TAG}_file`,
+                type: "upsert_customer",
+                phoneVar: "lead_phone",
+                nameVar: "lead_name",
+                emailVar: "lead_email"
+              } as Step,
+              {
                 id: EFU_TAG,
                 type: "update_contact",
-                // The contact exists by now: the flow emailed this lead
-                // earlier, and an email send files the lead as a contact
-                // (PR #1486). emailVar is what lets the tag land on a contact
-                // that has no phone to be keyed by.
+                // emailVar is what lets the tag land on a contact that has no
+                // phone to be keyed by.
                 phoneVar: "lead_phone",
                 emailVar: "lead_email",
                 addTags: [FOLLOW_UP_TAG],

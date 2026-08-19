@@ -752,6 +752,13 @@ gets. Jack Briggs, claimed by Gabrielle and mid-cadence when this shipped,
 would have been tagged by none of them, so reusing those steps would have
 quietly dropped exactly the leads this is for.
 
+It FILES the lead (`upsert_customer`, keyed by the address) before tagging.
+`update_contact` skips when there is no contact row, so tagging alone would
+have depended on an earlier `send_email` in the same flow having succeeded,
+which is what files an emailed lead. A skipped or failed intro email would then
+have silently ended all outreach, and the inline rounds it replaces needed no
+contact at all.
+
 It carries an honest note rather than the shared `AUTO_TAG_NOTE`, which says
 the AI "already called and texted" and would be false for a lead with no phone.
 The cadence's round-1 call is a harmless no-op for them, so there is nothing to
