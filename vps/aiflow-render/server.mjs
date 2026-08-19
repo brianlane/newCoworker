@@ -130,6 +130,59 @@ function uaFor(browser) {
   );
 }
 
+/**
+ * Align User-Agent CLIENT HINTS with the UA string, per page.
+ *
+ * The `userAgent` context option rewrites only the UA HEADER. Chromium keeps
+ * broadcasting its true identity through Sec-CH-UA client hints, and in
+ * headless mode the brand list literally says "HeadlessChrome". HomeLight's own
+ * analytics beacon showed ours verbatim (`uafvl=...|HeadlessChrome...`), which
+ * is how this was caught: the perfect UA string above was being contradicted on
+ * every request by a channel we never controlled. A CDN that keys on client
+ * hints answers script-chunk requests with an HTML challenge page, the document
+ * still loads, and the page half-renders with `Unexpected token '<'` errors:
+ * HomeLight's stage editor, exactly (docs/tenants/homelight-flow.md).
+ *
+ * Playwright has no first-class API for this, so it goes through CDP's
+ * `Emulation.setUserAgentOverride`, whose `userAgentMetadata` is what Sec-CH-UA
+ * is generated from. Brands and versions are DERIVED from the engine, same rule
+ * as uaFor: no second copy of a number to forget.
+ *
+ * Best-effort on purpose: a CDP failure must degrade to today's behavior, not
+ * break rendering.
+ */
+async function alignClientHints(page, browser) {
+  try {
+    const fullVersion = browser.version();
+    const major = fullVersion.split(".")[0];
+    const brands = [
+      { brand: "Chromium", version: major },
+      { brand: "Google Chrome", version: major },
+      // The GREASE brand every real Chrome ships; its absence is a tell too.
+      { brand: "Not=A?Brand", version: "99" }
+    ];
+    const session = await page.context().newCDPSession(page);
+    await session.send("Emulation.setUserAgentOverride", {
+      userAgent: uaFor(browser),
+      userAgentMetadata: {
+        brands,
+        fullVersionList: brands.map((b) => ({
+          brand: b.brand,
+          version: b.brand === "Not=A?Brand" ? "99.0.0.0" : fullVersion
+        })),
+        platform: "macOS",
+        platformVersion: "10.15.7",
+        architecture: "x86",
+        model: "",
+        mobile: false,
+        fullVersion
+      }
+    });
+  } catch (e) {
+    console.error(`[render] client-hint alignment failed (continuing): ${String(e).slice(0, 200)}`);
+  }
+}
+
 function isPrivateIpv4(host) {
   const parts = host.split(".").map(Number);
   if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
@@ -834,8 +887,8 @@ const renderHandler = async (req, res) => {
       context = await browser.newContext({ userAgent: uaFor(browser) });
       page = await context.newPage();
       await attachSsrfGuard(page);
+      await alignClientHints(page, browser);
       pageDiagnostics = attachDiagnostics(page);
-    page.__diag = pageDiagnostics;
       page.__diag = pageDiagnostics;
       await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
@@ -897,6 +950,7 @@ const renderHandler = async (req, res) => {
   try {
     page = await session.context.newPage();
     await attachSsrfGuard(page);
+    await alignClientHints(page, await getBrowser());
     pageDiagnostics = attachDiagnostics(page);
     page.__diag = pageDiagnostics;
     await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
