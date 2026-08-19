@@ -72,6 +72,19 @@ describe("the render service listens to the page", () => {
     const successSites = server.match(/summarizeDiagnostics\(page\.__diag\)/g) ?? [];
     expect(successSites.length).toBeGreaterThanOrEqual(5);
   });
+
+  it("covers the AUTHENTICATED path, which is the one that actually matters", () => {
+    // Bugbot, high severity: the first cut attached listeners on the pooled
+    // authenticated page but spread diagnostics only on the UNAUTHENTICATED
+    // twins. Every credentialed tenant browse and the owner-facing page picker
+    // come through the authenticated handler, so a logged-in portal, which is
+    // exactly where a half-rendered page looks healthy, still returned nothing.
+    const authSuccess = server.slice(server.indexOf("const html = await page.content();"));
+    expect(authSuccess).toContain("summarizeDiagnostics(page.__diag)");
+
+    const authCatch = server.slice(server.indexOf("render_failed (authenticated"));
+    expect(authCatch).toContain("summarizeDiagnostics(page.__diag)");
+  });
 });
 
 describe("the worker records them, so every tenant's failure keeps the reason", () => {
@@ -85,6 +98,15 @@ describe("the worker records them, so every tenant's failure keeps the reason", 
 
   it("carries them into an action failure, which is the missing-control case", () => {
     expect(worker).toContain("readRenderDiagnostics(parsedBody)");
+  });
+
+  it("carries them into a TRANSIENT render failure too", () => {
+    // Bugbot: pageDiag was read and then used only on the login arm, so a
+    // transient browse failure stored a bare "render service error
+    // (render_failed)" and threw the page's own account away.
+    const at = worker.indexOf("throw new RenderFailedError(");
+    expect(at).toBeGreaterThan(-1);
+    expect(worker.slice(Math.max(0, at - 400), at)).toContain("pageDiag");
   });
 
   it("bounds the stored string, which shares ai_flow_runs.last_error", () => {

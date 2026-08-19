@@ -925,6 +925,10 @@ app.post("/render", async (req, res) => {
     const screenshotBase64 =
       wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     return res.json({
+      // The authenticated path is the one that matters most: every credentialed
+      // tenant browse and the owner-facing page picker come through here, and a
+      // logged-in portal is exactly where a half-rendered page looks healthy.
+      ...(summarizeDiagnostics(page.__diag) ? { diagnostics: summarizeDiagnostics(page.__diag) } : {}),
       finalUrl: page.url(),
       text,
       html,
@@ -940,6 +944,9 @@ app.post("/render", async (req, res) => {
     return res.status(200).json({
       error: "render_failed",
       detail: String(e).slice(0, 300),
+      ...(page && summarizeDiagnostics(page.__diag)
+        ? { diagnostics: summarizeDiagnostics(page.__diag) }
+        : {}),
       ...(screenshotBase64 ? { screenshotBase64 } : {}),
       ...(pageSource ? { pageSource } : {})
     });

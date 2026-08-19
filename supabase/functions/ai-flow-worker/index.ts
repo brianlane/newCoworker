@@ -4557,7 +4557,13 @@ async function fetchViaRender(
       // render_failed / unknown → transient; surface the root cause. Carry any
       // failure screenshot so a debug-enabled caller can store it before the run
       // retries (otherwise the stuck page is lost on a timeout/interstitial).
-      const why = [errCode, detail].filter(Boolean).join(": ");
+      // pageDiag belongs here too, not only on the login arm: a transient
+      // render failure is precisely when the page's own console and failed
+      // requests explain what went wrong, and without it the run stores a bare
+      // "render service error (render_failed)".
+      const why = [[errCode, detail].filter(Boolean).join(": "), pageDiag]
+        .filter(Boolean)
+        .join(" | ");
       throw new RenderFailedError(
         `render service error${why ? ` (${why})` : ""}`,
         readScreenshotBase64(body) ?? undefined,
