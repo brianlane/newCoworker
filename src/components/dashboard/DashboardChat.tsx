@@ -447,7 +447,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     </p>
                     <p className="text-xs text-parchment/60 mt-0.5">
                       {draft.kind === "aiflow"
-                        ? "Review the drafted automation in the builder, then save it there. Nothing runs until you save."
+                        ? "Review the drafted automation in the builder, then save it there. It saves switched OFF: turn it on in the builder when you're ready, or it will never run."
                         : `"${draft.name}", review and save it on the Agents page. Nothing is saved yet.`}
                     </p>
                     {draft.kind === "aiflow" && draft.warnings.length > 0 && (
