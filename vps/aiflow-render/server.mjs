@@ -355,7 +355,7 @@ const DIAG_MAX = 25;
 const DIAG_TEXT_MAX = 300;
 
 function attachDiagnostics(page) {
-  const diag = { consoleErrors: [], failedRequests: [], pageErrors: [], scriptNotJavaScript: [] };
+  const diag = { consoleErrors: [], failedRequests: [], pageErrors: [], dataServedAsMarkup: [] };
   const push = (arr, value) => {
     if (arr.length < DIAG_MAX) arr.push(String(value ?? "").slice(0, DIAG_TEXT_MAX));
   };
@@ -386,10 +386,25 @@ function attachDiagnostics(page) {
     // "missing a control". Naming the URL is the difference between that dead
     // end and a fixable problem.
     try {
-      if (res.request().resourceType() !== "script") return;
+      // Scripts AND data calls. Restricting this to `script` missed the case
+      // that actually bites: `Unexpected token '<'` is equally the signature of
+      // JSON.parse() on an HTML body, so an XHR answered with a login page or a
+      // challenge throws inside the app and the component that needed the data
+      // never renders. HomeLight's referral drawer fails this way, and the
+      // script-only version of this check came back empty while the page still
+      // threw twice.
+      const kind = res.request().resourceType();
+      if (kind !== "script" && kind !== "fetch" && kind !== "xhr") return;
       const type = res.headers()["content-type"] ?? "";
-      if (/javascript|ecmascript|application\/json/i.test(type)) return;
-      push(diag.scriptNotJavaScript, `${res.status()} ${type || "no content-type"} ${res.url()}`);
+      if (/javascript|ecmascript|json/i.test(type)) return;
+      // Markup is the tell. A data call legitimately returning text/plain or an
+      // image is not interesting; one returning a document is a redirect to
+      // something the app never asked for.
+      if (!/html|xml/i.test(type)) return;
+      push(
+        diag.dataServedAsMarkup,
+        `${kind} ${res.status()} ${type || "no content-type"} ${res.url()}`
+      );
     } catch {
       /* header access on a closed page must never break collection */
     }

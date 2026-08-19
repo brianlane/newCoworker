@@ -197,20 +197,24 @@ describe("navigator.webdriver does not give the game away", () => {
   });
 });
 
-describe("a script served as markup gets named", () => {
-  it("records scripts whose content-type is not JavaScript", () => {
-    // Invisible to every other check: status 200, request did not fail, the
-    // document keeps rendering, and the app then dies on "Unexpected token
-    // '<'" with nothing naming the file. A CDN challenge page, an SPA rewrite
-    // swallowing a 404, or an auth redirect on a static asset all look like
-    // this. Verified against HomeLight, where plain curl from the same box
-    // returns the chunk as real JavaScript and only the browser gets markup.
-    expect(server).toContain("scriptNotJavaScript");
-    expect(server).toContain('res.request().resourceType() !== "script"');
+describe("data served as markup gets named", () => {
+  it("covers XHR and fetch, not just script tags", () => {
+    // Restricting this to `script` missed the case that actually bites.
+    // `Unexpected token '<'` is equally the signature of JSON.parse() on an
+    // HTML body, so an XHR answered with a login page or a challenge throws
+    // inside the app and the component that needed the data never renders.
+    // Verified against HomeLight: the script-only version came back EMPTY
+    // while the page still threw "Unexpected token '<'" twice.
+    expect(server).toContain("dataServedAsMarkup");
+    expect(server).toContain('kind !== "script" && kind !== "fetch" && kind !== "xhr"');
   });
 
-  it("treats JSON as acceptable, since bundlers legitimately serve it", () => {
-    expect(server).toMatch(/javascript\|ecmascript\|application\\\/json/);
+  it("only flags MARKUP, so text/plain and images stay quiet", () => {
+    expect(server).toMatch(/if \(!\/html\|xml\/i\.test\(type\)\) return;/);
+  });
+
+  it("accepts json and javascript as healthy", () => {
+    expect(server).toMatch(/javascript\|ecmascript\|json/);
   });
 
   it("returns early on a real HTTP error rather than double-reporting", () => {
@@ -219,8 +223,7 @@ describe("a script served as markup gets named", () => {
   });
 
   it("never lets header access on a closed page break collection", () => {
-    // Anchor on the PUSH site, not the declaration, which comes first.
-    const at = server.indexOf("push(diag.scriptNotJavaScript");
+    const at = server.indexOf("push(\n        diag.dataServedAsMarkup");
     expect(at).toBeGreaterThan(-1);
     expect(server.slice(at, at + 300)).toContain("catch");
   });
