@@ -329,55 +329,56 @@ the stage ordering itself, so the forward-only guard this plan plannned to build
 is unnecessary: the portal will not offer a backward stage. What a flow must
 handle instead is the target stage simply not being on offer.
 
-**WHY the headless render does not get here (diagnosed 2026-08-19).** With page
-diagnostics live (PR #1504) the panel finally explains itself:
+**WHY the headless render does not get here: still open, but three theories are
+now DEAD (2026-08-19).** Page diagnostics (PRs #1504, #1508, #1520, #1521) were
+built to answer this and mostly served to kill wrong answers. Recorded so nobody
+re-runs them:
 
-```
-pageErrors (2): Unexpected token '<'
-failedRequests (7): net::ERR_ABORTED POST https://www.google-analytics.com/g/collect?...
-```
+1. **Not IP reputation.** Plain `curl` from Amy's own VPS fetches a HomeLight JS
+   chunk fine: `status=200`, `application/javascript`, 141,005 bytes of real
+   code. The box is not blocked.
+2. **Not `Unexpected token '<'`.** The headless page throws it, and so does a
+   REAL signed-in browser that renders the editor perfectly. Same error, same
+   count. It is background noise on this portal, not the fault.
+3. **Not the data endpoint returning HTML.** `/_next/data/<buildId>/referrals/
+   page/1.json` answers `text/html` in the real browser too, with and without an
+   `x-nextjs-data` header. Also noise.
+4. **Not fingerprint.** The UA now matches the engine (#1511), Sec-CH-UA client
+   hints are aligned (#1513) and `navigator.webdriver` is off (#1515). The
+   analytics beacon confirms it on the wire (`uafvl=Chromium;151.0.7922.34`, no
+   `HeadlessChrome`). Error count fell 11 -> 2, and the panel still does not
+   change.
+5. **Not viewport, and not the referral's stage** (see below).
 
-The analytics aborts are noise. `Unexpected token '<'` is the classic signature
-of **JavaScript being served HTML instead of a script**: HomeLight lazy-loads
-the chunk that renders the stage editor, that request comes back as markup, the
-component never mounts, and the two `--skeleton` placeholders stay forever.
+**What the difference actually is.** The two browsers render DIFFERENT PANELS
+for the same referral, and the headless one is not merely slower or emptier:
 
-Two things that narrows it to. No 4xx/5xx was recorded (the `response` listener
-catches those), so the chunk returns **200 with an HTML body**, which is what a
-bot-challenge or interstitial looks like rather than a plain 404. And the
-analytics payload carries `sr=1280x720`, confirming the headless viewport is a
-normal desktop size, so viewport is NOT the cause: a real browser at 817px wide
-renders the editor fine.
+| | real browser | render service |
+| --- | --- | --- |
+| skeletons | 0 | 0 |
+| controls | Call, Email, Reassign, Activity, Hide Activity, **Update Stage**, **Add Note** | Last Updated, Stage, **Done** |
 
-Remaining suspects, in order: bot protection on whatever serves HomeLight's JS
-chunks (our datacenter IP plus a Playwright fingerprint), and the UA override in
-`server.mjs`, which claims `Chrome/124.0` while the bundled engine is far newer,
-a mismatch that is itself a common detection signal. Next step is to capture the
-chunk response body rather than guess between them.
+So the render service gets a reduced, read-only variant of the drawer. That is a
+different component, not a half-loaded one, which is why every timing and
+network theory above came back empty.
 
-**The UA suspect is now ruled out on its own (2026-08-19, after PR #1511).**
-That PR derived the UA version from `browser.version()` so the claimed Chrome
-major can never disagree with the engine again, and the fleet was redeployed
-the same day. Probing `https://agent.homelight.com/referrals` on Amy's box
-AFTER that redeploy still reports the same failure, louder:
+**Two traps that cost time here, worth not repeating.**
 
-```
-pageErrors (11): Unexpected token '<' (x8), Request failed with status code 401
-failedRequests: HTTP 401 POST https://hapi.homelight.com/api/events-service/user-events/record-user-event
-```
+A referral in a TERMINAL stage (`Failed`, `Closed`) has no `Update Stage` button
+in ANY browser. `Anastasios C.` is `Failed`, and probing it produced a "headless
+cannot see the editor" reading that was simply true of every browser. Probe a
+live one (`Thomas Larkin` at `Left Voicemail`, `Jose King` at `Listing`).
 
-So a matching user agent does not get the chunks served as JavaScript. Fixing
-the mismatch was still right (it removed a real detection signal and cannot
-drift again), but it is NOT sufficient, and the "two suspects" list above is
-now a list of one: whatever serves those chunks is refusing this client for
-some other reason.
+And clicking a second referral without closing the first leaves BOTH drawers
+mounted, so a naive `document.querySelectorAll("button")` reads the previous
+referral's controls. The tell is duplicated labels ("Add Note", "Add Note").
+Close with `Done` first, or scope the query to one drawer.
 
-The 401 is a new detail worth keeping: an authenticated XHR to HomeLight's own
-events service is being rejected inside a session that is otherwise logged in
-(the referrals list itself renders, with its real counts). Whether that shares
-a cause with the HTML-for-JS responses is unknown; capturing one chunk response
-body is still the next step, and is now the ONLY step that separates the
-remaining hypotheses.
+**Next step**, cheapest first: screenshot the headless panel to see which
+variant it is, then compare the two DOMs for the container that differs. A
+feature flag or an entitlement fetched per session is the most likely
+discriminator, since one API call (`hapi.homelight.com/api/events-service/
+user-events/record-user-event`) answers `401` in the render service.
 
 **The headless render still does not get here.** Same referral, same click:
 the real browser shows zero skeletons and `Update Stage`; the render service
