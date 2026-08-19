@@ -127,16 +127,21 @@ export function toCheckableActions(actions: EditorAction[]): CheckableAction[] {
 }
 
 /**
- * True when a value the check actually COMPARES is still a template.
+ * True when something the check actually COMPARES is still a template.
  *
- * Only the value-requiring kinds matter: a dry run never types, so a
- * `fill_selector` template is irrelevant, but `select_option` and
+ * For values, only the value-requiring kinds matter: a dry run never types,
+ * so a `fill_selector` template is irrelevant, but `select_option` and
  * `click_role` match ON the value, and at authoring time there is no run to
- * resolve {{vars.x}} against. The owner has to be told the comparison used
- * the text as written, or a correct step reads as a missing option.
+ * resolve {{vars.x}} against. Targets are compared on by EVERY kind (text,
+ * CSS, placeholder), and the runtime renders a braced target the same way it
+ * renders a valueTemplate, so an unresolved one makes the whole check
+ * unreliable regardless of kind. The owner has to be told the comparison used
+ * the text as written, or a correct step reads as a missing control.
  */
 export function hasUnresolvedTemplateValue(actions: EditorAction[]): boolean {
   return actions.some(
-    (a) => VALUE_REQUIRING_KINDS.has(a.kind) && (a.valueTemplate ?? "").includes("{{")
+    (a) =>
+      (VALUE_REQUIRING_KINDS.has(a.kind) && (a.valueTemplate ?? "").includes("{{")) ||
+      a.target.includes("{{")
   );
 }

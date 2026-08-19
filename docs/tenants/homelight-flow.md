@@ -329,117 +329,93 @@ the stage ordering itself, so the forward-only guard this plan plannned to build
 is unnecessary: the portal will not offer a backward stage. What a flow must
 handle instead is the target stage simply not being on offer.
 
-**WHY the headless render does not get here: still open, but three theories are
-now DEAD (2026-08-19).** Page diagnostics (PRs #1504, #1508, #1520, #1521) were
-built to answer this and mostly served to kill wrong answers. Recorded so nobody
-re-runs them:
+**RESOLVED (2026-08-19): the headless render now gets the full editor.** The
+long "headless sees a reduced read-only drawer" investigation ended with a
+root cause and a fix, recorded here so nobody re-runs the dead theories:
 
-1. **Not IP reputation.** Plain `curl` from Amy's own VPS fetches a HomeLight JS
-   chunk fine: `status=200`, `application/javascript`, 141,005 bytes of real
-   code. The box is not blocked.
-2. **Not `Unexpected token '<'`.** The headless page throws it, and so does a
-   REAL signed-in browser that renders the editor perfectly. Same error, same
-   count. It is background noise on this portal, not the fault.
-3. **Not the data endpoint returning HTML.** `/_next/data/<buildId>/referrals/
-   page/1.json` answers `text/html` in the real browser too, with and without an
-   `x-nextjs-data` header. Also noise.
-4. **Not fingerprint.** The UA now matches the engine (#1511), Sec-CH-UA client
-   hints are aligned (#1513) and `navigator.webdriver` is off (#1515). The
-   analytics beacon confirms it on the wire (`uafvl=Chromium;151.0.7922.34`, no
-   `HeadlessChrome`). Error count fell 11 -> 2, and the panel still does not
-   change.
-5. **Not viewport, and not the referral's stage** (see below).
+- **Root cause.** The drawer's data comes from `hapi.homelight.com` REST
+  services (`api/lead-data-service/agent-dashboard/leads/<id>/agent-lead-detail`),
+  authenticated by an `hapi_user_production` cookie, NOT by the NextAuth
+  session cookie that renders the page shell. A session whose login predated
+  the fingerprint fixes held only the NextAuth cookie, so the server-rendered
+  chrome worked while every hapi call answered 401: full page, empty drawer,
+  "0 referral matches". That is why it looked like a different component
+  rather than a slow one.
+- **The fix that landed.** The derived UA (#1511), aligned Sec-CH-UA client
+  hints (#1513) and `--disable-blink-features=AutomationControlled` (#1515),
+  plus a container restart (fresh sessions, 2026-08-19): a fresh login now
+  comes away with the hapi cookie and every data call succeeds. Verified
+  end to end through the sidecar: populated list (Seller 27, Left Voicemail
+  22, Connected 4), hydrated drawer, stage dropdown opens with its
+  forward-only options.
+- **Noise that is NOT a defect** (identical in a signed-in real browser): the
+  404 on `_next/static/<buildId>/_ssgManifest.js`, the 404/`text/html` answers
+  on `/_next/data/<buildId>/referrals/page/1.json`, and two
+  `Unexpected token '<'` page errors.
 
-**What the difference actually is.** The two browsers render DIFFERENT PANELS
-for the same referral, and the headless one is not merely slower or emptier:
-
-| | real browser | render service |
-| --- | --- | --- |
-| skeletons | 0 | 0 |
-| controls | Call, Email, Reassign, Activity, Hide Activity, **Update Stage**, **Add Note** | Last Updated, Stage, **Done** |
-
-So the render service gets a reduced, read-only variant of the drawer. That is a
-different component, not a half-loaded one, which is why every timing and
-network theory above came back empty.
-
-**Two traps that cost time here, worth not repeating.**
-
-A referral in a TERMINAL stage (`Failed`, `Closed`) has no `Update Stage` button
-in ANY browser. `Anastasios C.` is `Failed`, and probing it produced a "headless
-cannot see the editor" reading that was simply true of every browser. Probe a
-live one (`Thomas Larkin` at `Left Voicemail`, `Jose King` at `Listing`).
-
-And clicking a second referral without closing the first leaves BOTH drawers
-mounted, so a naive `document.querySelectorAll("button")` reads the previous
-referral's controls. The tell is duplicated labels ("Add Note", "Add Note").
-Close with `Done` first, or scope the query to one drawer.
-
-**Next step**, cheapest first: screenshot the headless panel to see which
-variant it is, then compare the two DOMs for the container that differs. A
-feature flag or an entitlement fetched per session is the most likely
-discriminator, since one API call (`hapi.homelight.com/api/events-service/
-user-events/record-user-event`) answers `401` in the render service.
-
-**The headless render still does not get here.** Same referral, same click:
-the real browser shows zero skeletons and `Update Stage`; the render service
-leaves both interactive children as `--skeleton` and `--expect "Update Stage"`
-times out. Two hypotheses are now DISPROVEN: it is not referral-specific (a
-terminal `Failed` referral has the editor too), and it is not the SSRF guard
-aborting `blob:`/`data:` subresources (the live page loads 242 resources, all
-https, no service worker, no workers). Still open: viewport (the render service
-sets none, so Playwright's default applies) and headless-specific gating.
-
-**Superseded note on where the editor is**
-
-Both routes, clicking a row and clicking the dashboard's `Update Referral
-Stage`, open the same panel. Its visible text reads as read-only:
+**The drawer's write surface, read live headless on 2026-08-19.** Clicking a
+client's name on `agent.homelight.com/referrals` opens the detail drawer with
+the editor inline (no separate "Update Stage" button on this variant):
 
 ```
-<Name> / Role / Property Address / Price / Client timeframe
-Date Received / Last Updated / Stage: <value> / [Done]
+Stage    combobox: [data-test="referralDetailsModal-stageUpdateOptions"]
+           [data-test="select-selected-item"]   current stage (SCOPE IT: the
+             list page's team-member filter carries the same data-test)
+           [data-test="select-option-item"]     one per offered stage
+Add Note [data-test="referral-detail-modal-add-note-button"] swaps in:
+           [data-test="referral-add-note-textarea"]  "Add an optional note..."
+           [data-test="referral-add-note-btn"]       "Add note" (submits)
+           plus a Cancel button
 ```
 
-But the markup shows the controls ARE there and simply had not hydrated when
-the probe read. Directly below the Stage row:
+The stage dropdown stays forward-only and contextual (Agent Left Voicemail
+offers Connected, Meeting Scheduled, Met With Person, Coming Soon, Listing,
+and later stages; never an earlier one).
 
-```html
-<div class="... MygTT">
-  <div class="... Udsyj"><p>Stage</p><p>Failed</p></div>
-  <span class="--skeleton" style="width:100%; height:40px;  margin-top:32px;"></span>
-  <span class="--skeleton" style="width:100%; height:200px; margin-top:24px;"></span>
-</div>
-<button type="button"><span>Done</span></button>
+**What ships on it: a note, deliberately not a stage write**
+(`scripts/oneshot/amy-homelight-portal-note.ts`, plan Phase 4b). The flow's
+only call signal (`hl_call_outcome` from `wait_for_call`) proves our line
+answered HomeLight's claim call, not that the client was reached, so an
+automatic "Connected" would routinely be false, and HomeLight's own AI
+already maintains the stage from its call system ("Stage updated by HomeLight
+AI" on live timelines). A note is append-only free text, so it can carry the
+run's own `actions_taken` log verbatim, the same honesty model as the
+ReferralExchange update. The `hl_note_gate` branch at the end of the
+`still_ours` arm posts, guarded on `lead_name != "none"` (the click needs the
+real name) and `claimed_agent != "none"` (matching the sibling sends):
+
+```
+click_text      "Referrals"                       (claim page header nav)
+click_text      "{{vars.lead_name}}"              (templated target, rendered
+                                                   at plan time; clicks the row)
+click_selector  [data-test="referral-detail-modal-add-note-button"]
+fill_selector   [data-test="referral-add-note-textarea"]
+                  -> "Update from Amy's assistant: {{vars.actions_taken}}.
+                      Will keep following up."
+click_selector  [data-test="referral-add-note-btn"]
+expectText      "Update from Amy's assistant"     (holds until the note shows
+                                                   in the activity feed)
 ```
 
-A 40px-tall control (the stage picker) and a 200px-tall one (notes or the
-activity feed), both still `--skeleton`. The date values above them are wrapped
-in `--skeleton` spans too, which is the tell: the panel paints its text first
-and swaps in its interactive children afterwards.
+**Navigation traps that remain true, each one paid for:**
 
-So `expectText "Last Updated"` is NOT a sufficient wait: that text is present
-while still inside a skeleton. The panel needs a marker that only exists after
-hydration before the editor can be read, and until it is read, no
-`browse_action` should be authored against it. This account has been bitten
-twice by selectors written from a guess
-(`debug/update-amy-aiflow-re-update-actions.ts`, and the Aug 16 claim click
-that reported success and changed nothing).
-
-Next step: get the skeletons to resolve. Five candidate post-hydration markers
-were tried and none appeared within `expectText`'s 10s window ("Add a note",
-"Activity Feed", "Select a stage", "Update Stage", "Save"). Since the panel's
-own DATE values are skeleton-wrapped too, the likely cause is the panel's data
-fetch not completing in the headless session rather than a wrong marker: this
-is a waiting problem, not a selector problem. Worth trying next, in order: a
-longer settle (`AIFLOW_RENDER_TIMEOUT_MS` on the box), a screenshot via
-`--shot` to see what the panel actually looks like once open, and
-`--read-network`-style inspection of whether the panel's XHR is being blocked
-by the SSRF guard the render service attaches to every page
-(`attachSsrfGuard`), which is the one thing in our stack that could stop a
-fetch a real browser would allow. Concretely: the guard routes `**/*` through
-`safeUrl`, which returns null for any protocol that is not `http:`/`https:`, so
-every `blob:` and `data:` subresource is aborted with `blockedbyclient`. A SPA
-that boots a web worker from a `blob:` URL, which is a common bundler output,
-would lose it silently and could leave exactly this pattern: text painted,
-every interactive child stuck as a skeleton. That would affect every SPA portal
-we browse, not just this panel, so it is worth confirming before anything is
-built on top of it.
+- Rows are `<a>` with NO href: `forEachLink` cannot reach them (it collects
+  hrefs), and navigating directly to `?referralId=` does not open the drawer
+  (client-side state). The row must be CLICKED.
+- **Do not fill the list's search box and click "the first row".** The click
+  races the SPA re-render and lands on the stale first row of the unfiltered
+  list; observed live, and the row it hit was a terminal referral with no
+  editor at all. The templated name click replaces that whole idea: action
+  targets render `{{vars.*}}` at plan time (steps.ts), so
+  `click_text "{{vars.lead_name}}"` waits for the one row carrying the name.
+- A referral in a TERMINAL stage (`Failed`, `Closed`) has no stage dropdown
+  and no Add Note in ANY browser, just static text and Done. Probe a live one
+  (`Thomas Larkin` at Left Voicemail, `Jose King` at Listing), never
+  `Anastasios C.` (Failed).
+- Clicking a second referral without closing the first leaves BOTH drawers
+  mounted, so an unscoped read returns the previous referral's controls
+  (duplicated "Add Note" labels are the tell). Close with the X / Done first,
+  or scope every query to one drawer.
+- The drawer mounts asynchronously; a read right after the click is a race.
+  Use the probe's `--expect` (e.g. `--expect "Add Note"`) to hold until it is
+  on the page.

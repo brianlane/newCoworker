@@ -965,6 +965,13 @@ transferred AI call, see Sharp edges),
 `amy-homelight-feedback-request-definition.ts` (Aug 18 2026: gives HomeLight's
 feedback number a named owner so it stops reaching the general assistant, see
 Sharp edges),
+`amy-homelight-portal-note.ts` +
+`amy-homelight-portal-note-definition.ts` (Aug 19 2026: after the HomeLight
+Referral flow works a lead, it now posts a progress note on the agent
+dashboard's drawer, the honest `actions_taken` wording, via a templated
+`click_text "{{vars.lead_name}}"` row click; selectors and the reasoning live
+in [homelight-flow.md](homelight-flow.md), pinned by
+`tests/amy-homelight-portal-note.test.ts`),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder

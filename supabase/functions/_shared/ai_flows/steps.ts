@@ -1745,11 +1745,31 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (step.actions.length === 0) {
         return { ok: false, error: "browse_action: no actions configured" };
       }
-      const actions: BrowseActionPlanned[] = step.actions.map((a) => ({
-        kind: a.kind,
-        target: a.target,
-        value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
-      }));
+      // A target may itself be a template: `click_text "{{vars.lead_name}}"` is
+      // how a flow opens ONE lead's row on a portal list whose rows carry no
+      // hrefs (HomeLight's referral dashboard), where forEachLink cannot reach
+      // and a search-box fill races the list re-render. Rendered only when the
+      // braces are present, so every existing literal target stays
+      // byte-identical. An empty render fails the step here, at plan time: the
+      // sidecar would otherwise wait the full click timeout on "" and blame
+      // the page for a value the run never had.
+      const actions: BrowseActionPlanned[] = [];
+      for (const a of step.actions) {
+        const target = a.target.includes("{{")
+          ? renderTemplate(a.target, scope).trim()
+          : a.target;
+        if (!target) {
+          return {
+            ok: false,
+            error: `browse_action: action target "${a.target}" rendered empty`
+          };
+        }
+        actions.push({
+          kind: a.kind,
+          target,
+          value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
+        });
+      }
       // Resolve the forEachLink name filter: split the var's value on
       // commas/newlines/semicolons, trim, drop empties, dedupe. When the author
       // requested a filter (forEachLinkMatchVar set) we ALWAYS attach the list,

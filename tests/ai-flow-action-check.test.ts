@@ -472,4 +472,15 @@ describe("hasUnresolvedTemplateValue", () => {
     ).toBe(false);
     expect(hasUnresolvedTemplateValue([{ kind: "select_option", target: "s" }])).toBe(false);
   });
+
+  it("is true when any kind's TARGET still holds a template", () => {
+    // Every kind matches on its target (text, CSS, placeholder), and the
+    // runtime renders a braced target the way it renders a valueTemplate, so
+    // an authoring-time check compared it as written: the owner has to be
+    // told, or a correct step reads as a missing control.
+    expect(
+      hasUnresolvedTemplateValue([{ kind: "click_text", target: "{{vars.lead_name}}" }])
+    ).toBe(true);
+    expect(hasUnresolvedTemplateValue([{ kind: "click_text", target: "Referrals" }])).toBe(false);
+  });
 });

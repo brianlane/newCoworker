@@ -2311,7 +2311,14 @@ function templateStringsForStep(step: FlowStep): string[] {
         step.unclaimedReminders?.detailsTemplate ?? ""
       ];
     case "browse_action":
-      return step.actions.map((a) => a.valueTemplate ?? "");
+      // A target is rendered by the runtime exactly when it carries braces
+      // (see planStep), so a templated target needs the same scope check as a
+      // valueTemplate: a var no step produces would otherwise surface as a
+      // runtime "rendered empty" failure instead of an authoring error.
+      return step.actions.flatMap((a) => [
+        a.valueTemplate ?? "",
+        a.target.includes("{{") ? a.target : ""
+      ]);
     case "email_extract":
       return step.matchTemplates ?? [];
     // The document source and the filing title are ordinary templates (the

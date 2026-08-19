@@ -2120,6 +2120,44 @@ describe("planStep: browse_action", () => {
       error: "browse_action: no actions configured"
     });
   });
+  it("renders a braced target and leaves literal targets byte-identical", () => {
+    // `click_text "{{vars.lead_name}}"` is how a flow opens ONE lead's row on
+    // a portal list whose rows carry no hrefs (HomeLight's dashboard), where
+    // forEachLink cannot reach and a search fill races the re-render.
+    const named: FlowStep = {
+      id: "u",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [
+        { kind: "click_text", target: "Referrals" },
+        { kind: "click_text", target: "{{vars.lead_name}}" }
+      ]
+    };
+    const r = planStep(named, {
+      vars: { lead_url: "https://agent.homelight.com/referrals", lead_name: " Thomas Larkin " }
+    });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.actions).toEqual([
+      { kind: "click_text", target: "Referrals", value: "" },
+      // Rendered AND trimmed: a padded var must not defeat the text match.
+      { kind: "click_text", target: "Thomas Larkin", value: "" }
+    ]);
+  });
+  it("fails at plan time when a braced target renders empty", () => {
+    // Passing "" to the sidecar would wait the full click timeout on nothing
+    // and blame the page for a value the run never had.
+    const named: FlowStep = {
+      id: "u",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text", target: "{{vars.lead_name}}" }]
+    };
+    expect(
+      planStep(named, { vars: { lead_url: "https://agent.homelight.com/referrals" } })
+    ).toEqual({
+      ok: false,
+      error: 'browse_action: action target "{{vars.lead_name}}" rendered empty'
+    });
+  });
   it("passes a click_text_while_present action through unchanged", () => {
     const wizard: FlowStep = {
       id: "u",
