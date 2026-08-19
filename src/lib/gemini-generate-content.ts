@@ -1,3 +1,9 @@
+import {
+  geminiAuthHeaders,
+  geminiEndpoint,
+  resolveModelSurface,
+  type ModelSurface
+} from "../../supabase/functions/_shared/hipaa_model_surface";
 /**
  * Gemini Developer API (`ai.google.dev` key): native `generateContent` REST calls.
  *
@@ -10,6 +16,13 @@
 
 export type GeminiGenerateTextParams = {
   apiKey: string;
+  /**
+   * Where to send this call. Omitted by every existing caller, which resolves
+   * to the AI Studio surface from `apiKey` exactly as before. A HIPAA tenant's
+   * caller passes the BAA-covered Google Cloud surface instead; see
+   * supabase/functions/_shared/hipaa_model_surface.ts.
+   */
+  surface?: ModelSurface;
   /** Short model id, e.g. `gemini-3-flash-preview` (no `models/` prefix). */
   model: string;
   systemInstruction: string;
@@ -159,8 +172,11 @@ export function thinkingLevelFallback(
 export async function geminiGenerateTextDetailed(
   params: GeminiGenerateTextParams
 ): Promise<GeminiGenerateTextResult> {
-  const model = encodeURIComponent(params.model.trim());
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  // Endpoint AND auth come from the surface resolver, so a HIPAA tenant
+  // can never be sent to the AI Studio host no BAA covers. Non-HIPAA
+  // callers pass no surface and resolve to exactly the previous URL.
+  const surface = params.surface ?? resolveModelSurface(false, params.apiKey);
+  const url = geminiEndpoint(surface, params.model);
   const temperature = params.temperature ?? 0.2;
   const maxOutputTokens = params.maxOutputTokens ?? 1500;
 
@@ -169,7 +185,7 @@ export async function geminiGenerateTextDetailed(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-goog-api-key": params.apiKey
+        ...geminiAuthHeaders(surface)
       },
       signal: params.signal,
       body: JSON.stringify({
