@@ -355,6 +355,30 @@ chunks (our datacenter IP plus a Playwright fingerprint), and the UA override in
 a mismatch that is itself a common detection signal. Next step is to capture the
 chunk response body rather than guess between them.
 
+**The UA suspect is now ruled out on its own (2026-08-19, after PR #1511).**
+That PR derived the UA version from `browser.version()` so the claimed Chrome
+major can never disagree with the engine again, and the fleet was redeployed
+the same day. Probing `https://agent.homelight.com/referrals` on Amy's box
+AFTER that redeploy still reports the same failure, louder:
+
+```
+pageErrors (11): Unexpected token '<' (x8), Request failed with status code 401
+failedRequests: HTTP 401 POST https://hapi.homelight.com/api/events-service/user-events/record-user-event
+```
+
+So a matching user agent does not get the chunks served as JavaScript. Fixing
+the mismatch was still right (it removed a real detection signal and cannot
+drift again), but it is NOT sufficient, and the "two suspects" list above is
+now a list of one: whatever serves those chunks is refusing this client for
+some other reason.
+
+The 401 is a new detail worth keeping: an authenticated XHR to HomeLight's own
+events service is being rejected inside a session that is otherwise logged in
+(the referrals list itself renders, with its real counts). Whether that shares
+a cause with the HTML-for-JS responses is unknown; capturing one chunk response
+body is still the next step, and is now the ONLY step that separates the
+remaining hypotheses.
+
 **The headless render still does not get here.** Same referral, same click:
 the real browser shows zero skeletons and `Update Stage`; the render service
 leaves both interactive children as `--skeleton` and `--expect "Update Stage"`
