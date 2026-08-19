@@ -15,6 +15,7 @@ import {
   type LoginMethod
 } from "@/lib/auth/last-login-method";
 import { NO_ACCOUNT_ERROR } from "@/lib/auth/account-gate";
+import { SESSION_TIMEOUT_ERROR } from "@/lib/hipaa/session-timeout";
 import { isPasskeyCeremonyCancellation, passkeyErrorMessage } from "@/lib/auth/passkey-errors";
 import { safeInternalPath } from "@/lib/auth/safe-redirect";
 import {
@@ -52,6 +53,21 @@ function MethodSlot({
 }
 
 /**
+ * Maps a `?error=` token to its message. Both tokens are set by a redirect
+ * away from a screen that cannot show its own error: the OAuth account gate
+ * in /api/auth/callback, and the HIPAA idle logout, which hard-navigates
+ * here after revoking the session.
+ */
+function loginErrorMessage(
+  token: string | null,
+  t: ReturnType<typeof useTranslations<"auth">>
+): string | null {
+  if (token === NO_ACCOUNT_ERROR) return t("noAccountForEmail");
+  if (token === SESSION_TIMEOUT_ERROR) return t("sessionTimedOut");
+  return null;
+}
+
+/**
  * What is currently in flight. Sending a reset email is not a way to sign in,
  * so it gets its own token: reusing `"password"` would spin the Sign in
  * button when the owner clicked "Forgot password?".
@@ -74,7 +90,7 @@ export default function LoginForm() {
   // into the same error slot every other failure uses, so the next attempt
   // clears it.
   const [error, setError] = useState<string | null>(() =>
-    searchParams.get("error") === NO_ACCOUNT_ERROR ? t("noAccountForEmail") : null
+    loginErrorMessage(searchParams.get("error"), t)
   );
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [magicSent, setMagicSent] = useState(false);

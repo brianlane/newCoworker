@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SESSION_TIMEOUT_ERROR } from "@/lib/hipaa/session-timeout";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { safeAdminNextPath } from "@/lib/auth/admin-aal";
@@ -21,7 +22,14 @@ export default function AdminLoginForm({
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  // The HIPAA idle logout sends admins here too (an admin timed out while
+  // viewing a tenant under view-as), so this page has to explain the sign-out
+  // the same way /login does. Whitelisted token, never reflected.
+  const [error, setError] = useState(() =>
+    searchParams.get("error") === SESSION_TIMEOUT_ERROR
+      ? "You were signed out after 30 minutes of inactivity, to protect patient information. Please sign in again."
+      : ""
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
