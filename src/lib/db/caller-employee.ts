@@ -46,15 +46,24 @@ export async function resolveCallerEmployeeId(
       (memberRow as { employee_id?: string | null } | null)?.employee_id ?? null;
     if (linked) return linked;
 
-    // 2) The owner's own roster row. Exact owner_email match, mirroring
-    // requireOwner's check.
+    // 2) The owner's own roster row. Case-insensitive owner_email match,
+    // mirroring getBusinessRoleForEmail, the check that admitted this
+    // caller to the page; a strict DB equality would let a mixed-case
+    // owner_email pass authorization yet miss here, leaving the owner
+    // "unlinked" again.
     const { data: bizRow } = await db
       .from("businesses")
-      .select("id")
+      .select("owner_email")
       .eq("id", businessId)
-      .eq("owner_email", callerEmail)
       .maybeSingle();
-    if (!bizRow) return null;
+    const ownerEmail = (
+      (bizRow as { owner_email?: string | null } | null)?.owner_email ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    if (!ownerEmail || ownerEmail !== callerEmail.trim().toLowerCase()) {
+      return null;
+    }
 
     const [roster, ownerNumbers] = await Promise.all([
       listTeamMembers(businessId, db),

@@ -33,7 +33,7 @@ const OWNER_PHONE = "+16026951142";
 
 type TableResults = {
   business_members?: { employee_id: string | null } | null;
-  businesses?: { id: string } | null;
+  businesses?: { owner_email: string | null } | null;
 };
 
 /** Chainable stub covering the two maybeSingle() lookups the helper makes. */
@@ -103,10 +103,33 @@ describe("resolveCallerEmployeeId", () => {
   });
 
   it("resolves the owner to their phone-matched active roster row", async () => {
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBe(
       "mem-owner"
     );
+  });
+
+  it("matches owner_email case-insensitively, like getBusinessRoleForEmail", async () => {
+    // Signup can keep a mixed-case owner_email while auth emails are
+    // lowercased; the check that ADMITS the caller to the page compares
+    // normalized, so this one must too or the owner reads as unlinked.
+    const client = stubClient({ businesses: { owner_email: "Owner@Example.COM " } });
+    await expect(
+      resolveCallerEmployeeId(BIZ, "owner@example.com", client)
+    ).resolves.toBe("mem-owner");
+  });
+
+  it("returns null when the business row is missing or has no owner_email", async () => {
+    await expect(
+      resolveCallerEmployeeId(BIZ, OWNER_EMAIL, stubClient({ businesses: null }))
+    ).resolves.toBeNull();
+    await expect(
+      resolveCallerEmployeeId(
+        BIZ,
+        OWNER_EMAIL,
+        stubClient({ businesses: { owner_email: null } })
+      )
+    ).resolves.toBeNull();
   });
 
   it("also resolves the owner on a multi-person roster", async () => {
@@ -114,14 +137,14 @@ describe("resolveCallerEmployeeId", () => {
       member({ id: "mem-2", name: "Dave", phone_e164: "+15555550102" }),
       member()
     ] as never);
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBe(
       "mem-owner"
     );
   });
 
   it("returns null for a non-owner with no member row", async () => {
-    const client = stubClient({ businesses: null });
+    const client = stubClient({ businesses: { owner_email: "someone-else@example.com" } });
     await expect(
       resolveCallerEmployeeId(BIZ, "stranger@example.com", client)
     ).resolves.toBeNull();
@@ -132,13 +155,13 @@ describe("resolveCallerEmployeeId", () => {
     vi.mocked(listTeamMembers).mockResolvedValue([
       member({ phone_e164: "+15555550199" })
     ] as never);
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBeNull();
   });
 
   it("never hands back an inactive roster row", async () => {
     vi.mocked(listTeamMembers).mockResolvedValue([member({ active: false })] as never);
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBeNull();
   });
 
@@ -152,14 +175,14 @@ describe("resolveCallerEmployeeId", () => {
 
   it("returns null (and warns) instead of throwing on a read failure", async () => {
     vi.mocked(listTeamMembers).mockRejectedValue(new Error("boom"));
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("survives a non-Error failure too", async () => {
     vi.mocked(listTeamMembers).mockRejectedValue("string failure");
-    const client = stubClient({ businesses: { id: BIZ } });
+    const client = stubClient({ businesses: { owner_email: OWNER_EMAIL } });
     await expect(resolveCallerEmployeeId(BIZ, OWNER_EMAIL, client)).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
