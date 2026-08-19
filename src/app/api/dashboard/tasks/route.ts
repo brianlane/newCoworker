@@ -33,6 +33,8 @@ import {
 import { runTriggerEntries, runVarEntries, type RunDataEntry } from "@/lib/ai-flows/run-stats";
 import type { FlowStep } from "@/lib/ai-flows/schema";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getActivityForContacts, type ActivityItem } from "@/lib/db/activity";
 
 export const dynamic = "force-dynamic";
@@ -269,6 +271,11 @@ export async function GET(request: Request) {
       name: m.name
     }));
     const employeeNameById = new Map(employees.map((m) => [m.id, m.name]));
+    // One-person team whose only member is the owner: their unclaimed leads
+    // are theirs, so the cards name them and scope=mine returns those leads
+    // instead of an empty board. The roster select above carries only
+    // id + name, so this reads the roster's own columns.
+    const implicitOwner = await resolveImplicitContactOwner(businessId, db);
 
     // 5) Goal checkpoints recorded on the shown runs.
     const goalsByRun = new Map<string, GoalTimelineEntry[]>();
@@ -431,16 +438,20 @@ export async function GET(request: Request) {
         .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
         .slice(0, ACTIVITY_PER_TASK);
 
+      const owner = effectiveContactOwner(
+        contact.owner_employee_id,
+        implicitOwner,
+        employeeNameById
+      );
       cards.push({
         e164: phone,
         name:
           contactNames.get(phone)?.name ?? contact.display_name ?? phone,
         tags: contact.tags ?? [],
-        ownerEmployeeId: contact.owner_employee_id,
-        ownerName:
-          (contact.owner_employee_id &&
-            employeeNameById.get(contact.owner_employee_id)) ||
-          null,
+        // Explicit stamp first, implicit owner when nobody claimed it. Both
+        // the card label and the scope=mine filter below read these.
+        ownerEmployeeId: owner?.id ?? null,
+        ownerName: owner?.name ?? null,
         summary: contact.summary_md,
         runs: runViews,
         goals,

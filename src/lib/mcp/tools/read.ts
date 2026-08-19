@@ -172,6 +172,16 @@ export const getContactTool = defineMcpTool({
     type: z.string().nullable(),
     tags: z.array(z.string()).nullable(),
     owner_employee_id: z.string().nullable(),
+    /**
+     * Read-only. `owner_employee_id` stays the RAW stored claim, because
+     * `update_contact` writes back whatever it is handed and its own tags
+     * field tells the model to fetch current values here first: resolving
+     * the implicit owner into that field would let a routine tag edit
+     * persist a stamp nobody made. These two carry the resolved answer
+     * instead, and no write path accepts them.
+     */
+    implicit_owner_employee_id: z.string().nullable(),
+    implicit_owner_name: z.string().nullable(),
     birthday: z.string().nullable(),
     pinned_notes: z.string().nullable(),
     ai_summary: z.string().nullable(),
@@ -180,7 +190,7 @@ export const getContactTool = defineMcpTool({
     total_interactions: z.number().nullable()
   }),
   description:
-    "Get one contact's full profile: name, email, tags, owner, birthday, pinned notes, and the AI's rolling relationship summary.",
+    "Get one contact's full profile: name, email, tags, owner, birthday, pinned notes, and the AI's rolling relationship summary. `owner_employee_id` is who CLAIMED the contact; when it is null and `implicit_owner_employee_id` is set, the business is a one-person team and that member holds the contact by default. Never copy an implicit owner into update_contact: it is the roster's answer, not a stored claim.",
   schema: {
     business_id: businessIdField,
     phone: z.string().describe("The contact's phone number (any common format).")
@@ -192,6 +202,20 @@ export const getContactTool = defineMcpTool({
     const { getCustomerMemory } = await import("@/lib/customer-memory/db");
     const row = await getCustomerMemory(businessId, phone);
     if (!row) throw new McpToolError(`No contact found for ${phone}.`);
+    // An unclaimed contact on a one-person team belongs to that one person,
+    // so the model is told who holds it rather than "nobody". Reported in
+    // its OWN fields, never folded into `owner_employee_id`: that field is
+    // echoed straight back into `update_contact`, which would turn a
+    // read-time answer into a stored stamp and take the row out of reach of
+    // the claim path's compare-and-swap on a null owner. Guarded, so a
+    // contact someone actually claimed costs no extra read at all.
+    let implicitOwner: { id: string; name: string } | null = null;
+    if (!row.owner_employee_id) {
+      const { resolveImplicitContactOwner } = await import(
+        "@/lib/db/implicit-contact-owner"
+      );
+      implicitOwner = await resolveImplicitContactOwner(businessId);
+    }
     return {
       phone: row.customer_e164,
       name: row.display_name,
@@ -199,6 +223,8 @@ export const getContactTool = defineMcpTool({
       type: row.type,
       tags: row.tags,
       owner_employee_id: row.owner_employee_id,
+      implicit_owner_employee_id: implicitOwner?.id ?? null,
+      implicit_owner_name: implicitOwner?.name ?? null,
       birthday: row.birthday,
       pinned_notes: row.pinned_md,
       ai_summary: row.summary_md,

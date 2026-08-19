@@ -16,6 +16,7 @@
 import {
   isPhoneFieldName
 } from "../../../supabase/functions/_shared/ai_flows/engine";
+import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
 
 /** Most rows one response carries; newest lead first. */
 export const MAX_LEAD_DATA_ROWS = 200;
@@ -134,8 +135,19 @@ export function buildLeadDataRows(input: {
    * response by other people's newer leads (Board/List scope the same way).
    */
   scopeOwnerEmployeeId?: string | null;
+  /**
+   * The roster member an UNCLAIMED contact already falls to: a one-person
+   * team whose only member is the business owner
+   * (`src/lib/db/implicit-contact-owner.ts`). Contact rows with a null
+   * `owner_employee_id` are attributed to them, so a solo owner's grid names
+   * them instead of leaving the owner column empty on every row, and
+   * "My leads" returns those leads. Null for every other business, which is
+   * the old behavior exactly.
+   */
+  implicitOwner?: { id: string; name: string } | null;
 }): LeadDataRow[] {
   const { submissions, contacts, contactNames, employeeNameById } = input;
+  const implicitOwner = input.implicitOwner ?? null;
 
   // Identifier → contact primary key (primary phone, aliases, email).
   const contactByKey = new Map<string, LeadContactRow>();
@@ -181,10 +193,11 @@ export function buildLeadDataRows(input: {
   const seenContacts = new Set<string>();
 
   const contactRow = (contact: LeadContactRow, sub: LeadSubmissionRow | undefined) => {
-    const ownerName =
-      (contact.owner_employee_id &&
-        employeeNameById.get(contact.owner_employee_id)) ||
-      null;
+    const owner = effectiveContactOwner(
+      contact.owner_employee_id,
+      implicitOwner,
+      employeeNameById
+    );
     return {
       e164: contact.customer_e164,
       name:
@@ -193,8 +206,8 @@ export function buildLeadDataRows(input: {
         contact.customer_e164,
       email: contact.email ?? sub?.email ?? null,
       tags: contact.tags ?? [],
-      ownerEmployeeId: contact.owner_employee_id,
-      ownerName,
+      ownerEmployeeId: owner?.id ?? null,
+      ownerName: owner?.name ?? null,
       // A matched submission carries the exact upstream label, so it wins;
       // the contact's own stamp covers every lead that arrived by SMS, voice
       // or a referral text and therefore has no submission row at all.

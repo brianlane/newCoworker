@@ -21,12 +21,16 @@ vi.mock("@/lib/db/sms-history", () => ({
 vi.mock("@/lib/db/voice-transcripts", () => ({
   listTranscriptsForBusiness: vi.fn()
 }));
+vi.mock("@/lib/db/implicit-contact-owner", () => ({
+  resolveImplicitContactOwner: vi.fn(async () => null)
+}));
 
 const serviceClientMock = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => serviceClientMock())
 }));
 
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { McpToolError, requireMcpBusinessRole } from "@/lib/mcp/auth";
 import {
   getBusinessTool,
@@ -176,6 +180,21 @@ describe("search_contacts", () => {
   });
 });
 
+/** A full profile row, so the tool's outputSchema accepts what it returns. */
+const CONTACT_ROW = {
+  customer_e164: "+15550001111",
+  display_name: "Ann",
+  email: "ann@x.com",
+  type: "customer",
+  tags: [],
+  birthday: null,
+  pinned_md: null,
+  summary_md: null,
+  last_channel: "voice",
+  last_interaction_at: "2026-07-01",
+  total_interaction_count: 9
+};
+
 describe("get_contact", () => {
   it("returns the full profile", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue({
@@ -199,6 +218,65 @@ describe("get_contact", () => {
     expect(getCustomerMemory).toHaveBeenCalledWith("biz-1", "+15550001111");
     expect(result.phone).toBe("+15550001111");
     expect(result.ai_summary).toBe("Long-time customer");
+  });
+
+  /**
+   * HQ, Aug 18 2026. A one-person team whose only member is the owner has no
+   * unowned contacts, so the model is told who holds the lead instead of
+   * "nobody", the same answer the dashboard shows.
+   *
+   * In its OWN field, never folded into `owner_employee_id`: this tool's tag
+   * field tells the model to read current values here before writing them
+   * back through `update_contact`, which persists whatever it is handed. A
+   * merged field would turn a tag edit into a stored owner stamp, and a
+   * stamped row is invisible to the claim path's compare-and-swap on a null
+   * owner.
+   */
+  it("reports the implicit one-person-team owner without faking a claim", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      ...CONTACT_ROW,
+      owner_employee_id: null
+    } as never);
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue({
+      id: "mem-owner",
+      name: "Brian"
+    });
+    const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
+      owner_employee_id: string | null;
+      implicit_owner_employee_id: string | null;
+      implicit_owner_name: string | null;
+    };
+    expect(result.owner_employee_id).toBeNull();
+    expect(result.implicit_owner_employee_id).toBe("mem-owner");
+    expect(result.implicit_owner_name).toBe("Brian");
+  });
+
+  it("leaves the implicit fields empty for a business with a real team", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      ...CONTACT_ROW,
+      owner_employee_id: null
+    } as never);
+    const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
+      implicit_owner_employee_id: string | null;
+      implicit_owner_name: string | null;
+    };
+    expect(result.implicit_owner_employee_id).toBeNull();
+    expect(result.implicit_owner_name).toBeNull();
+  });
+
+  it("keeps a claimed contact's owner and pays for no ownership read", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      ...CONTACT_ROW,
+      owner_employee_id: "emp-9"
+    } as never);
+    const result = (await runTool(getContactTool, { phone: "+15550001111" }, AUTH)) as {
+      owner_employee_id: string | null;
+      implicit_owner_employee_id: string | null;
+    };
+    expect(result.owner_employee_id).toBe("emp-9");
+    expect(result.implicit_owner_employee_id).toBeNull();
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
 
   it("errors when the contact does not exist", async () => {

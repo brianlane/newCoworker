@@ -39,6 +39,7 @@ import {
   SMS_REPLY_MODES,
   normalizeContactTags
 } from "@/lib/customer-memory/types";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
@@ -137,6 +138,20 @@ export async function GET(
 
     const smsHistory = await listSmsHistoryForCustomer(businessId, customerE164, { limit: 50 });
 
+    // Same attribution the contact page shows: on a one-person team whose
+    // only member is the owner, an unclaimed contact is already theirs.
+    //
+    // Reported in its OWN field. `ownerEmployeeId` stays the RAW stored
+    // claim, because this response's shape mirrors the PATCH body below: a
+    // caller that reads, edits one field and sends the object back would
+    // otherwise persist an owner nobody assigned, fire `owner_assigned`, and
+    // put the row out of reach of the claim path's compare-and-swap on a
+    // null owner. Only read when the column is null, so a claimed contact
+    // costs no extra query.
+    const implicitOwner = memory.owner_employee_id
+      ? null
+      : await resolveImplicitContactOwner(businessId);
+
     return successResponse({
       memory: {
         customerE164: memory.customer_e164,
@@ -153,6 +168,8 @@ export async function GET(
         lastChannel: memory.last_channel,
         tags: memory.tags,
         ownerEmployeeId: memory.owner_employee_id,
+        implicitOwnerEmployeeId: implicitOwner?.id ?? null,
+        implicitOwnerName: implicitOwner?.name ?? null,
         birthday: memory.birthday,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at

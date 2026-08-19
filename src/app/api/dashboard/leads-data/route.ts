@@ -27,6 +27,7 @@ import {
   type LeadContactRow,
   type LeadSubmissionRow
 } from "@/lib/leads/data-view";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,15 @@ export async function GET(request: Request) {
       myEmployeeId =
         (memberRow as { employee_id?: string | null } | null)?.employee_id ?? null;
     }
+
+    // One-person team whose only member is the owner: their unclaimed leads
+    // are already theirs everywhere else, so this view attributes them the
+    // same way. `mineIncludesUnowned` widens the scope=mine SQL below, which
+    // filters in the DB (not in the fold), so an unclaimed lead would
+    // otherwise never reach the row builder to be attributed at all.
+    const implicitOwner = await resolveImplicitContactOwner(businessId, db);
+    const mineIncludesUnowned =
+      implicitOwner !== null && myEmployeeId === implicitOwner.id;
 
     // 1) Newest submissions.
     const { data: subData, error: subErr } = await db
@@ -138,7 +148,9 @@ export async function GET(request: Request) {
         .eq("business_id", businessId)
         .neq("tags", "{}");
       if (scope === "mine" && myEmployeeId) {
-        query = query.eq("owner_employee_id", myEmployeeId);
+        query = mineIncludesUnowned
+          ? query.or(`owner_employee_id.eq.${myEmployeeId},owner_employee_id.is.null`)
+          : query.eq("owner_employee_id", myEmployeeId);
       }
       const { data, error } = await query
         .order("updated_at", { ascending: false })
@@ -219,6 +231,7 @@ export async function GET(request: Request) {
       contacts,
       contactNames,
       employeeNameById,
+      implicitOwner,
       scopeOwnerEmployeeId:
         scope === "mine" ? (myEmployeeId ?? "__no-linked-roster-member__") : null
     });

@@ -23,6 +23,18 @@ type Props = {
   initialBirthday: string | null;
   /** Roster for the owner picker (id + name; inactive members included). */
   teamMembers: { id: string; name: string }[];
+  /**
+   * The roster member an unowned contact already falls to: a one-person team
+   * whose only member is the business owner (see
+   * `src/lib/db/implicit-contact-owner.ts`). Null for every other business.
+   *
+   * When set, the picker OPENS on that person instead of "Nobody (unowned)",
+   * because on a one-person team there is nobody else the contact could
+   * belong to, and it drops the "Nobody" choice entirely: the stored column
+   * would resolve straight back to this same person, so offering it would be
+   * a control that does nothing.
+   */
+  implicitOwner?: { id: string; name: string } | null;
 };
 
 const PINNED_MAX = 2000;
@@ -37,7 +49,12 @@ export function CustomerProfileEditor(props: Props) {
   const [type, setType] = useState<ContactType>(props.initialType);
   const [tags, setTags] = useState<string[]>(props.initialTags);
   const [tagDraft, setTagDraft] = useState("");
-  const [ownerId, setOwnerId] = useState<string>(props.initialOwnerEmployeeId ?? "");
+  // The owner the page already SHOWS everywhere else: the stored stamp, else
+  // the implicit one-person-team owner. Both the picker's opening value and
+  // the dirty baseline, so landing on the page never arms Save by itself.
+  const effectiveInitialOwnerId =
+    props.initialOwnerEmployeeId ?? props.implicitOwner?.id ?? "";
+  const [ownerId, setOwnerId] = useState<string>(effectiveInitialOwnerId);
   // The DATE column may come back with a time suffix from PostgREST; keep
   // only the date part the <input type="date"> understands.
   const [birthday, setBirthday] = useState<string>(
@@ -53,7 +70,7 @@ export function CustomerProfileEditor(props: Props) {
   const emailChanged = (props.initialEmail ?? "") !== email;
   const typeChanged = props.initialType !== type;
   const tagsChanged = props.initialTags.join("\u0000") !== tags.join("\u0000");
-  const ownerChanged = (props.initialOwnerEmployeeId ?? "") !== ownerId;
+  const ownerChanged = effectiveInitialOwnerId !== ownerId;
   const birthdayChanged = ((props.initialBirthday ?? "").slice(0, 10)) !== birthday;
   const dirty =
     nameChanged ||
@@ -225,12 +242,18 @@ export function CustomerProfileEditor(props: Props) {
           (the teammate responsible for this contact; auto-set when someone claims their lead)
         </span>
       </label>
+      {props.implicitOwner && (
+        <p className="text-[10px] text-parchment/40 mb-1">
+          Your team is just you, so every contact is yours until you add a
+          teammate to hand it to.
+        </p>
+      )}
       <select
         value={ownerId}
         onChange={(e) => setOwnerId(e.target.value)}
         className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment focus:outline-none focus:border-claw-green/60"
       >
-        <option value="">Nobody (unowned)</option>
+        {!props.implicitOwner && <option value="">Nobody (unowned)</option>}
         {props.teamMembers.map((m) => (
           <option key={m.id} value={m.id}>
             {m.name}

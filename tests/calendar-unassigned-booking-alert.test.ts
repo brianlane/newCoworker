@@ -28,6 +28,9 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 }));
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
 vi.mock("@/lib/db/employees", () => ({ getTeamMember: vi.fn(), listTeamMembers: vi.fn() }));
+vi.mock("@/lib/db/implicit-contact-owner", () => ({
+  resolveImplicitContactOwner: vi.fn()
+}));
 vi.mock("@/lib/telnyx/messaging", () => ({
   getTelnyxMessagingForBusiness: vi.fn(),
   sendTelnyxSms: vi.fn()
@@ -41,6 +44,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { getTeamMember, listTeamMembers } from "@/lib/db/employees";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { logger } from "@/lib/logger";
 
@@ -125,6 +129,62 @@ beforeEach(() => {
   vi.mocked(dispatchUrgentNotification).mockResolvedValue({ results: [] });
   vi.mocked(getNotificationPreferences).mockResolvedValue(null as never);
   vi.mocked(getTeamMember).mockResolvedValue({ id: "emp-1", name: "Dana Reyes" } as never);
+  // Default: the one active member is NOT the owner, so a count of 1 means a
+  // real teammate exists. The solo-owner block below overrides it.
+  vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
+});
+
+/**
+ * HQ, Aug 18 2026. The Aug 3 rework taught this alert about a business with
+ * NO roster, and HQ has one roster row: Brian, the owner himself. So every
+ * booking told the owner to "assign the contact to a teammate" who does not
+ * exist. One active member who IS the owner is the same situation as no
+ * roster at all, and takes the same `solo` copy.
+ */
+describe("maybeAlertUnassignedBooking: a one-person roster that is the owner", () => {
+  const OWNER_ONLY = { id: "mem-owner", name: "Brian" };
+
+  it("never asks the owner to assign the lead to their nonexistent teammate", async () => {
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(OWNER_ONLY);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT })
+    });
+
+    expect(out).toBe("sent_solo");
+    const copy = emailCopy();
+    const whole = `${copy.subject}\n${copy.body}\n${dispatched().smsBody}`.toLowerCase();
+    expect(whole).not.toContain("assign");
+    expect(whole).not.toContain("teammate");
+  });
+
+  it("still warns a one-person roster whose member is NOT the owner", async () => {
+    // An assistant on the roster can be handed the lead, so "nobody holds
+    // this yet" is still news. resolveImplicitContactOwner returns null.
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT })
+    });
+
+    expect(out).toBe("sent_unowned");
+    expect(emailCopy().body.toLowerCase()).toContain("assign");
+  });
+
+  it("keeps the old wording when the ownership read fails", async () => {
+    // Fails toward "there is a team": a wording miss beats silencing the
+    // warning that exists to prevent a no-show.
+    vi.mocked(resolveImplicitContactOwner).mockResolvedValue(null);
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 1 }, contacts: NO_CONTACT })
+    });
+    expect(out).toBe("sent_unowned");
+  });
+
+  it("does not pay for the ownership read when the roster is empty", async () => {
+    const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
+      client: fakeDb({ roster: { count: 0 }, contacts: NO_CONTACT })
+    });
+    expect(out).toBe("sent_solo");
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
+  });
 });
 
 describe("maybeAlertUnassignedBooking: a business with no employees", () => {
@@ -474,12 +534,16 @@ describe("the employee audience", () => {
 
   it("never reads the roster when the audience is the default owner", async () => {
     prefs({ unassigned_booking_alerts: true });
+    // Two active members: a business with a real team, which is what this
+    // cost claim is about. (A count of ONE takes the ownership read below,
+    // since that single member may be the owner's own roster row.)
     const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
-      client: fakeDb({ contacts: NO_CONTACT }),
+      client: fakeDb({ roster: { count: 2 }, contacts: NO_CONTACT }),
       listMembers: vi.fn() as never
     });
     expect(out).toBe("sent_unowned");
     expect(listTeamMembers).not.toHaveBeenCalled();
+    expect(resolveImplicitContactOwner).not.toHaveBeenCalled();
   });
 
   it("texts every active member and still alerts the owner on 'both'", async () => {

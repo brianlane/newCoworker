@@ -18,7 +18,8 @@
  * credited to the AI coworker. So ownership is now RESOLVED into one of
  * three states and the copy follows it:
  *
- *   1. `solo`    - no active roster member exists. Nobody to assign to.
+ *   1. `solo`    - nobody to assign to: no active roster member, or the only
+ *                  active member IS the owner (HQ, Aug 18 2026).
  *   2. `covered` - the booking's assignee, else the contact's owner.
  *   3. `unowned` - a roster exists and nobody holds this lead. The warning.
  *
@@ -34,6 +35,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { getTeamMember, listTeamMembers } from "@/lib/db/employees";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import {
   buildBookingAlertSms,
   parseBookingAlertAudience,
@@ -101,22 +103,27 @@ export type UnassignedBookingAlertDeps = {
 };
 
 /**
- * Does this business have anyone to assign work to?
+ * How many people this business could assign work to.
  *
  * Only ACTIVE members count: a roster of people who have all left is the
- * same situation as no roster at all.
+ * same situation as no roster at all. Null means the count is unreadable.
  *
- * Deliberately fails toward "yes, there is a roster". This read only chooses
- * the WORDING, so an error must not be allowed to reach the catch and
- * suppress the alert outright. Of the two wrong answers, telling a solo
- * owner to assign the lead is a wording miss they can ignore; telling a real
- * team that nobody needs to show up is the no-show this alert exists to
- * prevent.
+ * Deliberately fails toward "yes, there is a roster" at the call site. This
+ * read only chooses the WORDING, so an error must not be allowed to reach
+ * the catch and suppress the alert outright. Of the two wrong answers,
+ * telling a solo owner to assign the lead is a wording miss they can ignore;
+ * telling a real team that nobody needs to show up is the no-show this alert
+ * exists to prevent.
+ *
+ * The exact count, not a boolean, because ONE active member is the case that
+ * needs a second look: it may be the owner's own roster row, and then there
+ * is still nobody to hand the appointment to. Every other count answers on
+ * its own and pays for no further reads.
  */
-async function hasActiveRoster(
+async function activeRosterCount(
   db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
   businessId: string
-): Promise<boolean> {
+): Promise<number | null> {
   try {
     const { count, error } = await db
       .from("ai_flow_team_members")
@@ -124,13 +131,13 @@ async function hasActiveRoster(
       .eq("business_id", businessId)
       .eq("active", true);
     if (error) throw new Error(error.message);
-    return (count ?? 0) > 0;
+    return count ?? 0;
   } catch (err) {
     logger.warn("unassigned-booking alert: roster count unreadable, assuming a team", {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
-    return true;
+    return null;
   }
 }
 
@@ -270,7 +277,21 @@ export async function maybeAlertUnassignedBooking(
     // exactly the old path below and pays for no extra reads.
     const audience = parseBookingAlertAudience(prefs?.booking_alert_audience);
 
-    const rostered = await hasActiveRoster(db, businessId);
+    // "Is there a teammate to assign to?", not "is the roster non-empty".
+    // A one-person business whose single roster row is the OWNER (HQ: Brian)
+    // has nobody to hand the appointment to, so it takes the `solo` copy that
+    // already exists for a business with no roster at all. Without this it
+    // was told to "assign the contact to a teammate" who does not exist: the
+    // same defect the Aug 3 2026 rework fixed for the zero-roster case and
+    // missed for this one.
+    //
+    // The implicit-owner read only happens at a count of exactly one, and it
+    // fails toward null (a team), so an unreadable roster keeps the old
+    // wording rather than silencing the warning.
+    const activeCount = await activeRosterCount(db, businessId);
+    const implicitOwner =
+      activeCount === 1 ? await resolveImplicitContactOwner(businessId, db) : null;
+    const rostered = (activeCount === null || activeCount > 0) && implicitOwner === null;
 
     // Whoever holds the appointment outranks whoever owns the lead.
     const holderId =

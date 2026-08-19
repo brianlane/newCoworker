@@ -22,6 +22,8 @@ import { Card } from "@/components/ui/Card";
 import { listCustomerMemories, MAX_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { findDuplicateContactPairs } from "@/lib/customer-memory/dedup";
 import { listTeamMembers } from "@/lib/db/employees";
+import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
+import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listContactSegments } from "@/lib/segments/db";
 import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
@@ -101,6 +103,10 @@ export default async function DashboardCustomersPage() {
   // Smart List administration is manager+, same bar as the pipeline boards.
   const canManageSegments = ctx.role === "owner" || ctx.role === "manager";
   const memberNameById = new Map(teamMembers.map((m) => [m.id, m.name]));
+  // One-person team whose only member is the owner: an unclaimed contact is
+  // already theirs, so the owner badge and the "owned by" filter say so
+  // instead of leaving the whole directory blank. Reuses the roster above.
+  const implicitOwner = await resolveImplicitContactOwner(business.id, db, teamMembers);
   // Owner/employee/manual-label names win over the stored display_name, so the
   // owner's own number reads "Brian Lane (owner)" instead of a bare number, and
   // roster members get their names + badges here too.
@@ -121,6 +127,10 @@ export default async function DashboardCustomersPage() {
     // identity); `label` is the human-readable form of that key, which for an
     // email-keyed contact is the bare address without the `email:` prefix.
     const label = formatContactKey(c.customer_e164);
+    // Explicit stamp first, the implicit owner when nobody claimed it. Feeds
+    // the row badge, the owner filter, and Smart List `ownerEmployeeId`
+    // matching, which all run off these two fields.
+    const owner = effectiveContactOwner(c.owner_employee_id, implicitOwner, memberNameById);
     return {
       e164: c.customer_e164,
       label,
@@ -132,8 +142,8 @@ export default async function DashboardCustomersPage() {
       totalInteractions: c.total_interaction_count,
       lastInteractionAt: c.last_interaction_at,
       tags: c.tags ?? [],
-      ownerEmployeeId: c.owner_employee_id ?? null,
-      ownerName: (c.owner_employee_id && memberNameById.get(c.owner_employee_id)) || null,
+      ownerEmployeeId: owner?.id ?? null,
+      ownerName: owner?.name ?? null,
       createdAt: c.created_at,
       updatedAt: c.updated_at
     };
