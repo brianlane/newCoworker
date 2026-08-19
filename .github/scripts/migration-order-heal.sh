@@ -206,10 +206,22 @@ while :; do
   # The merge-window casualties: pending (not in the ledger) yet sorting at
   # or below the applied head. String comparison is safe: stamps are
   # fixed-width digit strings.
+  #
+  # The membership check reads $applied from a HERESTRING, never a pipe. It
+  # used to be `printf '%s\n' "$applied" | grep -qx`, and under pipefail that
+  # is a loaded-runner race: grep -q exits at its first match, and when
+  # printf is still writing at that instant it takes EPIPE (exit 141), which
+  # pipefail promotes to the pipeline's status, so the `if` reads a FOUND
+  # version as ABSENT. On 2026-08-19 (run 32309988631 attempt 1, the
+  # "printf: write error: Broken pipe" line) that renamed the APPLIED
+  # 20260420100000_voice_telnyx_platform.sql out from under its ledger row,
+  # violating this script's central contract and freezing deploys until the
+  # ledger was repaired by hand. A herestring has no writer process, so
+  # there is nothing to break and grep's own status is the verdict.
   to_heal=""
   while IFS= read -r f; do
     v="${f%%_*}"
-    if printf '%s\n' "$applied" | grep -qx "$v"; then
+    if grep -qx "$v" <<< "$applied"; then
       continue # applied: the filename must keep matching the ledger row
     fi
     if [ "$v" \< "$applied_head" ] || [ "$v" = "$applied_head" ]; then
@@ -222,6 +234,26 @@ while :; do
     echo "Migration order heal: nothing to do (no pending migration sorts below the applied head $applied_head)."
     exit 0
   fi
+
+  # Age guard, defense in depth behind the membership check above. A genuine
+  # merge-window casualty was stamped HOURS before the head that overtook it,
+  # days at the very most; a candidate stamped months below the head is not a
+  # merge-window story, it is a corrupted read or a corrupted tree, and
+  # renaming it converts that corruption into a re-applied migration. Fail
+  # the deploy loudly instead: a human (or agent) reading this error checks
+  # the ledger directly before anything gets renamed. The 2026-08-19 incident
+  # candidate sat 124 days below the head; this bound alone would have
+  # stopped it even with the membership read broken.
+  max_age_days="${MIGRATION_HEAL_MAX_AGE_DAYS:-14}"
+  head_date="${applied_head:0:8}"
+  while IFS= read -r f; do
+    v="${f%%_*}"
+    gap_days=$(( ($(date -u -d "${head_date}" +%s 2>/dev/null || date -ju -f "%Y%m%d" "${head_date}" +%s) - $(date -u -d "${v:0:8}" +%s 2>/dev/null || date -ju -f "%Y%m%d" "${v:0:8}" +%s)) / 86400 ))
+    if [ "$gap_days" -gt "$max_age_days" ]; then
+      echo "::error::migration order heal refused: ${f} is stamped ${gap_days} days below the applied head ${applied_head}, far past the ${max_age_days}-day merge-window bound (MIGRATION_HEAL_MAX_AGE_DAYS). A gap that large means a bad ledger read or a bad tree, not a merge-window collision; renaming it would re-apply an old migration. Check the applied ledger by hand before touching this file."
+      exit 1
+    fi
+  done <<< "$to_heal"
 
   echo "Migration order heal: pending migration(s) below the applied head $applied_head:"
   printf '%s\n' "$to_heal" | sed 's/^/  /'
