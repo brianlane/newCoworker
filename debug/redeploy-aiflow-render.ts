@@ -16,7 +16,8 @@
  *   - rsyncs ONLY vps/aiflow-render → /opt/aiflow-render (excluding .env), so the
  *     existing AIFLOW_RENDER_TOKEN / AIFLOW_PLATFORM_URL / AIFLOW_GATEWAY_TOKEN
  *     are preserved untouched,
- *   - verifies the Clever-engine code landed (click_text_while_present), and
+ *   - verifies the Clever-engine code landed (click_text_while_present) and
+ *     that the dry-run responder is present, and
  *   - rebuilds ONLY the aiflow-render container.
  *
  * Usage:
@@ -152,7 +153,20 @@ if ! grep -q 'from "./actions.mjs"' "$DEST/server.mjs"; then
   echo "ERROR: server.mjs does not import ./actions.mjs, stale build?" >&2
   exit 1
 fi
+# The dashboard's "Try these actions" button calls the dry-run responder. A box
+# without it answers checkOnly requests by RUNNING the actions, so a stale box
+# would turn a safety check into a real click on a live portal. Verify the
+# responder and the engine it calls both landed.
+if ! grep -q checkActions "$DEST/actions.mjs"; then
+  echo "ERROR: checkActions not found in synced actions.mjs (dry run would not work)" >&2
+  exit 1
+fi
+if ! grep -q respondWithActionChecks "$DEST/server.mjs"; then
+  echo "ERROR: server.mjs has no dry-run responder; a checkOnly request would PERFORM the actions" >&2
+  exit 1
+fi
 echo "click_text_while_present present in actions.mjs, server.mjs imports it"
+echo "dry-run responder present, so a checkOnly request cannot fall through to a real click"
 echo "== confirm render token (redacted; len=0 means the auth gate is OFF) =="
 awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env, auth gate OFF"}' "$DEST/.env" || true
 echo "== rebuild aiflow-render container only =="
