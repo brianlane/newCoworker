@@ -215,3 +215,122 @@ describe("classifyEditRisk", () => {
     expect(classifyEditRisk(trig, null)).toBe("structural");
   });
 });
+
+describe("changes that are not wording", () => {
+  const BROWSE = def([
+    {
+      id: "claim_click",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text", target: "Claim this lead" }]
+    },
+    { id: "tell_team", type: "notify_owner", message: "claimed" }
+  ]);
+
+  it("treats a changed click target as behavioral, not wording", () => {
+    // The step list is untouched, so no parked run moves, but what the
+    // automation DOES on someone else's website changed. Judged from the
+    // sentence alone ("point it at the new button label") this reads like a
+    // trivial fix right up until it silently stops claiming leads.
+    const after = def([
+      {
+        id: "claim_click",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Accept referral" }]
+      },
+      { id: "tell_team", type: "notify_owner", message: "claimed" }
+    ]);
+    const diff = diffFlowDefinitions(BROWSE, after);
+    expect(diff.stepsChanged).toEqual(["claim_click"]);
+    expect(diff.stepsChangedBeyondWording).toEqual(["claim_click"]);
+    expect(diff.firstDivergenceIndex).toBeNull();
+    expect(classifyEditRisk(diff, null)).toBe("behavioral");
+  });
+
+  it("counts a changed proof marker on a browse step too", () => {
+    const after = def([
+      {
+        id: "claim_click",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Claim this lead" }],
+        expectText: "We're calling you at"
+      },
+      { id: "tell_team", type: "notify_owner", message: "claimed" }
+    ]);
+    expect(classifyEditRisk(diffFlowDefinitions(BROWSE, after), null)).toBe("behavioral");
+  });
+
+  it("counts a browse_extract change as well", () => {
+    const before = def([
+      { id: "read", type: "browse_extract", urlVar: "lead_url", fields: [{ name: "price" }] }
+    ]);
+    const after = def([
+      { id: "read", type: "browse_extract", urlVar: "other_url", fields: [{ name: "price" }] }
+    ]);
+    expect(classifyEditRisk(diffFlowDefinitions(before, after), null)).toBe("behavioral");
+  });
+
+  it("counts a step whose type changed INTO a browse step", () => {
+    // Same id, different instruction. Reading the type off both sides means a
+    // step turning into a page action cannot slip through as wording.
+    const before = def([{ id: "x", type: "notify_owner", message: "hi" }]);
+    const after = def([
+      { id: "x", type: "browse_action", urlVar: "u", actions: [{ kind: "click_text", target: "Go" }] }
+    ]);
+    expect(classifyEditRisk(diffFlowDefinitions(before, after), null)).toBe("behavioral");
+  });
+
+  it("treats a changed `when` guard as behavioral on ANY step type", () => {
+    // Every message is untouched; what changed is whether the step runs.
+    const before = def([{ id: "s1", type: "send_sms", body: "hi" }]);
+    const after = def([
+      { id: "s1", type: "send_sms", body: "hi", when: { var: "stage", equals: "new" } }
+    ]);
+    const diff = diffFlowDefinitions(before, after);
+    expect(diff.stepsChangedBeyondWording).toEqual(["s1"]);
+    expect(classifyEditRisk(diff, null)).toBe("behavioral");
+  });
+
+  it("still calls a reworded message wording", () => {
+    // The class must stay narrow: rewording a text is exactly what the text
+    // surfaces exist to allow.
+    const before = def([{ id: "s1", type: "send_sms", body: "hi" }]);
+    const after = def([{ id: "s1", type: "send_sms", body: "hello there" }]);
+    const diff = diffFlowDefinitions(before, after);
+    expect(diff.stepsChangedBeyondWording).toEqual([]);
+    expect(classifyEditRisk(diff, null)).toBe("wording");
+  });
+
+  it("ranks a structural change above a behavioral one", () => {
+    // Adding a step renumbers the flat index, which is the more dangerous
+    // fact even when a browse step also changed.
+    const after = def([
+      { id: "s0", type: "sleep", minutes: 5 },
+      {
+        id: "claim_click",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Accept referral" }]
+      },
+      { id: "tell_team", type: "notify_owner", message: "claimed" }
+    ]);
+    expect(classifyEditRisk(diffFlowDefinitions(BROWSE, after), null)).toBe("structural");
+  });
+
+  it("a behavioral change with runs in flight stays behavioral, not in_flight", () => {
+    // in_flight is about a parked run RESUMING on the wrong instruction, which
+    // needs the flat index to move. A field change leaves the order intact.
+    const after = def([
+      {
+        id: "claim_click",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Accept referral" }]
+      },
+      { id: "tell_team", type: "notify_owner", message: "claimed" }
+    ]);
+    expect(classifyEditRisk(diffFlowDefinitions(BROWSE, after), 1)).toBe("behavioral");
+  });
+});

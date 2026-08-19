@@ -248,6 +248,9 @@ function describeRisk(risk: string, liveStep: number | null): string {
   if (risk === "in_flight") {
     return `it adds or removes steps ahead of runs already at step ${liveStep}, which would resume them on the wrong instruction`;
   }
+  if (risk === "behavioral") {
+    return "it changes what a step DOES on a web page, or whether a step runs at all, which cannot be checked from the sentence describing it";
+  }
   return "it adds, removes or reorders steps, or changes what starts it";
 }
 

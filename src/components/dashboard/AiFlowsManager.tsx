@@ -3490,17 +3490,16 @@ function StepFields({
           onChange={(v) => patchStep(index, { urlVar: v })}
           help="The name of a link an earlier step saved (e.g. lead_url)."
         />
-        <Field
-          label="Finish gracefully when the page says (optional)"
-          value={step.skipWhenText ?? ""}
-          onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
-          help='When the page contains this text (e.g. "already claimed"), there is nothing to read: the step is skipped and the run ends as done instead of failing.'
-        />
-        <Field
-          label="Skip the read but keep going when the page says (optional)"
-          value={step.continueWhenText ?? ""}
-          onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
-          help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page just is not ready yet (e.g. "details pending") and a later step tries again.'
+        <AlreadyDoneMarkers
+          stopValue={step.skipWhenText ?? ""}
+          continueValue={step.continueWhenText ?? ""}
+          onChangeStop={(v) => patchStep(index, { skipWhenText: v })}
+          onChangeContinue={(v) => patchStep(index, { continueWhenText: v })}
+          trigger="If the page carries one of these phrases, we stop trying to read it."
+          stopExample="already claimed"
+          stopMeaning="There is nothing left to read here, and nothing later in the flow can use it."
+          continueExample="details pending"
+          continueMeaning="The page just is not ready yet, so a later step can try again."
         />
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
@@ -5059,26 +5058,35 @@ function StepFields({
             patchStep(index, { auth: v.trim() ? { integrationLabel: v } : undefined })
           }
         />
-        <Field
-          label="Finish gracefully when the page says (optional)"
-          value={step.skipWhenText ?? ""}
-          onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
-          help='When an action fails AND the page contains this text (e.g. "already claimed"), the goal is already met: the step is skipped and the run ends as done instead of failing.'
+        <AlreadyDoneMarkers
+          stopValue={step.skipWhenText ?? ""}
+          continueValue={step.continueWhenText ?? ""}
+          onChangeStop={(v) => patchStep(index, { skipWhenText: v })}
+          onChangeContinue={(v) => patchStep(index, { continueWhenText: v })}
+          trigger="If an action fails and the page carries one of these phrases, we treat the job as already done rather than reporting a failure."
+          stopExample="already claimed"
+          stopMeaning="Someone else got there first, so there is nothing left to do anywhere."
+          continueExample="you accepted this lead"
+          continueMeaning="This step already worked, so the later steps that file the lead and tell your team still need to run."
         />
-        <Field
-          label="Treat this step as already done when the page says (optional)"
-          value={step.continueWhenText ?? ""}
-          onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
-          help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page proves this step already worked (e.g. "you just accepted"), so the later steps that file the lead and tell your team still happen.'
-        />
-        <Field
-          label="After the actions, the page must say (optional)"
-          value={step.expectText ?? ""}
-          onChange={(v) => patchStep(index, { expectText: v.trim() ? v : undefined })}
-          help={
-            'Proof the actions actually worked: after every action completes, the page must show this text (e.g. "We\'re calling you at") or the step is treated as failed. Use it on clicks that matter - a button can be clicked and still do nothing while the page is mid-load.'
-          }
-        />
+        <div className="space-y-1 rounded-lg border border-parchment/10 bg-deep-ink/30 p-3">
+          <p className="text-xs font-semibold text-parchment/80">Proof it worked (optional)</p>
+          <input
+            className={inputClass}
+            value={step.expectText ?? ""}
+            placeholder={"We're calling you at"}
+            onChange={(ev) =>
+              patchStep(index, {
+                expectText: ev.target.value.trim() ? ev.target.value : undefined
+              })
+            }
+          />
+          <p className="text-[11px] leading-snug text-parchment/60">
+            After every action, the page must show this, or the step counts as failed. Worth
+            setting on any click that matters: a button can be clicked and still do nothing while
+            the page is loading, and without this the step reports success having changed nothing.
+          </p>
+        </div>
         <label className={labelClass}>
           Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)
         </label>
@@ -7248,6 +7256,93 @@ function NoMatchVarsField({
       help='Without this, finding no email writes nothing at all, and a later step waiting on e.g. "status is missing" never runs. Example line: u1_status = missing'
       textarea
     />
+  );
+}
+
+/**
+ * The "what if it already happened" markers, as one titled group instead of
+ * three sibling text boxes.
+ *
+ * `skipWhenText` and `continueWhenText` differ by ONE thing, what happens to
+ * the rest of the run, and the old layout buried that in two paragraphs of
+ * help text sitting under near-identical labels ("Finish gracefully when the
+ * page says" / "Treat this step as already done when the page says"). The
+ * distinction is not cosmetic: a lead-accept step whose wizard finished but
+ * whose last click timed out HAS accepted the lead, so ending the run there
+ * loses the filing, the owner email and the team hand-off (Amy / Clever, Aug
+ * 4 2026). Putting the consequence on the same line as the box is the whole
+ * point of this component.
+ *
+ * Both stay editable rather than becoming one either/or control: the schema
+ * allows both, several live flows set both, and a radio would silently drop
+ * whichever the owner did not pick.
+ */
+function AlreadyDoneMarkers({
+  stopValue,
+  continueValue,
+  onChangeStop,
+  onChangeContinue,
+  trigger,
+  stopExample,
+  stopMeaning,
+  continueExample,
+  continueMeaning
+}: {
+  stopValue: string;
+  continueValue: string;
+  onChangeStop: (v: string | undefined) => void;
+  onChangeContinue: (v: string | undefined) => void;
+  /** What has to happen before these are even consulted. */
+  trigger: string;
+  stopExample: string;
+  stopMeaning: string;
+  continueExample: string;
+  continueMeaning: string;
+}) {
+  const bothSet = stopValue.trim().length > 0 && continueValue.trim().length > 0;
+  return (
+    <div className="space-y-2 rounded-lg border border-parchment/10 bg-deep-ink/30 p-3">
+      <p className="text-xs font-semibold text-parchment/80">
+        When the job turns out to be already done
+      </p>
+      <p className="text-[11px] leading-snug text-parchment/50">{trigger} Both are optional.</p>
+
+      <div>
+        <input
+          className={inputClass}
+          value={stopValue}
+          placeholder={stopExample}
+          onChange={(e) => onChangeStop(e.target.value.trim() ? e.target.value : undefined)}
+        />
+        <p className="mt-1 text-[11px] leading-snug text-parchment/60">
+          <span className="font-semibold text-parchment/80">then stop the whole flow.</span>{" "}
+          {stopMeaning} The run finishes as done, not failed.
+        </p>
+      </div>
+
+      <div>
+        <input
+          className={inputClass}
+          value={continueValue}
+          placeholder={continueExample}
+          onChange={(e) => onChangeContinue(e.target.value.trim() ? e.target.value : undefined)}
+        />
+        <p className="mt-1 text-[11px] leading-snug text-parchment/60">
+          <span className="font-semibold text-parchment/80">
+            then skip just this step and keep going.
+          </span>{" "}
+          {continueMeaning}
+        </p>
+      </div>
+
+      {/* Surfaced only once it can actually bite: the engine checks the stop
+          phrase first, so an owner who set both needs to know which wins. */}
+      {bothSet && (
+        <p className="text-[11px] text-parchment/40">
+          Both are filled in. If the page shows both phrases, the flow stops.
+        </p>
+      )}
+    </div>
   );
 }
 

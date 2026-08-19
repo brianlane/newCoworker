@@ -18,7 +18,22 @@ import { flattenSteps } from "../../../supabase/functions/_shared/ai_flows/branc
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
 
 /** How much of the automation an edit disturbs. Ordered least to most. */
-export type EditRisk = "none" | "wording" | "structural" | "in_flight";
+export type EditRisk = "none" | "wording" | "behavioral" | "structural" | "in_flight";
+
+/**
+ * Step types whose fields aim at a page we do not control. A changed selector
+ * or marker here is not wording: it changes what the automation DOES on
+ * someone else's website, it cannot be judged from the sentence describing
+ * it, and when it is wrong the step fails silently on a live lead days later.
+ */
+const THIRD_PARTY_PAGE_STEPS = new Set(["browse_action", "browse_extract"]);
+
+/**
+ * Fields that decide whether a step runs at all, on any step type. Changing
+ * one is a change to the automation's behavior even when every message in it
+ * is untouched.
+ */
+const GATING_FIELDS = new Set(["when"]);
 
 export type FlowEditDiff = {
   renamedTo: string | null;
@@ -27,6 +42,13 @@ export type FlowEditDiff = {
   stepsRemoved: string[];
   /** Step ids present in both, with at least one field different. */
   stepsChanged: string[];
+  /**
+   * The subset of `stepsChanged` whose change is not merely wording: a step
+   * that acts on a third-party page, or a change to whether a step runs. The
+   * text surfaces refuse these, so they reach the dashboard where the owner
+   * can see the page and the whole automation.
+   */
+  stepsChangedBeyondWording: string[];
   /**
    * First flat execution index where the two definitions stop agreeing on
    * which step runs, or null when the flattened id lists are identical.
@@ -109,6 +131,7 @@ export function diffFlowDefinitions(
   const stepsAdded = afterIds.filter((id) => !beforeSteps.has(id));
   const stepsRemoved = beforeIds.filter((id) => !afterSteps.has(id));
   const stepsChanged: string[] = [];
+  const stepsChangedBeyondWording: string[] = [];
   const fieldLines: string[] = [];
   // Iterate the MAP, not the flat id list: a duplicate id appears twice in
   // the flat list and would otherwise be reported as changed twice.
@@ -119,6 +142,14 @@ export function diffFlowDefinitions(
     const fields = changedFields(b, a);
     if (fields.length === 0) continue;
     stepsChanged.push(id);
+    // Read the type off BOTH sides: a step whose type itself changed is a
+    // different instruction under the same id, and if either side touches a
+    // third-party page the owner needs to see it.
+    const touchesThirdPartyPage =
+      THIRD_PARTY_PAGE_STEPS.has(String(b.type)) || THIRD_PARTY_PAGE_STEPS.has(String(a.type));
+    if (touchesThirdPartyPage || fields.some((f) => GATING_FIELDS.has(f))) {
+      stepsChangedBeyondWording.push(id);
+    }
     for (const field of fields) {
       fieldLines.push(
         `Step "${id}": ${field} changes from ${describeValue(b[field])} to ${describeValue(a[field])}.`
@@ -162,6 +193,7 @@ export function diffFlowDefinitions(
     stepsAdded,
     stepsRemoved,
     stepsChanged,
+    stepsChangedBeyondWording,
     firstDivergenceIndex,
     summary
   };
@@ -193,6 +225,12 @@ export function classifyEditRisk(
     return "in_flight";
   }
   if (structural) return "structural";
+  // Between wording and structural: the step list is untouched (so no parked
+  // run moves) but what a step DOES changed. Ranked above wording because the
+  // text surfaces judge on the sentence describing the edit, and "point the
+  // claim button at the new label" reads like a trivial fix right up until it
+  // silently stops claiming leads.
+  if (diff.stepsChangedBeyondWording.length > 0) return "behavioral";
   if (diff.stepsChanged.length > 0 || diff.renamedTo !== null) return "wording";
   return "none";
 }
