@@ -248,6 +248,39 @@ function reportLinks(html: string, all: boolean): void {
   section("Links (href <- visible text)", rows, all ? 500 : 40);
 }
 
+/**
+ * Print what the page said about itself.
+ *
+ * The render service now returns console errors, uncaught page errors and
+ * failed/4xx requests whenever a page had any, on success as well as failure.
+ * Printing it here is the point of the whole exercise: "no matching control on
+ * the page" and "the control never rendered because its data request was
+ * blocked" are the same message without this, and telling them apart is what
+ * stops the next person guessing at selectors.
+ */
+function reportDiagnostics(diagnostics?: Record<string, string[]>): void {
+  if (!diagnostics) return;
+  const entries = Object.entries(diagnostics).filter(([, v]) => Array.isArray(v) && v.length > 0);
+  if (entries.length === 0) return;
+  console.log(`\n## What the page reported about itself`);
+  for (const [kind, items] of entries) {
+    console.log(`  ${kind} (${items.length}):`);
+    for (const item of items.slice(0, 8)) console.log(`    ${item}`);
+    if (items.length > 8) console.log(`    ... ${items.length - 8} more`);
+  }
+  // Our ssrf guard aborts with `route.abort("blockedbyclient")`, but Chromium
+  // reports it back through `request.failure().errorText` as
+  // `net::ERR_BLOCKED_BY_CLIENT`. Matching the literal abort ARGUMENT never
+  // fires, which would leave our own refusals looking like portal failures:
+  // exactly what this note exists to prevent. Normalize both spellings.
+  const normalized = JSON.stringify(entries).toLowerCase().replace(/[^a-z]/g, "");
+  if (normalized.includes("blockedbyclient")) {
+    console.log(
+      `  note: ERR_BLOCKED_BY_CLIENT is OUR ssrf guard refusing that request, not the portal.`
+    );
+  }
+}
+
 async function main(): Promise<void> {
   loadEnv();
   ensureNextPublicSupabaseUrlOrExit();
@@ -368,6 +401,8 @@ async function main(): Promise<void> {
     actionsCompleted?: number;
     screenshotBase64?: string;
     pageTextExcerpt?: string;
+    /** What the PAGE reported about itself (PR #1504). */
+    diagnostics?: Record<string, string[]>;
   };
   try {
     body = JSON.parse(ssh.stdout);
@@ -382,6 +417,7 @@ async function main(): Promise<void> {
     // explicable by looking at what the page said back.
     if (body.finalUrl) console.log(`finalUrl : ${body.finalUrl}`);
     if (body.pageTextExcerpt) console.log(`\npage says:\n  ${body.pageTextExcerpt.replace(/\s+/g, " ").trim()}`);
+    reportDiagnostics(body.diagnostics);
     const shotOut = flag("shot");
     if (shotOut && body.screenshotBase64) {
       const { writeFileSync } = await import("node:fs");
@@ -406,6 +442,10 @@ async function main(): Promise<void> {
   }
   if (!html) fail("render returned no html");
 
+  // Success path too: a page whose data requests failed returns 200 with real
+  // html and MISSING controls, which is exactly the case that reads as "this
+  // portal has no such control".
+  reportDiagnostics(body.diagnostics);
   reportControls(html);
   reportLinks(html, allLinks);
 

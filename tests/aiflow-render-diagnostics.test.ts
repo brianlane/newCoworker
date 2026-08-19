@@ -23,6 +23,7 @@ import { describe, it, expect } from "vitest";
  * same way `aiflow-render-dockerfile-copies-imports.test.ts` pins its subject.
  */
 const server = readFileSync(new URL("../vps/aiflow-render/server.mjs", import.meta.url), "utf8");
+const probe = readFileSync(new URL("../debug/portal-dom-probe.ts", import.meta.url), "utf8");
 const worker = readFileSync(
   new URL("../supabase/functions/ai-flow-worker/index.ts", import.meta.url),
   "utf8"
@@ -127,5 +128,21 @@ describe("the worker records them, so every tenant's failure keeps the reason", 
 
   it("summarizes rather than dumping, so one kind cannot crowd out the others", () => {
     expect(worker).toContain("items.slice(0, 2)");
+  });
+});
+
+describe("the probe names our own refusals correctly", () => {
+  it("matches Chromium's errorText, not the abort argument we passed", () => {
+    // Bugbot: the guard aborts with `route.abort("blockedbyclient")`, but
+    // Chromium reports it back as `net::ERR_BLOCKED_BY_CLIENT`. Looking for the
+    // lowercase argument never fires, which leaves OUR refusals looking like
+    // portal failures: precisely what the note exists to prevent.
+    expect(probe).toMatch(/replace\(\/\[\^a-z\]\/g, ""\)/);
+    expect(probe).toContain('includes("blockedbyclient")');
+    expect(probe).toContain("ERR_BLOCKED_BY_CLIENT is OUR ssrf guard");
+  });
+
+  it("prints diagnostics on the success path as well as on failure", () => {
+    expect((probe.match(/reportDiagnostics\(body\.diagnostics\)/g) ?? []).length).toBe(2);
   });
 });

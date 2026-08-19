@@ -329,6 +329,32 @@ the stage ordering itself, so the forward-only guard this plan plannned to build
 is unnecessary: the portal will not offer a backward stage. What a flow must
 handle instead is the target stage simply not being on offer.
 
+**WHY the headless render does not get here (diagnosed 2026-08-19).** With page
+diagnostics live (PR #1504) the panel finally explains itself:
+
+```
+pageErrors (2): Unexpected token '<'
+failedRequests (7): net::ERR_ABORTED POST https://www.google-analytics.com/g/collect?...
+```
+
+The analytics aborts are noise. `Unexpected token '<'` is the classic signature
+of **JavaScript being served HTML instead of a script**: HomeLight lazy-loads
+the chunk that renders the stage editor, that request comes back as markup, the
+component never mounts, and the two `--skeleton` placeholders stay forever.
+
+Two things that narrows it to. No 4xx/5xx was recorded (the `response` listener
+catches those), so the chunk returns **200 with an HTML body**, which is what a
+bot-challenge or interstitial looks like rather than a plain 404. And the
+analytics payload carries `sr=1280x720`, confirming the headless viewport is a
+normal desktop size, so viewport is NOT the cause: a real browser at 817px wide
+renders the editor fine.
+
+Remaining suspects, in order: bot protection on whatever serves HomeLight's JS
+chunks (our datacenter IP plus a Playwright fingerprint), and the UA override in
+`server.mjs`, which claims `Chrome/124.0` while the bundled engine is far newer,
+a mismatch that is itself a common detection signal. Next step is to capture the
+chunk response body rather than guess between them.
+
 **The headless render still does not get here.** Same referral, same click:
 the real browser shows zero skeletons and `Update Stage`; the render service
 leaves both interactive children as `--skeleton` and `--expect "Update Stage"`
