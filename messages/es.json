@@ -838,7 +838,7 @@
         },
         "u5": {
           "title": "Privado por diseño",
-          "description": "Cada consultorio corre en su propio servidor dedicado, con las conversaciones aisladas por negocio. En enterprise, las conversaciones de pacientes pueden vivir en ese servidor en vez de en nuestra nube."
+          "description": "Cada consultorio corre en su propio servidor dedicado, con las conversaciones aisladas por negocio."
         },
         "u6": {
           "title": "Campañas de recordatorio",
