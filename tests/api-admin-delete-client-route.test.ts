@@ -56,6 +56,31 @@ vi.mock("@/lib/supabase/server", () => ({
   }))
 }));
 
+/**
+ * The Hostinger client must be mocked, and this mock is the whole flake fix.
+ *
+ * The stubbed business row carries `hostinger_vps_id: "42"`, and the route's
+ * subscription-less path stops that VM via a REAL `HostingerClient` before
+ * touching the auth user. With the module unmocked, every subscription-less
+ * test here made a live HTTPS request to the Hostinger API with an empty
+ * token: a fast 401 on a developer machine (still 0.2-4.7s of real network),
+ * and DNS + TLS on a loaded CI runner, which is how two different tests in
+ * this file blew the 15s timeout on two unrelated PRs (#1513, #1515) in one
+ * day. The route tolerates the call failing and proceeds, so the tests always
+ * PASSED, just nondeterministically slowly: network in a unit test is a flake
+ * even when the assertions never look at it.
+ */
+const mockStopVirtualMachine = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/lib/hostinger/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/hostinger/client")>();
+  return {
+    ...actual,
+    HostingerClient: class {
+      stopVirtualMachine = mockStopVirtualMachine;
+    }
+  };
+});
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -87,6 +112,8 @@ function makeRequest() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks wipes the resolved value off the module-level VM-stop mock.
+  mockStopVirtualMachine.mockResolvedValue(undefined);
   afterCallbacks.length = 0;
   mockDeleteAuthUser.mockReset();
   mockDeleteAuthUser.mockResolvedValue({ error: null });
@@ -194,6 +221,10 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     ).toBeGreaterThan(vi.mocked(deleteBusiness).mock.invocationCallOrder[0]);
     expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
     expect(planLifecycleAction).not.toHaveBeenCalled();
+    // The orphan VM (hostinger_vps_id: "42") is stopped through the MOCKED
+    // client. If someone removes the module mock, this test does not merely
+    // get slow again, it starts asserting against live infrastructure.
+    expect(mockStopVirtualMachine).toHaveBeenCalledWith(42);
   });
 
   it("deletes subscription-less businesses even when the owner has no auth user", async () => {
