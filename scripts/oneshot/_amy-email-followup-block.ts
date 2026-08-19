@@ -221,6 +221,105 @@ function openingCheck(): Step[] {
   return [checkStep(0), ...stopSteps(0)];
 }
 
+/** Prefix for the TAG block that replaced the inline rounds in the lead flows. */
+export const EFU_TAG = "efu_tag";
+
+/**
+ * The tag this puts on an email-only lead: the same one every other automated
+ * ladder uses, because it is what starts "Needs Follow Up (AI cadence)".
+ */
+export const FOLLOW_UP_TAG = "Needs Follow Up";
+
+/**
+ * Why the tag was applied, carried into the cadence as {{trigger.note}}.
+ *
+ * Deliberately NOT the shared AUTO_TAG_NOTE. That one reads "the AI already
+ * called and texted this lead just now", which is false here: this lead has no
+ * phone, which is the entire reason they are being tagged. It also gates the
+ * cadence's round-1 call (tag_auto), and that call is a harmless no-op for a
+ * lead with no number, so there is nothing to suppress and no reason to lie.
+ */
+export const EMAIL_ONLY_TAG_NOTE =
+  "email_only_lead: no phone number on file, so the AI emailed them and could not call or text";
+
+/**
+ * The lead-flow half of the split: TAG an email-only lead instead of running
+ * the rounds inline.
+ *
+ * The rounds live in "Needs Follow Up (AI cadence)" and only there. Before
+ * this, both places carried them, so tagging a lead would have sent six emails
+ * instead of three, which is exactly why tagging was never switched on. One
+ * copy, one place to edit the copy, and the cadence reached the way every
+ * other follow-up reaches it.
+ *
+ * The gates are the SAME two predicates {@link buildEmailFollowUpBlock} uses,
+ * from this same module, so "email only" can never come to mean two things.
+ */
+export function buildEmailOnlyTagBlock(): Step {
+  return {
+    id: `${EFU_TAG}_root`,
+    type: "branch",
+    question: "Can we reach this lead by phone?",
+    branches: [
+      {
+        id: `${EFU_TAG}_has_phone`,
+        label: "Has a phone: the call and text follow-up already covers them",
+        condition: { var: "lead_phone", contains: "+" },
+        steps: []
+      }
+    ],
+    else: [
+      {
+        id: `${EFU_TAG}_email_gate`,
+        type: "branch",
+        question: "Do we at least have an email address for them?",
+        branches: [
+          {
+            id: `${EFU_TAG}_has_email`,
+            label: "Email only: hand them to the follow-up cadence",
+            condition: { var: "lead_email", contains: "@" },
+            steps: [
+              {
+                // File the lead FIRST, in this same run.
+                //
+                // update_contact skips when there is no contact row, so
+                // tagging alone would have depended on an earlier send_email
+                // in this flow having succeeded (that is what files an emailed
+                // lead, PR #1486). A skipped or failed intro email would then
+                // silently end all outreach: no contact, no tag, no cadence.
+                // The inline rounds it replaces needed no contact at all, so
+                // leaning on that side effect would have been a real
+                // regression rather than a refactor.
+                //
+                // Keyed by the address because there is no phone
+                // (upsert_customer falls back to emailVar, PR #1473), and
+                // idempotent, so the common case where the intro email already
+                // filed them just bumps the existing row.
+                id: `${EFU_TAG}_file`,
+                type: "upsert_customer",
+                phoneVar: "lead_phone",
+                nameVar: "lead_name",
+                emailVar: "lead_email"
+              } as Step,
+              {
+                id: EFU_TAG,
+                type: "update_contact",
+                // emailVar is what lets the tag land on a contact that has no
+                // phone to be keyed by.
+                phoneVar: "lead_phone",
+                emailVar: "lead_email",
+                addTags: [FOLLOW_UP_TAG],
+                noteTemplate: EMAIL_ONLY_TAG_NOTE
+              } as Step
+            ]
+          }
+        ],
+        else: []
+      } as Step
+    ]
+  } as Step;
+}
+
 /**
  * Build the block. Flat rounds inside two gates: the schema caps branch
  * nesting at three levels, and a branch per round would have been five.

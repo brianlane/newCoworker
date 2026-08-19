@@ -2928,13 +2928,20 @@ async function upsertCustomerStep(
     : await findDuplicateLeadRun(supabase, run, scope, action.e164, action.emailVar);
   // An explicit upsert_customer step IS the lead, so the flow's origin always
   // applies (no co-recipient gating, unlike recordLeadCustomerProfile).
+  //
+  // The channel follows the KEY, not the default. An email-keyed lead has no
+  // phone by definition, so stamping last_channel "sms" on them would be a
+  // plain untruth, and it would overwrite the "email" an earlier send already
+  // recorded on the same row. The dashboard and the model's contact context
+  // both read that field.
   await enrichCustomerProfile(
     supabase,
     run.business_id,
     action.e164,
     action.name,
     action.email,
-    { runId: run.id, flowId: run.flow_id, flowName: scope.flowName }
+    { runId: run.id, flowId: run.flow_id, flowName: scope.flowName },
+    isEmailContactKey(action.e164) ? "email" : "sms"
   );
   if (duplicateOfRunId) {
     const label = action.name ? `${action.name} (${action.e164})` : action.e164;
