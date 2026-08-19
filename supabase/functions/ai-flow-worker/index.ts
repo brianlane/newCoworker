@@ -3913,7 +3913,7 @@ async function browseActionStep(
   const prior = parseForEachProgress(scope.vars[progressVar]);
   if (!prior) return outcome;
   delete scope.vars[progressVar];
-  const vars = forEachResultVars(stepId, { updated: prior.updated, left: prior.lastRemaining });
+  const vars = forEachResultVars(stepId, { updated: prior.updated, left: prior.lastLeft });
   Object.assign(scope.vars, vars);
   appendActionTaken(
     scope,
@@ -3926,7 +3926,7 @@ async function browseActionStep(
     event: "ai_flow_for_each_partial",
     message:
       `forEachLink stopped after ${prior.passes} completed pass(es): ${outcome.error}; ` +
-      `about ${prior.lastRemaining} list item(s) still waiting`,
+      `about ${prior.lastLeft} list item(s) still waiting`,
     payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, error: outcome.error }
   });
   return {
@@ -3937,7 +3937,7 @@ async function browseActionStep(
       ...(outcome.result ?? {}),
       passes: prior.passes,
       updated: prior.updated,
-      left: prior.lastRemaining,
+      left: prior.lastLeft,
       terminal: "pass_error",
       error: outcome.error,
       vars

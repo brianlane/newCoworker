@@ -370,7 +370,7 @@ describe("decideForEach", () => {
 
   it("collection failure on a continuation pass still reports fail (the wrapper converts it)", () => {
     expect(
-      decideForEach(fe({ errors: ["session expired"] }), { passes: 2, updated: 9, lastRemaining: 18 }, 20)
+      decideForEach(fe({ errors: ["session expired"] }), { passes: 2, updated: 9, lastLeft: 18 }, 20)
     ).toEqual({ kind: "fail_collect", error: "session expired" });
   });
 
@@ -385,7 +385,7 @@ describe("decideForEach", () => {
   });
 
   it("an empty list on a later pass keeps the cumulative total", () => {
-    expect(decideForEach(fe({}), { passes: 6, updated: 36, lastRemaining: 5 }, 20)).toEqual({
+    expect(decideForEach(fe({}), { passes: 6, updated: 36, lastLeft: 5 }, 20)).toEqual({
       kind: "done",
       passes: 7,
       updated: 36,
@@ -419,7 +419,21 @@ describe("decideForEach", () => {
   it("continues when the cap truncated the list and the pass made progress", () => {
     expect(decideForEach(fe({ items: 30, succeeded: 6, failed: 24, remaining: 24 }), null, 20)).toEqual({
       kind: "continue",
-      progress: { passes: 1, updated: 6, lastRemaining: 24 }
+      progress: { passes: 1, updated: 6, lastLeft: 24 }
+    });
+  });
+
+  it("carries the pass's real failures inside lastLeft, not just the capped tail", () => {
+    // Bugbot caught the first cut of this storing fe.remaining: a mid-sweep
+    // permanent failure then published a left count that dropped the cards
+    // that failed on the last completed pass, the exact undercount the
+    // measured alert exists to stop. 30 listed, 4 updated, 2 real failures,
+    // 24 beyond the cap: still listed is 26, not 24.
+    expect(
+      decideForEach(fe({ items: 30, succeeded: 4, failed: 26, remaining: 24 }), null, 20)
+    ).toEqual({
+      kind: "continue",
+      progress: { passes: 1, updated: 4, lastLeft: 26 }
     });
   });
 
@@ -427,12 +441,12 @@ describe("decideForEach", () => {
     expect(
       decideForEach(
         fe({ items: 24, succeeded: 6, failed: 18, remaining: 18 }),
-        { passes: 1, updated: 6, lastRemaining: 24 },
+        { passes: 1, updated: 6, lastLeft: 24 },
         20
       )
     ).toEqual({
       kind: "continue",
-      progress: { passes: 2, updated: 12, lastRemaining: 18 }
+      progress: { passes: 2, updated: 12, lastLeft: 18 }
     });
   });
 
@@ -440,7 +454,7 @@ describe("decideForEach", () => {
     expect(
       decideForEach(
         fe({ items: 5, succeeded: 4, failed: 1, errors: ["Submit Update: timeout"] }),
-        { passes: 6, updated: 36, lastRemaining: 5 },
+        { passes: 6, updated: 36, lastLeft: 5 },
         20
       )
     ).toEqual({
@@ -456,7 +470,7 @@ describe("decideForEach", () => {
     expect(
       decideForEach(
         fe({ items: 10, succeeded: 0, failed: 10, remaining: 4 }),
-        { passes: 3, updated: 12, lastRemaining: 10 },
+        { passes: 3, updated: 12, lastLeft: 10 },
         20
       )
     ).toEqual({
@@ -472,7 +486,7 @@ describe("decideForEach", () => {
     expect(
       decideForEach(
         fe({ items: 12, succeeded: 6, failed: 6, remaining: 6 }),
-        { passes: 19, updated: 114, lastRemaining: 12 },
+        { passes: 19, updated: 114, lastLeft: 12 },
         20
       )
     ).toEqual({
@@ -499,7 +513,7 @@ describe("decideForEach", () => {
 
 describe("forEach progress var", () => {
   it("round-trips through the context var encoding", () => {
-    const p = { passes: 3, updated: 17, lastRemaining: 9 };
+    const p = { passes: 3, updated: 17, lastLeft: 9 };
     expect(parseForEachProgress(encodeForEachProgress(p))).toEqual(p);
   });
 
@@ -514,8 +528,8 @@ describe("forEach progress var", () => {
     expect(parseForEachProgress("null")).toBeNull();
     expect(parseForEachProgress('"str"')).toBeNull();
     expect(parseForEachProgress('{"passes":1,"updated":2}')).toBeNull();
-    expect(parseForEachProgress('{"passes":-1,"updated":2,"lastRemaining":0}')).toBeNull();
-    expect(parseForEachProgress('{"passes":"1","updated":2,"lastRemaining":0}')).toBeNull();
+    expect(parseForEachProgress('{"passes":-1,"updated":2,"lastLeft":0}')).toBeNull();
+    expect(parseForEachProgress('{"passes":"1","updated":2,"lastLeft":0}')).toBeNull();
     expect(parseForEachProgress(7 as unknown as string)).toBeNull();
   });
 });

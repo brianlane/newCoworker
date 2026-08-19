@@ -216,9 +216,14 @@ export type ForEachProgress = {
   passes: number;
   /** Cumulative items whose action sequence completed, across all passes. */
   updated: number;
-  /** The `remaining` count the LAST pass reported (the best "left" estimate
-   * available if a later pass dies before reporting). */
-  lastRemaining: number;
+  /**
+   * Items still listed after the LAST completed pass: its `items - succeeded`,
+   * i.e. the capped tail PLUS that pass's per-card failures (failed cards
+   * stay in the list too). The best "left" figure available if a later pass
+   * dies before reporting; counting only the capped tail here would repeat
+   * the exact undercount the measured alert exists to stop.
+   */
+  lastLeft: number;
 };
 
 /** Context var holding a step's in-flight chained-sweep progress. */
@@ -246,9 +251,9 @@ export function parseForEachProgress(raw: unknown): ForEachProgress | null {
     typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
   const passes = num(p.passes);
   const updated = num(p.updated);
-  const lastRemaining = num(p.lastRemaining);
-  if (passes === null || updated === null || lastRemaining === null) return null;
-  return { passes, updated, lastRemaining };
+  const lastLeft = num(p.lastLeft);
+  if (passes === null || updated === null || lastLeft === null) return null;
+  return { passes, updated, lastLeft };
 }
 
 /**
@@ -343,6 +348,6 @@ export function decideForEach(
   }
   return {
     kind: "continue",
-    progress: { passes, updated, lastRemaining: fe.remaining }
+    progress: { passes, updated, lastLeft: left }
   };
 }
