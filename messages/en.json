@@ -838,7 +838,7 @@
         },
         "u5": {
           "title": "Private By Design",
-          "description": "Every practice runs on its own dedicated server, with conversations isolated per business. On enterprise, patient conversations can live on that server instead of our cloud."
+          "description": "Every practice runs on its own dedicated server, with conversations isolated per business."
         },
         "u6": {
           "title": "Recall Campaigns",
