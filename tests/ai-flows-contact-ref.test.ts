@@ -402,10 +402,13 @@ describe("resolveRefIdentityValues", () => {
     ).toEqual(["+16025550000"]);
   });
 
-  it("drops an email KEY from the identity list but keeps the address itself", async () => {
-    // `email:<addr>` is an internal identifier; no sender ever arrives as one.
-    // The address is already in the list via the `email` column, and that is
-    // what a from_matches condition on an emailed lead actually compares.
+  it("lists BOTH spellings of an email-keyed contact, because two channels use different ones", async () => {
+    // An inbound email arrives as the bare address; a CONTACT EVENT arrives as
+    // the contact key (contact_events sets trigger.from to the key, which the
+    // language seeding then looks the contact up by). Listing one and not the
+    // other makes a from_matches condition silently unmatchable on the other
+    // channel. Neither can false-positive: no sender ever arrives as a string
+    // that is not one of these.
     const { db } = stubDb({
       contacts: {
         data: {
@@ -417,6 +420,7 @@ describe("resolveRefIdentityValues", () => {
       }
     });
     expect(await resolveRefIdentityValues(db, "biz", { source: "contact", id: CON_ID })).toEqual([
+      "email:valm0417@gmail.com",
       "valm0417@gmail.com"
     ]);
   });

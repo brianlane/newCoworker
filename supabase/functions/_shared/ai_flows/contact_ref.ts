@@ -15,7 +15,7 @@
  *     stay dependency-free and unit-testable).
  */
 import type { AiFlowDefinition, ContactRef, FlowStep, TriggerCondition } from "./types.ts";
-import { isDialableContactKey, isEmailContactKey } from "../contact_key.ts";
+import { isDialableContactKey } from "../contact_key.ts";
 
 // Minimal structural client type so this module works with the esm.sh
 // supabase-js the Edge functions use without importing it here (same pattern
@@ -116,11 +116,14 @@ export async function resolveRefIdentityValues(
     email?: string | null;
   } | null;
   const aliases = Array.isArray(row?.alias_e164s) ? row.alias_e164s : [];
-  // An `email:` key is an internal identifier, never a value a sender arrives
-  // as. Drop it; the address itself is already in the list via `email`, which
-  // is what a from_matches condition on an emailed lead actually compares.
-  const key = isEmailContactKey(row?.customer_e164) ? null : row?.customer_e164;
-  return [key, ...aliases, row?.email]
+  // BOTH spellings of an email-keyed contact, because from_matches is compared
+  // against two different senders depending on the channel. An inbound email
+  // arrives as the bare address; a CONTACT EVENT arrives as the contact key
+  // (contact_events sets trigger.from to the key, which several consumers then
+  // look the contact up by). Listing only one of them makes the condition
+  // silently unmatchable on the other channel. Neither can false-positive: no
+  // sender ever arrives as a string that is not one of these.
+  return [row?.customer_e164, ...aliases, row?.email]
     .map((v) => (typeof v === "string" ? v.trim() : ""))
     .filter((v) => v.length > 0);
 }

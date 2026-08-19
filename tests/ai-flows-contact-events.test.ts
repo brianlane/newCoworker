@@ -48,6 +48,38 @@ describe("contactEventText / contactEventTriggerScope", () => {
     expect(text).toContain("change: added");
   });
 
+  it("never prints an email KEY under the phone label", () => {
+    // `e164` is the contact key, not always a phone. The cadence's
+    // extract_text lifts lead_phone out of this exact text, so printing
+    // "phone: email:val@example.com" tells Gemini that IS the person's number.
+    // A contact with no phone gets no phone line at all.
+    const text = contactEventText(
+      input({
+        contact: {
+          e164: "email:valm0417@gmail.com",
+          name: "Valerie Marino",
+          email: "valm0417@gmail.com",
+          tags: ["Needs Follow Up"]
+        }
+      })
+    );
+    expect(text).not.toContain("phone:");
+    expect(text).not.toContain("email:valm0417@gmail.com");
+    expect(text).toContain("email: valm0417@gmail.com");
+    expect(text).toContain("name: Valerie Marino");
+  });
+
+  it("keeps the contact KEY as `from`, which consumers look the contact up by", () => {
+    // Not the bare address: the worker seeds {{vars.contact_language}} from
+    // this value with a customer_e164 lookup, so it has to be the identity.
+    // from_matches lines up from the other side, where
+    // resolveRefIdentityValues lists the key alongside the address.
+    const scope = contactEventTriggerScope(
+      input({ contact: { e164: "email:valm0417@gmail.com", email: "valm0417@gmail.com" } })
+    );
+    expect(scope.from).toBe("email:valm0417@gmail.com");
+  });
+
   it("omits absent fields and includes the owner line for owner_assigned", () => {
     const text = contactEventText(
       input({ kind: "owner_assigned", contact: { e164: "+16025550111" }, ownerName: "Dania" })
@@ -223,6 +255,49 @@ describe("enqueueContactEventRuns", () => {
       input({ kind: "contact_created", tag: undefined, change: undefined })
     );
     expect(recordStageChangeForMeta).not.toHaveBeenCalled();
+  });
+
+  it("enrolls an EMAIL-KEYED contact, with no phantom phone in what the flow reads", async () => {
+    // The whole chain in one assertion: an email-only lead becomes a contact
+    // (PR #1486), gets tagged, and the tag_changed flow it starts sees an
+    // honest window. This is the path that reaches the cadence's email arm,
+    // and until now that window claimed their phone number was
+    // "email:valm0417@gmail.com".
+    const { db, calls } = makeDb([
+      {
+        data: [
+          flowRow("cadence", {
+            channel: "tag_changed",
+            tag: "Needs Follow Up",
+            conditions: []
+          })
+        ],
+        error: null
+      },
+      { data: null, error: null } // run insert
+    ]);
+    const enrolled = await enqueueContactEventRuns(
+      db,
+      BIZ,
+      input({
+        tag: "Needs Follow Up",
+        contact: {
+          e164: "email:valm0417@gmail.com",
+          name: "Valerie Marino",
+          email: "valm0417@gmail.com",
+          tags: ["Needs Follow Up"]
+        }
+      })
+    );
+    expect(enrolled).toBe(1);
+
+    const insert = calls.find((c) => c.name === "insert")!.args[0] as Record<string, unknown>;
+    const ctx = insert.context as { trigger: Record<string, unknown> };
+    expect(ctx.trigger.from).toBe("email:valm0417@gmail.com");
+    const windowText = ctx.trigger.windowText as string;
+    expect(windowText).not.toContain("phone:");
+    expect(windowText).toContain("email: valm0417@gmail.com");
+    expect(windowText).toContain("tag: Needs Follow Up");
   });
 
   it("enqueues a run for a matching flow with the event scope + dedupe key", async () => {

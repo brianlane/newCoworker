@@ -84,10 +84,17 @@ const FLOW_PAGE = 100;
 export function contactEventText(input: ContactEventInput): string {
   const c = input.contact;
   const tags = c.tags ?? [];
+  // `e164` is the contact KEY, and a key is not always a phone number. For an
+  // email-keyed contact it is `email:<addr>`, and printing that under a
+  // `phone:` label tells every reader of this text, including the Gemini
+  // extraction that lifts lead_phone out of it, that the person's phone number
+  // is "email:val@example.com". A contact with no phone gets no phone line;
+  // the `email:` line below already carries their identity.
+  const phone = isEmailContactKey(c.e164) ? "" : c.e164;
   const lines = [
     `event: ${input.kind}`,
     c.name ? `name: ${c.name}` : "",
-    `phone: ${c.e164}`,
+    phone ? `phone: ${phone}` : "",
     c.email ? `email: ${c.email}` : "",
     tags.length > 0 ? `tags: ${tags.join(", ")}` : "",
     input.kind === "tag_changed" ? `tag: ${input.tag ?? ""}` : "",
@@ -104,6 +111,12 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     channel: input.kind,
     windowText: contactEventText(input),
     url: "",
+    // The contact KEY, deliberately, including the `email:` form. Several
+    // consumers look the contact up by this value (the worker seeds
+    // {{vars.contact_language}} from it with a customer_e164 lookup), so it has
+    // to be the identity, not a rendering of it. from_matches is made to line
+    // up from the OTHER side: resolveRefIdentityValues returns the key
+    // alongside the address.
     from: input.contact.e164,
     contact_name: input.contact.name ?? "",
     contact_email: input.contact.email ?? "",
