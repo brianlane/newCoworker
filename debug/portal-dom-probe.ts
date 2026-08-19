@@ -268,10 +268,16 @@ function reportDiagnostics(diagnostics?: Record<string, string[]>): void {
     for (const item of items.slice(0, 8)) console.log(`    ${item}`);
     if (items.length > 8) console.log(`    ... ${items.length - 8} more`);
   }
-  // blockedbyclient is OUR ssrf guard, not the portal failing. Say so rather
-  // than let someone spend an afternoon blaming the vendor.
-  if (JSON.stringify(entries).includes("blockedbyclient")) {
-    console.log(`  note: "blockedbyclient" is OUR ssrf guard refusing that request, not the portal.`);
+  // Our ssrf guard aborts with `route.abort("blockedbyclient")`, but Chromium
+  // reports it back through `request.failure().errorText` as
+  // `net::ERR_BLOCKED_BY_CLIENT`. Matching the literal abort ARGUMENT never
+  // fires, which would leave our own refusals looking like portal failures:
+  // exactly what this note exists to prevent. Normalize both spellings.
+  const normalized = JSON.stringify(entries).toLowerCase().replace(/[^a-z]/g, "");
+  if (normalized.includes("blockedbyclient")) {
+    console.log(
+      `  note: ERR_BLOCKED_BY_CLIENT is OUR ssrf guard refusing that request, not the portal.`
+    );
   }
 }
 
