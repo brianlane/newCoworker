@@ -256,3 +256,110 @@ re-run: several supersede each other.
 
 PRs #790, #911, #913, #920, #927, #932, #936, #986, #990, #1370, #1371,
 #1400.
+
+## The agent dashboard, read live 2026-08-18
+
+Reachable now that the render service can do HomeLight's email-first login
+(PRs #1462, #1469). `agent.homelight.com/dashboard` returns ~294KB of
+authenticated content.
+
+**What is there**
+
+- Action item: "Provide feedback on N of your recent referrals" ->
+  `Submit Feedback`
+- Per referral: "Any updates for <Name>? ... Last Update: <Stage> (<age>)" ->
+  `Update Referral Stage`
+- `agent.homelight.com/referrals` lists every referral. Rows carry
+  `data-test="referralsList-row"` with `referralsList-rowClientName`,
+  `referralsList-rowStage`, `referralsList-rowAssignedTo`,
+  `referralsList-rowCreatedAt`, and a per-card `referralsList-card-<agentLeadId>`.
+
+**The stage vocabulary**, from the filter panel's own options
+(`referralsList-filterOption-<key>`):
+
+| Label | key |
+| --- | --- |
+| New | `introduced` |
+| Left Voicemail | `agent_left_vm` |
+| Connected | `connected` |
+| Meeting Scheduled | `meeting_scheduled` |
+| Met With Client | `met_in_person` |
+| Coming Soon | `coming_soon` |
+| Listed | `listing` |
+| Making Offer | `making_offer` |
+| In Escrow | `in_escrow` |
+| Offer Accepted | `offer_accepted` |
+| Failed | `failed` |
+| Closed | `closed` |
+
+That ordering is what a forward-only stage guard has to respect: never move a
+referral backwards, and never off `closed` or `failed`.
+
+**How navigation works, and the trap in it**
+
+Rows are `<a>` elements with **no href**; the SPA navigates on click. Clicking a
+client name lands on `agent.homelight.com/referrals/page/1?referralId=<leadId>`
+and opens a detail drawer. The `referralId` is the same `lead_id` carried in the
+row's "Request cash offer" link.
+
+Navigating DIRECTLY to that `?referralId=` url does NOT open the drawer: it is
+client-side state, so the flow has to click. And the drawer mounts
+asynchronously, so a read taken right after the click is a race. It appeared in
+one probe's control list and was absent from the next probe's markup, from the
+identical click. Use the probe's `--expect` flag (added for exactly this) to
+hold until the drawer is on the page.
+
+**Where the stage editor actually is**
+
+Both routes, clicking a row and clicking the dashboard's `Update Referral
+Stage`, open the same panel. Its visible text reads as read-only:
+
+```
+<Name> / Role / Property Address / Price / Client timeframe
+Date Received / Last Updated / Stage: <value> / [Done]
+```
+
+But the markup shows the controls ARE there and simply had not hydrated when
+the probe read. Directly below the Stage row:
+
+```html
+<div class="... MygTT">
+  <div class="... Udsyj"><p>Stage</p><p>Failed</p></div>
+  <span class="--skeleton" style="width:100%; height:40px;  margin-top:32px;"></span>
+  <span class="--skeleton" style="width:100%; height:200px; margin-top:24px;"></span>
+</div>
+<button type="button"><span>Done</span></button>
+```
+
+A 40px-tall control (the stage picker) and a 200px-tall one (notes or the
+activity feed), both still `--skeleton`. The date values above them are wrapped
+in `--skeleton` spans too, which is the tell: the panel paints its text first
+and swaps in its interactive children afterwards.
+
+So `expectText "Last Updated"` is NOT a sufficient wait: that text is present
+while still inside a skeleton. The panel needs a marker that only exists after
+hydration before the editor can be read, and until it is read, no
+`browse_action` should be authored against it. This account has been bitten
+twice by selectors written from a guess
+(`debug/update-amy-aiflow-re-update-actions.ts`, and the Aug 16 claim click
+that reported success and changed nothing).
+
+Next step: get the skeletons to resolve. Five candidate post-hydration markers
+were tried and none appeared within `expectText`'s 10s window ("Add a note",
+"Activity Feed", "Select a stage", "Update Stage", "Save"). Since the panel's
+own DATE values are skeleton-wrapped too, the likely cause is the panel's data
+fetch not completing in the headless session rather than a wrong marker: this
+is a waiting problem, not a selector problem. Worth trying next, in order: a
+longer settle (`AIFLOW_RENDER_TIMEOUT_MS` on the box), a screenshot via
+`--shot` to see what the panel actually looks like once open, and
+`--read-network`-style inspection of whether the panel's XHR is being blocked
+by the SSRF guard the render service attaches to every page
+(`attachSsrfGuard`), which is the one thing in our stack that could stop a
+fetch a real browser would allow. Concretely: the guard routes `**/*` through
+`safeUrl`, which returns null for any protocol that is not `http:`/`https:`, so
+every `blob:` and `data:` subresource is aborted with `blockedbyclient`. A SPA
+that boots a web worker from a `blob:` URL, which is a common bundler output,
+would lose it silently and could leave exactly this pattern: text painted,
+every interactive child stuck as a skeleton. That would affect every SPA portal
+we browse, not just this panel, so it is worth confirming before anything is
+built on top of it.

@@ -60,6 +60,11 @@
  *   --fill <css>=<value>  type into a SEARCH-shaped field (repeatable, ordered).
  *                         Refused on password fields and on anything whose
  *                         selector does not look like a search box.
+ *   --expect <text>       wait for this visible text before reading. Use it
+ *                         whenever a --click opens something that mounts
+ *                         asynchronously (a drawer, a modal, a search overlay):
+ *                         without it the read is a race and the thing you
+ *                         clicked for may simply not be there yet.
  *   --shot <path>         save the post-action screenshot as JPEG and read it
  *
  * Clicks and reads report the page AFTER the actions, so a modal opened by a
@@ -353,6 +358,21 @@ async function main(): Promise<void> {
     }
   }
   const shotPath = flag("shot");
+  /**
+   * Wait for this text before reading. A client-rendered drawer or modal mounts
+   * AFTER the click that opens it, so the probe's single read lands on whatever
+   * happened to exist at that instant: HomeLight's referral drawer showed up in
+   * one run's button list and was absent from the next run's markup, from the
+   * same click. `expectText` makes the render service hold until the marker is
+   * on the page, which turns a racy read into a deterministic one. The render
+   * service rejects it alongside `forEachLink` or without actions, so it is only
+   * meaningful with a --click.
+   */
+  const expectText = flag("expect");
+  if (expectText && actions.length === 0) {
+    console.error("--expect needs at least one --click / --click-selector / --fill to wait after.");
+    process.exit(2);
+  }
 
   // Without any click flag there is no `actions` key at all, so the render
   // service reads and returns and cannot interact with the page.
@@ -361,6 +381,7 @@ async function main(): Promise<void> {
     businessId,
     ...(label ? { auth: { integrationLabel: label } } : {}),
     ...(actions.length > 0 ? { actions } : {}),
+    ...(expectText ? { expectText } : {}),
     ...(shotPath ? { screenshot: true } : {})
   });
 
@@ -371,6 +392,8 @@ async function main(): Promise<void> {
   console.log(`url      : ${url}`);
   console.log(
     `actions  : ${actions.length === 0 ? "(none, read-only)" : actions.map((a) => `${a.kind}("${a.target}"${a.value === undefined ? "" : `="${a.value}"`})`).join(" -> ")}`
+  );
+  if (expectText) console.log(`expect   : "${expectText}" (waits for this before reading)`
   );
 
   const startedAt = Date.now();
