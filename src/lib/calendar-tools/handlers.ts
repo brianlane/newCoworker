@@ -39,6 +39,23 @@ import { graphTimeIso } from "@/lib/ai-flows/calendar-poll";
 import { logger } from "@/lib/logger";
 
 /**
+ * How a just-booked attendee is identified to the goal engine: their phone
+ * when we have one, otherwise their email.
+ *
+ * A booking is the milestone that stops a follow-up cadence, and a lead with
+ * no phone books too. Passing only the phone meant their `appointment_booked`
+ * never fired, so the cadence kept emailing someone who had already booked.
+ */
+function bookedLeadIdentity(
+  args: { attendeePhone?: string; attendeeEmail?: string },
+  fallbackPhone: string | null | undefined
+): string | null {
+  const phone = args.attendeePhone?.trim() || (fallbackPhone ?? "").trim();
+  if (phone) return phone;
+  return args.attendeeEmail?.trim() || null;
+}
+
+/**
  * Channel-agnostic cores for the calendar tools (`calendar_find_slots`,
  * `calendar_book_appointment`), shared by every surface that exposes them:
  *   - voice  → /api/voice/tools/calendar/* (bridge adapters)
@@ -1000,7 +1017,7 @@ async function bookOnProvider(
       // response carrying an appointment id counts as booked for goals.
       const vagaroEventId = (vagaroResult.data as { eventId?: unknown } | undefined)?.eventId;
       if (vagaroResult.ok && vagaroEventId) {
-        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+        await fireGoalEvent(businessId, bookedLeadIdentity(args, fallbackPhone), {
           kind: "appointment_booked"
         });
         await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
@@ -1022,7 +1039,7 @@ async function bookOnProvider(
       // a response carrying an appointment id counts as booked for goals.
       const acuityEventId = (acuityResult.data as { eventId?: unknown } | undefined)?.eventId;
       if (acuityResult.ok && acuityEventId) {
-        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+        await fireGoalEvent(businessId, bookedLeadIdentity(args, fallbackPhone), {
           kind: "appointment_booked"
         });
         await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
@@ -1109,7 +1126,7 @@ async function bookOnProvider(
       const caldavEventId = (caldavResult.data as { eventId?: unknown } | undefined)?.eventId;
       if (caldavResult.ok && caldavEventId) {
         orphanZoomMeetingId = null;
-        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+        await fireGoalEvent(businessId, bookedLeadIdentity(args, fallbackPhone), {
           kind: "appointment_booked"
         });
         await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
@@ -1317,7 +1334,7 @@ async function bookOnProvider(
     // fireGoalEvent; the Calendly path above is exempt, a scheduling LINK is
     // not a booking.
     if (eventId) {
-      await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+      await fireGoalEvent(businessId, bookedLeadIdentity(args, fallbackPhone), {
         kind: "appointment_booked"
       });
       await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {

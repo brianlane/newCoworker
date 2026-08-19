@@ -37,6 +37,53 @@ beforeEach(() => {
 });
 
 describe("fireGoalEvent", () => {
+  it("accepts an email identity, so a phoneless lead's milestones still fire", async () => {
+    // The gap: this wrapper dropped anything that was not a phone, one level
+    // ABOVE the matching, so a lead with no number never had a milestone fire
+    // at all. They booked and kept receiving follow-ups.
+    for (const identity of [
+      "valm0417@gmail.com",
+      "  VALM0417@Gmail.com ",
+      "email:valm0417@gmail.com"
+    ]) {
+      const { db, calls } = makeDb();
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await fireGoalEvent(BIZ, identity, { kind: "appointment_booked" });
+      const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+      expect(filter, identity).toContain("email:valm0417@gmail.com");
+    }
+  });
+
+  it("resolves an address with a NUMERIC local part as email, not as a phone", async () => {
+    // normalizeNanpToE164 keeps only the digits, so trying it first would turn
+    // 4805551234@example.com into +14805551234 and hunt for a phone that is
+    // not this lead, leaving them exactly as unreachable as before.
+    for (const identity of ["4805551234@example.com", "email:4805551234@example.com"]) {
+      const { db, calls } = makeDb();
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await fireGoalEvent(BIZ, identity, { kind: "appointment_booked" });
+      const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+      expect(filter, identity).toContain("email:4805551234@example.com");
+      expect(filter, identity).not.toContain("+14805551234");
+    }
+  });
+
+  it("still normalizes a loose NANP number when the value is not an address", async () => {
+    const { db, calls } = makeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await fireGoalEvent(BIZ, "(480) 555-1234", { kind: "appointment_booked" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    expect(filter).toContain("+14805551234");
+    expect(filter).toContain("lead_phone");
+  });
+
+  it("still drops a value that is neither a phone nor an address", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(makeDb().db as never);
+    await fireGoalEvent(BIZ, "not-an-identity", { kind: "appointment_booked" });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+
   it("no phone / unusable phone → silent noop, no client created", async () => {
     await fireGoalEvent(BIZ, null, { kind: "appointment_booked" });
     await fireGoalEvent(BIZ, "  ", { kind: "appointment_booked" });
