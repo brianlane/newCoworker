@@ -111,13 +111,13 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     channel: input.kind,
     windowText: contactEventText(input),
     url: "",
-    // The sender identity a from_matches condition compares against. For an
-    // email-keyed contact that is their ADDRESS, not the `email:` key: the key
-    // is an internal identifier, and resolveRefIdentityValues (the other side
-    // of that comparison) deliberately returns the address for exactly this
-    // reason. Leaving the key here would make from_matches unmatchable for the
-    // contacts email keys were added to serve.
-    from: contactKeyEmail(input.contact.e164) ?? input.contact.e164,
+    // The contact KEY, deliberately, including the `email:` form. Several
+    // consumers look the contact up by this value (the worker seeds
+    // {{vars.contact_language}} from it with a customer_e164 lookup), so it has
+    // to be the identity, not a rendering of it. from_matches is made to line
+    // up from the OTHER side: resolveRefIdentityValues returns the key
+    // alongside the address.
+    from: input.contact.e164,
     contact_name: input.contact.name ?? "",
     contact_email: input.contact.email ?? "",
     note: input.note ?? "",
@@ -331,22 +331,9 @@ export async function enqueueContactEventRuns(
           console.error("contact_events: ref resolution", e);
           continue;
         }
-        // Same sender identity contactEventTriggerScope stores, and for the
-        // same reason: an email-keyed contact matches on their ADDRESS, which
-        // is what resolveRefIdentityValues returns for them. Matching on the
-        // `email:` key here would evaluate a from_matches condition against a
-        // value no identity list ever contains.
         const res = evaluateSmsTrigger(
           { channel: "sms", conditions },
-          {
-            messages: [
-              {
-                text: windowText,
-                from: contactKeyEmail(hydrated.contact.e164) ?? hydrated.contact.e164,
-                atMs: Date.now()
-              }
-            ]
-          },
+          { messages: [{ text: windowText, from: hydrated.contact.e164, atMs: Date.now() }] },
           refValues
         );
         if (res.matched) {

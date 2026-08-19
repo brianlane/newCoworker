@@ -69,14 +69,15 @@ describe("contactEventText / contactEventTriggerScope", () => {
     expect(text).toContain("name: Valerie Marino");
   });
 
-  it("carries the ADDRESS as the sender identity for an email-keyed contact", () => {
-    // resolveRefIdentityValues returns the address for these contacts, so a
-    // from_matches condition compared against the `email:` key could never
-    // match. Both sides have to name the same thing.
+  it("keeps the contact KEY as `from`, which consumers look the contact up by", () => {
+    // Not the bare address: the worker seeds {{vars.contact_language}} from
+    // this value with a customer_e164 lookup, so it has to be the identity.
+    // from_matches lines up from the other side, where
+    // resolveRefIdentityValues lists the key alongside the address.
     const scope = contactEventTriggerScope(
       input({ contact: { e164: "email:valm0417@gmail.com", email: "valm0417@gmail.com" } })
     );
-    expect(scope.from).toBe("valm0417@gmail.com");
+    expect(scope.from).toBe("email:valm0417@gmail.com");
   });
 
   it("omits absent fields and includes the owner line for owner_assigned", () => {
@@ -292,9 +293,7 @@ describe("enqueueContactEventRuns", () => {
 
     const insert = calls.find((c) => c.name === "insert")!.args[0] as Record<string, unknown>;
     const ctx = insert.context as { trigger: Record<string, unknown> };
-    // The address, not the internal key: this is what a from_matches condition
-    // and every {{trigger.from}} template will see.
-    expect(ctx.trigger.from).toBe("valm0417@gmail.com");
+    expect(ctx.trigger.from).toBe("email:valm0417@gmail.com");
     const windowText = ctx.trigger.windowText as string;
     expect(windowText).not.toContain("phone:");
     expect(windowText).toContain("email: valm0417@gmail.com");

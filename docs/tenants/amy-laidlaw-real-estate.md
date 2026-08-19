@@ -718,9 +718,10 @@ A person tagging an email-only contact from the Contacts page reaches the arm
 today, and that path was quietly broken until PR #1489: `contactEventText`
 printed the contact KEY under a `phone:` label, so the window the cadence's
 `read_lead` extraction reads said `phone: email:valm0417@gmail.com`. A contact
-with no phone now gets no phone line, and `trigger.from` carries the ADDRESS,
-which is what `resolveRefIdentityValues` returns for these contacts and
-therefore what a `from_matches` condition compares against.
+with no phone now gets no phone line. `trigger.from` deliberately stays the
+KEY, because the worker seeds `{{vars.contact_language}}` by looking the
+contact up with it; `from_matches` lines up from the other side instead, with
+`resolveRefIdentityValues` listing the key alongside the address.
 
 ## One-shots
 
