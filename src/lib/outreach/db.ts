@@ -286,6 +286,52 @@ export async function listProspectsByStatus(
   return (data ?? []) as OutreachProspectRow[];
 }
 
+/**
+ * Drafts a bulk rewrite has not reached yet, oldest first.
+ *
+ * "Not reached yet" is `updated_at < before`, where `before` is the instant the
+ * rewrite run started. Every rewrite stamps `updated_at`, so a draft leaves this
+ * window the moment it is done and the next batch reads the next slice. That is
+ * why the cursor is a timestamp and not an offset: the set shifts under a bulk
+ * pass (a sweep can send one, the owner can skip one), and an offset would step
+ * over the rows that moved.
+ */
+export async function listProspectsToRewrite(
+  businessId: string,
+  beforeIso: string,
+  limit: number,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .eq("status", "drafted")
+    .lt("updated_at", beforeIso)
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`listProspectsToRewrite: ${error.message}`);
+  return (data ?? []) as OutreachProspectRow[];
+}
+
+/** How many drafts that same run still has to reach. Drives the progress line. */
+export async function countProspectsToRewrite(
+  businessId: string,
+  beforeIso: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("outreach_prospects")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .eq("status", "drafted")
+    .lt("updated_at", beforeIso);
+  if (error) throw new Error(`countProspectsToRewrite: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function getProspect(
   businessId: string,
   prospectId: string,

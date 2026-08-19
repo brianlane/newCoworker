@@ -1936,6 +1936,42 @@ Write it again re-composes from the findings already on the row and does NOT
 re-probe the prospect's site. A probe is a network fetch of someone else's
 server, and a button an owner can press repeatedly must not become one.
 
+Because the edit box holds only the middle, the panel also prints the whole
+email underneath it, read-only, exactly as it will send. Without that, pressing
+Write it again reads as though it deleted the CTA, the sign-off, and the
+footer: those lines are on screen for a legacy draft (which is shown as one
+assembled body) and nowhere at all once the draft becomes editable.
+
+### Write it again, for all drafts
+
+The single-draft button cannot answer the case the settings create. Drafts
+outlive the settings that produced them, so changing what the email offers, who
+signs it, or the footer address leaves a queue of hundreds still carrying the
+old wording, and the review list only renders the first
+`REVIEW_QUEUE_LIMIT` (25) of them. **Write it again (for all drafts)** rewrites
+every `drafted` row for the tenant, capped by nothing but the queue itself.
+
+It runs in batches of `REWRITE_BATCH_SIZE` (20) behind
+`POST /api/dashboard/outreach/rewrite-all`, and the panel loops until the
+server reports nothing left. One rewrite is one Gemini tone pass of about a
+second, so a single request covering a busy queue would sit behind the edge
+timeout and throw away everything it had already done.
+
+The cursor is a timestamp, not an offset: the first call gets back a
+`startedAt`, every later call passes it, and each batch reads the drafts whose
+`updated_at` is older than it, oldest first. Every rewrite stamps `updated_at`,
+so a finished draft leaves the window on its own, and rows that move under the
+pass (a sweep sends one, the owner skips one) are simply no longer `drafted`
+and drop out. A draft that cannot be rewritten (its findings no longer say
+anything checkable) is stamped anyway, under the same drafted-only guard, or
+the cursor would read it back forever.
+
+Both buttons compose through one function, so a bulk rewrite cannot drift into
+producing a different email from the one a single press previews. Like the
+single press, it re-composes from stored findings and probes nobody, and it
+replaces anything the owner edited by hand, which is why the panel asks twice
+and names the count.
+
 ### Why the send is NOT a flow step
 
 The obvious design is a `send_email` step in the outreach flow. It is wrong

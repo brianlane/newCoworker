@@ -127,6 +127,14 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    */
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  /**
+   * The bulk rewrite, which is a loop rather than one call: the server rewrites
+   * a batch per request and hands back a cursor, so progress has to live here.
+   * `null` means idle, "confirm" means the warning is on screen and nothing has
+   * been spent yet.
+   */
+  const [bulk, setBulk] = useState<null | "confirm" | { done: number; total: number }>(null);
+  const bulkRunning = bulk !== null && bulk !== "confirm";
 
   const markDirty = () => {
     dirtyRef.current = true;
@@ -246,6 +254,60 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
       setError(t("actionFailed"));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  /**
+   * Write every waiting draft again, batch by batch.
+   *
+   * The queue on screen is capped at 25 while a busy tenant can have hundreds
+   * waiting, so this counts against the funnel's pending number rather than the
+   * rows rendered. The server decides when the run is finished (`remaining`
+   * reaching zero); the count here only feeds the progress line, so a draft the
+   * sweep sends mid-run cannot strand the loop.
+   */
+  const rewriteAll = async () => {
+    const total = view?.funnel.pending ?? 0;
+    setBulk({ done: 0, total });
+    setError(null);
+    setNotice(null);
+    let since: string | undefined;
+    let done = 0;
+    try {
+      for (;;) {
+        const res = await fetch("/api/dashboard/outreach/rewrite-all", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessId, since })
+        });
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { startedAt: string; rewritten: number; skipped: number; remaining: number };
+          error?: { message?: string };
+        };
+        if (!json.ok || !json.data) {
+          setError(json.error?.message ?? t("actionFailed"));
+          return;
+        }
+        since = json.data.startedAt;
+        done += json.data.rewritten + json.data.skipped;
+        setBulk({ done, total: Math.max(total, done) });
+        if (json.data.remaining <= 0) break;
+        // A batch that reached nothing at all cannot be repeated usefully: the
+        // count says work is left but the read found none of it. Stopping beats
+        // spinning on the same empty slice.
+        if (json.data.rewritten + json.data.skipped === 0) break;
+      }
+      setNotice(t("rewroteAll", { count: done }));
+      // Drops every local edit: the rewrite replaced the stored text under all
+      // of them, so keeping one would show the owner their old words over a
+      // draft that no longer says that.
+      setDrafts({});
+      await refresh();
+    } catch {
+      setError(t("actionFailed"));
+    } finally {
+      setBulk(null);
     }
   };
 
@@ -530,9 +592,41 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
 
       {view && view.queue.length > 0 ? (
         <div>
-          <h3 className="text-sm font-medium text-parchment/80">
-            {t("queueTitle", { count: view.queue.length })}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-medium text-parchment/80">
+              {t("queueTitle", { count: view.queue.length })}
+            </h3>
+            {/* Two presses, because one press replaces every draft in the queue
+                and spends a model call on each. The warning names the number so
+                it is not a surprise. */}
+            {bulk === "confirm" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-amber-200">
+                  {t("rewriteAllConfirm", { count: view.funnel.pending })}
+                </span>
+                <Button onClick={() => void rewriteAll()}>{t("actions.rewriteAllYes")}</Button>
+                <Button variant="secondary" onClick={() => setBulk(null)}>
+                  {t("actions.cancel")}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                {bulkRunning ? (
+                  <span className="text-xs text-parchment/60">
+                    {t("rewriteAllProgress", { done: bulk.done, total: bulk.total })}
+                  </span>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  disabled={bulkRunning}
+                  onClick={() => setBulk("confirm")}
+                >
+                  {t("actions.rewriteAll")}
+                </Button>
+              </div>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-parchment/50">{t("rewriteAllHelp")}</p>
           <div className="mt-2 space-y-2">
             {view.queue.map((item) => (
               <div
@@ -558,7 +652,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                     </Button>
                     <Button
                       variant="secondary"
-                      disabled={busyId === item.id}
+                      disabled={busyId === item.id || bulkRunning}
                       onClick={() => void act(item.id, "skip")}
                     >
                       {t("actions.skip")}
@@ -567,7 +661,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                         would send the stored draft, and the owner would watch
                         their rewrite go out as the old text. */}
                     <Button
-                      disabled={busyId === item.id || Boolean(drafts[item.id])}
+                      disabled={busyId === item.id || bulkRunning || Boolean(drafts[item.id])}
                       onClick={() => void act(item.id, "send")}
                     >
                       {t("actions.send")}
@@ -615,13 +709,30 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                           />
                           <p className="mt-1 text-xs text-parchment/50">{t("draftFooterHelp")}</p>
                         </div>
+                        {/* The whole email, as stored. The edit boxes hold only
+                            the middle, so without this the CTA, the sign-off,
+                            the unsubscribe link, and the address are nowhere on
+                            screen, and pressing Write it again looks like it
+                            deleted most of the email rather than rewording the
+                            part the owner can change. */}
+                        {item.pitch_body ? (
+                          <div>
+                            <p className={labelClass}>{t("fields.wholeEmail")}</p>
+                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-xs text-parchment/60">
+                              {item.pitch_body}
+                            </pre>
+                            <p className="mt-1 text-xs text-parchment/50">
+                              {drafts[item.id] ? t("wholeEmailStale") : t("wholeEmailHelp")}
+                            </p>
+                          </div>
+                        ) : null}
                       </>
                     )}
                     <div className="flex flex-wrap items-center gap-2">
                       {isLegacyDraft(item) ? null : (
                         <Button
                           variant="secondary"
-                          disabled={busyId === item.id || !drafts[item.id]}
+                          disabled={busyId === item.id || bulkRunning || !drafts[item.id]}
                           onClick={() => void act(item.id, "edit")}
                         >
                           {t("actions.saveDraft")}
@@ -629,7 +740,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                       )}
                       <Button
                         variant="secondary"
-                        disabled={busyId === item.id}
+                        disabled={busyId === item.id || bulkRunning}
                         onClick={() => void act(item.id, "regenerate")}
                       >
                         {t("actions.regenerate")}
