@@ -21,6 +21,7 @@
 import { logger } from "@/lib/logger";
 import { isBareIpHost, isPrivateOrLoopbackHost } from "@/lib/db/custom-integrations";
 import { digestPageControls, type PageDigest } from "@/lib/ai-flows/page-controls";
+import type { PageDiagnostics } from "@/lib/ai-flows/action-check-view";
 
 /** Every way a probe can fail. Exported so callers must name each one. */
 export type ProbePageFailure =
@@ -30,7 +31,18 @@ export type ProbePageFailure =
   | "login_failed";
 
 export type ProbePageResult =
-  | { ok: true; finalUrl: string; digest: PageDigest }
+  | {
+      ok: true;
+      finalUrl: string;
+      digest: PageDigest;
+      /**
+       * What the page reported about itself, when it reported anything. Sent
+       * on SUCCESS too, which is the case that matters: a page whose data
+       * requests failed returns 200 with real markup and missing controls, so
+       * an empty picker and a broken portal look identical without it.
+       */
+      diagnostics?: PageDiagnostics;
+    }
   | { ok: false; error: ProbePageFailure; detail?: string };
 
 export type ProbePageDeps = {
@@ -114,6 +126,7 @@ export async function probePageControls(
     const body = (await res.json().catch(() => null)) as {
       finalUrl?: unknown;
       html?: unknown;
+      diagnostics?: unknown;
       error?: unknown;
       detail?: unknown;
     } | null;
@@ -139,7 +152,10 @@ export async function probePageControls(
     return {
       ok: true,
       finalUrl: typeof body.finalUrl === "string" ? body.finalUrl : url,
-      digest: digestPageControls(body.html)
+      digest: digestPageControls(body.html),
+      ...(body.diagnostics && typeof body.diagnostics === "object"
+        ? { diagnostics: body.diagnostics as PageDiagnostics }
+        : {})
     };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

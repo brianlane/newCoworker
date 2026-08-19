@@ -238,3 +238,31 @@ describe("probePageControls", () => {
     expect(result).toEqual({ ok: false, error: "render_failed", detail: "timed out" });
   });
 });
+
+
+describe("probePageControls diagnostics", () => {
+  it("carries what the page reported about itself, on success", async () => {
+    // An empty picker and a broken portal look identical without this.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        html: "<p>shell only</p>",
+        diagnostics: { pageErrors: ["Unexpected token '<'"] }
+      })
+    );
+    const result = await probePageControls(BIZ, "https://portal.example.com/", {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      diagnostics: { pageErrors: ["Unexpected token '<'"] }
+    });
+  });
+
+  it("omits the field when the page reported nothing", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ html: "<p>hi</p>" }));
+    const result = await probePageControls(BIZ, "https://portal.example.com/", {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result.ok && result.diagnostics).toBeUndefined();
+  });
+});

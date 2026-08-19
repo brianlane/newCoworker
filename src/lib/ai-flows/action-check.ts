@@ -21,7 +21,8 @@ import { isProbeableUrl, resolveRenderProbeUrl } from "@/lib/ai-flows/page-probe
 import {
   MAX_CHECKABLE_ACTIONS,
   type ActionCheck,
-  type CheckableAction
+  type CheckableAction,
+  type PageDiagnostics
 } from "@/lib/ai-flows/action-check-view";
 
 // Re-exported so server callers have one import site, while the "use client"
@@ -29,10 +30,12 @@ import {
 export {
   MAX_CHECKABLE_ACTIONS,
   describeActionCheck,
+  describePageDiagnostics,
   noActionResolved,
   type ActionCheck,
   type ActionCheckState,
-  type CheckableAction
+  type CheckableAction,
+  type PageDiagnostics
 } from "@/lib/ai-flows/action-check-view";
 
 export type CheckActionsFailure =
@@ -43,7 +46,14 @@ export type CheckActionsFailure =
   | "login_failed";
 
 export type CheckActionsResult =
-  | { ok: true; finalUrl: string; checks: ActionCheck[]; screenshotBase64?: string }
+  | {
+      ok: true;
+      finalUrl: string;
+      checks: ActionCheck[];
+      screenshotBase64?: string;
+      /** What the page reported about itself, when it reported anything. */
+      diagnostics?: PageDiagnostics;
+    }
   | { ok: false; error: CheckActionsFailure; detail?: string };
 
 export type CheckActionsDeps = {
@@ -111,6 +121,7 @@ export async function checkBrowseActions(
       finalUrl?: unknown;
       checks?: unknown;
       screenshotBase64?: unknown;
+      diagnostics?: unknown;
       error?: unknown;
       detail?: unknown;
     } | null;
@@ -132,6 +143,12 @@ export async function checkBrowseActions(
       checks: body.checks as ActionCheck[],
       ...(typeof body.screenshotBase64 === "string" && body.screenshotBase64.length > 0
         ? { screenshotBase64: body.screenshotBase64 }
+        : {}),
+      // The sidecar sends this on SUCCESS too, which is the case that matters:
+      // a page whose data requests failed still returns 200 with real markup
+      // and missing controls.
+      ...(body.diagnostics && typeof body.diagnostics === "object"
+        ? { diagnostics: body.diagnostics as PageDiagnostics }
         : {})
     };
   } catch (err) {

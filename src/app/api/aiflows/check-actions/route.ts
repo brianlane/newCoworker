@@ -79,7 +79,8 @@ export async function POST(request: Request) {
     return successResponse({
       finalUrl: result.finalUrl,
       checks: result.checks,
-      ...(result.screenshotBase64 ? { screenshotBase64: result.screenshotBase64 } : {})
+      ...(result.screenshotBase64 ? { screenshotBase64: result.screenshotBase64 } : {}),
+      ...(result.diagnostics ? { diagnostics: result.diagnostics } : {})
     });
   } catch (err) {
     return handleRouteError(err);

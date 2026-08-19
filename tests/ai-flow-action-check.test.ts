@@ -3,6 +3,7 @@ import {
   MAX_CHECKABLE_ACTIONS,
   checkBrowseActions,
   describeActionCheck,
+  describePageDiagnostics,
   noActionResolved,
   type ActionCheck
 } from "@/lib/ai-flows/action-check";
@@ -302,5 +303,81 @@ describe("checkBrowseActions", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(result).toMatchObject({ ok: false, error: "render_failed" });
+  });
+});
+
+
+describe("describePageDiagnostics", () => {
+  it("is empty when the page had nothing to report", () => {
+    expect(describePageDiagnostics(undefined)).toEqual([]);
+    expect(describePageDiagnostics({})).toEqual([]);
+    expect(describePageDiagnostics({ consoleErrors: [] })).toEqual([]);
+  });
+
+  it("reports the page's own complaints, which is what separates two identical-looking results", () => {
+    // On HomeLight this exact shape was the whole diagnosis: a lazy-loaded
+    // script served an HTML error page, so the stage editor never mounted and
+    // the controls were genuinely absent for a reason that has nothing to do
+    // with the selector (PR #1508).
+    const lines = describePageDiagnostics({ pageErrors: ["Unexpected token '<'"] });
+    expect(lines).toEqual(["pageErrors: Unexpected token '<'"]);
+  });
+
+  it("caps a noisy page and says how many were dropped", () => {
+    const lines = describePageDiagnostics({
+      consoleErrors: Array.from({ length: 9 }, (_, i) => `boom ${i}`)
+    });
+    expect(lines).toHaveLength(6);
+    expect(lines[5]).toBe("consoleErrors: ... 4 more");
+  });
+
+  it("names our OWN blocked requests rather than letting them read as portal faults", () => {
+    // The guard aborts with "blockedbyclient"; Chromium reports it back as
+    // net::ERR_BLOCKED_BY_CLIENT, so matching the abort argument alone never
+    // fires. Both spellings must be caught.
+    for (const spelling of ["net::ERR_BLOCKED_BY_CLIENT GET https://x/y", "blockedbyclient GET https://x/y"]) {
+      const lines = describePageDiagnostics({ failedRequests: [spelling] });
+      expect(lines[lines.length - 1]).toContain("our own safety guard");
+    }
+  });
+
+  it("does not fire that note on an unrelated failure code", () => {
+    const lines = describePageDiagnostics({ failedRequests: ["net::ERR_ABORTED GET https://x/y"] });
+    expect(lines.join(" ")).not.toContain("safety guard");
+  });
+
+  it("ignores a malformed diagnostics group instead of throwing", () => {
+    expect(
+      describePageDiagnostics({ consoleErrors: "not an array" as unknown as string[] })
+    ).toEqual([]);
+  });
+});
+
+describe("checkBrowseActions diagnostics", () => {
+  it("carries what the page reported, on SUCCESS", async () => {
+    // The case that matters: a page whose data requests failed returns 200
+    // with real markup and missing controls, so without this the dry run says
+    // "not found" and the owner rewrites a correct selector.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        checks: [{ kind: "click_text", target: "Claim", state: "absent" }],
+        diagnostics: { pageErrors: ["Unexpected token '<'"] }
+      })
+    );
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      diagnostics: { pageErrors: ["Unexpected token '<'"] }
+    });
+  });
+
+  it("omits the field when the page reported nothing", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ checks: [] }));
+    const result = await checkBrowseActions(BIZ, URL_OK, ACTIONS, {
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(result.ok && result.diagnostics).toBeUndefined();
   });
 });

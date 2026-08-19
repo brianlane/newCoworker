@@ -20,6 +20,8 @@ import { useState } from "react";
 import { ExternalLink, Eye, Plus } from "lucide-react";
 import type { PageControl, PageDigest } from "@/lib/ai-flows/page-controls";
 import { PAGE_CONTROL_GROUPS } from "@/lib/ai-flows/page-controls";
+import type { PageDiagnostics } from "@/lib/ai-flows/action-check-view";
+import { describePageDiagnostics } from "@/lib/ai-flows/action-check-view";
 
 type Props = {
   businessId: string;
@@ -39,6 +41,7 @@ export function BrowseActionPagePicker({ businessId, integrationLabel, onAddActi
   const [error, setError] = useState<string | null>(null);
   const [digest, setDigest] = useState<PageDigest | null>(null);
   const [finalUrl, setFinalUrl] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
 
   const probe = async (target: string) => {
     if (!target.trim()) return;
@@ -56,14 +59,16 @@ export function BrowseActionPagePicker({ businessId, integrationLabel, onAddActi
       });
       const json = (await res.json()) as {
         ok: boolean;
-        data?: { finalUrl: string; digest: PageDigest };
+        data?: { finalUrl: string; digest: PageDigest; diagnostics?: PageDiagnostics };
         error?: { message: string };
       };
       if (json.ok && json.data) {
         setDigest(json.data.digest);
         setFinalUrl(json.data.finalUrl);
+        setDiagnostics(json.data.diagnostics ?? null);
       } else {
         setDigest(null);
+        setDiagnostics(null);
         setError(json.error?.message ?? "The page could not be opened.");
       }
     } catch {
@@ -149,6 +154,22 @@ export function BrowseActionPagePicker({ businessId, integrationLabel, onAddActi
                   Nothing clickable was found. The page may still have been loading, or it may need
                   a login this step does not have yet.
                 </p>
+              )}
+
+              {/* An empty picker and a broken portal look identical without
+                  this: a page whose scripts failed still returns a real page
+                  with no controls on it. */}
+              {describePageDiagnostics(diagnostics ?? undefined).length > 0 && (
+                <div className="space-y-1 rounded-md border border-parchment/10 bg-deep-ink/40 p-2">
+                  <p className="text-[11px] font-semibold text-parchment/70">
+                    What the page reported about itself
+                  </p>
+                  {describePageDiagnostics(diagnostics ?? undefined).map((line, i) => (
+                    <p key={i} className="break-all font-mono text-[10px] text-parchment/50">
+                      {line}
+                    </p>
+                  ))}
+                </div>
               )}
 
               {PAGE_CONTROL_GROUPS.map((group) => {

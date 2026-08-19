@@ -19,8 +19,16 @@ import { AlertTriangle, CheckCircle2, CircleDashed, PlayCircle, XCircle } from "
 // The VIEW module, not action-check.ts: that one reaches the sidecar client,
 // which reaches the URL guard, which reaches next/headers. Importing a value
 // from it here fails the build.
-import type { ActionCheck, CheckableAction } from "@/lib/ai-flows/action-check-view";
-import { describeActionCheck, noActionResolved } from "@/lib/ai-flows/action-check-view";
+import type {
+  ActionCheck,
+  CheckableAction,
+  PageDiagnostics
+} from "@/lib/ai-flows/action-check-view";
+import {
+  describeActionCheck,
+  describePageDiagnostics,
+  noActionResolved
+} from "@/lib/ai-flows/action-check-view";
 
 type Props = {
   businessId: string;
@@ -46,14 +54,17 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState<ActionCheck[] | null>(null);
   const [shot, setShot] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<PageDiagnostics | null>(null);
 
   const usable = actions.filter((a) => a.kind && a.target);
+  const diagnosticLines = describePageDiagnostics(diagnostics ?? undefined);
 
   const run = async () => {
     setLoading(true);
     setError(null);
     setChecks(null);
     setShot(null);
+    setDiagnostics(null);
     try {
       const res = await fetch("/api/aiflows/check-actions", {
         method: "POST",
@@ -67,12 +78,17 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
       });
       const json = (await res.json()) as {
         ok: boolean;
-        data?: { checks: ActionCheck[]; screenshotBase64?: string };
+        data?: {
+          checks: ActionCheck[];
+          screenshotBase64?: string;
+          diagnostics?: PageDiagnostics;
+        };
         error?: { message: string };
       };
       if (json.ok && json.data) {
         setChecks(json.data.checks);
         setShot(json.data.screenshotBase64 ?? null);
+        setDiagnostics(json.data.diagnostics ?? null);
       } else {
         setError(json.error?.message ?? "The actions could not be tried.");
       }
@@ -155,6 +171,23 @@ export function BrowseActionTryPanel({ businessId, integrationLabel, actions }: 
                   Nothing at all was found. That usually means the page did not really load: check
                   the address, and whether this step needs a login it does not have.
                 </p>
+              )}
+
+              {/* The page's own complaints, when it made any. This is what
+                  separates "the page has no such button" from "the button
+                  never rendered because its script came back broken", which
+                  otherwise read as the same result. */}
+              {diagnosticLines.length > 0 && (
+                <div className="space-y-1 rounded-md border border-parchment/10 bg-deep-ink/40 p-2">
+                  <p className="text-[11px] font-semibold text-parchment/70">
+                    What the page reported about itself
+                  </p>
+                  {diagnosticLines.map((line, i) => (
+                    <p key={i} className="break-all font-mono text-[10px] text-parchment/50">
+                      {line}
+                    </p>
+                  ))}
+                </div>
               )}
 
               {shot && (

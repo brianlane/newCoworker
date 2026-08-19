@@ -60,3 +60,37 @@ export function describeActionCheck(check: ActionCheck): string {
 export function noActionResolved(checks: ActionCheck[]): boolean {
   return checks.length > 0 && checks.every((c) => c.state === "absent");
 }
+
+/** What the page reported about itself, as the sidecar groups it. */
+export type PageDiagnostics = Record<string, string[]>;
+
+/**
+ * Owner-readable lines for what the page reported about itself.
+ *
+ * The reason this matters is the same one PR #1508 gave for printing it in
+ * the engineer probe: a page whose data requests failed returns HTTP 200 with
+ * real markup and missing controls, so "not found on this page" and "the
+ * control never rendered because its script was served an HTML error page"
+ * are the same message without this. On HomeLight that distinction was two
+ * `Unexpected token '<'` page errors, and nothing else would have said so.
+ */
+export function describePageDiagnostics(diagnostics?: PageDiagnostics): string[] {
+  if (!diagnostics) return [];
+  const lines: string[] = [];
+  for (const [kind, items] of Object.entries(diagnostics)) {
+    if (!Array.isArray(items) || items.length === 0) continue;
+    for (const item of items.slice(0, 5)) lines.push(`${kind}: ${item}`);
+    if (items.length > 5) lines.push(`${kind}: ... ${items.length - 5} more`);
+  }
+  // Our own SSRF guard aborts with `route.abort("blockedbyclient")`, which
+  // Chromium reports back as `net::ERR_BLOCKED_BY_CLIENT`. Matching the abort
+  // ARGUMENT alone never fires, so our refusals would read as portal faults;
+  // normalize both spellings, the same way the engineer probe does.
+  const normalized = lines.join(" ").toLowerCase().replace(/[^a-z]/g, "");
+  if (normalized.includes("blockedbyclient")) {
+    lines.push(
+      "Note: a blocked request above is our own safety guard refusing it, not the page failing."
+    );
+  }
+  return lines;
+}

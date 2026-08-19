@@ -64,7 +64,11 @@ export async function POST(request: Request) {
         result.detail ? `${message} (${result.detail})` : message
       );
     }
-    return successResponse({ finalUrl: result.finalUrl, digest: result.digest });
+    return successResponse({
+      finalUrl: result.finalUrl,
+      digest: result.digest,
+      ...(result.diagnostics ? { diagnostics: result.diagnostics } : {})
+    });
   } catch (err) {
     return handleRouteError(err);
   }
