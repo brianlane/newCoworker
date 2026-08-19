@@ -48,6 +48,14 @@ export const PLAN_CARD_ROWS = 11;
  * buttons landed at three different heights. Every direct child below is one
  * grid row, which is why the empty placeholders are here rather than being
  * conditionally omitted.
+ *
+ * `gap-y-0` here is deliberate and load-bearing. A subgrid inherits the
+ * parent's gutters by default, and the card container carries `gap-6` for the
+ * space BETWEEN cards; without this override that 24px would also open up
+ * between all 11 bands inside every card. Per CSS Grid Level 2 a subgrid's own
+ * gap wins in the subgridded axis, so the bands are spaced only by the `mt-*`
+ * margins below (measured 12/4/12/4/16/8/16/20/10/20px at 1440, 900, and
+ * 390 wide, with the 24px between-card gutter intact at each).
  */
 export function PlanCard({
   tier,
