@@ -104,6 +104,9 @@ export type BrowseActionPlanned = {
     | "select_option";
   target: string;
   value: string;
+  /** Skip (instead of fail) when the target is not on the page. Authoring
+   * restricts this to select_option (see browseActionItemSchema). */
+  optional?: boolean;
 };
 
 /** Hard ceiling on any wait (sleep / wait_for_reply): 30 days, in minutes. */
@@ -1767,7 +1770,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         actions.push({
           kind: a.kind,
           target,
-          value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
+          value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : "",
+          ...(a.optional === true ? { optional: true } : {})
         });
       }
       // Resolve the forEachLink name filter: split the var's value on

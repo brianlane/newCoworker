@@ -2108,6 +2108,33 @@ describe("planStep: browse_action", () => {
       r.ok && r.action.kind === "browse_action" && r.action.auth?.integrationLabel
     ).toBe("Referral Exchange");
   });
+  it("carries an action's optional flag through, and only when set", () => {
+    const r = planStep(
+      {
+        ...base,
+        actions: [
+          { kind: "click_text", target: "Provide Update" },
+          {
+            kind: "select_option",
+            target: 'select[id="How would you classify this customer?"]',
+            valueTemplate: "Active/progressing",
+            optional: true
+          }
+        ]
+      },
+      { vars: { lead_url: "https://rfrl.to/x" } }
+    );
+    expect(r.ok && r.action.kind === "browse_action" && r.action.actions).toEqual([
+      { kind: "click_text", target: "Provide Update", value: "" },
+      {
+        kind: "select_option",
+        target: 'select[id="How would you classify this customer?"]',
+        value: "Active/progressing",
+        optional: true
+      }
+    ]);
+  });
+
   it("fails when the urlVar is missing", () => {
     expect(planStep(base, { vars: {} })).toEqual({
       ok: false,

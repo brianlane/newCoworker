@@ -684,12 +684,25 @@ const browseActionItemSchema = z
   .object({
     kind: z.enum(BROWSE_ACTION_KINDS),
     target: z.string().min(1).max(300),
-    valueTemplate: z.string().max(2000).optional()
+    valueTemplate: z.string().max(2000).optional(),
+    // Skip this action (instead of failing the page) when its target is not
+    // on the page. For controls a portal renders only on SOME records:
+    // Clever's "How would you classify this customer?" select appears on a
+    // subset of update modals and is REQUIRED there, so a sweep that never
+    // answers it times out on Submit for those cards, while a sweep that
+    // always answers it fails every card that lacks the control. Restricted
+    // to select_option: a select is either in the DOM or it is not, while
+    // "optional click_text" would let hydration lag silently skip real
+    // buttons (the exact class of bug CLICK_TEXT_APPEAR_MS exists to stop).
+    optional: z.boolean().optional()
   })
   .refine(
     (a) => !VALUE_REQUIRING_KINDS.has(a.kind) || (a.valueTemplate ?? "").length > 0,
     { message: "this action kind needs a value (the option to choose or the name to click)" }
-  );
+  )
+  .refine((a) => a.optional !== true || a.kind === "select_option", {
+    message: 'only a select_option action can be optional (a missing select is unambiguous; a missing button is usually just late)'
+  });
 
 /**
  * Optional per-step guard. The step only runs when the condition holds against a
