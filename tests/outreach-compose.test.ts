@@ -82,6 +82,72 @@ describe("leadFinding / isPitchable", () => {
     }
   });
 
+  it("has a cost sentence for every opening it will pitch", () => {
+    // The two maps are keyed the same way and read in the same breath. If one
+    // gains a finding code the other does not, the pitch reads "...noticed X.
+    // undefined" and goes out that way, because isPitchable only ever checked
+    // the opening. This is the guard that keeps them in step.
+    for (const code of [
+      "no_online_booking",
+      "no_chat_widget",
+      "no_text_option",
+      "no_tap_to_call",
+      "closed_weekends",
+      "after_hours_gap"
+    ]) {
+      const pitch = composePitch(
+        TENANT,
+        { businessName: "Acme", city: "Mesa", findings: [{ code, detail: "d" }] },
+        UNSUB
+      );
+      expect(isPitchable([{ code, detail: "d" }])).toBe(true);
+      expect(pitch?.body).not.toContain("undefined");
+      // Observation and cost land as one paragraph, so the gap and what falls
+      // through it are read as a single thought.
+      const opening = (pitch?.body ?? "").split("\n\n")[1] ?? "";
+      expect(opening.split(". ").length).toBeGreaterThan(1);
+    }
+  });
+
+  it("never puts a number, a percentage, or a competitor in the reader's mouth", () => {
+    // The most persuasive sentence a cold email can write is the one it has not
+    // earned: "up to 35% of those calls go to voicemail". We probed their site;
+    // we did not measure their phone. Every cost line is general behaviour, and
+    // the polish prompt forbids inventing the rest.
+    for (const code of [
+      "no_online_booking",
+      "no_chat_widget",
+      "no_text_option",
+      "no_tap_to_call",
+      "closed_weekends",
+      "after_hours_gap"
+    ]) {
+      const paragraphs = pitchParagraphs(
+        TENANT,
+        { businessName: "Acme", city: "Mesa", findings: [] },
+        { code, detail: "d" }
+      );
+      // The opener paragraph is the observation and the cost joined. Only the
+      // cost is under test here: the observations DO talk about the site,
+      // because a probe read it. Neither observation contains a sentence break,
+      // so everything after the first one is the cost.
+      const [observation, ...rest] = paragraphs[1].split(". ");
+      const cost = rest.join(". ");
+      expect(observation).not.toBe("");
+      expect(cost).not.toBe("");
+      expect(cost).not.toMatch(/\d/);
+      expect(cost).not.toMatch(/percent|%|competitor|revenue/i);
+      // Nor a fact about their site or their phone that the finding never
+      // established. Knowing there is no text link says nothing about what else
+      // is on the page; knowing when their hours end says nothing about what
+      // answers the phone afterwards. These are the words that smuggle one in.
+      expect(cost).not.toMatch(/voicemail|answering service|the page|the site|their website/i);
+    }
+    expect(PITCH_POLISH_INSTRUCTION).toContain("percentages");
+    expect(PITCH_POLISH_INSTRUCTION).toContain("never");
+    expect(PITCH_POLISH_INSTRUCTION).toContain("name a competitor");
+  });
+
   it("refuses a finding it has no honest opening for", () => {
     // An unknown code could only produce a vague opener, which is spam.
     expect(isPitchable([{ code: "invented_by_a_future_probe", detail: "d" }])).toBe(false);

@@ -27,6 +27,8 @@ import {
   processOutreachSweep,
   recordOutreachEmailLog,
   regenerateProspectDraft,
+  REWRITE_BATCH_SIZE,
+  rewriteAllProspectDrafts,
   sendProspectNow
 } from "@/lib/outreach/sweep";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
@@ -167,6 +169,8 @@ function stubLedger(over: Record<string, unknown> = {}) {
     claimProspectNudge: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
     countProspectsNudgedSince: vi.fn(async () => 0),
+    listProspectsToRewrite: vi.fn(async () => []),
+    countProspectsToRewrite: vi.fn(async () => 0),
     ...over
   };
   for (const [name, impl] of Object.entries(defaults)) {
@@ -1724,5 +1728,205 @@ describe("recordOutreachEmailLog", () => {
         providerMessageId: null
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("rewriteAllProspectDrafts (Write it again, for every waiting draft)", () => {
+  /** The drafts a run has not reached yet, in the order the cursor hands them over. */
+  function queue(n: number, over: Partial<OutreachProspectRow> = {}): OutreachProspectRow[] {
+    return Array.from({ length: n }, (_, i) =>
+      prospect({ id: `p-${i}`, business_name: `Prospect ${i}`, ...over })
+    );
+  }
+
+  it("rewrites the batch, hands back a cursor, and reports what is left", async () => {
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => queue(3)),
+      countProspectsToRewrite: vi.fn(async () => 140)
+    });
+    const result = await rewriteAllProspectDrafts(BIZ, {}, baseDeps());
+    expect(result).toEqual({
+      ok: true,
+      // The run's own clock, so every later batch reads the same slice
+      // boundary rather than a moving "now".
+      startedAt: MONDAY_MORNING.toISOString(),
+      rewritten: 3,
+      skipped: 0,
+      remaining: 140
+    });
+    expect(ledger.listProspectsToRewrite).toHaveBeenCalledWith(
+      BIZ,
+      MONDAY_MORNING.toISOString(),
+      REWRITE_BATCH_SIZE,
+      expect.anything()
+    );
+    // Three drafts rewritten means three guarded writes, each still keyed on
+    // the row being a draft.
+    const writes = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls;
+    expect(writes).toHaveLength(3);
+    expect(writes.map((c) => c[1])).toEqual(["p-0", "p-1", "p-2"]);
+    expect(writes.every((c) => c[2] === "drafted")).toBe(true);
+  });
+
+  it("writes the same email the single-draft button writes", async () => {
+    // The two buttons share one composer on purpose: a bulk rewrite that
+    // produced a subtly different email from the one the owner previewed by
+    // pressing Write it again on a single draft would be the worst kind of
+    // surprise, since it lands on every draft at once.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => [prospect()])
+    });
+    const bulk = await rewriteAllProspectDrafts(BIZ, {}, baseDeps());
+    const bulkPatch = (
+      (await import("@/lib/outreach/db")).transitionProspect as ReturnType<typeof vi.fn>
+    ).mock.calls[0][3];
+    expect(bulk.ok).toBe(true);
+
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      getProspect: vi.fn(async () => prospect())
+    });
+    const single = await regenerateProspectDraft(BIZ, prospect().id, baseDeps());
+    expect(single).toEqual({ ok: true, prospect: bulkPatch });
+  });
+
+  it("picks up the settings the owner just changed, which is the whole point", async () => {
+    // The drafts outlive the settings that produced them. Change the offer and
+    // the queue still holds the old wording until something rewrites it.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () =>
+        settings({ mode: "manual", value_prop: "We give you an AI coworker.", sender_name: "Bri" })
+      ),
+      listProspectsToRewrite: vi.fn(async () => [prospect()])
+    });
+    await rewriteAllProspectDrafts(BIZ, {}, baseDeps());
+    const patch = (
+      (await import("@/lib/outreach/db")).transitionProspect as ReturnType<typeof vi.fn>
+    ).mock.calls[0][3];
+    expect(patch.pitch_paragraphs).toContain("We give you an AI coworker.");
+    expect(patch.pitch_body).toContain("Bri");
+    // Still no footer inside the editable paragraphs, and still assembled
+    // around them.
+    expect(patch.pitch_paragraphs).not.toContain("/api/outreach/unsubscribe?");
+    expect(patch.pitch_body).toContain("/api/outreach/unsubscribe?");
+  });
+
+  it("re-composes from the stored findings, so a bulk press never re-probes anyone", async () => {
+    // A button that fetches a few hundred strangers' websites on one click is a
+    // different thing from a button that rewrites a few hundred emails.
+    const probeSiteImpl = vi.fn(async () => ({ reachable: false as const, failure: "no" }));
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => queue(5))
+    });
+    await rewriteAllProspectDrafts(BIZ, {}, baseDeps({ probeSiteImpl }));
+    expect(probeSiteImpl).not.toHaveBeenCalled();
+  });
+
+  it("carries the caller's cursor instead of starting a fresh slice each batch", async () => {
+    // Without this, batch two would re-read the rows batch one just stamped,
+    // and a long queue would never finish.
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => [])
+    });
+    const since = "2026-08-19T05:09:13.000Z";
+    const result = await rewriteAllProspectDrafts(BIZ, { since }, baseDeps());
+    expect(result).toEqual({ ok: true, startedAt: since, rewritten: 0, skipped: 0, remaining: 0 });
+    expect(ledger.listProspectsToRewrite).toHaveBeenCalledWith(
+      BIZ,
+      since,
+      REWRITE_BATCH_SIZE,
+      expect.anything()
+    );
+  });
+
+  it("stamps a draft it cannot rewrite, so the cursor cannot stall on it", async () => {
+    // A row whose findings no longer say anything checkable is left as it is,
+    // but it still sits before the cursor. Without the stamp every later batch
+    // would read the same row back and the loop would never end.
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => [prospect({ id: "p-stuck", findings: [] })])
+    });
+    expect(await rewriteAllProspectDrafts(BIZ, {}, baseDeps())).toEqual({
+      ok: true,
+      startedAt: MONDAY_MORNING.toISOString(),
+      rewritten: 0,
+      skipped: 1,
+      remaining: 0
+    });
+    const writes = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls;
+    expect(writes).toHaveLength(1);
+    // Nothing but the timestamp, and still guarded on the row being a draft.
+    expect(writes[0][1]).toBe("p-stuck");
+    expect(writes[0][2]).toBe("drafted");
+    expect(writes[0][3]).toEqual({});
+  });
+
+  it("counts a draft that stopped being one as skipped, and does not touch it again", async () => {
+    // The sweep can send a draft between the batch read and the batch write.
+    // The guarded write reports that, and there is nothing to stamp: a sent row
+    // is no longer in the cursor's window at all.
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => [prospect()]),
+      transitionProspect: vi.fn(async () => false)
+    });
+    expect(await rewriteAllProspectDrafts(BIZ, {}, baseDeps())).toMatchObject({
+      ok: true,
+      rewritten: 0,
+      skipped: 1
+    });
+    expect((ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("refuses an unconfigured or downgraded tenant before spending a single model call", async () => {
+    stubLedger({ getOutreachSettings: vi.fn(async () => null) });
+    expect(await rewriteAllProspectDrafts(BIZ, {}, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured"
+    });
+
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsToRewrite: vi.fn(async () => queue(3))
+    });
+    const polishImpl = vi.fn(async (_biz: string, paragraphs: string[]) => paragraphs);
+    expect(
+      await rewriteAllProspectDrafts(
+        BIZ,
+        {},
+        baseDeps({
+          polishImpl,
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "Starter Co",
+            timezone: "America/Phoenix",
+            website_url: null,
+            tier: "starter"
+          }))
+        })
+      )
+    ).toEqual({
+      ok: false,
+      reason: "tier_blocked",
+      detail: "prospecting requires the Standard plan"
+    });
+    // A bulk press is the expensive one to get wrong: the tier gate runs before
+    // the queue is even read.
+    expect(ledger.listProspectsToRewrite).not.toHaveBeenCalled();
+    expect(polishImpl).not.toHaveBeenCalled();
+
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", postal_address: null }))
+    });
+    expect(await rewriteAllProspectDrafts(BIZ, {}, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured",
+      detail: "no postal address configured"
+    });
   });
 });

@@ -50,6 +50,7 @@ import {
   claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
+  countProspectsToRewrite,
   existingProspectDomains,
   getOutreachSettings,
   getProspect,
@@ -59,6 +60,7 @@ import {
   listProspectsByStatus,
   listProspectsDueForNudge,
   listProspectsToProbe,
+  listProspectsToRewrite,
   patchProspect,
   transitionProspect,
   upsertOutreachSettings,
@@ -993,8 +995,25 @@ export async function regenerateProspectDraft(
   const r = await resolveDeps(deps);
   const context = await loadDraftContext(businessId, prospectId, r);
   if ("failure" in context) return context.failure;
-  const { tenant, prospect, unsubscribeUrl } = context;
+  return rewriteOneDraft(businessId, context.tenant, context.prospect, r);
+}
 
+/**
+ * Compose one drafted row again from the findings already on it, then write it.
+ *
+ * The shared middle of Write it again, whether the owner pressed it on a single
+ * draft or on the whole queue. Kept as one function so a bulk rewrite cannot
+ * drift into producing a different email from the single-draft button: the
+ * subject, the paragraphs, the tone pass, and the footer are assembled here
+ * once.
+ */
+async function rewriteOneDraft(
+  businessId: string,
+  tenant: PitchTenant,
+  prospect: OutreachProspectRow,
+  r: Resolved
+): Promise<DraftUpdateResult> {
+  const unsubscribeUrl = buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospect.id);
   const findings = prospect.findings ?? [];
   // The row was drafted, so it was pitchable once. Re-checked anyway: the
   // finding vocabulary can change under a stored row, and composePitch coming
@@ -1016,9 +1035,89 @@ export async function regenerateProspectDraft(
     pitch_paragraphs: polished.join("\n\n"),
     pitch_body: assembleBody(tenant, polished, unsubscribeUrl)
   };
-  const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
+  const saved = await transitionProspect(businessId, prospect.id, "drafted", patch, r.db);
   if (!saved) return { ok: false, reason: "not_drafted" };
   return { ok: true, prospect: patch };
+}
+
+/**
+ * Drafts rewritten per request. One rewrite is one Gemini tone pass of about a
+ * second, so a batch is sized to finish well inside the route's time budget and
+ * the caller loops until `remaining` reaches zero. A single long request would
+ * be the wrong shape here: a tenant with hundreds of waiting drafts would sit
+ * behind one response until the edge timed it out and lose the work already
+ * done.
+ */
+export const REWRITE_BATCH_SIZE = 20;
+
+export type RewriteAllResult =
+  | {
+      ok: true;
+      /** Cursor for the next batch. Echo it back to keep one run one pass. */
+      startedAt: string;
+      rewritten: number;
+      /** Reached, but left alone: nothing checkable left to say, or no longer a draft. */
+      skipped: number;
+      remaining: number;
+    }
+  | { ok: false; reason: "not_configured" | "tier_blocked"; detail?: string };
+
+/**
+ * Write every waiting draft again, one batch per call.
+ *
+ * The button this serves exists because the drafts outlive the settings that
+ * produced them. Change the offer, the sender name, or the footer address and
+ * the queue still holds the old wording, however many hundreds of drafts deep
+ * it is, with no way to refresh them short of pressing Write it again on each
+ * one. This re-composes them from the findings already stored, so no prospect's
+ * site is fetched again.
+ *
+ * Anything the owner edited by hand is replaced, exactly as the single-draft
+ * button replaces it. The caller warns before spending that.
+ *
+ * `since` is the run's cursor: the first call leaves it out and gets one back,
+ * every later call passes it. A draft this run has already rewritten has a
+ * newer `updated_at` than the cursor, so it drops out of the next batch without
+ * anything having to remember it.
+ */
+export async function rewriteAllProspectDrafts(
+  businessId: string,
+  options: { since?: string } = {},
+  deps: OutreachSweepDeps = {}
+): Promise<RewriteAllResult> {
+  const r = await resolveDeps(deps);
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { ok: false, reason: "not_configured" };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) {
+    return {
+      ok: false,
+      reason: resolved.blockedBy === "tier" ? "tier_blocked" : "not_configured",
+      detail: resolved.missing
+    };
+  }
+
+  const startedAt = options.since ?? r.now.toISOString();
+  const batch = await listProspectsToRewrite(businessId, startedAt, REWRITE_BATCH_SIZE, r.db);
+  let rewritten = 0;
+  let skipped = 0;
+  for (const prospect of batch) {
+    const result = await rewriteOneDraft(businessId, resolved.tenant, prospect, r);
+    if (result.ok) {
+      rewritten += 1;
+      continue;
+    }
+    skipped += 1;
+    // Nothing was written, so the row still sits before the cursor and the next
+    // batch would read it again forever. Stamping `updated_at` moves it past,
+    // and the stamp rides the same drafted-only guard so a prospect the sweep
+    // sent mid-run is left alone instead of being touched after the fact.
+    if (result.reason === "not_pitchable") {
+      await transitionProspect(businessId, prospect.id, "drafted", {}, r.db);
+    }
+  }
+  const remaining = await countProspectsToRewrite(businessId, startedAt, r.db);
+  return { ok: true, startedAt, rewritten, skipped, remaining };
 }
 
 /** Everything one business gets in one pass. */

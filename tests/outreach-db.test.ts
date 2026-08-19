@@ -20,6 +20,7 @@ import {
   claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
+  countProspectsToRewrite,
   existingProspectDomains,
   findProspectByEmail,
   getOutreachSettings,
@@ -30,6 +31,7 @@ import {
   listProspectsByStatus,
   listProspectsDueForNudge,
   listProspectsToProbe,
+  listProspectsToRewrite,
   OUTREACH_ACTIVE_PAGE_SIZE,
   patchProspect,
   transitionProspect,
@@ -57,6 +59,7 @@ function chain(terminal?: unknown): Chain {
     "is",
     "gte",
     "lte",
+    "lt",
     "or",
     "order",
     "range",
@@ -470,5 +473,46 @@ describe("countProspectsSentSince / countProspectsNudgedSince", () => {
     await expect(
       countProspectsNudgedSince(BIZ, DAY, makeDb(chain({ count: null, error: { message: "nc" } })))
     ).rejects.toThrow(/nc/);
+  });
+});
+
+describe("listProspectsToRewrite / countProspectsToRewrite (the bulk rewrite cursor)", () => {
+  const STARTED = "2026-08-19T05:09:13.000Z";
+
+  it("reads the oldest untouched drafts first, so a run walks the queue once", async () => {
+    // The cursor is `updated_at < startedAt` and every rewrite stamps
+    // `updated_at`, so a rewritten draft drops out of the next batch on its
+    // own. Ordering oldest-first is what makes that a walk rather than a
+    // shuffle: the batch always takes the rows the run has not reached.
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await listProspectsToRewrite(BIZ, STARTED, 20, makeDb(c))).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("status", "drafted");
+    expect(c.lt).toHaveBeenCalledWith("updated_at", STARTED);
+    expect(c.order).toHaveBeenCalledWith("updated_at", { ascending: true });
+    expect(c.limit).toHaveBeenCalledWith(20);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
+    expect(await listProspectsToRewrite(BIZ, STARTED, 20)).toEqual([]);
+
+    await expect(
+      listProspectsToRewrite(BIZ, STARTED, 20, makeDb(chain({ data: null, error: { message: "lst" } })))
+    ).rejects.toThrow(/lst/);
+  });
+
+  it("counts what the run still has to reach, and treats a null count as none left", async () => {
+    const c = chain({ count: 143, error: null });
+    expect(await countProspectsToRewrite(BIZ, STARTED, makeDb(c))).toBe(143);
+    expect(c.select).toHaveBeenCalledWith("id", { count: "exact", head: true });
+    expect(c.lt).toHaveBeenCalledWith("updated_at", STARTED);
+
+    // Null reads as zero, which ends the caller's loop. The alternative bias
+    // would spin: a count that cannot be read is not evidence of work left.
+    defaultClientSpy.mockReturnValue(makeDb(chain({ count: null, error: null })));
+    expect(await countProspectsToRewrite(BIZ, STARTED)).toBe(0);
+
+    await expect(
+      countProspectsToRewrite(BIZ, STARTED, makeDb(chain({ count: null, error: { message: "cnt" } })))
+    ).rejects.toThrow(/cnt/);
   });
 });

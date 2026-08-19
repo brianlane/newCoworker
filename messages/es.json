@@ -2519,7 +2519,8 @@
         "windowEnd": "Enviar hasta (hora)",
         "postalAddressOptional": "Dirección postal para el pie del correo (opcional)",
         "draftSubject": "Asunto",
-        "draftBody": "Lo que dice el correo"
+        "draftBody": "Lo que dice el correo",
+        "wholeEmail": "El correo completo, tal como se enviará"
       },
       "placeholders": {
         "searchTerms": "plomero, técnico de aire acondicionado, techador",
@@ -2540,7 +2541,10 @@
         "skip": "Omitir",
         "saveSettings": "Guardar ajustes",
         "saveDraft": "Guardar borrador",
-        "regenerate": "Escribirlo otra vez"
+        "regenerate": "Escribirlo otra vez",
+        "rewriteAll": "Escribirlo de nuevo (todos los borradores)",
+        "rewriteAllYes": "Sí, reescribirlos todos",
+        "cancel": "Cancelar"
       },
       "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
       "saveFailed": "No se pudo guardar.",
@@ -2554,7 +2558,13 @@
       "legacyDraft": "Este borrador se escribió antes de que se pudieran editar. Vuelve a escribirlo para poder editarlo.",
       "unsavedDraft": "Cambios sin guardar. Guarda el borrador antes de enviarlo.",
       "editedOne": "Borrador guardado.",
-      "regeneratedOne": "Escrito otra vez. Léelo antes de enviarlo."
+      "regeneratedOne": "Escrito otra vez. Léelo antes de enviarlo.",
+      "rewriteAllHelp": "¿Cambiaste lo que ofrece el correo, quién lo firma o la dirección del pie? Escríbelos todos de nuevo para que cada borrador en espera use el texto nuevo.",
+      "rewriteAllConfirm": "¿Reescribir los {count} borradores en espera? Se reemplaza todo lo que hayas editado a mano.",
+      "rewriteAllProgress": "Escribiéndolos de nuevo: {done} de {total}.",
+      "rewroteAll": "Se reescribieron {count} borradores. Léelos antes de enviarlos.",
+      "wholeEmailHelp": "La despedida, el enlace, la línea para darse de baja y la dirección se añaden solos. Solo el cuadro de arriba es tuyo para editar.",
+      "wholeEmailStale": "Aquí sigue el borrador guardado. Guarda tus cambios para verlos aquí."
     }
   },
   "admin": {

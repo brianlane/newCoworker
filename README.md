@@ -1936,6 +1936,73 @@ Write it again re-composes from the findings already on the row and does NOT
 re-probe the prospect's site. A probe is a network fetch of someone else's
 server, and a button an owner can press repeatedly must not become one.
 
+Because the edit box holds only the middle, the panel also prints the whole
+email underneath it, read-only, exactly as it will send. Without that, pressing
+Write it again reads as though it deleted the CTA, the sign-off, and the
+footer: those lines are on screen for a legacy draft (which is shown as one
+assembled body) and nowhere at all once the draft becomes editable.
+
+### Write it again, for all drafts
+
+The single-draft button cannot answer the case the settings create. Drafts
+outlive the settings that produced them, so changing what the email offers, who
+signs it, or the footer address leaves a queue of hundreds still carrying the
+old wording, and the review list only renders the first
+`REVIEW_QUEUE_LIMIT` (25) of them. **Write it again (for all drafts)** rewrites
+every `drafted` row for the tenant, capped by nothing but the queue itself.
+
+It runs in batches of `REWRITE_BATCH_SIZE` (20) behind
+`POST /api/dashboard/outreach/rewrite-all`, and the panel loops until the
+server reports nothing left. One rewrite is one Gemini tone pass of about a
+second, so a single request covering a busy queue would sit behind the edge
+timeout and throw away everything it had already done.
+
+The cursor is a timestamp, not an offset: the first call gets back a
+`startedAt`, every later call passes it, and each batch reads the drafts whose
+`updated_at` is older than it, oldest first. Every rewrite stamps `updated_at`,
+so a finished draft leaves the window on its own, and rows that move under the
+pass (a sweep sends one, the owner skips one) are simply no longer `drafted`
+and drop out. A draft that cannot be rewritten (its findings no longer say
+anything checkable) is stamped anyway, under the same drafted-only guard, or
+the cursor would read it back forever.
+
+Both buttons compose through one function, so a bulk rewrite cannot drift into
+producing a different email from the one a single press previews. Like the
+single press, it re-composes from stored findings and probes nobody, and it
+replaces anything the owner edited by hand, which is why the panel asks twice
+and names the count.
+
+### What makes the pitch persuasive, and the line it will not cross
+
+The mail is four paragraphs: the greeting; what was noticed about them AND what
+that usually costs, together in one; what the sender does about it; and the ask.
+The cost sentence is the one that earns a reply. An observation on its own
+("there is no way to book you online") is an interesting fact about somebody's
+website; `COST_BY_FINDING` adds the sentence that makes it worth answering
+("people who are still deciding rarely wait long"). The two share a paragraph on
+purpose, so the gap and what falls through it read as one thought, and
+`PITCH_POLISH_INSTRUCTION` tells the tone pass not to split them apart again.
+
+Each cost line also has to agree with the opening it follows. The
+`no_online_booking` opening names two routes in, a call and a form, so its cost
+line answers both ("either way the job waits on somebody getting back to them");
+answering only the call would contradict the sentence beside it. None of them
+may assert a site fact the finding did not establish: "there is no way to text
+you" says nothing about what else is on the page, and knowing when their hours
+end says nothing about what answers the phone afterwards.
+
+Every cost line describes GENERAL behaviour, never this prospect. No
+percentages, no revenue figures, no "you are losing N calls a week", and no
+naming a competitor. Those are the sentences a cold email most wants to write
+and least deserves to: we probed their site, we did not measure their phone. An
+invented number is also the fastest way to be caught out by the one reader who
+knows the real one. `PITCH_POLISH_INSTRUCTION` forbids the model the same
+things, and `tests/outreach-compose.test.ts` asserts both ends of it.
+
+`COST_BY_FINDING` and `OBSERVATION_BY_FINDING` are keyed the same way and read
+in the same breath, so a finding code added to one and not the other would ship
+"...noticed X. undefined" to a stranger. A test holds them in step.
+
 ### Why the send is NOT a flow step
 
 The obvious design is a `send_email` step in the outreach flow. It is wrong

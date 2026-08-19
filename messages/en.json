@@ -2519,7 +2519,8 @@
         "windowEnd": "Send until (hour)",
         "postalAddressOptional": "Postal address for the email footer (optional)",
         "draftSubject": "Subject",
-        "draftBody": "What the email says"
+        "draftBody": "What the email says",
+        "wholeEmail": "The whole email, as it will send"
       },
       "placeholders": {
         "searchTerms": "plumber, HVAC contractor, roofer",
@@ -2540,7 +2541,10 @@
         "skip": "Skip",
         "saveSettings": "Save settings",
         "saveDraft": "Save draft",
-        "regenerate": "Write it again"
+        "regenerate": "Write it again",
+        "rewriteAll": "Write it again (for all drafts)",
+        "rewriteAllYes": "Yes, rewrite them all",
+        "cancel": "Cancel"
       },
       "saved": "Saved. The change takes effect on the next pass.",
       "saveFailed": "That could not be saved.",
@@ -2554,7 +2558,13 @@
       "legacyDraft": "This draft was written before you could edit them. Regenerate it to make it editable.",
       "unsavedDraft": "Unsaved changes. Save the draft before you send it.",
       "editedOne": "Draft saved.",
-      "regeneratedOne": "Written again. Read it before you send."
+      "regeneratedOne": "Written again. Read it before you send.",
+      "rewriteAllHelp": "Changed what the email offers, who signs it, or the footer address? Write them all again so every waiting draft uses the new wording.",
+      "rewriteAllConfirm": "Rewrite all {count} waiting drafts? Anything you edited by hand is replaced.",
+      "rewriteAllProgress": "Writing them again: {done} of {total}.",
+      "rewroteAll": "Wrote {count} drafts again. Read them before you send.",
+      "wholeEmailHelp": "The sign-off, the link, the unsubscribe line, and the address are added for you. Only the box above is yours to edit.",
+      "wholeEmailStale": "This still shows the saved draft. Save your changes to see them here."
     }
   },
   "admin": {
