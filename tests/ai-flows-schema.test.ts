@@ -1662,6 +1662,28 @@ describe("browse_action step", () => {
     ).toBe(true);
   });
 
+  it("a braced action target gets the same scope check as a valueTemplate", () => {
+    // The runtime renders a target exactly when it carries braces (planStep),
+    // so a var no step produces must fail at authoring time, not surface as a
+    // runtime "rendered empty" click on nothing.
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].actions.push({ kind: "click_text", target: "{{vars.ghost_name}}" });
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(validateDefinitionSemantics(def).some((i) => i.includes("ghost_name"))).toBe(true);
+  });
+
+  it("a braced target referencing a produced var is legal", () => {
+    const good = JSON.parse(JSON.stringify(actionInput));
+    good.steps.splice(1, 0, {
+      id: "who",
+      type: "extract_text",
+      fields: [{ name: "lead_name", description: "the client name" }]
+    });
+    good.steps[2].actions.push({ kind: "click_text", target: "{{vars.lead_name}}" });
+    const def = parseAiFlowDefinition(good);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
   it("a forEachLink sweep registers its measured-outcome vars for later steps", () => {
     // The worker publishes `<id>_updated`/`<id>_left` when a chained sweep
     // ends, so a later alert can report what the sweep actually delivered
