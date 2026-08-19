@@ -688,6 +688,32 @@ An email reply resolves to the claiming teammate by NAME (`nameVar:
 email-only lead has none, so without it every reply would take the unowned
 fallback and go to the whole team.
 
+### An emailed lead now becomes a contact (Aug 18 2026, platform)
+
+Both arms above reach an email-only lead, but until PR #1486 that lead still
+had no row in Contacts at all, so Valerie was emailed for three days and
+claimed by Gabrielle while appearing nowhere in the CRM.
+
+The cause was an asymmetry, not anything tenant-specific: lead filing hung off
+the `send_sms` path only (`recordLeadCustomerProfile`), so a lead we could only
+email was never filed. `send_email` now files the lead the same way, keyed by
+their phone when the flow captured one and by `email:<addr>` when it did not.
+It applies to every tenant and needed NO change to any of Amy's flows.
+
+**The tagging steps in the lead-source flows stay phone-only, and that is now a
+different decision than it looks.** With the cadence carrying its own email arm,
+tagging an email-only lead is no longer a no-op. It is a DOUBLE: these flows
+already run the identical block in-flow, so a tagged email-only lead would get
+the cadence's three emails and the flow's three emails, same copy, same mailbox,
+same person. The split above is the whole design. The lead-source flows serve
+their own email-only leads in-flow; the cadence's arm serves an email-only lead
+that arrives tagged from somewhere else.
+
+Nothing tags one today: a fleet-wide scan on Aug 18 2026 found ZERO live
+`update_contact` steps with an `emailVar`, so the cadence's email arm is built
+and currently unreached. Whoever wires the first one should check the host flow
+does not already carry the in-flow block.
+
 ## One-shots
 
 **`amy-email-followup-cadence.ts` (Aug 18 2026):** appends the three-round
