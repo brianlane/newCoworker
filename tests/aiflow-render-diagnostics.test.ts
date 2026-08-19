@@ -146,3 +146,20 @@ describe("the probe names our own refusals correctly", () => {
     expect((probe.match(/reportDiagnostics\(body\.diagnostics\)/g) ?? []).length).toBe(2);
   });
 });
+
+describe("the user agent cannot disagree with the engine", () => {
+  it("derives its Chrome version from browser.version(), not a literal", () => {
+    // The old override pinned "Chrome/124.0" while Playwright bumps moved the
+    // real engine on. A UA whose claimed version disagrees with the engine's
+    // fingerprint is a quiet bot signal: HomeLight answered our lazy-loaded
+    // script chunks with an HTML page, and the stage editor never mounted
+    // ("Unexpected token '<'"). Deriving the version means there is no second
+    // copy of the number to forget on the next Playwright bump.
+    expect(server).toContain("Chrome/${browser.version()}");
+    expect(server).not.toMatch(/Chrome\/\d/);
+  });
+
+  it("still overrides the default, which says HeadlessChrome", () => {
+    expect(server.match(/userAgent: uaFor\(browser\)/g) ?? []).toHaveLength(2);
+  });
+});

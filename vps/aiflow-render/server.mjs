@@ -105,9 +105,29 @@ const PLATFORM_URL = (process.env.AIFLOW_PLATFORM_URL ?? "").replace(/\/+$/, "")
 const GATEWAY_TOKEN = process.env.AIFLOW_GATEWAY_TOKEN ?? "";
 const SESSION_TTL_MS = Number(process.env.AIFLOW_SESSION_TTL_MS ?? 30 * 60 * 1000);
 const MAX_SESSIONS = Number(process.env.AIFLOW_MAX_SESSIONS ?? 50);
-const UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+/**
+ * User agent for every context this service opens.
+ *
+ * The override exists because headless Chromium's default UA says
+ * "HeadlessChrome", which is a bot signal on its own. But the override used to
+ * pin major version 124 while the bundled engine moved on with every Playwright
+ * bump, and a UA whose claimed version disagrees with the engine's real
+ * fingerprint is ALSO a bot signal, the quieter kind that gets your lazy-loaded
+ * script chunks answered with an HTML challenge page instead of JavaScript.
+ * HomeLight's stage editor died exactly that way: `Unexpected token '<'`, two
+ * skeletons forever (see docs/tenants/homelight-flow.md).
+ *
+ * So the version is DERIVED from the running browser instead of written down:
+ * `browser.version()` returns the real Chromium version (e.g. "141.0.7390.37"),
+ * and the UA carries it verbatim. It can never drift again, on any future
+ * Playwright bump, because there is no second copy of the number to forget.
+ */
+function uaFor(browser) {
+  return (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+    `(KHTML, like Gecko) Chrome/${browser.version()} Safari/537.36`
+  );
+}
 
 function isPrivateIpv4(host) {
   const parts = host.split(".").map(Number);
@@ -207,7 +227,12 @@ async function acquireSession(key) {
   let s = sessions.get(key);
   if (!s) {
     const browser = await getBrowser();
-    s = { ctx: browser.newContext({ userAgent: UA }), lastUsed: Date.now(), inUse: 0, doomed: false };
+    s = {
+      ctx: browser.newContext({ userAgent: uaFor(browser) }),
+      lastUsed: Date.now(),
+      inUse: 0,
+      doomed: false
+    };
     sessions.set(key, s);
   }
   s.inUse++;
@@ -762,7 +787,7 @@ app.post("/render", async (req, res) => {
     let page = null;
     try {
       const browser = await getBrowser();
-      context = await browser.newContext({ userAgent: UA });
+      context = await browser.newContext({ userAgent: uaFor(browser) });
       page = await context.newPage();
       await attachSsrfGuard(page);
       pageDiagnostics = attachDiagnostics(page);
