@@ -94,6 +94,20 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **HomeLight's feedback number was unowned and fed the general assistant.**
+  +1 415-549-1442 sends "Great job connecting with <Name>! You have N referrals
+  that are pending your feedback ... https://hmlt.co/<id>". No flow matched it,
+  so it reached the default AI, which on Aug 7 2026 answered HomeLight's
+  autoresponder, addressed it as "Aaron", and traded 30 messages over 16
+  minutes. The Aug 13 nudge drew no reply only because PR #1239's robot-loop cap
+  held. Closed Aug 18 2026 by `seed-amy-homelight-feedback-request.ts`: the
+  "HomeLight Update Request" flow claims the number, extracts the link, the
+  pending count and the named client, texts Amy, and replies to nobody
+  (`suppressDefaultReply`). It submits NOTHING to HomeLight. That is deliberate:
+  the prompt asks for a subjective REFERRAL QUALITY rating, which shapes the
+  referrals she is sent next, so a canned automated answer is worth less than
+  her own and could degrade her lead flow. The factual STAGE update on the agent
+  dashboard is a different surface, tracked in `docs/tenants/homelight-flow.md`.
 - **HomeLight's login is EMAIL-FIRST, and until Aug 18 2026 the render service
   could not see it at all.** `homelight.com/client/sign-in` asks only for the
   email; **Continue** hands off to `homelight.com/users/login?email=<addr>`,
@@ -817,6 +831,10 @@ transferred AI call, see Sharp edges),
 `realtor-retrigger-guard.ts`,
 `homelight-dedupe-and-price-digits.ts` (Aug 11 2026: the duplicate-run and
 `price_digits` fixes, see Sharp edges),
+`seed-amy-homelight-feedback-request.ts` +
+`amy-homelight-feedback-request-definition.ts` (Aug 18 2026: gives HomeLight's
+feedback number a named owner so it stops reaching the general assistant, see
+Sharp edges),
 `amy-homelight-integration-label.ts` (Aug 17 2026: repoints all ten HomeLight
 browse steps from the `Home Light` credential label to `HomeLight` after the
 row was renamed, see below) over the pure builder
