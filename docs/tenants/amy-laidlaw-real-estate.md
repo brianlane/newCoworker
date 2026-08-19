@@ -738,10 +738,24 @@ same person. The split above is the whole design. The lead-source flows serve
 their own email-only leads in-flow; the cadence's arm serves an email-only lead
 that arrives tagged from somewhere else.
 
-No FLOW tags one today: a fleet-wide scan on Aug 18 2026 found zero live
-`update_contact` steps with an `emailVar`. Whoever wires the first one should
-check the host flow does not already carry the in-flow block, or that lead gets
-both ladders.
+**Resolved Aug 19 2026: there is now ONE copy, in the cadence.** Brian: "Remove
+the unneeded one to avoid confusion and drift. Email cadence should start if
+have a case like Valerie. It is only used as a fallback if there is no phone
+number." `amy-email-followup-via-tag.ts` swaps the inline rounds in the four
+lead flows for a single `update_contact` behind the same two gates, so an
+email-only lead is TAGGED and the cadence runs the emails.
+
+The tag is gated on reachability and nothing else, deliberately unlike the
+flows' other tag steps: the unclaimed ladders only fire while `claimed_agent`
+is "none", and the call-outcome tags only after a call a phoneless lead never
+gets. Jack Briggs, claimed by Gabrielle and mid-cadence when this shipped,
+would have been tagged by none of them, so reusing those steps would have
+quietly dropped exactly the leads this is for.
+
+It carries an honest note rather than the shared `AUTO_TAG_NOTE`, which says
+the AI "already called and texted" and would be false for a lead with no phone.
+The cadence's round-1 call is a harmless no-op for them, so there is nothing to
+suppress and no reason to lie in a line a human reads.
 
 A person tagging an email-only contact from the Contacts page reaches the arm
 today, and that path was quietly broken until PR #1489: `contactEventText`
@@ -754,11 +768,19 @@ contact up with it; `from_matches` lines up from the other side instead, with
 
 ## One-shots
 
-**`amy-email-followup-cadence.ts` (Aug 18 2026):** appends the three-round
+**`amy-email-followup-cadence.ts` (Aug 18 2026):** appended the three-round
 email follow-up block to ReferralExchange Lead, Realtor.com Lead, New Lead
-Intake and Clever Lead - Accept. Pure append, so parked runs keep their
-`current_step`. `--revert --apply` removes it; the ledger row carries
-`previous_definition` for each flow.
+Intake and Clever Lead - Accept. Pure append, so parked runs kept their
+`current_step`. SUPERSEDED by `amy-email-followup-via-tag.ts` below, which
+removes that block again; run this one only to reconstruct history.
+
+**`amy-email-followup-via-tag.ts` (Aug 19 2026):** replaces those inline rounds
+with one `update_contact` that tags an email-only lead "Needs Follow Up", so
+the cadence runs the emails and there is exactly one copy of them. REMOVES
+steps, so unlike the append above it is not automatically index-safe: it reads
+the live runs per flow and REFUSES to apply while any is parked at or after the
+block, naming each one (`--force` overrides deliberately). `--revert --apply`
+puts the inline rounds back.
 
 **Voice infra (Aug 2026):** `migrate-tenants-to-dedicated-telnyx-apps.ts` moves
 this tenant off the shared Telnyx Call Control app/profile onto a DEDICATED
