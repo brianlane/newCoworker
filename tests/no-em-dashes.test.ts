@@ -36,6 +36,11 @@ function guardedFiles(): string[] {
   const emailTemplatesDir = join(ROOT, "src/lib/email/templates");
   const workflowsDir = join(ROOT, ".github/workflows");
   return [
+    // The file that states the rule has to keep it. Guarded since Aug 2026
+    // because `next dev` used to append a managed block containing an em dash
+    // (see `agentRules: false` in next.config.ts); this is the backstop for
+    // that and for any other tool that decides to write here.
+    "CLAUDE.md",
     "messages/en.json",
     "messages/es.json",
     "messages/edge-en.json",
