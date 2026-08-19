@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MIN_ASSISTANT_TURNS,
   detectCallIntegrity,
+  callIntegrityAlertSubject,
   formatCallIntegrityAlert,
   hasRoleLeak,
-  looksMachineGenerated,
-  postCallIntegrityWebhook
+  looksMachineGenerated
 } from "../supabase/functions/_shared/call_integrity.ts";
 
 /**
@@ -209,79 +209,29 @@ describe("formatCallIntegrityAlert", () => {
   });
 });
 
-describe("postCallIntegrityWebhook", () => {
-  const findings = [
-    {
-      transcriptId: "28f9c228",
-      business: "Amy Laidlaw Real Estate",
-      caller: "+14159851909",
-      startedAt: "2026-08-14T17:26:54Z",
-      kind: "role_leak" as const,
-      detail: "Is that correct?user Correct."
-    }
-  ];
+describe("callIntegrityAlertSubject", () => {
+  const call = {
+    transcriptId: "28f9c228",
+    business: "Amy Laidlaw Real Estate",
+    caller: "+14159851909",
+    startedAt: "2026-08-14T17:26:54Z"
+  };
 
-  it("posts a Slack-compatible body and reports success", async () => {
-    let seen: { url: string; body: string } | null = null;
-    const res = await postCallIntegrityWebhook(
-      async (url, init) => {
-        seen = { url, body: String(init?.body ?? "") };
-        return { ok: true, status: 200, text: async () => "" };
-      },
-      "https://hooks.example/x",
-      findings
+  it("names the tenant when every finding is theirs", () => {
+    expect(callIntegrityAlertSubject([{ ...call, kind: "role_leak", detail: "x" }])).toBe(
+      "1 call-integrity failure at Amy Laidlaw Real Estate"
     );
-    expect(res).toEqual({ ok: true, status: 200 });
-    expect(seen!.url).toBe("https://hooks.example/x");
-    expect(JSON.parse(seen!.body).text).toContain("call-integrity failure");
   });
 
-  it("reports a non-2xx without throwing, and clips the upstream body", async () => {
-    const res = await postCallIntegrityWebhook(
-      async () => ({ ok: false, status: 500, text: async () => "y".repeat(900) }),
-      "https://hooks.example/x",
-      findings
-    );
-    expect(res.ok).toBe(false);
-    expect(res.status).toBe(500);
-    expect(res.error!.length).toBeLessThanOrEqual(500);
+  it("drops the tenant name when more than one is involved", () => {
+    const s = callIntegrityAlertSubject([
+      { ...call, kind: "role_leak", detail: "x" },
+      { ...call, business: "Truly Insurance", kind: "talked_to_recording", detail: "y" }
+    ]);
+    expect(s).toBe("2 call-integrity failures");
   });
 
-  it("survives a transport throw, because an alert must never break the sweep", async () => {
-    const res = await postCallIntegrityWebhook(
-      async () => {
-        throw new Error("dns");
-      },
-      "https://hooks.example/x",
-      findings
-    );
-    expect(res).toEqual({ ok: false, status: 0, error: "dns" });
-  });
-
-  it("survives a throw that is not an Error at all", async () => {
-    // fetch implementations reject with all sorts of things; String() keeps
-    // the telemetry readable instead of logging "[object Object]".
-    const res = await postCallIntegrityWebhook(
-      async () => {
-        throw "socket hang up";
-      },
-      "https://hooks.example/x",
-      findings
-    );
-    expect(res).toEqual({ ok: false, status: 0, error: "socket hang up" });
-  });
-
-  it("refuses to post when there is nothing to say", async () => {
-    let called = false;
-    const res = await postCallIntegrityWebhook(
-      async () => {
-        called = true;
-        return { ok: true, status: 200, text: async () => "" };
-      },
-      "https://hooks.example/x",
-      []
-    );
-    expect(called).toBe(false);
-    expect(res.ok).toBe(true);
+  it("is empty for no findings, so nothing can be sent about nothing", () => {
+    expect(callIntegrityAlertSubject([])).toBe("");
   });
 });

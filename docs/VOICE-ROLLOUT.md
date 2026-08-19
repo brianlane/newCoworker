@@ -171,10 +171,24 @@ The `voice-bridge-health-alerts` Edge cron fires every 5 minutes and pages on:
 - Any `voice_settlements` row with `finalized_at IS NULL` older than
   `VOICE_HEALTH_SETTLEMENT_STUCK_SECONDS` (default 1800s).
 
-Set `ALERT_WEBHOOK_URL` on the Edge function environment to POST a
-Slack-compatible alert on issue-detect. Every run records a
-`voice_bridge_health_check` telemetry event whether or not there's an issue,
-so you can trend the stale/stuck counts without parsing logs.
+On issue-detect it EMAILS the admin, resolving the recipient the same way
+every other alert path does (`ADMIN_ALERT_EMAIL` > `ADMIN_EMAIL` >
+`CONTACT_EMAIL`, sent via Resend). Those are already configured, so this
+needs no setup.
+
+The email is throttled to one per `VOICE_HEALTH_ALERT_THROTTLE_MINUTES`
+(default 60), because the sweep re-detects the same stale bridge every 5
+minutes and an unthrottled version would send twelve mails an hour until
+someone muted it.
+
+`ALERT_WEBHOOK_URL` additionally POSTs a Slack-compatible alert per run, and
+is optional. It has never been set in this project: until 2026-08 it was the
+ONLY output, which meant this cron advertised paging on a dead bridge and in
+practice only ever wrote rows.
+
+Every run records a `voice_bridge_health_check` telemetry event whether or
+not there's an issue, so you can trend the stale/stuck counts without parsing
+logs.
 
 ---
 

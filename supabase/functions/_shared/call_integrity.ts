@@ -193,44 +193,15 @@ export function formatCallIntegrityAlert(items: readonly CallIntegrityAlertItem[
   return [head, ...lines].join("\n");
 }
 
-/** Minimal fetch shape, injected so the transport is testable. */
-export type CallIntegrityFetch = (
-  url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string }
-) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
-
 /**
- * POST the alert to a Slack-compatible webhook.
- *
- * Never throws and never rejects: this runs at the end of a sweep that has
- * already done its real work (the system_logs rows), and a webhook outage
- * must not turn a successful detection run into a 500. The caller records the
- * failure as telemetry instead.
- *
- * The upstream body is clipped to 500 chars on a non-2xx. It can carry
- * provider error text, which is the sort of thing that ends up in a log and
- * then in a screenshot.
+ * Subject line for the alert email. Leads with the count and the word
+ * "call-integrity" so it is filterable, and names the single tenant when
+ * there is only one, which is the common case.
  */
-export async function postCallIntegrityWebhook(
-  fetchImpl: CallIntegrityFetch,
-  url: string,
-  items: readonly CallIntegrityAlertItem[]
-): Promise<{ ok: boolean; status: number; error?: string }> {
-  const text = formatCallIntegrityAlert(items);
-  // Nothing to say. Reported as ok so a quiet day is not logged as a failure.
-  if (!text) return { ok: true, status: 0 };
-  try {
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      return { ok: false, status: res.status, error: body.slice(0, 500) };
-    }
-    return { ok: true, status: res.status };
-  } catch (err) {
-    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
-  }
+export function callIntegrityAlertSubject(items: readonly CallIntegrityAlertItem[]): string {
+  if (items.length === 0) return "";
+  const noun = items.length === 1 ? "failure" : "failures";
+  const businesses = new Set(items.map((i) => i.business));
+  const who = businesses.size === 1 ? ` at ${[...businesses][0]}` : "";
+  return `${items.length} call-integrity ${noun}${who}`;
 }

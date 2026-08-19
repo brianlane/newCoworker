@@ -25,13 +25,17 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
+  callIntegrityAlertSubject,
   detectCallIntegrity,
   formatCallIntegrityAlert,
-  postCallIntegrityWebhook,
   type CallIntegrityAlertItem,
   type CallIntegrityFinding,
   type IntegrityTurn
 } from "../_shared/call_integrity.ts";
+import {
+  resolveAdminAlertConfig,
+  sendAdminAlertEmail
+} from "../_shared/admin_alert_email.ts";
 
 /**
  * Lookback. Slightly over a day so a call landing near the boundary of a
@@ -201,37 +205,52 @@ serve(async (req: Request) => {
     findings: alerts.length
   });
 
-  // Push, so a finding reaches someone instead of waiting to be found. Only
-  // when there is something to say and a webhook is configured; the sweep is
-  // fully functional without one.
-  const webhookUrl = Deno.env.get("ALERT_WEBHOOK_URL") ?? "";
-  let webhook: { ok: boolean; status: number } | null = null;
-  if (alerts.length > 0 && webhookUrl) {
-    const result = await postCallIntegrityWebhook(
-      (url, init) => fetch(url, init),
-      webhookUrl,
-      alerts
-    );
-    webhook = { ok: result.ok, status: result.status };
-    if (!result.ok) {
-      // The system_logs rows are already written, so a webhook outage is not
-      // a failed run. Record it and answer 200.
-      await telemetryRecord(supabase, "call_integrity_sweep_webhook_failed", {
-        status: result.status,
-        error: result.error ?? null
+  // Email, so a finding reaches someone instead of waiting to be found. The
+  // fleet error feed already has it; this is the push half.
+  //
+  // Deliberately email and not a webhook: ALERT_WEBHOOK_URL has never been
+  // set in this project, so the webhook this originally copied from
+  // voice-bridge-health-alerts would have been silently inert, which is the
+  // whole failure mode being fixed. The Resend vars ARE configured.
+  //
+  // No throttle needed here, unlike the bridge health sweep: this runs daily
+  // and already skips calls it has reported, so it cannot repeat itself.
+  let alertResult: string | null = null;
+  if (alerts.length > 0) {
+    const config = resolveAdminAlertConfig((name) => Deno.env.get(name));
+    if (!config) {
+      alertResult = "unconfigured";
+      // Loud, because a detector that finds something and tells nobody is
+      // the exact bug this sweep exists to catch in the AI.
+      console.error("call-integrity-sweep: findings but no alert email configured");
+      await telemetryRecord(supabase, "call_integrity_sweep_alert_unconfigured", {
+        findings: alerts.length
       });
+    } else {
+      alertResult = await sendAdminAlertEmail(
+        (url, init) => fetch(url, init),
+        config,
+        { subject: callIntegrityAlertSubject(alerts), text: formatCallIntegrityAlert(alerts) }
+      );
+      if (alertResult !== "sent") {
+        // The system_logs rows are already written, so a mail outage is not a
+        // failed run. Record it and answer 200.
+        await telemetryRecord(supabase, "call_integrity_sweep_alert_failed", {
+          findings: alerts.length
+        });
+      }
     }
   }
 
-  // Webhook error text stays out of the HTTP response: it can carry upstream
-  // provider messages, and CodeQL flags that as information exposure. The
-  // detail is in the telemetry event above.
+  // Provider error text stays out of the HTTP response: it can carry upstream
+  // messages, and CodeQL flags that as information exposure. The detail is in
+  // the telemetry events above.
   return new Response(
     JSON.stringify({
       ok: true,
       scanned,
       findings: alerts.length,
-      webhook,
+      alert: alertResult,
       summary: formatCallIntegrityAlert(alerts)
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }
