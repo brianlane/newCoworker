@@ -12,9 +12,8 @@ import {
   type FaqItem
 } from "@/components/marketing/sections";
 import { PlanCards } from "@/components/pricing/PlanCards";
-import { TIER_LIMITS } from "@/lib/plans/limits";
 import { getPeriodPricing } from "@/lib/plans/tier";
-import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { buildComparisonGroups, type ComparisonCell } from "@/lib/plans/comparison";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
@@ -36,13 +35,6 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-type ComparisonRow = {
-  label: string;
-  starter: string;
-  standard: string;
-  enterprise: string;
-};
-
 const CHECK = "✓";
 const DASH = "–";
 
@@ -50,59 +42,23 @@ export default async function PricingPage() {
   const t = await getTranslations("marketing.pricing");
   const locale = (await getLocale()) as AppLocale;
 
-  const custom = t("custom");
-  const comparisonRows: ComparisonRow[] = [
-    {
-      label: t("rowVoiceMinutes"),
-      starter: voiceMinutesLine("starter", undefined, locale),
-      standard: voiceMinutesLine("standard", undefined, locale),
-      enterprise: custom
-    },
-    {
-      label: t("rowSmsPerMonth"),
-      starter: `${TIER_LIMITS.starter.smsPerMonth}`,
-      standard: `${TIER_LIMITS.standard.smsPerMonth}`,
-      enterprise: custom
-    },
-    {
-      label: t("rowConcurrentCalls"),
-      starter: concurrentCallsLine(TIER_LIMITS.starter.maxConcurrentCalls, locale),
-      standard: concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls, locale),
-      enterprise: custom
-    },
-    { label: t("rowAiBudget"), starter: "$5", standard: "$10", enterprise: custom },
-    {
-      label: t("rowImageGen"),
-      starter: imageGenerationLine("starter", undefined, locale),
-      standard: imageGenerationLine("standard", undefined, locale),
-      enterprise: custom
-    },
-    { label: t("rowDedicated"), starter: CHECK, standard: CHECK, enterprise: CHECK },
-    { label: t("rowBooking"), starter: CHECK, standard: CHECK, enterprise: CHECK },
-    { label: t("rowMemory"), starter: CHECK, standard: CHECK, enterprise: CHECK },
-    { label: t("rowWidget"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowByon"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowRcs"), starter: DASH, standard: DASH, enterprise: CHECK },
-    { label: t("rowZapier"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowTextsDuringCalls"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowScheduledTexts"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowSummaries"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowAnalytics"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowWarmHandoff"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    {
-      label: t("rowBrowserSkills"),
-      starter: t("browserStarter"),
-      standard: t("browserStandard"),
-      enterprise: t("browserStandard")
-    },
-    {
-      label: t("rowSupport"),
-      starter: t("supportStarter"),
-      standard: t("supportStandard"),
-      enterprise: t("supportEnterprise")
-    },
-    { label: t("rowWhiteLabel"), starter: DASH, standard: DASH, enterprise: CHECK }
-  ];
+  const comparisonGroups = buildComparisonGroups(locale);
+
+  /** Resolves one table cell to the string it renders as. */
+  const cellText = (cell: ComparisonCell): string => {
+    switch (cell.kind) {
+      case "check":
+        return CHECK;
+      case "dash":
+        return DASH;
+      case "custom":
+        return t("custom");
+      case "text":
+        return cell.value;
+      case "key":
+        return t(cell.key);
+    }
+  };
 
   // Same env-driven address the footer uses, so the two can't diverge.
   const contactEmail = resolveContactEmail();
@@ -176,12 +132,16 @@ export default async function PricingPage() {
       />
 
       <section className="mx-auto max-w-5xl px-6 pb-20">
-        <PlanCards />
+        <PlanCards compareHref="#compare" />
       </section>
 
-      {/* Comparison table */}
-      <section className="mx-auto max-w-5xl px-6 pb-20">
-        <SectionHeading title={t("compareTitle")} />
+      {/* Comparison table. The complete feature record, deliberately always
+          open: the plan cards show only a differentiating handful each, which
+          is only honest while the full list is on the page and not behind a
+          click. `tests/pricing-comparison.test.ts` proves every card bullet
+          has a row here. */}
+      <section id="compare" className="mx-auto max-w-5xl px-6 pb-20 scroll-mt-8">
+        <SectionHeading title={t("compareTitle")} subtitle={t("compareSubtitle")} />
         <div className="mobile-scroll-x rounded-xl border border-parchment/10">
           <table className="w-full min-w-[640px] border-collapse text-sm">
             <thead>
@@ -192,22 +152,35 @@ export default async function PricingPage() {
                 <th className="px-4 py-3 font-semibold text-parchment">{t("tierEnterprise")}</th>
               </tr>
             </thead>
-            <tbody>
-              {comparisonRows.map((row) => (
-                <tr key={row.label} className="border-b border-parchment/5 last:border-b-0">
-                  <td className="px-4 py-3 text-parchment/70">{row.label}</td>
-                  <td className={`px-4 py-3 ${row.starter === DASH ? "text-parchment/30" : "text-parchment/85"}`}>
-                    {row.starter}
-                  </td>
-                  <td className={`px-4 py-3 ${row.standard === DASH ? "text-parchment/30" : "text-parchment/85"}`}>
-                    {row.standard}
-                  </td>
-                  <td className={`px-4 py-3 ${row.enterprise === DASH ? "text-parchment/30" : "text-parchment/85"}`}>
-                    {row.enterprise}
-                  </td>
+            {comparisonGroups.map((group) => (
+              <tbody key={group.headingKey}>
+                <tr className="border-b border-parchment/10 bg-parchment/[0.05]">
+                  <th
+                    colSpan={4}
+                    scope="colgroup"
+                    className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-signal-teal"
+                  >
+                    {t(group.headingKey)}
+                  </th>
                 </tr>
-              ))}
-            </tbody>
+                {group.rows.map((row) => {
+                  const cells = [row.starter, row.standard, row.enterprise];
+                  return (
+                    <tr key={row.labelKey} className="border-b border-parchment/5">
+                      <td className="px-4 py-3 text-parchment/70">{t(row.labelKey)}</td>
+                      {cells.map((cell, index) => (
+                        <td
+                          key={index}
+                          className={`px-4 py-3 ${cell.kind === "dash" ? "text-parchment/30" : "text-parchment/85"}`}
+                        >
+                          {cellText(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            ))}
           </table>
         </div>
       </section>
