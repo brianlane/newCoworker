@@ -1972,6 +1972,27 @@ single press, it re-composes from stored findings and probes nobody, and it
 replaces anything the owner edited by hand, which is why the panel asks twice
 and names the count.
 
+### What makes the pitch persuasive, and the line it will not cross
+
+The mail has four beats: the greeting, what was noticed about them, what that
+usually costs, and the ask. The third one is the one that earns a reply. An
+observation on its own ("there is no way to book you online") is an interesting
+fact about somebody's website; `COST_BY_FINDING` adds the sentence that makes it
+worth answering ("the ones who cannot get through rarely try twice"), in the
+same paragraph, so the gap and what falls through it read as one thought.
+
+Every cost line describes GENERAL behaviour, never this prospect. No
+percentages, no revenue figures, no "you are losing N calls a week", and no
+naming a competitor. Those are the sentences a cold email most wants to write
+and least deserves to: we probed their site, we did not measure their phone. An
+invented number is also the fastest way to be caught out by the one reader who
+knows the real one. `PITCH_POLISH_INSTRUCTION` forbids the model the same
+things, and `tests/outreach-compose.test.ts` asserts both ends of it.
+
+`COST_BY_FINDING` and `OBSERVATION_BY_FINDING` are keyed the same way and read
+in the same breath, so a finding code added to one and not the other would ship
+"...noticed X. undefined" to a stranger. A test holds them in step.
+
 ### Why the send is NOT a flow step
 
 The obvious design is a `send_email` step in the outreach flow. It is wrong

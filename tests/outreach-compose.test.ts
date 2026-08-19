@@ -82,6 +82,60 @@ describe("leadFinding / isPitchable", () => {
     }
   });
 
+  it("has a cost sentence for every opening it will pitch", () => {
+    // The two maps are keyed the same way and read in the same breath. If one
+    // gains a finding code the other does not, the pitch reads "...noticed X.
+    // undefined" and goes out that way, because isPitchable only ever checked
+    // the opening. This is the guard that keeps them in step.
+    for (const code of [
+      "no_online_booking",
+      "no_chat_widget",
+      "no_text_option",
+      "no_tap_to_call",
+      "closed_weekends",
+      "after_hours_gap"
+    ]) {
+      const pitch = composePitch(
+        TENANT,
+        { businessName: "Acme", city: "Mesa", findings: [{ code, detail: "d" }] },
+        UNSUB
+      );
+      expect(isPitchable([{ code, detail: "d" }])).toBe(true);
+      expect(pitch?.body).not.toContain("undefined");
+      // Observation and cost land as one paragraph, so the gap and what falls
+      // through it are read as a single thought.
+      const opening = (pitch?.body ?? "").split("\n\n")[1] ?? "";
+      expect(opening.split(". ").length).toBeGreaterThan(1);
+    }
+  });
+
+  it("never puts a number, a percentage, or a competitor in the reader's mouth", () => {
+    // The most persuasive sentence a cold email can write is the one it has not
+    // earned: "up to 35% of those calls go to voicemail". We probed their site;
+    // we did not measure their phone. Every cost line is general behaviour, and
+    // the polish prompt forbids inventing the rest.
+    for (const code of [
+      "no_online_booking",
+      "no_chat_widget",
+      "no_text_option",
+      "no_tap_to_call",
+      "closed_weekends",
+      "after_hours_gap"
+    ]) {
+      const paragraphs = pitchParagraphs(
+        TENANT,
+        { businessName: "Acme", city: "Mesa", findings: [] },
+        { code, detail: "d" }
+      );
+      const cost = paragraphs[1];
+      expect(cost).not.toMatch(/\d/);
+      expect(cost).not.toMatch(/percent|%|competitor|revenue/i);
+    }
+    expect(PITCH_POLISH_INSTRUCTION).toContain("percentages");
+    expect(PITCH_POLISH_INSTRUCTION).toContain("never");
+    expect(PITCH_POLISH_INSTRUCTION).toContain("name a competitor");
+  });
+
   it("refuses a finding it has no honest opening for", () => {
     // An unknown code could only produce a vague opener, which is spam.
     expect(isPitchable([{ code: "invented_by_a_future_probe", detail: "d" }])).toBe(false);

@@ -89,6 +89,35 @@ const OBSERVATION_BY_FINDING: Record<string, string> = {
   after_hours_gap: "your hours end in the afternoon"
 };
 
+/**
+ * What the gap costs, one sentence per finding, appended to the observation.
+ *
+ * The observation alone is an interesting fact about somebody's website. It is
+ * the cost line that makes it worth answering: what usually happens to the
+ * person on the other side of that gap, and where they go instead. Without it
+ * the mail reads as a feature list bolted onto a compliment.
+ *
+ * Every line here describes GENERAL behaviour, never this prospect. No
+ * percentages, no revenue figures, no "you are losing N calls a week". Those
+ * are the sentences a cold email most wants to write and least deserves to: we
+ * probed their site, we did not measure their phone. An invented number is also
+ * the fastest way to be caught out by the one reader who knows the real one.
+ */
+const COST_BY_FINDING: Record<string, string> = {
+  no_online_booking:
+    "Every one of those depends on somebody being free to pick up, and the ones who cannot get through rarely try twice.",
+  no_chat_widget:
+    "Most people will not ring a business over one question, so the question goes unasked and so does the job.",
+  no_text_option:
+    "Plenty of people will not ring somewhere they have never used, and there is nothing else on the page for them to do.",
+  no_tap_to_call:
+    "On a phone that is enough friction to lose the call to whoever is one tap away.",
+  closed_weekends:
+    "The weekend is when most people finally get round to sorting this kind of thing out, and by Monday they have usually called somebody else.",
+  after_hours_gap:
+    "Anything that lands after that goes to voicemail, and someone who is still shopping around does not leave one."
+};
+
 /** Findings we lead with, best first: the ones that map to lost work. */
 const FINDING_PRIORITY = [
   "after_hours_gap",
@@ -149,13 +178,22 @@ export function pitchParagraphs(
   lead: ProbeFinding
 ): string[] {
   const observation = OBSERVATION_BY_FINDING[lead.code];
+  const cost = COST_BY_FINDING[lead.code];
   const where = prospect.city.trim() ? ` in ${prospect.city.trim()}` : "";
   return [
     `Hi ${firstName(prospect.businessName)},`,
     // "Looking you up" rather than "looking at your site": the hours findings
     // can come from their Google listing instead of their markup, and an
     // opening line that misstates where we looked is a bad first sentence.
-    `I was looking you up${where} and noticed ${observation}.`,
+    //
+    // The cost sentence rides in the SAME paragraph as the observation, so the
+    // two are read as one thought: here is the gap, here is what falls through
+    // it. Split across paragraphs they read as two unrelated remarks.
+    `I was looking you up${where} and noticed ${observation}. ${cost}`,
+    // The tenant's own words, verbatim. It answers the cost sentence above it
+    // by position rather than by a lead-in we would have to write for them:
+    // anything prepended here would be our sentence in their voice, and it
+    // would have to make sense in front of every offer any tenant ever types.
     tenant.valueProp.trim(),
     "Worth a quick look?"
   ];
@@ -239,10 +277,16 @@ export type PolishDeps = {
  */
 export const PITCH_POLISH_INSTRUCTION = [
   "You rewrite the body of a short cold outreach email so it reads like one",
-  "person writing to another. Keep it under 90 words.",
+  "person writing to another, and so the reader can see what the gap you",
+  "mention is costing them. Keep it under 120 words.",
+  "Keep all four beats, in order: the greeting, what was noticed about them,",
+  "what usually happens because of it, what the sender does about it, and the",
+  "ask at the end. Write plainly and specifically. Cut anything that reads like",
+  "a brochure.",
   "Rules you must not break: keep every factual claim exactly as given, never",
   "add a claim about the recipient's business that is not already there, never",
-  "invent names, numbers, prices, or results, keep the greeting line first,",
+  "invent names, numbers, percentages, statistics, prices, or results, never",
+  "name a competitor, keep the greeting line first,",
   "and do not add a sign-off, a signature, a link, or a postscript.",
   "Return only the rewritten paragraphs, separated by blank lines.",
   NO_EM_DASH_PROMPT_LINE
