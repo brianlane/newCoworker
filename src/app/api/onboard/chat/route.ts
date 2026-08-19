@@ -60,8 +60,9 @@ const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20_000;
 //   1. Latency: each output token costs ~10-20ms, so an uncapped runaway response could
 //      easily blow past OPENROUTER_ATTEMPT_TIMEOUT_MS even on a healthy provider.
 //   2. Cost: misbehaving models can loop or hallucinate verbosely; the cap caps the bill.
-//   3. Safety: `response_format: { type: "json_object" }` constrains shape, not length,
-//      without a cap we'd inherit whatever provider default applies (often 4-8K).
+//   3. Safety: `response_format` constrains shape, not length, so even with the
+//      strict schema below a model can pad string fields indefinitely; without a cap
+//      we'd inherit whatever provider default applies (often 4-8K).
 //
 // Sizing: every turn the model has to re-emit the *full* assistant profile (16 fields,
 // most of them growing string arrays) plus the next assistantMessage. A late-conversation
