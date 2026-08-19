@@ -41,9 +41,15 @@ export async function fireGoalEvent(
 ): Promise<void> {
   const raw = (identity ?? "").trim();
   if (!raw) return;
+  // Order matters. normalizeNanpToE164 keeps only the DIGITS, so an address
+  // with a numeric local part ("4805551234@example.com", or the `email:` key
+  // of one) would be rewritten to +14805551234 and hunted for as a phone,
+  // leaving that lead exactly as unreachable as before. An E.164 value is
+  // unambiguous and wins outright; anything shaped like an address is resolved
+  // as one; only then is a loose number normalized.
   const resolved = isE164(raw)
     ? raw
-    : (normalizeNanpToE164(raw) ?? emailContactKey(contactKeyEmail(raw) ?? raw));
+    : (emailContactKey(contactKeyEmail(raw) ?? raw) ?? normalizeNanpToE164(raw));
   if (!resolved) return;
   try {
     const db = await createSupabaseServiceClient();

@@ -54,6 +54,29 @@ describe("fireGoalEvent", () => {
     }
   });
 
+  it("resolves an address with a NUMERIC local part as email, not as a phone", async () => {
+    // normalizeNanpToE164 keeps only the digits, so trying it first would turn
+    // 4805551234@example.com into +14805551234 and hunt for a phone that is
+    // not this lead, leaving them exactly as unreachable as before.
+    for (const identity of ["4805551234@example.com", "email:4805551234@example.com"]) {
+      const { db, calls } = makeDb();
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await fireGoalEvent(BIZ, identity, { kind: "appointment_booked" });
+      const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+      expect(filter, identity).toContain("email:4805551234@example.com");
+      expect(filter, identity).not.toContain("+14805551234");
+    }
+  });
+
+  it("still normalizes a loose NANP number when the value is not an address", async () => {
+    const { db, calls } = makeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await fireGoalEvent(BIZ, "(480) 555-1234", { kind: "appointment_booked" });
+    const filter = String(calls.find((c) => c.name === "or")?.args[0] ?? "");
+    expect(filter).toContain("+14805551234");
+    expect(filter).toContain("lead_phone");
+  });
+
   it("still drops a value that is neither a phone nor an address", async () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(makeDb().db as never);
     await fireGoalEvent(BIZ, "not-an-identity", { kind: "appointment_booked" });
