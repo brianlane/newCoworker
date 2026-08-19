@@ -387,6 +387,17 @@ describe("the applied-membership read cannot be broken by a pipe race", () => {
     expect(source).not.toMatch(/^\s*if printf[^\n]*\|\s*grep -q/m);
   });
 
+  it("the stamp guard carries no early-exiting grep pipeline either", () => {
+    // Bugbot caught the first cut of the pure-rename exemption reintroducing
+    // the exact pipefail race this change fixes in the heal.
+    const guard = readFileSync(
+      join(__dirname, "..", ".github", "scripts", "migration-stamp-guard.sh"),
+      "utf8"
+    );
+    expect(guard).not.toMatch(/^\s*if !? ?printf[^\n]*\|\s*grep -q/m);
+    expect(guard).not.toMatch(/&& printf[^\n]*\|\s*grep -q/);
+  });
+
   it("reads membership from a herestring, whose writer cannot take EPIPE", () => {
     expect(source).toContain('grep -qx "$v" <<< "$applied"');
   });

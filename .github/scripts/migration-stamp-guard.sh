@@ -136,7 +136,10 @@ if [ -n "$base_files" ]; then
       | awk '{ split($0, a, "\t"); n = a[2]; sub(".*/", "", n); print $3 "\t" n }' \
       | while IFS=$'\t' read -r hash name; do
           case "$name" in *.sql) ;; *) continue ;; esac
-          if ! printf '%s\n' "$pr_files" | grep -qxF "$name"; then
+          # Herestring, not a pipe: grep -q exiting early would hand the
+          # pipeline printf's EPIPE under pipefail, the same race the order
+          # heal's membership read had (2026-08-19 incident).
+          if ! grep -qxF "$name" <<< "$pr_files"; then
             printf '%s\n' "$hash"
           fi
         done)
@@ -144,7 +147,7 @@ if [ -n "$base_files" ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       blob=$(git hash-object "$MIGRATIONS_DIR/$f")
-      if [ -n "$removed_hashes" ] && printf '%s\n' "$removed_hashes" | grep -qxF "$blob"; then
+      if [ -n "$removed_hashes" ] && grep -qxF "$blob" <<< "$removed_hashes"; then
         echo "Note: $f sorts below the head of origin/$BASE but is a pure rename of a file this PR removes (content identical); allowed as a stamp restore. Deploy-time checks still verify it against the applied ledger."
       else
         kept="${kept}${f}"$'\n'
