@@ -50,6 +50,20 @@
 export const LOGIN_CLICK_TIMEOUT_MS = Number(
   process.env.AIFLOW_LOGIN_CLICK_TIMEOUT_MS ?? 10_000
 );
+/**
+ * How long a SUBMITTED login gets to actually resolve before the caller moves
+ * on. Clever's takes several seconds: the click swaps the button for a
+ * spinner, an auth request round-trips, and the app then NAVIGATES
+ * (login.listwithclever.com hands the session to agents.listwithclever.com on
+ * a redirect hop). A wrong password burns this whole budget before the caller
+ * re-checks and reports login_failed, which is the acceptable cost of never
+ * abandoning a login that was still in flight.
+ */
+export const LOGIN_RESOLVE_TIMEOUT_MS = Number(
+  process.env.AIFLOW_LOGIN_RESOLVE_TIMEOUT_MS ?? 12_000
+);
+/** Gap between re-checks while waiting for a submitted login to resolve. */
+export const LOGIN_RESOLVE_POLL_MS = Number(process.env.AIFLOW_LOGIN_RESOLVE_POLL_MS ?? 250);
 /** Bound on the post-blur settle, so validation can run before we look. */
 export const LOGIN_SETTLE_MS = Number(process.env.AIFLOW_LOGIN_SETTLE_MS ?? 750);
 
@@ -465,4 +479,59 @@ export async function performLogin(page, creds, login) {
     }
   }
   return diagnostics;
+}
+
+/**
+ * Wait for a submitted login to RESOLVE: the page navigating away from the
+ * form, or the form leaving the page, whichever the portal does.
+ *
+ * WHY THIS EXISTS (Clever, 2026-08-19). The caller used to wait with
+ * `waitForLoadState("networkidle")` after performLogin and then immediately
+ * re-navigate to the requested URL. Load states are reached ONCE per
+ * document: on a login page that finished loading long before the click, the
+ * networkidle wait returns instantly no matter what the click set in motion,
+ * so the re-navigation fired while the auth request was in flight and
+ * CANCELLED it. Amy Laidlaw's Clever login failed deterministically through
+ * the service while the identical performLogin, given eight idle seconds,
+ * landed in the portal: the fields held their typed values, the submit had
+ * swapped to a spinner, and the session simply never got its redirect hop
+ * (login.listwithclever.com sets the agents.listwithclever.com session on a
+ * cross-subdomain redirect).
+ *
+ * Returns `{ resolved, via, waitedMs }`, never throws:
+ *   via "navigation"  the URL changed (any hop counts; the caller re-navigates
+ *                     to its own target afterwards anyway),
+ *   via "form_gone"   same-document apps that swap the form out in place,
+ *   via "timeout"     nothing moved inside the budget: a rejected password or
+ *                     a genuinely stuck form; resolved=false, and the caller's
+ *                     re-check reports login_failed exactly as before.
+ */
+export async function waitForLoginToResolve(page, login, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? LOGIN_RESOLVE_TIMEOUT_MS;
+  const pollMs = opts.pollMs ?? LOGIN_RESOLVE_POLL_MS;
+  const readUrl = () => {
+    // url() can throw mid-navigation, which is itself a sign things are
+    // moving; report "unchanged" for this tick and let the next one read it.
+    try {
+      return String(page.url?.() ?? "");
+    } catch {
+      return null;
+    }
+  };
+  const startUrl = readUrl() ?? "";
+  const startedAt = Date.now();
+  for (;;) {
+    const waitedMs = Date.now() - startedAt;
+    const url = readUrl();
+    if (url !== null && url !== startUrl) return { resolved: true, via: "navigation", waitedMs };
+    let formStillThere = true;
+    try {
+      formStillThere = await looksLikeLogin(page, login);
+    } catch {
+      formStillThere = true;
+    }
+    if (!formStillThere) return { resolved: true, via: "form_gone", waitedMs };
+    if (waitedMs >= timeoutMs) return { resolved: false, via: "timeout", waitedMs };
+    await page.waitForTimeout?.(pollMs);
+  }
 }

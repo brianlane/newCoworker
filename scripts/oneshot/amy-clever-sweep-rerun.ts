@@ -12,19 +12,22 @@
  * "Needs Action" list and works whatever is still owed, which makes the
  * replay idempotent at the portal level (updated cards are no longer listed).
  *
- * WHAT THIS CANNOT DO, learned by running it (2026-08-19). Clever's magic
- * link is SINGLE-USE: once the scheduled run has consumed it, replaying the
- * same trigger lands on "Magic link has expired", a page with no list rows
- * and no error, so the sweep posts nothing. There is no fallback, because
- * Clever's password login fails for this account too (probe the portal with
- * `debug/portal-dom-probe.ts --label Clever` and it redirects to
- * login.listwithclever.com and returns `login_failed`).
+ * THE MAGIC LINK IS SINGLE-USE, so a bare replay only works for a reminder
+ * whose link is still UNSPENT (the scheduled run never ran or died before the
+ * browse step). Once spent, the interstitial renders "Magic link has expired",
+ * a page with no list rows and no error, and the sweep posts nothing; the
+ * flow's `posted_nothing` alert arm at least makes that audible.
  *
- * So this is only useful for a reminder whose link is still UNSPENT, i.e. the
- * scheduled run never ran or died before the browse step. Replaying a
- * reminder the sweep already worked will do nothing; it is at least no longer
- * SILENT about it, since the flow's `posted_nothing` alert arm fires when the
- * sweep posts zero (see `amy-clever-sweep-measured-alert-definition.ts`).
+ * `--portal-url <url>` is the way around a spent link (2026-08-19): it seeds
+ * `vars.portal_url` with the given STABLE portal URL (e.g.
+ * https://agents.listwithclever.com/portal/<portalId>/active) and starts the
+ * run AT the sweep's browse step, skipping the extract_url step that would
+ * re-extract the dead link from the trigger text. Navigating there logged-out
+ * redirects to Clever's login form and the sidecar signs in with the stored
+ * "Clever" custom-integration credentials. That login works as of the
+ * waitForLoginToResolve fix (the sidecar used to abandon the submitted login
+ * mid-flight; see vps/aiflow-render/login.mjs), so the replay covers the
+ * whole backlog regardless of the link's state.
  *
  * SAFE BY REFUSAL: refuses when the flow already has a queued/running/parked
  * run (never stack two sweeps), and refuses a replay when the source run is
@@ -36,12 +39,15 @@
  *   npx tsx scripts/oneshot/amy-clever-sweep-rerun.ts            # dry run
  *   npx tsx scripts/oneshot/amy-clever-sweep-rerun.ts --apply
  *   npx tsx scripts/oneshot/amy-clever-sweep-rerun.ts --apply --max-age-hours 12
+ *   npx tsx scripts/oneshot/amy-clever-sweep-rerun.ts --apply \
+ *     --portal-url "https://agents.listwithclever.com/portal/<portalId>/active"
  *
  * Exit codes: 0 enqueued / dry-run, 1 Supabase error, 2 refused (bad env,
- * missing flow, active run, or stale source).
+ * missing flow, active run, stale source, or a bad --portal-url).
  */
 import { pathToFileURL } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import { RESUME_STEP_ID_VAR } from "../../supabase/functions/_shared/ai_flows/branching";
 import { recordOneshotApplied } from "./_ledger";
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3"; // Amy Laidlaw Real Estate
@@ -71,6 +77,22 @@ async function main(): Promise<void> {
     console.error("--max-age-hours must be a positive number");
     process.exit(2);
   }
+  const portalUrl = argValue("portal-url", "");
+  if (portalUrl) {
+    let parsed: URL;
+    try {
+      parsed = new URL(portalUrl);
+    } catch {
+      console.error(`--portal-url is not a URL: ${portalUrl}`);
+      process.exit(2);
+    }
+    // Guard the override against typos: this URL is what the sweep will log
+    // into and CLICK THROUGH, so it must be Clever's agent portal.
+    if (parsed!.protocol !== "https:" || parsed!.hostname !== "agents.listwithclever.com") {
+      console.error(`--portal-url must be an https://agents.listwithclever.com/... URL`);
+      process.exit(2);
+    }
+  }
 
   const db = createClient(
     requireEnv("NEXT_PUBLIC_SUPABASE_URL", process.env.SUPABASE_URL),
@@ -80,7 +102,7 @@ async function main(): Promise<void> {
 
   const { data: flows, error: flowErr } = await db
     .from("ai_flows")
-    .select("id,name,enabled")
+    .select("id,name,enabled,definition")
     .eq("business_id", businessId)
     .ilike("name", WEEKLY_FLOW_NAME);
   if (flowErr) {
@@ -144,10 +166,46 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  // With --portal-url, start AT the sweep's browse step with vars.portal_url
+  // pre-seeded, skipping the extract_url step that would re-extract the spent
+  // magic link from the trigger text. The browse step precedes any branch in
+  // this flow (asserted below), so its trunk index IS its flat execution
+  // index, and the resume marker makes the start point edit-proof the same
+  // way the worker's own parks are.
+  let startStep = 0;
+  const vars: Record<string, string> = {};
+  if (portalUrl) {
+    const steps = (flow.definition as { steps?: Array<Record<string, unknown>> } | null)?.steps;
+    if (!Array.isArray(steps)) {
+      console.error("Flow definition has no steps array; cannot compute the browse step index.");
+      process.exit(2);
+    }
+    const sweepAt = steps.findIndex(
+      (s) => s.type === "browse_action" && typeof s.forEachLink === "string" && s.forEachLink
+    );
+    if (sweepAt < 0) {
+      console.error("Flow has no forEachLink browse step; --portal-url does not apply.");
+      process.exit(2);
+    }
+    if (steps.slice(0, sweepAt).some((s) => s.type === "branch")) {
+      console.error(
+        "A branch precedes the browse step, so trunk index != flat index; refusing to guess."
+      );
+      process.exit(2);
+    }
+    startStep = sweepAt;
+    vars.portal_url = portalUrl;
+    vars[RESUME_STEP_ID_VAR] = String(steps[sweepAt].id ?? "");
+  }
+
   const dedupeKey = `${source.dedupe_key ?? source.id}-rerun-${Date.now()}`;
   console.log(`Replaying run ${source.id} (${ageHours.toFixed(1)}h old) of "${flow.name}":`);
   console.log(`  business ${businessId}`);
   console.log(`  new dedupe_key ${dedupeKey}`);
+  if (portalUrl) {
+    console.log(`  portal_url OVERRIDE ${portalUrl}`);
+    console.log(`  starting at step ${startStep} (${vars[RESUME_STEP_ID_VAR]}), login via stored credentials`);
+  }
   console.log(
     `  trigger text: ${String((trigger as { windowText?: string }).windowText ?? "").slice(0, 120)}...`
   );
@@ -163,9 +221,9 @@ async function main(): Promise<void> {
       flow_id: flow.id,
       business_id: businessId,
       status: "queued",
-      current_step: 0,
+      current_step: startStep,
       attempt_count: 0,
-      context: { trigger, vars: {} },
+      context: { trigger, vars },
       dedupe_key: dedupeKey
     })
     .select("id");
@@ -176,7 +234,12 @@ async function main(): Promise<void> {
   await recordOneshotApplied(db, {
     scriptPath: process.argv[1] ?? "amy-clever-sweep-rerun.ts",
     businessId,
-    details: { replayed_run: source.id, created_run: created![0].id, dedupe_key: dedupeKey }
+    details: {
+      replayed_run: source.id,
+      created_run: created![0].id,
+      dedupe_key: dedupeKey,
+      ...(portalUrl ? { portal_url_override: portalUrl, start_step: startStep } : {})
+    }
   });
   console.log(`\nEnqueued run ${created![0].id}. The worker claims it within a minute.`);
 }

@@ -104,3 +104,19 @@ export function waitForPasswordField(
   login?: LoginOverrides,
   timeoutMs?: number
 ): Promise<string | null>;
+
+/** Budget for a submitted login to resolve before the caller re-checks. */
+export const LOGIN_RESOLVE_TIMEOUT_MS: number;
+/** Gap between re-checks while waiting for a submitted login to resolve. */
+export const LOGIN_RESOLVE_POLL_MS: number;
+/**
+ * Wait for a submitted login to resolve: the page navigating away from the
+ * form (any hop), or the form leaving the page. Never throws; "timeout" with
+ * resolved=false means nothing moved inside the budget (e.g. a rejected
+ * password) and the caller's re-check decides.
+ */
+export function waitForLoginToResolve(
+  page: RenderPage,
+  login?: LoginOverrides,
+  opts?: { timeoutMs?: number; pollMs?: number }
+): Promise<{ resolved: boolean; via: "navigation" | "form_gone" | "timeout"; waitedMs: number }>;
