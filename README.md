@@ -2016,6 +2016,17 @@ list leads with "Automatic" (id `""`), so one mailbox makes it two long, and a
 length test renders a picker whose only decision is between automatic and the
 single mailbox automatic would have chosen anyway.
 
+**Hiding the picker on mailbox count ALONE strands a stale pin.** Disconnect the
+pinned mailbox while another stays connected and every exit is closed at once:
+the `mailbox` blocker is silent (a mailbox IS connected), the send path refuses
+to fall back to an address the owner did not choose, and the form keeps
+submitting the stale id so every save is refused. Outreach stops with nothing on
+the page able to clear it. Two things prevent that: a `mailboxGone` blocker,
+named separately because the fix is different, and the picker rendering whenever
+the pin does not resolve, with an explicit option for the disconnected id so the
+control shows what is actually stored rather than displaying "Automatic" over a
+pin that is still there.
+
 `listOutreachSendFromOptions` is deliberately a SHORTER list than the Emails
 composer's `listSendFromOptions`: no AI coworker mailbox. Cold outreach has to
 leave from the tenant's own domain, since that is the address replies come back

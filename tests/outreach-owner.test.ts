@@ -570,6 +570,28 @@ describe("the mailbox cold email leaves from", () => {
     expect(without.blockers).toContain("mailbox");
   });
 
+  it("flags a pin whose mailbox is gone, which is a quieter dead end than having none", async () => {
+    // Another mailbox is still connected, so the `mailbox` blocker stays
+    // silent. Meanwhile the send path refuses to fall back to an address the
+    // owner did not choose, and every save is refused because the form keeps
+    // submitting the stale id. Without its own blocker (and the picker the
+    // panel shows alongside it) outreach is stopped with nothing able to
+    // clear it.
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ from_connection_id: "conn-gone" }));
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.blockers).toContain("mailboxGone");
+    expect(view.blockers).not.toContain("mailbox");
+    return view;
+  });
+
+  it("says nothing when the pin still resolves, or when there is no pin", () => {
+    expect(
+      describeBlockers(settingsRow() as never, { pinnedMailboxConnected: true })
+    ).not.toContain("mailboxGone");
+    // Defaults to fine, so a caller that never looked cannot invent one.
+    expect(describeBlockers(settingsRow() as never, {})).not.toContain("mailboxGone");
+  });
+
   it("defaults to connected, so a caller that never looked cannot invent a blocker", () => {
     expect(describeBlockers(settingsRow() as never, {})).not.toContain("mailbox");
     expect(describeBlockers(settingsRow() as never, { mailboxConnected: true })).not.toContain(

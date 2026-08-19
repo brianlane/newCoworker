@@ -2524,7 +2524,8 @@
         "valueProp": "Say what you want the email to offer.",
         "searchTerms": "Add at least one kind of business to look for.",
         "cities": "Add at least one town or city to look in.",
-        "mailbox": "Connect the mailbox your outreach should be sent from, on the Integrations page. Drafts will keep piling up until you do, and nothing can go out."
+        "mailbox": "Connect the mailbox your outreach should be sent from, on the Integrations page. Drafts will keep piling up until you do, and nothing can go out.",
+        "mailboxGone": "The mailbox you chose to send from is not connected any more. Pick another one under Send from, or choose Automatic. Nothing can go out until you do."
       },
       "stats": {
         "discovered": "Found",
@@ -2605,7 +2606,8 @@
       "verticalOpen": "{count} still to go out",
       "verticalNothingOpen": "Nothing waiting",
       "senderNameHelp": "The name at the bottom of the email. It does not change the address it is sent from.",
-      "fromMailboxHelp": "The address the email comes from, and where replies land. Automatic uses whichever mailbox you have connected."
+      "fromMailboxHelp": "The address the email comes from, and where replies land. Automatic uses whichever mailbox you have connected.",
+      "fromMailboxGoneOption": "The mailbox you picked (no longer connected)"
     }
   },
   "admin": {

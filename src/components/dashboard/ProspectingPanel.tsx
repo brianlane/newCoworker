@@ -401,6 +401,12 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   // Defaults to required until the view loads, so the stricter copy is what a
   // slow first paint shows.
   const postalRequired = view?.postalAddressRequired !== false;
+  /** Real mailboxes, excluding the leading "Automatic" entry (id ""). */
+  const connectedMailboxCount = (view?.mailboxes ?? []).filter((m) => m.id !== "").length;
+  /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
+  const pinnedMailboxGone = Boolean(
+    form.from_connection_id && !(view?.mailboxes ?? []).some((m) => m.id === form.from_connection_id)
+  );
 
   if (view && !view.tierAllowed) {
     return (
@@ -565,8 +571,15 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             preference. Counted on the CONNECTED entries, not the list length:
             the list leads with "Automatic" (id ""), so a single mailbox makes
             it two long and a length test shows a picker whose only decision is
-            between automatic and the one mailbox automatic would have picked. */}
-        {view && view.mailboxes.filter((m) => m.id !== "").length > 1 ? (
+            between automatic and the one mailbox automatic would have picked.
+
+            The second arm is the escape hatch. A pin whose mailbox has since
+            been disconnected refuses every save (the form keeps submitting the
+            stale id) while the send path refuses to fall back to an address the
+            owner did not choose. Hiding the control on mailbox count alone
+            would leave outreach stopped with nothing on the page able to clear
+            it. */}
+        {view && (connectedMailboxCount > 1 || pinnedMailboxGone) ? (
           <div>
             <label className={labelClass} htmlFor="prospecting-from">
               {t("fields.fromMailbox")}
@@ -577,6 +590,13 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
               value={form.from_connection_id ?? ""}
               onChange={(e) => edit({ from_connection_id: e.target.value })}
             >
+              {/* The stale pin gets a real option, so the control shows what is
+                  actually stored. Without it the browser would display the
+                  first option while state still held the disconnected id, and
+                  an owner who "saw Automatic" would submit the stale pin again. */}
+              {pinnedMailboxGone ? (
+                <option value={form.from_connection_id ?? ""}>{t("fromMailboxGoneOption")}</option>
+              ) : null}
               {view.mailboxes.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}

@@ -137,7 +137,10 @@ export async function loadProspectingView(
     blockers: describeBlockers(settings, {
       placesKeyConfigured: Boolean((process.env.GOOGLE_PLACES_API_KEY ?? "").trim()),
       postalAddressRequired: gates.postalAddressRequired,
-      mailboxConnected: mailboxes.length > 0
+      mailboxConnected: mailboxes.length > 0,
+      pinnedMailboxConnected:
+        !settings?.from_connection_id ||
+        mailboxes.some((m) => m.id === settings.from_connection_id)
     }),
     tierAllowed: gates.tierAllowed,
     postalAddressRequired: gates.postalAddressRequired,
@@ -158,6 +161,7 @@ export function describeBlockers(
     placesKeyConfigured?: boolean;
     postalAddressRequired?: boolean;
     mailboxConnected?: boolean;
+    pinnedMailboxConnected?: boolean;
   } = {}
 ): string[] {
   if (!settings) return [];
@@ -170,6 +174,13 @@ export function describeBlockers(
   // drafts pile up with nothing going out has no other way to learn why.
   // Defaults to connected, so a caller that has not looked cannot invent one.
   if (env.mailboxConnected === false) blockers.push("mailbox");
+  // A pinned mailbox that has since been disconnected is its own dead end, and
+  // a quiet one: another mailbox is connected, so the blocker above stays
+  // silent, the send path refuses to fall back to an address the owner did not
+  // choose, and saving anything at all is refused until the pin is changed.
+  // Named separately because the fix is different: pick another mailbox, or
+  // choose Automatic. Defaults to fine, like the gate above it.
+  if (env.pinnedMailboxConnected === false) blockers.push("mailboxGone");
   // Defaults to required, so every caller that has not resolved a tier keeps
   // the old, stricter behavior.
   if (env.postalAddressRequired !== false && !settings.postal_address?.trim()) {

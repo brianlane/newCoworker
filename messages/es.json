@@ -2524,7 +2524,8 @@
         "valueProp": "Di qué quieres que ofrezca el correo.",
         "searchTerms": "Agrega al menos un tipo de negocio que buscar.",
         "cities": "Agrega al menos una ciudad donde buscar.",
-        "mailbox": "Conecta el buzón desde el que se debe enviar tu prospección, en la página de Integraciones. Los borradores se seguirán acumulando hasta que lo hagas, y no podrá salir nada."
+        "mailbox": "Conecta el buzón desde el que se debe enviar tu prospección, en la página de Integraciones. Los borradores se seguirán acumulando hasta que lo hagas, y no podrá salir nada.",
+        "mailboxGone": "El buzón que elegiste para enviar ya no está conectado. Elige otro en Enviar desde, o elige Automático. No podrá salir nada hasta que lo hagas."
       },
       "stats": {
         "discovered": "Encontrados",
@@ -2605,7 +2606,8 @@
       "verticalOpen": "faltan {count} por salir",
       "verticalNothingOpen": "Nada en espera",
       "senderNameHelp": "El nombre al final del correo. No cambia la dirección desde la que se envía.",
-      "fromMailboxHelp": "La dirección desde la que sale el correo, y donde llegan las respuestas. Automático usa el buzón que tengas conectado."
+      "fromMailboxHelp": "La dirección desde la que sale el correo, y donde llegan las respuestas. Automático usa el buzón que tengas conectado.",
+      "fromMailboxGoneOption": "El buzón que elegiste (ya no está conectado)"
     }
   },
   "admin": {
