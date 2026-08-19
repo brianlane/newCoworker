@@ -180,12 +180,22 @@ These are mistakes already made on this account. Do not remake them.
   ("is open to working with me"), never the whole label. The gate is positive
   (`equals answered` / `equals transferred`) and never `notEquals no_answer`,
   because a call skipped by the calling window resolves to `not_placed`.
-- **RE's update modal has a built-in "Schedule text reminder" (step 3)**, with
-  `button.reminder-button[value="tomorrowMorning"]`, `[value="tomorrowAfternoon"]`
-  and `#reminder-selector[value="pickADate"]`. That is the mechanism a RECURRING
-  RE update would hang off, since a `schedule` trigger produces no URL and
-  `browse_action.urlVar` takes no literal. Not built yet: no RE reminder text
-  has ever arrived, so there is no trigger wording to anchor on.
+- **RE's update modal has a built-in "Schedule text reminder" (step 3)**, and
+  it is the only mechanism that can make RE updates recurring, since a
+  `schedule` trigger produces no URL and `browse_action.urlVar` takes no
+  literal. Its controls, read live Aug 18 2026, are refreshingly plain:
+  `#reminder-selector[value="pickADate"]` reveals
+  `input[name="reminderDate"]` (native date, `pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"`,
+  so `{{now.in7Days.iso}}` fits exactly), plus
+  `select[name="reminderHour"]` (1..12, NOT 09),
+  `select[name="reminderMinutes"]` (00/15/30/45) and
+  `select[name="reminderAmPm"]`. The one-click presets
+  `[value="tomorrowMorning"]` / `[value="tomorrowAfternoon"]` are deliberately
+  NOT used: they would text Amy about every open referral every day. Applied
+  Aug 18 2026 at 9:00 AM seven days out. This is a bootstrap: the reminder text
+  RE sends has never been seen, and the recurring flow that consumes it is
+  authored only once a real one lands in `sms_inbound_jobs`, because matching on
+  guessed vendor copy has cost this account two flows for weeks.
 - **Clever sends two different messages from ONE number, and both flows have
   to say which one they want.** +1 314-207-7635 carries the daily "summary of
   the new customers you received today" AND the weekly "N Active Deals awaiting
@@ -843,6 +853,10 @@ the owner-addressed `notify_no_phone` steps on ReferralExchange and New Lead
 Intake are still left alone.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
+`amy-referralexchange-weekly-reminder.ts` +
+`amy-referralexchange-weekly-reminder-definition.ts` (Aug 18 2026: the RE
+update also schedules RE's own text reminder 7 days out, so a referral stops
+going quiet after arrival day, see Sharp edges),
 `amy-referralexchange-update-honesty.ts` +
 `amy-referralexchange-update-honesty-definition.ts` (Aug 17 2026: the posted
 ReferralExchange status stops saying "no interaction yet" after an answered or
