@@ -2575,7 +2575,9 @@
         "regenerate": "Escribirlo otra vez",
         "rewriteAll": "Escribirlo de nuevo (todos los borradores)",
         "rewriteAllYes": "Sí, reescribirlos todos",
-        "cancel": "Cancelar"
+        "cancel": "Cancelar",
+        "skipVertical": "Omitir estos",
+        "skipVerticalYes": "Sí, omitirlos"
       },
       "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
       "saveFailed": "No se pudo guardar.",
@@ -2595,7 +2597,9 @@
       "rewriteAllProgress": "Escribiéndolos de nuevo: {done} de {total}.",
       "rewroteAll": "Se reescribieron {count} borradores. Léelos antes de enviarlos.",
       "wholeEmailHelp": "La despedida, el enlace, la línea para darse de baja y la dirección se añaden solos. Solo el cuadro de arriba es tuyo para editar.",
-      "wholeEmailStale": "Aquí sigue el borrador guardado. Guarda tus cambios para verlos aquí."
+      "wholeEmailStale": "Aquí sigue el borrador guardado. Guarda tus cambios para verlos aquí.",
+      "skipVerticalConfirm": "¿Detener el contacto con todos los {vertical}? Se omiten {count} borradores en espera y todo lo que siga en cola detrás de ellos. No se toca nada que ya se haya enviado.",
+      "skippedVertical": "Se omitieron {count} prospectos de {vertical}. No se tocó nada que ya se hubiera enviado."
     }
   },
   "admin": {

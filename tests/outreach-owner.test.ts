@@ -25,6 +25,8 @@ const upsertOutreachSettingsSpy = vi.fn(
   })
 );
 const transitionProspectSpy = vi.fn(async () => true);
+const countProspectsInVerticalSpy = vi.fn(async () => 0);
+const skipProspectsInVerticalSpy = vi.fn(async () => {});
 /**
  * One tier lookup backs both plan gates, so the fake is the tier itself:
  * a test picks a plan and the two predicates fall out of it, exactly as they
@@ -56,7 +58,9 @@ vi.mock("@/lib/outreach/db", async (importOriginal) => {
       upsertOutreachSettingsSpy(
         ...(a as unknown as Parameters<typeof upsertOutreachSettingsSpy>)
       ),
-    transitionProspect: (...a: unknown[]) => transitionProspectSpy(...(a as []))
+    transitionProspect: (...a: unknown[]) => transitionProspectSpy(...(a as [])),
+    countProspectsInVertical: (...a: unknown[]) => countProspectsInVerticalSpy(...(a as [])),
+    skipProspectsInVertical: (...a: unknown[]) => skipProspectsInVerticalSpy(...(a as []))
   };
 });
 
@@ -72,6 +76,8 @@ import {
   REVIEW_QUEUE_LIMIT,
   saveProspectingSettings,
   skipProspect,
+  skipVertical,
+  VERTICAL_SKIP_DETAIL,
   type ProspectingSettingsInput
 } from "@/lib/outreach/owner";
 
@@ -505,5 +511,34 @@ describe("defaultProspectingSettings", () => {
       valueProp: "",
       senderName: ""
     });
+  });
+});
+
+describe("skipVertical (the owner stopped looking for this kind of business)", () => {
+  it("retires everything the trade still has waiting, and says how much that was", async () => {
+    // Taking a term out of the search list only stops the NEXT discovery pass.
+    // This is what clears what the term already produced.
+    countProspectsInVerticalSpy.mockResolvedValueOnce(63);
+    expect(await skipVertical(BIZ, "dental office", {} as never)).toBe(63);
+    expect(skipProspectsInVerticalSpy).toHaveBeenCalledWith(
+      BIZ,
+      "dental office",
+      VERTICAL_SKIP_DETAIL,
+      expect.anything()
+    );
+  });
+
+  it("writes nothing when the trade has nothing left to call off", async () => {
+    // Pressing it twice is not an error, and the second press must not issue an
+    // update that would restamp rows it already retired.
+    countProspectsInVerticalSpy.mockResolvedValueOnce(0);
+    expect(await skipVertical(BIZ, "dental office", {} as never)).toBe(0);
+    expect(skipProspectsInVerticalSpy).not.toHaveBeenCalled();
+  });
+
+  it("works through the default client too", async () => {
+    defaultClientSpy.mockReturnValue({});
+    countProspectsInVerticalSpy.mockResolvedValueOnce(2);
+    expect(await skipVertical(BIZ, "law firm")).toBe(2);
   });
 });

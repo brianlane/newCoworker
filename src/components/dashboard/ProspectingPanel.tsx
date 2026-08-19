@@ -142,6 +142,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    * each. `setState` cannot stop that; a ref can.
    */
   const bulkRunningRef = useRef(false);
+  /** The trade whose "are you sure" is on screen, and the one being retired. */
+  const [confirmVertical, setConfirmVertical] = useState<string | null>(null);
+  const [skippingVertical, setSkippingVertical] = useState<string | null>(null);
 
   const markDirty = () => {
     dirtyRef.current = true;
@@ -321,6 +324,48 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
       await refresh();
       setBulk(null);
       bulkRunningRef.current = false;
+    }
+  };
+
+  /**
+   * Call off a whole trade.
+   *
+   * Taking a term out of "Kinds of business to look for" only stops the next
+   * discovery pass; everything that term already found is still queued, and in
+   * automatic mode still goes out. This retires all of it. The server reports
+   * how many it caught, which is the number worth showing: the row's own count
+   * includes prospects that were already sent, and those are left alone.
+   */
+  const skipVertical = async (vertical: string) => {
+    setSkippingVertical(vertical);
+    setConfirmVertical(null);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/dashboard/outreach/verticals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, vertical })
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { skipped: number };
+        error?: { message?: string };
+      };
+      if (!json.ok || !json.data) {
+        setError(json.error?.message ?? t("actionFailed"));
+        return;
+      }
+      setNotice(t("skippedVertical", { count: json.data.skipped, vertical }));
+    } catch {
+      setError(t("actionFailed"));
+    } finally {
+      // Always re-read: the queue below is showing drafts this may have just
+      // retired, and leaving Send live over them is how a called-off trade
+      // still gets emailed.
+      setDrafts({});
+      await refresh();
+      setSkippingVertical(null);
     }
   };
 
@@ -589,14 +634,42 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-parchment/10 bg-deep-ink/20 px-3 py-2 text-sm"
               >
                 <span className="text-parchment/80">{v.vertical}</span>
-                <span className="text-xs text-parchment/60">
-                  {t("verticalLine", {
-                    drafted: v.drafted,
-                    sent: v.sent,
-                    replied: v.replied,
-                    booked: v.booked
-                  })}
-                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs text-parchment/60">
+                    {t("verticalLine", {
+                      drafted: v.drafted,
+                      sent: v.sent,
+                      replied: v.replied,
+                      booked: v.booked
+                    })}
+                  </span>
+                  {/* Two presses, like the bulk rewrite: this retires work in
+                      bulk, and the count makes the size of it plain. */}
+                  {confirmVertical === v.vertical ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-amber-200">
+                        {t("skipVerticalConfirm", { vertical: v.vertical, count: v.pending })}
+                      </span>
+                      <Button
+                        disabled={skippingVertical !== null}
+                        onClick={() => void skipVertical(v.vertical)}
+                      >
+                        {t("actions.skipVerticalYes")}
+                      </Button>
+                      <Button variant="secondary" onClick={() => setConfirmVertical(null)}>
+                        {t("actions.cancel")}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      disabled={skippingVertical !== null || bulkRunning}
+                      onClick={() => setConfirmVertical(v.vertical)}
+                    >
+                      {t("actions.skipVertical")}
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

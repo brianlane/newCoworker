@@ -332,6 +332,62 @@ export async function countProspectsToRewrite(
   return count ?? 0;
 }
 
+/**
+ * Statuses a whole trade can still be called off at.
+ *
+ * `discovered` is a prospect the sweep has not written to yet; `drafted` is one
+ * waiting on the owner. Everything later is excluded on purpose: `queued` is
+ * already in flight, and a sent pitch is a thing that happened, so retiring the
+ * trade must not rewrite the record of mail that is already in somebody's
+ * inbox.
+ */
+const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"];
+
+/** How many prospects in one trade a skip would still catch. */
+export async function countProspectsInVertical(
+  businessId: string,
+  vertical: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("outreach_prospects")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .eq("vertical", vertical)
+    .in("status", CANCELLABLE_STATUSES);
+  if (error) throw new Error(`countProspectsInVertical: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
+ * Retire every prospect in one trade that has not gone out yet.
+ *
+ * The owner stopped looking for this kind of business, so the drafts already
+ * queued for it are work nobody wants done. Skipped rather than deleted, for
+ * the same reason a single Skip is: the row is what keeps the domain out of
+ * future discovery, so deleting it would invite the sweep to find them again.
+ *
+ * The status filter rides inside the UPDATE rather than being read first, so a
+ * prospect the sweep sends between the page load and the press is left alone
+ * instead of being marked skipped after the fact.
+ */
+export async function skipProspectsInVertical(
+  businessId: string,
+  vertical: string,
+  detail: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("outreach_prospects")
+    .update({ status: "skipped", status_detail: detail, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("vertical", vertical)
+    .in("status", CANCELLABLE_STATUSES);
+  if (error) throw new Error(`skipProspectsInVertical: ${error.message}`);
+}
+
 export async function getProspect(
   businessId: string,
   prospectId: string,

@@ -19,6 +19,7 @@ import {
   claimDiscoveryRun,
   claimProspectNudge,
   countProspectsNudgedSince,
+  countProspectsInVertical,
   countProspectsSentSince,
   countProspectsToRewrite,
   existingProspectDomains,
@@ -34,6 +35,7 @@ import {
   listProspectsToRewrite,
   OUTREACH_ACTIVE_PAGE_SIZE,
   patchProspect,
+  skipProspectsInVertical,
   transitionProspect,
   upsertOutreachSettings
 } from "@/lib/outreach/db";
@@ -514,5 +516,44 @@ describe("listProspectsToRewrite / countProspectsToRewrite (the bulk rewrite cur
     await expect(
       countProspectsToRewrite(BIZ, STARTED, makeDb(chain({ count: null, error: { message: "cnt" } })))
     ).rejects.toThrow(/cnt/);
+  });
+});
+
+describe("countProspectsInVertical / skipProspectsInVertical (calling off a trade)", () => {
+  it("counts only what has not gone out yet", async () => {
+    const c = chain({ count: 63, error: null });
+    expect(await countProspectsInVertical(BIZ, "dental office", makeDb(c))).toBe(63);
+    expect(c.eq).toHaveBeenCalledWith("vertical", "dental office");
+    // `queued` is already in flight and a sent pitch is a thing that happened,
+    // so neither is cancellable.
+    expect(c.in).toHaveBeenCalledWith("status", ["discovered", "drafted"]);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ count: null, error: null })));
+    expect(await countProspectsInVertical(BIZ, "dental office")).toBe(0);
+
+    await expect(
+      countProspectsInVertical(BIZ, "x", makeDb(chain({ count: null, error: { message: "cnt" } })))
+    ).rejects.toThrow(/cnt/);
+  });
+
+  it("retires the trade with the status filter inside the write", async () => {
+    // Read-then-write would mark a prospect skipped that the sweep sent in
+    // between, quietly removing a real send from the funnel. The filter rides
+    // in the UPDATE so that row simply does not match.
+    const c = chain({ error: null });
+    await skipProspectsInVertical(BIZ, "dental office", "owner stopped", makeDb(c));
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "skipped", status_detail: "owner stopped" })
+    );
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("vertical", "dental office");
+    expect(c.in).toHaveBeenCalledWith("status", ["discovered", "drafted"]);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ error: null })));
+    await expect(skipProspectsInVertical(BIZ, "x", "d")).resolves.toBeUndefined();
+
+    await expect(
+      skipProspectsInVertical(BIZ, "x", "d", makeDb(chain({ error: { message: "upd" } })))
+    ).rejects.toThrow(/upd/);
   });
 });

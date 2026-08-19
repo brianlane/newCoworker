@@ -21,9 +21,11 @@ import {
   prospectingTierForBusiness
 } from "@/lib/plans/prospecting";
 import {
+  countProspectsInVertical,
   getOutreachSettings,
   listProspectOutcomes,
   listProspectsByStatus,
+  skipProspectsInVertical,
   upsertOutreachSettings,
   transitionProspect,
   OUTREACH_DEFAULT_DAILY_CAP,
@@ -303,6 +305,40 @@ export async function skipProspect(
     { status: "skipped", status_detail: "the owner read the draft and passed" },
     db
   );
+}
+
+/** Why a prospect was retired when a whole trade was called off. */
+export const VERTICAL_SKIP_DETAIL = "the owner stopped looking for this kind of business";
+
+/**
+ * The owner stopped looking for a kind of business, so the work already queued
+ * for it is work nobody wants done.
+ *
+ * Removing a trade from the search terms only stops the NEXT discovery pass.
+ * Everything that trade already produced stays in the queue: prospects waiting
+ * to be drafted, and drafts waiting to be read. On a queue of a few hundred
+ * that is a lot of Skip presses, and the drafts that survive them go out.
+ *
+ * Skipped, never deleted. The row is what keeps the domain out of future
+ * discovery, so deleting it would only invite the sweep to find them again.
+ * Nothing already sent is touched.
+ *
+ * The number returned is what was waiting the instant before the write, which
+ * is what the owner should be told they just called off. The write itself
+ * filters on status again, so a prospect the sweep sends in between is left
+ * alone rather than marked skipped after the fact, and the count is at most one
+ * or two out in that rare case.
+ */
+export async function skipVertical(
+  businessId: string,
+  vertical: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const waiting = await countProspectsInVertical(businessId, vertical, db);
+  if (waiting === 0) return 0;
+  await skipProspectsInVertical(businessId, vertical, VERTICAL_SKIP_DETAIL, db);
+  return waiting;
 }
 
 /** Default settings the panel shows a business that has never configured it. */

@@ -2003,6 +2003,26 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### Calling off a whole kind of business
+
+Removing a trade from "Kinds of business to look for" only stops the NEXT
+discovery pass. Everything that trade already produced stays in the queue:
+prospects waiting to be drafted, and drafts waiting to be read, which in
+automatic mode still go out. **Skip these**, on each row of the by-trade
+breakdown, retires all of it in one press
+(`skipVertical`, `POST /api/dashboard/outreach/verticals`).
+
+Skipped, never deleted, for the same reason a single Skip is: the row is what
+keeps the domain out of future discovery, so deleting it would only invite the
+sweep to find them again. Only `discovered` and `drafted` are cancellable.
+`queued` is already in flight and a sent pitch is a thing that happened, so
+neither is touched, and the status filter rides inside the UPDATE rather than
+being read first, or a prospect the sweep sends between the page load and the
+press would be marked skipped after the fact and vanish from the sent count.
+
+There is no tier gate on it. Stopping outreach costs nothing and is exactly
+what a downgraded tenant should still be able to do.
+
 ### Why the send is NOT a flow step
 
 The obvious design is a `send_email` step in the outreach flow. It is wrong
