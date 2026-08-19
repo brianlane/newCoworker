@@ -210,6 +210,17 @@ describe("varsProducedByStep", () => {
         fields: [{ name: "c" }]
       })
     ).toEqual(["c"]);
+    // A forEachLink sweep also publishes its measured outcome when it ends,
+    // named by step id, so a later alert can read what the sweep delivered.
+    expect(
+      varsProducedByStep({
+        id: "update_each",
+        type: "browse_action",
+        urlVar: "u",
+        actions: [{ kind: "click_text", target: "Provide Update" }],
+        forEachLink: "a.clickable-card"
+      })
+    ).toEqual(["update_each_updated", "update_each_left"]);
     expect(
       varsProducedByStep({ id: "x", type: "http_call", label: "api", saveAs: "resp" })
     ).toEqual(["resp"]);

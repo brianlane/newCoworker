@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  decideForEach,
+  encodeForEachProgress,
+  forEachOutcomeVars,
+  forEachProgressVar,
+  forEachResultVars,
   isUnsafeBrowseHost,
   normalizeBrowseUrl,
   parseActionResponse,
+  parseForEachProgress,
   parseRenderResponse,
   renderErrorFields,
-  renderErrorKind
+  renderErrorKind,
+  type ForEachSummary
 } from "../supabase/functions/_shared/ai_flows/browse";
 
 describe("isUnsafeBrowseHost", () => {
@@ -231,7 +238,7 @@ describe("parseActionResponse", () => {
       actionsCompleted: 12,
       text: "",
       html: "",
-      forEach: { items: 3, succeeded: 2, failed: 1, errors: ['lead-3: select_option "No": timeout'] }
+      forEach: { items: 3, succeeded: 2, failed: 1, remaining: 0, errors: ['lead-3: select_option "No": timeout'] }
     });
   });
 
@@ -249,7 +256,7 @@ describe("parseActionResponse", () => {
       actionsCompleted: 4,
       text: "",
       html: "",
-      forEach: { items: 2, succeeded: 2, failed: 0, errors: [] }
+      forEach: { items: 2, succeeded: 2, failed: 0, remaining: 0, errors: [] }
     });
     expect(
       parseActionResponse(
@@ -261,7 +268,7 @@ describe("parseActionResponse", () => {
       actionsCompleted: 4,
       text: "",
       html: "",
-      forEach: { items: 2, succeeded: 2, failed: 0, errors: [] }
+      forEach: { items: 2, succeeded: 2, failed: 0, remaining: 0, errors: [] }
     });
   });
 
@@ -279,7 +286,263 @@ describe("parseActionResponse", () => {
       actionsCompleted: 4,
       text: "",
       html: "",
-      forEach: { items: 2, succeeded: 1, failed: 1, errors: ["real error", "second"] }
+      forEach: { items: 2, succeeded: 1, failed: 1, remaining: 0, errors: ["real error", "second"] }
+    });
+  });
+});
+
+/**
+ * The chained-sweep contract: one capped render pass at a time, the worker
+ * deferring between passes until the portal's "Needs Action" list is drained.
+ *
+ * The scenario these pin is Amy Laidlaw's weekly Clever sweep, 2026-08-19: 41
+ * active deals stated, 30 rendered in the list, a 6-item cap, and an owner
+ * alert claiming "about 35 still need you" derived from arithmetic instead of
+ * from what the sweep did (2 updated, 4 card failures). Chaining replaces the
+ * arithmetic: passes repeat until nothing is owed, and the flow reads the
+ * measured `<id>_updated`/`<id>_left` vars.
+ */
+describe("parseForEach remaining", () => {
+  it("parses the remaining count the capped pass reports", () => {
+    expect(
+      parseActionResponse(
+        {
+          actionsCompleted: 12,
+          forEach: { items: 30, succeeded: 2, failed: 28, remaining: 24, errors: [] }
+        },
+        "u"
+      )?.forEach
+    ).toEqual({ items: 30, succeeded: 2, failed: 28, remaining: 24, errors: [] });
+  });
+
+  it("defaults remaining to 0 on an older render service that omits it", () => {
+    expect(
+      parseActionResponse(
+        { actionsCompleted: 4, forEach: { items: 2, succeeded: 2, failed: 0 } },
+        "u"
+      )?.forEach?.remaining
+    ).toBe(0);
+  });
+
+  it("clamps remaining to failed, since the service counts the capped tail inside failed", () => {
+    expect(
+      parseActionResponse(
+        {
+          actionsCompleted: 4,
+          forEach: { items: 5, succeeded: 4, failed: 1, remaining: 9, errors: [] }
+        },
+        "u"
+      )?.forEach?.remaining
+    ).toBe(1);
+  });
+
+  it("treats a negative or non-numeric remaining as absent", () => {
+    for (const bad of [-3, "24", null]) {
+      expect(
+        parseActionResponse(
+          {
+            actionsCompleted: 4,
+            forEach: { items: 5, succeeded: 4, failed: 1, remaining: bad, errors: [] }
+          },
+          "u"
+        )?.forEach?.remaining
+      ).toBe(0);
+    }
+  });
+});
+
+describe("decideForEach", () => {
+  const fe = (over: Partial<ForEachSummary>): ForEachSummary => ({
+    items: 0,
+    succeeded: 0,
+    failed: 0,
+    remaining: 0,
+    errors: [],
+    ...over
+  });
+
+  it("fails loudly when link collection itself broke", () => {
+    expect(decideForEach(fe({ errors: ["bad selector"] }), null, 20)).toEqual({
+      kind: "fail_collect",
+      error: "bad selector"
+    });
+  });
+
+  it("collection failure on a continuation pass still reports fail (the wrapper converts it)", () => {
+    expect(
+      decideForEach(fe({ errors: ["session expired"] }), { passes: 2, updated: 9, lastLeft: 18 }, 20)
+    ).toEqual({ kind: "fail_collect", error: "session expired" });
+  });
+
+  it("an empty list is a clean finish, not an error", () => {
+    expect(decideForEach(fe({}), null, 20)).toEqual({
+      kind: "done",
+      passes: 1,
+      updated: 0,
+      left: 0,
+      terminal: "list_drained"
+    });
+  });
+
+  it("an empty list on a later pass keeps the cumulative total", () => {
+    expect(decideForEach(fe({}), { passes: 6, updated: 36, lastLeft: 5 }, 20)).toEqual({
+      kind: "done",
+      passes: 7,
+      updated: 36,
+      left: 0,
+      terminal: "list_drained"
+    });
+  });
+
+  it("a first pass where every attempted item failed stays a loud, run-failing error", () => {
+    expect(
+      decideForEach(
+        fe({ items: 30, failed: 28, remaining: 24, errors: ["Provide Update: no matching control"] }),
+        null,
+        20
+      )
+    ).toEqual({
+      kind: "fail_first_pass",
+      attempted: 6,
+      error: "Provide Update: no matching control"
+    });
+  });
+
+  it("an all-failed first pass with no error detail still fails, with an empty reason", () => {
+    expect(decideForEach(fe({ items: 4, failed: 4 }), null, 20)).toEqual({
+      kind: "fail_first_pass",
+      attempted: 4,
+      error: ""
+    });
+  });
+
+  it("continues when the cap truncated the list and the pass made progress", () => {
+    expect(decideForEach(fe({ items: 30, succeeded: 6, failed: 24, remaining: 24 }), null, 20)).toEqual({
+      kind: "continue",
+      progress: { passes: 1, updated: 6, lastLeft: 24 }
+    });
+  });
+
+  it("carries the pass's real failures inside lastLeft, not just the capped tail", () => {
+    // Bugbot caught the first cut of this storing fe.remaining: a mid-sweep
+    // permanent failure then published a left count that dropped the cards
+    // that failed on the last completed pass, the exact undercount the
+    // measured alert exists to stop. 30 listed, 4 updated, 2 real failures,
+    // 24 beyond the cap: still listed is 26, not 24.
+    expect(
+      decideForEach(fe({ items: 30, succeeded: 4, failed: 26, remaining: 24 }), null, 20)
+    ).toEqual({
+      kind: "continue",
+      progress: { passes: 1, updated: 4, lastLeft: 26 }
+    });
+  });
+
+  it("accumulates the updated total across passes", () => {
+    expect(
+      decideForEach(
+        fe({ items: 24, succeeded: 6, failed: 18, remaining: 18 }),
+        { passes: 1, updated: 6, lastLeft: 24 },
+        20
+      )
+    ).toEqual({
+      kind: "continue",
+      progress: { passes: 2, updated: 12, lastLeft: 18 }
+    });
+  });
+
+  it("finishes when the final slice fits, counting real failures as left", () => {
+    expect(
+      decideForEach(
+        fe({ items: 5, succeeded: 4, failed: 1, errors: ["Submit Update: timeout"] }),
+        { passes: 6, updated: 36, lastLeft: 5 },
+        20
+      )
+    ).toEqual({
+      kind: "done",
+      passes: 7,
+      updated: 40,
+      left: 1,
+      terminal: "list_drained"
+    });
+  });
+
+  it("stops when a full continuation pass made no progress (a stuck head would loop forever)", () => {
+    expect(
+      decideForEach(
+        fe({ items: 10, succeeded: 0, failed: 10, remaining: 4 }),
+        { passes: 3, updated: 12, lastLeft: 10 },
+        20
+      )
+    ).toEqual({
+      kind: "done",
+      passes: 4,
+      updated: 12,
+      left: 10,
+      terminal: "no_progress"
+    });
+  });
+
+  it("stops at the pass cap even while progressing, and says so", () => {
+    expect(
+      decideForEach(
+        fe({ items: 12, succeeded: 6, failed: 6, remaining: 6 }),
+        { passes: 19, updated: 114, lastLeft: 12 },
+        20
+      )
+    ).toEqual({
+      kind: "done",
+      passes: 20,
+      updated: 120,
+      left: 6,
+      terminal: "pass_cap"
+    });
+  });
+
+  it("does not chain against an older render service that never reports remaining", () => {
+    // failed includes what the old service capped, but remaining is 0, so the
+    // decision is a single-pass finish with the miss counted in left.
+    expect(decideForEach(fe({ items: 30, succeeded: 2, failed: 28 }), null, 20)).toEqual({
+      kind: "done",
+      passes: 1,
+      updated: 2,
+      left: 28,
+      terminal: "list_drained"
+    });
+  });
+});
+
+describe("forEach progress var", () => {
+  it("round-trips through the context var encoding", () => {
+    const p = { passes: 3, updated: 17, lastLeft: 9 };
+    expect(parseForEachProgress(encodeForEachProgress(p))).toEqual(p);
+  });
+
+  it("names the var by step id, __-prefixed like other engine bookkeeping", () => {
+    expect(forEachProgressVar("update_each")).toBe("__foreach_update_each");
+  });
+
+  it("rejects absent, malformed, or truncated state instead of throwing", () => {
+    expect(parseForEachProgress(undefined)).toBeNull();
+    expect(parseForEachProgress("")).toBeNull();
+    expect(parseForEachProgress("not json")).toBeNull();
+    expect(parseForEachProgress("null")).toBeNull();
+    expect(parseForEachProgress('"str"')).toBeNull();
+    expect(parseForEachProgress('{"passes":1,"updated":2}')).toBeNull();
+    expect(parseForEachProgress('{"passes":-1,"updated":2,"lastLeft":0}')).toBeNull();
+    expect(parseForEachProgress('{"passes":"1","updated":2,"lastLeft":0}')).toBeNull();
+    expect(parseForEachProgress(7 as unknown as string)).toBeNull();
+  });
+});
+
+describe("forEach outcome vars", () => {
+  it("derives both names from the step id, the same names the authoring layer registers", () => {
+    expect(forEachOutcomeVars("update_each")).toEqual(["update_each_updated", "update_each_left"]);
+  });
+
+  it("publishes the measured totals under those names", () => {
+    expect(forEachResultVars("update_each", { updated: 39, left: 2 })).toEqual({
+      update_each_updated: "39",
+      update_each_left: "2"
     });
   });
 });

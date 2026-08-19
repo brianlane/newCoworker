@@ -211,17 +211,33 @@ These are mistakes already made on this account. Do not remake them.
   `contains` needle to BOTH flows. Fixing only the sender would have been worse
   than the bug: both flows would then match both messages, and the sweep would
   blanket-update her whole active book daily.
-- **A `forEachLink` sweep is capped by Cloudflare, not by the cap.** The whole
-  loop runs inside ONE HTTP response crossing a tunnel with no `originRequest`
-  block, so it inherits Cloudflare's default ~100s 524. At Amy's measured pace
-  (~5s fixed plus ~13s per lead) that is about 6 leads. `MAX_FOREACH_ITEMS` sat
-  at 25, i.e. ~330s, which was never deliverable; it moved to 6 on Aug 17 2026.
-  A 524 is worse than a truncation, because the worker treats it as transient
-  and RETRIES, re-submitting every card the timed-out pass already did. The
-  weekly flow now reads the backlog Clever states, compares it against one
-  pass, and texts Amy the remainder, so a short sweep can never again look like
-  a complete one. Covering the whole backlog needs the loop moved worker-side
-  (one request per item); until then the alert is the honest answer.
+- **A `forEachLink` sweep is capped by Cloudflare per PASS, and the worker
+  chains passes until the list is drained (Aug 19 2026).** The loop's single
+  HTTP response crosses a tunnel with no `originRequest` block, so it inherits
+  Cloudflare's default ~100s 524; at Amy's measured pace (~5s fixed plus ~13s
+  per lead) that is about 6 leads, which is where `MAX_FOREACH_ITEMS` sits
+  (down from an undeliverable 25 on Aug 17 2026). Covering a bigger backlog is
+  the worker's job now: the render service reports what the cap left unvisited
+  (`remaining`), and the worker defers the run ~15s and re-enters the SAME
+  browse step for the next slice until nothing is owed. Terminal conditions
+  are named, never inferred: `list_drained` (clean, or only per-card failures
+  left), `no_progress` (a full pass succeeded on nothing, so re-listing would
+  hand back the same stuck head forever), `pass_cap`
+  (`AIFLOW_MAX_FOREACH_PASSES`, default 20, the runaway valve), and
+  `pass_error` (a later pass failed permanently, e.g. the portal magic link
+  expired mid-sweep; the run does NOT dead-letter, because the alert behind it
+  must still fire). The step then publishes measured totals as
+  `update_each_updated` / `update_each_left`, which is what the alert texts
+  (see `amy-clever-sweep-measured-alert.ts`). Failed cards stay in the list
+  and are retried on later passes; the first pass keeps the old loud
+  semantics (all-fail = run failure). A box whose sidecar predates the
+  `remaining` field simply never chains: one pass plus a truthful
+  measured-numbers alert. On the first real run before chaining (Aug 19
+  2026), Clever stated 41 deals, the list rendered 30 (InfiniteList
+  lazy-render), one pass attempted 6, landed 2, and the arithmetic alert said
+  "about 35 still need you" when the honest count was 39; the lazy-render
+  undercount also self-corrects across chained passes because each pass
+  re-lists.
 - **Clever's status list is FORWARD-ONLY from the card's current stage, so
   "We Spoke" is not on every card.** Read live 2026-08-18 in a signed-in
   browser. A card at "Tried Reaching Out" offers `We Spoke`; a card already at
@@ -242,8 +258,10 @@ These are mistakes already made on this account. Do not remake them.
 - **An updated Clever card DOES leave "Needs Action".** Confirmed live
   2026-08-18: `Needs Action (0)` / `Recently Updated (87)`, the second section
   labelled "Items in this list do not need to be updated". That is the
-  precondition chained sweep passes depend on, so chaining is now safe to build.
-  Per-lead URLs are `/portal/<portalId>/connection/<connectionId>/`.
+  precondition the chained sweep passes (built Aug 19 2026, see the
+  `forEachLink` bullet above) depend on: each pass re-lists and sees only what
+  is still owed. Per-lead URLs are
+  `/portal/<portalId>/connection/<connectionId>/`.
 - **A channel policy set with tool toggles reaches only the channel you set
   it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
   and hands off rather than books, and enforced it by disabling the five
@@ -849,7 +867,17 @@ see Sharp edges),
 `amy-clever-weekly-update-sweep.ts` +
 `amy-clever-weekly-update-sweep-definition.ts` (Aug 17 2026: repoints
 the weekly sweep at the real sender, separates the two flows by needle, and
-adds the capacity alert; see Sharp edges).
+adds the capacity alert; see Sharp edges),
+`amy-clever-sweep-measured-alert.ts` +
+`amy-clever-sweep-measured-alert-definition.ts` (Aug 19 2026: the alert reads
+the chained sweep's measured `update_each_updated`/`update_each_left` vars
+instead of backlog-minus-6 arithmetic, and the `sweep_remainder` math step is
+removed; a clean sweep of any backlog stays silent; see Sharp edges),
+`amy-clever-sweep-rerun.ts` (Aug 19 2026: replays the most recent weekly
+reminder's trigger as a fresh queued run, so the week the chaining shipped
+got finished instead of waiting for Clever's next text; refuses when a run is
+active or the source is older than 48h, since the magic link dies in under a
+day).
 
 Unowned-lead recovery (Aug 15 2026): `amy-unowned-lead-team-alert.ts` texts
 the lead-type-tagged team about ONE unowned lead by hand, using the same

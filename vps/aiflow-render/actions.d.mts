@@ -32,6 +32,11 @@ export const MAX_ACTIONS: number;
 export const MAX_WHILE_PRESENT_CLICKS: number;
 export const WHILE_PRESENT_PROBE_MS: number;
 export const MAX_FOREACH_ITEMS: number;
+export function capForEachList(hrefs: string[]): {
+  kept: string[];
+  remaining: number;
+  capNote: string | null;
+};
 export const CLICK_TEXT_APPEAR_MS: number;
 export const CHECK_TOTAL_APPEAR_MS: number;
 export const CLICK_TEXT_APPEAR_POLL_MS: number;

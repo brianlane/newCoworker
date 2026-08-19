@@ -28,6 +28,10 @@ import {
 // and the call-end webhook, so it lives with them and is imported here rather
 // than duplicated into the authoring layer.
 import { callOutcomeCompanionVars } from "../../../supabase/functions/_shared/ai_flows/call_outcome_meta";
+// Same arrangement for the vars a forEachLink sweep publishes when it ends
+// (`<id>_updated` / `<id>_left`): the worker writes them, so the worker's
+// module names them and the authoring layer imports the names.
+import { forEachOutcomeVars } from "../../../supabase/functions/_shared/ai_flows/browse";
 
 export const TRIGGER_CONDITION_TYPES = [
   "contains",
@@ -3364,6 +3368,12 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       // Same-pass extraction registers its produced vars for LATER steps, just
       // like browse_extract.
       for (const f of step.fields ?? []) vars.add(f.name);
+      // A forEachLink sweep publishes its measured outcome when it ends:
+      // `<id>_updated` (items whose sequence completed, across every chained
+      // pass) and `<id>_left` (items still listed when the loop stopped), so
+      // a later step can alert on what the sweep actually delivered instead
+      // of re-deriving it from assumptions about the cap.
+      if (step.forEachLink) for (const v of forEachOutcomeVars(step.id)) vars.add(v);
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {
       vars.add(step.saveAs);

@@ -123,12 +123,22 @@ export function renderErrorFields(body: unknown): { error: string; detail: strin
 
 /** Loop-over-list outcome when a browse_action carried `forEachLink`. */
 export type ForEachSummary = {
-  /** How many list links the service found + visited (capped service-side). */
+  /** How many list links the service MATCHED (the pre-cap total, not visits). */
   items: number;
   /** Items whose full action sequence completed. */
   succeeded: number;
-  /** Items where navigation or an action failed (best-effort: loop continues). */
+  /**
+   * Items where navigation or an action failed (best-effort: loop continues).
+   * Includes the capped tail (`remaining`), kept that way so an older worker
+   * reading only items/succeeded/failed still sees the truncation as misses.
+   */
   failed: number;
+  /**
+   * Items the service matched but never visited because the per-response cap
+   * truncated the list. 0 on an older render service that doesn't report it,
+   * which also (deliberately) disables pass chaining against that service.
+   */
+  remaining: number;
   /** Up to a few human-readable per-item failure reasons. */
   errors: string[];
 };
@@ -186,8 +196,158 @@ function parseForEach(raw: unknown): ForEachSummary | null {
   const succeeded = num(f.succeeded);
   const failed = num(f.failed);
   if (items === null || succeeded === null || failed === null) return null;
+  // Absent on an older render service → 0 (no chaining). The service counts
+  // the capped tail inside `failed` too, so a body claiming more remaining
+  // than failed is malformed; clamp rather than let the arithmetic go
+  // negative downstream.
+  const remaining = Math.min(num(f.remaining) ?? 0, failed);
   const errors = Array.isArray(f.errors)
     ? f.errors.filter((e): e is string => typeof e === "string").slice(0, 20)
     : [];
-  return { items, succeeded, failed, errors };
+  return { items, succeeded, failed, remaining, errors };
+}
+
+/**
+ * Cross-pass bookkeeping for a chained forEachLink sweep, JSON-encoded into a
+ * `__foreach_<stepId>` context var so it survives the defer between passes.
+ */
+export type ForEachProgress = {
+  /** Passes completed so far (each pass is one render-service request). */
+  passes: number;
+  /** Cumulative items whose action sequence completed, across all passes. */
+  updated: number;
+  /**
+   * Items still listed after the LAST completed pass: its `items - succeeded`,
+   * i.e. the capped tail PLUS that pass's per-card failures (failed cards
+   * stay in the list too). The best "left" figure available if a later pass
+   * dies before reporting; counting only the capped tail here would repeat
+   * the exact undercount the measured alert exists to stop.
+   */
+  lastLeft: number;
+};
+
+/** Context var holding a step's in-flight chained-sweep progress. */
+export function forEachProgressVar(stepId: string): string {
+  return `__foreach_${stepId}`;
+}
+
+/** Encode progress for the context var. */
+export function encodeForEachProgress(p: ForEachProgress): string {
+  return JSON.stringify(p);
+}
+
+/** Decode progress from a context var; null when absent or malformed. */
+export function parseForEachProgress(raw: unknown): ForEachProgress | null {
+  if (typeof raw !== "string" || !raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const p = parsed as Record<string, unknown>;
+  const num = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
+  const passes = num(p.passes);
+  const updated = num(p.updated);
+  const lastLeft = num(p.lastLeft);
+  if (passes === null || updated === null || lastLeft === null) return null;
+  return { passes, updated, lastLeft };
+}
+
+/**
+ * Names of the vars a forEachLink browse step publishes for LATER steps once
+ * the sweep ends: how many list items it updated in total, and how many were
+ * still listed when it stopped. The authoring-side validator and the builder
+ * palette (`src/lib/ai-flows/schema.ts` / `tree.ts`) import THIS function, so
+ * a flow can template `{{vars.<id>_updated}}`/`{{vars.<id>_left}}` and the
+ * names can never drift from what the worker writes.
+ */
+export function forEachOutcomeVars(stepId: string): [updated: string, left: string] {
+  return [`${stepId}_updated`, `${stepId}_left`];
+}
+
+/** The published vars with their values, for the worker's terminal write. */
+export function forEachResultVars(
+  stepId: string,
+  outcome: { updated: number; left: number }
+): Record<string, string> {
+  const [updatedVar, leftVar] = forEachOutcomeVars(stepId);
+  return {
+    [updatedVar]: String(outcome.updated),
+    [leftVar]: String(outcome.left)
+  };
+}
+
+/**
+ * What the worker should do after one forEachLink pass.
+ *
+ * Every terminal condition is NAMED so the run log can say why the loop
+ * stopped instead of leaving a count mismatch to be reverse-engineered:
+ *  - "list_drained": the pass saw the whole remaining list (no cap overflow).
+ *    `left` is the real failures still sitting in the list, usually 0.
+ *  - "no_progress": a full pass succeeded on nothing while items remained
+ *    beyond the cap. The head of the list is stuck (cards whose page won't
+ *    take the update), and re-listing would hand back the same head forever.
+ *  - "pass_cap": the safety valve fired (maxPasses); a runaway list (or a
+ *    portal that re-lists updated cards after all) must not loop for hours.
+ */
+export type ForEachDecision =
+  | { kind: "fail_collect"; error: string }
+  | { kind: "fail_first_pass"; attempted: number; error: string }
+  | { kind: "continue"; progress: ForEachProgress }
+  | {
+      kind: "done";
+      passes: number;
+      updated: number;
+      left: number;
+      terminal: "list_drained" | "no_progress" | "pass_cap";
+    };
+
+/**
+ * Decide whether a chained sweep continues, finishes, or fails after a pass.
+ *
+ * Chaining exists because the whole loop must fit ONE HTTP response behind a
+ * ~100s Cloudflare Tunnel timeout, so the render service caps each pass (6 by
+ * default) and reports what it could not visit as `remaining`. Updated cards
+ * leave the portal's "Needs Action" list (verified live 2026-08-18 on Amy's
+ * Clever book), so re-running the same step gets the NEXT slice of the
+ * backlog; the worker defers between passes and re-enters the same step until
+ * nothing is left. Cards that fail keep their place in the list, which is why
+ * they are retried on later passes and why a pass with zero successes ends
+ * the loop instead of spinning on the same stuck head.
+ */
+export function decideForEach(
+  fe: ForEachSummary,
+  prior: ForEachProgress | null,
+  maxPasses: number
+): ForEachDecision {
+  const passes = (prior?.passes ?? 0) + 1;
+  const updated = (prior?.updated ?? 0) + fe.succeeded;
+  const left = fe.items - fe.succeeded;
+  if (fe.items === 0 && fe.errors.length > 0) {
+    return { kind: "fail_collect", error: fe.errors[0] };
+  }
+  if (fe.items === 0) {
+    return { kind: "done", passes, updated, left: 0, terminal: "list_drained" };
+  }
+  if (fe.succeeded === 0 && passes === 1) {
+    // Nothing was applied, so failing the run is retry-safe, and a selector
+    // or portal that broke for EVERY card must stay loud (today's semantics).
+    return { kind: "fail_first_pass", attempted: fe.items - fe.remaining, error: fe.errors[0] ?? "" };
+  }
+  if (fe.remaining === 0) {
+    return { kind: "done", passes, updated, left, terminal: "list_drained" };
+  }
+  if (fe.succeeded === 0) {
+    return { kind: "done", passes, updated, left, terminal: "no_progress" };
+  }
+  if (passes >= maxPasses) {
+    return { kind: "done", passes, updated, left, terminal: "pass_cap" };
+  }
+  return {
+    kind: "continue",
+    progress: { passes, updated, lastLeft: left }
+  };
 }

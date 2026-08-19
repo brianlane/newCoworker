@@ -44,6 +44,24 @@ POST /render
 
 200 -> { "finalUrl": "https://...", "text": "<innerText>", "html": "<html>",
          "screenshotBase64": "<base64 jpeg, only when requested>" }
+
+# forEachLink (loop the action sequence over every matching list row) answers
+# with a summary instead of a single page's counts. One request is ONE PASS,
+# capped at MAX_FOREACH_ITEMS (6) because the whole loop must fit in this one
+# response, behind the tunnel's ~100s 524.
+200 -> { "finalUrl": "...", "actionsCompleted": <n>, "text": "", "html": "",
+         "forEach": { "items": <matched before the cap>,
+                      "succeeded": <sequences that completed>,
+                      "failed": <nav/action failures PLUS the capped tail>,
+                      "remaining": <matched but never visited: the capped tail>,
+                      "errors": ["<per-item reason>", ...] } }
+# `remaining` is what makes multi-pass sweeps work: the worker sees a nonzero
+# value, defers the run, and re-enters the same browse step for the next
+# slice. That only drains a backlog when updated rows LEAVE the list being
+# matched (true of Clever's "Needs Action"); against a list that keeps showing
+# updated rows, pass 2 would redo pass 1 and the worker's no-progress /
+# pass-cap guards are what stop it. `remaining` stays counted inside `failed`
+# too, so a worker predating chaining still reports the truncation as misses.
 # Application-level failures also return 200 with an { error, detail } body so
 # the Cloudflare Tunnel can't strip them (it replaces any origin 5xx body with
 # its own "error code: 502" page). The worker classifies on the error code.
