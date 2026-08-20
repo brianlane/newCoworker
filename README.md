@@ -2003,6 +2003,61 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### An emailed prospect is Contacted, not a New Lead
+
+A cold-emailed prospect used to land on the Tasks board in **New Lead**, beside
+leads nobody had touched, while the Contacted column read zero. The board's
+stage names describe what has happened to a lead, so that was simply false.
+
+The platform advances leads on lifecycle moments (`LIFECYCLE_STAGE_TAGS`), and
+sending had none: the outreach flow files the contact, which fires `lead_filed`
+("New Lead"), and nothing moved it on until the prospect replied. `contacted`
+is the missing moment. It shares the "Contacted" tag with `claimed` on purpose,
+because the board asks whether anyone has touched this lead, not who did, but
+stays a separate EVENT because the two happen at different times from different
+code.
+
+**It cannot fire at the send, and that is the whole design.** The board is keyed
+on CONTACTS, and a cold-emailed prospect has none when the mail leaves: the
+outreach flow files them asynchronously about a minute later (measured on the
+HQ tenant, a send at 00:55:59 produced a contact at 00:57:02). Firing inside the
+send would tag nothing at all. So `reconcileContactedForBusiness` runs as a
+phase of the NEXT sweep pass, over everything emailed in the last
+`CONTACTED_RECONCILE_DAYS` (3), capped at `CONTACTED_RECONCILE_LIMIT` (100).
+
+`outreach_prospects.contacted_stage_at` is what lets the phase DRAIN, and it is
+not optional bookkeeping. Reading "recently emailed" alone is a window the phase
+cannot work through: a tenant near the 200/day cap has more prospects in the
+window than one pass may read, the same rows come back every pass, and
+everything behind them ages out still sitting in New Lead, which is the board
+lie the phase exists to fix. The column is stamped for every outcome EXCEPT
+"no contact yet", the one case that might still be the filing race, and even
+that is only retried while it plausibly IS one (`CONTACTED_RACE_GRACE_MS`, 30
+minutes against an observed 63-second race). Past the grace window "no contact"
+is an answer rather than a race: the tenant's outreach flow is off, or filing
+failed, or the number will not normalize. Those rows have to be stamped too, or
+they collect at the head of an oldest-first capped queue and starve every
+prospect behind them whose contact DOES exist, which is the same starvation the
+column was added to prevent, arriving by a different door.
+
+Three more properties make it safe to repeat: `applyLifecycleStage` is
+forward-only, so a prospect already at Contacted costs one read and no write and
+one who has replied is never dragged back; the stage must exist, so a tenant who
+renamed the column gets nothing rather than junk; and it BACKFILLS, which is what
+makes it a fix for sends that already happened rather than only for future ones.
+
+It runs before the auto-only gate, since a manual tenant sends with the Send
+button and their board deserves the same truth, and outside the window and cap,
+since reading and tagging is not sending. The WHOLE phase is wrapped, the list
+read included and not just the per-prospect move: it runs before the send, so
+anything that escapes stops the mail, and the query can throw exactly as the
+move can. Failures are recorded as notes. The board is cosmetic; the mail is the
+job.
+
+Only prospects with a PHONE reach the board at all. The CRM is phone-keyed, so
+one discovered with just an address files no contact and appears nowhere in
+Tasks. The Marketing page is the complete picture.
+
 ### Send all drafts, and why "all" respects the cap
 
 The owner does not always want to wait for tomorrow morning's window. **Send

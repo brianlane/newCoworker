@@ -92,6 +92,7 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     queued_at: null,
     sent_at: null,
     nudged_at: null,
+    contacted_stage_at: null,
     replied_at: null,
     created_at: "2026-07-27T14:00:00Z",
     updated_at: "2026-07-27T15:00:00Z",
@@ -157,6 +158,7 @@ function baseDeps(over: Record<string, unknown> = {}) {
       flowsMatched: 1
     })),
     recordEmailLogImpl: vi.fn(async () => {}),
+    fireLifecycleStageImpl: vi.fn(async () => "moved" as const),
     ...over
   } as never;
 }
@@ -179,6 +181,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     claimProspectNudge: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
     countProspectsNudgedSince: vi.fn(async () => 0),
+    listProspectsContactedSince: vi.fn(async () => []),
     listProspectsToRewrite: vi.fn(async () => []),
     countProspectsToRewrite: vi.fn(async () => 0),
     countProspectsByStatus: vi.fn(async () => 0),
@@ -2187,5 +2190,180 @@ describe("sendDraftsNow (the owner pressed Send all)", () => {
       reason: "not_configured",
       detail: "no postal address configured"
     });
+  });
+});
+
+describe("the Contacted stage (an emailed prospect is not a new lead)", () => {
+  it("moves everyone emailed recently, and does it on a LATER pass than the send", async () => {
+    // The board is keyed on contacts, and a cold-emailed prospect has none at
+    // the moment the mail leaves: the outreach flow files them about a minute
+    // afterwards. Measured on the live tenant: a send at 00:55:59 produced a
+    // contact at 00:57:02. Firing inside the send would tag nothing, and the
+    // flow would then file them as "New Lead", sitting beside leads nobody has
+    // touched while the Contacted column read zero.
+    const emailed = prospect({ id: "p-sent", phone: "(480) 999-5302" });
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [emailed])
+    });
+    const fireLifecycleStageImpl = vi.fn(async () => "moved" as const);
+    await processOutreachSweep(baseDeps({ fireLifecycleStageImpl }));
+    expect(fireLifecycleStageImpl).toHaveBeenCalledWith(
+      BIZ,
+      "(480) 999-5302",
+      "contacted",
+      { dedupeSuffix: "p-sent" }
+    );
+    // Bounded and recent: this runs every pass, so it must never be a scan.
+    const call = (ledger.listProspectsContactedSince as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[1] < MONDAY_MORNING.toISOString()).toBe(true);
+    expect(typeof call[2]).toBe("number");
+  });
+
+  it("runs for a manual tenant too, and outside the send window", async () => {
+    // A manual tenant sends with the Send button, so their board deserves the
+    // same truth. Reading and tagging is not sending, so neither the window nor
+    // the cap has any claim on it.
+    const fireLifecycleStageImpl = vi.fn(async () => "moved" as const);
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ phone: "+14809995302" })])
+    });
+    await processOutreachSweep(baseDeps({ fireLifecycleStageImpl, now: () => MONDAY_AFTERNOON }));
+    expect(fireLifecycleStageImpl).toHaveBeenCalledWith(
+      BIZ,
+      "+14809995302",
+      "contacted",
+      expect.anything()
+    );
+  });
+
+  it("stamps what it handled, so the queue drains instead of re-reading the same rows", async () => {
+    // Without the marker this phase can only read "recently emailed", which is
+    // a window it cannot work through: a tenant near the 200/day ceiling has
+    // more prospects in the window than one pass may read, the same rows come
+    // back every pass, and everything behind them ages out still in New Lead.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-done" })])
+    });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-done",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("leaves a genuinely racing prospect unstamped, so a later pass retries it", async () => {
+    // The contact does not exist YET: the outreach flow files it about a minute
+    // after the send. Stamping that would abandon the prospect in New Lead for
+    // good, which is the exact bug this phase exists to fix.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [
+        prospect({ id: "p-early", sent_at: new Date(MONDAY_MORNING.getTime() - 60_000).toISOString() })
+      ])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a contact that is never coming, so it cannot starve the queue", async () => {
+    // Past the grace window "no contact" is an answer, not a race: the tenant's
+    // outreach flow is off, or filing failed, or the number will not normalize.
+    // Left unstamped forever those rows collect at the head of an oldest-first
+    // capped queue and starve every prospect behind them whose contact DOES
+    // exist, until those age out of the window still in New Lead.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [
+        prospect({
+          id: "p-hopeless",
+          sent_at: new Date(MONDAY_MORNING.getTime() - 2 * 60 * 60 * 1000).toISOString()
+        })
+      ])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-hopeless",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("stops waiting on a prospect with no send stamp at all", async () => {
+    // Defensive: a row in this queue always has sent_at, but a null one must
+    // read as "long past the race" rather than sitting in it forever.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-nostamp", sent_at: null })])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-nostamp",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("never lets the list read stop the mail either", async () => {
+    // The per-prospect catch does not cover this one: the query runs before the
+    // loop, and the phase runs before the send.
+    stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect()] : []
+      ),
+      listProspectsContactedSince: vi.fn(async () => {
+        throw new Error("read exploded");
+      })
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.errors).toEqual([]);
+    expect(result.sent).toBe(1);
+    expect(result.notes).toContainEqual({
+      businessId: BIZ,
+      note: "could not move emailed prospects to Contacted: read exploded"
+    });
+  });
+
+  it("never lets an unmovable board stop the mail", async () => {
+    // The sweep's job is sending. A stage that will not move is a cosmetic
+    // problem and must not become an outage.
+    // A sendable queue, so the assertion that the mail still went out is real.
+    // However it failed: a thrown string is not an Error, and reading .message
+    // off one would record "undefined" as the reason.
+    for (const thrown of [new Error("board exploded"), "board exploded"]) {
+      stubLedger({
+        listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+          statuses.includes("drafted") ? [prospect()] : []
+        ),
+        listProspectsContactedSince: vi.fn(async () => [prospect()])
+      });
+      const result = await processOutreachSweep(
+        baseDeps({
+          fireLifecycleStageImpl: vi.fn(async () => {
+            throw thrown;
+          })
+        })
+      );
+      // Recorded, not swallowed, and the pass carried on: this phase runs
+      // BEFORE the send, so an exception escaping it would stop the mail.
+      expect(result.errors).toEqual([]);
+      expect(result.notes).toContainEqual({
+        businessId: BIZ,
+        note: "could not move emailed prospects to Contacted: board exploded"
+      });
+      expect(result.sent).toBe(1);
+    }
   });
 });

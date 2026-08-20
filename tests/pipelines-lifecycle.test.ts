@@ -32,22 +32,34 @@ describe("shared tag caps stay in lockstep with the platform ruleset", () => {
 });
 
 describe("LIFECYCLE_STAGE_TAGS", () => {
-  it("is the default board minus Won, in board order", () => {
-    // Won is a human judgement the board move endpoint owns; the platform
-    // must never write it.
+  it("writes only default-board stages, and never Won", () => {
+    // Won is a human judgement the board move endpoint owns; the platform must
+    // never write it. Compared as a SET rather than a list, because moments and
+    // stages are no longer one-to-one: `claimed` and `contacted` both mean the
+    // lead has been reached and both write "Contacted".
     const defaults = DEFAULT_PIPELINE.stages.map((s) => s.name);
-    expect(Object.values(LIFECYCLE_STAGE_TAGS)).toEqual(defaults.slice(0, -1));
+    const written = [...new Set(Object.values(LIFECYCLE_STAGE_TAGS))];
+    expect([...written].sort()).toEqual([...defaults.slice(0, -1)].sort());
     expect(defaults.at(-1)).toBe("Won");
-    expect(Object.values(LIFECYCLE_STAGE_TAGS)).not.toContain("Won");
+    expect(written).not.toContain("Won");
+    // Every stage a moment writes has to be a real column on the default board,
+    // since a stage IS a tag and an invented one is junk that still burns a slot.
+    for (const tag of written) expect(defaults).toContain(tag);
   });
 
-  it("covers the four lifecycle moments", () => {
+  it("covers the five lifecycle moments", () => {
     expect(Object.keys(LIFECYCLE_STAGE_TAGS)).toEqual([
       "lead_filed",
       "claimed",
+      // We emailed them. A separate moment from `claimed` because it happens at
+      // a different time from different code (the prospecting sweep, not a
+      // teammate taking ownership), but the same stage: the board asks whether
+      // anyone has touched this lead, not who did.
+      "contacted",
       "replied",
       "booked"
     ]);
+    expect(LIFECYCLE_STAGE_TAGS.contacted).toBe(LIFECYCLE_STAGE_TAGS.claimed);
   });
 });
 
