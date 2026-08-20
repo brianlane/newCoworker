@@ -142,6 +142,31 @@ export function dealStatusStamps(
 }
 
 /**
+ * Set ONE deal's status inside a board list, leaving every other row as it
+ * stands (same object, so React skips re-rendering the untouched cards).
+ *
+ * Board writes have to be per deal rather than per snapshot. Two drags can
+ * overlap, and a failed PATCH that restored a whole-array snapshot would
+ * silently undo a DIFFERENT deal's move that had already succeeded on the
+ * server: the board would then show a stale column for a deal nobody touched,
+ * until a reload. So the optimistic move and its rollback both go through
+ * here, inside a functional state update.
+ *
+ * Returns the list unchanged (by reference) when the id is absent or already
+ * carries `status`, so a late rollback for a deal that has since been removed
+ * cannot resurrect it.
+ */
+export function applyDealStatusToList<T extends { id: string; status: DealStatus }>(
+  deals: T[] | null,
+  dealId: string,
+  status: DealStatus
+): T[] | null {
+  if (!deals) return deals;
+  if (!deals.some((d) => d.id === dealId && d.status !== status)) return deals;
+  return deals.map((d) => (d.id === dealId ? { ...d, status } : d));
+}
+
+/**
  * "$12,500" / "$1,234.56" for the board cards and analytics. Whole-dollar
  * values drop the cents. Null in, null out (an unsized deal shows nothing,
  * not $0). Unknown currency codes fall back to a plain "1234.56 XXX" so a

@@ -23,6 +23,7 @@ import { Card } from "@/components/ui/Card";
 import {
   DEAL_STATUSES,
   MAX_DEAL_TITLE_LENGTH,
+  applyDealStatusToList,
   formatCommissionBps,
   formatDealValue,
   type Deal,
@@ -126,10 +127,13 @@ export function DealsBoard({
       const deal = deals.find((d) => d.id === dealId);
       if (!deal || deal.status === status) return;
       setMoveError(null);
-      const previous = deals;
+      const previousStatus = deal.status;
       // Optimistic move; the server response carries the authoritative
       // stamps (won_at/lost_at) so a reload isn't needed on success.
-      setDeals(deals.map((d) => (d.id === dealId ? { ...d, status } : d)));
+      // Per DEAL, never a whole-array snapshot: a second drag can land while
+      // this PATCH is in flight, and both this write and the rollback below
+      // must leave that other deal alone.
+      setDeals((ds) => applyDealStatusToList(ds, dealId, status));
       try {
         const data = await fetch(
           `/api/dashboard/deals/${encodeURIComponent(dealId)}?businessId=${encodeURIComponent(businessId)}`,
@@ -149,7 +153,7 @@ export function DealsBoard({
             : ds
         );
       } catch (e) {
-        setDeals(previous);
+        setDeals((ds) => applyDealStatusToList(ds, dealId, previousStatus));
         setMoveError(e instanceof Error ? e.message : t("moveFailed"));
       }
     },

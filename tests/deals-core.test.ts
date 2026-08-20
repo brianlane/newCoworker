@@ -4,6 +4,7 @@ import {
   MAX_DEAL_COMMISSION_BPS,
   MAX_DEAL_TITLE_LENGTH,
   MAX_DEAL_VALUE_CENTS,
+  applyDealStatusToList,
   canTransitionDealStatus,
   commissionValueCents,
   dealCreateSchema,
@@ -154,5 +155,46 @@ describe("commissionValueCents", () => {
     expect(commissionValueCents(333333, 250)).toBe(8333);
     expect(commissionValueCents(null, 250)).toBeNull();
     expect(commissionValueCents(45000000, null)).toBeNull();
+  });
+});
+
+describe("applyDealStatusToList", () => {
+  const board = (): { id: string; status: DealStatus; title: string }[] => [
+    { id: "a", status: "open", title: "A" },
+    { id: "b", status: "open", title: "B" }
+  ];
+
+  it("moves only the named deal and leaves the others by reference", () => {
+    const before = board();
+    const after = applyDealStatusToList(before, "a", "won");
+    expect(after?.map((d) => [d.id, d.status])).toEqual([
+      ["a", "won"],
+      ["b", "open"]
+    ]);
+    // The untouched card keeps its identity, so React skips re-rendering it.
+    expect(after?.[1]).toBe(before[1]);
+  });
+
+  it("a failed drag's rollback cannot undo another deal's finished move", () => {
+    // The Bugbot case: drag A, drag B, B's PATCH lands first, then A's fails.
+    // Rolling A back must not restore a snapshot that still shows B as open.
+    let list: ReturnType<typeof board> | null = board();
+    list = applyDealStatusToList(list, "a", "won"); // optimistic A
+    list = applyDealStatusToList(list, "b", "lost"); // optimistic B
+    list = applyDealStatusToList(list, "a", "open"); // A's rollback
+    expect(list?.map((d) => [d.id, d.status])).toEqual([
+      ["a", "open"],
+      ["b", "lost"]
+    ]);
+  });
+
+  it("returns the same list when the deal is missing or already there", () => {
+    const before = board();
+    expect(applyDealStatusToList(before, "zz", "won")).toBe(before);
+    expect(applyDealStatusToList(before, "a", "open")).toBe(before);
+  });
+
+  it("passes a null list through, so a late rollback cannot resurrect a board", () => {
+    expect(applyDealStatusToList(null, "a", "won")).toBeNull();
   });
 });
