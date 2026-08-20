@@ -50,6 +50,17 @@
  * un-limited selects at 1000 rows); a capped touch scan can lose the OLDEST
  * touches and overcount no-touch claims, so the caps sit far above current
  * tenant volumes.
+ *
+ * Residency: EVERY table the touch check reads is a residency-moved table
+ * (`voice_call_transcripts`, `contacts`, `sms_outbound_log`, `email_log`),
+ * so for a `vps`-mode tenant the authoritative copies live on that tenant's
+ * own box and each read routes through the residency layer. Reading them
+ * centrally returned nothing for exactly those tenants, and an empty touch
+ * scan reads as "nobody followed up", so the card accused teammates who had
+ * done the work. `ai_flow_runs` (the engine table the claims themselves come
+ * from) stays central in every mode. A box that is unreachable raises
+ * ResidencyReadError rather than falling back, which the analytics page
+ * turns into a hidden card: no number beats a wrong one.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -57,6 +68,7 @@ import {
   ANALYTICS_CALL_SCAN_LIMIT,
   fetchTranscriptRows
 } from "@/lib/analytics/dashboard-analytics";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { listTeamMembers } from "@/lib/db/employees";
 import { taskLeadPhone } from "@/lib/ai-flows/tasks";
 import { routingOfContext } from "../../../supabase/functions/_shared/ai_flows/routing";
@@ -281,6 +293,12 @@ export async function getEmployeePerformance(
  * window's outbound SMS / email logs, then checks each claim's 48h window;
  * forwarded-call touches ride in from the transcript scan the caller
  * already ran.
+ *
+ * All three tables are residency-moved, so every read below picks the box
+ * or central exactly as the transcript scan does (see the module doc).
+ * Neither path filters `deleted_at`: a soft-deleted text or email still
+ * HAPPENED, and counting it keeps the metric from accusing a teammate whose
+ * outreach was hidden after the fact. Both paths behave identically there.
  */
 async function countClaimsWithNoTouch(
   db: SupabaseClient,
@@ -305,27 +323,52 @@ async function countClaimsWithNoTouch(
     .slice(0, CLAIM_TOUCH_LEAD_LIMIT);
   if (due.length === 0) return counts;
 
+  // Which side of the residency split this tenant reads from. Resolved once
+  // and reused by all three lookups (the mode itself is cached for 30s, so
+  // the extra call the transcript scan already made costs nothing).
+  const vpsReadMode = await isVpsReadMode(businessId, db);
+
   const leadPhones = [...new Set(due.map((c) => c.leadPhone))];
   type ContactRow = {
     customer_e164: string;
     alias_e164s: string[] | null;
     email: string | null;
   };
-  // E.164 values are strictly `+digits`, so they are safe inside the
-  // PostgREST filter string (the tasks route builds the same lookup).
-  // `ov` = array overlap on alias_e164s: a claimed run can be keyed on a
-  // merged-away number whose surviving contact holds the email.
-  const list = leadPhones.join(",");
-  const contactsRes = await db
-    .from("contacts")
-    .select("customer_e164, alias_e164s, email")
-    .eq("business_id", businessId)
-    .or(`customer_e164.in.(${list}),alias_e164s.ov.{${list}}`)
-    .limit(CLAIM_TOUCH_LEAD_LIMIT);
-  if (contactsRes.error) {
-    throw new Error(`getEmployeePerformance contacts: ${contactsRes.error.message}`);
-  }
-  const contacts = ((contactsRes.data as ContactRow[] | null) ?? []);
+  const fetchContacts = async (): Promise<ContactRow[]> => {
+    if (vpsReadMode) {
+      // The box filter grammar is AND-only and has no array-overlap op
+      // (src/lib/residency/contract.ts), so the central "primary OR alias"
+      // lookup below cannot be expressed in one call. Matching the PRIMARY
+      // number covers the normal case, and each row it returns carries its
+      // own aliases and email, so a second lead phone that is an alias of
+      // the SAME contact still resolves in the loop underneath.
+      return await readMovedRows<ContactRow>(businessId, {
+        table: "contacts",
+        columns: ["customer_e164", "alias_e164s", "email"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "customer_e164", op: "in", value: leadPhones }
+        ],
+        limit: CLAIM_TOUCH_LEAD_LIMIT
+      });
+    }
+    // E.164 values are strictly `+digits`, so they are safe inside the
+    // PostgREST filter string (the tasks route builds the same lookup).
+    // `ov` = array overlap on alias_e164s: a claimed run can be keyed on a
+    // merged-away number whose surviving contact holds the email.
+    const list = leadPhones.join(",");
+    const contactsRes = await db
+      .from("contacts")
+      .select("customer_e164, alias_e164s, email")
+      .eq("business_id", businessId)
+      .or(`customer_e164.in.(${list}),alias_e164s.ov.{${list}}`)
+      .limit(CLAIM_TOUCH_LEAD_LIMIT);
+    if (contactsRes.error) {
+      throw new Error(`getEmployeePerformance contacts: ${contactsRes.error.message}`);
+    }
+    return (contactsRes.data as ContactRow[] | null) ?? [];
+  };
+  const contacts = await fetchContacts();
 
   // Identity per claimed lead phone: the contact's primary + aliases and its
   // email when a contact row exists, else just the phone itself.
@@ -334,6 +377,20 @@ async function countClaimsWithNoTouch(
     const contact = contacts.find(
       (c) => c.customer_e164 === phone || (c.alias_e164s ?? []).includes(phone)
     );
+    if (!contact && vpsReadMode) {
+      // No match on the box path is AMBIGUOUS: either this lead has no
+      // contact row at all, or it is a merged-away ALIAS whose surviving
+      // contact (holding the email and the sibling numbers an outreach may
+      // have gone to) the alias-less filter could not fetch. Judging it on
+      // the bare phone could call a teammate out for a lead they emailed,
+      // so the claim goes UNJUDGED instead of counted. Undercounting is the
+      // bias this metric already takes everywhere (the grace filter, the
+      // evaluation cap, the legacy window opening at run start); a false
+      // accusation is not. The complete alternative, paging the tenant's
+      // entire contacts table on every dashboard render to match aliases in
+      // JS the way the erasure path does, is an unbounded per-render cost.
+      continue;
+    }
     const numbers = new Set<string>([phone]);
     const emails = new Set<string>();
     if (contact) {
@@ -343,6 +400,10 @@ async function countClaimsWithNoTouch(
     }
     identities.set(phone, { numbers, emails });
   }
+  // Every identity contributes at least its own phone, so an empty map means
+  // nothing is judgeable, and it also keeps an empty `in` list (which the
+  // box rejects as an invalid request) out of the SMS scan below.
+  if (identities.size === 0) return counts;
 
   const allNumbers = [...new Set([...identities.values()].flatMap((i) => [...i.numbers]))];
   const allEmails = new Set([...identities.values()].flatMap((i) => [...i.emails]));
@@ -351,19 +412,35 @@ async function countClaimsWithNoTouch(
   // Claims (and therefore their touch windows) start inside the window, so
   // the window's log covers every judgeable touch.
   type SmsRow = { to_e164: string; created_at: string };
-  const smsRes = await db
-    .from("sms_outbound_log")
-    .select("to_e164, created_at")
-    .eq("business_id", businessId)
-    .in("to_e164", allNumbers)
-    .gte("created_at", args.cutoffIso)
-    .order("created_at", { ascending: false })
-    .limit(TOUCH_SCAN_LIMIT);
-  if (smsRes.error) {
-    throw new Error(`getEmployeePerformance sms touches: ${smsRes.error.message}`);
-  }
+  const fetchSmsRows = async (): Promise<SmsRow[]> => {
+    if (vpsReadMode) {
+      return await readMovedRows<SmsRow>(businessId, {
+        table: "sms_outbound_log",
+        columns: ["to_e164", "created_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_e164", op: "in", value: allNumbers },
+          { column: "created_at", op: "gte", value: args.cutoffIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: TOUCH_SCAN_LIMIT
+      });
+    }
+    const smsRes = await db
+      .from("sms_outbound_log")
+      .select("to_e164, created_at")
+      .eq("business_id", businessId)
+      .in("to_e164", allNumbers)
+      .gte("created_at", args.cutoffIso)
+      .order("created_at", { ascending: false })
+      .limit(TOUCH_SCAN_LIMIT);
+    if (smsRes.error) {
+      throw new Error(`getEmployeePerformance sms touches: ${smsRes.error.message}`);
+    }
+    return (smsRes.data as SmsRow[] | null) ?? [];
+  };
   const smsTouches = new Map<string, number[]>();
-  for (const row of ((smsRes.data as SmsRow[] | null) ?? [])) {
+  for (const row of await fetchSmsRows()) {
     const at = Date.parse(row.created_at);
     if (!Number.isFinite(at)) continue;
     const listForNumber = smsTouches.get(row.to_e164) ?? [];
@@ -375,8 +452,21 @@ async function countClaimsWithNoTouch(
   // server-side: to_email is stored as typed, and a case-mismatched filter
   // would silently miss real touches.
   const emailTouches = new Map<string, number[]>();
-  if (allEmails.size > 0) {
-    type EmailRow = { to_email: string | null; created_at: string };
+  type EmailRow = { to_email: string | null; created_at: string };
+  const fetchEmailRows = async (): Promise<EmailRow[]> => {
+    if (vpsReadMode) {
+      return await readMovedRows<EmailRow>(businessId, {
+        table: "email_log",
+        columns: ["to_email", "created_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "direction", op: "eq", value: "outbound" },
+          { column: "created_at", op: "gte", value: args.cutoffIso }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: TOUCH_SCAN_LIMIT
+      });
+    }
     const emailRes = await db
       .from("email_log")
       .select("to_email, created_at")
@@ -388,7 +478,10 @@ async function countClaimsWithNoTouch(
     if (emailRes.error) {
       throw new Error(`getEmployeePerformance email touches: ${emailRes.error.message}`);
     }
-    for (const row of ((emailRes.data as EmailRow[] | null) ?? [])) {
+    return (emailRes.data as EmailRow[] | null) ?? [];
+  };
+  if (allEmails.size > 0) {
+    for (const row of await fetchEmailRows()) {
       const to = row.to_email?.trim().toLowerCase();
       const at = Date.parse(row.created_at);
       if (!to || !allEmails.has(to) || !Number.isFinite(at)) continue;
@@ -402,7 +495,10 @@ async function countClaimsWithNoTouch(
     (times ?? []).some((t) => t > from && t <= until);
 
   for (const claim of due) {
-    const identity = identities.get(claim.leadPhone)!;
+    const identity = identities.get(claim.leadPhone);
+    // Missing only for a lead the box path could not resolve to a contact
+    // (see the identity loop): unjudgeable, so it counts against nobody.
+    if (!identity) continue;
     const until = claim.claimMs + CLAIM_TOUCH_WINDOW_MS;
     let touched = false;
     for (const number of identity.numbers) {

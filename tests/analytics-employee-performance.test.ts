@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Pin CENTRAL residency mode (the transcript scan's VPS branch is covered by
-// tests/residency-read-flip.test.ts).
+// Pin CENTRAL residency mode. The VPS branch of every read this module makes
+// (transcripts, and the contacts / SMS / email touch scans behind
+// claimedNoTouch48h) is covered by tests/residency-read-flip.test.ts.
 vi.mock("@/lib/residency/read", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/residency/read")>();
   return { ...actual, isVpsReadMode: vi.fn(async () => false) };

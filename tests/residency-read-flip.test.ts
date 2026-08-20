@@ -20,6 +20,13 @@ vi.mock("@/lib/supabase/server", () => ({
   })
 }));
 
+// The roster behind the team-performance card; `employees` is a CENTRAL
+// table, stubbed here so each case can name its own teammate.
+vi.mock("@/lib/db/employees", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/employees")>();
+  return { ...actual, listTeamMembers: vi.fn(async () => []) };
+});
+
 import {
   countMovedRows,
   isVpsReadMode,
@@ -44,6 +51,8 @@ import {
   getInboundCallStats,
   getSentimentCallsDetail
 } from "@/lib/analytics/dashboard-analytics";
+import { getEmployeePerformance } from "@/lib/analytics/employee-performance";
+import { listTeamMembers } from "@/lib/db/employees";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -346,7 +355,11 @@ describe("analytics vps reads", () => {
   function analyticsCentralDb(resultsByTable: Record<string, unknown> = {}) {
     const builder = (table: string) => {
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit"]) {
+      // `or` / `in` are here so a read that WRONGLY goes central still
+      // resolves to an empty result set instead of crashing on a missing
+      // method: that is what makes the employee-performance cases below
+      // fail with the false accusation they are guarding against.
+      for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit", "or", "in"]) {
         chain[m] = vi.fn(() => chain);
       }
       chain.maybeSingle = vi.fn(async () => ({
@@ -523,6 +536,171 @@ describe("analytics vps reads", () => {
     });
     expect(detail.calls.map((c) => c.id)).toEqual(["match"]);
     expect(detail.turnedAway).toBe(0);
+  });
+
+  /**
+   * The team card's "no touch in 48h" column accuses a NAMED teammate, so
+   * every table it consults has to come from the same place the claim's
+   * transcripts do. contacts, sms_outbound_log and email_log are all moved
+   * tables: reading them centrally for a vps tenant returned nothing, and an
+   * empty touch scan reads as "nobody followed up".
+   */
+  describe("employee performance vps reads", () => {
+    const DAVE = "+16025550001";
+    const LEAD = "+16025559999";
+    /** now - 30 days, the window every touch scan is bounded by. */
+    const CUTOFF = "2026-06-04T12:00:00.000Z";
+    /** Claimed at run start, so the 48h grace closed on 2026-07-03. */
+    const CLAIM_MS = Date.parse("2026-07-01T00:00:00Z");
+
+    function roster() {
+      vi.mocked(listTeamMembers).mockResolvedValue([
+        {
+          id: "m-dave",
+          business_id: BIZ,
+          name: "Dave",
+          phone_e164: DAVE,
+          email: null,
+          active: true,
+          last_offered_at: null,
+          weekly_schedule: null,
+          preferred_windows: null,
+          created_at: "2026-01-01T00:00:00Z"
+        }
+      ] as never);
+    }
+
+    /** One elapsed-grace claim by Dave on `leadPhone`. */
+    function claimRun(leadPhone: string) {
+      return {
+        context: {
+          routing: { offered_log: [DAVE], claimed_by: DAVE, claimed_at_ms: CLAIM_MS },
+          vars: { lead_phone: leadPhone }
+        },
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:05:00Z"
+      };
+    }
+
+    function runsDb(...runs: unknown[]) {
+      return analyticsCentralDb({ ai_flow_runs: { data: runs, error: null } });
+    }
+
+    /** The box request for one moved table, or undefined if never read. */
+    function movedRequest(table: string) {
+      return vi
+        .mocked(readMovedRows)
+        .mock.calls.find((c) => (c[1] as { table: string }).table === table)?.[1];
+    }
+
+    beforeEach(() => {
+      roster();
+    });
+
+    it("sees a box-side text, so the claim is not counted as untouched", async () => {
+      dispatchMovedRows({
+        contacts: [{ customer_e164: LEAD, alias_e164s: [], email: "lead@example.com" }],
+        sms_outbound_log: [{ to_e164: LEAD, created_at: "2026-07-01T01:00:00Z" }]
+      });
+      const rows = await getEmployeePerformance(BIZ, { client: runsDb(claimRun(LEAD)), now: NOW });
+      expect(rows[0]).toMatchObject({ claimed: 1, claimedNoTouch48h: 0 });
+
+      // Contacts: primary-number match only, the box filter grammar has no
+      // array-overlap op for the central alias leg.
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: ["customer_e164", "alias_e164s", "email"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "customer_e164", op: "in", value: [LEAD] }
+        ],
+        limit: 200
+      });
+      expect(movedRequest("sms_outbound_log")).toEqual({
+        table: "sms_outbound_log",
+        columns: ["to_e164", "created_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "to_e164", op: "in", value: [LEAD] },
+          { column: "created_at", op: "gte", value: CUTOFF }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: 2000
+      });
+      expect(movedRequest("email_log")).toEqual({
+        table: "email_log",
+        columns: ["to_email", "created_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "direction", op: "eq", value: "outbound" },
+          { column: "created_at", op: "gte", value: CUTOFF }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: 2000
+      });
+    });
+
+    it("sees a box-side email touch, matched case-insensitively", async () => {
+      dispatchMovedRows({
+        contacts: [{ customer_e164: LEAD, alias_e164s: null, email: "Lead@Example.com" }],
+        email_log: [{ to_email: "LEAD@example.com  ", created_at: "2026-07-02T09:00:00Z" }]
+      });
+      const rows = await getEmployeePerformance(BIZ, { client: runsDb(claimRun(LEAD)), now: NOW });
+      expect(rows[0]).toMatchObject({ claimedNoTouch48h: 0 });
+    });
+
+    it("sees a box-side forwarded call as a touch", async () => {
+      dispatchMovedRows({
+        voice_call_transcripts: [
+          { forwarded_to_e164: DAVE, caller_e164: LEAD, started_at: "2026-07-01T02:00:00Z" }
+        ],
+        contacts: [{ customer_e164: LEAD, alias_e164s: [], email: null }]
+      });
+      const rows = await getEmployeePerformance(BIZ, { client: runsDb(claimRun(LEAD)), now: NOW });
+      expect(rows[0]).toMatchObject({ forwardedCalls: 1, claimedNoTouch48h: 0 });
+      // No contact email, so the email scan is skipped entirely.
+      expect(movedRequest("email_log")).toBeUndefined();
+    });
+
+    it("still counts a real no-touch claim on the box path", async () => {
+      dispatchMovedRows({
+        contacts: [{ customer_e164: LEAD, alias_e164s: [], email: "lead@example.com" }],
+        sms_outbound_log: [
+          // Same lead, but three days after the grace window closed.
+          { to_e164: LEAD, created_at: "2026-07-04T09:00:00Z" }
+        ]
+      });
+      const rows = await getEmployeePerformance(BIZ, { client: runsDb(claimRun(LEAD)), now: NOW });
+      expect(rows[0]).toMatchObject({ claimedNoTouch48h: 1 });
+    });
+
+    it("leaves a lead the box cannot resolve to a contact unjudged", async () => {
+      // An unmatched phone on the box path could be a merged-away alias
+      // whose surviving contact holds the email that WAS written, so the
+      // claim is skipped rather than counted. With nothing judgeable left,
+      // the touch scans never run (an empty `in` list is a box error).
+      dispatchMovedRows({ contacts: [] });
+      const rows = await getEmployeePerformance(BIZ, { client: runsDb(claimRun(LEAD)), now: NOW });
+      expect(rows[0]).toMatchObject({ claimed: 1, claimedNoTouch48h: 0 });
+      expect(movedRequest("sms_outbound_log")).toBeUndefined();
+      expect(movedRequest("email_log")).toBeUndefined();
+    });
+
+    it("judges the resolvable lead and skips the unresolvable one", async () => {
+      const OTHER = "+16025558888";
+      dispatchMovedRows({
+        contacts: [{ customer_e164: LEAD, alias_e164s: [], email: null }]
+      });
+      const rows = await getEmployeePerformance(BIZ, {
+        client: runsDb(claimRun(LEAD), claimRun(OTHER)),
+        now: NOW
+      });
+      // Two claims, only the resolved one is judged, and it is untouched.
+      expect(rows[0]).toMatchObject({ claimed: 2, claimedNoTouch48h: 1 });
+      expect(movedRequest("sms_outbound_log")).toMatchObject({
+        filters: expect.arrayContaining([{ column: "to_e164", op: "in", value: [LEAD] }])
+      });
+    });
   });
 });
 
