@@ -113,13 +113,22 @@ export function BrowseActionDemoPanel({
 
   const live = demoId !== null && !gone;
   /**
-   * The cap that stops further acts belongs to the SESSION, not the
-   * recording: the sidecar counts what it actually performed on the site, and
-   * removing a row from the recording cannot un-perform a click. Reading the
-   * local list here would tell an owner they had room, then hand them
-   * `action_cap` on the next click with no way out but starting over.
+   * TWO limits, and the higher one wins, because they diverge in both
+   * directions:
+   *
+   *  - The SESSION's executed count. The sidecar counts what it actually
+   *    performed, and removing a row cannot un-perform a click, so reading
+   *    the local list alone would promise room and then hand the owner
+   *    `action_cap` with no way out but abandoning the session.
+   *  - The RECORDING's length. That is what gets SAVED, and a step holds at
+   *    most MAX_DEMO_ACTIONS, so a recording kept across a restarted session
+   *    (whose fresh counter starts at zero) must not grow past the schema's
+   *    cap into something that cannot be saved at all.
+   *
+   * `start` resets the executed counter, so a stale one from a dead session
+   * cannot block the restart the owner was just invited to make.
    */
-  const atCap = executedCount >= MAX_DEMO_ACTIONS;
+  const atCap = Math.max(recorded.length, executedCount) >= MAX_DEMO_ACTIONS;
 
   const reset = () => {
     setDemoId(null);
@@ -140,6 +149,11 @@ export function BrowseActionDemoPanel({
     setNotice(null);
     setGone(false);
     setPendingConfirm(null);
+    // A new session has performed nothing yet, so its budget is genuinely
+    // fresh. Carrying a dead session's count forward would block the restart
+    // the owner was just invited to make. The recording is deliberately KEPT
+    // across a restart, and `atCap` still counts it.
+    setExecutedCount(0);
     try {
       const res = await fetch("/api/aiflows/demo/start", {
         method: "POST",
