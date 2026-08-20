@@ -2031,9 +2031,14 @@ cannot work through: a tenant near the 200/day cap has more prospects in the
 window than one pass may read, the same rows come back every pass, and
 everything behind them ages out still sitting in New Lead, which is the board
 lie the phase exists to fix. The column is stamped for every outcome EXCEPT
-"no contact yet", the one case that is a race rather than an answer, so a
-prospect whose contact the flow has not filed yet is retried next pass while
-everything settled stops being read at all.
+"no contact yet", the one case that might still be the filing race, and even
+that is only retried while it plausibly IS one (`CONTACTED_RACE_GRACE_MS`, 30
+minutes against an observed 63-second race). Past the grace window "no contact"
+is an answer rather than a race: the tenant's outreach flow is off, or filing
+failed, or the number will not normalize. Those rows have to be stamped too, or
+they collect at the head of an oldest-first capped queue and starve every
+prospect behind them whose contact DOES exist, which is the same starvation the
+column was added to prevent, arriving by a different door.
 
 Three more properties make it safe to repeat: `applyLifecycleStage` is
 forward-only, so a prospect already at Contacted costs one read and no write and

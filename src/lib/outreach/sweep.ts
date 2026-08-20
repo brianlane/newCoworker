@@ -518,6 +518,18 @@ const CONTACTED_RECONCILE_DAYS = 3;
 const CONTACTED_RECONCILE_LIMIT = 100;
 
 /**
+ * How long a prospect may have no contact row before we stop waiting for one.
+ *
+ * The filing race is about a minute (a 00:55:59 send produced a 00:57:02
+ * contact), so half an hour is generous. Past it, "no contact" is not a race,
+ * it is an answer: the tenant's outreach flow is off, or filing failed, or the
+ * number will not normalize. Those rows must still be stamped, or they collect
+ * at the head of an oldest-first, capped queue and starve every prospect behind
+ * them, whose contacts DO exist, until those age out of the window in New Lead.
+ */
+const CONTACTED_RACE_GRACE_MS = 30 * 60 * 1000;
+
+/**
  * Move emailed prospects to the Contacted stage on the owner's board.
  *
  * Why this is a separate phase and not part of the send. The board is keyed on
@@ -562,13 +574,20 @@ async function reconcileContactedForBusiness(
         "contacted",
         { dedupeSuffix: prospect.id }
       );
-      // Stamped for everything EXCEPT "no contact yet". That one case is the
-      // race this phase exists for: the outreach flow files the contact about a
-      // minute after the send, so leaving it null retries on the next pass.
-      // Every other outcome is final (moved, already past it, no such stage,
-      // a teammate, the feature switched off) and stamping it keeps the row
-      // out of a queue it would otherwise clog.
-      if (outcome === "no_contact") continue;
+      // Every outcome except "no contact" is final (moved, already past it, no
+      // such stage, a teammate, the feature switched off), so stamping keeps
+      // the row out of a queue it would otherwise clog.
+      //
+      // "No contact" is the one that might still be the filing race, and it is
+      // only retried while it plausibly IS one. Left null forever it would be
+      // worse than not stamping at all: a tenant with their outreach flow off
+      // never files ANY contact, so every one of their sends would pile up at
+      // the head of an oldest-first capped queue and starve the prospects
+      // behind them whose contacts do exist.
+      const stillRacing =
+        outcome === "no_contact" &&
+        (prospect.sent_at ?? "") > new Date(r.now.getTime() - CONTACTED_RACE_GRACE_MS).toISOString();
+      if (stillRacing) continue;
       await patchProspect(
         settings.business_id,
         prospect.id,

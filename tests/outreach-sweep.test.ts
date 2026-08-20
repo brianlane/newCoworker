@@ -2256,18 +2256,64 @@ describe("the Contacted stage (an emailed prospect is not a new lead)", () => {
     );
   });
 
-  it("leaves the one racing case unstamped, so a later pass retries it", async () => {
+  it("leaves a genuinely racing prospect unstamped, so a later pass retries it", async () => {
     // The contact does not exist YET: the outreach flow files it about a minute
     // after the send. Stamping that would abandon the prospect in New Lead for
     // good, which is the exact bug this phase exists to fix.
     const ledger = stubLedger({
       listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
-      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-early" })])
+      listProspectsContactedSince: vi.fn(async () => [
+        prospect({ id: "p-early", sent_at: new Date(MONDAY_MORNING.getTime() - 60_000).toISOString() })
+      ])
     });
     await processOutreachSweep(
       baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
     );
     expect(ledger.patchProspect).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a contact that is never coming, so it cannot starve the queue", async () => {
+    // Past the grace window "no contact" is an answer, not a race: the tenant's
+    // outreach flow is off, or filing failed, or the number will not normalize.
+    // Left unstamped forever those rows collect at the head of an oldest-first
+    // capped queue and starve every prospect behind them whose contact DOES
+    // exist, until those age out of the window still in New Lead.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [
+        prospect({
+          id: "p-hopeless",
+          sent_at: new Date(MONDAY_MORNING.getTime() - 2 * 60 * 60 * 1000).toISOString()
+        })
+      ])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-hopeless",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("stops waiting on a prospect with no send stamp at all", async () => {
+    // Defensive: a row in this queue always has sent_at, but a null one must
+    // read as "long past the race" rather than sitting in it forever.
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ id: "p-nostamp", sent_at: null })])
+    });
+    await processOutreachSweep(
+      baseDeps({ fireLifecycleStageImpl: vi.fn(async () => "no_contact" as const) })
+    );
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      "p-nostamp",
+      { contacted_stage_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
   });
 
   it("never lets the list read stop the mail either", async () => {
