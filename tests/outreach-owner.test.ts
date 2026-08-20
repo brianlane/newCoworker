@@ -25,6 +25,8 @@ const upsertOutreachSettingsSpy = vi.fn(
   })
 );
 const transitionProspectSpy = vi.fn(async () => true);
+const countProspectsSentSinceSpy = vi.fn(async () => 0);
+const countProspectsNudgedSinceSpy = vi.fn(async () => 0);
 const countProspectsInVerticalSpy = vi.fn(async () => 0);
 const skipProspectsInVerticalSpy = vi.fn(async () => {});
 /**
@@ -71,6 +73,8 @@ vi.mock("@/lib/outreach/db", async (importOriginal) => {
       ),
     transitionProspect: (...a: unknown[]) => transitionProspectSpy(...(a as [])),
     countProspectsInVertical: (...a: unknown[]) => countProspectsInVerticalSpy(...(a as [])),
+    countProspectsSentSince: (...a: unknown[]) => countProspectsSentSinceSpy(...(a as [])),
+    countProspectsNudgedSince: (...a: unknown[]) => countProspectsNudgedSinceSpy(...(a as [])),
     skipProspectsInVertical: (...a: unknown[]) => skipProspectsInVerticalSpy(...(a as []))
   };
 });

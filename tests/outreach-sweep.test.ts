@@ -28,6 +28,8 @@ import {
   recordOutreachEmailLog,
   regenerateProspectDraft,
   REWRITE_BATCH_SIZE,
+  sendDraftsNow,
+  SEND_NOW_BATCH,
   rewriteAllProspectDrafts,
   sendProspectNow
 } from "@/lib/outreach/sweep";
@@ -179,6 +181,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     countProspectsNudgedSince: vi.fn(async () => 0),
     listProspectsToRewrite: vi.fn(async () => []),
     countProspectsToRewrite: vi.fn(async () => 0),
+    countProspectsByStatus: vi.fn(async () => 0),
     ...over
   };
   for (const [name, impl] of Object.entries(defaults)) {
@@ -2041,5 +2044,148 @@ describe("sendProspectNow with no mailbox (the owner pressed Send too early)", (
     });
     expect(ledger.transitionProspect).not.toHaveBeenCalled();
     expect(ledger.patchProspect).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendDraftsNow (the owner pressed Send all)", () => {
+  function sendable(n: number): OutreachProspectRow[] {
+    return Array.from({ length: n }, (_, i) => prospect({ id: `s-${i}` }));
+  }
+
+  it("sends inside today's cap and reports what is left over", async () => {
+    // "All" cannot mean all: a few hundred cold emails leaving one mailbox in
+    // a burst is how a sending domain gets rate limited, and the cap is the
+    // tenant's own rule. It is enforced, and the leftover is reported rather
+    // than silently dropped.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", daily_cap: 3 })),
+      listProspectsByStatus: vi.fn(async () => sendable(3)),
+      countProspectsSentSince: vi.fn(async () => 1),
+      countProspectsByStatus: vi.fn(async () => 20)
+    });
+    const result = await sendDraftsNow(BIZ, baseDeps());
+    expect(result).toMatchObject({ ok: true, sent: 3, remaining: 20, allowanceLeft: 0 });
+  });
+
+  it("counts follow-ups against the same allowance, because a nudge is cold mail too", async () => {
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", daily_cap: 5 })),
+      listProspectsByStatus: vi.fn(async () => []),
+      countProspectsSentSince: vi.fn(async () => 2),
+      countProspectsNudgedSince: vi.fn(async () => 3)
+    });
+    const result = await sendDraftsNow(BIZ, baseDeps());
+    expect(result).toMatchObject({ ok: true, sent: 0, allowanceLeft: 0 });
+  });
+
+  it("sends nothing at all once the cap is spent, without claiming a single draft", async () => {
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", daily_cap: 2 })),
+      listProspectsByStatus: vi.fn(async () => sendable(5)),
+      countProspectsSentSince: vi.fn(async () => 2)
+    });
+    expect(await sendDraftsNow(BIZ, baseDeps())).toMatchObject({ ok: true, sent: 0 });
+    // Not even read: over the cap there is nothing to do, and claiming a row
+    // it cannot send would strand it.
+    expect(ledger.listProspectsByStatus).not.toHaveBeenCalled();
+  });
+
+  it("caps one request at the batch size, so the caller loops instead of timing out", async () => {
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", daily_cap: 200 })),
+      listProspectsByStatus: vi.fn(async () => [])
+    });
+    await sendDraftsNow(BIZ, baseDeps());
+    expect(ledger.listProspectsByStatus).toHaveBeenCalledWith(
+      BIZ,
+      ["drafted"],
+      SEND_NOW_BATCH,
+      expect.anything()
+    );
+  });
+
+  it("ignores the send window, because the owner is choosing this moment", async () => {
+    // The single Send button beside each draft ignores it for the same reason.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsByStatus: vi.fn(async () => sendable(1))
+    });
+    const result = await sendDraftsNow(BIZ, baseDeps({ now: () => MONDAY_AFTERNOON }));
+    expect(result).toMatchObject({ ok: true, sent: 1 });
+  });
+
+  it("carries the send's own notes back, so a filed-nowhere prospect is visible", async () => {
+    // The mail went out but no flow matched it, so nothing filed the prospect
+    // and nobody was told. That is the note the sweep already records, and a
+    // manual press must not swallow it just because there is no cron log to
+    // read afterwards.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsByStatus: vi.fn(async () => sendable(1))
+    });
+    const result = await sendDraftsNow(
+      BIZ,
+      baseDeps({
+        processFlowEventImpl: vi.fn(async () => ({
+          enqueued: 0,
+          flowsEvaluated: 1,
+          flowsMatched: 0
+        }))
+      })
+    );
+    expect(result).toMatchObject({ ok: true, sent: 1 });
+    expect(result.ok && result.notes).toEqual([
+      "no flow matched, so the prospect was emailed but not filed"
+    ]);
+  });
+
+  it("refuses before claiming anything when there is no mailbox, or no plan", async () => {
+    const ledger = stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      listProspectsByStatus: vi.fn(async () => sendable(3))
+    });
+    expect(
+      await sendDraftsNow(BIZ, baseDeps({ resolveEmailConnectionImpl: vi.fn(async () => null) }))
+    ).toEqual({
+      ok: false,
+      reason: "no_mailbox",
+      detail: "no mailbox connected to send from"
+    });
+    expect(ledger.listProspectsByStatus).not.toHaveBeenCalled();
+
+    stubLedger({ getOutreachSettings: vi.fn(async () => null) });
+    expect(await sendDraftsNow(BIZ, baseDeps())).toEqual({ ok: false, reason: "not_configured" });
+
+    stubLedger({ getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })) });
+    expect(
+      await sendDraftsNow(
+        BIZ,
+        baseDeps({
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "Starter Co",
+            timezone: "America/Phoenix",
+            website_url: null,
+            tier: "starter"
+          }))
+        })
+      )
+    ).toEqual({
+      ok: false,
+      reason: "tier_blocked",
+      detail: "prospecting requires the Standard plan"
+    });
+
+    // Classified by the discriminant, not by matching the note's wording: a
+    // config gap is not a plan problem, and telling a paying tenant to upgrade
+    // over a missing footer address would be the wrong instruction entirely.
+    stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", postal_address: null }))
+    });
+    expect(await sendDraftsNow(BIZ, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured",
+      detail: "no postal address configured"
+    });
   });
 });

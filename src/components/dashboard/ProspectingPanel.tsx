@@ -87,6 +87,8 @@ type View = {
   tierAllowed: boolean;
   /** False on Enterprise: the footer address is optional here. */
   postalAddressRequired: boolean;
+  /** How many more emails may go out today, from the server's own arithmetic. */
+  sendAllowanceLeft: number;
   /** Mailboxes cold email may leave from. Empty means none is connected. */
   mailboxes: Array<{ id: string; label: string; email: string | null }>;
   /** Meetings the CTA can link straight to. Empty when the choice does not apply. */
@@ -144,6 +146,10 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    * been spent yet.
    */
   const [bulk, setBulk] = useState<null | "confirm" | { done: number; total: number }>(null);
+  /** The Send all press: null idle, "confirm" warning shown, else progress. */
+  const [sendAll, setSendAll] = useState<null | "confirm" | { sent: number }>(null);
+  const sendAllRunning = sendAll !== null && sendAll !== "confirm";
+  const sendAllRunningRef = useRef(false);
   const bulkRunning = bulk !== null && bulk !== "confirm";
   /**
    * The same fact as `bulkRunning`, readable synchronously. Two clicks landing
@@ -340,6 +346,59 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   };
 
   /**
+   * Send the waiting drafts now, batch by batch, up to today's cap.
+   *
+   * The loop ends on the server's own answer: no allowance left, or nothing
+   * left to send. A batch that sends zero also ends it, so a prospect the
+   * server declines for its own reasons cannot spin this forever.
+   */
+  const sendAllDrafts = async () => {
+    if (sendAllRunningRef.current) return;
+    sendAllRunningRef.current = true;
+    setSendAll({ sent: 0 });
+    setError(null);
+    setNotice(null);
+    let sent = 0;
+    try {
+      for (;;) {
+        const res = await fetch("/api/dashboard/outreach/send-all", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessId })
+        });
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { sent: number; remaining: number; allowanceLeft: number };
+          error?: { message?: string };
+        };
+        if (!json.ok || !json.data) {
+          setError(json.error?.message ?? t("actionFailed"));
+          return;
+        }
+        sent += json.data.sent;
+        setSendAll({ sent });
+        if (json.data.sent === 0 || json.data.allowanceLeft <= 0 || json.data.remaining <= 0) {
+          setNotice(
+            json.data.remaining > 0
+              ? t("sentAllCapped", { count: sent, left: json.data.remaining })
+              : t("sentAll", { count: sent })
+          );
+          break;
+        }
+      }
+    } catch {
+      setError(t("actionFailed"));
+    } finally {
+      // Re-read on every exit: the queue below is showing drafts that just
+      // went out, and Send stays live over them until this lands.
+      setDrafts({});
+      await refresh();
+      setSendAll(null);
+      sendAllRunningRef.current = false;
+    }
+  };
+
+  /**
    * Call off a whole trade.
    *
    * Taking a term out of "Kinds of business to look for" only stops the next
@@ -426,6 +485,14 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     form.booking_meeting_type_id &&
       !(view?.meetings ?? []).some((m) => m.id === form.booking_meeting_type_id)
   );
+  /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
+  /**
+   * How many more may go out today, computed SERVER-side by the same
+   * arithmetic the send path uses. Deliberately not re-derived here: a number
+   * on the button that disagrees with the number the server honours is the
+   * failure this panel has already shipped twice.
+   */
+  const sendAllowanceLeft = view?.sendAllowanceLeft ?? 0;
   /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
   const pinnedMailboxGone = Boolean(
     form.from_connection_id && !(view?.mailboxes ?? []).some((m) => m.id === form.from_connection_id)
@@ -832,7 +899,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                 ) : null}
                 <Button
                   variant="secondary"
-                  disabled={bulkRunning}
+                  disabled={bulkRunning || sendAllRunning}
                   onClick={() => setBulk("confirm")}
                 >
                   {t("actions.rewriteAll")}
@@ -841,6 +908,51 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             )}
           </div>
           <p className="mt-1 text-xs text-parchment/50">{t("rewriteAllHelp")}</p>
+          {/* Send all. The cap is named in the confirm rather than enforced
+              silently: "all" cannot mean all when the daily limit is what
+              protects the sending domain, and a button that quietly ignored it
+              would be doing the owner harm on request. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {sendAll === "confirm" ? (
+              <>
+                <span className="text-xs text-amber-200">
+                  {t("sendAllConfirm", {
+                    count: Math.max(0, Math.min(sendAllowanceLeft, view.funnel.pending)),
+                    waiting: view.funnel.pending
+                  })}
+                </span>
+                <Button onClick={() => void sendAllDrafts()}>{t("actions.sendAllYes")}</Button>
+                <Button variant="secondary" onClick={() => setSendAll(null)}>
+                  {t("actions.cancel")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  disabled={
+                    bulkRunning ||
+                    sendAllRunning ||
+                    view.funnel.pending === 0 ||
+                    sendAllowanceLeft <= 0
+                  }
+                  onClick={() => setSendAll("confirm")}
+                >
+                  {t("actions.sendAll")}
+                </Button>
+                {sendAllRunning ? (
+                  <span className="text-xs text-parchment/60">
+                    {t("sendAllProgress", { sent: sendAll.sent })}
+                  </span>
+                ) : (
+                  <span className="text-xs text-parchment/50">
+                    {sendAllowanceLeft <= 0
+                      ? t("sendAllCapSpent")
+                      : t("sendAllHelp", { count: sendAllowanceLeft })}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
           <div className="mt-2 space-y-2">
             {view.queue.map((item) => (
               <div
