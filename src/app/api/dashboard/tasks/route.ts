@@ -41,8 +41,26 @@ import { effectiveContactOwner } from "@/lib/contacts/owner-attribution";
 import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
 import { getActivityForContacts, type ActivityItem } from "@/lib/db/activity";
+import { listContactsByLeadPhone, listTaggedContacts } from "@/lib/contacts/lookup";
+import { listAiFlowDefinitions } from "@/lib/ai-flows/db";
+import { isVpsReadMode } from "@/lib/residency/read";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Contact projection behind both contacts reads below, shared by the box and
+ * central paths (`src/lib/contacts/lookup.ts` joins it for PostgREST) so the
+ * two can never drift apart.
+ */
+const CONTACT_COLUMNS = [
+  "customer_e164",
+  "alias_e164s",
+  "display_name",
+  "summary_md",
+  "tags",
+  "owner_employee_id",
+  "updated_at"
+] as const;
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
@@ -139,6 +157,12 @@ export async function GET(request: Request) {
 
     const db = await createSupabaseServiceClient();
 
+    // `contacts` and `ai_flows` are both residency-moved, so for a tenant in
+    // vps mode the rows behind this board live on that tenant's own box and
+    // a central read comes back empty (an empty board, no error). One mode
+    // lookup up front, reused by every routed read below.
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+
     // The roster member the caller IS (drives scope=mine): their explicit
     // business_members link, or the owner's own roster row, owner logins
     // have no member row, so "mine" used to come back empty for them.
@@ -160,22 +184,14 @@ export async function GET(request: Request) {
     // 2) Their flow definitions (names + step trees for the cursor mapping).
     const flowIds = [...new Set(runs.map((r) => r.flow_id))];
     const flowsById = new Map<string, { name: string; steps: FlowStep[] }>();
-    if (flowIds.length > 0) {
-      const { data: flowData, error: flowErr } = await db
-        .from("ai_flows")
-        .select("id, name, definition")
-        .in("id", flowIds);
-      if (flowErr) throw new Error(`tasks: flows: ${flowErr.message}`);
-      for (const row of (flowData ?? []) as Array<{
-        id: string;
-        name: string;
-        definition?: { steps?: unknown } | null;
-      }>) {
-        const steps = Array.isArray(row.definition?.steps)
-          ? (row.definition!.steps as FlowStep[])
-          : [];
-        flowsById.set(row.id, { name: row.name, steps });
-      }
+    for (const row of await listAiFlowDefinitions(businessId, flowIds, {
+      client: db,
+      vpsReadMode
+    })) {
+      const steps = Array.isArray(row.definition?.steps)
+        ? (row.definition.steps as FlowStep[])
+        : [];
+      flowsById.set(row.id, { name: row.name, steps });
     }
 
     // Group runs by lead phone. Runs with no identifiable lead are dropped,
@@ -206,20 +222,18 @@ export async function GET(request: Request) {
       updated_at: string;
     };
     const contactsByPhone = new Map<string, ContactRow>();
-    const CONTACT_COLUMNS =
-      "customer_e164, alias_e164s, display_name, summary_md, tags, owner_employee_id, updated_at";
-    if (phones.length > 0) {
-      // E.164 values are strictly `+digits`, so they are safe inside the
-      // PostgREST filter string. `ov` = array overlap on alias_e164s.
-      const list = phones.join(",");
-      const { data, error } = await db
-        .from("contacts")
-        .select(CONTACT_COLUMNS)
-        .eq("business_id", businessId)
-        .or(`customer_e164.in.(${list}),alias_e164s.ov.{${list}}`);
-      if (error) throw new Error(`tasks: contacts: ${error.message}`);
+    const lookup = { businessId, db, vpsReadMode, label: "tasks" };
+    {
+      // On a vps tenant the box matches PRIMARY numbers only (no OR, no
+      // array overlap in its filter grammar), so a run keyed on a
+      // merged-away alias finds no contact and stays on its own card as an
+      // unresolved lead instead of being folded onto, and labeled with, some
+      // other person's profile. Same trade PR #1547 made for this filter.
       const aliasToPrimary = new Map<string, string>();
-      for (const c of (data ?? []) as ContactRow[]) {
+      for (const c of await listContactsByLeadPhone<ContactRow>(lookup, {
+        columns: CONTACT_COLUMNS,
+        phones
+      })) {
         contactsByPhone.set(c.customer_e164, c);
         for (const alias of c.alias_e164s ?? []) {
           aliasToPrimary.set(alias, c.customer_e164);
@@ -237,20 +251,13 @@ export async function GET(request: Request) {
         runsByLead.delete(phone);
       }
     }
-    {
-      // Tagged contacts without an active run round out the board. Cap keeps
-      // the page bounded for tag-heavy tenants.
-      const { data, error } = await db
-        .from("contacts")
-        .select(CONTACT_COLUMNS)
-        .eq("business_id", businessId)
-        .neq("tags", "{}")
-        .order("updated_at", { ascending: false })
-        .limit(MAX_TASKS);
-      if (error) throw new Error(`tasks: tagged contacts: ${error.message}`);
-      for (const c of (data ?? []) as ContactRow[]) {
-        if (!contactsByPhone.has(c.customer_e164)) contactsByPhone.set(c.customer_e164, c);
-      }
+    // Tagged contacts without an active run round out the board. Cap keeps
+    // the page bounded for tag-heavy tenants.
+    for (const c of await listTaggedContacts<ContactRow>(lookup, {
+      columns: CONTACT_COLUMNS,
+      limit: MAX_TASKS
+    })) {
+      if (!contactsByPhone.has(c.customer_e164)) contactsByPhone.set(c.customer_e164, c);
     }
     // A lead can be in motion with NO contact row yet (the flow hasn't filed
     // them, or the profile is keyed on a merged-away number). Their runs must

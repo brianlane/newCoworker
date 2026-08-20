@@ -30,8 +30,32 @@ import {
 } from "@/lib/leads/data-view";
 import { resolveCallerEmployeeId } from "@/lib/db/caller-employee";
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
+import {
+  listContactsByEmail,
+  listContactsByLeadPhone,
+  listTaggedContacts
+} from "@/lib/contacts/lookup";
+import { isVpsReadMode } from "@/lib/residency/read";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Contact projection behind every contacts read below, shared by the box and
+ * central paths (`src/lib/contacts/lookup.ts` joins it for PostgREST) so the
+ * two can never drift apart.
+ */
+const CONTACT_COLUMNS = [
+  "customer_e164",
+  "alias_e164s",
+  "display_name",
+  "email",
+  "summary_md",
+  "tags",
+  "owner_employee_id",
+  "lead_source",
+  "created_at",
+  "updated_at"
+] as const;
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
@@ -89,25 +113,25 @@ export async function GET(request: Request) {
 
     // 2) Contacts: everyone matching a submission identifier + every tagged
     //    contact (a lead can be on the board with no stored submission).
-    const CONTACT_COLUMNS =
-      "customer_e164, alias_e164s, display_name, email, summary_md, tags, owner_employee_id, lead_source, created_at, updated_at";
+    //    `contacts` is residency-moved, so for a vps tenant all three reads
+    //    below come from that tenant's box; resolved ONCE here rather than
+    //    per query.
+    const lookup = {
+      businessId,
+      db,
+      vpsReadMode: await isVpsReadMode(businessId, db),
+      label: "leads-data"
+    };
     const contactsByPrimary = new Map<string, LeadContactRow>();
 
     const phones = [
       ...new Set(submissions.map((s) => s.phone_e164).filter((p): p is string => !!p))
     ];
-    if (phones.length > 0) {
-      // E.164 values are strictly `+digits`, so they are safe in the filter.
-      const list = phones.join(",");
-      const { data, error } = await db
-        .from("contacts")
-        .select(CONTACT_COLUMNS)
-        .eq("business_id", businessId)
-        .or(`customer_e164.in.(${list}),alias_e164s.ov.{${list}}`);
-      if (error) throw new Error(`leads-data: contacts by phone: ${error.message}`);
-      for (const c of (data ?? []) as LeadContactRow[]) {
-        contactsByPrimary.set(c.customer_e164, c);
-      }
+    for (const c of await listContactsByLeadPhone<LeadContactRow>(lookup, {
+      columns: CONTACT_COLUMNS,
+      phones
+    })) {
+      contactsByPrimary.set(c.customer_e164, c);
     }
     const emails = [
       ...new Set(
@@ -116,43 +140,27 @@ export async function GET(request: Request) {
           .filter((e): e is string => !!e)
       )
     ];
-    if (emails.length > 0) {
-      // Emails can contain PostgREST-reserved chars; use an exact-match IN
-      // via .in() which escapes values properly.
-      const { data, error } = await db
-        .from("contacts")
-        .select(CONTACT_COLUMNS)
-        .eq("business_id", businessId)
-        .in("email", emails);
-      if (error) throw new Error(`leads-data: contacts by email: ${error.message}`);
-      for (const c of (data ?? []) as LeadContactRow[]) {
-        if (!contactsByPrimary.has(c.customer_e164)) {
-          contactsByPrimary.set(c.customer_e164, c);
-        }
+    for (const c of await listContactsByEmail<LeadContactRow>(lookup, {
+      columns: CONTACT_COLUMNS,
+      emails
+    })) {
+      if (!contactsByPrimary.has(c.customer_e164)) {
+        contactsByPrimary.set(c.customer_e164, c);
       }
     }
-    {
-      // scope=mine narrows the DB window itself: without this, an owned
-      // lead older than the newest-N business-wide tagged contacts could
-      // never reach the mine view at all.
-      let query = db
-        .from("contacts")
-        .select(CONTACT_COLUMNS)
-        .eq("business_id", businessId)
-        .neq("tags", "{}");
-      if (scope === "mine" && myEmployeeId) {
-        query = mineIncludesUnowned
-          ? query.or(`owner_employee_id.eq.${myEmployeeId},owner_employee_id.is.null`)
-          : query.eq("owner_employee_id", myEmployeeId);
-      }
-      const { data, error } = await query
-        .order("updated_at", { ascending: false })
-        .limit(MAX_LEAD_DATA_ROWS);
-      if (error) throw new Error(`leads-data: tagged contacts: ${error.message}`);
-      for (const c of (data ?? []) as LeadContactRow[]) {
-        if (!contactsByPrimary.has(c.customer_e164)) {
-          contactsByPrimary.set(c.customer_e164, c);
-        }
+    // scope=mine narrows the DB window itself: without this, an owned lead
+    // older than the newest-N business-wide tagged contacts could never
+    // reach the mine view at all.
+    for (const c of await listTaggedContacts<LeadContactRow>(lookup, {
+      columns: CONTACT_COLUMNS,
+      limit: MAX_LEAD_DATA_ROWS,
+      owner:
+        scope === "mine" && myEmployeeId
+          ? { employeeId: myEmployeeId, includeUnowned: mineIncludesUnowned }
+          : null
+    })) {
+      if (!contactsByPrimary.has(c.customer_e164)) {
+        contactsByPrimary.set(c.customer_e164, c);
       }
     }
     const contacts = [...contactsByPrimary.values()];

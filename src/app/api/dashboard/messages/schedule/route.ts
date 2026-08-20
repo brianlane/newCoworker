@@ -24,6 +24,7 @@ import {
   SMS_TOOLS_UPGRADE_MESSAGE,
   smsToolsAllowedForBusiness
 } from "@/lib/plans/sms-tools";
+import { listScheduledSmsForDashboard } from "@/lib/db/scheduled-sms";
 
 export const dynamic = "force-dynamic";
 
@@ -70,30 +71,11 @@ export async function GET(request: Request) {
     if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
-    // Pending soonest-first so a deep queue never hides what dispatches next
-    // (a descending-only cap would drop the soonest rows), plus a short tail
-    // of recent dispatched/canceled rows for context.
-    const [pendingRes, historyRes] = await Promise.all([
-      db
-        .from("scheduled_sms")
-        .select("id, to_e164, body, send_at, status, error, created_at, sent_at")
-        .eq("business_id", businessId)
-        .eq("status", "pending")
-        .order("send_at", { ascending: true })
-        .limit(50),
-      db
-        .from("scheduled_sms")
-        .select("id, to_e164, body, send_at, status, error, created_at, sent_at")
-        .eq("business_id", businessId)
-        .neq("status", "pending")
-        .order("send_at", { ascending: false })
-        .limit(10)
-    ]);
-    if (pendingRes.error) return errorResponse("DB_ERROR", pendingRes.error.message);
-    if (historyRes.error) return errorResponse("DB_ERROR", historyRes.error.message);
-
+    // Pending soonest-first plus a short tail of recent dispatched/canceled
+    // rows. `scheduled_sms` is residency-moved, so the helper routes the read
+    // to the tenant's own box when they are in vps mode.
     return successResponse({
-      scheduled: [...(pendingRes.data ?? []), ...(historyRes.data ?? [])]
+      scheduled: await listScheduledSmsForDashboard(businessId, db)
     });
   } catch (err) {
     return handleRouteError(err);

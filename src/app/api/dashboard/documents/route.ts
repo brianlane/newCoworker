@@ -33,6 +33,8 @@ import {
 import { getTeamMember } from "@/lib/db/employees";
 import { ingestDocument, isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { contactExistsForBusiness } from "@/lib/contacts/lookup";
+import { isVpsReadMode } from "@/lib/residency/read";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -151,20 +153,25 @@ export async function POST(request: Request) {
     // Cross-tenant guards: a linked contact / assigned employee must belong
     // to this business.
     if (contactId) {
-      const { data: contactRow, error: contactErr } = await db
-        .from("contacts")
-        .select("id")
-        .eq("business_id", businessId.data)
-        .eq("id", contactId.data)
-        .maybeSingle();
-      if (contactErr) {
+      // `contacts` is residency-moved: for a vps tenant this guard has to ask
+      // that tenant's box, or every contact-linked upload would be refused as
+      // "Contact not found" against an empty central table.
+      const found = await contactExistsForBusiness(
+        {
+          businessId: businessId.data,
+          db,
+          vpsReadMode: await isVpsReadMode(businessId.data, db)
+        },
+        contactId.data
+      );
+      if (!found.ok) {
         logger.warn("documents/upload: contact lookup failed", {
           businessId: businessId.data,
-          error: contactErr.message
+          error: found.error
         });
         return errorResponse("INTERNAL_SERVER_ERROR", "Contact lookup failed");
       }
-      if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
+      if (!found.exists) return errorResponse("VALIDATION_ERROR", "Contact not found");
     }
     if (assignedEmployeeId) {
       const member = await getTeamMember(businessId.data, assignedEmployeeId.data);

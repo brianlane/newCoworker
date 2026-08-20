@@ -14,6 +14,7 @@ import {
   parseAiFlowDefinition
 } from "@/lib/ai-flows/schema";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
+import { readMovedRows } from "@/lib/residency/read";
 import { reentryBlocked } from "../../../supabase/functions/_shared/ai_flows/reentry";
 import { isTestModeTrigger } from "../../../supabase/functions/_shared/ai_flows/test_mode";
 
@@ -175,6 +176,56 @@ export async function listAiFlows(
     if (br) return 1;
     return 0;
   });
+}
+
+/** Name + step tree for a set of flow ids, as the Task Center needs them. */
+export type AiFlowDefinitionRow = {
+  id: string;
+  name: string;
+  definition: { steps?: unknown } | null;
+};
+
+/** Projection shared by the box and central paths so they cannot drift. */
+const FLOW_DEFINITION_COLUMNS = ["id", "name", "definition"] as const;
+
+/**
+ * The named flows behind a set of runs.
+ *
+ * `ai_flows` is a residency-moved table, so for a tenant in vps mode the
+ * definitions live on that tenant's box and a central read returns nothing,
+ * which on the Task Center meant every card labeling its workflow "AiFlow"
+ * with no step position. `vpsReadMode` is resolved once by the caller and
+ * passed in, so a route running several routed reads makes one decision.
+ */
+export async function listAiFlowDefinitions(
+  businessId: string,
+  flowIds: readonly string[],
+  opts: { client?: SupabaseClient; vpsReadMode: boolean }
+): Promise<AiFlowDefinitionRow[]> {
+  // Nothing to fetch, and an empty `in` list is an outright error on the box.
+  if (flowIds.length === 0) return [];
+  if (opts.vpsReadMode) {
+    return await readMovedRows<AiFlowDefinitionRow>(businessId, {
+      table: "ai_flows",
+      columns: [...FLOW_DEFINITION_COLUMNS],
+      filters: [
+        // The box serves exactly one tenant, so this is already implicit,
+        // but every other box read carries it and an id-only filter would
+        // be the one place a mis-replicated row could surface unscoped.
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "id", op: "in", value: [...flowIds] }
+      ]
+    });
+  }
+  const db = await resolveDb(opts.client);
+  // Central mirrors exactly: ids alone, with no business_id filter, because
+  // the ids come from this business's own runs.
+  const { data, error } = await db
+    .from("ai_flows")
+    .select(FLOW_DEFINITION_COLUMNS.join(", "))
+    .in("id", [...flowIds]);
+  if (error) throw new Error(`listAiFlowDefinitions: ${error.message}`);
+  return (data as unknown as AiFlowDefinitionRow[] | null) ?? [];
 }
 
 export async function getAiFlow(
