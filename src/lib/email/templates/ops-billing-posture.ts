@@ -5,6 +5,11 @@
  * paid period has ended and whose inventory row it retired. Auto-healed
  * findings are included so the operator can see what the cron changed on
  * their behalf; everything else is a manual hPanel action.
+ *
+ * The framing tracks the contents rather than assuming the worst: a run whose
+ * findings were all handled in place says so plainly, and the warning about
+ * Hostinger deleting a live tenant's box appears only when something in the
+ * body is actually at risk.
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
@@ -33,7 +38,13 @@ function findingLine(finding: BillingPostureFinding): string {
   const who = finding.businessName
     ? `${finding.businessName} (${finding.businessId})`
     : ownerless;
-  const expires = finding.expiresAt ? `, period ends ${finding.expiresAt}` : "";
+  // "period ends" states the deadline a finding is RACING. A reaped pool box
+  // has no deadline left, and its detail already says when it lapsed, so
+  // appending the suffix printed the SAME timestamp twice in one line.
+  const expires =
+    finding.expiresAt && finding.kind !== "pool_box_lapsed_retired"
+      ? `, period ends ${finding.expiresAt}`
+      : "";
   const healed = finding.autoHealed ? " [AUTO-HEALED]" : " [ACTION REQUIRED]";
   // online_tenant_no_box is about a tenant, not a box, so there is no VM id.
   const subject = finding.vmId === null ? who : `VM ${finding.vmId} / ${who}`;
@@ -49,11 +60,26 @@ export function buildOpsBillingPostureEmail(
       ? `[ops] ACTION REQUIRED: ${actionCount} VPS billing posture finding(s), live boxes at risk of lapsing`
       : `[ops] VPS billing posture: ${input.findings.length} finding(s) auto-healed`;
 
-  const textLines = [
-    `The daily VPS billing-posture check (${input.checkedTenantVms} tenant VMs, ${input.checkedPoolBoxes} pooled boxes) found auto-renew states that contradict fleet assignments. A live tenant's box with auto-renew off gets DELETED by Hostinger at its paid period's end.`,
-    input.findings.map(findingLine).join("\n"),
-    `Auto-healed findings need no action: renewal was re-enabled, or a lapsed pool box was retired from inventory. For the rest: hPanel -> Billing -> Subscriptions, and flip the renewal toggle to match the assignment.`
-  ];
+  const scanned = `The daily VPS billing-posture check (${input.checkedTenantVms} tenant VMs, ${input.checkedPoolBoxes} pooled boxes)`;
+
+  // The opening and closing lines describe what is actually in the digest.
+  // They used to be fixed text that always announced auto-renew contradictions
+  // and warned that Hostinger DELETES a live tenant's box. On an all-healed
+  // run (four lapsed pool boxes reaped, say) that described nothing in the
+  // body and made routine cleanup read as an incident. An operator who is
+  // startled by a digest that turns out to be nothing learns to skim it, and
+  // then skims the one that matters.
+  const intro =
+    actionCount > 0
+      ? `${scanned} found ${actionCount} finding(s) that need a human. A live tenant's box with auto-renew off gets DELETED by Hostinger at its paid period's end.`
+      : `${scanned} found nothing that needs a human. Everything below was already handled by the check itself.`;
+
+  const closing =
+    actionCount > 0
+      ? "Auto-healed findings need no action. For the rest: hPanel -> Billing -> Subscriptions, and flip the renewal toggle to match the assignment."
+      : "No action needed. Auto-healed means renewal was re-enabled, or a lapsed pool box was retired from inventory.";
+
+  const textLines = [intro, input.findings.map(findingLine).join("\n"), closing];
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({

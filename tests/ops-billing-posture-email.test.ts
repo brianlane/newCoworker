@@ -134,6 +134,74 @@ describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
     expect(email.text).toContain("a lapsed pool box was retired from inventory");
   });
 
+  // The reaped line already says when the box lapsed. Appending the shared
+  // "period ends" suffix printed the same timestamp twice on one line, which
+  // is how the first production digest actually rendered.
+  it("prints a reaped box's date once, not twice", () => {
+    const stamp = "2026-08-05T04:41:32+00:00";
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 4,
+      checkedPoolBoxes: 5,
+      findings: [
+        finding({
+          kind: "pool_box_lapsed_retired",
+          vmId: 1806114,
+          businessId: null,
+          businessName: null,
+          expiresAt: stamp,
+          autoHealed: true,
+          detail: `pooled box lapsed on ${stamp} (VM state suspended), so it can never be adopted again`
+        })
+      ]
+    });
+
+    expect(email.text.split(stamp)).toHaveLength(2); // one occurrence
+    expect(email.text).not.toContain("period ends");
+  });
+
+  // A digest whose findings were all handled must not open by warning that
+  // Hostinger DELETES a live tenant's box. Nothing in the body is at risk,
+  // and an operator startled by a false alarm skims the real one.
+  it("keeps the framing calm when nothing needs a human", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 4,
+      checkedPoolBoxes: 5,
+      findings: [
+        finding({
+          kind: "pool_box_lapsed_retired",
+          businessId: null,
+          businessName: null,
+          autoHealed: true,
+          detail: "pooled box lapsed, its vps_inventory row was retired"
+        })
+      ]
+    });
+
+    expect(email.text).toContain("4 tenant VMs, 5 pooled boxes");
+    expect(email.text).toContain("found nothing that needs a human");
+    expect(email.text).not.toContain("DELETED by Hostinger");
+    expect(email.text).not.toContain("contradict fleet assignments");
+    // The hPanel instruction is for findings a human must fix; there are none.
+    expect(email.text).not.toContain("flip the renewal toggle");
+  });
+
+  // The counterpart: when something IS at risk, the warning must still be
+  // there. This is the case the alarming copy was written for.
+  it("keeps the warning when a finding does need a human", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 4,
+      checkedPoolBoxes: 5,
+      findings: [finding({ autoHealed: false }), finding({ vmId: 2, autoHealed: true })]
+    });
+
+    expect(email.text).toContain("found 1 finding(s) that need a human");
+    expect(email.text).toContain("DELETED by Hostinger");
+    expect(email.text).toContain("flip the renewal toggle");
+  });
+
   it("omits the VM prefix when the finding has no box", () => {
     const email = buildOpsBillingPostureEmail({
       siteUrl: "https://www.newcoworker.com",
