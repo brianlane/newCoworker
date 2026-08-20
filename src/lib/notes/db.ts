@@ -2,7 +2,7 @@
  * Contact notes, DB access.
  *
  * `contact_notes` holds authored, timestamped notes on a contact (see
- * `supabase/migrations/20260822212305_contact_notes.sql`). Service-role only
+ * `supabase/migrations/20260822220229_contact_notes.sql`). Service-role only
  * (RLS on, no policies): every access flows through the Next.js API after
  * its own auth checks, matching the business_documents posture. Ownership
  * rules (edit/delete own, owner deletes any) are enforced by the routes;
