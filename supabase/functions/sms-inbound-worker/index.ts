@@ -366,6 +366,8 @@ async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): 
 type JobRow = {
   id: string;
   business_id: string;
+  /** Row insert time; feeds the duplicate-delivery window check. */
+  created_at: string;
   payload: Record<string, unknown>;
   outbound_idempotency_key: string | null;
   attempt_count: number;
@@ -1153,23 +1155,33 @@ serve(async (req: Request) => {
     // auto-responder answered THAT, and the two machines thanked each other
     // every ~30s while each lap fired an urgent owner alert. A loop needs
     // both sides talking, so our side stops: an inbound worded like a
-    // do-not-reply notice, or repeating the sender's own recent text at
-    // machine fidelity, gets NO generated reply. Customer jobs only, same
-    // position and bookkeeping as the tapback branch above. The history
-    // lookup runs only when the cheap wording check does not already decide,
-    // and a failed lookup fails open to replying, like every other gate here.
+    // do-not-reply notice, repeating the sender's own recent text at
+    // machine fidelity, or duplicating a text received seconds earlier
+    // (transport duplicate; Amy Laidlaw, 2026-08-19) gets NO generated
+    // reply. Customer jobs only, same position and bookkeeping as the
+    // tapback branch above. The history lookup runs only when the cheap
+    // wording check does not already decide, and a failed lookup fails open
+    // to replying, like every other gate here. This is also the backstop for
+    // the webhook's own duplicate guard, which misses when the two webhook
+    // deliveries overlap (the earlier copy's row not yet inserted when the
+    // later copy checks); by claim time both rows always exist.
     if (!job.staff_kind) {
-      let loopVerdict = autoResponderVerdict([], userText);
+      // Timing/identity ride along so the duplicate-delivery detector can
+      // compare insert times; per-contact FIFO claiming means the earlier
+      // copy's row always exists (and sorts earlier) by the time this runs.
+      const incomingForVerdict = { text: userText, atMs: Date.parse(job.created_at), id: job.id };
+      let loopVerdict = autoResponderVerdict([], incomingForVerdict);
       if (!loopVerdict.suppress) {
         try {
-          // One query serves both slower detectors: the newest bodies feed
-          // the identical-repeat check, and the number of rows that already
-          // carry a generated reply feeds the rate breaker. Only the newest
-          // few bodies are compared (a repeat loop is always recent), but
-          // replies are counted across the whole fetched window.
+          // One query serves the slower detectors: the newest rows feed the
+          // identical-repeat and duplicate-delivery checks, and the number
+          // of rows that already carry a generated reply feeds the rate
+          // breaker. Only the newest few rows are compared (a repeat loop
+          // and a duplicate burst are always recent), but replies are
+          // counted across the whole fetched window.
           const { data: recentRows } = await supabase
             .from("sms_inbound_jobs")
-            .select("payload, assistant_reply_text")
+            .select("id, created_at, payload, assistant_reply_text")
             .eq("business_id", job.business_id)
             .eq("customer_e164", fromE164)
             .neq("id", job.id)
@@ -1177,12 +1189,21 @@ serve(async (req: Request) => {
             .is("deleted_at", null)
             .order("created_at", { ascending: false })
             .limit(40);
-          const rows = (recentRows ?? []) as { payload: unknown; assistant_reply_text?: string | null }[];
-          const recentBodies = rows.slice(0, 8).map((r) => {
+          const rows = (recentRows ?? []) as {
+            id: string;
+            created_at: string;
+            payload: unknown;
+            assistant_reply_text?: string | null;
+          }[];
+          const recentInbounds = rows.slice(0, 8).map((r) => {
             const env = r.payload as { data?: { payload?: Record<string, unknown> } };
-            return inboundPayloadText(env?.data?.payload ?? {});
+            return {
+              id: r.id,
+              atMs: Date.parse(r.created_at),
+              text: inboundPayloadText(env?.data?.payload ?? {})
+            };
           });
-          loopVerdict = autoResponderVerdict(recentBodies, userText);
+          loopVerdict = autoResponderVerdict(recentInbounds, incomingForVerdict);
           // The circuit breaker: rate is the one signature a loop cannot
           // avoid. Catches bot-vs-bot loops where the OTHER side varies its
           // wording every lap, which slips both content detectors above.

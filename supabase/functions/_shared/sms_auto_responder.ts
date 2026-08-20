@@ -14,8 +14,9 @@
  *
  * A reply loop between two bots needs both sides to keep talking. This
  * module is how our side stops: an inbound that is (a) worded like an
- * auto-responder or (b) a near-verbatim repeat of what the same sender
- * already sent gets no generated reply, which starves the other robot of
+ * auto-responder, (b) a near-verbatim repeat of what the same sender
+ * already sent, or (c) a transport duplicate of a text received seconds
+ * earlier gets no generated reply, which starves the other robot of
  * anything to answer.
  *
  * Pure functions only: no I/O, no clock, no Deno globals, so the whole
@@ -83,10 +84,72 @@ export function countIdenticalRecent(recentBodies: readonly string[], incoming: 
  */
 export const REPEAT_SUPPRESS_THRESHOLD = 2;
 
+/**
+ * A single identical prior IS enough when it landed this close: transport
+ * duplicates (a carrier or messaging app sending one text twice, distinct
+ * Telnyx message AND event ids, so the event-id unique index cannot catch
+ * them) arrive sub-second, plus a few seconds of webhook jitter between the
+ * two job inserts. A human re-asking after no answer takes longer than this
+ * (Amy Laidlaw, 2026-08-19: two copies of a lead's question received 412ms
+ * apart, job rows 2.4s apart, and each drew its own differently-worded
+ * reply). Measured between job insert times, the one clock both copies
+ * share.
+ */
+export const DUPLICATE_DELIVERY_WINDOW_MS = 10_000;
+
+/** An inbound with the timing/identity needed by the duplicate detector. */
+export type TimedInboundText = {
+  text: string;
+  /** The job row's insert time (`created_at`), epoch ms. */
+  atMs: number;
+  /**
+   * Job row id, the tiebreak when two inserts share a millisecond (the
+   * queue's own FIFO orders by `(created_at, id)`, this mirrors it). The
+   * webhook checks BEFORE inserting its own row, so its incoming has no id
+   * yet and any equal-time stored row counts as earlier.
+   */
+  id?: string;
+};
+
+/**
+ * Is `prior` earlier than `incoming` by the queue's `(created_at, id)`
+ * order? Exactly one copy of a same-millisecond pair wins, so exactly one
+ * gets a reply. A non-finite timestamp (unparseable created_at) compares
+ * false and fails open to replying.
+ */
+function priorIsEarlier(prior: TimedInboundText, incoming: TimedInboundText): boolean {
+  if (prior.atMs !== incoming.atMs) return prior.atMs < incoming.atMs;
+  if (incoming.id === undefined) return true;
+  if (prior.id === undefined) return false;
+  return prior.id < incoming.id;
+}
+
+/**
+ * True when `incoming` is a transport-duplicate of `prior`: same fingerprint,
+ * `prior` earlier by `(atMs, id)`, and within `DUPLICATE_DELIVERY_WINDOW_MS`.
+ *
+ * Unlike `countIdenticalRecent`, URLs are NOT stripped before comparing: two
+ * lead notices seconds apart that differ only by their per-lead link are two
+ * different leads and both must process. A true duplicate delivery carries
+ * byte-identical links anyway.
+ */
+export function isDuplicateDelivery(prior: TimedInboundText, incoming: TimedInboundText): boolean {
+  const target = normalizeSmsFingerprint(incoming.text);
+  if (target.length === 0) return false;
+  if (normalizeSmsFingerprint(prior.text) !== target) return false;
+  if (!priorIsEarlier(prior, incoming)) return false;
+  return incoming.atMs - prior.atMs <= DUPLICATE_DELIVERY_WINDOW_MS;
+}
+
 export type AutoResponderVerdict = {
   suppress: boolean;
   /** Which detector fired; null when the message looks human. */
-  reason: "auto_responder_wording" | "repeated_inbound" | "reply_flood" | null;
+  reason:
+    | "auto_responder_wording"
+    | "repeated_inbound"
+    | "duplicate_delivery"
+    | "reply_flood"
+    | null;
 };
 
 /**
@@ -95,17 +158,24 @@ export type AutoResponderVerdict = {
  *
  * Wording alone suppresses on the FIRST sighting: by the time a do-not-reply
  * notice has arrived, replying can only start a loop or text a void. The
- * repeat detector needs `REPEAT_SUPPRESS_THRESHOLD` priors, per above.
+ * repeat detector needs `REPEAT_SUPPRESS_THRESHOLD` priors, per above. The
+ * duplicate detector needs only one prior but a tight clock: an identical
+ * text from the same sender inside `DUPLICATE_DELIVERY_WINDOW_MS` already
+ * has its answer in flight from the earlier copy. A slower double-text
+ * still gets its answer.
  */
 export function autoResponderVerdict(
-  recentBodies: readonly string[],
-  incoming: string
+  recent: readonly TimedInboundText[],
+  incoming: TimedInboundText
 ): AutoResponderVerdict {
-  if (looksLikeAutoResponder(incoming)) {
+  if (looksLikeAutoResponder(incoming.text)) {
     return { suppress: true, reason: "auto_responder_wording" };
   }
-  if (countIdenticalRecent(recentBodies, incoming) >= REPEAT_SUPPRESS_THRESHOLD) {
+  if (countIdenticalRecent(recent.map((r) => r.text), incoming.text) >= REPEAT_SUPPRESS_THRESHOLD) {
     return { suppress: true, reason: "repeated_inbound" };
+  }
+  if (recent.some((r) => isDuplicateDelivery(r, incoming))) {
+    return { suppress: true, reason: "duplicate_delivery" };
   }
   return { suppress: false, reason: null };
 }
