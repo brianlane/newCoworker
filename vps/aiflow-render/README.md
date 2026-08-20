@@ -5,7 +5,7 @@ when a lead page is a JavaScript SPA whose data isn't in the static HTML, **or
 when the page is login-gated** (the worker's static fetch can't authenticate).
 When the worker has no render URL configured it falls back to a static `fetch`.
 
-## Deployment model — per-tenant
+## Deployment model: per-tenant
 
 This runs as a **per-tenant sidecar**, one container on each business's own VPS
 (same model as the voice bridge and chat-worker), so a tenant's stored
@@ -17,7 +17,7 @@ and the per-tenant Cloudflare Tunnel publishes it at
 
 The shared `ai-flow-worker` (Supabase Edge) reaches the right tenant by
 templating the businessId into `AIFLOW_RENDER_URL_TEMPLATE`
-(e.g. `https://render-{businessId}.newcoworker.com/render`) — exactly like
+(e.g. `https://render-{businessId}.newcoworker.com/render`), exactly like
 `ROWBOAT_CHAT_URL_TEMPLATE` does for per-tenant Rowboat.
 
 > **Tier gating:** the render sidecar is **not** deployed on the starter/KVM2
@@ -90,6 +90,46 @@ POST /check-actions
 # state: "ready" | "blocked" | "absent" | "missing_option". It judges the page
 # AS LOADED, so an action that only exists after an earlier click reads as
 # "absent"; that is a limit of not clicking, not evidence the action is wrong.
+
+# DEMONSTRATION mode, on its OWN PATHS (same stale-box rule as the dry run:
+# an old box 404s, which the app reports as "not updated yet"). The owner
+# performs a workflow ONCE against a persistent page; each interaction
+# EXECUTES for real and is recorded as a normal browse action, so the
+# recording replays through /render verbatim. Engine in demo.mjs.
+POST /demo/start
+{ "businessId": "<uuid>", "url": "https://...",
+  "auth": { "integrationLabel": "..." } }                       # auth optional
+200 -> { "demoId": "<uuid>", "loggedIn": true, "finalUrl": "...",
+         "html": "...", "text": "...", "screenshotBase64": "..." }
+200 -> { "error": "render_failed" | "login_failed" | "auth_config_error"
+                 | "demo_limit", "detail": "..." }
+
+POST /demo/act
+{ "businessId": "<uuid>", "demoId": "<uuid>", "confirm": false,
+  "action": { "kind": "click_text", "target": "Offers" } }      # engine kinds
+# ...or a POINT on the screenshot (document-space CSS px), resolved to an
+# engine action first: click_point { x, y } / fill_point { x, y, value }.
+200 -> { "recorded": { "kind": "...", "target": "...", "value": "..." },
+         "actionsCount": <n>, "finalUrl": "...", "html": "...", "text": "...",
+         "screenshotBase64": "..." }
+# A destructive-looking label (CONFIRM_LABEL_RE, the engineer probe's
+# vocabulary) is NOT executed until the request carries confirm: true:
+200 -> { "error": "needs_confirm", "resolved": { ... }, "label": "..." }
+# A point that cannot become a durable action names why (nothing executed):
+200 -> { "error": "resolve_failed", "reason": "not_interactive"
+         | "iframe_content" | "select_needs_option" | "field_use_fill"
+         | "not_typeable" | "field_unaddressable" | "no_stable_selector"
+         | "ambiguous", "options": ["..."] }
+200 -> { "error": "action_failed", "detail": "...", ... }       # + after-state
+200 -> { "error": "unknown_demo" }   # expired / restarted box / wrong tenant;
+                                     # NEVER a 404, which means "old box"
+200 -> { "error": "action_cap" }     # 15 recorded actions, the schema max
+200 -> { "error": "demo_gone" }      # page died mid-act; session released
+
+POST /demo/stop
+{ "businessId": "<uuid>", "demoId": "<uuid>" }
+200 -> { "ok": true, "actionsCount": <n> }                      # idempotent
+
 401 -> { "error": "unauthorized" }                              # bad/no bearer
 ```
 
@@ -105,8 +145,11 @@ When `auth` is present the service:
    platform's gateway-guarded endpoint
    (`POST {AIFLOW_PLATFORM_URL}/api/integrations/custom/credentials?businessId=…`),
    fills the email/password fields, submits, and re-navigates to the URL.
-3. Returns the rendered page. It **only reads** — it never clicks lead-page
-   action buttons (accept/call/email), which can create binding agreements.
+3. Returns the rendered page. EXTRACT mode **only reads**: it never clicks
+   lead-page action buttons (accept/call/email), which can create binding
+   agreements. The paths that DO act (ACTION mode, /demo/act) act only on an
+   owner-authored or owner-demonstrated instruction, and demo acts behind a
+   destructive-looking label additionally require an explicit confirm.
 
 The same SSRF host rules as the worker apply to every browser request (initial
 nav, redirects, subresources): http/https only; no localhost / private-IPv4 /
@@ -126,6 +169,9 @@ IPv6-literal / `*.internal` / metadata hosts.
 | `AIFLOW_MAX_SESSIONS` | Max cached contexts (default `50`). |
 | `AIFLOW_RATE_WINDOW_MS` | Rate-limit window (default `60000`). |
 | `AIFLOW_RATE_MAX` | Max requests per window per IP (default `120`). |
+| `AIFLOW_DEMO_IDLE_TTL_MS` | Demo session idle eviction (default `300000` = 5m). |
+| `AIFLOW_DEMO_MAX_LIFETIME_MS` | Demo session hard lifetime (default `1200000` = 20m). |
+| `AIFLOW_DEMO_MAX_SESSIONS` | Concurrent demo sessions per box (default `2`; each holds a persistent page). |
 
 ## Enable
 
@@ -143,9 +189,9 @@ every non-starter tenant. You only need to set the secrets:
    ```
    `AIFLOW_PLATFORM_URL` and `AIFLOW_GATEWAY_TOKEN` on the VPS are derived from
    the platform origin (`APP_BASE_URL`) and `ROWBOAT_GATEWAY_TOKEN` already in
-   the stack — see the render block in `deploy-client.sh`.
+   the stack; see the render block in `deploy-client.sh`.
 
-Local / single-host testing (no tunnel) — run the container and point the worker
+Local / single-host testing (no tunnel): run the container and point the worker
 at a static URL (no `{businessId}` placeholder is accepted too):
 ```
 docker compose -f vps/aiflow-render/docker-compose.yml up --build
@@ -154,5 +200,5 @@ docker compose -f vps/aiflow-render/docker-compose.yml up --build
 
 > The service is network-reachable from Supabase Edge, so always set
 > `AIFLOW_RENDER_TOKEN` in production. Credentials never leave the tenant's VPS
-> process — they're used in-page to drive the login form and are never persisted
+> process; they're used in-page to drive the login form and are never persisted
 > or returned.

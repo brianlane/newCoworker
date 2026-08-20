@@ -160,9 +160,10 @@ describe("the user agent cannot disagree with the engine", () => {
   });
 
   it("still overrides the default, which says HeadlessChrome", () => {
-    // Three sites: both context creations, plus the CDP client-hint override,
-    // which must carry the SAME string or the two channels contradict again.
-    expect(server.match(/userAgent: uaFor\(browser\)/g) ?? []).toHaveLength(3);
+    // Four sites: both /render context creations, the demo-start anonymous
+    // context, plus the CDP client-hint override, which must carry the SAME
+    // string or the two channels contradict again.
+    expect(server.match(/userAgent: uaFor\(browser\)/g) ?? []).toHaveLength(4);
   });
 });
 
@@ -176,7 +177,9 @@ describe("client hints cannot contradict the UA string", () => {
     // page half-renders: "Unexpected token '<'".
     expect(server).toContain('session.send("Emulation.setUserAgentOverride"');
     expect(server).toContain("userAgentMetadata");
-    expect((server.match(/await alignClientHints\(page, /g) ?? []).length).toBe(2);
+    // Every page-opening path: /render unauthenticated, /render authenticated,
+    // and /demo/start's persistent page.
+    expect((server.match(/await alignClientHints\(page, /g) ?? []).length).toBe(3);
   });
 
   it("derives brands from the engine, with the GREASE brand real Chrome ships", () => {

@@ -19,7 +19,7 @@ RUN npm ci --omit=dev
 # That is exactly what happened on 2026-08-17 when login.mjs was split out of
 # server.mjs and this line was not updated: the file rsynced to the box fine and
 # was simply absent from the image.
-COPY server.mjs actions.mjs login.mjs ./
+COPY server.mjs actions.mjs login.mjs demo.mjs ./
 
 ENV PORT=8080
 EXPOSE 8080
