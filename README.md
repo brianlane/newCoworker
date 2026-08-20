@@ -2003,6 +2003,56 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### Which meeting the cold email offers
+
+The pitch's CTA links the booking page, which for a tenant with more than one
+meeting type is a chooser: "what would you like to book?". That is a fair
+question for somebody who arrived on purpose and a bad one for a stranger who
+has read one paragraph about missed calls. **Which meeting the email offers**
+names one, and `outreachSchedulingLink` deep links it
+(`/book/<page>/<meeting>`) instead.
+
+Stored per tenant in `outreach_settings.booking_meeting_type_id`, null meaning
+"link the page and let them choose", which is what every existing tenant keeps
+until they pick one. The control only appears with more than one meeting: with
+a single one the page already IS that meeting.
+
+It falls back to the page link, never to nothing, in every way it can come
+apart: a Calendly tenant (whose event types are not ours to deep link, and
+whose URL is already one specific event), a meeting since deleted, and a
+meeting since disabled. `enabled` is re-checked at send time rather than
+trusted from the stored id, because a direct link to a disabled type shows the
+visitor "not available". A cold email carrying the chooser link is worse than
+one naming a meeting; a cold email carrying a dead link is worse than both.
+
+Disabled meetings are left off the picker for the same reason. Hidden ones are
+NOT: hidden only keeps a type off the page's own menu, and it still books
+through its direct link, which is exactly what outreach sends.
+
+The picker appears when naming a meeting could produce a DIFFERENT link than
+not naming one, which is not the same as "more than one meeting". One VISIBLE
+meeting means the page already is that meeting, so there is nothing to choose.
+One HIDDEN meeting is the opposite: the page shows an empty chooser and only a
+direct link reaches the meeting at all.
+
+A named meeting that goes away needs the SAME escape hatch as a stale mailbox
+pin, and for the same reason: gating the control on "is there a choice worth
+making" strands the stored id, the form keeps submitting it, the save is
+refused, and nothing on the page can change it. The picker therefore renders
+whenever the pick does not resolve, with an explicit option for the dead id, and
+a `meetingGone` blocker says what happened. That blocker is milder than
+`mailboxGone` (outreach keeps sending, the CTA just falls back to the chooser
+page) but it is not silent, because otherwise the emails quietly stop offering
+the meeting the owner picked.
+
+The stored id carries a FOREIGN KEY, so unlike the mailbox pin an id deleted
+while the panel sat open fails the upsert itself. `saveProspectingSettings`
+therefore resolves it every time: switching ON with a gone or disabled meeting
+is refused out loud (silently reverting to "let them choose" would change what
+the owner's emails say without telling them), while switching OFF drops it to
+null. The kill switch outranks a stale preference, and it is the one write that
+must never be blocked by a form error.
+
 ### Which mailbox cold email leaves from
 
 Prospecting sends through the owner's connected Gmail or Outlook mailbox. With

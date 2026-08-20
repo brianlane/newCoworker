@@ -35,6 +35,7 @@ import {
   type OutreachSettingsRow
 } from "./db";
 import { summarizeFunnel, type OutreachFunnel, type VerticalFunnel } from "./stats";
+import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { listOutreachSendFromOptions, type SendFromOption } from "@/lib/email/mailbox-options";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -84,6 +85,11 @@ export type ProspectingView = {
    * tenant has connected none, which is a blocker rather than a preference.
    */
   mailboxes: SendFromOption[];
+  /**
+   * Meetings the CTA can link straight to. Empty when the tenant books through
+   * Calendly or has no booking page, where the choice does not apply.
+   */
+  meetings: Array<{ id: string; name: string; durationMinutes: number; hidden: boolean }>;
 };
 
 /** The two tier-derived gates the panel needs, resolved from one lookup. */
@@ -120,12 +126,16 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue, gates, mailboxes] = await Promise.all([
+  const [settings, outcomes, queue, gates, mailboxes, meetingTypes] = await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
     resolveTierGates(businessId, db),
-    listOutreachSendFromOptions(businessId)
+    listOutreachSendFromOptions(businessId),
+    // Only the ones a visitor could be sent to: a hidden type still books
+    // through its direct link, so it is offered here even though the page's
+    // own chooser leaves it off the menu.
+    listMeetingTypes(businessId, db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -140,11 +150,22 @@ export async function loadProspectingView(
       mailboxConnected: mailboxes.length > 0,
       pinnedMailboxConnected:
         !settings?.from_connection_id ||
-        mailboxes.some((m) => m.id === settings.from_connection_id)
+        mailboxes.some((m) => m.id === settings.from_connection_id),
+      pinnedMeetingAvailable:
+        !settings?.booking_meeting_type_id ||
+        meetingTypes.some((t) => t.id === settings.booking_meeting_type_id && t.enabled)
     }),
     tierAllowed: gates.tierAllowed,
     postalAddressRequired: gates.postalAddressRequired,
-    mailboxes
+    mailboxes,
+    meetings: meetingTypes
+      .filter((t) => t.enabled)
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        durationMinutes: t.duration_minutes,
+        hidden: t.hidden
+      }))
   };
 }
 
@@ -162,6 +183,7 @@ export function describeBlockers(
     postalAddressRequired?: boolean;
     mailboxConnected?: boolean;
     pinnedMailboxConnected?: boolean;
+    pinnedMeetingAvailable?: boolean;
   } = {}
 ): string[] {
   if (!settings) return [];
@@ -181,6 +203,11 @@ export function describeBlockers(
   // Named separately because the fix is different: pick another mailbox, or
   // choose Automatic. Defaults to fine, like the gate above it.
   if (env.pinnedMailboxConnected === false) blockers.push("mailboxGone");
+  // Milder than the mailbox one: outreach keeps sending, the CTA just falls
+  // back to the chooser page. Said anyway, because otherwise the emails quietly
+  // stop offering the meeting the owner picked, and because every save is
+  // refused until the pick is changed. Defaults to fine.
+  if (env.pinnedMeetingAvailable === false) blockers.push("meetingGone");
   // Defaults to required, so every caller that has not resolved a tier keeps
   // the old, stricter behavior.
   if (env.postalAddressRequired !== false && !settings.postal_address?.trim()) {
@@ -207,6 +234,8 @@ export type ProspectingSettingsInput = {
    * is connected", the behavior from before there was a choice.
    */
   fromConnectionId: string;
+  /** Meeting the CTA links to. Empty links the page and lets them choose. */
+  bookingMeetingTypeId: string;
 };
 
 export class ProspectingSettingsError extends Error {}
@@ -296,6 +325,31 @@ export async function saveProspectingSettings(
     }
   }
 
+  // The chosen meeting, checked the same way and for a sharper reason: this
+  // column carries a FOREIGN KEY, so an id deleted while the panel sat open
+  // fails the upsert itself. Unchecked, that would break the one write this
+  // function promises never to block, and turning outreach off would start
+  // failing because of a meeting that no longer exists.
+  //
+  // Hence the split. Switching ON says so out loud, because silently swapping
+  // the owner's named meeting back to "let them choose" changes what their
+  // emails say without telling them. Switching OFF drops it to null instead:
+  // the kill switch outranks a stale preference, and null is what the send
+  // path falls back to anyway.
+  let bookingMeetingTypeId: string | null = input.bookingMeetingTypeId.trim() || null;
+  if (bookingMeetingTypeId) {
+    const types = await listMeetingTypes(businessId, db);
+    const live = types.some((t) => t.id === bookingMeetingTypeId && t.enabled);
+    if (!live) {
+      if (strict) {
+        throw new ProspectingSettingsError(
+          "That meeting is not available any more. Pick another one, or let them choose."
+        );
+      }
+      bookingMeetingTypeId = null;
+    }
+  }
+
   return upsertOutreachSettings(
     businessId,
     {
@@ -309,7 +363,8 @@ export async function saveProspectingSettings(
       postal_address_exempt: postalAddressExempt,
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null,
-      from_connection_id: fromConnectionId || null
+      from_connection_id: fromConnectionId || null,
+      booking_meeting_type_id: bookingMeetingTypeId
     },
     db
   );
@@ -403,6 +458,7 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     postalAddress: "",
     valueProp: "",
     senderName: "",
-    fromConnectionId: ""
+    fromConnectionId: "",
+    bookingMeetingTypeId: ""
   };
 }

@@ -51,6 +51,10 @@ const listOutreachSendFromOptionsSpy = vi.fn(async () => [
   { id: "", label: "Automatic", email: null as string | null },
   { id: "conn-a", label: "Gmail: sales@acme.test", email: "sales@acme.test" }
 ]);
+const listMeetingTypesSpy = vi.fn(async () => [] as unknown[]);
+vi.mock("@/lib/booking-page/meeting-types", () => ({
+  listMeetingTypes: (...a: unknown[]) => listMeetingTypesSpy(...(a as []))
+}));
 vi.mock("@/lib/email/mailbox-options", () => ({
   listOutreachSendFromOptions: (...a: unknown[]) => listOutreachSendFromOptionsSpy(...(a as []))
 }));
@@ -101,6 +105,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
     send_window_start_hour: 8,
     send_window_end_hour: 11,
     from_connection_id: null,
+    booking_meeting_type_id: null,
     postal_address: "1 Example Plaza",
     value_prop: "We answer every call.",
     sender_name: "Brian",
@@ -114,6 +119,7 @@ function settingsRow(over: Record<string, unknown> = {}) {
 function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSettingsInput {
   return {
     fromConnectionId: "",
+    bookingMeetingTypeId: "",
     mode: "auto",
     searchTerms: ["hvac"],
     cities: ["Phoenix"],
@@ -520,7 +526,10 @@ describe("defaultProspectingSettings", () => {
       senderName: "",
       // Empty means "whichever mailbox is connected", which is what the sweep
       // did before there was a choice to make.
-      fromConnectionId: ""
+      fromConnectionId: "",
+      // Empty links the booking page and lets them choose, which is what the
+      // CTA did before a meeting could be named.
+      bookingMeetingTypeId: ""
     });
   });
 });
@@ -631,6 +640,108 @@ describe("the mailbox cold email leaves from", () => {
     expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
       BIZ,
       expect.objectContaining({ from_connection_id: null }),
+      expect.anything()
+    );
+  });
+});
+
+describe("which meeting the outreach CTA offers", () => {
+  it("lists the enabled meetings, and leaves the disabled ones off", async () => {
+    // A disabled type's direct link shows the visitor "not available", so
+    // offering it here would be offering a dead CTA. Hidden types DO appear:
+    // hidden only keeps a type off the page's own menu, and it still books
+    // through its direct link, which is exactly what outreach sends.
+    listMeetingTypesSpy.mockResolvedValueOnce([
+      { id: "m1", name: "Discovery Call", duration_minutes: 60, enabled: true, hidden: false },
+      { id: "m2", name: "Secret Call", duration_minutes: 15, enabled: true, hidden: true },
+      { id: "m3", name: "Retired Call", duration_minutes: 30, enabled: false, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow());
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.meetings).toEqual([
+      { id: "m1", name: "Discovery Call", durationMinutes: 60, hidden: false },
+      { id: "m2", name: "Secret Call", durationMinutes: 15, hidden: true }
+    ]);
+  });
+
+  it("never lets a deleted meeting block the kill switch", async () => {
+    // This column carries a FOREIGN KEY, so an id deleted while the panel sat
+    // open fails the upsert itself. Unchecked, turning outreach OFF would start
+    // failing because of a meeting that no longer exists, and off is the one
+    // write that must never be blocked by a form error.
+    listMeetingTypesSpy.mockResolvedValue([]);
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", bookingMeetingTypeId: "m-gone" }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: null }),
+      expect.anything()
+    );
+  });
+
+  it("says so out loud when switching ON with a meeting that is gone or disabled", async () => {
+    // Silently swapping the owner's named meeting back to "let them choose"
+    // would change what their emails say without telling them.
+    listMeetingTypesSpy.mockResolvedValue([]);
+    await expect(
+      saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m-gone" }), {} as never)
+    ).rejects.toThrow(/not available any more/);
+
+    // Disabled counts as gone: a direct link to a disabled type shows the
+    // visitor "not available", so it is not a usable CTA.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Retired", duration_minutes: 30, enabled: false, hidden: false }
+    ]);
+    await expect(
+      saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m1" }), {} as never)
+    ).rejects.toThrow(/not available any more/);
+  });
+
+  it("flags a named meeting that is gone, so the silent fallback is not silent", async () => {
+    // Milder than a stale mailbox pin (outreach keeps sending, the CTA just
+    // falls back to the chooser page) but worth saying: otherwise the emails
+    // quietly stop offering the meeting the owner picked, and every save is
+    // refused until the pick is changed.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery", duration_minutes: 60, enabled: true, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ booking_meeting_type_id: "m-gone" }));
+    expect((await loadProspectingView(BIZ, {} as never)).blockers).toContain("meetingGone");
+
+    // A disabled type counts as gone, matching what the send path does with it.
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery", duration_minutes: 60, enabled: false, hidden: false }
+    ]);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ booking_meeting_type_id: "m1" }));
+    expect((await loadProspectingView(BIZ, {} as never)).blockers).toContain("meetingGone");
+  });
+
+  it("says nothing when the meeting still resolves, or when none is named", () => {
+    expect(
+      describeBlockers(settingsRow() as never, { pinnedMeetingAvailable: true })
+    ).not.toContain("meetingGone");
+    // Defaults to fine, so a caller that never looked cannot invent one.
+    expect(describeBlockers(settingsRow() as never, {})).not.toContain("meetingGone");
+  });
+
+  it("stores the chosen meeting, and null when they should choose", async () => {
+    listMeetingTypesSpy.mockResolvedValue([
+      { id: "m1", name: "Discovery Call", duration_minutes: 60, enabled: true, hidden: false }
+    ]);
+    await saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "m1" }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: "m1" }),
+      expect.anything()
+    );
+
+    await saveProspectingSettings(BIZ, input({ bookingMeetingTypeId: "  " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({ booking_meeting_type_id: null }),
       expect.anything()
     );
   });

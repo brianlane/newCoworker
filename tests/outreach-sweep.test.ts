@@ -53,6 +53,7 @@ function settings(over: Partial<OutreachSettingsRow> = {}): OutreachSettingsRow 
     send_window_start_hour: 8,
     send_window_end_hour: 11,
     from_connection_id: null,
+    booking_meeting_type_id: null,
     postal_address: "1 Example Plaza, Phoenix AZ",
     postal_address_exempt: false,
     value_prop: "We answer every call and text for you.",

@@ -43,7 +43,9 @@ const saveSchema = z.object({
   valueProp: z.string().max(600),
   senderName: z.string().max(120),
   /** A workspace_oauth_connections id, or "" for whichever mailbox is connected. */
-  fromConnectionId: z.union([z.literal(""), z.string().uuid()]).default("")
+  fromConnectionId: z.union([z.literal(""), z.string().uuid()]).default(""),
+  /** A booking_meeting_types id, or "" to link the page and let them choose. */
+  bookingMeetingTypeId: z.union([z.literal(""), z.string().uuid()]).default("")
 });
 
 export async function GET(request: Request) {
