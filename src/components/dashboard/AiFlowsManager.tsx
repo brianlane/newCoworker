@@ -26,6 +26,7 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { BrowseActionDemoPanel } from "@/components/dashboard/BrowseActionDemoPanel";
 import { BrowseActionPagePicker } from "@/components/dashboard/BrowseActionPagePicker";
 import { BrowseActionTryPanel } from "@/components/dashboard/BrowseActionTryPanel";
 import {
@@ -5192,6 +5193,22 @@ function StepFields({
             ? { integrationLabel: step.auth.integrationLabel }
             : {})}
           actions={step.actions}
+        />
+        {/* The third surface, and the only one that ACTS: perform the task
+            once on the live page and record each interaction as an action.
+            This is what reaches past the as-loaded limitation the two panels
+            above state (a wizard's later pages exist only after a click). */}
+        <BrowseActionDemoPanel
+          businessId={businessId}
+          {...(step.auth?.integrationLabel
+            ? { integrationLabel: step.auth.integrationLabel }
+            : {})}
+          existingActionsCount={step.actions.length}
+          onFinish={(actions, mode) =>
+            patchStep(index, {
+              actions: mode === "replace" ? actions : [...step.actions, ...actions]
+            })
+          }
         />
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
