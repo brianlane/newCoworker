@@ -23,6 +23,13 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
  */
 export const TODOS_LIST_LIMIT = 500;
 
+/**
+ * Linked ids per .in() chunk: a PostgREST .in() rides the GET URL, and a
+ * full page of to-dos can carry TODOS_LIST_LIMIT (500) distinct uuids, which
+ * blows past common URI limits. Same bound the deals board uses.
+ */
+const REF_CHUNK = 150;
+
 /** Typed failure the API routes map onto 4xx responses. */
 export class TodoError extends Error {
   constructor(
@@ -137,12 +144,13 @@ export async function listTodosWithRefs(
   const dealIds = [...new Set(todos.map((t) => t.dealId).filter((id): id is string => !!id))];
 
   const contacts = new Map<string, { e164: string; displayName: string | null }>();
-  if (contactIds.length > 0) {
+  for (let i = 0; i < contactIds.length; i += REF_CHUNK) {
+    const chunk = contactIds.slice(i, i + REF_CHUNK);
     const { data, error } = await db
       .from("contacts")
       .select("id, customer_e164, display_name")
       .eq("business_id", businessId)
-      .in("id", contactIds);
+      .in("id", chunk);
     if (error) throw new Error(`listTodosWithRefs: contacts: ${error.message}`);
     for (const row of (data ?? []) as {
       id: string;
@@ -154,12 +162,13 @@ export async function listTodosWithRefs(
   }
 
   const dealTitles = new Map<string, string>();
-  if (dealIds.length > 0) {
+  for (let i = 0; i < dealIds.length; i += REF_CHUNK) {
+    const chunk = dealIds.slice(i, i + REF_CHUNK);
     const { data, error } = await db
       .from("deals")
       .select("id, title")
       .eq("business_id", businessId)
-      .in("id", dealIds);
+      .in("id", chunk);
     if (error) throw new Error(`listTodosWithRefs: deals: ${error.message}`);
     for (const row of (data ?? []) as { id: string; title: string }[]) {
       dealTitles.set(row.id, row.title);
@@ -185,6 +194,84 @@ export async function listTodosWithRefs(
   });
 }
 
+/**
+ * The three rows a to-do can point at: the table each link lives in, the
+ * column the FK error names, and the word the caller sees when the link is
+ * refused. One map so the lookup and the error mapping can never drift.
+ */
+const TODO_REFS = {
+  contact: { table: "contacts", column: "contact_id", noun: "contact" },
+  deal: { table: "deals", column: "deal_id", noun: "deal" },
+  assignee: {
+    table: "ai_flow_team_members",
+    column: "assignee_employee_id",
+    noun: "teammate"
+  }
+} as const;
+
+type TodoRefKind = keyof typeof TODO_REFS;
+
+/** The link ids a create or a patch can carry. */
+type TodoRefInput = {
+  contactId?: string | null;
+  dealId?: string | null;
+  assigneeEmployeeId?: string | null;
+};
+
+/**
+ * Cross-tenant guard, the same lookup the deals module runs before linking:
+ * a row being linked must exist IN THIS BUSINESS. The bare FK only proves
+ * the uuid exists somewhere, so without this a manager could attach another
+ * tenant's contact, deal, or roster member, and could tell a real uuid from
+ * a made-up one by whether the write succeeded. A foreign id and a
+ * nonexistent id fail identically here, so nothing leaks either way. No-op
+ * when no link is being written (undefined = untouched, null = clearing).
+ */
+async function assertRefInBusiness(
+  db: SupabaseClient,
+  businessId: string,
+  kind: TodoRefKind,
+  id: string | null | undefined
+): Promise<void> {
+  if (!id) return;
+  const { table, noun } = TODO_REFS[kind];
+  const { data, error } = await db
+    .from(table)
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`todos ${noun} lookup: ${error.message}`);
+  if (!data) throw new TodoError("invalid", `That ${noun} does not exist.`);
+}
+
+/** All three links, checked in a fixed order so the refusal is stable. */
+async function assertRefsInBusiness(
+  db: SupabaseClient,
+  businessId: string,
+  refs: TodoRefInput
+): Promise<void> {
+  await assertRefInBusiness(db, businessId, "contact", refs.contactId);
+  await assertRefInBusiness(db, businessId, "deal", refs.dealId);
+  await assertRefInBusiness(db, businessId, "assignee", refs.assigneeEmployeeId);
+}
+
+/**
+ * The word for the link an FK failure blames, or null when the failure is
+ * not one of ours (a business_id FK failure, or a 23503 with no message,
+ * must surface plainly rather than be blamed on a link the caller sent).
+ * Reached only by the delete race: the row passed its in-business check and
+ * was deleted before the write landed.
+ */
+function fkViolationNoun(error: { code?: string; message?: string } | null): string | null {
+  if (error?.code !== "23503") return null;
+  const message = error.message ?? "";
+  for (const ref of Object.values(TODO_REFS)) {
+    if (message.includes(ref.column)) return ref.noun;
+  }
+  return null;
+}
+
 /** Insert a new to-do (always created open; completion is a later PATCH). */
 export async function createTodo(
   businessId: string,
@@ -193,6 +280,7 @@ export async function createTodo(
   client?: SupabaseClient
 ): Promise<Todo> {
   const db = client ?? (await createSupabaseServiceClient());
+  await assertRefsInBusiness(db, businessId, input);
   const { data, error } = await db
     .from("todos")
     .insert({
@@ -208,10 +296,9 @@ export async function createTodo(
     .select(TODO_COLUMNS)
     .single();
   if (error || !data) {
-    // A bogus contact/deal/assignee id (23503) is caller input, not an outage.
-    if ((error as { code?: string } | null)?.code === "23503") {
-      throw new TodoError("invalid", "That contact, deal, or teammate does not exist.");
-    }
+    // A link passed its in-business check but was deleted mid-flight.
+    const noun = fkViolationNoun(error as { code?: string; message?: string } | null);
+    if (noun) throw new TodoError("invalid", `That ${noun} does not exist.`);
     throw new Error(`createTodo: ${error?.message ?? "insert returned no row"}`);
   }
   return toTodo(data as TodoRow);
@@ -249,6 +336,10 @@ export async function updateTodo(
   if (!currentRow) throw new TodoError("not_found", "To-do not found.");
   const current = toTodo(currentRow as TodoRow);
 
+  // Re-linking is a cross-tenant surface exactly like creating; clearing a
+  // link (null) needs no lookup.
+  await assertRefsInBusiness(db, businessId, patch);
+
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -275,9 +366,9 @@ export async function updateTodo(
     .select(TODO_COLUMNS)
     .maybeSingle();
   if (error) {
-    if ((error as { code?: string }).code === "23503") {
-      throw new TodoError("invalid", "That contact, deal, or teammate does not exist.");
-    }
+    // A link passed its in-business check but was deleted mid-flight.
+    const noun = fkViolationNoun(error as { code?: string; message?: string });
+    if (noun) throw new TodoError("invalid", `That ${noun} does not exist.`);
     throw new Error(`updateTodo: ${error.message}`);
   }
   // A no-match update returns no error and no row (PostgREST), so the
