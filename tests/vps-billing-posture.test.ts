@@ -51,9 +51,20 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     listVirtualMachines: vi.fn().mockResolvedValue([]),
     listBillingSubscriptions: vi.fn().mockResolvedValue([]),
     enableAutoRenewal: vi.fn().mockResolvedValue(undefined),
+    retireVps: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
+
+const HOUR_MS = 60 * 60 * 1000;
+/**
+ * Paid-through dates are computed FROM `Date.now()` rather than written as
+ * literals: the reaper's whole question is "is this timestamp in the past",
+ * so a hardcoded date silently changes meaning as the calendar moves and
+ * eventually flips a passing test into a failing one for no code reason.
+ */
+const lapsedIso = (hoursAgo = 300) => new Date(Date.now() - hoursAgo * HOUR_MS).toISOString();
+const runwayIso = (hoursAhead = 300) => new Date(Date.now() + hoursAhead * HOUR_MS).toISOString();
 
 describe("checkVpsBillingPosture, tenant direction", () => {
   it("reports nothing when the tenant's box renews", async () => {
@@ -631,6 +642,316 @@ describe("checkVpsBillingPosture, pool direction", () => {
     // Only the 3 `available` rows are counted; none produce findings.
     expect(result.checkedPoolBoxes).toBe(3);
     expect(result.findings).toEqual([]);
+  });
+});
+
+/**
+ * The lapsed-pool reaper.
+ *
+ * A pooled row whose paid period ended could never be cleaned up by anything:
+ * `claimAvailableVps` skips candidates under a 72h runway floor and the only
+ * caller of `retireVps` is the adopt path's catch block, so the row was never
+ * claimed, never adopted, never failed, and never retired. Four such rows
+ * accumulated in production and made the admin pool advertise five available
+ * boxes when one was adoptable.
+ *
+ * The failure mode that matters in the other direction is retiring a box that
+ * is still alive, which hides reusable hardware and makes the next signup buy
+ * a box we already own. So every one of these cases asserts the CONSERVATIVE
+ * behavior explicitly rather than trusting the happy path.
+ */
+describe("checkVpsBillingPosture, lapsed pool reaper", () => {
+  it("retires a lapsed pooled box whose VM is suspended and subscription cancelled", async () => {
+    const expiredAt = lapsedIso();
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800985, hostinger_billing_subscription_id: "hsub-x", expires_at: expiredAt })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1800985, state: "suspended", plan: "KVM 2" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-x", status: "cancelled", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).toHaveBeenCalledTimes(1);
+    expect(deps.retireVps).toHaveBeenCalledWith(
+      1800985,
+      expect.stringContaining("lapsed pool box retired by the billing-posture cron")
+    );
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "pool_box_lapsed_retired",
+        vmId: 1800985,
+        businessId: null,
+        hostingerBillingSubscriptionId: "hsub-x",
+        expiresAt: expiredAt,
+        // Reaping FIXED the problem, so this must not inflate the email's
+        // ACTION REQUIRED count.
+        autoHealed: true,
+        detail: expect.stringContaining("no longer counts it as spare capacity")
+      })
+    ]);
+    // The lapsed box must not also be reported as an idle renewing box.
+    expect(result.findings).toHaveLength(1);
+  });
+
+  it("retires a lapsed pooled box whose VM is gone from the account entirely", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1806114, hostinger_billing_subscription_id: "hsub-gone", expires_at: lapsedIso() })
+        ]),
+      // Account listing succeeds and simply does not contain the VM.
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 999, state: "running" }]),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).toHaveBeenCalledWith(
+      1806114,
+      expect.stringContaining("VM absent from the Hostinger account")
+    );
+    // With the subscription gone too, the id falls back to the inventory row.
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({
+        kind: "pool_box_lapsed_retired",
+        vmId: 1806114,
+        hostingerBillingSubscriptionId: "hsub-gone",
+        autoHealed: true,
+        detail: expect.stringContaining("no billing subscription")
+      })
+    );
+  });
+
+  it("leaves a pooled box with an unknown paid-through alone, the adopt path owns those", async () => {
+    const deps = makeDeps({
+      listInventory: vi.fn().mockResolvedValue([
+        poolRow({ vm_id: 1, hostinger_billing_subscription_id: null, expires_at: null }),
+        poolRow({ vm_id: 2, hostinger_billing_subscription_id: null, expires_at: "" })
+      ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        { id: 1, state: "suspended" },
+        { id: 2, state: "suspended" }
+      ])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it("leaves a pooled box with an unparseable paid-through alone", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 3, hostinger_billing_subscription_id: null, expires_at: "not-a-date" })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 3, state: "suspended" }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it("leaves a pooled box with runway remaining alone", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1864812, hostinger_billing_subscription_id: "hsub-live", expires_at: runwayIso() })
+        ]),
+      // srv1864812's real shape: stopped by the cutover, still paid through.
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1864812, state: "stopped" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-live", status: "non_renewing", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it.each([
+    ["running", "running"],
+    ["stopped", "stopped"],
+    ["initial", "initial"]
+  ])("leaves a lapsed box alone while its VM is still %s", async (_label, state) => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 42, hostinger_billing_subscription_id: "hsub-c", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 42, state }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-c", status: "cancelled", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it("leaves a lapsed box alone while its subscription is not cancelled", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 55, hostinger_billing_subscription_id: "hsub-nr", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 55, state: "suspended" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-nr", status: "non_renewing", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it("skips reaping entirely when the Hostinger VM listing fails", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1815606, hostinger_billing_subscription_id: "hsub-y", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockRejectedValue(new Error("hostinger 503")),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-y", status: "cancelled", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    // Without the listing we cannot tell dead hardware from live, and
+    // retiring a live box would hide it from adopt-first.
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports ACTION REQUIRED when the retire write fails", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800980, hostinger_billing_subscription_id: "hsub-z", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1800980, state: "suspended" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-z", status: "cancelled", is_auto_renewed: false }]),
+      retireVps: vi.fn().mockRejectedValue(new Error("postgrest down"))
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "pool_box_lapsed_retired",
+        vmId: 1800980,
+        // The row is still `available`, so a human has to finish the job and
+        // the email must say so.
+        autoHealed: false,
+        detail: expect.stringContaining("postgrest down")
+      })
+    ]);
+    expect(result.findings[0].detail).toContain("retire it by hand");
+  });
+
+  // Not every rejection is an Error. A PostgREST/driver layer can reject with
+  // a bare string or a plain object, and stringifying that badly would put
+  // "[object Object]" in front of the operator instead of the cause.
+  it("still reports a readable cause when the retire rejects with a non-Error", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800981, hostinger_billing_subscription_id: "hsub-z", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1800981, state: "suspended" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-z", status: "cancelled", is_auto_renewed: false }]),
+      retireVps: vi.fn().mockRejectedValue("connection reset")
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(result.findings[0]).toEqual(
+      expect.objectContaining({
+        kind: "pool_box_lapsed_retired",
+        autoHealed: false,
+        detail: expect.stringContaining("connection reset")
+      })
+    );
+  });
+
+  it("never reaps an assigned or retired row, however lapsed it looks", async () => {
+    const deps = makeDeps({
+      listInventory: vi.fn().mockResolvedValue([
+        poolRow({
+          vm_id: 60,
+          state: "assigned",
+          assigned_business_id: "b-live",
+          hostinger_billing_subscription_id: "hsub-c",
+          expires_at: lapsedIso()
+        }),
+        poolRow({
+          vm_id: 61,
+          state: "retired",
+          hostinger_billing_subscription_id: "hsub-c",
+          expires_at: lapsedIso()
+        })
+      ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        { id: 60, state: "suspended" },
+        { id: 61, state: "suspended" }
+      ]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-c", status: "cancelled", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.retireVps).not.toHaveBeenCalled();
+    expect(result.checkedPoolBoxes).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not resurface a row it just retired as an untracked VM", async () => {
+    const deps = makeDeps({
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1800985, hostinger_billing_subscription_id: "hsub-x", expires_at: lapsedIso() })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1800985, state: "suspended", plan: "KVM 2" }]),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-x", status: "cancelled", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(result.findings.filter((f) => f.kind === "untracked_vm")).toEqual([]);
   });
 });
 

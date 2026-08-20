@@ -1,9 +1,10 @@
 /**
  * Operator email: the fleet billing-posture cron found VMs whose Hostinger
  * auto-renew state contradicts their tenant/pool assignment (live tenant on
- * a lapsing box, or an idle pooled box still paying). Auto-healed findings
- * are included so the operator can see what the cron changed on their
- * behalf; everything else is a manual hPanel action.
+ * a lapsing box, or an idle pooled box still paying), or a pooled box whose
+ * paid period has ended and whose inventory row it retired. Auto-healed
+ * findings are included so the operator can see what the cron changed on
+ * their behalf; everything else is a manual hPanel action.
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
@@ -51,7 +52,7 @@ export function buildOpsBillingPostureEmail(
   const textLines = [
     `The daily VPS billing-posture check (${input.checkedTenantVms} tenant VMs, ${input.checkedPoolBoxes} pooled boxes) found auto-renew states that contradict fleet assignments. A live tenant's box with auto-renew off gets DELETED by Hostinger at its paid period's end.`,
     input.findings.map(findingLine).join("\n"),
-    `Auto-healed findings need no action (renewal was re-enabled). For the rest: hPanel -> Billing -> Subscriptions, and flip the renewal toggle to match the assignment.`
+    `Auto-healed findings need no action: renewal was re-enabled, or a lapsed pool box was retired from inventory. For the rest: hPanel -> Billing -> Subscriptions, and flip the renewal toggle to match the assignment.`
   ];
   const text = textLines.join("\n\n");
 

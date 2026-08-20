@@ -107,6 +107,33 @@ describe("buildOpsBillingPostureEmail, tenant-level findings", () => {
     expect(email.text).toContain("/ pool:");
   });
 
+  // A reaped row is something the cron already FIXED. Filing it under ACTION
+  // REQUIRED would train the operator to ignore a digest whose whole value is
+  // that its action list is short and real.
+  it("renders a reaped lapsed pool box as auto-healed, not action required", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 0,
+      checkedPoolBoxes: 1,
+      findings: [
+        finding({
+          kind: "pool_box_lapsed_retired",
+          vmId: 1800985,
+          businessId: null,
+          businessName: null,
+          expiresAt: "2026-08-02T20:54:22Z",
+          autoHealed: true,
+          detail: "pooled box lapsed, its vps_inventory row was retired"
+        })
+      ]
+    });
+    expect(email.subject).toContain("1 finding(s) auto-healed");
+    expect(email.subject).not.toContain("ACTION REQUIRED");
+    expect(email.text).toContain("VM 1800985 / pool:");
+    expect(email.text).toContain("[AUTO-HEALED]");
+    expect(email.text).toContain("a lapsed pool box was retired from inventory");
+  });
+
   it("omits the VM prefix when the finding has no box", () => {
     const email = buildOpsBillingPostureEmail({
       siteUrl: "https://www.newcoworker.com",
