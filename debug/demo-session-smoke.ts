@@ -205,6 +205,16 @@ async function callDemo(
   const status = statusMatch ? Number(statusMatch[1]) : 0;
   const jsonStart = res.stdout.indexOf("\n", res.stdout.indexOf("HTTP_STATUS:"));
   const raw = jsonStart >= 0 ? res.stdout.slice(jsonStart + 1).trim() : "";
+  // A 404 is an ANSWER here, not a malformed one: the box predates the demo
+  // paths, and Express replies with its own HTML error page. Say so before
+  // trying to parse it, or the most likely first-run outcome greets an
+  // engineer with a wall of markup instead of "redeploy this box".
+  if (status === 404) {
+    fail(
+      "404 from the demo path: this box predates demonstration mode. " +
+        "Redeploy it first: tsx debug/redeploy-aiflow-render.ts --business-id <uuid>"
+    );
+  }
   let body: DemoResponseBody = {};
   if (raw) {
     try {
@@ -261,12 +271,11 @@ async function main(): Promise<void> {
     if (!demoId) fail("--stop-only requires --demo-id");
   } else if (!existingDemoId) {
     console.log(`\n== /demo/start ${url}`);
-    const { status, body } = await callDemo(ssh, "/demo/start", {
+    const { body } = await callDemo(ssh, "/demo/start", {
       businessId,
       url,
       ...(label ? { auth: { integrationLabel: label } } : {})
     });
-    if (status === 404) fail("404: this box predates the demo paths; redeploy it first.");
     if (body.error) fail(`start error "${body.error}"${body.detail ? `: ${body.detail}` : ""}`);
     if (!body.demoId) fail("start returned no demoId");
     demoId = body.demoId;
@@ -284,8 +293,7 @@ async function main(): Promise<void> {
         ? `${act.kind}("${act.target}"${act.value === undefined ? "" : `="${act.value}"`})`
         : `${act.kind}(${act.x},${act.y}${act.value ? `="${act.value}"` : ""})`;
     console.log(`\n== /demo/act ${desc}`);
-    const { status, body } = await callDemo(ssh, "/demo/act", { businessId, demoId, action: act });
-    if (status === 404) fail("404: this box predates the demo paths; redeploy it first.");
+    const { body } = await callDemo(ssh, "/demo/act", { businessId, demoId, action: act });
     lastShot = body.screenshotBase64 ?? lastShot;
     if (body.error === "needs_confirm") {
       // The engineer tool never confirms; reaching the gate is itself the
@@ -323,8 +331,7 @@ async function main(): Promise<void> {
   }
   if (demoId) {
     console.log(`\n== /demo/stop`);
-    const { status, body } = await callDemo(ssh, "/demo/stop", { businessId, demoId });
-    if (status === 404) fail("404: this box predates the demo paths; redeploy it first.");
+    const { body } = await callDemo(ssh, "/demo/stop", { businessId, demoId });
     console.log(`ok       : ${body.ok === true}${body.actionsCount !== undefined ? `, ${body.actionsCount} action(s) recorded` : ""}`);
   }
 }
