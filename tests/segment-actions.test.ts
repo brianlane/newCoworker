@@ -68,7 +68,7 @@ function makeDb(
     }
     tables.push(table);
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "update", "insert", "eq", "in", "order", "range"]) {
+    for (const m of ["select", "update", "insert", "eq", "in", "order", "range", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -108,6 +108,13 @@ const contactRow = (over: Record<string, unknown> = {}) => ({
   created_at: "2026-08-01T00:00:00.000Z",
   ...over
 });
+
+/**
+ * The write-time re-read of contacts.tags. The sweep merges against the row
+ * as it stands after the (slow) hooks rather than writing back the snapshot
+ * it planned from, so every persisted contact costs one of these first.
+ */
+const reread = (tags: unknown = []) => ({ data: [{ tags }] });
 
 beforeEach(() => {
   applyGoalEvent.mockClear();
@@ -374,6 +381,7 @@ describe("runSegmentActionSweep", () => {
     const { db, calls } = makeDb([
       { data: [segRow()] },
       { data: rows },
+      reread(["Existing"]), // c1 write-time re-read
       { data: null }, // c1 tag write
       { data: null } // stamp
     ]);
@@ -436,6 +444,7 @@ describe("runSegmentActionSweep", () => {
     const { db, calls } = makeDb([
       { data: [segRow()] },
       { data: [contactRow()] },
+      reread(), // write-time re-read
       { data: null }, // tag write
       { data: null } // stamp
     ]);
@@ -452,13 +461,102 @@ describe("runSegmentActionSweep", () => {
     expect(contactWrites()).toBe(1);
   });
 
+  it("merges at write time, keeping a tag another writer added while the hooks ran", async () => {
+    // Announcing before persisting puts the slow hooks (a goal-event pass per
+    // linked number, a flow listing per tag) between the page read and the
+    // write. Writing back the planned snapshot would silently drop whatever
+    // landed in that window: a teammate tagging from the dashboard, another
+    // flow's update_contact, the lifecycle stager.
+    const { db, calls } = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow({ tags: ["Existing"] })] },
+      reread(["Existing", "Teammate"]), // arrived while the hooks ran
+      { data: null }, // write
+      { data: null } // stamp
+    ]);
+    const result = await runSegmentActionSweep(db, NOW);
+    expect(result.tagsWritten).toBe(1);
+    expect(result.errors).toEqual([]);
+    const write = calls.find((c) => c.table === "contacts" && c.name === "update");
+    expect(write?.args[0]).toEqual({
+      tags: ["Existing", "Teammate", "Follow up"],
+      updated_at: NOW_ISO
+    });
+    // The re-read is the row's tags only, by id.
+    const selects = calls.filter((c) => c.table === "contacts" && c.name === "select");
+    expect(selects[1].args[0]).toBe("tags");
+    const eqs = calls.filter((c) => c.table === "contacts" && c.name === "eq");
+    expect(eqs.some((c) => c.args[0] === "id" && c.args[1] === "c1")).toBe(true);
+    // The announcement stays the picture from the read, deliberately: it has
+    // to go out BEFORE the write for a half-finished night to be repairable.
+    expect(enqueueContactEventRuns.mock.calls[0][2]).toMatchObject({
+      contact: { e164: "+15550001111", tags: ["Existing", "Follow up"] }
+    });
+  });
+
+  it("writes nothing when another writer landed the same tag first", async () => {
+    const { db, calls } = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow()] },
+      reread(["FOLLOW UP"]), // the same tag, from someone else, mid-window
+      { data: null } // stamp
+    ]);
+    const result = await runSegmentActionSweep(db, NOW);
+    expect(result.tagsWritten).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(0);
+    // The hooks still fired, and the row does carry the tag, so what they
+    // announced is true.
+    expect(enqueueContactEventRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a 25-tag-cap drop that only happens at write time", async () => {
+    const full = Array.from({ length: 25 }, (_, i) => `t${i}`);
+    const { db, calls } = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow()] },
+      reread(full), // the row filled up while the hooks ran
+      { data: null } // stamp
+    ]);
+    const result = await runSegmentActionSweep(db, NOW);
+    expect(result.droppedAtTagCap).toBe(1);
+    expect(result.tagsWritten).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(0);
+  });
+
+  it("never writes blind: an unreadable or vanished row is recorded, not clobbered", async () => {
+    const down = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow()] },
+      { error: { message: "read down" } }, // the re-read fails
+      { data: null } // stamp
+    ]);
+    const r1 = await runSegmentActionSweep(down.db, NOW);
+    expect(r1.errors).toEqual(["business biz-a: tag re-read for contact c1: read down"]);
+    expect(r1.tagsWritten).toBe(0);
+    expect(down.calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(0);
+
+    // Deleted between the page read and the write: nothing to merge into.
+    const gone = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow()] },
+      { data: [] }, // the row is no longer there
+      { data: null } // stamp
+    ]);
+    const r2 = await runSegmentActionSweep(gone.db, NOW);
+    expect(r2.errors).toEqual(["business biz-a: tag re-read for contact c1: row is gone"]);
+    expect(gone.calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(0);
+  });
+
   it("a night that dies at the tag write repairs on the next one, with the same dedupe key", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // Night 1: the automation is enqueued, then the process dies at the
       // column write (a 150s route cap, a pod restart: same outcome, no tag).
-      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }], {
-        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 1 }
+      // skip 2 lets the page read and the write-time re-read through.
+      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }, reread()], {
+        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 2 }
       });
       const r1 = await runSegmentActionSweep(night1.db, NOW);
       expect(r1.errors).toEqual(["business biz-a: sweep threw: pod killed"]);
@@ -472,6 +570,7 @@ describe("runSegmentActionSweep", () => {
       const night2 = makeDb([
         { data: [segRow()] },
         { data: [contactRow()] },
+        reread(), // write-time re-read
         { data: null }, // tag write
         { data: null } // stamp
       ]);
@@ -496,13 +595,14 @@ describe("runSegmentActionSweep", () => {
       // dedupes on the runs it would move, and it can only do that if both
       // nights hand it the same key. (That the key then stops the second
       // jump is pinned by tests/ai-flows-goal-events.test.ts.)
-      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }], {
-        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 1 }
+      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }, reread()], {
+        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 2 }
       });
       await runSegmentActionSweep(night1.db, NOW);
       const night2 = makeDb([
         { data: [segRow()] },
         { data: [contactRow()] },
+        reread(), // write-time re-read
         { data: null }, // tag write
         { data: null } // stamp
       ]);
@@ -552,6 +652,7 @@ describe("runSegmentActionSweep", () => {
         ]
       },
       { data: [contactRow()] },
+      reread(), // write-time re-read
       { data: null }, // write
       { data: null } // stamp
     ]);
@@ -608,9 +709,13 @@ describe("runSegmentActionSweep", () => {
       },
       { data: roster },
       { data: contacts },
+      reread(), // cOwner re-read
       { data: null }, // cOwner write
+      reread(), // cEmp re-read
       { data: null }, // cEmp write
+      reread(), // cCust re-read
       { data: null }, // cCust write
+      reread(), // cGone re-read
       { data: null }, // cGone write
       { data: null } // stamp
     ]);
@@ -633,6 +738,7 @@ describe("runSegmentActionSweep", () => {
       { data: [segRow({ filters: { type: "customer" } })] },
       { data: null }, // roster: null page
       { data: [contactRow()] },
+      reread(), // write-time re-read
       { data: null }, // write
       { data: null } // stamp
     ]);
@@ -657,7 +763,9 @@ describe("runSegmentActionSweep", () => {
       },
       { data: [{ id: UUID_EMP, name: "Solo", phone_e164: "+15550009999", email: null, active: true }] },
       { data: contacts },
+      reread(), // cImplicit re-read
       { data: null }, // cImplicit write
+      reread(), // cStamped re-read
       { data: null }, // cStamped write
       { data: null } // stamp
     ]);
@@ -696,7 +804,9 @@ describe("runSegmentActionSweep", () => {
           })
         ]
       },
+      reread(), // c1 re-read
       { error: { message: "locked" } }, // c1 write fails
+      reread(null), // c2 re-read (a pre-backfill null column)
       { data: null }, // c2 write
       { data: null } // stamp
     ]);
@@ -717,6 +827,7 @@ describe("runSegmentActionSweep", () => {
     const { db, calls } = makeDb([
       { data: [segRow()] },
       { data: [contactRow({ id: "cFull", tags: full }), contactRow({ id: "c2", customer_e164: "+15550002222" })] },
+      reread(), // c2 re-read (cFull never reaches the hooks)
       { data: null }, // c2 write (cFull gets none)
       { data: null } // stamp
     ]);
@@ -735,6 +846,7 @@ describe("runSegmentActionSweep", () => {
       const { db, calls } = makeDb([
         { data: [segRow()] },
         { data: rows },
+        reread(), // write-time re-read
         { data: null }, // the single budgeted write
         { data: null } // stamp
       ]);
@@ -762,6 +874,7 @@ describe("runSegmentActionSweep", () => {
           ]
         },
         { data: [contactRow({ id: "c1" }), contactRow({ id: "c2", customer_e164: "+15550002222" })] },
+        reread(), // write-time re-read
         { data: null }, // trimmed write for c1
         { data: null } // stamp
       ]);
@@ -788,6 +901,7 @@ describe("runSegmentActionSweep", () => {
           ]
         },
         { data: [contactRow({ id: "c1" })] },
+        reread(), // write-time re-read
         { error: { message: "locked" } }, // the trimmed write fails
         { data: null } // stamp
       ]);
@@ -809,6 +923,7 @@ describe("runSegmentActionSweep", () => {
       const { db } = makeDb([
         { data: [segRow()] },
         { data: [contactRow({ id: "c1" }), contactRow({ id: "c2", customer_e164: "+15550002222" })] },
+        reread(), // c1 re-read
         { error: { message: "locked" } }, // c1's write fails
         { data: null } // stamp
       ]);
@@ -833,6 +948,7 @@ describe("runSegmentActionSweep", () => {
       { data: [segRow({ filters: { tagsAny: ["VIP"] } })] },
       { data: page1 }, // full page, nothing matches
       { data: [contactRow({ id: "hit", customer_e164: "+15550002222", tags: ["VIP"] })] },
+      reread(["VIP"]), // write-time re-read
       { data: null }, // write
       { data: null } // stamp
     ]);

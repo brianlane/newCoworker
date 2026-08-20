@@ -45,7 +45,11 @@
  *    did, so it has to be written last: a half-finished run must not be
  *    able to retire a contact whose automation never got enqueued. Both
  *    hooks carry the same tag-application key so the night that repairs one
- *    cannot deliver either of them twice. Full reasoning at the write site.
+ *    cannot deliver either of them twice. That ordering puts the hooks
+ *    between the read and the write, so the write MERGES with the row as it
+ *    stands then (a fresh read, re-planned) instead of writing back a
+ *    snapshot and dropping another writer's tag. Full reasoning at the
+ *    write site.
  *
  * Everything is dependency-injected (client + clock) and never throws, so
  * the whole surface is unit-testable under the shared 100% coverage gate.
@@ -396,6 +400,76 @@ async function loadOwnerOverlay(
   return { ownerNumbers, rosterPhones, implicitOwnerId };
 }
 
+/**
+ * Persist this pass's adds by MERGING them into the row as it stands now,
+ * never by writing back the snapshot they were planned from.
+ *
+ * The hooks fire before this, and they sit between the contact page read and
+ * this write: a goal-event pass per linked number plus a full flow listing
+ * per tag, so the gap is round trips, not microseconds. Writing the planned
+ * list back would silently drop whatever another writer added inside that
+ * window, and there are several of those: a teammate tagging from the
+ * dashboard, another flow's update_contact, the lifecycle stager, an inbound
+ * SMS. So re-read the row and re-plan the same adds against what it holds
+ * now, which is why this goes back through `planContactTagAdds` instead of
+ * open-coding an append: the normalize, case-insensitive de-dup and 25-tag
+ * cap rules stay identical.
+ *
+ * What remains is one statement's worth of window, the same one every other
+ * tag writer here carries; closing it completely would take a database-side
+ * array append, which is a migration this does not own.
+ *
+ * Returns what actually landed. `added` is empty whenever nothing was
+ * written, including the benign case where another writer landed this very
+ * tag first, and the failures are described rather than thrown so the caller
+ * keeps its single "was this business capped" exit.
+ */
+async function persistTagAdds(
+  supabase: AnyClient,
+  contactId: string,
+  adds: string[],
+  nowMs: number
+): Promise<{
+  added: string[];
+  droppedAtCap: string[];
+  error?: { stage: "tag re-read" | "tag write"; message: string };
+}> {
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("tags")
+    .eq("id", contactId)
+    .limit(1);
+  const row = ((data ?? []) as Array<{ tags: unknown }>)[0];
+  if (error || !row) {
+    // Not knowing what the row holds is a reason NOT to write it: a blind
+    // write is exactly the clobber this re-read exists to prevent. The
+    // contact stays untagged, so a later night finishes the job, and both
+    // hooks are keyed, so that night announces nothing a second time.
+    return {
+      added: [],
+      droppedAtCap: [],
+      error: { stage: "tag re-read", message: error ? error.message : "row is gone" }
+    };
+  }
+  const plan = planContactTagAdds(row.tags, adds);
+  // Nothing left to persist: in the hook window another writer either landed
+  // this very tag (the row carries it already, which is what the automation
+  // announced) or filled the row to the cap, reported like any other drop.
+  if (plan.added.length === 0) return { added: [], droppedAtCap: plan.droppedAtCap };
+  const { error: writeErr } = await supabase
+    .from("contacts")
+    .update({ tags: plan.next, updated_at: new Date(nowMs).toISOString() })
+    .eq("id", contactId);
+  if (writeErr) {
+    return {
+      added: [],
+      droppedAtCap: plan.droppedAtCap,
+      error: { stage: "tag write", message: writeErr.message }
+    };
+  }
+  return { added: plan.added, droppedAtCap: plan.droppedAtCap };
+}
+
 /** One business's pass; failures land in `result.errors`. */
 async function sweepBusiness(
   supabase: AnyClient,
@@ -489,8 +563,8 @@ async function sweepBusiness(
         if (capped) break;
         continue;
       }
-      // Re-plan with only the budgeted adds so the row that gets persisted
-      // carries exactly what the hooks announce.
+      // Re-plan with only the budgeted adds, so the hooks announce exactly
+      // the tags this pass is going to add.
       const finalPlan = planContactTagAdds(contact.tags ?? [], writes);
       // Spend the budget HERE, at the announcement, not after the persist.
       // What the cap exists to bound is the automation fan-out, and that is
@@ -579,8 +653,14 @@ async function sweepBusiness(
       for (const application of applications) {
         await enqueueContactEventRuns(supabase, businessId, {
           kind: "tag_changed",
-          // The post-write list, which is what the contact is about to
-          // carry; hydrateContactEventContact leaves caller tags alone.
+          // The page read plus this pass's adds, which is what the contact is
+          // about to carry; hydrateContactEventContact leaves caller tags
+          // alone. A tag another writer adds while these hooks run is missing
+          // from this list, and stays missing: announcing before the write is
+          // what makes a half-finished night repairable, so this payload can
+          // only ever be the picture from the read. The ROW itself is merged
+          // with the live one below; this list only feeds the event text the
+          // flow renders from.
           contact: { e164: primary, tags: finalPlan.next },
           tag: application.tag,
           change: "added",
@@ -589,18 +669,17 @@ async function sweepBusiness(
         });
       }
 
-      const { error: writeErr } = await supabase
-        .from("contacts")
-        .update({ tags: finalPlan.next, updated_at: new Date(nowMs).toISOString() })
-        .eq("id", contact.id);
-      if (writeErr) {
+      // The persist merges with the row as it stands NOW rather than writing
+      // back the snapshot above; see persistTagAdds for why that matters.
+      const persisted = await persistTagAdds(supabase, contact.id, finalPlan.added, nowMs);
+      result.droppedAtTagCap += persisted.droppedAtCap.length;
+      result.tagsWritten += persisted.added.length;
+      if (persisted.error) {
         result.errors.push(
-          `business ${businessId}: tag write for contact ${contact.id}: ${writeErr.message}`
+          `business ${businessId}: ${persisted.error.stage} for contact ${contact.id}: ` +
+            persisted.error.message
         );
-        if (capped) break;
-        continue;
       }
-      result.tagsWritten += finalPlan.added.length;
       if (capped) break;
     }
 
