@@ -38,6 +38,7 @@ const DOC_ID = "22222222-2222-4222-8222-222222222222";
 const VTT = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nBrian: Hello everyone\n";
 
 const DOC_ROW = { id: DOC_ID, business_id: BIZ, title: "T" };
+const MEETING_UUID = "WRkTlvIESr+N4HTcIESuww==";
 
 function makeStorage(uploadError: unknown = null, removeError: unknown = null) {
   const upload = vi.fn().mockResolvedValue({ error: uploadError });
@@ -60,6 +61,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
         .fn()
         .mockResolvedValue({ ok: true, contentMd: "## Minutes", summary: "Short recap" }),
       syncVault: vi.fn().mockResolvedValue(undefined),
+      scheduleClassification: vi.fn(),
       uuid: vi.fn(() => DOC_ID),
       ...overrides
     } as never
@@ -317,5 +319,77 @@ describe("resolveHostNames", () => {
         throw "string boom";
       })
     ).resolves.toEqual(["New Coworker"]);
+  });
+});
+
+describe("importZoomTranscriptDocument, the meeting classification hand-off", () => {
+  it("schedules the classification with what the pass needs", async () => {
+    const { deps } = makeDeps();
+    await importZoomTranscriptDocument(
+      { ...PARAMS, meetingUuid: MEETING_UUID, zoomMeetingId: "89815540862", hostNames: ["Acme Spa"] },
+      deps
+    );
+    const d = deps as { scheduleClassification: ReturnType<typeof vi.fn> };
+    expect(d.scheduleClassification).toHaveBeenCalledTimes(1);
+    expect(d.scheduleClassification.mock.calls[0][0]).toMatchObject({
+      businessId: BIZ,
+      documentId: DOC_ID,
+      minutes: "## Minutes",
+      summary: "Short recap",
+      meetingUuid: MEETING_UUID,
+      zoomMeetingId: "89815540862",
+      hostNames: ["Acme Spa"]
+    });
+  });
+
+  it("files the document but classifies nothing without a meeting uuid", async () => {
+    // A legacy reference shape that resolves no past-meeting UUID has
+    // nothing to stamp, so a retry could not be told from a first run and
+    // would duplicate the note and the to-dos.
+    const { deps } = makeDeps();
+    const out = await importZoomTranscriptDocument({ ...PARAMS, zoomMeetingId: null }, deps);
+    expect(out.ok).toBe(true);
+    expect((deps as { scheduleClassification: ReturnType<typeof vi.fn> }).scheduleClassification)
+      .not.toHaveBeenCalled();
+  });
+
+  it("hands over the DERIVED title, which is what the document ends up called", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({
+        ok: true,
+        contentMd: "## Discovery call\n\nNotes",
+        summary: "Recap"
+      })
+    });
+    await importZoomTranscriptDocument(
+      {
+        ...PARAMS,
+        title: "Zoom meeting recording (transcript)",
+        meetingUuid: MEETING_UUID,
+        hostNames: ["Acme Spa"]
+      },
+      deps
+    );
+    const handed = (deps as { scheduleClassification: ReturnType<typeof vi.fn> })
+      .scheduleClassification.mock.calls[0][0];
+    expect(handed.documentTitle).toContain("Discovery call");
+  });
+
+  it("defaults the optional identifiers when the caller omits them", async () => {
+    const { deps } = makeDeps();
+    await importZoomTranscriptDocument({ ...PARAMS, meetingUuid: MEETING_UUID }, deps);
+    expect(
+      (deps as { scheduleClassification: ReturnType<typeof vi.fn> }).scheduleClassification.mock
+        .calls[0][0]
+    ).toMatchObject({ zoomMeetingId: null, hostNames: [] });
+  });
+
+  it("does not classify a transcript whose condensation failed", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({ ok: false, error: "summarizer_failed" })
+    });
+    await importZoomTranscriptDocument({ ...PARAMS, meetingUuid: MEETING_UUID }, deps);
+    expect((deps as { scheduleClassification: ReturnType<typeof vi.fn> }).scheduleClassification)
+      .not.toHaveBeenCalled();
   });
 });

@@ -482,6 +482,71 @@ export async function findZoomMeetingIdByEvent(
   }
 }
 
+/** The attendee a Zoom meeting was booked for, as the ledger recorded them. */
+export type ZoomMeetingAttendee = {
+  /** `phone:+1...`, `email:someone@example.com`, `name:...`, or `anonymous`. */
+  attendeeKey: string;
+  attendeeEmail: string | null;
+  attendeeName: string | null;
+  startAt: string;
+};
+
+/**
+ * Who a Zoom meeting was booked for, by its Zoom meeting id.
+ *
+ * The inverse of {@link findZoomMeetingIdByEvent}, and the reason meeting
+ * minutes can be attributed to a person without guessing: the booking that
+ * CREATED the Zoom meeting already recorded the attendee, so a transcript
+ * carrying the same meeting id resolves to that contact deterministically.
+ * A meeting the owner started themselves has no ledger row, which is a
+ * clean null rather than a wrong answer.
+ *
+ * Most recent first: a recurring booking link reuses one Zoom meeting id
+ * across instances, and the newest row is the one whose transcript just
+ * arrived. Best-effort, like every other read here.
+ */
+export async function findBookingByZoomMeetingId(
+  businessId: string,
+  zoomMeetingId: string
+): Promise<ZoomMeetingAttendee | null> {
+  const trimmed = zoomMeetingId.trim();
+  if (!trimmed) return null;
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("attendee_key, attendee_email, attendee_name, start_at")
+      .eq("business_id", businessId)
+      .eq("zoom_meeting_id", trimmed)
+      .order("start_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as {
+      attendee_key: string | null;
+      attendee_email: string | null;
+      attendee_name: string | null;
+      start_at: string;
+    };
+    const attendeeKey = (row.attendee_key ?? "").trim();
+    // "anonymous" is the ledger's placeholder for a booking with no
+    // identifying detail at all; it names nobody, so it is not a match.
+    if (!attendeeKey || attendeeKey === "anonymous") return null;
+    return {
+      attendeeKey,
+      attendeeEmail: row.attendee_email?.trim() || null,
+      attendeeName: row.attendee_name?.trim() || null,
+      startAt: row.start_at
+    };
+  } catch (err) {
+    logger.warn("booking-dedupe: attendee-by-zoom-meeting lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
 /**
  * Drop any UNCONFIRMED claim still parked on a start under one key.
  *

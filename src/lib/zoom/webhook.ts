@@ -452,7 +452,12 @@ export async function processZoomWebhookEvent(
           vtt,
           title: buildZoomTranscriptTitle(titleBits),
           refLabel: buildZoomTranscriptRefLabel(titleBits),
-          hostNames
+          hostNames,
+          // Drives the post-import classification: the UUID is its
+          // exactly-once key (same one the ledger claim above used), the
+          // numeric id joins the booking ledger to attribute the meeting.
+          meetingUuid: extracted.meetingUuid,
+          zoomMeetingId: meetingId
         });
 
         if (!imported.ok) {

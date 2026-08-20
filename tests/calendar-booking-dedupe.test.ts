@@ -13,6 +13,7 @@ import {
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
   LEDGER_BLOCK_MS,
+  findBookingByZoomMeetingId,
   findBookingClaimStartsByEvent,
   isLedgerSlotOpen,
   releaseParkedSlotClaims,
@@ -726,5 +727,86 @@ describe("recordExternalBookingClaim (pre-ledger bookings discovered via provide
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     await recordExternalBookingClaim(BIZ, KEY, START, "evt-9");
     expect(logger.warn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("findBookingByZoomMeetingId (who a recorded meeting was with)", () => {
+  const ZOOM_ID = "89815540862";
+
+  it("returns the attendee the booking recorded", async () => {
+    // The deterministic half of meeting-minutes attribution: the booking
+    // that CREATED the Zoom meeting already knows who it was for.
+    const calls = scriptClient([
+      {
+        data: {
+          attendee_key: KEY,
+          attendee_email: "king@kinintegrated.com",
+          attendee_name: "Kingsley Moyo",
+          start_at: START
+        },
+        error: null
+      }
+    ]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toEqual({
+      attendeeKey: KEY,
+      attendeeEmail: "king@kinintegrated.com",
+      attendeeName: "Kingsley Moyo",
+      startAt: START
+    });
+    const eqs = calls.filter((c) => c.name === "eq").map((c) => c.args);
+    expect(eqs).toContainEqual(["business_id", BIZ]);
+    expect(eqs).toContainEqual(["zoom_meeting_id", ZOOM_ID]);
+  });
+
+  it("takes the newest instance when a link reuses one meeting id", async () => {
+    const calls = scriptClient([
+      { data: { attendee_key: KEY, attendee_email: null, attendee_name: null, start_at: START }, error: null }
+    ]);
+    await findBookingByZoomMeetingId(BIZ, ZOOM_ID);
+    expect(calls.find((c) => c.name === "order")?.args).toEqual([
+      "start_at",
+      { ascending: false }
+    ]);
+  });
+
+  it("treats the anonymous placeholder as naming nobody", async () => {
+    // bookingAttendeeKey's fallback for a booking with no identifying
+    // detail at all. Attributing a meeting to it would be meaningless.
+    scriptClient([
+      { data: { attendee_key: "anonymous", attendee_email: null, attendee_name: null, start_at: START }, error: null }
+    ]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
+  });
+
+  it("blanks empty optional fields rather than returning whitespace", async () => {
+    scriptClient([
+      { data: { attendee_key: KEY, attendee_email: "  ", attendee_name: "", start_at: START }, error: null }
+    ]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toMatchObject({
+      attendeeEmail: null,
+      attendeeName: null
+    });
+  });
+
+  it("null on a blank id, no row, a blank key, a read error, or a client blow-up", async () => {
+    expect(await findBookingByZoomMeetingId(BIZ, "   ")).toBeNull();
+
+    scriptClient([{ data: null, error: null }]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
+
+    scriptClient([
+      { data: { attendee_key: null, attendee_email: null, attendee_name: null, start_at: START }, error: null }
+    ]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
+
+    scriptClient([{ data: null, error: { message: "boom" } }]);
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
+    expect(logger.warn).toHaveBeenCalled();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
+    expect(await findBookingByZoomMeetingId(BIZ, ZOOM_ID)).toBeNull();
   });
 });

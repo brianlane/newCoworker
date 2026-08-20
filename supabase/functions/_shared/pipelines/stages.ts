@@ -132,9 +132,7 @@ export function computeStageMove(
  * The lifecycle moments the PLATFORM advances a lead through, and the stage
  * tag each one writes.
  *
- * These names are `DEFAULT_PIPELINE.stages` (src/lib/pipelines/types.ts)
- * minus "Won", which is deliberately never platform-written: won is a human
- * judgement, and the board's own move endpoint already owns it.
+ * These names are `DEFAULT_PIPELINE.stages` (src/lib/pipelines/types.ts).
  *
  * Each moment is a sibling of an existing `GoalEventKind` call site, so the
  * tagger rides instrumentation the engine already had rather than adding new
@@ -144,6 +142,23 @@ export function computeStageMove(
  * reconcile phase (NOT at the send: the cold-emailed prospect has no contact
  * row yet, the outreach flow files it a minute later, so the stage is applied
  * on the next pass once there is something to tag).
+ *
+ * `met` and `won` are the meeting-minutes pair (src/lib/meetings/), fired
+ * after a recorded meeting is condensed and classified. They are the only
+ * moments here that come from READING content rather than from an event
+ * firing, so they carry the one caveat the others do not: the input is a
+ * transcript of what a third party said, and the classifier is what stands
+ * between that and the board.
+ *
+ * "Won" USED to be excluded from this map on the grounds that won is a human
+ * judgement. That held while the platform's only signals were mechanical
+ * (a lead was filed, a booking existed): none of them can tell a closed deal
+ * from a booked call, so writing Won from them would have been a guess.
+ * A meeting where the guest agreed to move forward is different in kind, and
+ * it is the one moment a business most wants reflected on the board without
+ * having to go and drag a card. The board's move endpoint still owns the
+ * human path, and forward-only means a human can always drag a card back
+ * without the platform re-writing it.
  */
 export const LIFECYCLE_STAGE_TAGS = {
   lead_filed: "New Lead",
@@ -155,7 +170,17 @@ export const LIFECYCLE_STAGE_TAGS = {
   // outreach path depend on a teammate claiming something first.
   contacted: "Contacted",
   replied: "Engaged",
-  booked: "Booked"
+  booked: "Booked",
+  // A recorded meeting actually happened and was about this lead. Shares
+  // "Engaged" with `replied` for the same reason `contacted` shares
+  // "Contacted": the board asks whether the lead is in conversation, and a
+  // meeting is the strongest possible yes. Forward-only keeps this from
+  // dragging a Booked lead backwards after a call.
+  met: "Engaged",
+  // The meeting classifier read a commitment to move forward. The ONLY
+  // platform path to Won, and the only lifecycle tag whose trigger is a
+  // model's reading rather than an event: see the note above.
+  won: "Won"
 } as const;
 
 export type LifecycleEvent = keyof typeof LIFECYCLE_STAGE_TAGS;

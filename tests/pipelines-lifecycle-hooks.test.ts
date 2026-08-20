@@ -56,6 +56,22 @@ describe("fireLifecycleStage", () => {
     expect(applyLifecycleStage).not.toHaveBeenCalled();
   });
 
+  it("passes an email contact key through unnormalized", async () => {
+    // An email-only lead has no number to normalize, and refusing the key
+    // here was why such a lead never reached a board at all.
+    await fireLifecycleStage(BIZ, "email:king@kinintegrated.com", "won", opts);
+    expect(applyLifecycleStage.mock.calls[0][2]).toBe("email:king@kinintegrated.com");
+  });
+
+  it("refuses a malformed email key rather than querying with it", async () => {
+    // classifyContactKey validates the address behind the prefix, so this
+    // never becomes a lookup that quietly matches nothing.
+    expect(await fireLifecycleStage(BIZ, "email:not-an-address", "won", opts)).toBe(
+      "no_contact"
+    );
+    expect(applyLifecycleStage).not.toHaveBeenCalled();
+  });
+
   it("swallows a client-construction failure", async () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
     expect(await fireLifecycleStage(BIZ, "+16026160662", "booked", opts)).toBe("no_change");
