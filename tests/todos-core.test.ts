@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_TODO_DETAILS_LENGTH,
   MAX_TODO_TITLE_LENGTH,
+  applyTodoCompletion,
   buildTodoAssignmentSms,
   formatTodoDueAt,
   isTodoOverdue,
   todoCompletionStamps,
   todoCreateSchema,
   todoListFilterSchema,
-  todoPatchSchema
+  todoMatchesStatusFilter,
+  todoPatchSchema,
+  type Todo,
+  type TodoListView
 } from "@/lib/todos/core";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
@@ -140,6 +144,134 @@ describe("formatTodoDueAt", () => {
     expect(formatTodoDueAt("2026-08-25T21:00:00.000Z", "Not/AZone", now)).toBe(
       "Tue, Aug 25, 9:00 PM"
     );
+  });
+});
+
+describe("todoMatchesStatusFilter", () => {
+  const row = (over: Partial<Pick<Todo, "dueAt" | "completedAt">>) => ({
+    dueAt: null,
+    completedAt: null,
+    ...over
+  });
+  const now = new Date("2026-08-20T12:00:00.000Z");
+  const past = "2026-08-19T12:00:00.000Z";
+  const future = "2026-08-21T12:00:00.000Z";
+
+  it("mirrors the three server-side list predicates", () => {
+    expect(todoMatchesStatusFilter(row({}), "open", now)).toBe(true);
+    expect(todoMatchesStatusFilter(row({ completedAt: past }), "open", now)).toBe(false);
+
+    expect(todoMatchesStatusFilter(row({ completedAt: past }), "done", now)).toBe(true);
+    expect(todoMatchesStatusFilter(row({}), "done", now)).toBe(false);
+
+    expect(todoMatchesStatusFilter(row({ dueAt: past }), "overdue", now)).toBe(true);
+    expect(todoMatchesStatusFilter(row({ dueAt: future }), "overdue", now)).toBe(false);
+    // Checking a late row off stops it being overdue, however late it was.
+    const lateAndDone = row({ dueAt: past, completedAt: past });
+    expect(todoMatchesStatusFilter(lateAndDone, "overdue", now)).toBe(false);
+  });
+
+  it("defaults `now` to the current instant", () => {
+    expect(todoMatchesStatusFilter(row({ dueAt: "2000-01-01T00:00:00.000Z" }), "overdue")).toBe(
+      true
+    );
+  });
+});
+
+describe("applyTodoCompletion", () => {
+  const now = new Date("2026-08-20T12:00:00.000Z");
+  const past = "2026-08-19T12:00:00.000Z";
+
+  const todo = (id: string, over: Partial<Todo> = {}): Todo => ({
+    id,
+    businessId: UUID,
+    contactId: null,
+    dealId: null,
+    title: `todo ${id}`,
+    details: null,
+    assigneeEmployeeId: null,
+    dueAt: null,
+    completedAt: null,
+    completedBy: null,
+    createdAt: "2026-08-18T12:00:00.000Z",
+    updatedAt: "2026-08-18T12:00:00.000Z",
+    ...over
+  });
+
+  const view = (status: TodoListView<Todo>["status"], rows: Todo[]): TodoListView<Todo> => ({
+    status,
+    rows
+  });
+
+  it("refreshes the row's fields and keeps every other row untouched", () => {
+    const other = todo("b");
+    const before = view("open", [todo("a"), other]);
+    const after = applyTodoCompletion(
+      before,
+      todo("a", { title: "renamed by the server", completedAt: null }),
+      now
+    );
+    expect(after.rows.map((r) => r.id)).toEqual(["a", "b"]);
+    expect(after.rows[0].title).toBe("renamed by the server");
+    expect(after.rows[1]).toBe(other);
+  });
+
+  it("drops a row that no longer belongs under the list's own chip", () => {
+    const open = applyTodoCompletion(
+      view("open", [todo("a"), todo("b")]),
+      todo("a", { completedAt: past }),
+      now
+    );
+    expect(open.rows.map((r) => r.id)).toEqual(["b"]);
+
+    const done = applyTodoCompletion(
+      view("done", [todo("a", { completedAt: past })]),
+      todo("a", { completedAt: null }),
+      now
+    );
+    expect(done.rows).toEqual([]);
+
+    const overdue = applyTodoCompletion(
+      view("overdue", [todo("a", { dueAt: past })]),
+      todo("a", { dueAt: past, completedAt: past }),
+      now
+    );
+    expect(overdue.rows).toEqual([]);
+  });
+
+  // The race Bugbot found: the user checks a row off under Open, switches to
+  // the Done chip, and the Done list lands before the completion response
+  // does. Membership is judged against the chip the list on screen belongs
+  // to, so the row stays where it legitimately belongs. Judging it against
+  // the chip captured when the request went out ("open") hid the row until a
+  // manual refresh brought it back.
+  it("keeps a checked-off row when the list has already moved to the Done chip", () => {
+    const landed = view("done", [
+      todo("a", { completedAt: past }),
+      todo("c", { completedAt: past })
+    ]);
+    const after = applyTodoCompletion(landed, todo("a", { completedAt: past }), now);
+    expect(after.status).toBe("done");
+    expect(after.rows.map((r) => r.id)).toEqual(["a", "c"]);
+  });
+
+  it("keeps an unchecked row when the list has already moved to the Open chip", () => {
+    const landed = view("open", [todo("a")]);
+    const after = applyTodoCompletion(landed, todo("a", { completedAt: null }), now);
+    expect(after.rows.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("leaves a list that no longer holds the row untouched, by reference", () => {
+    // The other half of the same race: the newer list does not carry the row
+    // at all, so a late response must not write anything into it.
+    const landed = view("done", [todo("z", { completedAt: past })]);
+    expect(applyTodoCompletion(landed, todo("a", { completedAt: past }), now)).toBe(landed);
+  });
+
+  it("defaults `now` to the current instant", () => {
+    const landed = view("overdue", [todo("a", { dueAt: "2000-01-01T00:00:00.000Z" })]);
+    const after = applyTodoCompletion(landed, todo("a", { dueAt: "2000-01-01T00:00:00.000Z" }));
+    expect(after.rows.map((r) => r.id)).toEqual(["a"]);
   });
 });
 

@@ -119,6 +119,61 @@ export function isTodoOverdue(
 }
 
 /**
+ * Whether a row (still) belongs under a list filter chip. Mirrors the
+ * server-side predicates in listTodos (src/lib/todos/db.ts) so the client can
+ * settle membership after a local edit without refetching the whole list.
+ * `overdue` leans on isTodoOverdue, which already excludes completed rows.
+ */
+export function todoMatchesStatusFilter(
+  todo: Pick<Todo, "dueAt" | "completedAt">,
+  status: TodoStatusFilter,
+  now: Date = new Date()
+): boolean {
+  if (status === "done") return todo.completedAt !== null;
+  if (status === "overdue") return isTodoOverdue(todo, now);
+  return todo.completedAt === null;
+}
+
+/**
+ * A loaded to-do list together with the filter chip it was loaded UNDER.
+ *
+ * The two travel as one value on purpose. A completion request can resolve
+ * after the user switched chips and a newer list already landed, so the chip
+ * captured when that request went out is not the one the rows on screen
+ * belong to. Carrying the chip with the rows means membership is always
+ * judged against the list being changed, never against a filter that has
+ * since moved on.
+ */
+export type TodoListView<T extends Todo> = {
+  status: TodoStatusFilter;
+  rows: T[];
+};
+
+/**
+ * Fold the authoritative row a completion request returned into a loaded
+ * list: refresh that row's fields, then drop it when it no longer belongs
+ * under the list's own chip (a checked-off row leaves Open and Overdue, an
+ * unchecked one leaves Done).
+ *
+ * When the list no longer holds that row at all (the filter moved on, or a
+ * newer load replaced the rows) the view comes back untouched, by reference,
+ * so a late response can never write over a fresher fetch.
+ */
+export function applyTodoCompletion<T extends Todo>(
+  view: TodoListView<T>,
+  updated: Todo,
+  now: Date = new Date()
+): TodoListView<T> {
+  if (!view.rows.some((row) => row.id === updated.id)) return view;
+  return {
+    status: view.status,
+    rows: view.rows
+      .map((row) => (row.id === updated.id ? { ...row, ...updated } : row))
+      .filter((row) => row.id !== updated.id || todoMatchesStatusFilter(row, view.status, now))
+  };
+}
+
+/**
  * The `completed_at`/`completed_by` values a completion change must write:
  * checking off stamps both, unchecking clears both, so the pair always
  * describes the CURRENT state, never a stale one.

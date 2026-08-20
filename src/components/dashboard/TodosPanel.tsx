@@ -21,22 +21,13 @@ import { Card } from "@/components/ui/Card";
 import {
   MAX_TODO_DETAILS_LENGTH,
   MAX_TODO_TITLE_LENGTH,
+  applyTodoCompletion,
   isTodoOverdue,
   type Todo,
+  type TodoListView,
   type TodoStatusFilter
 } from "@/lib/todos/core";
 import type { TodoWithRefs } from "@/lib/todos/db";
-
-/** Whether a row (still) belongs under the active status chip; mirrors the
- * server-side predicates in src/lib/todos/db.ts listTodos. */
-function matchesStatusChip(
-  todo: Pick<Todo, "dueAt" | "completedAt">,
-  status: TodoStatusFilter
-): boolean {
-  if (status === "done") return todo.completedAt !== null;
-  if (status === "overdue") return todo.completedAt === null && isTodoOverdue(todo);
-  return todo.completedAt === null;
-}
 
 type ApiEnvelope<T> = { ok: boolean; data?: T; error?: { message?: string } };
 
@@ -93,7 +84,9 @@ export function TodosPanel({
   canManage: boolean;
 }) {
   const t = useTranslations("dashboard.todos");
-  const [todos, setTodos] = useState<TodoWithRefs[] | null>(null);
+  /** The loaded rows AND the chip they were loaded under, kept together so a
+   * late completion response is judged against the list actually on screen. */
+  const [list, setList] = useState<TodoListView<TodoWithRefs> | null>(null);
   const [employees, setEmployees] = useState<RosterOption[]>([]);
   const [dealOptions, setDealOptions] = useState<DealOption[]>([]);
   const [status, setStatus] = useState<TodoStatusFilter>("open");
@@ -118,12 +111,14 @@ export function TodosPanel({
         cache: "no-store"
       }).then((r) => readEnvelope<{ todos: TodoWithRefs[]; employees: RosterOption[] }>(r));
       if (seq !== loadSeq.current) return;
-      setTodos(data.todos);
+      // Stamped with the chip THIS fetch asked for, not whatever the chip
+      // reads at the moment the rows land.
+      setList({ status, rows: data.todos });
       setEmployees(data.employees);
     } catch (e) {
       if (seq !== loadSeq.current) return;
       setError(e instanceof Error ? e.message : t("loadFailed"));
-      setTodos(null);
+      setList(null);
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
@@ -157,24 +152,22 @@ export function TodosPanel({
             body: JSON.stringify({ completed: todo.completedAt === null })
           }
         ).then((r) => readEnvelope<{ todo: Todo }>(r));
-        // Merge the authoritative row (the PATCH response carries no
-        // resolved refs, keep the row's), then drop it when it no longer
-        // belongs under the active chip: a checked-off row must leave the
-        // Open and Overdue lists, an unchecked one must leave Done.
-        setTodos((ts) =>
-          ts
-            ? ts
-                .map((x) => (x.id === todo.id ? { ...x, ...data.todo } : x))
-                .filter((x) => x.id !== todo.id || matchesStatusChip(x, status))
-            : ts
-        );
+        // Merge the authoritative row (the PATCH response carries no resolved
+        // refs, keep the row's), then drop it when it no longer belongs under
+        // the chip. Read out of the updater, so the chip is the one the list
+        // on screen belongs to at the moment this response lands: the user
+        // can switch chips mid-request, and judging membership by the chip
+        // captured when the request went out hid rows the newer list had
+        // just legitimately loaded. A row that list does not hold is left
+        // alone, so this can never write over a newer fetch either.
+        setList((cur) => (cur ? applyTodoCompletion(cur, data.todo) : cur));
       } catch (e) {
         setActionError(e instanceof Error ? e.message : t("updateFailed"));
       } finally {
         setBusyId(null);
       }
     },
-    [businessId, status, t]
+    [businessId, t]
   );
 
   const chips: { id: TodoStatusFilter; label: string }[] = [
@@ -269,7 +262,7 @@ export function TodosPanel({
         </Card>
       )}
 
-      {todos !== null && todos.length === 0 && (
+      {list !== null && list.rows.length === 0 && (
         <Card>
           <div className="space-y-3 py-4 text-center">
             <p className="text-sm text-parchment/60">{t("empty")}</p>
@@ -278,9 +271,9 @@ export function TodosPanel({
         </Card>
       )}
 
-      {todos !== null && todos.length > 0 && (
+      {list !== null && list.rows.length > 0 && (
         <div className="divide-y divide-parchment/10 overflow-hidden rounded-lg border border-parchment/10 bg-parchment/5">
-          {todos.map((todo) => {
+          {list.rows.map((todo) => {
             const overdue = isTodoOverdue(todo);
             const assignee = todo.assigneeEmployeeId
               ? employees.find((m) => m.id === todo.assigneeEmployeeId)?.name ?? null
