@@ -27,6 +27,7 @@ import type {
   PeriodChange
 } from "@/lib/analytics/dashboard-analytics";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
+import { formatDealValue } from "@/lib/deals/core";
 import type { SmsLinkView } from "@/lib/db/sms-links";
 import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
@@ -687,6 +688,131 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
       <p className="text-[10px] text-parchment/35 mt-3">
         Turnaround approximates run start → claim settle and can include follow-up steps.
       </p>
+    </Card>
+  );
+}
+
+export type DealsSourceRowView = {
+  label: string;
+  wonCount: number;
+  wonValueCents: number;
+};
+
+export type DealsOwnerRowView = {
+  employeeId: string | null;
+  name: string;
+  wonCount: number;
+  wonValueCents: number;
+};
+
+export type DealsOverviewView = {
+  windowDays: number;
+  createdCount: number;
+  wonCount: number;
+  wonValueCents: number;
+  openCount: number;
+  openValueCents: number;
+  bySource: DealsSourceRowView[];
+  byOwner: DealsOwnerRowView[];
+  clipped: boolean;
+};
+
+function DealsBreakdownTable({
+  title,
+  firstColumn,
+  rows
+}: {
+  title: string;
+  firstColumn: string;
+  rows: { key: string; label: string; wonCount: number; wonValueCents: number }[];
+}) {
+  return (
+    <div className="min-w-0 flex-1">
+      <p className="text-xs text-parchment/50 mb-1.5">{title}</p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-parchment/40">
+            <th className="pb-1 font-normal">{firstColumn}</th>
+            <th className="pb-1 pr-2 text-right font-normal">Won</th>
+            <th className="pb-1 text-right font-normal">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className="border-t border-parchment/10">
+              <td className="py-1 pr-2 text-parchment/80 truncate max-w-[10rem]">{r.label}</td>
+              <td className="py-1 pr-2 text-right text-parchment/70">{r.wonCount}</td>
+              <td className="py-1 text-right text-parchment/70">
+                {formatDealValue(r.wonValueCents, "USD") ?? "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Owner-only deals rollup: the trailing window's created/won deals with the
+ * won money broken down by contacts.lead_source and by owning teammate,
+ * plus the all-time open book (open + under-contract deals of any age).
+ * Sums render as USD, the v1 deal currency.
+ */
+export function DealsCard({ view }: { view: DealsOverviewView }) {
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Deals ({view.windowDays} days), owner view
+      </p>
+      <p className="text-sm text-parchment/70">
+        {view.createdCount.toLocaleString()} created ·{" "}
+        {view.wonCount.toLocaleString()} won
+        {view.wonCount > 0 ? (
+          <span className="text-parchment/45">
+            {" "}
+            worth {formatDealValue(view.wonValueCents, "USD")}
+          </span>
+        ) : null}
+      </p>
+      <p className="text-sm text-parchment/70">
+        Open book (all time): {view.openCount.toLocaleString()} deal
+        {view.openCount === 1 ? "" : "s"}
+        {view.openValueCents > 0 ? (
+          <span className="text-parchment/45">
+            {" "}
+            worth {formatDealValue(view.openValueCents, "USD")}
+          </span>
+        ) : null}
+      </p>
+      {(view.bySource.length > 0 || view.byOwner.length > 0) && (
+        <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:gap-8">
+          {view.bySource.length > 0 && (
+            <DealsBreakdownTable
+              title="Won by lead source"
+              firstColumn="Source"
+              rows={view.bySource.map((r) => ({ key: r.label, ...r }))}
+            />
+          )}
+          {view.byOwner.length > 0 && (
+            <DealsBreakdownTable
+              title="Won by teammate"
+              firstColumn="Teammate"
+              rows={view.byOwner.map((r) => ({
+                key: r.employeeId ?? "unassigned",
+                label: r.name,
+                wonCount: r.wonCount,
+                wonValueCents: r.wonValueCents
+              }))}
+            />
+          )}
+        </div>
+      )}
+      {view.clipped ? (
+        <p className="text-[11px] text-amber-300/80 mt-2">
+          Large book, counts cover the most recent deals only.
+        </p>
+      ) : null}
     </Card>
   );
 }
