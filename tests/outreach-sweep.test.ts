@@ -157,6 +157,7 @@ function baseDeps(over: Record<string, unknown> = {}) {
       flowsMatched: 1
     })),
     recordEmailLogImpl: vi.fn(async () => {}),
+    fireLifecycleStageImpl: vi.fn(async () => "moved" as const),
     ...over
   } as never;
 }
@@ -179,6 +180,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     claimProspectNudge: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
     countProspectsNudgedSince: vi.fn(async () => 0),
+    listProspectsContactedSince: vi.fn(async () => []),
     listProspectsToRewrite: vi.fn(async () => []),
     countProspectsToRewrite: vi.fn(async () => 0),
     countProspectsByStatus: vi.fn(async () => 0),
@@ -2187,5 +2189,82 @@ describe("sendDraftsNow (the owner pressed Send all)", () => {
       reason: "not_configured",
       detail: "no postal address configured"
     });
+  });
+});
+
+describe("the Contacted stage (an emailed prospect is not a new lead)", () => {
+  it("moves everyone emailed recently, and does it on a LATER pass than the send", async () => {
+    // The board is keyed on contacts, and a cold-emailed prospect has none at
+    // the moment the mail leaves: the outreach flow files them about a minute
+    // afterwards. Measured on the live tenant: a send at 00:55:59 produced a
+    // contact at 00:57:02. Firing inside the send would tag nothing, and the
+    // flow would then file them as "New Lead", sitting beside leads nobody has
+    // touched while the Contacted column read zero.
+    const emailed = prospect({ id: "p-sent", phone: "(480) 999-5302" });
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [emailed])
+    });
+    const fireLifecycleStageImpl = vi.fn(async () => "moved" as const);
+    await processOutreachSweep(baseDeps({ fireLifecycleStageImpl }));
+    expect(fireLifecycleStageImpl).toHaveBeenCalledWith(
+      BIZ,
+      "(480) 999-5302",
+      "contacted",
+      { dedupeSuffix: "p-sent" }
+    );
+    // Bounded and recent: this runs every pass, so it must never be a scan.
+    const call = (ledger.listProspectsContactedSince as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[1] < MONDAY_MORNING.toISOString()).toBe(true);
+    expect(typeof call[2]).toBe("number");
+  });
+
+  it("runs for a manual tenant too, and outside the send window", async () => {
+    // A manual tenant sends with the Send button, so their board deserves the
+    // same truth. Reading and tagging is not sending, so neither the window nor
+    // the cap has any claim on it.
+    const fireLifecycleStageImpl = vi.fn(async () => "moved" as const);
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })]),
+      listProspectsContactedSince: vi.fn(async () => [prospect({ phone: "+14809995302" })])
+    });
+    await processOutreachSweep(baseDeps({ fireLifecycleStageImpl, now: () => MONDAY_AFTERNOON }));
+    expect(fireLifecycleStageImpl).toHaveBeenCalledWith(
+      BIZ,
+      "+14809995302",
+      "contacted",
+      expect.anything()
+    );
+  });
+
+  it("never lets an unmovable board stop the mail", async () => {
+    // The sweep's job is sending. A stage that will not move is a cosmetic
+    // problem and must not become an outage.
+    // A sendable queue, so the assertion that the mail still went out is real.
+    // However it failed: a thrown string is not an Error, and reading .message
+    // off one would record "undefined" as the reason.
+    for (const thrown of [new Error("board exploded"), "board exploded"]) {
+      stubLedger({
+        listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+          statuses.includes("drafted") ? [prospect()] : []
+        ),
+        listProspectsContactedSince: vi.fn(async () => [prospect()])
+      });
+      const result = await processOutreachSweep(
+        baseDeps({
+          fireLifecycleStageImpl: vi.fn(async () => {
+            throw thrown;
+          })
+        })
+      );
+      // Recorded, not swallowed, and the pass carried on: this phase runs
+      // BEFORE the send, so an exception escaping it would stop the mail.
+      expect(result.errors).toEqual([]);
+      expect(result.notes).toContainEqual({
+        businessId: BIZ,
+        note: "could not move acmehvac.com to Contacted: board exploded"
+      });
+      expect(result.sent).toBe(1);
+    }
   });
 });

@@ -140,11 +140,20 @@ export function computeStageMove(
  * tagger rides instrumentation the engine already had rather than adding new
  * hooks: lead_filed at `enrichCustomerProfile`, claimed at
  * `assignContactOwnerOnClaim`, replied at the inbound SMS webhook, booked at
- * every `appointment_booked` goal event.
+ * every `appointment_booked` goal event, contacted at the prospecting sweep's
+ * reconcile phase (NOT at the send: the cold-emailed prospect has no contact
+ * row yet, the outreach flow files it a minute later, so the stage is applied
+ * on the next pass once there is something to tag).
  */
 export const LIFECYCLE_STAGE_TAGS = {
   lead_filed: "New Lead",
   claimed: "Contacted",
+  // We emailed them. Shares a tag with `claimed` on purpose: both mean the
+  // lead has been reached, and the board asks "has anyone touched this?", not
+  // "who touched it?". Kept a separate EVENT because the two happen at
+  // different moments from different code, and collapsing them would make the
+  // outreach path depend on a teammate claiming something first.
+  contacted: "Contacted",
   replied: "Engaged",
   booked: "Booked"
 } as const;

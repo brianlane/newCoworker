@@ -48,6 +48,7 @@ import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
 import { logger } from "@/lib/logger";
 import {
   claimDiscoveryRun,
@@ -56,6 +57,7 @@ import {
   countProspectsSentSince,
   countProspectsByStatus,
   countProspectsToRewrite,
+  listProspectsContactedSince,
   existingProspectDomains,
   getOutreachSettings,
   getProspect,
@@ -150,6 +152,7 @@ export type OutreachSweepDeps = {
   schedulingLinkImpl?: typeof outreachSchedulingLink;
   processFlowEventImpl?: typeof processWebhookFlowEvent;
   recordEmailLogImpl?: typeof recordOutreachEmailLog;
+  fireLifecycleStageImpl?: typeof fireLifecycleStage;
 };
 
 /** Every dependency resolved once, so the phases below take no optionals. */
@@ -170,6 +173,7 @@ type Resolved = {
   schedulingLink: typeof outreachSchedulingLink;
   processFlowEvent: typeof processWebhookFlowEvent;
   recordEmailLog: typeof recordOutreachEmailLog;
+  fireLifecycleStage: typeof fireLifecycleStage;
 };
 
 /* c8 ignore start -- production defaults; every test injects its own */
@@ -190,7 +194,8 @@ async function resolveDeps(deps: OutreachSweepDeps): Promise<Resolved> {
     getBusiness: deps.getBusinessImpl ?? getBusiness,
     schedulingLink: deps.schedulingLinkImpl ?? outreachSchedulingLink,
     processFlowEvent: deps.processFlowEventImpl ?? processWebhookFlowEvent,
-    recordEmailLog: deps.recordEmailLogImpl ?? recordOutreachEmailLog
+    recordEmailLog: deps.recordEmailLogImpl ?? recordOutreachEmailLog,
+    fireLifecycleStage: deps.fireLifecycleStageImpl ?? fireLifecycleStage
   };
 }
 /* c8 ignore stop */
@@ -499,6 +504,70 @@ async function sendForBusiness(
     await handOffToFlow(settings, prospect, r, result, { email: to, subject });
   }
   return sentThisPass;
+}
+
+/**
+ * How far back the reconcile phase looks. Long enough to cover a send whose
+ * contact was filed late (or not at all, until the owner switched their
+ * outreach flow on), short enough that the work stays a handful of indexed
+ * reads per pass.
+ */
+const CONTACTED_RECONCILE_DAYS = 3;
+
+/** Ceiling on one reconcile pass, so a busy tenant cannot stall the sweep. */
+const CONTACTED_RECONCILE_LIMIT = 100;
+
+/**
+ * Move emailed prospects to the Contacted stage on the owner's board.
+ *
+ * Why this is a separate phase and not part of the send. The board is keyed on
+ * CONTACTS, and a cold-emailed prospect has none at the moment the mail leaves:
+ * the outreach flow files them asynchronously, about a minute later (measured:
+ * a send at 00:55:59 produced a contact at 00:57:02). Firing the stage inside
+ * the send would find nothing to tag, and the flow would then file them as
+ * "New Lead", where they would sit next to leads nobody has touched while the
+ * Contacted column read zero.
+ *
+ * So it runs on the NEXT pass, over everything emailed recently, and is safe to
+ * repeat: `applyLifecycleStage` is forward-only, so a prospect already at
+ * Contacted or beyond costs one read and no write, and one who has since
+ * replied is never dragged back. It also backfills, which is what makes this a
+ * fix for the sends that already happened rather than only for future ones.
+ *
+ * Tenants without a Contacted stage get nothing, by the same rule: the stage
+ * has to exist, because a stage IS a tag and inventing one writes junk.
+ */
+async function reconcileContactedForBusiness(
+  settings: OutreachSettingsRow,
+  r: Resolved,
+  result: OutreachSweepResult
+): Promise<void> {
+  const since = new Date(
+    r.now.getTime() - CONTACTED_RECONCILE_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const contacted = await listProspectsContactedSince(
+    settings.business_id,
+    since,
+    CONTACTED_RECONCILE_LIMIT,
+    r.db
+  );
+  for (const prospect of contacted) {
+    // Best-effort per prospect, and it has to be REAL best-effort: this phase
+    // runs before the send, so an exception here would abort the pass and stop
+    // the mail. The board is cosmetic; the mail is the job.
+    try {
+      await r.fireLifecycleStage(settings.business_id, prospect.phone, "contacted", {
+        dedupeSuffix: prospect.id
+      });
+    } catch (err) {
+      result.notes.push({
+        businessId: settings.business_id,
+        note: `could not move ${prospect.domain} to Contacted: ${
+          err instanceof Error ? err.message : String(err)
+        }`.slice(0, 200)
+      });
+    }
+  }
 }
 
 /** Phase 4: the single follow-up, for prospects who went quiet. */
@@ -1296,6 +1365,10 @@ async function sweepBusiness(
   }
   await discoverForBusiness(settings, r, result, resolved.placesQueriesPerDay);
   await draftForBusiness(settings, resolved.tenant, r, result);
+  // Before the auto-only gate: a manual-mode tenant sends with the Send button
+  // and their board deserves the same truth. This phase reads and tags, it
+  // never sends, so it is safe outside the window and the cap.
+  await reconcileContactedForBusiness(settings, r, result);
   if (settings.mode !== "auto") return;
   // One window check for both outbound phases: a nudge is cold mail too.
   if (

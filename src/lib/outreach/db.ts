@@ -363,6 +363,32 @@ const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"]
  */
 const BLANK_VERTICAL_FILTER = "vertical.is.null,vertical.eq.";
 
+/**
+ * Prospects emailed since `sinceIso` that carry a phone number.
+ *
+ * Feeds the sweep's reconcile phase. Phone-bearing only because the CRM is
+ * phone-keyed: a prospect discovered with just an address files no contact, so
+ * there is nothing on the board to move.
+ */
+export async function listProspectsContactedSince(
+  businessId: string,
+  sinceIso: string,
+  limit: number,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .gte("sent_at", sinceIso)
+    .not("phone", "is", null)
+    .order("sent_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listProspectsContactedSince: ${error.message}`);
+  return (data ?? []) as OutreachProspectRow[];
+}
+
 /** How many prospects sit in one status. Drives the Send all progress line. */
 export async function countProspectsByStatus(
   businessId: string,

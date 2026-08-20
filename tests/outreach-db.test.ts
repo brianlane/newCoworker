@@ -32,6 +32,7 @@ import {
   listProspectOutcomes,
   listProspectsByStatus,
   listProspectsDueForNudge,
+  listProspectsContactedSince,
   listProspectsToProbe,
   listProspectsToRewrite,
   OUTREACH_ACTIVE_PAGE_SIZE,
@@ -64,6 +65,7 @@ function chain(terminal?: unknown): Chain {
     "gte",
     "lte",
     "lt",
+    "not",
     "or",
     "order",
     "range",
@@ -591,5 +593,28 @@ describe("countProspectsByStatus", () => {
     await expect(
       countProspectsByStatus(BIZ, "drafted", makeDb(chain({ count: null, error: { message: "cnt" } })))
     ).rejects.toThrow(/cnt/);
+  });
+});
+
+describe("listProspectsContactedSince (who the board should show as Contacted)", () => {
+  const SINCE = "2026-08-17T00:00:00.000Z";
+
+  it("takes recently emailed prospects that have a phone, newest first", async () => {
+    // Phone-bearing only: the CRM is phone-keyed, so a prospect discovered with
+    // just an address files no contact and has nothing on the board to move.
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await listProspectsContactedSince(BIZ, SINCE, 100, makeDb(c))).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.gte).toHaveBeenCalledWith("sent_at", SINCE);
+    expect(c.not).toHaveBeenCalledWith("phone", "is", null);
+    // Bounded: this runs every pass, so it must never become a scan.
+    expect(c.limit).toHaveBeenCalledWith(100);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
+    expect(await listProspectsContactedSince(BIZ, SINCE, 100)).toEqual([]);
+
+    await expect(
+      listProspectsContactedSince(BIZ, SINCE, 100, makeDb(chain({ data: null, error: { message: "lst" } })))
+    ).rejects.toThrow(/lst/);
   });
 });
