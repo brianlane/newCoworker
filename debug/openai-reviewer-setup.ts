@@ -33,6 +33,7 @@
  *   tsx debug/openai-reviewer-setup.ts --apply
  */
 import { randomBytes } from "node:crypto";
+import { normalizeContactNumber } from "../src/lib/telnyx/format.ts";
 import { loadEnv } from "./_shared.ts";
 
 loadEnv();
@@ -45,10 +46,59 @@ const BUSINESS_ID = "e2b7a1c4-0000-4000-8000-000000000005";
 const BUSINESS_NAME = "Cedar Street Dental (demo)";
 const TIMEZONE = "America/Phoenix";
 
-/** Reserved fictional range: these cannot reach a real person. */
-const MARIA = "+15550142";
+/**
+ * Reserved fictional range: these cannot reach a real person.
+ *
+ * Tom and Priya stay fictional because nothing ever texts them. Maria is the
+ * one contact test case 5 sends to, so a fictional number there means the
+ * carrier rejects the send and the reviewer sees "Could not send". Pass a real
+ * line you control to make that case actually pass:
+ *
+ *   tsx debug/openai-reviewer-setup.ts --apply --sms-target +1XXXXXXXXXX
+ *   OPENAI_SANDBOX_SMS_TARGET=+1XXXXXXXXXX tsx debug/openai-reviewer-setup.ts --apply
+ *
+ * It is a flag and not a constant on purpose: the only sensible values are
+ * someone's real phone number, and personal numbers do not belong in a repo.
+ * The line must have NO AI automation attached, or our own coworker answers
+ * the reviewer's test and texts the sandbox back.
+ */
 const TOM = "+15550177";
 const PRIYA = "+15550198";
+
+const smsFlagIdx = process.argv.indexOf("--sms-target");
+const SMS_TARGET_RAW =
+  (smsFlagIdx >= 0 ? process.argv[smsFlagIdx + 1] : undefined) ??
+  process.env.OPENAI_SANDBOX_SMS_TARGET;
+const MARIA_FALLBACK = "+15550142";
+// Normalize through the SAME helper send_sms uses, so the number we seed is
+// byte-identical to the one the reviewer's send resolves to. A bare 10-digit
+// NANP number works; anything it refuses is refused here too, loudly, rather
+// than silently seeding a contact nothing can text.
+let MARIA = MARIA_FALLBACK;
+if (SMS_TARGET_RAW) {
+  const result = normalizeContactNumber(SMS_TARGET_RAW);
+  if (!result.ok) {
+    throw new Error(`--sms-target ${SMS_TARGET_RAW} is not a usable number: ${result.reason}`);
+  }
+  MARIA = result.value;
+}
+const SMS_TARGET_IS_REAL = MARIA !== MARIA_FALLBACK;
+
+/**
+ * The number test case 5's text is sent FROM.
+ *
+ * Without this row the sandbox has no messaging config, so
+ * getTelnyxMessagingForBusiness falls back to the platform profile and Telnyx
+ * picks whichever attached number it likes. That pool contains PAYING
+ * CUSTOMERS' numbers, so a reviewer's demo text would appear to come from a
+ * real customer's business line, and any reply would land in that customer's
+ * inbox. Pinning it to +16023131823, our own New Coworker DID, keeps both the
+ * send and any reply inside a business we own.
+ */
+const SMS_FROM_DEFAULT = "+16023131823";
+const fromFlagIdx = process.argv.indexOf("--sms-from");
+const SMS_FROM =
+  (fromFlagIdx >= 0 ? process.argv[fromFlagIdx + 1] : undefined) ?? SMS_FROM_DEFAULT;
 
 const CALL_ID = "e2b7a1c4-0005-4000-8000-000000000001";
 const CALL_CONTROL_ID = "demo-call-tom-becker-0001";
@@ -66,7 +116,11 @@ console.log("[setup] plan:", {
   businessId: BUSINESS_ID,
   owner: OWNER_EMAIL,
   staff: STAFF_EMAIL,
-  contacts: [MARIA, TOM, PRIYA]
+  contacts: [MARIA, TOM, PRIYA],
+  smsFrom: SMS_FROM,
+  smsTarget: SMS_TARGET_IS_REAL
+    ? `${MARIA} (real line, test case 5 will send)`
+    : `${MARIA} (fictional, test case 5 WILL FAIL)`
 });
 
 if (!APPLY) {
@@ -172,6 +226,16 @@ const staffPassword = await ensureUser(STAFF_EMAIL, "Oas");
   );
   if (error) throw new Error(`business upsert: ${error.message}`);
   console.log("[setup] business row ready");
+}
+
+// Messaging config, so a send does not borrow a customer's number.
+{
+  const { error } = await db.from("business_telnyx_settings").upsert(
+    { business_id: BUSINESS_ID, telnyx_sms_from_e164: SMS_FROM },
+    { onConflict: "business_id" }
+  );
+  if (error) throw new Error(`telnyx settings: ${error.message}`);
+  console.log(`[setup] messaging from-number pinned to ${SMS_FROM}`);
 }
 
 // Staff membership. This is the only thing that makes step 4 of the reviewer
@@ -372,16 +436,14 @@ Remaining manual steps:
   1. Connect a calendar on this business (Dashboard, Integrations) with at
      least one open slot in the next seven days, or test case 4
      (calendar_find_slots) returns nothing.
-
-  2. Test case 5 (send_sms) will FAIL as seeded. The contacts use the
+${
+  SMS_TARGET_IS_REAL
+    ? `  2. Test case 5 will send to ${MARIA}. Confirm that line has no AI
+     automation attached, or our own coworker answers the reviewer's test
+     and texts the sandbox back.`
+    : `  2. Test case 5 (send_sms) WILL FAIL as seeded. Maria's number is in the
      reserved +1 555 01XX fictional range, so the carrier rejects the send and
-     the reviewer sees "Could not send". Pick one before resubmitting:
-       a. Point Maria's number at a real line you control that has NO AI
-          automation attached, so the send completes and nothing replies.
-          Do NOT use +16023131823 (the New Coworker line): our own coworker
-          would answer and text the sandbox back.
-       b. Drop test case 5 and submit four positive cases plus the three
-          negative ones.
-     Option (a) is the stronger submission: it is the only case that shows
-     the confirm-before-sending behaviour actually working.
+     the reviewer sees "Could not send". Re-run with a real line you control:
+       tsx debug/openai-reviewer-setup.ts --apply --sms-target +1XXXXXXXXXX`
+}
 `);

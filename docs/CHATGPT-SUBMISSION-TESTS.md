@@ -35,11 +35,28 @@ summary the five test cases name.
 The credentials print to the terminal once. They go in the password manager and
 the submission form, never in this repo.
 
-Two things the script cannot do for you, both printed in its closing notes:
-connect a calendar (test case 4 returns nothing without one), and decide what
-number test case 5 should text. The seeded contacts use the reserved
-`+1 555 01XX` fictional range, which the carrier rejects, so the send fails as
-seeded.
+Test case 5 sends a real text, so it needs a real destination:
+
+```bash
+npx tsx debug/openai-reviewer-setup.ts --apply --sms-target +1XXXXXXXXXX
+```
+
+That number is a flag rather than a constant because the only sensible values
+are somebody's real phone, and personal numbers do not belong in a repo. Pass a
+line with **no AI automation attached**, or our own coworker answers the
+reviewer's test and texts the sandbox back. Without the flag, Maria keeps a
+reserved `+1 555 01XX` number, the carrier rejects the send, and the reviewer
+sees "Could not send".
+
+The script also pins the sandbox's **from**-number to `+16023131823`, our own
+New Coworker DID. That is not cosmetic. With no messaging row the sandbox falls
+back to the shared platform profile, and Telnyx picks whichever number it
+likes from a pool that contains paying customers' lines: a reviewer's demo text
+would appear to come from a real customer, and a reply would land in that
+customer's inbox.
+
+The one thing the script cannot do for you is connect a calendar. Test case 4
+returns nothing without one.
 
 
 OpenAI's wording is strict and each clause is a rejection if missed: test
