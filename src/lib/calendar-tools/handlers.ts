@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { BusinessHours } from "@/lib/business-profile/profile";
+import {
+  DEFAULT_BUSINESS_HOURS,
+  dayWindowMinutes
+} from "@/lib/business-profile/hours-window";
+import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   workspaceProxyForBusiness,
@@ -273,18 +279,114 @@ function alignedGapStart(
   return fits(first) ? first : null;
 }
 
+/**
+ * Quarter-hour scan cap: six weeks. `findCalendarSlots` defaults to a 7-day
+ * window (672 steps) and a caller-supplied `latest` is the only way past
+ * that, so this is a runaway guard, not a product limit.
+ */
+const MAX_HOURS_SCAN_STEPS = 6 * 7 * 24 * 4;
+
+/**
+ * The stretches of a free gap that fall inside the business's open hours.
+ *
+ * Returned as runs of contiguous VALID START instants rather than raw
+ * open/close boundaries, because a start is only usable when the whole
+ * appointment finishes before closing: a 60-minute request at 16:30 against
+ * a 17:00 close is not a slot. Each run's `end` is therefore the last valid
+ * start plus the duration, which is exactly the interval
+ * {@link alignedGapStart} needs.
+ *
+ * Classification only, never reverse-mapping a local time back to an
+ * instant, so DST transitions cannot shift an offer: the same rule the
+ * booking page's slot math follows.
+ */
+export function openRunsWithin(
+  gapStart: Date,
+  gapEnd: Date,
+  hours: BusinessHours,
+  durationMs: number,
+  /**
+   * The BUSINESS's timezone, never the requester's. Opening hours are stored
+   * in the owner's local clock, so classifying them in a customer-supplied
+   * zone shifts the whole window and can offer a time the owner is closed.
+   */
+  timeZone: string
+): Array<{ start: Date; end: Date }> {
+  const durationMinutes = Math.ceil(durationMs / 60_000);
+  const runs: Array<{ start: Date; end: Date }> = [];
+  let runStart: Date | null = null;
+  let lastValid: Date | null = null;
+
+  const closeRun = () => {
+    if (runStart && lastValid) {
+      runs.push({ start: runStart, end: new Date(lastValid.getTime() + durationMs) });
+    }
+    runStart = null;
+    lastValid = null;
+  };
+
+  const first = Math.ceil(gapStart.getTime() / QUARTER_MS) * QUARTER_MS;
+  let steps = 0;
+  for (let t = first; t + durationMs <= gapEnd.getTime(); t += QUARTER_MS) {
+    if (++steps > MAX_HOURS_SCAN_STEPS) break;
+    const candidate = new Date(t);
+    const clock = localClock(candidate, timeZone);
+    const window = dayWindowMinutes(hours, clock.weekday);
+    const open =
+      window !== null &&
+      clock.minutes >= window.openMin &&
+      clock.minutes + durationMinutes <= window.closeMin;
+    if (open) {
+      if (!runStart) runStart = candidate;
+      lastValid = candidate;
+    } else {
+      closeRun();
+    }
+  }
+  closeRun();
+  return runs;
+}
+
+/**
+ * @param timeZone Display zone, used only to prefer :00/:30 starts.
+ * @param businessHours When supplied, offers are clipped to the business's
+ *   open hours and a sparse calendar yields one offer per open stretch,
+ *   which spreads them across days instead of returning a single time.
+ *   Omitted (the CalDAV path and the existing unit tests) keeps the original
+ *   unclipped behaviour. The hours carry their OWN zone rather than reusing
+ *   `timeZone`: a model may pass the customer's zone for display, and hours
+ *   evaluated in that zone would clip against the wrong clock.
+ */
 export function computeFreeSlots(
   windowStart: Date,
   windowEnd: Date,
   busy: Array<{ start: Date; end: Date }>,
   durationMs: number,
   maxSlots = 3,
-  timeZone = "UTC"
+  timeZone = "UTC",
+  businessHours?: { hours: BusinessHours; timeZone: string } | null
 ): Slot[] {
   const sorted = [...busy].sort((a, b) => a.start.getTime() - b.start.getTime());
   const slots: Slot[] = [];
   const offerFromGap = (gapStart: Date, gapEnd: Date) => {
     if (slots.length >= maxSlots) return;
+    if (businessHours) {
+      const runs = openRunsWithin(
+        gapStart,
+        gapEnd,
+        businessHours.hours,
+        durationMs,
+        businessHours.timeZone
+      );
+      for (const run of runs) {
+        if (slots.length >= maxSlots) return;
+        offerAligned(run.start, run.end);
+      }
+      return;
+    }
+    offerAligned(gapStart, gapEnd);
+  };
+  const offerAligned = (gapStart: Date, gapEnd: Date) => {
     const start = alignedGapStart(gapStart, gapEnd, durationMs, timeZone);
     if (start) {
       slots.push({
@@ -599,6 +701,42 @@ export async function getWorkspaceBusyBlocks(
   return { busy, complete };
 }
 
+/**
+ * The business's open hours AND the zone they are written in.
+ *
+ * The zone travels with the hours on purpose. `resolveToolTimezone` prefers
+ * the model's `timezone` argument, which is the CUSTOMER's zone on a call
+ * routed from another region; clipping 09:00-17:00 against that clock offers
+ * times the owner is shut. The booking page evaluates hours in the business
+ * zone, and so must this.
+ *
+ * The 9-to-5 fallback is the same one the public booking page uses: a tenant
+ * who never set hours must not get "closed Sunday" from the booking page and
+ * a Sunday 3 PM offer from the coworker. Never throws; an unreadable row
+ * means the default rather than an offer at 2 AM.
+ *
+ * @param fallbackTimeZone Used only when the row is unreadable or carries an
+ *   invalid zone. Callers pass the already-resolved display zone, which
+ *   itself defaults to the business zone, so it is the best guess available.
+ */
+async function resolveBusinessHoursWindow(
+  businessId: string,
+  fallbackTimeZone: string
+): Promise<{ hours: BusinessHours; timeZone: string }> {
+  try {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { parseBusinessHours } = await import("@/lib/business-profile/profile");
+    const business = await getBusiness(businessId);
+    const zone = (business?.timezone ?? "").trim();
+    return {
+      hours: parseBusinessHours(business?.business_hours ?? null) ?? DEFAULT_BUSINESS_HOURS,
+      timeZone: isValidTimeZone(zone) ? zone : fallbackTimeZone
+    };
+  } catch {
+    return { hours: DEFAULT_BUSINESS_HOURS, timeZone: fallbackTimeZone };
+  }
+}
+
 export async function findCalendarSlots(
   businessId: string,
   args: FindSlotsArgs
@@ -691,7 +829,15 @@ export async function findCalendarSlots(
     // in the requester's local clock, and the echo lets the model present
     // the ISO slots in business-local terms instead of raw UTC.
     const timezone = await resolveToolTimezone(businessId, args.timezone);
-    const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs, 3, timezone);
+    const slots = computeFreeSlots(
+      windowStart,
+      windowEnd,
+      busy,
+      durationMs,
+      3,
+      timezone,
+      await resolveBusinessHoursWindow(businessId, timezone)
+    );
     return {
       ok: true,
       data: {
