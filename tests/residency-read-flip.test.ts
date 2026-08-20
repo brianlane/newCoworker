@@ -30,8 +30,21 @@ vi.mock("@/lib/db/employees", async (importOriginal) => {
 import {
   countMovedRows,
   isVpsReadMode,
-  readMovedRows
+  readMovedRows,
+  ResidencyReadError
 } from "@/lib/residency/read";
+import {
+  contactExistsForBusiness,
+  listContactsByEmail,
+  listContactsByLeadPhone,
+  listTaggedContacts
+} from "@/lib/contacts/lookup";
+import { listAiFlowDefinitions } from "@/lib/ai-flows/db";
+import {
+  SCHEDULED_SMS_HISTORY_LIMIT,
+  SCHEDULED_SMS_PENDING_LIMIT,
+  listScheduledSmsForDashboard
+} from "@/lib/db/scheduled-sms";
 import { listEmailLog, listEmailLogForAddress, getEmailBody, getEmailLogRow } from "@/lib/db/email-log";
 import { getNotifications, getUnreadNotificationCount } from "@/lib/db/notifications";
 import {
@@ -1143,6 +1156,507 @@ describe("sms-history vps reads (outbound log only)", () => {
       ],
       order: [{ column: "created_at", ascending: false }],
       limit: 50
+    });
+  });
+});
+
+/**
+ * The dashboard API routes' own `contacts` / `ai_flows` / `scheduled_sms`
+ * reads. `contacts` is a moved table, so on a vps tenant the Tasks board and
+ * the leads Data grid read an empty central table and rendered an empty
+ * board with no error at all. Each case pins the box request AND asserts
+ * central was never asked for the moved table.
+ */
+describe("dashboard route vps reads", () => {
+  const PHONE = "+16025550123";
+  const OTHER = "+16025550999";
+
+  type CentralResult = { data: unknown; error: { message: string } | null };
+
+  /**
+   * A central client whose every chain link is recorded, so a read that
+   * WRONGLY stayed central is visible. The terminal await (or `maybeSingle`)
+   * resolves to the canned result; pass an array to serve successive
+   * `from()` calls in order (the scheduled-SMS queue issues two).
+   */
+  function trackedDb(result: CentralResult | CentralResult[]) {
+    const chains: Array<{ table: string; calls: Array<[string, unknown[]]> }> = [];
+    const from = vi.fn((table: string) => {
+      const record: { table: string; calls: Array<[string, unknown[]]> } = { table, calls: [] };
+      const served = Array.isArray(result)
+        ? result[Math.min(chains.length, result.length - 1)]
+        : result;
+      chains.push(record);
+      const chain: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "neq", "is", "in", "or", "order", "limit"]) {
+        chain[m] = vi.fn((...args: unknown[]) => {
+          record.calls.push([m, args]);
+          return chain;
+        });
+      }
+      chain.maybeSingle = vi.fn(async () => served);
+      (chain as { then: unknown }).then = (
+        onF: (v: unknown) => unknown,
+        onR: (e: unknown) => unknown
+      ) => Promise.resolve(served).then(onF, onR);
+      return chain;
+    });
+    return { db: { from } as never, chains };
+  }
+
+  /** Every argument one central chain passed to `method`. */
+  function argsFor(
+    chains: Array<{ table: string; calls: Array<[string, unknown[]]> }>,
+    table: string,
+    method: string
+  ): unknown[][] {
+    return chains
+      .filter((c) => c.table === table)
+      .flatMap((c) => c.calls.filter(([m]) => m === method).map(([, args]) => args));
+  }
+
+  describe("contacts lookups", () => {
+    const ctx = (vpsReadMode: boolean, db: never) => ({
+      businessId: BIZ,
+      db,
+      vpsReadMode,
+      label: "tasks"
+    });
+
+    it("matches lead phones on the box by PRIMARY number only", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { customer_e164: PHONE, alias_e164s: null }
+      ] as never);
+      const { db, chains } = trackedDb({ data: [], error: null });
+      const rows = await listContactsByLeadPhone<{ customer_e164: string }>(ctx(true, db), {
+        columns: ["customer_e164", "alias_e164s"],
+        phones: [PHONE, OTHER]
+      });
+      expect(rows).toEqual([{ customer_e164: PHONE, alias_e164s: null }]);
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "contacts",
+        columns: ["customer_e164", "alias_e164s"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "customer_e164", op: "in", value: [PHONE, OTHER] }
+        ]
+      });
+      expect(chains).toHaveLength(0);
+    });
+
+    it("keeps the alias-overlap leg on the central path", async () => {
+      const { db, chains } = trackedDb({
+        data: [{ customer_e164: PHONE, alias_e164s: [OTHER] }],
+        error: null
+      });
+      const rows = await listContactsByLeadPhone<{ customer_e164: string }>(ctx(false, db), {
+        columns: ["customer_e164", "alias_e164s"],
+        phones: [PHONE, OTHER]
+      });
+      expect(rows).toEqual([{ customer_e164: PHONE, alias_e164s: [OTHER] }]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+      expect(argsFor(chains, "contacts", "select")).toEqual([["customer_e164, alias_e164s"]]);
+      expect(argsFor(chains, "contacts", "or")).toEqual([
+        [`customer_e164.in.(${PHONE},${OTHER}),alias_e164s.ov.{${PHONE},${OTHER}}`]
+      ]);
+    });
+
+    /**
+     * The deliberate degradation. A lead keyed on a merged-away alias has no
+     * box row of its own, so it comes back UNRESOLVED rather than folded
+     * onto whichever contact a widened scan happened to return: the box
+     * grammar has no OR and no array overlap, and PR #1547 made the same
+     * trade for the same filter. Less complete, never mis-attributed.
+     */
+    it("leaves a merged-away alias unresolved on the box, never re-keyed", async () => {
+      // The surviving contact holds OTHER as an alias, but the box can only
+      // be asked about primaries, and OTHER is nobody's primary.
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      const { db } = trackedDb({ data: [], error: null });
+      const rows = await listContactsByLeadPhone<{ customer_e164: string }>(ctx(true, db), {
+        columns: ["customer_e164", "alias_e164s"],
+        phones: [OTHER]
+      });
+      expect(rows).toEqual([]);
+      // Central, the same lookup DOES resolve it, onto a different primary.
+      const central = trackedDb({
+        data: [{ customer_e164: PHONE, alias_e164s: [OTHER] }],
+        error: null
+      });
+      expect(
+        await listContactsByLeadPhone<{ customer_e164: string }>(ctx(false, central.db), {
+          columns: ["customer_e164", "alias_e164s"],
+          phones: [OTHER]
+        })
+      ).toEqual([{ customer_e164: PHONE, alias_e164s: [OTHER] }]);
+    });
+
+    it("never sends the box an empty `in` list", async () => {
+      const { db, chains } = trackedDb({ data: [], error: null });
+      expect(
+        await listContactsByLeadPhone(ctx(true, db), { columns: ["customer_e164"], phones: [] })
+      ).toEqual([]);
+      expect(
+        await listContactsByEmail(ctx(true, db), { columns: ["customer_e164"], emails: [] })
+      ).toEqual([]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+      expect(chains).toHaveLength(0);
+    });
+
+    it("matches emails on the box, and central keeps its escaped IN", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([{ customer_e164: PHONE }] as never);
+      const boxDb = trackedDb({ data: [], error: null });
+      expect(
+        await listContactsByEmail<{ customer_e164: string }>(ctx(true, boxDb.db), {
+          columns: ["customer_e164", "email"],
+          emails: ["lead@example.com"]
+        })
+      ).toEqual([{ customer_e164: PHONE }]);
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "contacts",
+        columns: ["customer_e164", "email"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "email", op: "in", value: ["lead@example.com"] }
+        ]
+      });
+
+      const central = trackedDb({ data: [{ customer_e164: OTHER }], error: null });
+      expect(
+        await listContactsByEmail<{ customer_e164: string }>(ctx(false, central.db), {
+          columns: ["customer_e164", "email"],
+          emails: ["lead@example.com"]
+        })
+      ).toEqual([{ customer_e164: OTHER }]);
+      expect(argsFor(central.chains, "contacts", "in")).toEqual([
+        ["email", ["lead@example.com"]]
+      ]);
+    });
+
+    it("scans tagged contacts on the box with the empty-array comparison", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { customer_e164: PHONE, updated_at: "2026-07-01T00:00:00Z" }
+      ] as never);
+      const { db, chains } = trackedDb({ data: [], error: null });
+      const rows = await listTaggedContacts<{ customer_e164: string; updated_at: string }>(
+        ctx(true, db),
+        { columns: ["customer_e164", "updated_at"], limit: 60 }
+      );
+      expect(rows).toHaveLength(1);
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "contacts",
+        columns: ["customer_e164", "updated_at"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "tags", op: "neq", value: "{}" }
+        ],
+        order: [{ column: "updated_at", ascending: false }],
+        limit: 60
+      });
+      expect(chains).toHaveLength(0);
+    });
+
+    it("narrows tagged contacts to one owner on the box", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      const { db } = trackedDb({ data: [], error: null });
+      await listTaggedContacts<{ customer_e164: string; updated_at: string }>(ctx(true, db), {
+        columns: ["customer_e164", "updated_at"],
+        limit: 200,
+        owner: { employeeId: "m-dave", includeUnowned: false }
+      });
+      expect(readMovedRows).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "tags", op: "neq", value: "{}" },
+          { column: "owner_employee_id", op: "eq", value: "m-dave" }
+        ]
+      });
+    });
+
+    it("splits the one-person-roster OR into two capped box reads and merges", async () => {
+      vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
+        const filters = (request as { filters: Array<{ op: string }> }).filters;
+        const owned = filters.some((f) => f.op === "eq" && "value" in f && f.value === "m-dave");
+        return (
+          owned
+            ? [{ customer_e164: PHONE, updated_at: "2026-07-02T00:00:00Z" }]
+            : [
+                { customer_e164: OTHER, updated_at: "2026-07-03T00:00:00Z" },
+                // Ties with the owned row below, so the merge's tie-break
+                // (stable, owned leg first) is exercised too.
+                { customer_e164: "+16025550777", updated_at: "2026-07-02T00:00:00Z" }
+              ]
+        ) as never;
+      });
+      const { db } = trackedDb({ data: [], error: null });
+      const rows = await listTaggedContacts<{ customer_e164: string; updated_at: string }>(
+        ctx(true, db),
+        {
+          columns: ["customer_e164", "updated_at"],
+          limit: 2,
+          owner: { employeeId: "m-dave", includeUnowned: true }
+        }
+      );
+      // Merged newest-first and re-capped: exactly the rows the single
+      // central `eq OR is null` query would have returned.
+      expect(rows.map((r) => r.customer_e164)).toEqual([OTHER, PHONE]);
+      expect(readMovedRows).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(readMovedRows).mock.calls[1][1]).toMatchObject({
+        filters: expect.arrayContaining([
+          { column: "owner_employee_id", op: "is", value: null }
+        ]),
+        limit: 2
+      });
+    });
+
+    it("keeps the tagged-contact owner OR on the central path", async () => {
+      const { db, chains } = trackedDb({
+        data: [{ customer_e164: PHONE, updated_at: "2026-07-01T00:00:00Z" }],
+        error: null
+      });
+      const rows = await listTaggedContacts<{ customer_e164: string; updated_at: string }>(
+        ctx(false, db),
+        {
+          columns: ["customer_e164", "updated_at"],
+          limit: 200,
+          owner: { employeeId: "m-dave", includeUnowned: true }
+        }
+      );
+      expect(rows).toHaveLength(1);
+      expect(readMovedRows).not.toHaveBeenCalled();
+      expect(argsFor(chains, "contacts", "neq")).toEqual([["tags", "{}"]]);
+      expect(argsFor(chains, "contacts", "or")).toEqual([
+        ["owner_employee_id.eq.m-dave,owner_employee_id.is.null"]
+      ]);
+      expect(argsFor(chains, "contacts", "limit")).toEqual([[200]]);
+    });
+
+    it("narrows to one owner centrally, and surfaces a central error", async () => {
+      const ok = trackedDb({ data: null, error: null });
+      expect(
+        await listTaggedContacts<{ customer_e164: string; updated_at: string }>(ctx(false, ok.db), {
+          columns: ["customer_e164", "updated_at"],
+          limit: 200,
+          owner: { employeeId: "m-dave", includeUnowned: false }
+        })
+      ).toEqual([]);
+      expect(argsFor(ok.chains, "contacts", "eq")).toEqual([
+        ["business_id", BIZ],
+        ["owner_employee_id", "m-dave"]
+      ]);
+
+      // A central read that matched nothing is an empty list, never null.
+      expect(
+        await listContactsByLeadPhone(ctx(false, ok.db), {
+          columns: ["customer_e164"],
+          phones: [PHONE]
+        })
+      ).toEqual([]);
+      expect(
+        await listContactsByEmail(ctx(false, ok.db), {
+          columns: ["customer_e164"],
+          emails: ["a@b.com"]
+        })
+      ).toEqual([]);
+
+      const broken = trackedDb({ data: null, error: { message: "boom" } });
+      await expect(
+        listTaggedContacts<{ customer_e164: string; updated_at: string }>(ctx(false, broken.db), {
+          columns: ["customer_e164"],
+          limit: 10
+        })
+      ).rejects.toThrow("tasks: tagged contacts: boom");
+      await expect(
+        listContactsByLeadPhone(ctx(false, broken.db), {
+          columns: ["customer_e164"],
+          phones: [PHONE]
+        })
+      ).rejects.toThrow("tasks: contacts by phone: boom");
+      await expect(
+        listContactsByEmail(ctx(false, broken.db), {
+          columns: ["customer_e164"],
+          emails: ["a@b.com"]
+        })
+      ).rejects.toThrow("tasks: contacts by email: boom");
+    });
+
+    it("checks a linked contact's existence against the box, failing loudly", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([{ id: "c1" }] as never);
+      const { db, chains } = trackedDb({ data: null, error: null });
+      expect(
+        await contactExistsForBusiness({ businessId: BIZ, db, vpsReadMode: true }, "c1")
+      ).toEqual({ ok: true, exists: true });
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "contacts",
+        columns: ["id"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "id", op: "eq", value: "c1" }
+        ],
+        limit: 1
+      });
+      expect(chains).toHaveLength(0);
+
+      vi.mocked(readMovedRows).mockResolvedValue([] as never);
+      expect(
+        await contactExistsForBusiness({ businessId: BIZ, db, vpsReadMode: true }, "c1")
+      ).toEqual({ ok: true, exists: false });
+
+      // An unreachable box is NOT "contact not found": the caller must be
+      // able to say the lookup broke.
+      vi.mocked(readMovedRows).mockRejectedValue(new ResidencyReadError(BIZ, "box down"));
+      expect(
+        await contactExistsForBusiness({ businessId: BIZ, db, vpsReadMode: true }, "c1")
+      ).toEqual({ ok: false, error: "box down" });
+      vi.mocked(readMovedRows).mockRejectedValue("not an Error");
+      expect(
+        await contactExistsForBusiness({ businessId: BIZ, db, vpsReadMode: true }, "c1")
+      ).toEqual({ ok: false, error: "not an Error" });
+    });
+
+    it("checks contact existence centrally when the tenant is not on a box", async () => {
+      const found = trackedDb({ data: { id: "c1" }, error: null });
+      expect(
+        await contactExistsForBusiness(
+          { businessId: BIZ, db: found.db, vpsReadMode: false },
+          "c1"
+        )
+      ).toEqual({ ok: true, exists: true });
+      expect(argsFor(found.chains, "contacts", "eq")).toEqual([
+        ["business_id", BIZ],
+        ["id", "c1"]
+      ]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+
+      const missing = trackedDb({ data: null, error: null });
+      expect(
+        await contactExistsForBusiness(
+          { businessId: BIZ, db: missing.db, vpsReadMode: false },
+          "c1"
+        )
+      ).toEqual({ ok: true, exists: false });
+
+      const broken = trackedDb({ data: null, error: { message: "central down" } });
+      expect(
+        await contactExistsForBusiness(
+          { businessId: BIZ, db: broken.db, vpsReadMode: false },
+          "c1"
+        )
+      ).toEqual({ ok: false, error: "central down" });
+    });
+  });
+
+  describe("ai_flows definitions", () => {
+    it("reads the Task Center's flow definitions from the box, tenant-scoped", async () => {
+      vi.mocked(readMovedRows).mockResolvedValue([
+        { id: "f1", name: "Intake", definition: { steps: [{ type: "message" }] } }
+      ] as never);
+      const { db, chains } = trackedDb({ data: [], error: null });
+      const rows = await listAiFlowDefinitions(BIZ, ["f1"], { client: db, vpsReadMode: true });
+      expect(rows[0]).toMatchObject({ id: "f1", name: "Intake" });
+      expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+        table: "ai_flows",
+        columns: ["id", "name", "definition"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "id", op: "in", value: ["f1"] }
+        ]
+      });
+      expect(chains).toHaveLength(0);
+    });
+
+    it("reads them centrally otherwise, by id, and surfaces a central error", async () => {
+      const ok = trackedDb({ data: [{ id: "f1", name: "Intake", definition: null }], error: null });
+      expect(
+        await listAiFlowDefinitions(BIZ, ["f1"], { client: ok.db, vpsReadMode: false })
+      ).toEqual([{ id: "f1", name: "Intake", definition: null }]);
+      expect(argsFor(ok.chains, "ai_flows", "in")).toEqual([["id", ["f1"]]]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+
+      const empty = trackedDb({ data: null, error: null });
+      expect(
+        await listAiFlowDefinitions(BIZ, ["f1"], { client: empty.db, vpsReadMode: false })
+      ).toEqual([]);
+
+      const broken = trackedDb({ data: null, error: { message: "nope" } });
+      await expect(
+        listAiFlowDefinitions(BIZ, ["f1"], { client: broken.db, vpsReadMode: false })
+      ).rejects.toThrow("listAiFlowDefinitions: nope");
+    });
+
+    it("skips both paths when no run named a flow", async () => {
+      const { db, chains } = trackedDb({ data: [], error: null });
+      expect(await listAiFlowDefinitions(BIZ, [], { client: db, vpsReadMode: true })).toEqual([]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+      expect(chains).toHaveLength(0);
+    });
+  });
+
+  describe("scheduled_sms queue", () => {
+    it("reads pending and history from the box in two ordered calls", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(true);
+      vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
+        const pending = (request as { filters: Array<{ op: string }> }).filters.some(
+          (f) => f.op === "eq" && "value" in f && f.value === "pending"
+        );
+        return (pending ? [{ id: "s-next" }] : [{ id: "s-sent" }]) as never;
+      });
+      const { db, chains } = trackedDb({ data: [], error: null });
+      const rows = await listScheduledSmsForDashboard(BIZ, db);
+      expect(rows.map((r) => r.id)).toEqual(["s-next", "s-sent"]);
+      expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
+        table: "scheduled_sms",
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "status", op: "eq", value: "pending" }
+        ],
+        order: [{ column: "send_at", ascending: true }],
+        limit: SCHEDULED_SMS_PENDING_LIMIT
+      });
+      expect(vi.mocked(readMovedRows).mock.calls[1][1]).toMatchObject({
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "status", op: "neq", value: "pending" }
+        ],
+        order: [{ column: "send_at", ascending: false }],
+        limit: SCHEDULED_SMS_HISTORY_LIMIT
+      });
+      expect(chains).toHaveLength(0);
+      // One mode lookup for both queries.
+      expect(isVpsReadMode).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the queue centrally otherwise, and surfaces either error", async () => {
+      vi.mocked(isVpsReadMode).mockResolvedValue(false);
+      const ok = trackedDb({ data: [{ id: "s1" }], error: null });
+      expect((await listScheduledSmsForDashboard(BIZ, ok.db)).map((r) => r.id)).toEqual([
+        "s1",
+        "s1"
+      ]);
+      expect(argsFor(ok.chains, "scheduled_sms", "eq")).toEqual([
+        ["business_id", BIZ],
+        ["status", "pending"],
+        ["business_id", BIZ]
+      ]);
+      expect(argsFor(ok.chains, "scheduled_sms", "neq")).toEqual([["status", "pending"]]);
+      expect(readMovedRows).not.toHaveBeenCalled();
+
+      const empty = trackedDb({ data: null, error: null });
+      expect(await listScheduledSmsForDashboard(BIZ, empty.db)).toEqual([]);
+
+      // Either leg failing is surfaced, not silently half-served.
+      const brokenPending = trackedDb({ data: null, error: { message: "queue down" } });
+      await expect(listScheduledSmsForDashboard(BIZ, brokenPending.db)).rejects.toThrow(
+        "listScheduledSms: queue down"
+      );
+      const brokenHistory = trackedDb([
+        { data: [], error: null },
+        { data: null, error: { message: "history down" } }
+      ]);
+      await expect(listScheduledSmsForDashboard(BIZ, brokenHistory.db)).rejects.toThrow(
+        "listScheduledSms: history down"
+      );
     });
   });
 });

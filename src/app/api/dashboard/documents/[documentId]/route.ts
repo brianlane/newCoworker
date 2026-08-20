@@ -33,6 +33,8 @@ import {
 import { getBusiness } from "@/lib/db/businesses";
 import { getTeamMember } from "@/lib/db/employees";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { contactExistsForBusiness } from "@/lib/contacts/lookup";
+import { isVpsReadMode } from "@/lib/residency/read";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -183,20 +185,26 @@ export async function PATCH(request: Request, context: RouteContext) {
         patch.contact_id = null;
       } else {
         const db = await createSupabaseServiceClient();
-        const { data: contactRow, error: contactErr } = await db
-          .from("contacts")
-          .select("id")
-          .eq("business_id", body.data.businessId)
-          .eq("id", body.data.contactId)
-          .maybeSingle();
-        if (contactErr) {
+        // `contacts` is residency-moved: for a vps tenant this guard has to
+        // ask that tenant's box, or linking a document to a real contact
+        // would be refused as "Contact not found" against an empty central
+        // table.
+        const found = await contactExistsForBusiness(
+          {
+            businessId: body.data.businessId,
+            db,
+            vpsReadMode: await isVpsReadMode(body.data.businessId, db)
+          },
+          body.data.contactId
+        );
+        if (!found.ok) {
           logger.warn("documents/patch: contact lookup failed", {
             businessId: body.data.businessId,
-            error: contactErr.message
+            error: found.error
           });
           return errorResponse("INTERNAL_SERVER_ERROR", "Contact lookup failed");
         }
-        if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
+        if (!found.exists) return errorResponse("VALIDATION_ERROR", "Contact not found");
         patch.contact_id = body.data.contactId;
         // Linking makes this a person's record: unless the same request
         // explicitly sets an audience, snap to internal-only, a policy or
