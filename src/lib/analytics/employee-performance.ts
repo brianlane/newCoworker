@@ -24,9 +24,12 @@
  *     (updated_at moves again if steps run after the claim).
  *     `medianClaimExact` says which kind a member's median is, so the UI
  *     can label honestly instead of promising a stopwatch it lacks.
- *   - claimedNoTouch48h, claims (newest CLAIM_TOUCH_LEAD_LIMIT, once their
- *     48h grace has fully elapsed) where NO platform-visible touch reached
- *     that lead within 48h of the claim. A touch is a forwarded call the
+ *   - claimedNoTouch48h, claims where NO platform-visible touch reached
+ *     that lead within 48h of the claim. Only claims whose 48h grace has
+ *     fully elapsed are judged, and the evaluation budget
+ *     (CLAIM_TOUCH_LEAD_LIMIT) is applied AFTER that filter, to the newest
+ *     judgeable claims by CLAIM time, so pending claims never crowd out due
+ *     ones and a late claim on an old run is as fresh as its stamp says. A touch is a forwarded call the
  *     lead was on (voice_call_transcripts, call_kind=forwarded; missed rows
  *     are excluded at the shared scan layer), an outbound SMS to the lead
  *     (sms_outbound_log, any source, so an automated post-claim text counts
@@ -87,7 +90,8 @@ export const EMPLOYEE_RUN_SCAN_LIMIT = 2000;
 export const CLAIM_TOUCH_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 /**
- * Newest claims evaluated for follow-through per window. Also bounds the
+ * Judgeable claims evaluated for follow-through per window, newest CLAIM
+ * time first, applied after the grace filter. Also bounds the
  * contact-identity lookup's filter list (the tasks route uses the same size
  * for the same reason: the phones travel in the query string).
  */
@@ -168,8 +172,8 @@ export async function getEmployeePerformance(
   const offered = new Map<string, number>();
   const claimed = new Map<string, number>();
   const claimDurations = new Map<string, Array<{ ms: number; exact: boolean }>>();
-  // Runs arrive newest-first, so this list is newest-claims-first by
-  // construction and the evaluation cap below keeps the most recent ones.
+  // Every judgeable claim; the grace filter and the evaluation cap are
+  // applied in countClaimsWithNoTouch, in that order.
   const claimRecords: ClaimRecord[] = [];
   for (const run of ((runsRes.data as RunRow[] | null) ?? [])) {
     const routing = routingOfContext(run.context);
@@ -238,7 +242,7 @@ export async function getEmployeePerformance(
   }
 
   const noTouch = await countClaimsWithNoTouch(db, businessId, {
-    claims: claimRecords.slice(0, CLAIM_TOUCH_LEAD_LIMIT),
+    claims: claimRecords,
     callTouches,
     cutoffIso,
     nowMs
@@ -291,7 +295,14 @@ async function countClaimsWithNoTouch(
   const counts = new Map<string, number>();
   // Only claims whose 48h grace has fully elapsed are judged: a claim made
   // this morning has not had its chance yet, so it is pending, not guilty.
-  const due = args.claims.filter((c) => args.nowMs >= c.claimMs + CLAIM_TOUCH_WINDOW_MS);
+  // The cap comes AFTER that filter and orders by CLAIM time, newest first:
+  // pending claims must never consume the budget and push a due claim out
+  // of judgement, and a late claim lands on an old run, so run order is not
+  // claim order (Bugbot on this PR).
+  const due = args.claims
+    .filter((c) => args.nowMs >= c.claimMs + CLAIM_TOUCH_WINDOW_MS)
+    .sort((a, b) => b.claimMs - a.claimMs)
+    .slice(0, CLAIM_TOUCH_LEAD_LIMIT);
   if (due.length === 0) return counts;
 
   const leadPhones = [...new Set(due.map((c) => c.leadPhone))];

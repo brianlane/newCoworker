@@ -14,6 +14,7 @@ vi.mock("@/lib/db/employees", () => ({
 }));
 
 import {
+  CLAIM_TOUCH_LEAD_LIMIT,
   CLAIM_TOUCH_WINDOW_MS,
   EMPLOYEE_RUN_SCAN_LIMIT,
   TOUCH_SCAN_LIMIT,
@@ -389,6 +390,80 @@ describe("getEmployeePerformance", () => {
     expect(from).not.toHaveBeenCalledWith("contacts");
     expect(from).not.toHaveBeenCalledWith("sms_outbound_log");
     expect(from).not.toHaveBeenCalledWith("email_log");
+  });
+
+  it("pending claims never consume the evaluation budget (Bugbot: cap after the grace filter)", async () => {
+    vi.mocked(listTeamMembers).mockResolvedValue([
+      member(),
+      member({ id: "m-ana", name: "Ana", phone_e164: ANA })
+    ] as never);
+    // A full budget's worth of IN-GRACE claims on the newest runs, then one
+    // older claim whose grace elapsed and that nobody touched. Capping by
+    // run order would spend the whole budget on the pending claims and
+    // never judge the due one.
+    const pending = Array.from({ length: CLAIM_TOUCH_LEAD_LIMIT }, (_, i) =>
+      leadRun(
+        { claimed_by: ANA, claimed_at_ms: Date.parse("2026-07-04T00:00:00Z") },
+        `+1480666${String(1000 + i)}`,
+        "2026-07-03T00:00:00Z",
+        null
+      )
+    );
+    const { client } = makeClient({
+      ai_flow_runs: {
+        data: [
+          ...pending,
+          leadRun(
+            { claimed_by: DAVE, claimed_at_ms: Date.parse("2026-07-01T00:00:00Z") },
+            "+14805551001",
+            "2026-06-30T23:00:00Z",
+            null
+          )
+        ],
+        error: null
+      },
+      voice_call_transcripts: { data: [], error: null }
+    });
+    const rows = await getEmployeePerformance("biz-1", { client, now: NOW });
+    expect(rows.find((r) => r.e164 === DAVE)!.claimedNoTouch48h).toBe(1);
+    expect(rows.find((r) => r.e164 === ANA)!.claimedNoTouch48h).toBe(0);
+  });
+
+  it("the budget keeps the newest claims by CLAIM time, so a late claim on an old run stays judged", async () => {
+    vi.mocked(listTeamMembers).mockResolvedValue([
+      member(),
+      member({ id: "m-ana", name: "Ana", phone_e164: ANA })
+    ] as never);
+    // A full budget of due claims stamped at noon on new runs, plus Dave's
+    // LATE claim: the OLDEST run of the lot, but the NEWEST claim stamp.
+    // Ordering by run age would drop Dave's; ordering by claim time keeps
+    // it and drops one of Ana's instead.
+    const dueAna = Array.from({ length: CLAIM_TOUCH_LEAD_LIMIT }, (_, i) =>
+      leadRun(
+        { claimed_by: ANA, claimed_at_ms: Date.parse("2026-07-01T12:00:00Z") },
+        `+1480777${String(1000 + i)}`,
+        "2026-07-01T11:00:00Z",
+        null
+      )
+    );
+    const { client } = makeClient({
+      ai_flow_runs: {
+        data: [
+          ...dueAna,
+          leadRun(
+            { claimed_by: DAVE, claimed_at_ms: Date.parse("2026-07-01T18:00:00Z") },
+            "+14805551001",
+            "2026-06-15T00:00:00Z",
+            null
+          )
+        ],
+        error: null
+      },
+      voice_call_transcripts: { data: [], error: null }
+    });
+    const rows = await getEmployeePerformance("biz-1", { client, now: NOW });
+    expect(rows.find((r) => r.e164 === DAVE)!.claimedNoTouch48h).toBe(1);
+    expect(rows.find((r) => r.e164 === ANA)!.claimedNoTouch48h).toBe(CLAIM_TOUCH_LEAD_LIMIT - 1);
   });
 
   it("treats a null email page as zero email touches", async () => {
