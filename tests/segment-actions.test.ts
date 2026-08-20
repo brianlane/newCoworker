@@ -47,16 +47,24 @@ type Scripted = { data?: unknown; error?: unknown };
  */
 function makeDb(
   results: Scripted[],
-  opts: { throwFrom?: { table: string; value: unknown; times: number } } = {}
+  opts: {
+    // `skip` lets through that many uses of the table before throwing, so a
+    // test can kill the run at the tag WRITE rather than at the page read.
+    throwFrom?: { table: string; value: unknown; times: number; skip?: number };
+  } = {}
 ) {
   const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
   const tables: string[] = [];
   let idx = 0;
-  const throwFrom = opts.throwFrom ? { ...opts.throwFrom } : null;
+  const throwFrom = opts.throwFrom ? { skip: 0, ...opts.throwFrom } : null;
   const from = (table: string) => {
     if (throwFrom && throwFrom.table === table && throwFrom.times > 0) {
-      throwFrom.times -= 1;
-      throw throwFrom.value;
+      if (throwFrom.skip > 0) {
+        throwFrom.skip -= 1;
+      } else {
+        throwFrom.times -= 1;
+        throw throwFrom.value;
+      }
     }
     tables.push(table);
     const builder: Record<string, unknown> = {};
@@ -401,13 +409,93 @@ describe("runSegmentActionSweep", () => {
       tag: "Follow up",
       change: "added",
       note: 'Smart List "Hot" nightly action',
-      dedupeKey: "ce:segact:seg-1:c1:follow up:2026-08-20"
+      // No night in the key: it names the tag APPLICATION, so a repaired
+      // retry on a later night dedupes against the first delivery.
+      dedupeKey: "ce:segact:seg-1:c1:follow up"
     });
 
     const stamp = calls.find((c) => c.table === "contact_segments" && c.name === "update");
     expect(stamp?.args[0]).toEqual({ last_applied_at: NOW_ISO });
     const stampIn = calls.find((c) => c.table === "contact_segments" && c.name === "in");
     expect(stampIn?.args).toEqual(["id", ["seg-1"]]);
+  });
+
+  it("enqueues the automation BEFORE the tag column is persisted", async () => {
+    // The carried tag is the sweep's only "already done" marker, so it has
+    // to be the last thing written for a contact. Persisting it first would
+    // let a run that died in between retire the contact for good with its
+    // tag_changed never enqueued.
+    const { db, calls } = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow()] },
+      { data: null }, // tag write
+      { data: null } // stamp
+    ]);
+    const contactWrites = () =>
+      calls.filter((c) => c.table === "contacts" && c.name === "update").length;
+    let writesAtEnqueue = -1;
+    enqueueContactEventRuns.mockImplementationOnce(async () => {
+      writesAtEnqueue = contactWrites();
+      return 0;
+    });
+    const result = await runSegmentActionSweep(db, NOW);
+    expect(result.tagsWritten).toBe(1);
+    expect(writesAtEnqueue).toBe(0);
+    expect(contactWrites()).toBe(1);
+  });
+
+  it("a night that dies at the tag write repairs on the next one, with the same dedupe key", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Night 1: the automation is enqueued, then the process dies at the
+      // column write (a 150s route cap, a pod restart: same outcome, no tag).
+      const night1 = makeDb([{ data: [segRow()] }, { data: [contactRow()] }], {
+        throwFrom: { table: "contacts", value: new Error("pod killed"), times: 1, skip: 1 }
+      });
+      const r1 = await runSegmentActionSweep(night1.db, NOW);
+      expect(r1.errors).toEqual(["business biz-a: sweep threw: pod killed"]);
+      expect(r1.tagsWritten).toBe(0);
+      expect(enqueueContactEventRuns).toHaveBeenCalledTimes(1);
+
+      // Night 2 sees the same untagged contact and finishes the job. Its
+      // enqueue carries the key night 1 used, which the ai_flow_runs
+      // (flow_id, dedupe_key) index turns into a no-op, so the repair
+      // cannot text the same person a second time.
+      const night2 = makeDb([
+        { data: [segRow()] },
+        { data: [contactRow()] },
+        { data: null }, // tag write
+        { data: null } // stamp
+      ]);
+      const r2 = await runSegmentActionSweep(night2.db, NOW + DAY);
+      expect(r2.tagsWritten).toBe(1);
+      expect(r2.errors).toEqual([]);
+      expect(enqueueContactEventRuns).toHaveBeenCalledTimes(2);
+      const keys = enqueueContactEventRuns.mock.calls.map(
+        (c) => (c[2] as { dedupeKey: string }).dedupeKey
+      );
+      expect(keys).toEqual(["ce:segact:seg-1:c1:follow up", "ce:segact:seg-1:c1:follow up"]);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("a normal repeat night fires nothing: the carried tag skips the contact", async () => {
+    const { db, calls } = makeDb([
+      { data: [segRow()] },
+      { data: [contactRow({ tags: ["FOLLOW UP"] })] },
+      { data: null } // stamp only; there is nothing to write
+    ]);
+    const result = await runSegmentActionSweep(db, NOW + DAY);
+    expect(result).toMatchObject({
+      tagsWritten: 0,
+      alreadyTagged: 1,
+      applied: 1,
+      errors: []
+    });
+    expect(enqueueContactEventRuns).not.toHaveBeenCalled();
+    expect(applyGoalEvent).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(0);
   });
 
   it("de-duplicates a tag shared by two segments and still stamps every segment", async () => {
@@ -430,7 +518,7 @@ describe("runSegmentActionSweep", () => {
     // First segment wins the attribution for the shared tag identity.
     expect(enqueueContactEventRuns.mock.calls[0][2]).toMatchObject({
       tag: "Same",
-      dedupeKey: "ce:segact:s1:c1:same:2026-08-20"
+      dedupeKey: "ce:segact:s1:c1:same"
     });
     const stampIn = calls.find((c) => c.table === "contact_segments" && c.name === "in");
     expect(stampIn?.args).toEqual(["id", ["s1", "s2", "s3"]]);
@@ -572,7 +660,10 @@ describe("runSegmentActionSweep", () => {
     expect(result.errors).toEqual(["business biz-a: tag write for contact c1: locked"]);
     expect(result.tagsWritten).toBe(1);
     expect(result.applied).toBe(1);
-    expect(enqueueContactEventRuns).toHaveBeenCalledTimes(1);
+    // Both contacts got their automation: the hooks run BEFORE the column
+    // write, so c1's failure cost it only the column, which the next night
+    // retries (and the dedupe key makes that retry a no-op for the flow).
+    expect(enqueueContactEventRuns).toHaveBeenCalledTimes(2);
     const writes = calls.filter((c) => c.table === "contacts" && c.name === "update");
     expect(writes[1].args[0]).toMatchObject({ tags: ["Follow up"] });
   });

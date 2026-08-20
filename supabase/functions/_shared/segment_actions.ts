@@ -5,11 +5,11 @@
  * night, this module finds every contact currently matching the segment's
  * saved filters that does not already carry that tag, and adds it through
  * the SHARED tag-write mechanism (the same one the worker's update_contact
- * step and the lifecycle stager use): normalize + 25-tag cap on the contacts
- * row, then applyGoalEvent per linked number, then a tag_changed contact
- * event, so the tenant's automations fire exactly as if a person had added
- * the tag in the dashboard. Never a raw column poke that automations cannot
- * see.
+ * step and the lifecycle stager use): plan the add against the 25-tag row
+ * cap, then applyGoalEvent per linked number, then a tag_changed contact
+ * event, then persist the column, so the tenant's automations fire exactly
+ * as if a person had added the tag in the dashboard. Never a raw column poke
+ * that automations cannot see.
  *
  * Predicate parity: membership here must agree with what the Contacts page
  * shows for the same segment, so this is a faithful port of
@@ -38,6 +38,11 @@
  *  - The contacts-row 25-tag cap is enforced exactly like the worker's
  *    update_contact: a full contact drops the tag explicitly (counted),
  *    never silently.
+ *  - The automations are announced BEFORE the tag column is persisted. The
+ *    persisted tag is the only record this sweep keeps of what it already
+ *    did, so it has to be written last: a half-finished run must not be
+ *    able to retire a contact whose automation never got enqueued. Full
+ *    reasoning at the write site.
  *
  * Everything is dependency-injected (client + clock) and never throws, so
  * the whole surface is unit-testable under the shared 100% coverage gate.
@@ -411,7 +416,6 @@ async function sweepBusiness(
     }
   }
 
-  const dayStamp = new Date(nowMs).toISOString().slice(0, 10);
   let budget = maxWrites;
   let capped = false;
 
@@ -482,9 +486,62 @@ async function sweepBusiness(
         if (capped) break;
         continue;
       }
-      // Re-plan with only the budgeted adds so the written row carries
-      // exactly what the hooks below will announce.
+      // Re-plan with only the budgeted adds so the row that gets persisted
+      // carries exactly what the hooks announce.
       const finalPlan = planContactTagAdds(contact.tags ?? [], writes);
+
+      // ANNOUNCE FIRST, PERSIST SECOND, deliberately.
+      //
+      // The tag on the contacts row is the only record this sweep keeps of
+      // what it already did: a contact carrying the tag is skipped on every
+      // later night. Writing the column first therefore makes it a point of
+      // no return. This run can die at any moment (the route is capped at
+      // 150s, and it may spend that on up to 200 writes, each costing a
+      // goal-event pass plus a full flow listing), and a death between the
+      // column write and the hooks would leave the tag sitting there with
+      // tag_changed never enqueued, on that night and on every night after,
+      // for exactly the contacts this feature exists to act on.
+      //
+      // With the order flipped, a death anywhere above the write leaves the
+      // tag absent, so the next night re-evaluates the contact and finishes
+      // the job. The repair cannot fire an automation twice: the dedupe key
+      // below identifies the tag APPLICATION, not the night it was tried,
+      // so the second delivery is a benign 23505 against the ai_flow_runs
+      // (flow_id, dedupe_key) index and the matching meta_capi_events one.
+      // A normal repeat night never even reaches here, because the tag is
+      // already carried and the contact is skipped above.
+      //
+      // The exposure this leaves is the inverse one, and it self-heals: if
+      // the column write below errors after the hooks fired, the tag lands
+      // on the next night's pass instead, one night late rather than never.
+      const numbers = [
+        ...new Set(
+          [primary, ...(contact.alias_e164s ?? [])].filter(
+            (n) => typeof n === "string" && n.length > 0
+          )
+        )
+      ];
+      // The same hooks, in the same order, as update_contact's tag write.
+      for (const tag of finalPlan.added) {
+        for (const number of numbers) {
+          await applyGoalEvent(supabase, businessId, number, { kind: "tag_added", tag });
+        }
+      }
+      for (const tag of finalPlan.added) {
+        const source = candidates.find(
+          (c) => c.tag.trim().slice(0, MAX_TAG_LENGTH).toLowerCase() === tag.toLowerCase()
+        )!.segment;
+        await enqueueContactEventRuns(supabase, businessId, {
+          kind: "tag_changed",
+          // The post-write list, which is what the contact is about to
+          // carry; hydrateContactEventContact leaves caller tags alone.
+          contact: { e164: primary, tags: finalPlan.next },
+          tag,
+          change: "added",
+          note: `Smart List "${source.name}" nightly action`,
+          dedupeKey: `ce:segact:${source.id}:${contact.id}:${tag.toLowerCase()}`
+        });
+      }
 
       const { error: writeErr } = await supabase
         .from("contacts")
@@ -499,33 +556,6 @@ async function sweepBusiness(
       }
       budget -= finalPlan.added.length;
       result.tagsWritten += finalPlan.added.length;
-
-      // The same hooks, in the same order, as update_contact's tag write.
-      const numbers = [
-        ...new Set(
-          [primary, ...(contact.alias_e164s ?? [])].filter(
-            (n) => typeof n === "string" && n.length > 0
-          )
-        )
-      ];
-      for (const tag of finalPlan.added) {
-        for (const number of numbers) {
-          await applyGoalEvent(supabase, businessId, number, { kind: "tag_added", tag });
-        }
-      }
-      for (const tag of finalPlan.added) {
-        const source = candidates.find(
-          (c) => c.tag.trim().slice(0, MAX_TAG_LENGTH).toLowerCase() === tag.toLowerCase()
-        )!.segment;
-        await enqueueContactEventRuns(supabase, businessId, {
-          kind: "tag_changed",
-          contact: { e164: primary, tags: finalPlan.next },
-          tag,
-          change: "added",
-          note: `Smart List "${source.name}" nightly action`,
-          dedupeKey: `ce:segact:${source.id}:${contact.id}:${tag.toLowerCase()}:${dayStamp}`
-        });
-      }
       if (capped) break;
     }
 
