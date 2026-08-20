@@ -10,6 +10,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
@@ -536,7 +537,7 @@ export type LeadSourceRowView = {
 export type LeadSourcesView = {
   totalNewContacts: number;
   untracked: number;
-  channels: LeadSourceRowView[];
+  sources: LeadSourceRowView[];
   tags: LeadSourceRowView[];
   windowDays: number;
   clipped: boolean;
@@ -577,11 +578,15 @@ function LeadSourceTable({ title, rows }: { title: string; rows: LeadSourceRowVi
 }
 
 /**
- * Where this window's new leads came from, channels (last_channel) and the
- * source tags intake flows stamp, with per-source engagement and claim
- * rates. Untracked = new contacts carrying no source signal at all.
+ * Where this window's new leads came from: by real source
+ * (contacts.lead_source, the "Clever" / "HomeLight" label stamped when a
+ * flow files the lead, falling back to the arrival channel where no source
+ * was named) and by the source tags intake flows stamp, with per-source
+ * engagement and claim rates. Untracked = new contacts carrying no source
+ * signal at all.
  */
-export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
+export async function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
+  const t = await getTranslations("dashboard.analytics.sources");
   return (
     <Card>
       <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
@@ -595,11 +600,12 @@ export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
         ) : null}
       </p>
       <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:gap-8">
-        {view.channels.length > 0 && (
-          <LeadSourceTable title="By channel" rows={view.channels} />
+        {view.sources.length > 0 && (
+          <LeadSourceTable title={t("bySource")} rows={view.sources} />
         )}
-        {view.tags.length > 0 && <LeadSourceTable title="By tag" rows={view.tags} />}
+        {view.tags.length > 0 && <LeadSourceTable title={t("byTag")} rows={view.tags} />}
       </div>
+      <p className="text-[10px] text-parchment/35 mt-3">{t("sourceExplainer")}</p>
       {view.clipped ? (
         <p className="text-[11px] text-amber-300/80 mt-2">
           Large window, counts cover the{" "}
@@ -618,6 +624,8 @@ export type EmployeePerformanceView = {
   claimed: number;
   claimRate: number | null;
   medianClaimMs: number | null;
+  medianClaimExact: boolean;
+  claimedNoTouch48h: number;
   forwardedCalls: number;
 };
 
@@ -632,19 +640,22 @@ function humanizeMs(ms: number): string {
 
 /**
  * Owner-only roster leaderboard (BizBlasts StaffPerformanceService port):
- * lead offers/claims from AiFlow routing + calls the voice line forwarded.
- * Turnaround is approximate by design (see employee-performance.ts).
+ * lead offers/claims from AiFlow routing, claim follow-through, and calls
+ * the voice line forwarded. Claim time is real where the claim stamp exists
+ * and marked "~" where a member's median still includes pre-stamp runs
+ * (see employee-performance.ts).
  */
-export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceView[] }) {
+export async function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceView[] }) {
+  const t = await getTranslations("dashboard.analytics.sources");
   return (
     <Card>
       <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
         Team performance (30 days), owner view
       </p>
       <div className="mt-3 space-y-2">
-        {/* Same asymmetric grid as FlowFunnelCard: an equal 5-way split made
-            the multi-word headers physically overlap on phones. */}
-        <div className="grid grid-cols-[minmax(0,1.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
+        {/* Same asymmetric grid as FlowFunnelCard: an equal split made the
+            multi-word headers physically overlap on phones. */}
+        <div className="grid grid-cols-[minmax(0,1.5fr)_repeat(5,minmax(0,1fr))] gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
           <span>Teammate</span>
           <span className="text-right">
             <span className="sm:hidden">Leads</span>
@@ -652,8 +663,12 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
           </span>
           <span className="text-right">Claimed</span>
           <span className="text-right">
-            <span className="sm:hidden">Median</span>
-            <span className="hidden sm:inline">Typical turnaround</span>
+            <span className="sm:hidden">{t("timeToClaimShort")}</span>
+            <span className="hidden sm:inline">{t("timeToClaimHeader")}</span>
+          </span>
+          <span className="text-right" title={t("noTouchTooltip")}>
+            <span className="sm:hidden">{t("noTouchShort")}</span>
+            <span className="hidden sm:inline">{t("noTouchHeader")}</span>
           </span>
           <span className="text-right">
             <span className="sm:hidden">Calls</span>
@@ -663,7 +678,7 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
         {rows.map((row) => (
           <div
             key={row.memberId}
-            className="grid grid-cols-[minmax(0,1.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-sm items-baseline"
+            className="grid grid-cols-[minmax(0,1.5fr)_repeat(5,minmax(0,1fr))] gap-2 text-sm items-baseline"
           >
             <span className="text-parchment/85 truncate" title={row.name}>
               {row.name}
@@ -677,7 +692,15 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
               ) : null}
             </span>
             <span className="text-right text-parchment/70">
-              {row.medianClaimMs !== null ? humanizeMs(row.medianClaimMs) : "-"}
+              {row.medianClaimMs !== null
+                ? `${row.medianClaimExact ? "" : "~"}${humanizeMs(row.medianClaimMs)}`
+                : "-"}
+            </span>
+            <span
+              className={`text-right ${row.claimedNoTouch48h > 0 ? "text-amber-300" : "text-parchment/70"}`}
+              title={t("noTouchTooltip")}
+            >
+              {row.claimedNoTouch48h.toLocaleString()}
             </span>
             <span className="text-right text-parchment/70">
               {row.forwardedCalls.toLocaleString()}
@@ -685,9 +708,8 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
           </div>
         ))}
       </div>
-      <p className="text-[10px] text-parchment/35 mt-3">
-        Turnaround approximates run start → claim settle and can include follow-up steps.
-      </p>
+      <p className="text-[10px] text-parchment/35 mt-3">{t("noTouchFootnote")}</p>
+      <p className="text-[10px] text-parchment/35 mt-1">{t("claimClockFootnote")}</p>
     </Card>
   );
 }

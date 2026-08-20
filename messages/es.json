@@ -2128,6 +2128,20 @@
       "lastDays": "Últimos {days} días",
       "lastDaysAll": "Últimos {days} días (todo)"
     },
+    "analytics": {
+      "sources": {
+        "bySource": "Por origen",
+        "byTag": "Por etiqueta",
+        "sourceExplainer": "El origen nombra quién envió al cliente potencial (Clever, HomeLight) y se registra cuando un flujo archiva el contacto. Los que no tienen origen muestran el canal por el que llegaron.",
+        "timeToClaimHeader": "Tiempo en reclamar",
+        "timeToClaimShort": "Reclamo",
+        "noTouchHeader": "Sin contacto en 48h",
+        "noTouchShort": "Sin contacto",
+        "noTouchTooltip": "Reclamos donde el cliente potencial no recibió ningún contacto visible para la plataforma en las 48 horas: ni llamada transferida, ni texto saliente, ni correo registrado.",
+        "noTouchFootnote": "\"Sin contacto en 48h\" cuenta solo los contactos visibles para la plataforma. Si alguien del equipo llama o escribe desde su celular personal, la plataforma no lo ve y no se cuenta aquí.",
+        "claimClockFootnote": "~ marca medianas que aún incluyen ejecuciones anteriores al sellado del momento del reclamo; esas aproximan del inicio al cierre del reclamo."
+      }
+    },
     "activityBadge": {
       "aiflow": "AiFlow",
       "call": "Llamada",
