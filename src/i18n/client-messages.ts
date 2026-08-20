@@ -82,6 +82,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.bookings",
       "dashboard.companion",
       "dashboard.contacts",
+      "dashboard.deals",
       "dashboard.employeeAvailability",
       "dashboard.humanHandoff",
       "dashboard.integrationsGoogleMeet",

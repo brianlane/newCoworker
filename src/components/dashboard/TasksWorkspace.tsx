@@ -1,22 +1,24 @@
 "use client";
 
 /**
- * Tasks page shell: the Board | List | Data view toggle.
+ * Tasks page shell: the Board | List | Data | Deals view toggle.
  *
  * Board (default) is the GoHighLevel-style pipeline view (PipelineBoard);
  * List is the original detailed Task Center; Data is the Airtable-style
- * lead grid (LeadDataGrid). The choice persists per browser in localStorage
+ * lead grid (LeadDataGrid); Deals is the money view (DealsBoard, fixed
+ * status columns). The choice persists per browser in localStorage
  * (a personal layout preference, like GHL's kanban controls), read after
  * mount so SSR and the first client paint agree.
  */
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Columns3, List, Table2 } from "lucide-react";
+import { Columns3, DollarSign, List, Table2 } from "lucide-react";
 import { TaskCenter } from "@/components/dashboard/TaskCenter";
 import { PipelineBoard } from "@/components/dashboard/PipelineBoard";
 import { LeadDataGrid } from "@/components/dashboard/LeadDataGrid";
+import { DealsBoard } from "@/components/dashboard/DealsBoard";
 
-type View = "board" | "list" | "data";
+type View = "board" | "list" | "data" | "deals";
 const VIEW_STORAGE_KEY = "nc-tasks-view";
 
 export function TasksWorkspace({
@@ -37,6 +39,7 @@ export function TasksWorkspace({
   highlightLead: string | null;
 }) {
   const t = useTranslations("dashboard.tasksData");
+  const tDeals = useTranslations("dashboard.deals");
   // Hydration starts on the default and the effect applies the stored
   // preference (a brief flash beats an SSR/client mismatch), same pattern
   // as the AiFlows Visual|Classic toggle.
@@ -48,8 +51,10 @@ export function TasksWorkspace({
       // One-shot post-mount sync from external storage (the documented
       // exception to the rule): reading localStorage during render would
       // desync SSR markup from the first client paint.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (stored === "list" || stored === "board" || stored === "data") setView(stored);
+      if (stored === "list" || stored === "board" || stored === "data" || stored === "deals") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setView(stored);
+      }
     } catch {
       /* storage unavailable, keep the default */
     }
@@ -71,7 +76,8 @@ export function TasksWorkspace({
           [
             { id: "board" as const, label: t("viewBoard"), Icon: Columns3 },
             { id: "list" as const, label: t("viewList"), Icon: List },
-            { id: "data" as const, label: t("viewData"), Icon: Table2 }
+            { id: "data" as const, label: t("viewData"), Icon: Table2 },
+            { id: "deals" as const, label: tDeals("tab"), Icon: DollarSign }
           ] as const
         ).map(({ id, label, Icon }) => (
           <button
@@ -104,6 +110,8 @@ export function TasksWorkspace({
           hasLinkedEmployee={hasLinkedEmployee}
           canManage={canManagePipelines}
         />
+      ) : view === "deals" ? (
+        <DealsBoard businessId={businessId} canManage={canManagePipelines} />
       ) : (
         <TaskCenter
           businessId={businessId}

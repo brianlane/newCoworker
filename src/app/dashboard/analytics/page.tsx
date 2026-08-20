@@ -52,6 +52,7 @@ import {
 import { getEngagementOverview } from "@/lib/analytics/engagement";
 import { getLeadSourceOverview } from "@/lib/analytics/lead-sources";
 import { getEmployeePerformance } from "@/lib/analytics/employee-performance";
+import { getDealsOverview } from "@/lib/analytics/deals";
 import {
   FORECAST_MIN_DAYS,
   forecastActivity,
@@ -64,6 +65,7 @@ import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
+  DealsCard,
   EmployeePerformanceCard,
   EngagementCard,
   FlowFunnelCard,
@@ -230,6 +232,7 @@ export default async function DashboardAnalyticsPage(props: {
     engagement,
     leadSources,
     teamPerformance,
+    dealsOverview,
     flowFunnels,
     linkStats,
     renewalPipeline,
@@ -258,6 +261,11 @@ export default async function DashboardAnalyticsPage(props: {
       // Owner-only roster leaderboard, never even fetched for team viewers.
       isOwnerViewer
         ? getEmployeePerformance(business.id, { client: db, now }).catch(() => null)
+        : Promise.resolve(null),
+      // Owner-only deals rollup (money is personnel-adjacent data), never
+      // even fetched for team viewers; a blip hides the card.
+      isOwnerViewer
+        ? getDealsOverview(business.id, { client: db, now }).catch(() => null)
         : Promise.resolve(null),
       // Per-flow funnel; a blip hides the card.
       getFlowFunnels(business.id, { client: db, now }).catch(() => null),
@@ -566,6 +574,11 @@ export default async function DashboardAnalyticsPage(props: {
       {teamPerformance && teamPerformance.length > 0 && (
         <EmployeePerformanceCard rows={teamPerformance} />
       )}
+
+      {dealsOverview &&
+        (dealsOverview.createdCount > 0 ||
+          dealsOverview.wonCount > 0 ||
+          dealsOverview.openCount > 0) && <DealsCard view={dealsOverview} />}
 
       {(selectedSentiment || selectedHour !== null) &&
         (segmentDetail ? (

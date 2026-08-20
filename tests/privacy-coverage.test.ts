@@ -134,6 +134,8 @@ const EXEMPT: Record<string, string> = {
   dashboard_chat_activity: "owner dashboard chat",
   dashboard_chat_jobs: "owner dashboard chat",
   dashboard_chat_threads: "owner dashboard chat",
+  deals:
+    "owner deal records (title/value/close/commission work product, same boundary as business_documents); the person linkage is contact_id, which detaches via on delete set null when erasure deletes the contact",
   email_campaigns: "owner-authored campaign content; recipients are covered separately",
   email_coworker_seen: "message-id dedupe set; no person columns",
   employee_time_off: "the business's own staff",
