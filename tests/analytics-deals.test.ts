@@ -1,4 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+// Pin CENTRAL residency mode. `contacts` is a residency-moved table, so this
+// module routes its scan through the residency layer; the VPS branch is
+// covered by tests/residency-read-flip.test.ts.
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return { ...actual, isVpsReadMode: vi.fn(async () => false) };
+});
+
 import {
   DEALS_ANALYTICS_SCAN_LIMIT,
   DEALS_ANALYTICS_WINDOW_DAYS,

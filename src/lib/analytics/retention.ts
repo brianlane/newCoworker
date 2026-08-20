@@ -8,9 +8,16 @@
  * active inside it), and how many lapsed. Derived entirely from `contacts`
  * recency columns, no per-interaction history needed, so it works even
  * after retention pruning ages raw messages out.
+ *
+ * Residency: `contacts` is a residency-moved table, so a `vps`-mode tenant's
+ * scan reads that tenant's box. Reading central returned nothing for them,
+ * and a retention report over zero contacts is not "everyone lapsed", it is
+ * no report at all. An unreachable box raises ResidencyReadError, which the
+ * analytics page turns into a hidden card.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import {
   ENGAGEMENT_ACTIVE_DAYS,
   ENGAGEMENT_COOLING_DAYS,
@@ -19,6 +26,15 @@ import {
 } from "./engagement";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/** Projection behind the scan, shared by the box and central paths. */
+const RETENTION_COLUMNS = ["created_at", "last_interaction_at", "total_interaction_count"];
+
+type RetentionRow = {
+  created_at: string;
+  last_interaction_at: string | null;
+  total_interaction_count: number;
+};
 
 export type RetentionOverview = {
   /** Customers with at least one recorded interaction, ever. */
@@ -47,20 +63,29 @@ export async function getRetentionOverview(
   const now = opts.now ?? new Date();
   const windowMs = ENGAGEMENT_ACTIVE_DAYS * 24 * 60 * 60 * 1000;
 
-  const { data, error } = await db
-    .from("contacts")
-    .select("created_at, last_interaction_at, total_interaction_count")
-    .eq("business_id", businessId)
-    .eq("type", "customer")
-    .limit(ENGAGEMENT_SCAN_LIMIT);
-  if (error) throw new Error(`getRetentionOverview: ${error.message}`);
-
-  type Row = {
-    created_at: string;
-    last_interaction_at: string | null;
-    total_interaction_count: number;
+  const fetchContacts = async (): Promise<RetentionRow[]> => {
+    if (await isVpsReadMode(businessId, db)) {
+      return await readMovedRows<RetentionRow>(businessId, {
+        table: "contacts",
+        columns: RETENTION_COLUMNS,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: ENGAGEMENT_SCAN_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("contacts")
+      .select(RETENTION_COLUMNS.join(", "))
+      .eq("business_id", businessId)
+      .eq("type", "customer")
+      .limit(ENGAGEMENT_SCAN_LIMIT);
+    if (error) throw new Error(`getRetentionOverview: ${error.message}`);
+    return (data as unknown as RetentionRow[] | null) ?? [];
   };
-  const rows = ((data as Row[] | null) ?? []);
+
+  const rows = await fetchContacts();
 
   let engagedEver = 0;
   let retained = 0;

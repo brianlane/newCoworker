@@ -6,11 +6,18 @@
  * the reminders, this is the at-a-glance book view behind
  * /dashboard/analytics.
  *
- * business_documents is a central table (not residency-moved), so plain
- * service-role reads are correct for every tenant.
+ * Residency: `business_documents` and `ai_flow_team_members` are central
+ * tables (not residency-moved), so plain service-role reads are correct for
+ * every tenant. `contacts` IS moved, so the name/number lookup that renders
+ * each row routes through the residency layer: reading it centrally for a
+ * `vps`-mode tenant returned nothing, and every renewal then rendered as a
+ * nameless, numberless row the owner could not act on. An unreachable box
+ * raises ResidencyReadError, which the analytics page turns into a hidden
+ * card.
  */
 
 import { resolveImplicitContactOwner } from "@/lib/db/implicit-contact-owner";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -102,18 +109,33 @@ export async function getRenewalPipeline(
   const employeeIds = [
     ...new Set(docs.map((d) => d.assigned_employee_id).filter((v): v is string => !!v))
   ];
+  type ContactRow = { id: string; display_name: string | null; customer_e164: string };
   const contacts = new Map<string, { name: string | null; e164: string }>();
   if (contactIds.length > 0) {
-    const { data: rows, error: contactErr } = await db
-      .from("contacts")
-      .select("id, display_name, customer_e164")
-      .in("id", contactIds);
-    if (contactErr) throw new Error(`getRenewalPipeline contacts: ${contactErr.message}`);
-    for (const c of (rows ?? []) as Array<{
-      id: string;
-      display_name: string | null;
-      customer_e164: string;
-    }>) {
+    // Resolved here rather than at the top of the function: with no linked
+    // contacts there is nothing to route, and the lookup would be wasted.
+    const fetchContacts = async (): Promise<ContactRow[]> => {
+      if (await isVpsReadMode(businessId, db)) {
+        return await readMovedRows<ContactRow>(businessId, {
+          table: "contacts",
+          columns: ["id", "display_name", "customer_e164"],
+          // Same single filter as central: these ids come from THIS
+          // business's documents, and the box holds one tenant. `id` is the
+          // primary key, so the cap can never bind (contactIds is at most
+          // one per scanned document, and the document scan is capped at
+          // RENEWAL_PIPELINE_SCAN_LIMIT).
+          filters: [{ column: "id", op: "in", value: contactIds }],
+          limit: RENEWAL_PIPELINE_SCAN_LIMIT
+        });
+      }
+      const { data: rows, error: contactErr } = await db
+        .from("contacts")
+        .select("id, display_name, customer_e164")
+        .in("id", contactIds);
+      if (contactErr) throw new Error(`getRenewalPipeline contacts: ${contactErr.message}`);
+      return (rows ?? []) as ContactRow[];
+    };
+    for (const c of await fetchContacts()) {
       contacts.set(c.id, { name: c.display_name?.trim() || null, e164: c.customer_e164 });
     }
   }

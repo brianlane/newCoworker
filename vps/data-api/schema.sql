@@ -7,6 +7,12 @@
 -- columns on dashboard_chat_threads, email_log, voice_call_transcripts,
 -- sms_outbound_log, notifications.
 -- Also mirrors soft_delete_ai_flows: deleted_at/deleted_by on ai_flows.
+-- Also mirrors 20260709213842_contact_tags_ownership and
+-- 20260822035302_lead_source_and_lifecycle_stages: tags, owner_employee_id
+-- and lead_source on contacts, all added centrally AFTER this snapshot was
+-- generated. The dashboard's lead-source, quote-funnel and deals cards
+-- project those three, and the journal replays rows carrying them, so a box
+-- without them answers with a column error instead of the tenant's numbers.
 --
 -- Single-tenant datastore for the per-VPS data API. RLS is intentionally
 -- absent (one tenant per box; the data-api bearer token is the boundary).
@@ -65,6 +71,14 @@ alter table contacts add column if not exists email text;
 alter table contacts add column if not exists type text not null default 'customer'::text;
 alter table contacts add column if not exists name_source text not null default 'auto'::text;
 alter table contacts add column if not exists sms_reply_mode text not null default 'auto'::text;
+-- Post-snapshot central columns (see the hand-patch note in the header).
+-- Central's FK on owner_employee_id (-> ai_flow_team_members) is dropped like
+-- every other FK to a central table, and central's CHECK constraints are not
+-- mirrored: rows reach this datastore only through the journal, already
+-- validated on the way in.
+alter table contacts add column if not exists tags text[] not null default '{}'::text[];
+alter table contacts add column if not exists owner_employee_id uuid;
+alter table contacts add column if not exists lead_source text;
 
 create index if not exists customer_memories_business_email_idx ON public.contacts USING btree (business_id, lower(email)) WHERE (email IS NOT NULL);
 create index if not exists idx_customer_memories_alias_gin ON public.contacts USING gin (alias_e164s);

@@ -22,10 +22,18 @@
  * that number is the honest residue of intake paths with no source signal
  * (manual adds, bare CSV imports), surfaced rather than hidden so owners
  * know how much of their funnel is dark.
+ *
+ * Residency: `contacts` is a residency-moved table, so for a `vps`-mode
+ * tenant the authoritative rows live on that tenant's box and the scan
+ * routes through the residency layer. A central read for those tenants
+ * returned nothing, and an empty scan reads as "no leads came in this
+ * month". An unreachable box raises ResidencyReadError, which the analytics
+ * page turns into a hidden card: no number beats a wrong one.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { contactChannelLabel } from "@/lib/customer-memory/channel-label";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -57,6 +65,15 @@ export const LEAD_SOURCE_WINDOW_DAYS = 30;
 export const LEAD_SOURCE_TAG_LIMIT = 12;
 /** New-contact rows scanned per window, far above current tenant volumes. */
 export const LEAD_SOURCE_SCAN_LIMIT = 5000;
+
+/** Projection behind the scan, shared by the box and central paths. */
+const LEAD_SOURCE_COLUMNS = [
+  "lead_source",
+  "last_channel",
+  "tags",
+  "owner_employee_id",
+  "total_interaction_count"
+];
 
 export type LeadSourceContact = {
   lead_source: string | null;
@@ -134,19 +151,35 @@ export async function getLeadSourceOverview(
   // the same contacts everywhere.
   const since = analyticsWindowStart(now, windowDays).toISOString();
 
-  const { data, error } = await db
-    .from("contacts")
-    .select("lead_source, last_channel, tags, owner_employee_id, total_interaction_count")
-    .eq("business_id", businessId)
-    .eq("type", "customer")
-    .gte("created_at", since)
-    // Newest-first so a capped scan deterministically keeps the MOST RECENT
-    // contacts (the clipped footnote says exactly that).
-    .order("created_at", { ascending: false })
-    .limit(LEAD_SOURCE_SCAN_LIMIT);
-  if (error) throw new Error(`getLeadSourceOverview: ${error.message}`);
+  const fetchContacts = async (): Promise<LeadSourceContact[]> => {
+    if (await isVpsReadMode(businessId, db)) {
+      return await readMovedRows<LeadSourceContact>(businessId, {
+        table: "contacts",
+        columns: LEAD_SOURCE_COLUMNS,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "type", op: "eq", value: "customer" },
+          { column: "created_at", op: "gte", value: since }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: LEAD_SOURCE_SCAN_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("contacts")
+      .select(LEAD_SOURCE_COLUMNS.join(", "))
+      .eq("business_id", businessId)
+      .eq("type", "customer")
+      .gte("created_at", since)
+      // Newest-first so a capped scan deterministically keeps the MOST RECENT
+      // contacts (the clipped footnote says exactly that).
+      .order("created_at", { ascending: false })
+      .limit(LEAD_SOURCE_SCAN_LIMIT);
+    if (error) throw new Error(`getLeadSourceOverview: ${error.message}`);
+    return (data as unknown as LeadSourceContact[] | null) ?? [];
+  };
 
-  const rows = ((data as LeadSourceContact[] | null) ?? []);
+  const rows = await fetchContacts();
   return buildLeadSourceOverview(rows, {
     windowDays,
     clipped: rows.length >= LEAD_SOURCE_SCAN_LIMIT

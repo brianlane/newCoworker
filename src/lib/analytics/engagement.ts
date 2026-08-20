@@ -13,9 +13,16 @@
  * The quiet list is the actionable output, the owner's natural target for
  * a win-back flow, ordered by lifetime interactions so the most valuable
  * lapsed customers surface first.
+ *
+ * Residency: `contacts` is a residency-moved table, so a `vps`-mode tenant's
+ * directory scan reads that tenant's box. Central held nothing for them, and
+ * an empty directory reads as "this business has no customers". An
+ * unreachable box raises ResidencyReadError, which the analytics page turns
+ * into a hidden card.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -75,6 +82,23 @@ export const QUIET_CUSTOMER_LIMIT = 8;
 /** Contacts scanned per overview, far above any current tenant's directory. */
 export const ENGAGEMENT_SCAN_LIMIT = 5000;
 
+/** Projection behind the directory scan, shared by the box and central paths. */
+const ENGAGEMENT_COLUMNS = [
+  "customer_e164",
+  "display_name",
+  "created_at",
+  "last_interaction_at",
+  "total_interaction_count"
+];
+
+type EngagementRow = {
+  customer_e164: string;
+  display_name: string | null;
+  created_at: string;
+  last_interaction_at: string | null;
+  total_interaction_count: number;
+};
+
 /**
  * Segment counts + the quiet shortlist for the business's CUSTOMER contacts
  * (owner/employee/company rows are directory entries, not a relationship to
@@ -86,22 +110,30 @@ export async function getEngagementOverview(
 ): Promise<EngagementOverview> {
   const db = opts.client ?? (await createSupabaseServiceClient());
   const now = opts.now ?? new Date();
-  const { data, error } = await db
-    .from("contacts")
-    .select("customer_e164, display_name, created_at, last_interaction_at, total_interaction_count")
-    .eq("business_id", businessId)
-    .eq("type", "customer")
-    .limit(ENGAGEMENT_SCAN_LIMIT);
-  if (error) throw new Error(`getEngagementOverview: ${error.message}`);
 
-  type Row = {
-    customer_e164: string;
-    display_name: string | null;
-    created_at: string;
-    last_interaction_at: string | null;
-    total_interaction_count: number;
+  const fetchContacts = async (): Promise<EngagementRow[]> => {
+    if (await isVpsReadMode(businessId, db)) {
+      return await readMovedRows<EngagementRow>(businessId, {
+        table: "contacts",
+        columns: ENGAGEMENT_COLUMNS,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: ENGAGEMENT_SCAN_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("contacts")
+      .select(ENGAGEMENT_COLUMNS.join(", "))
+      .eq("business_id", businessId)
+      .eq("type", "customer")
+      .limit(ENGAGEMENT_SCAN_LIMIT);
+    if (error) throw new Error(`getEngagementOverview: ${error.message}`);
+    return (data as unknown as EngagementRow[] | null) ?? [];
   };
-  const rows = ((data as Row[] | null) ?? []);
+
+  const rows = await fetchContacts();
 
   const counts: Record<EngagementSegment, number> = { new: 0, active: 0, cooling: 0, quiet: 0 };
   const quiet: QuietCustomer[] = [];

@@ -52,6 +52,13 @@ import {
   getSentimentCallsDetail
 } from "@/lib/analytics/dashboard-analytics";
 import { getEmployeePerformance } from "@/lib/analytics/employee-performance";
+import { getLeadSourceOverview } from "@/lib/analytics/lead-sources";
+import { getEngagementOverview } from "@/lib/analytics/engagement";
+import { getRetentionOverview } from "@/lib/analytics/retention";
+import { getMonthlySummary } from "@/lib/analytics/monthly-summary";
+import { getQuoteFunnel } from "@/lib/analytics/quote-funnel";
+import { getRenewalPipeline } from "@/lib/analytics/renewal-pipeline";
+import { DEALS_CONTACT_CHUNK, getDealsOverview } from "@/lib/analytics/deals";
 import { listTeamMembers } from "@/lib/db/employees";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -359,7 +366,20 @@ describe("analytics vps reads", () => {
       // resolves to an empty result set instead of crashing on a missing
       // method: that is what makes the employee-performance cases below
       // fail with the false accusation they are guarding against.
-      for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit", "or", "in"]) {
+      for (const m of [
+        "select",
+        "eq",
+        "neq",
+        "is",
+        "not",
+        "gte",
+        "lt",
+        "lte",
+        "order",
+        "limit",
+        "or",
+        "in"
+      ]) {
         chain[m] = vi.fn(() => chain);
       }
       chain.maybeSingle = vi.fn(async () => ({
@@ -383,6 +403,20 @@ describe("analytics vps reads", () => {
     vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
       return (rowsByTable[(request as { table: string }).table] ?? []) as never;
     });
+  }
+
+  /** The box request for one moved table, or undefined if never read. */
+  function movedRequest(table: string) {
+    return vi
+      .mocked(readMovedRows)
+      .mock.calls.find((c) => (c[1] as { table: string }).table === table)?.[1];
+  }
+
+  /** Every table name the CENTRAL client was asked for. */
+  function centralTables(db: unknown): string[] {
+    return (db as { from: { mock: { calls: unknown[][] } } }).from.mock.calls.map(
+      (c) => c[0] as string
+    );
   }
 
   const BOX_CALL = {
@@ -586,13 +620,6 @@ describe("analytics vps reads", () => {
       return analyticsCentralDb({ ai_flow_runs: { data: runs, error: null } });
     }
 
-    /** The box request for one moved table, or undefined if never read. */
-    function movedRequest(table: string) {
-      return vi
-        .mocked(readMovedRows)
-        .mock.calls.find((c) => (c[1] as { table: string }).table === table)?.[1];
-    }
-
     beforeEach(() => {
       roster();
     });
@@ -700,6 +727,351 @@ describe("analytics vps reads", () => {
       expect(movedRequest("sms_outbound_log")).toMatchObject({
         filters: expect.arrayContaining([{ column: "to_e164", op: "in", value: [LEAD] }])
       });
+    });
+  });
+
+  /**
+   * The contact-backed cards. `contacts` is a moved table, so for a vps
+   * tenant every one of these read an empty central table and rendered
+   * zeros: no leads this month, nobody to win back, no quotes in flight, no
+   * names on the renewal book, every won deal filed under "No source". Each
+   * case pins the box request AND asserts central was never asked for
+   * `contacts`. The central paths keep their own suites
+   * (tests/analytics-*.test.ts), which now pin central mode explicitly.
+   */
+  describe("contact-backed analytics vps reads", () => {
+    /** analyticsWindowStart(NOW, 30), the boundary every windowed card uses. */
+    const WINDOW_START = "2026-06-05T00:00:00.000Z";
+
+    it("lead sources folds the box's new contacts", async () => {
+      dispatchMovedRows({
+        contacts: [
+          {
+            lead_source: "Clever",
+            last_channel: "sms",
+            tags: ["VIP"],
+            owner_employee_id: "m-dave",
+            total_interaction_count: 3
+          },
+          {
+            lead_source: null,
+            last_channel: "voice",
+            tags: [],
+            owner_employee_id: null,
+            total_interaction_count: 0
+          }
+        ]
+      });
+      const db = analyticsCentralDb();
+      const overview = await getLeadSourceOverview(BIZ, { client: db, now: NOW });
+
+      expect(overview.totalNewContacts).toBe(2);
+      expect(overview.sources).toEqual([
+        { label: "Clever", newContacts: 1, engaged: 1, claimed: 1 },
+        { label: "voice", newContacts: 1, engaged: 0, claimed: 0 }
+      ]);
+      expect(overview.tags).toEqual([{ label: "VIP", newContacts: 1, engaged: 1, claimed: 1 }]);
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: [
+          "lead_source",
+          "last_channel",
+          "tags",
+          "owner_employee_id",
+          "total_interaction_count"
+        ],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "type", op: "eq", value: "customer" },
+          { column: "created_at", op: "gte", value: WINDOW_START }
+        ],
+        order: [{ column: "created_at", ascending: false }],
+        limit: 5000
+      });
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("engagement segments and the quiet shortlist come from the box directory", async () => {
+      dispatchMovedRows({
+        contacts: [
+          {
+            customer_e164: "+16025551111",
+            display_name: "Quiet Quinn",
+            created_at: "2026-01-01T00:00:00Z",
+            last_interaction_at: "2026-02-01T00:00:00Z",
+            total_interaction_count: 9
+          },
+          {
+            customer_e164: "+16025552222",
+            display_name: "Active Amy",
+            created_at: "2026-01-01T00:00:00Z",
+            last_interaction_at: "2026-07-01T00:00:00Z",
+            total_interaction_count: 4
+          }
+        ]
+      });
+      const db = analyticsCentralDb();
+      const overview = await getEngagementOverview(BIZ, { client: db, now: NOW });
+
+      expect(overview.counts).toEqual({ new: 0, active: 1, cooling: 0, quiet: 1 });
+      expect(overview.total).toBe(2);
+      expect(overview.quietCustomers).toEqual([
+        {
+          e164: "+16025551111",
+          name: "Quiet Quinn",
+          lastInteractionAt: "2026-02-01T00:00:00Z",
+          totalInteractions: 9
+        }
+      ]);
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: [
+          "customer_e164",
+          "display_name",
+          "created_at",
+          "last_interaction_at",
+          "total_interaction_count"
+        ],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: 5000
+      });
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("retention bands the box's contacts", async () => {
+      dispatchMovedRows({
+        contacts: [
+          // Older than the window, active inside it: retained AND returning.
+          {
+            created_at: "2026-01-01T00:00:00Z",
+            last_interaction_at: "2026-07-01T00:00:00Z",
+            total_interaction_count: 5
+          },
+          // 45 days silent: the at-risk middle.
+          {
+            created_at: "2026-01-01T00:00:00Z",
+            last_interaction_at: "2026-05-20T00:00:00Z",
+            total_interaction_count: 2
+          },
+          // 90+ days silent: lapsed.
+          {
+            created_at: "2026-01-01T00:00:00Z",
+            last_interaction_at: "2026-01-02T00:00:00Z",
+            total_interaction_count: 1
+          },
+          // Created in the window, never interacted: new, not engagedEver.
+          {
+            created_at: "2026-07-01T00:00:00Z",
+            last_interaction_at: null,
+            total_interaction_count: 0
+          }
+        ]
+      });
+      const db = analyticsCentralDb();
+      const overview = await getRetentionOverview(BIZ, { client: db, now: NOW });
+
+      expect(overview).toEqual({
+        engagedEver: 3,
+        retained: 1,
+        atRisk: 1,
+        lapsed: 1,
+        retentionRate: 0.33,
+        returning: 1,
+        newInWindow: 1,
+        clipped: false
+      });
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: ["created_at", "last_interaction_at", "total_interaction_count"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: 5000
+      });
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("the monthly summary counts new contacts on the box, one mode lookup for both months", async () => {
+      // Dispatched on the month boundary rather than on call order, so the
+      // case still means something if the two months stop being awaited
+      // together.
+      vi.mocked(countMovedRows).mockImplementation(async (_biz, request) => {
+        const from = (request as { filters?: Array<{ column: string; op: string; value: unknown }> })
+          .filters?.find((f) => f.column === "created_at" && f.op === "gte")?.value;
+        return from === "2026-07-01T00:00:00.000Z" ? 7 : 4;
+      });
+      const db = analyticsCentralDb({
+        analytics_daily_snapshots: {
+          data: [{ calls: 3, sms_sent: 11, voice_minutes: 6, missed_calls: 1 }],
+          error: null
+        }
+      });
+      const summary = await getMonthlySummary(BIZ, { client: db, now: NOW });
+
+      expect(summary.current).toEqual({
+        month: "2026-07",
+        calls: 3,
+        texts: 11,
+        voiceMinutes: 6,
+        missedCalls: 1,
+        newContacts: 7,
+        coveredDays: 1
+      });
+      expect(summary.previous).toMatchObject({ month: "2026-06", newContacts: 4 });
+      // Head count, never a row fetch.
+      expect(readMovedRows).not.toHaveBeenCalled();
+      expect(vi.mocked(countMovedRows).mock.calls[0][1]).toEqual({
+        table: "contacts",
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "type", op: "eq", value: "customer" },
+          { column: "created_at", op: "gte", value: "2026-07-01T00:00:00.000Z" },
+          { column: "created_at", op: "lt", value: "2026-08-01T00:00:00.000Z" }
+        ]
+      });
+      // Resolved once for the whole render, not once per month.
+      expect(isVpsReadMode).toHaveBeenCalledTimes(1);
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("the quote funnel stages the box's tags", async () => {
+      dispatchMovedRows({
+        contacts: [
+          // Furthest stage wins: this contact is a win, not two entries.
+          { tags: ["quote-requested", "Quote-Won"] },
+          { tags: ["quote-lost"] },
+          { tags: null }
+        ]
+      });
+      const db = analyticsCentralDb();
+      const funnel = await getQuoteFunnel(BIZ, { client: db });
+
+      expect(funnel.counts).toEqual({
+        "quote-requested": 0,
+        "quote-received": 0,
+        "quote-presented": 0,
+        "quote-won": 1,
+        "quote-lost": 1
+      });
+      expect(funnel.totalTracked).toBe(2);
+      expect(funnel.conversionRate).toBe(0.5);
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: ["tags"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "type", op: "eq", value: "customer" }
+        ],
+        limit: 5000
+      });
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("the renewal pipeline names its rows from the box, documents stay central", async () => {
+      const db = analyticsCentralDb({
+        business_documents: {
+          data: [
+            {
+              id: "d1",
+              title: "Auto policy",
+              category: "insurance",
+              renewal_date: "2026-07-20T00:00:00Z",
+              contact_id: "c1",
+              assigned_employee_id: "m-dave"
+            }
+          ],
+          error: null
+        }
+      });
+      dispatchMovedRows({
+        contacts: [{ id: "c1", display_name: "  Rita  ", customer_e164: "+16025553333" }]
+      });
+      const pipeline = await getRenewalPipeline(BIZ, { client: db, now: NOW });
+
+      expect(pipeline.rows).toEqual([
+        {
+          documentId: "d1",
+          title: "Auto policy",
+          category: "insurance",
+          renewalDate: "2026-07-20",
+          daysUntil: 16,
+          bucket: "next30",
+          contactName: "Rita",
+          contactE164: "+16025553333",
+          assignedEmployee: null
+        }
+      ]);
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: ["id", "display_name", "customer_e164"],
+        // Same single filter as central: the ids already come from this
+        // business's documents, and a box holds one tenant.
+        filters: [{ column: "id", op: "in", value: ["c1"] }],
+        limit: 500
+      });
+      expect(centralTables(db)).toContain("business_documents");
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("won deals join the box's lead_source and owner", async () => {
+      vi.mocked(listTeamMembers).mockResolvedValue([
+        { id: "m-dave", name: "Dave" }
+      ] as never);
+      // All three `deals` reads share one scripted result (the stub keys by
+      // table): 2 created, one won deal worth $50, one open deal worth $50.
+      const db = analyticsCentralDb({
+        deals: { data: [{ contact_id: "c1", value_cents: 5000 }], count: 2, error: null }
+      });
+      dispatchMovedRows({
+        contacts: [{ id: "c1", lead_source: "Clever", owner_employee_id: "m-dave" }]
+      });
+      const overview = await getDealsOverview(BIZ, { client: db, now: NOW });
+
+      expect(overview).toMatchObject({
+        createdCount: 2,
+        wonCount: 1,
+        wonValueCents: 5000,
+        bySource: [{ label: "Clever", wonCount: 1, wonValueCents: 5000 }],
+        byOwner: [{ employeeId: "m-dave", name: "Dave", wonCount: 1, wonValueCents: 5000 }]
+      });
+      expect(movedRequest("contacts")).toEqual({
+        table: "contacts",
+        columns: ["id", "lead_source", "owner_employee_id"],
+        filters: [
+          { column: "business_id", op: "eq", value: BIZ },
+          { column: "id", op: "in", value: ["c1"] }
+        ],
+        limit: 150
+      });
+      expect(centralTables(db)).not.toContain("contacts");
+    });
+
+    it("deals chunk the box lookup and resolve the mode once for the whole loop", async () => {
+      const wonDeals = Array.from({ length: DEALS_CONTACT_CHUNK + 1 }, (_, i) => ({
+        contact_id: `c${i}`,
+        value_cents: 100
+      }));
+      const db = analyticsCentralDb({
+        deals: { data: wonDeals, count: wonDeals.length, error: null }
+      });
+      dispatchMovedRows({ contacts: [] });
+      await getDealsOverview(BIZ, { client: db, now: NOW });
+
+      const contactCalls = vi
+        .mocked(readMovedRows)
+        .mock.calls.filter((c) => (c[1] as { table: string }).table === "contacts");
+      expect(contactCalls).toHaveLength(2);
+      expect(
+        (contactCalls[0][1] as { filters: Array<{ value: string[] }> }).filters[1].value
+      ).toHaveLength(DEALS_CONTACT_CHUNK);
+      expect(
+        (contactCalls[1][1] as { filters: Array<{ value: string[] }> }).filters[1].value
+      ).toEqual([`c${DEALS_CONTACT_CHUNK}`]);
+      expect(isVpsReadMode).toHaveBeenCalledTimes(1);
     });
   });
 });
