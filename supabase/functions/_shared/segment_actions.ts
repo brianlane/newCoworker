@@ -511,6 +511,15 @@ async function sweepBusiness(
       // A normal repeat night never even reaches here, because the tag is
       // already carried and the contact is skipped above.
       //
+      // One consequence of that key is deliberate: a tag a person strips off
+      // gets put back quietly by a later night, without re-firing. Keying by
+      // the night (or by the contact's updated_at) would re-arm the
+      // automation for that re-add, but it would equally re-arm it for a
+      // crash repair whenever anything touched the contact in between, and
+      // that is a duplicate text to a real customer. Fire-once per contact
+      // per segment tag is the safer reading of "this contact entered the
+      // list".
+      //
       // The exposure this leaves is the inverse one, and it self-heals: if
       // the column write below errors after the hooks fired, the tag lands
       // on the next night's pass instead, one night late rather than never.
