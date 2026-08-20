@@ -20,6 +20,10 @@ import {
   parseWeeklyWindows
 } from "../../../supabase/functions/_shared/ai_flows/engine";
 import type { BusinessHours } from "@/lib/business-profile/profile";
+import {
+  DEFAULT_BUSINESS_HOURS,
+  dayWindowMinutes
+} from "@/lib/business-profile/hours-window";
 
 export type BusyBlock = { start: Date; end: Date };
 
@@ -64,35 +68,6 @@ export type PublicSlot = { startIso: string; endIso: string };
 const STEP_MS = 15 * 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Default availability when the owner never filled in business hours:
- * weekdays 9 to 5. An explicitly closed day (null) or a missing day on a
- * PARTIALLY specified schedule stays closed, ambiguity must never offer a
- * Sunday 3 PM the owner would have to honor.
- */
-const DEFAULT_HOURS: BusinessHours = {
-  mon: { open: "09:00", close: "17:00" },
-  tue: { open: "09:00", close: "17:00" },
-  wed: { open: "09:00", close: "17:00" },
-  thu: { open: "09:00", close: "17:00" },
-  fri: { open: "09:00", close: "17:00" }
-};
-
-/** Day window in minutes since local midnight, or null when closed. */
-function dayWindow(
-  hours: BusinessHours,
-  weekday: keyof BusinessHours
-): { openMin: number; closeMin: number } | null {
-  const entry = hours[weekday];
-  if (entry === undefined || entry === null) return null;
-  const openMin = parseHmToMinutes(entry.open);
-  const closeMin = parseHmToMinutes(entry.close);
-  // parseBusinessHours already validated HH:MM, but stay fail-closed on a
-  // hand-edited row where close does not follow open.
-  if (openMin === null || closeMin === null || closeMin <= openMin) return null;
-  return { openMin, closeMin };
-}
-
 export function computePublicSlots(input: ComputePublicSlotsInput): PublicSlot[] {
   const {
     now,
@@ -106,7 +81,7 @@ export function computePublicSlots(input: ComputePublicSlotsInput): PublicSlot[]
   } = input;
   const durationMs = durationMinutes * 60_000;
   const bufferMs = policy.bufferMinutes * 60_000;
-  const hours = input.businessHours ?? DEFAULT_HOURS;
+  const hours = input.businessHours ?? DEFAULT_BUSINESS_HOURS;
 
   // Busy blocks expanded by the buffer on both sides: a slot must clear the
   // padding, not just the meeting itself.
@@ -162,7 +137,7 @@ export function computePublicSlots(input: ComputePublicSlotsInput): PublicSlot[]
     if (clock.minutes % 30 !== 0) continue;
     if (clock.isoDate > lastIsoDate) break;
 
-    const window = dayWindow(hours, clock.weekday);
+    const window = dayWindowMinutes(hours, clock.weekday);
     if (!window) continue;
     if (clock.minutes < window.openMin) continue;
     if (clock.minutes + durationMinutes > window.closeMin) continue;

@@ -15,7 +15,10 @@ vi.mock("@/lib/workspace/proxy", () => ({
 // The Meet cases below opt in explicitly.
 vi.mock("@/lib/db/businesses", () => ({
   getBusinessTimezone: vi.fn(),
-  isGoogleMeetEnabled: vi.fn(async () => false)
+  isGoogleMeetEnabled: vi.fn(async () => false),
+  // Hours unset by default, so findCalendarSlots falls back to weekdays
+  // 09:00-17:00 exactly as it does for a tenant who never filled them in.
+  getBusiness: vi.fn(async () => ({ business_hours: null }))
 }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
   mirrorBookingToSharedCalendar: vi.fn(async () => null),
@@ -64,6 +67,7 @@ import {
   bookCalendarAppointment,
   computeFreeSlots,
   findCalendarSlots,
+  openRunsWithin,
   formatBookingStartLocal,
   getWorkspaceBusyBlocks,
   wallClockInZone
@@ -75,7 +79,7 @@ import {
   workspaceProxyStatusForBusiness
 } from "@/lib/workspace/proxy";
 import { isGoogleMeetEnabled } from "@/lib/db/businesses";
-import { getBusinessTimezone } from "@/lib/db/businesses";
+import { getBusiness, getBusinessTimezone } from "@/lib/db/businesses";
 import {
   ensureSharedCalendar,
   getSharedCalendar,
@@ -158,6 +162,207 @@ beforeEach(() => {
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
   // Default: no Zoom connection, bookings behave exactly as pre-Zoom tests pin.
   vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
+});
+
+/**
+ * Business-hours clipping. Before this, calendar_find_slots would happily
+ * offer a customer a 2 AM appointment: it never read the business's hours,
+ * and it emitted at most ONE slot per free gap, so a near-empty calendar
+ * answered "what is open this week?" with a single odd-hour time.
+ *
+ * The default (weekdays 09:00-17:00 when hours are unset) is deliberately the
+ * SAME default the public booking page uses. The two surfaces both answer
+ * "when can I come in?" for one tenant, so they must not disagree.
+ */
+describe("business hours clipping", () => {
+  const HOURS = {
+    mon: { open: "09:00", close: "17:00" },
+    tue: { open: "09:00", close: "17:00" },
+    wed: { open: "09:00", close: "17:00" },
+    thu: { open: "09:00", close: "17:00" },
+    fri: { open: "09:00", close: "16:00" },
+    sat: null,
+    sun: null
+  };
+  const HOUR = 60 * 60 * 1000;
+  // 2026-06-12 is a Friday. Phoenix is UTC-7 and never observes DST.
+  const utc = (day: number, h: number, m = 0) =>
+    new Date(Date.UTC(2026, 5, day, h, m, 0));
+  /**
+   * Built from parts rather than toLocaleString: the separator between
+   * weekday and time varies by ICU build (some emit "Fri 9:00 AM", some
+   * "Fri 9:00 AM"), and a slot assertion must not depend on that.
+   */
+  const phx = (iso: string) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Phoenix",
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true
+    }).formatToParts(new Date(iso));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${get("weekday")} ${get("hour")}:${get("minute")} ${get("dayPeriod")}`;
+  };
+
+  it("refuses a window that sits entirely before opening", () => {
+    // 09:00-12:00 UTC is 02:00-05:00 Phoenix. This is the exact bug: the
+    // old code offered 02:00 AM.
+    const slots = computeFreeSlots(
+      utc(12, 9),
+      utc(12, 12),
+      [],
+      HOUR,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots).toEqual([]);
+  });
+
+  it("offers the first open time instead of the requested overnight one", () => {
+    // Asking from 02:00 Phoenix Friday through Saturday morning: the only
+    // open stretch is Friday 09:00-16:00.
+    const slots = computeFreeSlots(
+      utc(12, 9),
+      utc(13, 9),
+      [],
+      HOUR,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots).toHaveLength(1);
+    expect(phx(slots[0].startIso)).toBe("Fri 9:00 AM");
+  });
+
+  it("spreads offers across days rather than returning one for the whole gap", () => {
+    // A completely empty week. The old behaviour was ONE slot, because the
+    // whole window is a single gap.
+    const slots = computeFreeSlots(
+      utc(12, 16),
+      utc(17, 23),
+      [],
+      HOUR,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots.map((s) => phx(s.startIso))).toEqual([
+      "Fri 9:00 AM",
+      "Mon 9:00 AM",
+      "Tue 9:00 AM"
+    ]);
+  });
+
+  it("skips closed days entirely", () => {
+    // Saturday and Sunday are explicit nulls; the window covers only them.
+    const slots = computeFreeSlots(
+      utc(13, 16),
+      utc(15, 3),
+      [],
+      HOUR,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots).toEqual([]);
+  });
+
+  it("will not start an appointment that runs past closing", () => {
+    // Friday closes at 16:00 Phoenix (23:00 UTC). A 2-hour request cannot
+    // start at 15:00, and the last legal start is 14:00.
+    const twoHours = 2 * HOUR;
+    const slots = computeFreeSlots(
+      utc(12, 21), // 14:00 Phoenix
+      utc(12, 23), // 16:00 Phoenix
+      [],
+      twoHours,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots.map((s) => phx(s.startIso))).toEqual(["Fri 2:00 PM"]);
+
+    const tooLate = computeFreeSlots(
+      utc(12, 22), // 15:00 Phoenix, only one hour before close
+      utc(12, 23),
+      [],
+      twoHours,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(tooLate).toEqual([]);
+  });
+
+  it("still splits around busy blocks inside the open window", () => {
+    const busy = [{ start: utc(12, 17), end: utc(12, 18) }]; // 10-11 Phoenix
+    const slots = computeFreeSlots(
+      utc(12, 16),
+      utc(12, 20),
+      busy,
+      HOUR,
+      3,
+      "America/Phoenix",
+      HOURS
+    );
+    expect(slots.map((s) => phx(s.startIso))).toEqual(["Fri 9:00 AM", "Fri 11:00 AM"]);
+  });
+
+  it("leaves behaviour untouched when no hours are supplied", () => {
+    // The CalDAV path and every pre-existing caller pass no hours, and must
+    // keep the original unclipped walk.
+    const slots = computeFreeSlots(utc(12, 9), utc(12, 12), [], HOUR, 3, "America/Phoenix");
+    expect(slots).toHaveLength(1);
+    expect(phx(slots[0].startIso)).toBe("Fri 2:00 AM");
+  });
+
+  it("treats a day whose close precedes its open as closed", () => {
+    const broken = { fri: { open: "17:00", close: "09:00" } };
+    const slots = computeFreeSlots(
+      utc(12, 16),
+      utc(12, 23),
+      [],
+      HOUR,
+      3,
+      "America/Phoenix",
+      broken
+    );
+    expect(slots).toEqual([]);
+  });
+
+  describe("openRunsWithin", () => {
+    it("returns one run per open stretch, ending at the last legal start", () => {
+      const runs = openRunsWithin(utc(12, 16), utc(12, 23), HOURS, HOUR, "America/Phoenix");
+      expect(runs).toHaveLength(1);
+      expect(phx(runs[0].start.toISOString())).toBe("Fri 9:00 AM");
+      // Friday closes at 16:00 Phoenix, so the last 60-minute start is
+      // 15:00 and the run ends when that appointment would.
+      expect(phx(runs[0].end.toISOString())).toBe("Fri 4:00 PM");
+    });
+
+    it("returns nothing when the gap is too short for the appointment", () => {
+      expect(
+        openRunsWithin(utc(12, 16), utc(12, 16, 30), HOURS, HOUR, "America/Phoenix")
+      ).toEqual([]);
+    });
+
+    it("stops scanning a pathologically long window", () => {
+      // Six weeks of quarter-hours is the runaway guard. A year-long window
+      // must return promptly rather than walking 35,000 steps.
+      const runs = openRunsWithin(
+        utc(12, 16),
+        new Date(Date.UTC(2027, 5, 12, 16)),
+        HOURS,
+        HOUR,
+        "America/Phoenix"
+      );
+      expect(runs.length).toBeGreaterThan(0);
+      // Six weeks of weekdays, not a year of them.
+      expect(runs.length).toBeLessThan(35);
+    });
+  });
 });
 
 describe("computeFreeSlots", () => {
@@ -429,20 +634,63 @@ describe("findCalendarSlots", () => {
     expect(vi.mocked(getSharedCalendar)).not.toHaveBeenCalled();
   });
 
+  it("falls back to 9-to-5 when the business row cannot be read", async () => {
+    // Fail-safe direction matters: an unreadable row must mean "assume
+    // normal working hours", never "no constraint". The latter is how a
+    // customer gets offered 2 AM.
+    vi.mocked(getBusiness).mockRejectedValueOnce(new Error("db down"));
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { calendars: { primary: { busy: [] } } }
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      // 02:00-05:00 Phoenix on a Friday.
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 60,
+      timezone: "America/Phoenix"
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toEqual([]);
+  });
+
+  it("honours hours the owner actually set, over the default", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_hours: { fri: { open: "06:00", close: "20:00" } }
+    } as never);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { calendars: { primary: { busy: [] } } }
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      // 07:00-09:00 Phoenix: before the 9-to-5 default, inside a 6 AM open.
+      earliest: "2026-06-12T14:00:00.000Z",
+      latest: "2026-06-12T16:00:00.000Z",
+      durationMinutes: 60,
+      timezone: "America/Phoenix"
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toHaveLength(1);
+  });
+
   it("computes slots from Google FreeBusy", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
       data: {
         calendars: {
           primary: {
-            busy: [{ start: "2026-06-12T10:00:00.000Z", end: "2026-06-12T11:00:00.000Z" }]
+            busy: [{ start: "2026-06-12T17:00:00.000Z", end: "2026-06-12T18:00:00.000Z" }]
           }
         }
       }
     } as never);
+    // 16:00-19:00 UTC is 09:00-12:00 in Phoenix (UTC-7), i.e. inside the
+    // 9-to-5 default. Do NOT "simplify" these back to 09:00-12:00 UTC: that
+    // is 02:00-05:00 local, and the whole point of the business-hours clip
+    // is that we no longer offer it.
     const result = await findCalendarSlots(BIZ, {
-      earliest: "2026-06-12T09:00:00.000Z",
-      latest: "2026-06-12T12:00:00.000Z",
+      earliest: "2026-06-12T16:00:00.000Z",
+      latest: "2026-06-12T19:00:00.000Z",
       durationMinutes: 60,
       timezone: "America/Phoenix",
       purpose: "estimate"
