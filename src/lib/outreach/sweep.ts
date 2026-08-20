@@ -54,6 +54,7 @@ import {
   claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
+  countProspectsByStatus,
   countProspectsToRewrite,
   existingProspectDomains,
   getOutreachSettings,
@@ -935,6 +936,105 @@ export async function sendProspectNow(
   if (!sent) return { ok: false, reason: "send_failed" };
   await handOffToFlow(settings, prospect, r, result, { email: to, subject });
   return { ok: true, notes: result.notes.map((n) => n.note) };
+}
+
+/**
+ * Drafts sent per request when the owner presses Send all.
+ *
+ * Each one is a provider round-trip plus a flow hand-off, so the work is cut
+ * into slices and the caller loops, exactly like the bulk rewrite. The daily
+ * cap is usually smaller than one slice anyway; the batching matters for a
+ * tenant whose cap is set high.
+ */
+export const SEND_NOW_BATCH = 10;
+
+export type SendAllResult =
+  | {
+      ok: true;
+      sent: number;
+      /** Drafts still waiting after this batch. */
+      remaining: number;
+      /** How many more may go out today. Zero means the cap is spent. */
+      allowanceLeft: number;
+      notes: string[];
+    }
+  | {
+      ok: false;
+      reason: "not_configured" | "tier_blocked" | "no_mailbox";
+      detail?: string;
+    };
+
+/**
+ * Send the waiting drafts now, up to what today's cap still allows.
+ *
+ * The same send path as everything else: same claim, same suppression
+ * re-check, same email_log row, same flow hand-off. Two things differ from the
+ * sweep, and both are deliberate.
+ *
+ * The SEND WINDOW is not enforced, for the reason the single Send button
+ * ignores it too: the owner is choosing this moment. The DAILY CAP is enforced,
+ * for the reason it exists: a few hundred cold emails leaving one mailbox in a
+ * burst is how a sending domain gets rate limited, and a button that quietly
+ * suspended the tenant's own deliverability rule would be doing them harm on
+ * request. So "all" means "as many as today allows", the caller is told exactly
+ * how many that is before pressing, and the rest stay queued.
+ */
+export async function sendDraftsNow(
+  businessId: string,
+  deps: OutreachSweepDeps = {}
+): Promise<SendAllResult> {
+  const r = await resolveDeps(deps);
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { ok: false, reason: "not_configured" };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) {
+    return {
+      ok: false,
+      reason: resolved.blockedBy === "tier" ? "tier_blocked" : "not_configured",
+      detail: resolved.missing
+    };
+  }
+  // Before anything is claimed, same as the sweep: a missing mailbox must not
+  // be discovered one prospect at a time, stamping each `failed` on the way.
+  const noMailbox = await outreachMailboxMissing(settings, r);
+  if (noMailbox) return { ok: false, reason: "no_mailbox", detail: noMailbox };
+
+  const dayStart = utcDayStartIso(r.now);
+  const [sentToday, nudgedToday] = await Promise.all([
+    countProspectsSentSince(businessId, dayStart, r.db),
+    countProspectsNudgedSince(businessId, dayStart, r.db)
+  ]);
+  // One allowance for the day, shared with follow-ups, exactly as the sweep
+  // computes it: a nudge is a cold email too.
+  const allowance = settings.daily_cap - sentToday - nudgedToday;
+  const result: OutreachSweepResult = {
+    businesses: 1,
+    discovered: 0,
+    drafted: 0,
+    sent: 0,
+    nudged: 0,
+    skipped: 0,
+    errors: [],
+    notes: []
+  };
+  const sent =
+    allowance <= 0
+      ? 0
+      : await sendForBusiness(
+          settings,
+          resolved.tenant,
+          r,
+          result,
+          Math.min(allowance, SEND_NOW_BATCH)
+        );
+  const remaining = await countProspectsByStatus(businessId, "drafted", r.db);
+  return {
+    ok: true,
+    sent,
+    remaining,
+    allowanceLeft: Math.max(0, allowance - sent),
+    notes: result.notes.map((n) => n.note)
+  };
 }
 
 /** Ceiling on an owner-written pitch, so one paste cannot become an essay. */

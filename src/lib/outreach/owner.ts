@@ -20,8 +20,11 @@ import {
   prospectingAllowedForTier,
   prospectingTierForBusiness
 } from "@/lib/plans/prospecting";
+import { utcDayStartIso } from "./compliance";
 import {
   countProspectsInVertical,
+  countProspectsNudgedSince,
+  countProspectsSentSince,
   getOutreachSettings,
   listProspectOutcomes,
   listProspectsByStatus,
@@ -90,6 +93,13 @@ export type ProspectingView = {
    * Calendly or has no booking page, where the choice does not apply.
    */
   meetings: Array<{ id: string; name: string; durationMinutes: number; hidden: boolean }>;
+  /**
+   * How many more emails may go out today: the cap less what has already been
+   * sent AND nudged, because a follow-up is a cold email too and both spend
+   * one allowance. Computed here with the arithmetic `sendDraftsNow` uses, so
+   * the number the Send all button promises is the number the server honours.
+   */
+  sendAllowanceLeft: number;
 };
 
 /** The two tier-derived gates the panel needs, resolved from one lookup. */
@@ -126,7 +136,8 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue, gates, mailboxes, meetingTypes] = await Promise.all([
+  const [settings, outcomes, queue, gates, mailboxes, meetingTypes, sentToday, nudgedToday] =
+    await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
@@ -135,7 +146,9 @@ export async function loadProspectingView(
     // Only the ones a visitor could be sent to: a hidden type still books
     // through its direct link, so it is offered here even though the page's
     // own chooser leaves it off the menu.
-    listMeetingTypes(businessId, db)
+    listMeetingTypes(businessId, db),
+    countProspectsSentSince(businessId, utcDayStartIso(new Date()), db),
+    countProspectsNudgedSince(businessId, utcDayStartIso(new Date()), db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -165,7 +178,8 @@ export async function loadProspectingView(
         name: t.name,
         durationMinutes: t.duration_minutes,
         hidden: t.hidden
-      }))
+      })),
+    sendAllowanceLeft: Math.max(0, (settings?.daily_cap ?? 0) - sentToday - nudgedToday)
   };
 }
 

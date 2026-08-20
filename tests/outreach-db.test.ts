@@ -19,6 +19,7 @@ import {
   claimDiscoveryRun,
   claimProspectNudge,
   countProspectsNudgedSince,
+  countProspectsByStatus,
   countProspectsInVertical,
   countProspectsSentSince,
   countProspectsToRewrite,
@@ -574,5 +575,21 @@ describe("countProspectsInVertical / skipProspectsInVertical (calling off a trad
     await expect(
       skipProspectsInVertical(BIZ, "x", "d", makeDb(chain({ error: { message: "upd" } })))
     ).rejects.toThrow(/upd/);
+  });
+});
+
+describe("countProspectsByStatus", () => {
+  it("counts one status, treats a null count as zero, and throws on error", async () => {
+    const c = chain({ count: 141, error: null });
+    expect(await countProspectsByStatus(BIZ, "drafted", makeDb(c))).toBe(141);
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("status", "drafted");
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ count: null, error: null })));
+    expect(await countProspectsByStatus(BIZ, "drafted")).toBe(0);
+
+    await expect(
+      countProspectsByStatus(BIZ, "drafted", makeDb(chain({ count: null, error: { message: "cnt" } })))
+    ).rejects.toThrow(/cnt/);
   });
 });

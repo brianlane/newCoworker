@@ -87,6 +87,8 @@ type View = {
   tierAllowed: boolean;
   /** False on Enterprise: the footer address is optional here. */
   postalAddressRequired: boolean;
+  /** How many more emails may go out today, from the server's own arithmetic. */
+  sendAllowanceLeft: number;
   /** Mailboxes cold email may leave from. Empty means none is connected. */
   mailboxes: Array<{ id: string; label: string; email: string | null }>;
   /** Meetings the CTA can link straight to. Empty when the choice does not apply. */
@@ -144,6 +146,10 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
    * been spent yet.
    */
   const [bulk, setBulk] = useState<null | "confirm" | { done: number; total: number }>(null);
+  /** The Send all press: null idle, "confirm" warning shown, else progress. */
+  const [sendAll, setSendAll] = useState<null | "confirm" | { sent: number }>(null);
+  const sendAllRunning = sendAll !== null && sendAll !== "confirm";
+  const sendAllRunningRef = useRef(false);
   const bulkRunning = bulk !== null && bulk !== "confirm";
   /**
    * The same fact as `bulkRunning`, readable synchronously. Two clicks landing
@@ -340,6 +346,69 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   };
 
   /**
+   * Send the waiting drafts now, batch by batch, up to today's cap.
+   *
+   * The loop ends on the server's own answer: no allowance left, or nothing
+   * left to send. A batch that sends zero also ends it, so a prospect the
+   * server declines for its own reasons cannot spin this forever.
+   */
+  const sendAllDrafts = async () => {
+    if (sendAllRunningRef.current) return;
+    sendAllRunningRef.current = true;
+    setSendAll({ sent: 0 });
+    setError(null);
+    setNotice(null);
+    let sent = 0;
+    try {
+      for (;;) {
+        const res = await fetch("/api/dashboard/outreach/send-all", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessId })
+        });
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { sent: number; remaining: number; allowanceLeft: number };
+          error?: { message?: string };
+        };
+        if (!json.ok || !json.data) {
+          setError(json.error?.message ?? t("actionFailed"));
+          return;
+        }
+        sent += json.data.sent;
+        setSendAll({ sent });
+        // Three ways to stop, and they are three different things to say. The
+        // queue emptying is the happy one. The cap is the expected one. A batch
+        // that sent nothing while allowance remained is neither: something
+        // refused those drafts, and reporting it as "today's limit" would tell
+        // the owner a limit was reached that was not.
+        const { sent: justSent, remaining, allowanceLeft } = json.data;
+        if (remaining <= 0) {
+          setNotice(t("sentAll", { count: sent }));
+          break;
+        }
+        if (allowanceLeft <= 0) {
+          setNotice(t("sentAllCapped", { count: sent, left: remaining }));
+          break;
+        }
+        if (justSent === 0) {
+          setNotice(t("sentAllStalled", { count: sent, left: remaining }));
+          break;
+        }
+      }
+    } catch {
+      setError(t("actionFailed"));
+    } finally {
+      // Re-read on every exit: the queue below is showing drafts that just
+      // went out, and Send stays live over them until this lands.
+      setDrafts({});
+      await refresh();
+      setSendAll(null);
+      sendAllRunningRef.current = false;
+    }
+  };
+
+  /**
    * Call off a whole trade.
    *
    * Taking a term out of "Kinds of business to look for" only stops the next
@@ -426,6 +495,28 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     form.booking_meeting_type_id &&
       !(view?.meetings ?? []).some((m) => m.id === form.booking_meeting_type_id)
   );
+  /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
+  /**
+   * How many more may go out today, computed SERVER-side by the same
+   * arithmetic the send path uses. Deliberately not re-derived here: a number
+   * on the button that disagrees with the number the server honours is the
+   * failure this panel has already shipped twice.
+   */
+  const sendAllowanceLeft = view?.sendAllowanceLeft ?? 0;
+  /**
+   * What one press would actually send: the smaller of today's allowance and
+   * the drafts waiting. The confirm, the help line, and the disabled state all
+   * read this, because three places deriving "how many" separately is how the
+   * help line came to promise the full allowance over a shorter queue.
+   */
+  const sendableNow = Math.max(0, Math.min(sendAllowanceLeft, view?.funnel.pending ?? 0));
+  /**
+   * Unsaved rewrites block Send all for the same reason they block the Send
+   * beside each row: the server sends the STORED text, so the owner would watch
+   * their rewrite go out as the old copy, and the refresh afterwards would then
+   * drop the edit they never got to save.
+   */
+  const unsavedDrafts = Object.keys(drafts).length > 0;
   /** A pin whose mailbox is gone: the one case that must show the picker anyway. */
   const pinnedMailboxGone = Boolean(
     form.from_connection_id && !(view?.mailboxes ?? []).some((m) => m.id === form.from_connection_id)
@@ -789,7 +880,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                   ) : (
                     <Button
                       variant="secondary"
-                      disabled={skippingVertical !== null || bulkRunning}
+                      disabled={skippingVertical !== null || bulkRunning || sendAllRunning}
                       onClick={() => setConfirmVertical(v.vertical)}
                     >
                       {t("actions.skipVertical")}
@@ -832,7 +923,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                 ) : null}
                 <Button
                   variant="secondary"
-                  disabled={bulkRunning}
+                  disabled={bulkRunning || sendAllRunning}
                   onClick={() => setBulk("confirm")}
                 >
                   {t("actions.rewriteAll")}
@@ -841,6 +932,45 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             )}
           </div>
           <p className="mt-1 text-xs text-parchment/50">{t("rewriteAllHelp")}</p>
+          {/* Send all. The cap is named in the confirm rather than enforced
+              silently: "all" cannot mean all when the daily limit is what
+              protects the sending domain, and a button that quietly ignored it
+              would be doing the owner harm on request. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {sendAll === "confirm" ? (
+              <>
+                <span className="text-xs text-amber-200">
+                  {t("sendAllConfirm", { count: sendableNow, waiting: view.funnel.pending })}
+                </span>
+                <Button onClick={() => void sendAllDrafts()}>{t("actions.sendAllYes")}</Button>
+                <Button variant="secondary" onClick={() => setSendAll(null)}>
+                  {t("actions.cancel")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  disabled={bulkRunning || sendAllRunning || unsavedDrafts || sendableNow === 0}
+                  onClick={() => setSendAll("confirm")}
+                >
+                  {t("actions.sendAll")}
+                </Button>
+                {sendAllRunning ? (
+                  <span className="text-xs text-parchment/60">
+                    {t("sendAllProgress", { sent: sendAll.sent })}
+                  </span>
+                ) : (
+                  <span className="text-xs text-parchment/50">
+                    {unsavedDrafts
+                      ? t("sendAllUnsaved")
+                      : sendAllowanceLeft <= 0
+                        ? t("sendAllCapSpent")
+                        : t("sendAllHelp", { count: sendableNow })}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
           <div className="mt-2 space-y-2">
             {view.queue.map((item) => (
               <div
@@ -866,7 +996,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                     </Button>
                     <Button
                       variant="secondary"
-                      disabled={busyId === item.id || bulkRunning}
+                      disabled={busyId === item.id || bulkRunning || sendAllRunning}
                       onClick={() => void act(item.id, "skip")}
                     >
                       {t("actions.skip")}
@@ -875,7 +1005,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                         would send the stored draft, and the owner would watch
                         their rewrite go out as the old text. */}
                     <Button
-                      disabled={busyId === item.id || bulkRunning || Boolean(drafts[item.id])}
+                      disabled={busyId === item.id || bulkRunning || sendAllRunning || Boolean(drafts[item.id])}
                       onClick={() => void act(item.id, "send")}
                     >
                       {t("actions.send")}
@@ -946,7 +1076,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                       {isLegacyDraft(item) ? null : (
                         <Button
                           variant="secondary"
-                          disabled={busyId === item.id || bulkRunning || !drafts[item.id]}
+                          disabled={busyId === item.id || bulkRunning || sendAllRunning || !drafts[item.id]}
                           onClick={() => void act(item.id, "edit")}
                         >
                           {t("actions.saveDraft")}
@@ -954,7 +1084,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                       )}
                       <Button
                         variant="secondary"
-                        disabled={busyId === item.id || bulkRunning}
+                        disabled={busyId === item.id || bulkRunning || sendAllRunning}
                         onClick={() => void act(item.id, "regenerate")}
                       >
                         {t("actions.regenerate")}

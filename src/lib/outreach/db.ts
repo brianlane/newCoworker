@@ -363,6 +363,22 @@ const CANCELLABLE_STATUSES: OutreachProspectStatus[] = ["discovered", "drafted"]
  */
 const BLANK_VERTICAL_FILTER = "vertical.is.null,vertical.eq.";
 
+/** How many prospects sit in one status. Drives the Send all progress line. */
+export async function countProspectsByStatus(
+  businessId: string,
+  status: OutreachProspectStatus,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("outreach_prospects")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .eq("status", status);
+  if (error) throw new Error(`countProspectsByStatus: ${error.message}`);
+  return count ?? 0;
+}
+
 /** How many prospects in one trade a skip would still catch. */
 export async function countProspectsInVertical(
   businessId: string,

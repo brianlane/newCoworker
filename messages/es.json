@@ -2617,7 +2617,9 @@
         "rewriteAllYes": "Sí, reescribirlos todos",
         "cancel": "Cancelar",
         "skipVertical": "Omitir estos",
-        "skipVerticalYes": "Sí, omitirlos"
+        "skipVerticalYes": "Sí, omitirlos",
+        "sendAll": "Enviar todos los borradores",
+        "sendAllYes": "Sí, enviarlos"
       },
       "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
       "saveFailed": "No se pudo guardar.",
@@ -2648,7 +2650,15 @@
       "bookingMeetingChooser": "Que elijan ellos",
       "bookingMeetingOption": "{name} ({minutes} min)",
       "bookingMeetingHelp": "El enlace de reserva va directo a esta reunión. Que elijan ellos los lleva a tu página de reservas para escoger, que es una decisión más para alguien que acaba de conocerte.",
-      "bookingMeetingGoneOption": "La reunión que elegiste (ya no está disponible)"
+      "bookingMeetingGoneOption": "La reunión que elegiste (ya no está disponible)",
+      "sendAllHelp": "Envía {count} hoy y se detiene. El límite diario es lo que protege la reputación de tu correo, así que esto lo respeta.",
+      "sendAllCapSpent": "El límite de hoy ya se usó. El resto sale en la próxima pasada.",
+      "sendAllConfirm": "¿Enviar {count} de tus {waiting} borradores en espera ahora? Es todo lo que permite el límite de hoy. Salen de inmediato, no en tu franja habitual de la mañana.",
+      "sendAllProgress": "Enviando: {sent} hasta ahora.",
+      "sentAll": "Se enviaron {count}. No queda nada en espera.",
+      "sentAllCapped": "Se enviaron {count}, el límite de hoy. Quedan {left} borradores en cola para la próxima pasada.",
+      "sentAllStalled": "Se enviaron {count} y se detuvo: el siguiente lote no pudo salir. Quedan {left} borradores en espera. Revisa tu buzón conectado e inténtalo de nuevo.",
+      "sendAllUnsaved": "Guarda o descarta tus cambios primero, o Enviar todos mandaría el texto anterior en su lugar."
     }
   },
   "admin": {

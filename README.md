@@ -2003,6 +2003,52 @@ things, and `tests/outreach-compose.test.ts` asserts both ends of it.
 in the same breath, so a finding code added to one and not the other would ship
 "...noticed X. undefined" to a stranger. A test holds them in step.
 
+### Send all drafts, and why "all" respects the cap
+
+The owner does not always want to wait for tomorrow morning's window. **Send
+all drafts** runs the send phase immediately (`sendDraftsNow`,
+`POST /api/dashboard/outreach/send-all`), batched at `SEND_NOW_BATCH` (10) per
+request with the panel looping.
+
+Two rules differ from the sweep, in opposite directions, and both are
+deliberate.
+
+The **send window is ignored**, exactly as it is for the single Send button:
+the owner is choosing this moment.
+
+The **daily cap is enforced**. A few hundred cold emails leaving one mailbox in
+a burst is how a sending domain gets rate limited, and the cap is the tenant's
+own deliverability rule; a button that quietly suspended it would be doing them
+harm on request. So "all" means "as many as today allows". The confirm names
+that number before the press and the notice reports the leftover afterwards,
+rather than the button silently under-delivering on its own label. Follow-ups
+count against the same allowance, because a nudge is a cold email too.
+
+`sendAllowanceLeft` is computed SERVER-side in `loadProspectingView`, by the
+same arithmetic `sendDraftsNow` uses, and the panel only renders it. Deriving it
+again in the browser is how a button comes to promise a number the server will
+not honour, which this panel has already shipped twice (the `(unknown)` trade
+row, and the Send from picker counting an "Automatic" entry as a mailbox).
+
+The mailbox pre-flight runs first here too, so an early press on a tenant with
+no connected mailbox refuses without claiming, and stamping, a single draft.
+
+Three ways to stop, and they are three different things to say: the queue
+emptied, the cap is spent, or a batch sent nothing while allowance remained.
+The third is neither of the first two, and reporting it as "today's limit"
+would name a limit that was never reached.
+
+**A bulk control has to inherit the rules of the row it replaces.** Send all
+refuses while any draft has unsaved edits, for exactly the reason the Send
+beside each row does: the server sends the STORED text, so the owner would
+watch their rewrite go out as the old copy, and the refresh afterwards would
+drop the edit they never saved. It also freezes every row action while it runs,
+as the bulk rewrite does, since the refresh that takes Send off a sent draft
+only lands when the whole loop finishes. The count in the confirm, the help
+line and the disabled state come from ONE value (`min(allowance, waiting)`),
+because three places deriving "how many" separately is how the help line came
+to promise a full allowance over a shorter queue.
+
 ### Which meeting the cold email offers
 
 The pitch's CTA links the booking page, which for a tenant with more than one
