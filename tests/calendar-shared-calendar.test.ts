@@ -487,7 +487,7 @@ describe("mirrorTimeOffEvent", () => {
     expect(vi.mocked(workspaceProxyForBusiness)).not.toHaveBeenCalled();
   });
 
-  it("creates an all-day Google event with an exclusive end date", async () => {
+  it("creates an all-day Google event, exclusive end date, marked BUSY", async () => {
     withSharedCalendar();
     vi.mocked(workspaceProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
     const id = await mirrorTimeOffEvent(BIZ, "Sam", "2026-06-12", "2026-06-13");
@@ -500,7 +500,11 @@ describe("mirrorTimeOffEvent", () => {
         data: expect.objectContaining({
           summary: "Sam: out of office",
           start: { date: "2026-06-12" },
-          end: { date: "2026-06-14" }
+          end: { date: "2026-06-14" },
+          // Opaque is what makes time off BLOCK availability (freeBusy only
+          // reports opaque spans). It shipped transparent until Aug 19 2026,
+          // which is why the founder's marked-off days kept being offered.
+          transparency: "opaque"
         })
       })
     );
@@ -514,7 +518,7 @@ describe("mirrorTimeOffEvent", () => {
     expect(await mirrorTimeOffEvent(BIZ, "Sam", "2026-06-12", "2026-06-12")).toBeNull();
   });
 
-  it("creates an all-day Microsoft event", async () => {
+  it("creates an all-day Microsoft event shown as OOF", async () => {
     vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({
@@ -534,6 +538,9 @@ describe("mirrorTimeOffEvent", () => {
         data: expect.objectContaining({
           subject: "Sam: out of office",
           isAllDay: true,
+          // oof, not free: getSchedule and the calendarView fallback both
+          // treat it as blocking, which is the whole point of time off.
+          showAs: "oof",
           start: { dateTime: "2026-06-12T00:00:00", timeZone: "UTC" },
           end: { dateTime: "2026-06-13T00:00:00", timeZone: "UTC" }
         })

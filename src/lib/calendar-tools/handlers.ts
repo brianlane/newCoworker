@@ -216,6 +216,29 @@ export function wallClockInZone(instant: Date, timeZone: string): string {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
+/**
+ * UTC instant of local midnight opening `isoDate` (YYYY-MM-DD) in `timeZone`.
+ *
+ * Google reports all-day events as bare dates, so blocking one means picking
+ * the instants "that day" spans. Offset correction converges in two passes
+ * wherever local midnight exists; in a zone whose DST jump skips midnight
+ * itself the result settles within the hour beside it, and either edge sits
+ * deep in the night where no bookable slot lives. A malformed date yields an
+ * Invalid Date for the caller to drop. The caller guarantees a valid IANA
+ * zone via resolveToolTimezone, the same contract wallClockInZone carries.
+ */
+export function zonedMidnightUtc(isoDate: string, timeZone: string): Date {
+  const utcGuess = Date.parse(`${isoDate}T00:00:00Z`);
+  if (!Number.isFinite(utcGuess)) return new Date(Number.NaN);
+  let ms = utcGuess;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const wallMs = Date.parse(`${wallClockInZone(new Date(ms), timeZone)}Z`);
+    if (wallMs === utcGuess) break;
+    ms -= wallMs - utcGuess;
+  }
+  return new Date(ms);
+}
+
 type FreeBusyBody = {
   calendars?: Record<string, { busy?: Array<{ start: string; end: string }> }>;
 };
@@ -420,6 +443,14 @@ export function computeFreeSlots(
  *
  * Callers pass google/microsoft connections only (the resolver's vagaro /
  * calendly / caldav providers never reach this fetch).
+ *
+ * Both providers follow one convention (the founder's Aug 19 2026 call):
+ * the Busy/Free flag decides what blocks, and a real out-of-office event
+ * always blocks. Google freeBusy honors the flag by construction but its
+ * out-of-office coverage is inconsistent, so readGoogleOutOfOfficeBusy
+ * supplements it; Microsoft honors it through showAs / getSchedule status.
+ * The platform's own time-off mirror writes Busy events on purpose (see
+ * mirrorTimeOffEvent), so marked-off days block through this same read.
  */
 /**
  * True when a thrown proxy error carries a real HTTP status, i.e. the provider
@@ -573,6 +604,101 @@ async function readCalendarViewBusy(
   return { busy, complete: false };
 }
 
+/**
+ * Google out-of-office events, which freeBusy cannot be trusted to report.
+ *
+ * freeBusy only carries OPAQUE spans, and that rule is honored on purpose
+ * for ordinary events: a timed or all-day event the owner marks Free stays
+ * bookable, and Google defaults all-day events to Free, so a plain all-day
+ * banner blocks only once the owner flips it to Busy (the founder's Aug 19
+ * 2026 call, over blocking every all-day event and eating false positives
+ * from decorative reminders). A real out-of-office event carries intent no
+ * flag can soften, Google auto-declines meetings inside it, yet freeBusy's
+ * coverage of the type is inconsistent across account types: the Aug 2026
+ * report was the founder's own out-of-office day being offered to visitors.
+ * So out-of-office is read explicitly; a block freeBusy also reported is
+ * harmless to every consumer.
+ *
+ * The eventTypes filter narrows the listing SERVER-side. That is what keeps
+ * the page budget honest: an unfiltered listing spends it on ordinary timed
+ * meetings and can starve out the very events this read exists to find.
+ * Date-form events resolve at business-local midnights; same page budget as
+ * the Graph calendarView read, same `complete: false` under-report contract.
+ */
+async function readGoogleOutOfOfficeBusy(
+  businessId: string,
+  conn: { connectionId: string; providerConfigKey: string },
+  calendarId: string,
+  windowStart: Date,
+  windowEnd: Date,
+  timeZone: string
+): Promise<WorkspaceBusyRead | null> {
+  type GoogleEventsPage = {
+    items?: Array<{
+      status?: string;
+      eventType?: string;
+      start?: { date?: string; dateTime?: string };
+      end?: { date?: string; dateTime?: string };
+    }>;
+    nextPageToken?: string;
+  };
+
+  const busy: Array<{ start: Date; end: Date }> = [];
+  let pageToken: string | null = null;
+  for (let page = 0; page < CALENDAR_VIEW_MAX_PAGES; page += 1) {
+    const res = await workspaceProxyForBusiness(businessId, conn, {
+      endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      method: "GET",
+      params: {
+        timeMin: windowStart.toISOString(),
+        timeMax: windowEnd.toISOString(),
+        // Recurring out-of-office ("every Friday off") arrives expanded.
+        singleEvents: "true",
+        eventTypes: "outOfOffice",
+        maxResults: String(CALENDAR_VIEW_PAGE_SIZE),
+        fields: "nextPageToken,items(status,eventType,start,end)",
+        ...(pageToken ? { pageToken } : {})
+      }
+    });
+    if (!res) return null;
+
+    const data = (res.data ?? null) as GoogleEventsPage | null;
+    for (const i of data?.items ?? []) {
+      if (i.status === "cancelled") continue;
+      // Belt and braces under the server-side filter: a proxy or API
+      // revision that ignored eventTypes would otherwise turn every plain
+      // meeting into a block here.
+      if (i.eventType !== "outOfOffice") continue;
+      if (i.start?.date && i.end?.date) {
+        // Date-form: bare dates, end exclusive. A malformed date (a shape
+        // Google does not send) drops the event rather than pushing an
+        // Invalid Date block, which compares as never-clear and would
+        // silently freeze the whole window.
+        const start = zonedMidnightUtc(i.start.date, timeZone);
+        const end = zonedMidnightUtc(i.end.date, timeZone);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+        busy.push({ start, end });
+        continue;
+      }
+      if (i.start?.dateTime && i.end?.dateTime) {
+        busy.push({ start: new Date(i.start.dateTime), end: new Date(i.end.dateTime) });
+      }
+    }
+
+    const next = data?.nextPageToken;
+    if (!next) return { busy, complete: true };
+    pageToken = next;
+  }
+
+  logger.warn("google out-of-office read exceeded its page budget; busy list is an under-report", {
+    businessId,
+    calendarId,
+    pages: CALENDAR_VIEW_MAX_PAGES,
+    eventsSeen: busy.length
+  });
+  return { busy, complete: false };
+}
+
 export async function getWorkspaceBusyBlocks(
   businessId: string,
   conn: { provider: string; connectionId: string; providerConfigKey: string },
@@ -584,29 +710,62 @@ export async function getWorkspaceBusyBlocks(
   const shared = await getSharedCalendar(businessId);
 
   if (conn.provider === "google") {
-    const items = [{ id: "primary" }];
-    if (shared) items.push({ id: shared.calendarId });
-    const res = await workspaceProxyForBusiness(
-      businessId,
-      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-      {
+    const link = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
+    const calendarIds = ["primary", ...(shared ? [shared.calendarId] : [])];
+    // Date-form out-of-office events resolve at business-local midnights:
+    // the day grid every consumer offers from is business-local, and "out
+    // Friday" means THAT Friday wherever the calendar's zone setting sits.
+    const timeZone = await resolveToolTimezone(businessId, undefined);
+    // freeBusy and the per-calendar out-of-office reads are independent, and
+    // a public page load sits behind this fetch, so they run concurrently.
+    const [res, ...oooReads] = await Promise.all([
+      workspaceProxyForBusiness(businessId, link, {
         endpoint: "/calendar/v3/freeBusy",
         method: "POST",
         data: {
           timeMin: windowStart.toISOString(),
           timeMax: windowEnd.toISOString(),
-          items
+          items: calendarIds.map((id) => ({ id }))
         }
-      }
-    );
+      }),
+      ...calendarIds.map(async (calendarId): Promise<WorkspaceBusyRead | null> => {
+        // A failed out-of-office read must not take down the freeBusy answer
+        // it supplements. `complete: false` already says exactly what
+        // happened: every block returned is real, and more went unread.
+        try {
+          return await readGoogleOutOfOfficeBusy(
+            businessId,
+            link,
+            calendarId,
+            windowStart,
+            windowEnd,
+            timeZone
+          );
+        } catch (err) {
+          logger.warn("google out-of-office read failed; busy list is an under-report", {
+            businessId,
+            calendarId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return null;
+        }
+      })
+    ]);
     if (!res) return null;
     const data = res.data as FreeBusyBody;
     const blocks = Object.values(data?.calendars ?? {}).flatMap((c) => c.busy ?? []);
     // freeBusy answers for every calendar in one response, with no paging.
-    return {
-      busy: blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) })),
-      complete: true
-    };
+    const busy = blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+    let complete = true;
+    for (const read of oooReads) {
+      if (read === null) {
+        complete = false;
+        continue;
+      }
+      busy.push(...read.busy);
+      complete = complete && read.complete;
+    }
+    return { busy, complete };
   }
 
   // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
@@ -666,13 +825,21 @@ export async function getWorkspaceBusyBlocks(
     if (!res) return null;
     type GraphBusy = {
       value?: Array<{
-        scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+        scheduleItems?: Array<{
+          status?: string;
+          start?: { dateTime: string };
+          end?: { dateTime: string };
+        }>;
       }>;
     };
     const data = res.data as GraphBusy;
     const items = data?.value?.[0]?.scheduleItems ?? [];
     busy = items
       .filter((i) => i.start?.dateTime && i.end?.dateTime)
+      // Same Busy/Free convention as the calendarView fallback below: a
+      // schedule item getSchedule labels free or working-elsewhere is not
+      // busy, and treating it as busy would delete real availability.
+      .filter((i) => !(typeof i.status === "string" && GRAPH_FREE_SHOW_AS.has(i.status)))
       .map((i) => ({
         start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
         end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
