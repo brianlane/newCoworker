@@ -102,6 +102,60 @@ describe("HQ inbox classify: hosting renewals never page the owner", () => {
       expect(kind).toBe("automated_notice");
     }
   );
+
+  /**
+   * Live, Aug 20 2026, 2:02pm: the SAME failure the case above was written to
+   * stop, in wording the case above does not cover, so it never caught it.
+   *
+   * The fixture above says "has expired" and asks for nothing. The real mail
+   * says the plan "has been canceled as we have not received payment", and it
+   * asks twice: a "View restore options" button and "if you consider this to
+   * be a mistake, please reply to this email". That wording matches `billing`
+   * ("a failed or declined payment") head-on and disqualifies itself from the
+   * old `automated_notice` wording ("asks nothing of us"), so it paged Brian
+   * about srv1632631, a box flagged never_renew in July so it WOULD lapse.
+   *
+   * The old wording was replayed against five framings of this one email
+   * (run e04e2550, five draws each). It was not merely wrong, it was
+   * UNSTABLE, and the framing decided the answer:
+   *
+   *   production windowText verbatim  -> billing 5/5             (texts)
+   *   this condensed fixture          -> automated_important 5/5 (texts)
+   *   same, tracking URLs redacted    -> automated_notice 5/5    (silent)
+   *
+   * The 1.5KB of opaque per-recipient tracking tokens were load-bearing:
+   * removing them alone flipped the verdict. The new wording answers
+   * automated_notice on all five framings, 25 draws, which is the actual
+   * repair. A category that only wins when the sender formats the mail a
+   * certain way is not a category.
+   *
+   * This fixture is the condensed shape rather than the verbatim one, because
+   * reproducing `billing` needs those tracking tokens and they are tied to
+   * Brian's address. It is still a real guard: it answered a PAGING tier 5/5
+   * before the fix, so it fails loudly if the wording regresses.
+   */
+  it(
+    "files a plan canceled for non-payment as routine, restore button and all",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      const kind = await classify(
+        email("Your KVM 8 srv1632631.hstgr.cloud has been canceled", [
+          "Your KVM 8 for srv1632631.hstgr.cloud has been canceled as we have",
+          "not received payment for the renewal.",
+          "",
+          "Check your VPS service list to see if you can restore your plan and",
+          "keep your data.",
+          "",
+          "If you consider this to be a mistake, please reply to this email.",
+          "",
+          "View restore options"
+        ].join("\n"))
+      );
+      // Not billing and not automated_important: both of those text him, and
+      // billing-posture.ts is what actually knows this box was meant to die.
+      expect(kind).toBe("automated_notice");
+    }
+  );
 });
 
 describe("HQ inbox classify: a real money problem still pages", () => {

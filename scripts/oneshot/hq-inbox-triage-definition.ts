@@ -181,6 +181,40 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
          *
          * A real payment problem (a declined card, a dispute, an invoice we
          * owe) is still `billing`, because no cron owns those.
+         *
+         * IT HAPPENED AGAIN, Aug 20 2026, 2:02pm, and the one-line exclusion
+         * on `billing` was not enough. Hostinger mailed "Your KVM 8
+         * srv1632631.hstgr.cloud has been canceled as we have not received
+         * payment for the renewal", and the flow texted a billing alert.
+         * srv1632631 is the KVM 8 pooled under the kvm2 label, flagged
+         * `never_renew` in July precisely so it would lapse: at $73.99/mo it
+         * costs more to renew than any tenant on it pays, and it had already
+         * been retired in vps_inventory. Restoring it would have been the
+         * wrong move, not the right one.
+         *
+         * That wording beat the guard because it matches the OTHER two
+         * paging tiers on their own terms, and both had to be closed:
+         *
+         *   * `billing` names "a failed or declined payment", and "we have
+         *     not received payment" is exactly that sentence. It is now
+         *     scoped to a service we intend to KEEP, and names this case.
+         *   * `automated_notice` opened with "asks nothing of us", which this
+         *     mail violates twice ("View restore options", "please reply to
+         *     this email"), disqualifying the very tier it belonged in. That
+         *     clause is gone: what makes these routine is who owns the
+         *     decision, not whether the sender wants a reply, so the tier now
+         *     claims them "even expired, canceled, or asking us to restore".
+         *   * `automated_important` names "suspension" and "asks us to
+         *     respond" and would simply have caught the same mail on the
+         *     rebound, since it texts too. Excluded there as well.
+         *
+         * Fixing only the tier that happened to win last time just moves the
+         * false alarm to its neighbour, which is what the Aug 6 fix did.
+         *
+         * Note for the next edit: the authoring validator caps a category
+         * description at 200 characters and all three of these sit within a
+         * character or two of it. Room for a new clause has to be bought by
+         * removing words, not appending them.
          */
         type: "classify",
         question: "What kind of email did the business just receive?",
@@ -198,12 +232,12 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "billing",
             description:
-              "Billing needing a human: an unpaid invoice we owe, a failed or declined payment, a dispute or chargeback. NOT receipts for charges that already succeeded, and NOT hosting renewal or expiry notices"
+              "Billing on a service we KEEP: an invoice we owe, a declined card, a dispute or chargeback. NOT receipts for charges that succeeded, and NOT any hosting or server notice, even canceled for non-payment"
           },
           {
             value: "automated_important",
             description:
-              "Automated mail a human must act on: it asks us to do, verify, approve or respond, reports an outage, security alert, suspension or broken integration, OR continues a conversation we are in"
+              "Automated mail we must act on: asks us to do, verify or respond, reports an outage, security alert, suspension or broken integration, OR continues a conversation we are in. NOT hosting notices"
           },
           {
             value: "billing_receipt",
@@ -252,7 +286,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "automated_notice",
             description:
-              "Routine automated mail: asks nothing of us, not part of a conversation we are in, reports no result we were waiting on. Our alert copies, calendar invites, digests, usage summaries, hosting renewals"
+              "Routine mail that asks nothing of us, not part of a conversation we are in: alert copies, calendar invites, digests. ANY hosting renewal or server notice, even canceled or asking us to restore"
           }
         ],
         saveAs: "email_kind"
