@@ -2656,7 +2656,9 @@
       "sendAllConfirm": "¿Enviar {count} de tus {waiting} borradores en espera ahora? Es todo lo que permite el límite de hoy. Salen de inmediato, no en tu franja habitual de la mañana.",
       "sendAllProgress": "Enviando: {sent} hasta ahora.",
       "sentAll": "Se enviaron {count}. No queda nada en espera.",
-      "sentAllCapped": "Se enviaron {count}, el límite de hoy. Quedan {left} borradores en cola para la próxima pasada."
+      "sentAllCapped": "Se enviaron {count}, el límite de hoy. Quedan {left} borradores en cola para la próxima pasada.",
+      "sentAllStalled": "Se enviaron {count} y se detuvo: el siguiente lote no pudo salir. Quedan {left} borradores en espera. Revisa tu buzón conectado e inténtalo de nuevo.",
+      "sendAllUnsaved": "Guarda o descarta tus cambios primero, o Enviar todos mandaría el texto anterior en su lugar."
     }
   },
   "admin": {

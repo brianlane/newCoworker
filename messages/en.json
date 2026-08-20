@@ -2656,7 +2656,9 @@
       "sendAllConfirm": "Send {count} of your {waiting} waiting drafts now? That is all today's limit allows. They go out immediately, not in your usual morning window.",
       "sendAllProgress": "Sending: {sent} so far.",
       "sentAll": "Sent {count}. Nothing is left waiting.",
-      "sentAllCapped": "Sent {count}, which is today's limit. {left} drafts stay queued for the next pass."
+      "sentAllCapped": "Sent {count}, which is today's limit. {left} drafts stay queued for the next pass.",
+      "sentAllStalled": "Sent {count}, then stopped: the next batch could not go out. {left} drafts are still waiting. Check your connected mailbox and try again.",
+      "sendAllUnsaved": "Save or discard your draft edits first, or Send all would send the old wording over them."
     }
   },
   "admin": {

@@ -2033,6 +2033,22 @@ row, and the Send from picker counting an "Automatic" entry as a mailbox).
 The mailbox pre-flight runs first here too, so an early press on a tenant with
 no connected mailbox refuses without claiming, and stamping, a single draft.
 
+Three ways to stop, and they are three different things to say: the queue
+emptied, the cap is spent, or a batch sent nothing while allowance remained.
+The third is neither of the first two, and reporting it as "today's limit"
+would name a limit that was never reached.
+
+**A bulk control has to inherit the rules of the row it replaces.** Send all
+refuses while any draft has unsaved edits, for exactly the reason the Send
+beside each row does: the server sends the STORED text, so the owner would
+watch their rewrite go out as the old copy, and the refresh afterwards would
+drop the edit they never saved. It also freezes every row action while it runs,
+as the bulk rewrite does, since the refresh that takes Send off a sent draft
+only lands when the whole loop finishes. The count in the confirm, the help
+line and the disabled state come from ONE value (`min(allowance, waiting)`),
+because three places deriving "how many" separately is how the help line came
+to promise a full allowance over a shorter queue.
+
 ### Which meeting the cold email offers
 
 The pitch's CTA links the booking page, which for a tenant with more than one
