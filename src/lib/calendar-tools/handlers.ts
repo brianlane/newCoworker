@@ -305,6 +305,11 @@ export function openRunsWithin(
   gapEnd: Date,
   hours: BusinessHours,
   durationMs: number,
+  /**
+   * The BUSINESS's timezone, never the requester's. Opening hours are stored
+   * in the owner's local clock, so classifying them in a customer-supplied
+   * zone shifts the whole window and can offer a time the owner is closed.
+   */
   timeZone: string
 ): Array<{ start: Date; end: Date }> {
   const durationMinutes = Math.ceil(durationMs / 60_000);
@@ -343,11 +348,14 @@ export function openRunsWithin(
 }
 
 /**
+ * @param timeZone Display zone, used only to prefer :00/:30 starts.
  * @param businessHours When supplied, offers are clipped to the business's
  *   open hours and a sparse calendar yields one offer per open stretch,
  *   which spreads them across days instead of returning a single time.
  *   Omitted (the CalDAV path and the existing unit tests) keeps the original
- *   unclipped behaviour.
+ *   unclipped behaviour. The hours carry their OWN zone rather than reusing
+ *   `timeZone`: a model may pass the customer's zone for display, and hours
+ *   evaluated in that zone would clip against the wrong clock.
  */
 export function computeFreeSlots(
   windowStart: Date,
@@ -356,14 +364,21 @@ export function computeFreeSlots(
   durationMs: number,
   maxSlots = 3,
   timeZone = "UTC",
-  businessHours?: BusinessHours | null
+  businessHours?: { hours: BusinessHours; timeZone: string } | null
 ): Slot[] {
   const sorted = [...busy].sort((a, b) => a.start.getTime() - b.start.getTime());
   const slots: Slot[] = [];
   const offerFromGap = (gapStart: Date, gapEnd: Date) => {
     if (slots.length >= maxSlots) return;
     if (businessHours) {
-      for (const run of openRunsWithin(gapStart, gapEnd, businessHours, durationMs, timeZone)) {
+      const runs = openRunsWithin(
+        gapStart,
+        gapEnd,
+        businessHours.hours,
+        durationMs,
+        businessHours.timeZone
+      );
+      for (const run of runs) {
         if (slots.length >= maxSlots) return;
         offerAligned(run.start, run.end);
       }
@@ -687,21 +702,38 @@ export async function getWorkspaceBusyBlocks(
 }
 
 /**
- * The business's open hours, falling back to weekdays 9 to 5.
+ * The business's open hours AND the zone they are written in.
  *
- * The same fallback the public booking page uses, on purpose: a tenant who
- * never set hours must not get "closed Sunday" from the booking page and a
- * Sunday 3 PM offer from the coworker. Never throws; an unreadable row means
- * the default rather than an offer at 2 AM.
+ * The zone travels with the hours on purpose. `resolveToolTimezone` prefers
+ * the model's `timezone` argument, which is the CUSTOMER's zone on a call
+ * routed from another region; clipping 09:00-17:00 against that clock offers
+ * times the owner is shut. The booking page evaluates hours in the business
+ * zone, and so must this.
+ *
+ * The 9-to-5 fallback is the same one the public booking page uses: a tenant
+ * who never set hours must not get "closed Sunday" from the booking page and
+ * a Sunday 3 PM offer from the coworker. Never throws; an unreadable row
+ * means the default rather than an offer at 2 AM.
+ *
+ * @param fallbackTimeZone Used only when the row is unreadable or carries an
+ *   invalid zone. Callers pass the already-resolved display zone, which
+ *   itself defaults to the business zone, so it is the best guess available.
  */
-async function resolveBusinessHours(businessId: string): Promise<BusinessHours> {
+async function resolveBusinessHoursWindow(
+  businessId: string,
+  fallbackTimeZone: string
+): Promise<{ hours: BusinessHours; timeZone: string }> {
   try {
     const { getBusiness } = await import("@/lib/db/businesses");
     const { parseBusinessHours } = await import("@/lib/business-profile/profile");
     const business = await getBusiness(businessId);
-    return parseBusinessHours(business?.business_hours ?? null) ?? DEFAULT_BUSINESS_HOURS;
+    const zone = (business?.timezone ?? "").trim();
+    return {
+      hours: parseBusinessHours(business?.business_hours ?? null) ?? DEFAULT_BUSINESS_HOURS,
+      timeZone: isValidTimeZone(zone) ? zone : fallbackTimeZone
+    };
   } catch {
-    return DEFAULT_BUSINESS_HOURS;
+    return { hours: DEFAULT_BUSINESS_HOURS, timeZone: fallbackTimeZone };
   }
 }
 
@@ -804,7 +836,7 @@ export async function findCalendarSlots(
       durationMs,
       3,
       timezone,
-      await resolveBusinessHours(businessId)
+      await resolveBusinessHoursWindow(businessId, timezone)
     );
     return {
       ok: true,

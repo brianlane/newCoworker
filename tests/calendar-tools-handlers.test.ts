@@ -215,7 +215,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots).toEqual([]);
   });
@@ -230,7 +230,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots).toHaveLength(1);
     expect(phx(slots[0].startIso)).toBe("Fri 9:00 AM");
@@ -246,7 +246,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots.map((s) => phx(s.startIso))).toEqual([
       "Fri 9:00 AM",
@@ -264,7 +264,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots).toEqual([]);
   });
@@ -280,7 +280,7 @@ describe("business hours clipping", () => {
       twoHours,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots.map((s) => phx(s.startIso))).toEqual(["Fri 2:00 PM"]);
 
@@ -291,7 +291,7 @@ describe("business hours clipping", () => {
       twoHours,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(tooLate).toEqual([]);
   });
@@ -305,7 +305,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      HOURS
+      { hours: HOURS, timeZone: "America/Phoenix" }
     );
     expect(slots.map((s) => phx(s.startIso))).toEqual(["Fri 9:00 AM", "Fri 11:00 AM"]);
   });
@@ -327,7 +327,7 @@ describe("business hours clipping", () => {
       HOUR,
       3,
       "America/Phoenix",
-      broken
+      { hours: broken, timeZone: "America/Phoenix" }
     );
     expect(slots).toEqual([]);
   });
@@ -668,6 +668,32 @@ describe("findCalendarSlots", () => {
       latest: "2026-06-12T16:00:00.000Z",
       durationMinutes: 60,
       timezone: "America/Phoenix"
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toHaveLength(1);
+  });
+
+  it("clips hours in the BUSINESS zone even when the model asks for another", async () => {
+    // The bug this pins: resolveToolTimezone prefers the model's `timezone`
+    // argument, which on a call routed from another region is the CUSTOMER's
+    // zone. Opening hours are stored in the owner's clock, so evaluating
+    // them in the caller's clock shifts the whole window.
+    //
+    // 22:00-23:00 UTC is 15:00-16:00 in Phoenix (open, 9-5) but 18:00-19:00
+    // in New York (shut). A Phoenix business must still offer it.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      timezone: "America/Phoenix",
+      business_hours: { fri: { open: "09:00", close: "17:00" } }
+    } as never);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(workspaceProxyForBusiness).mockResolvedValue({
+      data: { calendars: { primary: { busy: [] } } }
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T22:00:00.000Z",
+      latest: "2026-06-12T23:00:00.000Z",
+      durationMinutes: 60,
+      timezone: "America/New_York"
     });
     expect(result.ok).toBe(true);
     expect((result.data as { slots: unknown[] }).slots).toHaveLength(1);
