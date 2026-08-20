@@ -15,7 +15,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { Tag, Trash2 } from "lucide-react";
+import { CircleMinus, Tag, Trash2 } from "lucide-react";
 import { addTagToDraft, buildContactPatch } from "@/lib/contacts/quick-edit";
 import { MAX_CONTACT_TAG_LENGTH } from "@/lib/customer-memory/types";
 
@@ -30,6 +30,7 @@ export function LeadQuickEditor({
   initialOwnerEmployeeId,
   employees,
   implicitOwnerEmployeeId,
+  hasActiveRuns,
   onSaved,
   onDeleted,
   onClose
@@ -50,6 +51,11 @@ export function LeadQuickEditor({
    * then drops "Unassigned", which would resolve straight back to them.
    */
   implicitOwnerEmployeeId: string | null;
+  /**
+   * Whether a workflow is mid-run for this lead: "Remove from tasks" then
+   * warns that the card stays in motion until the run ends or is dismissed.
+   */
+  hasActiveRuns: boolean;
   onSaved: () => void;
   onDeleted: () => void;
   onClose: () => void;
@@ -59,7 +65,7 @@ export function LeadQuickEditor({
   const [tags, setTags] = useState<string[]>(initialTags);
   const [tagDraft, setTagDraft] = useState("");
   const [ownerId, setOwnerId] = useState(initialOwnerEmployeeId ?? "");
-  const [busy, setBusy] = useState<"saving" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"saving" | "removing" | "deleting" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const patch = useMemo(
@@ -106,8 +112,54 @@ export function LeadQuickEditor({
     }
   }
 
+  /**
+   * The soft removal: clear the tags so the lead leaves the tasks views,
+   * keeping the contact and every bit of history. Runs are untouched (they
+   * are the AI mid-conversation; the per-run Dismiss is the tool for that),
+   * so when one is active the confirm says the card stays in motion.
+   */
+  async function removeFromTasks() {
+    const warning = hasActiveRuns ? ` ${t("editRemoveFromTasksRuns")}` : "";
+    if (
+      !window.confirm(
+        `${t("editRemoveFromTasksConfirm", { name: resolvedName })}${warning}`
+      )
+    ) {
+      return;
+    }
+    setBusy("removing");
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/dashboard/customers/${encodeURIComponent(contactKey)}?businessId=${encodeURIComponent(businessId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tags: [] })
+        }
+      );
+      const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      if (!res.ok || !json?.ok) {
+        setError(t("editRemoveFailed"));
+        setBusy(null);
+        return;
+      }
+      onSaved();
+    } catch {
+      setError(t("editRemoveFailed"));
+      setBusy(null);
+    }
+  }
+
   async function remove() {
-    if (!window.confirm(t("editDeleteConfirm", { name: resolvedName }))) return;
+    // Deleting the contact does not stop a mid-run workflow either, so the
+    // same stays-in-motion warning applies here.
+    const warning = hasActiveRuns ? ` ${t("editRemoveFromTasksRuns")}` : "";
+    if (
+      !window.confirm(`${t("editDeleteConfirm", { name: resolvedName })}${warning}`)
+    ) {
+      return;
+    }
     setBusy("deleting");
     setError(null);
     try {
@@ -222,12 +274,27 @@ export function LeadQuickEditor({
         >
           {t("editFullProfile")}
         </Link>
+        {initialTags.length > 0 && (
+          <button
+            type="button"
+            data-testid="lead-edit-remove"
+            onClick={() => void removeFromTasks()}
+            disabled={busy !== null}
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-parchment/20 px-2.5 py-1.5 text-xs text-parchment/70 hover:bg-parchment/10 hover:text-parchment disabled:opacity-40"
+            title={t("editRemoveFromTasksTitle")}
+          >
+            <CircleMinus className="h-3 w-3" />
+            {busy === "removing" ? t("editRemoving") : t("editRemoveFromTasks")}
+          </button>
+        )}
         <button
           type="button"
           data-testid="lead-edit-delete"
           onClick={() => void remove()}
           disabled={busy !== null}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border border-spark-orange/40 px-2.5 py-1.5 text-xs text-spark-orange hover:bg-spark-orange/10 disabled:opacity-40"
+          className={`inline-flex items-center gap-1 rounded-md border border-spark-orange/40 px-2.5 py-1.5 text-xs text-spark-orange hover:bg-spark-orange/10 disabled:opacity-40 ${
+            initialTags.length > 0 ? "" : "ml-auto"
+          }`}
         >
           <Trash2 className="h-3 w-3" />
           {busy === "deleting" ? t("editDeleting") : t("editDelete")}

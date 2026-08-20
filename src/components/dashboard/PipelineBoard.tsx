@@ -522,6 +522,7 @@ export function PipelineBoard({
               initialOwnerEmployeeId={editLead.ownerEmployeeId}
               employees={employees}
               implicitOwnerEmployeeId={implicitOwnerEmployeeId}
+              hasActiveRuns={editLead.runs.length > 0}
               onSaved={() => {
                 setEditLeadKey(null);
                 void load(scope);
