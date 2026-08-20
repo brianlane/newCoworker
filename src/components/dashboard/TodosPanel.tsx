@@ -478,6 +478,9 @@ function QuickAddRow({
     "rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment placeholder:text-parchment/30";
 
   const add = async () => {
+    // Guarded here, not just on the button: the title input's Enter key
+    // reaches this too, and a double Enter must not double-create.
+    if (busy) return;
     const trimmed = title.trim();
     if (!trimmed) {
       setFormError(t("titleRequired"));
